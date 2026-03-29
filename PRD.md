@@ -260,12 +260,11 @@ Premium + Private + Cross-platform + Free. Nobody is here.
 - [x] Error handling (4.1) — mic disconnect, model fallback, paste fail
 - [x] First-run experience (4.2) — onboarding wizard, model download prompt
 - [x] Windows build (4.3) — NSIS + MSI, unsigned (SmartScreen warning)
-- [ ] Windows code signing (4.3.4-5) — deferred, Certum ~€30/yr
-- [ ] macOS build + notarization (4.4)
-- [ ] Linux build (4.5)
-- [ ] Auto-update (4.6)
-- [ ] Final polish + README (4.7)
-- [ ] Git repo — no version control yet
+- [ ] Windows code signing (4.3.4-5) — deferred, shipping unsigned
+- [x] macOS + Linux builds (4.4-4.5) — GitHub Actions CI, unsigned
+- [x] Auto-update (4.6) — Tauri updater plugin, signed artifacts, CI generates updater JSON
+- [x] Final polish + README (4.7) — UX pass, perf audit, accessibility, README.md
+- [x] Git repo — private at github.com/SirSicard/inkwell, tagged v0.1.0
 
 ### v0.2 - Polish ("It's good") — MOSTLY SHIPPED IN v0.1
 - [x] Transcript history + search

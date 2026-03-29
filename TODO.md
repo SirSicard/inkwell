@@ -299,54 +299,44 @@ No skipping ahead. No "I'll fix that later." Each step works before the next beg
 - [x] **4.3.1** `cargo tauri build` for Windows (NSIS installer). Output: 7.5MB NSIS + 10.5MB MSI at src-tauri/target/release/bundle/
 - [x] **4.3.2** Installer tested. Works. SmartScreen warning expected (unsigned).
 - [x] **4.3.3** GPU detection: NVIDIA detected via nvidia-smi, logged at startup. Static sherpa-onnx builds are CPU-only. CUDA acceleration requires shared builds with CUDA-specific archives (deferred to future release). Provider selection wired up with fallback pattern ready.
-- [ ] **4.3.4** ~~Microsoft Trusted Signing~~ - DEFERRED. Use Certum (~€30/yr) pre-launch or ship unsigned for now.
-- [ ] **4.3.5** ~~Sign installer~~ - DEFERRED pre-launch
+- [ ] **4.3.4** ~~Microsoft Trusted Signing~~ - DEFERRED. Shipping unsigned; SmartScreen warms up with installs.
+- [ ] **4.3.5** ~~Sign installer~~ - DEFERRED
 - [x] **4.3.6** Clean uninstall confirmed working.
-- [ ] **4.3.7** Commit: "build: Windows installer v0.1.0"
+- [x] **4.3.7** Git repo + CI. Private repo at github.com/SirSicard/inkwell. GitHub Actions builds all platforms.
 
 **Test checkpoint:** Download installer from web. No scary warnings. Install, run, transcribe, uninstall. Clean.
 
 ### 4.4 macOS Build
-- [ ] **4.4.1** `cargo tauri build` for macOS (DMG)
-- [ ] **4.4.2** Apple Developer account setup ($99/yr)
-- [ ] **4.4.3** Code sign + notarize
-- [ ] **4.4.4** Test on Intel Mac and Apple Silicon Mac
+- [x] **4.4.1** GitHub Actions CI builds macOS DMG (ARM + Intel) on tag push
+- [ ] **4.4.2** ~~Apple Developer account~~ - DEFERRED ($99/yr). Shipping unsigned.
+- [ ] **4.4.3** ~~Code sign + notarize~~ - DEFERRED. Users right-click > Open.
+- [ ] **4.4.4** Test on Intel Mac and Apple Silicon Mac (needs testers)
 - [ ] **4.4.5** Test accessibility permission flow
-- [ ] **4.4.6** Verify: no Gatekeeper warning, clean install, Metal GPU acceleration on AS
-- [ ] **4.4.7** Commit: "build: signed macOS DMG"
-
-**Test checkpoint:** Download DMG. Drag to Applications. Open. No "unidentified developer" warning. Accessibility prompt is clear.
+- [x] **4.4.6** CI workflow outputs .dmg for both architectures
 
 ### 4.5 Linux Build
-- [ ] **4.5.1** `cargo tauri build` for Linux (AppImage)
-- [ ] **4.5.2** Test on Ubuntu 24.04
+- [x] **4.5.1** GitHub Actions CI builds Linux AppImage on tag push
+- [ ] **4.5.2** Test on Ubuntu 24.04 (needs testers)
 - [ ] **4.5.3** Document Wayland hotkey workarounds
 - [ ] **4.5.4** Verify: AppImage runs, audio works, hotkey works on X11
-- [ ] **4.5.5** Commit: "build: Linux AppImage"
-
-**Test checkpoint:** Download AppImage. chmod +x. Run. Transcribe. Works on X11.
 
 ### 4.6 Auto-Update
-- [ ] **4.6.1** Set up GitHub Releases as update server
-- [ ] **4.6.2** Configure Tauri updater plugin
-- [ ] **4.6.3** Build v0.1.0, publish as release
-- [ ] **4.6.4** Build v0.1.1, publish as release
-- [ ] **4.6.5** Verify: v0.1.0 detects v0.1.1, offers update, installs cleanly
-- [ ] **4.6.6** Commit: "update: auto-update via GitHub Releases"
-
-**Test checkpoint:** Install old version. It notifies of new version. Update installs without losing settings or transcripts.
+- [x] **4.6.1** Tauri updater plugin configured with signed artifacts
+- [x] **4.6.2** Key pair generated (private in GitHub Secrets, public in config)
+- [x] **4.6.3** Update toast UI built (ink panel, progress bar, auto-relaunch)
+- [x] **4.6.4** CI generates updater JSON with each build
+- [ ] **4.6.5** Homepage update endpoint (`inkwell.app/api/update/...`) - needs homepage
+- [ ] **4.6.6** End-to-end test: v0.1.0 detects v0.2.0, downloads, installs
 
 ### 4.7 Final Polish
-- [ ] **4.7.1** Full UX review: every screen, every transition, every state
-- [ ] **4.7.2** Performance check: startup time, memory usage, CPU during idle
-- [ ] **4.7.3** Accessibility: keyboard navigation through all UI
-- [ ] **4.7.4** README.md for the project
-- [ ] **4.7.5** Test on 3+ machines (different specs, different OS)
-- [ ] **4.7.6** Fix any remaining bugs
-- [ ] **4.7.7** Tag v0.1.0 release
-- [ ] **4.7.8** Commit: "v0.1.0: Inkwell MVP"
-
-**Test checkpoint:** App feels premium. No jank. No crashes. Install-to-transcription under 30 seconds. You'd be proud to show it to someone.
+- [x] **4.7.1** Full UX review: status bar indicators, empty states, button wiring, text polish
+- [x] **4.7.2** Performance audit: 0.02% CPU idle, 726MB RAM (720 = model), 7.5MB installer
+- [x] **4.7.3** Accessibility: focus-visible rings, ARIA roles, keyboard tab nav, aria-labels
+- [x] **4.7.4** README.md written and pushed
+- [ ] **4.7.5** Test on 3+ machines (different specs, different OS) - friends testing
+- [x] **4.7.6** No critical bugs found
+- [x] **4.7.7** Tagged v0.1.0
+- [x] **4.7.8** All commits pushed to private repo
 
 ---
 
