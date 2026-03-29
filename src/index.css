@@ -1,0 +1,105 @@
+@import "tailwindcss";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+
+/* Geist fonts from public/fonts/ */
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* ── Design Tokens ── */
+@theme {
+  --font-sans: "Geist Sans", "Inter", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --font-body: "Inter", "Geist Sans", system-ui, sans-serif;
+
+  /* Ink panel (unchanged) */
+  --color-ink-bg: #050505;
+  --color-ink-primary: #0a0a0a;
+  --color-ink-edge: #1a1a1a;
+
+  /* Background elevations (4 layers) */
+  --color-bg-base: #0e0e11;
+  --color-bg-surface: #18181d;
+  --color-bg-hover: #222228;
+  --color-bg-overlay: #2a2a32;
+
+  /* Legacy aliases */
+  --color-bg-primary: #0e0e11;
+  --color-bg-elevated: #18181d;
+  --color-bg-glass: #18181d;
+
+  /* Borders */
+  --color-border: rgba(255, 255, 255, 0.10);
+  --color-border-default: rgba(255, 255, 255, 0.16);
+  --color-border-accent: rgba(200, 149, 108, 0.30);
+
+  /* Text */
+  --color-text-primary: rgba(255, 255, 255, 0.95);
+  --color-text-secondary: rgba(255, 255, 255, 0.60);
+  --color-text-tertiary: rgba(255, 255, 255, 0.35);
+
+  /* Accent */
+  --color-accent: #c8956c;
+  --color-accent-recording: #e84040;
+}
+
+/* Hide scrollbar but allow scroll */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Base ── */
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── Scrollbar (thin, subtle) ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.14);
+}
+
+/* ── Focus ring (accent glow, not browser default) ── */
+*:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1.5px rgba(200, 149, 108, 0.4);
+  border-radius: inherit;
+}
