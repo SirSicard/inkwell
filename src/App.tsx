@@ -258,12 +258,24 @@ function TabBar({ tabs, activeTab, onTabChange }: { tabs: readonly string[]; act
   const overflowTabs = needsOverflow ? tabs.slice(maxVisible) : []
 
   return (
-    <div ref={containerRef} className="relative flex items-center gap-0.5 px-5 pt-3 pb-0 border-b border-border">
+    <div ref={containerRef} role="tablist" className="relative flex items-center gap-0.5 px-5 pt-3 pb-0 border-b border-border"
+      onKeyDown={(e) => {
+        const allTabs = [...tabs]
+        const idx = allTabs.indexOf(activeTab)
+        if (e.key === "ArrowRight" && idx < allTabs.length - 1) { e.preventDefault(); onTabChange(allTabs[idx + 1] as Tab) }
+        if (e.key === "ArrowLeft" && idx > 0) { e.preventDefault(); onTabChange(allTabs[idx - 1] as Tab) }
+        if (e.key === "Home") { e.preventDefault(); onTabChange(allTabs[0] as Tab) }
+        if (e.key === "End") { e.preventDefault(); onTabChange(allTabs[allTabs.length - 1] as Tab) }
+      }}
+    >
       {visibleTabs.map((tab) => (
         <button
           key={tab}
+          role="tab"
+          aria-selected={activeTab === tab}
+          tabIndex={activeTab === tab ? 0 : -1}
           onClick={() => { onTabChange(tab as Tab); setShowMenu(false) }}
-          className={`relative px-3 py-2.5 text-[11px] font-medium tracking-wide transition-colors whitespace-nowrap ${
+          className={`relative px-3 py-2.5 text-[11px] font-medium tracking-wide transition-colors whitespace-nowrap focus:outline-none ${
             activeTab === tab
               ? "text-text-primary"
               : "text-text-tertiary hover:text-text-secondary"
@@ -327,17 +339,42 @@ function TabBar({ tabs, activeTab, onTabChange }: { tabs: readonly string[]; act
   )
 }
 
+// --- Update state ---
+interface UpdateInfo {
+  version: string
+  notes: string
+  date: string
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("Dashboard")
   const [modelName, setModelName] = useState("Loading...")
   const [advancedMode, setAdvancedMode] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [updateAvailable, setUpdateAvailable] = useState<UpdateInfo | null>(null)
+  const [updateDismissed, setUpdateDismissed] = useState(false)
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null)
 
   const addToast = (message: string, type: Toast["type"] = "error") => {
     const id = ++toastId
     setToasts((prev) => [...prev, { id, message, type }])
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
   }
+
+  // --- MOCK: simulate update available after 2s. Remove when real updater is wired. ---
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setUpdateDismissed(false)
+      setUpdateProgress(null)
+      setUpdateAvailable({
+        version: "0.2.0",
+        notes: "Moonshine Base & Parakeet V2 models, bug fixes, performance improvements.",
+        date: "2026-03-29",
+      })
+    }, 2000)
+    return () => clearTimeout(timer)
+  }, [])
+  // --- END MOCK ---
 
   // First-run onboarding
   const [showOnboarding, setShowOnboarding] = useState(false)
@@ -386,9 +423,9 @@ function App() {
   return (
     <div className="h-screen flex bg-bg-base">
       {/* Left: Ink Zone */}
-      <div className="w-[35%] min-w-[240px] h-full relative bg-ink-bg flex flex-col">
+      <div className="w-[35%] min-w-[240px] h-full relative bg-ink-bg flex flex-col overflow-visible">
         {/* Ink canvas */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative overflow-hidden">
           <InkCanvas />
 
           {/* Overlay text with blend mode difference */}
@@ -398,6 +435,85 @@ function App() {
             </span>
           </div>
         </div>
+
+        {/* Update toast - positioned on the outer ink panel */}
+        <AnimatePresence>
+          {updateAvailable && !updateDismissed && (
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              transition={{ type: "spring", stiffness: 260, damping: 24, delay: 0.3 }}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 w-[85%] max-w-[280px]"
+            >
+              <div className="bg-bg-surface/95 backdrop-blur-xl border border-border rounded-xl shadow-2xl overflow-hidden">
+                <div className="h-0.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-teal-500" />
+                <div className="p-4 space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-emerald-400">
+                          <path d="M8 1v10M4 7l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          <path d="M2 13h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-text-primary">Update available</p>
+                        <p className="text-[11px] font-mono text-emerald-400">v{updateAvailable.version}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setUpdateDismissed(true)}
+                      className="text-text-tertiary hover:text-text-secondary transition-colors p-0.5 -m-0.5"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <p className="text-xs text-text-secondary leading-relaxed">{updateAvailable.notes}</p>
+                  {updateProgress !== null && (
+                    <div className="space-y-1">
+                      <div className="h-1.5 rounded-full bg-bg-base overflow-hidden">
+                        <motion.div
+                          className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-500"
+                          initial={{ width: 0 }}
+                          animate={{ width: `${updateProgress}%` }}
+                          transition={{ duration: 0.3 }}
+                        />
+                      </div>
+                      <p className="text-[10px] font-mono text-text-tertiary text-right">{updateProgress}%</p>
+                    </div>
+                  )}
+                  {updateProgress === null && (
+                    <div className="flex items-center gap-2 pt-0.5">
+                      <button
+                        onClick={() => {
+                          setUpdateProgress(0)
+                          let pct = 0
+                          const interval = setInterval(() => {
+                            pct += Math.random() * 15 + 5
+                            if (pct >= 100) { pct = 100; clearInterval(interval); setTimeout(() => { setUpdateProgress(null); setUpdateDismissed(true); addToast("Update downloaded. Restart to apply.", "info") }, 600) }
+                            setUpdateProgress(Math.round(pct))
+                          }, 400)
+                        }}
+                        className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors"
+                      >
+                        Update now
+                      </button>
+                      <button
+                        onClick={() => setUpdateDismissed(true)}
+                        className="px-3 py-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+                      >
+                        Later
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Right: Content Zone */}
@@ -406,7 +522,7 @@ function App() {
         <TabBar tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto px-5 py-5">
+        <div role="tabpanel" className="flex-1 overflow-y-auto px-5 py-5">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -422,8 +538,12 @@ function App() {
 
         {/* Status Bar */}
         <div className="flex items-center justify-between px-5 py-2.5 border-t border-border">
-          <span className="text-[11px] font-mono text-text-tertiary tracking-wide">
-            {modelName}
+          <span className="text-[11px] font-mono text-text-tertiary tracking-wide flex items-center gap-1.5">
+            {modelName === "Loading..." || modelName === "No model loaded" ? (
+              <><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />{modelName}</>
+            ) : (
+              <><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />{modelName}</>
+            )}
           </span>
           <span className="text-[11px] font-mono text-text-tertiary">v0.1.0</span>
         </div>
@@ -460,6 +580,8 @@ function App() {
           ))}
         </AnimatePresence>
       </div>
+
+
     </div>
   )
 }
@@ -487,18 +609,7 @@ function TabContent({ tab, onAdvancedChange }: { tab: Tab; onAdvancedChange?: (v
     case "Commands":
       return <VoiceCommandsTab />
     case "About":
-      return (
-        <div className="flex items-center justify-center h-full min-h-[400px]">
-          <div className="text-center space-y-4">
-            <div className="text-4xl font-sans font-bold tracking-tight text-text-primary">INKWELL</div>
-            <p className="text-base text-text-secondary">Your voice. Your machine. Nothing leaves.</p>
-            <div className="pt-2 space-y-1">
-              <p className="text-sm text-text-tertiary">Built by Mattias H.</p>
-              <p className="text-[11px] font-mono text-text-tertiary">v0.1.0</p>
-            </div>
-          </div>
-        </div>
-      )
+      return <AboutTab />
   }
 }
 
@@ -693,12 +804,13 @@ function DashboardTab() {
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         placeholder="Search transcripts..."
+        aria-label="Search transcripts"
         className="w-full px-3 py-2 text-[13px] bg-bg-surface border border-border rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-default transition-colors"
       />
 
       {transcripts.length === 0 ? (
         <p className="text-[13px] text-text-tertiary py-12 text-center">
-          {search ? "No results." : "No transcripts yet. Press Ctrl+Space to start."}
+          {search ? "No matching transcripts." : "No transcripts yet. Press your hotkey to start dictating."}
         </p>
       ) : (
         <div className="space-y-1.5">
@@ -717,12 +829,14 @@ function DashboardTab() {
                   <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                     <button
                       onClick={() => handleCopy(t.text)}
+                      aria-label="Copy transcript"
                       className="px-2 py-1 text-[11px] text-text-tertiary hover:text-text-primary rounded transition-colors"
                     >
                       Copy
                     </button>
                     <button
                       onClick={() => handleDelete(t.id)}
+                      aria-label="Delete transcript"
                       className="px-2 py-1 text-[11px] text-text-tertiary hover:text-red-400 rounded transition-colors"
                     >
                       Del
@@ -878,7 +992,7 @@ function ModelsTab() {
             </div>
             <p className="text-[12px] text-text-secondary mt-1 ml-[14px]">{model.description}</p>
             <div className="flex items-center gap-2 mt-1.5 ml-[14px]">
-              <span className="text-[10px] text-text-tertiary">&#127760; {model.languages}</span>
+              <span className="text-[10px] text-text-tertiary">{model.languages}</span>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -1015,6 +1129,7 @@ function AudioTab() {
             max="0.95"
             step="0.05"
             value={vadThreshold}
+            aria-label="VAD sensitivity"
             onChange={(e) => handleVadChange(parseFloat(e.target.value))}
             className="flex-1 h-1.5 bg-border rounded-full appearance-none cursor-pointer
               [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5
@@ -1028,7 +1143,7 @@ function AudioTab() {
       <div className="p-3 bg-bg-surface border border-border rounded-lg">
         <h3 className="text-[11px] font-medium text-text-tertiary tracking-wide mb-2">Detected devices</h3>
         {devices.length === 0 ? (
-          <p className="text-sm text-text-tertiary">No input devices found.</p>
+          <p className="text-sm text-text-tertiary">No input devices found. Check your mic connection.</p>
         ) : (
           <div className="space-y-1.5">
             {devices.map((d, i) => (
@@ -1042,7 +1157,7 @@ function AudioTab() {
       </div>
 
       <p className="text-xs text-text-tertiary">
-        Mic changes take effect on next restart. VAD changes apply immediately.
+        Mic changes take effect on next restart. VAD sensitivity applies immediately.
       </p>
     </div>
   )
@@ -1626,7 +1741,7 @@ function AppStylesTab() {
 
       {/* Rules list */}
       {rules.length === 0 ? (
-        <p className="text-sm text-text-tertiary py-4 text-center">No rules yet. Add one above.</p>
+        <p className="text-sm text-text-tertiary py-8 text-center">No rules yet. Add a process name above.</p>
       ) : (
         <div className="space-y-1.5">
           {rules.map((r, i) => (
@@ -1760,7 +1875,7 @@ function SnippetsTab() {
 
       {/* Snippet list */}
       {snippets.length === 0 ? (
-        <p className="text-sm text-text-tertiary py-4 text-center">No snippets yet. Add one above.</p>
+        <p className="text-sm text-text-tertiary py-8 text-center">No snippets yet. Add a trigger phrase above.</p>
       ) : (
         <div className="space-y-1.5">
           {snippets.map((s) => (
@@ -2249,7 +2364,7 @@ function DictionaryTab() {
       </div>
 
       {entries.length === 0 ? (
-        <p className="text-sm text-text-tertiary py-4 text-center">No dictionary entries yet.</p>
+        <p className="text-sm text-text-tertiary py-8 text-center">No dictionary entries yet. Add one above.</p>
       ) : (
         <div className="space-y-1.5">
           {entries.map((entry, i) => (
@@ -2480,7 +2595,31 @@ function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolean) => v
       <HotkeyCapture />
 
       <div className="flex gap-2 pt-2">
-        <GlassButton variant="ghost">Reset Defaults</GlassButton>
+        <GlassButton variant="ghost" onClick={() => {
+          invoke("update_settings", { key: "style", value: "formal" }).catch(() => {})
+          invoke("update_settings", { key: "recording_mode", value: "ptt" }).catch(() => {})
+          invoke("update_settings", { key: "show_overlay", value: "true" }).catch(() => {})
+          invoke("update_settings", { key: "start_on_boot", value: "false" }).catch(() => {})
+          window.location.reload()
+        }}>Reset Defaults</GlassButton>
+      </div>
+    </div>
+  )
+}
+
+function AboutTab() {
+  return (
+    <div className="flex items-center justify-center h-full min-h-[400px]">
+      <div className="text-center space-y-4">
+        <div className="text-4xl font-sans font-bold tracking-tight text-text-primary">INKWELL</div>
+        <p className="text-base text-text-secondary">Your voice. Your machine. Nothing leaves.</p>
+        <div className="pt-3 space-y-1.5">
+          <p className="text-sm text-text-tertiary">Built by Mattias H.</p>
+          <p className="text-[11px] font-mono text-text-tertiary">v0.1.0</p>
+        </div>
+        <div className="pt-4 flex items-center justify-center gap-4">
+          <span className="text-xs text-text-tertiary">Tauri + React + sherpa-onnx</span>
+        </div>
       </div>
     </div>
   )

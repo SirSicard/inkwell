@@ -97,9 +97,20 @@ body {
   background: rgba(255,255,255,0.14);
 }
 
-/* ── Focus ring (accent glow, not browser default) ── */
+/* ── Focus ring (accent glow, keyboard only) ── */
 *:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 1.5px rgba(200, 149, 108, 0.4);
-  border-radius: inherit;
+  outline: 2px solid rgba(200, 149, 108, 0.5) !important;
+  outline-offset: 1px;
+}
+
+/* Suppress focus ring on mouse click (keep on keyboard) */
+*:focus:not(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Skip focus ring on scrollable containers */
+[class*="overflow-y-auto"]:focus-visible,
+[class*="overflow-x-auto"]:focus-visible {
+  outline: none !important;
 }

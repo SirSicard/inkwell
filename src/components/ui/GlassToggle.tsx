@@ -13,6 +13,7 @@ export function GlassToggle({ checked, onChange }: GlassToggleProps) {
       onClick={() => onChange(!checked)}
       className={`
         relative w-9 h-[22px] rounded-full transition-colors duration-200 cursor-pointer shrink-0
+        focus:outline-none
         ${checked ? "bg-accent" : "bg-bg-hover border border-border"}
       `}
     >
