@@ -361,20 +361,30 @@ function App() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
   }
 
-  // --- MOCK: simulate update available after 2s. Remove when real updater is wired. ---
+  // Check for updates on mount (real Tauri updater)
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setUpdateDismissed(false)
-      setUpdateProgress(null)
-      setUpdateAvailable({
-        version: "0.2.0",
-        notes: "Moonshine Base & Parakeet V2 models, bug fixes, performance improvements.",
-        date: "2026-03-29",
-      })
-    }, 2000)
-    return () => clearTimeout(timer)
+    let cancelled = false
+    const checkUpdate = async () => {
+      try {
+        const { check } = await import("@tauri-apps/plugin-updater")
+        const update = await check()
+        if (update && !cancelled) {
+          setUpdateAvailable({
+            version: update.version,
+            notes: update.body || "Bug fixes and improvements.",
+            date: update.date?.split("T")[0] || "",
+          })
+          // Store the update object for later download
+          ;(window as any).__inkwell_update = update
+        }
+      } catch (e) {
+        console.log("Update check skipped:", e)
+      }
+    }
+    // Delay check by 5s to not slow startup
+    const timer = setTimeout(checkUpdate, 5000)
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [])
-  // --- END MOCK ---
 
   // First-run onboarding
   const [showOnboarding, setShowOnboarding] = useState(false)
@@ -488,14 +498,34 @@ function App() {
                   {updateProgress === null && (
                     <div className="flex items-center gap-2 pt-0.5">
                       <button
-                        onClick={() => {
+                        onClick={async () => {
+                          const update = (window as any).__inkwell_update
+                          if (!update) return
                           setUpdateProgress(0)
-                          let pct = 0
-                          const interval = setInterval(() => {
-                            pct += Math.random() * 15 + 5
-                            if (pct >= 100) { pct = 100; clearInterval(interval); setTimeout(() => { setUpdateProgress(null); setUpdateDismissed(true); addToast("Update downloaded. Restart to apply.", "info") }, 600) }
-                            setUpdateProgress(Math.round(pct))
-                          }, 400)
+                          try {
+                            let downloaded = 0
+                            const total = update.rawContentLength || 1
+                            await update.downloadAndInstall((event: any) => {
+                              if (event.event === "Started" && event.data?.contentLength) {
+                                // total known
+                              } else if (event.event === "Progress") {
+                                downloaded += event.data?.chunkLength || 0
+                                setUpdateProgress(Math.min(Math.round((downloaded / total) * 100), 99))
+                              } else if (event.event === "Finished") {
+                                setUpdateProgress(100)
+                              }
+                            })
+                            setUpdateProgress(null)
+                            setUpdateDismissed(true)
+                            addToast("Update installed. Restart to apply.", "info")
+                            // Prompt restart
+                            const { relaunch } = await import("@tauri-apps/plugin-process")
+                            await relaunch()
+                          } catch (e) {
+                            console.error("Update failed:", e)
+                            setUpdateProgress(null)
+                            addToast(`Update failed: ${e}`, "error")
+                          }
                         }}
                         className="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors"
                       >

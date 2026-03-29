@@ -34,6 +34,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": "v1Compatible"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkzODk1RTMwNENBQ0E2NDAKUldSQXBxeE1NRjZKazF5SHVtWnNSREM1bm9rRTcxMkFuWVJKNnJULzNqdVNLalRHOGFKQjZBZEsK",
+      "endpoints": [
+        "https://inkwell.app/api/update/{{target}}/{{arch}}/{{current_version}}"
+      ]
+    }
   }
 }
