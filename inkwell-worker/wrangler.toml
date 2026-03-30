@@ -1,0 +1,7 @@
+name = "inkwell-polish"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+[[kv_namespaces]]
+binding = "INKWELL_USAGE"
+id = "a9d978284a374df39259ce6b3f9b8fd2"

@@ -1337,15 +1337,15 @@ pub fn run() {
                                                         log::info!("AI Polish: sending to {}", byok_provider.as_deref().unwrap_or("proxy"));
 
                                                         // Block on async call (we're already in a spawned thread)
-                                                        let rt = tokio::runtime::Handle::try_current()
-                                                            .or_else(|_| {
-                                                                tokio::runtime::Runtime::new().map(|rt| rt.handle().clone())
-                                                            });
+                                                        // Create a fresh tokio runtime for the async LLM call.
+                                                        // Using the Tauri runtime handle via block_on from a spawned thread
+                                                        // doesn't carry the I/O driver, causing DNS resolution failures.
+                                                        let rt_result = tokio::runtime::Runtime::new();
 
-                                                        match rt {
-                                                            Ok(handle) => {
+                                                        match rt_result {
+                                                            Ok(runtime) => {
                                                                 let result = std::thread::spawn(move || {
-                                                                    handle.block_on(async {
+                                                                    runtime.block_on(async {
                                                                         if let Some(provider) = byok_provider {
                                                                             let api_key = keyring::Entry::new("inkwell", &provider)
                                                                                 .ok().and_then(|e| e.get_password().ok()).unwrap_or_default();
@@ -1355,8 +1355,16 @@ pub fn run() {
                                                                             let llm = llm::build_provider(cfg);
                                                                             llm.complete(&prompt, &styled_clone).await.map(|r| r.text).ok()
                                                                         } else {
-                                                                            llm::call_proxy(&install_id, &styled_clone, &prompt).await
-                                                                                .ok().and_then(|r| r.text)
+                                                                            match llm::call_proxy(&install_id, &styled_clone, &prompt).await {
+                                                                                Ok(r) => {
+                                                                                    log::info!("Proxy response: {:?}", r);
+                                                                                    r.text
+                                                                                }
+                                                                                Err(e) => {
+                                                                                    log::error!("Proxy call failed: {}", e);
+                                                                                    None
+                                                                                }
+                                                                            }
                                                                         }
                                                                     })
                                                                 }).join().ok().flatten();
