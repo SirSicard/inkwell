@@ -77,5 +77,5 @@ export interface FileTranscribeResult {
 }
 
 export const basicTabs = ["Dashboard", "General", "About"] as const
-export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Snippets", "App Styles", "Dictionary", "Files", "Commands", "About"] as const
+export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Agent", "Snippets", "App Styles", "Dictionary", "Files", "Commands", "About"] as const
 export type Tab = (typeof advancedTabs)[number]

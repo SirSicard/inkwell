@@ -1,3 +1,4 @@
+pub mod agent;
 mod appdetect;
 mod audio;
 mod commands;
@@ -123,6 +124,9 @@ pub fn run() {
             polish::set_polish_settings,
             polish::get_usage,
             polish::run_ai_polish,
+            commands::save_agent_token,
+            commands::get_agent_token_status,
+            commands::test_agent_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

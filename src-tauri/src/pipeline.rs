@@ -1,6 +1,9 @@
-use crate::{llm, overlay, paste, recording, style, usage, vad, voicecommand, AppState};
+use crate::{agent, llm, overlay, paste, recording, style, usage, vad, voicecommand, AppState};
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager};
+
+// Track agent recording state separately
+static AGENT_RECORDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Build and register the global shortcut plugin with the hotkey handler (the core dictation pipeline).
 pub fn build_shortcut_plugin(
@@ -14,6 +17,27 @@ pub fn build_shortcut_plugin(
                 event.state == tauri_plugin_global_shortcut::ShortcutState::Released;
 
             let app_state = handle.state::<AppState>();
+
+            // Check if this is the agent hotkey
+            let agent_hotkey_str = {
+                let settings = app_state.settings.lock().unwrap();
+                if settings.agent_enabled {
+                    Some(settings.agent_hotkey.clone())
+                } else {
+                    None
+                }
+            };
+            let shortcut_str = format!("{}", shortcut);
+            let is_agent_hotkey = agent_hotkey_str
+                .as_ref()
+                .map(|ahk| shortcut_str.to_lowercase().replace(" ", "") == ahk.to_lowercase().replace(" ", ""))
+                .unwrap_or(false);
+
+            if is_agent_hotkey {
+                handle_agent_hotkey(&handle, &app_state, pressed, released, shortcut);
+                return;
+            }
+
             let mode = app_state.settings.lock().unwrap().recording_mode.clone();
             let is_toggle = mode == "toggle";
 
@@ -115,6 +139,69 @@ pub fn build_shortcut_plugin(
             }
         })
         .build()
+}
+
+/// Handle the agent hotkey (push-to-talk only, sends to OpenClaw).
+fn handle_agent_hotkey(
+    handle: &tauri::AppHandle,
+    app_state: &tauri::State<AppState>,
+    pressed: bool,
+    released: bool,
+    shortcut: &tauri_plugin_global_shortcut::Shortcut,
+) {
+    if pressed {
+        let guard = app_state.audio.lock().unwrap();
+        if let Some(audio) = guard.as_ref() {
+            audio.recording_buffer.lock().unwrap().clear();
+            audio.is_recording.store(true, Ordering::Relaxed);
+            AGENT_RECORDING.store(true, Ordering::Relaxed);
+            log::info!("Agent recording started (shortcut: {:?})", shortcut);
+        }
+        drop(guard);
+        let _ = handle.emit("recording-state", true);
+        let _ = handle.emit("agent-recording", true);
+        overlay::show(handle);
+    }
+
+    if released && AGENT_RECORDING.load(Ordering::Relaxed) {
+        AGENT_RECORDING.store(false, Ordering::Relaxed);
+        let guard = app_state.audio.lock().unwrap();
+        if let Some(audio) = guard.as_ref() {
+            audio.is_recording.store(false, Ordering::Relaxed);
+            let samples: Vec<f32> = {
+                let mut buf = audio.recording_buffer.lock().unwrap();
+                std::mem::take(&mut *buf)
+            };
+            let source_rate = audio.sample_rate;
+            drop(guard);
+            let _ = handle.emit("recording-state", false);
+            let _ = handle.emit("agent-recording", false);
+
+            log::info!(
+                "Agent recording stopped: {} samples ({:.1}s)",
+                samples.len(),
+                samples.len() as f32 / source_rate as f32
+            );
+
+            let min_samples = (source_rate as f32 * 0.3) as usize;
+            if samples.len() >= min_samples {
+                let handle_clone = handle.clone();
+                std::thread::spawn(move || {
+                    agent::process_agent_recording(&handle_clone, samples, source_rate);
+                });
+            }
+        } else {
+            drop(guard);
+            let _ = handle.emit("recording-state", false);
+            let _ = handle.emit("agent-recording", false);
+        }
+        // Hide overlay after a short delay
+        let handle_clone = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            overlay::hide(&handle_clone);
+        });
+    }
 }
 
 /// The core recording processing pipeline: resample → VAD → transcribe → style → dict → snippet → polish → paste.

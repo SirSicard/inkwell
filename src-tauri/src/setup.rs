@@ -243,6 +243,25 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.global_shortcut().register(shortcut)?;
     log::info!("Global hotkey registered: {}", hotkey_str);
 
+    // Register agent hotkey (if enabled)
+    {
+        let app_state = app.state::<AppState>();
+        let settings = app_state.settings.lock().unwrap();
+        if settings.agent_enabled {
+            let agent_hotkey_str = settings.agent_hotkey.clone();
+            drop(settings);
+            match agent_hotkey_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                Ok(agent_shortcut) => {
+                    app.global_shortcut().register(agent_shortcut)?;
+                    log::info!("Agent hotkey registered: {}", agent_hotkey_str);
+                }
+                Err(e) => {
+                    log::warn!("Failed to parse agent hotkey '{}': {}", agent_hotkey_str, e);
+                }
+            }
+        }
+    }
+
     // System tray
     tray::setup_tray(app)?;
 

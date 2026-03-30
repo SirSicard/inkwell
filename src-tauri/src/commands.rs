@@ -826,3 +826,61 @@ pub fn save_voice_commands(
     log::info!("Voice commands saved");
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Agent (OpenClaw) commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn save_agent_token(token: String) -> Result<(), String> {
+    let entry = keyring::Entry::new("inkwell", "openclaw")
+        .map_err(|e| format!("Keyring error: {}", e))?;
+    entry.set_password(&token)
+        .map_err(|e| format!("Failed to save token: {}", e))?;
+    log::info!("Agent: OpenClaw token saved to keyring");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_agent_token_status() -> bool {
+    keyring::Entry::new("inkwell", "openclaw")
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub async fn test_agent_connection(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let url = {
+        let settings = state.settings.lock().unwrap();
+        settings.agent_url.clone()
+    };
+
+    let token = keyring::Entry::new("inkwell", "openclaw")
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .unwrap_or_default();
+
+    if token.is_empty() {
+        return Err("No token configured".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Client error: {}", e))?;
+
+    let resp = client
+        .get(format!("{}/health", url))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+
+    if resp.status().is_success() {
+        Ok("Connected to OpenClaw".to_string())
+    } else {
+        Err(format!("OpenClaw returned status {}", resp.status()))
+    }
+}

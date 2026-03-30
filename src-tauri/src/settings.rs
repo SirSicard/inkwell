@@ -31,6 +31,15 @@ pub struct Settings {
     /// AI Polish: system prompt for the LLM.
     #[serde(default = "default_polish_prompt")]
     pub polish_prompt: String,
+    // Voice Agent (OpenClaw integration)
+    #[serde(default)]
+    pub agent_enabled: bool,
+    #[serde(default = "default_agent_hotkey")]
+    pub agent_hotkey: String,
+    #[serde(default = "default_agent_url")]
+    pub agent_url: String,
+    #[serde(default = "default_agent_id")]
+    pub agent_id: String,
 }
 
 fn default_style() -> String { "formal".to_string() }
@@ -41,6 +50,9 @@ fn default_true() -> bool { true }
 fn default_mic() -> String { "auto".to_string() }
 fn default_vad_threshold() -> f32 { 0.5 }
 fn default_polish_prompt() -> String { crate::llm::DEFAULT_POLISH_PROMPT.to_string() }
+fn default_agent_hotkey() -> String { "ctrl+shift+space".to_string() }
+fn default_agent_url() -> String { "http://127.0.0.1:41738".to_string() }
+fn default_agent_id() -> String { "main".to_string() }
 pub fn generate_install_id() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -66,6 +78,10 @@ impl Default for Settings {
             install_id: generate_install_id(),
             polish_enabled: false,
             polish_prompt: default_polish_prompt(),
+            agent_enabled: false,
+            agent_hotkey: default_agent_hotkey(),
+            agent_url: default_agent_url(),
+            agent_id: default_agent_id(),
         }
     }
 }

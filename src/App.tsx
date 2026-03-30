@@ -7,7 +7,7 @@ import type { Settings, Toast, UpdateInfo, Tab } from "./types"
 import { basicTabs, advancedTabs } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
-  AITab, SnippetsTab, AppStylesTab, DictionaryTab,
+  AITab, AgentTab, SnippetsTab, AppStylesTab, DictionaryTab,
   FilesTab, VoiceCommandsTab, AboutTab,
 } from "./tabs"
 
@@ -343,6 +343,7 @@ function TabContent({ tab, onAdvancedChange }: { tab: Tab; onAdvancedChange?: (v
     case "Audio":       return <AudioTab />
     case "Models":      return <ModelsTab />
     case "AI":          return <AITab />
+    case "Agent":       return <AgentTab />
     case "Snippets":    return <SnippetsTab />
     case "App Styles":  return <AppStylesTab />
     case "Dictionary":  return <DictionaryTab />
