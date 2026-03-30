@@ -58,6 +58,7 @@ pub enum ModelType {
     ParakeetV2,
     Whisper(String), // model name, e.g. "small", "turbo"
     SenseVoice,
+    CanaryFlash,
 }
 
 /// A speech recognition engine wrapping sherpa-onnx OfflineRecognizer.
@@ -234,6 +235,34 @@ impl SpeechEngine {
 
         log::info!("Loaded SenseVoice successfully");
         Ok(Self { recognizer, model_type: ModelType::SenseVoice })
+    }
+
+    /// Create a Canary 180M Flash engine (en, es, de, fr)
+    pub fn canary_flash(models_dir: &Path) -> Result<Self, String> {
+        let model_dir = models_dir.join("canary-flash");
+
+        let encoder = find_file(&model_dir, &["encoder.int8.onnx", "encoder.onnx"])
+            .ok_or(format!("Canary Flash encoder not found in {}", model_dir.display()))?;
+        let decoder = find_file(&model_dir, &["decoder.int8.onnx", "decoder.onnx"])
+            .ok_or(format!("Canary Flash decoder not found in {}", model_dir.display()))?;
+        let tokens = model_dir.join("tokens.txt");
+
+        if !tokens.exists() {
+            return Err(format!("Canary Flash tokens not found at {}", tokens.display()));
+        }
+
+        let mut config = OfflineRecognizerConfig::default();
+        config.model_config.canary.encoder = Some(encoder.to_string_lossy().into_owned());
+        config.model_config.canary.decoder = Some(decoder.to_string_lossy().into_owned());
+        config.model_config.tokens = Some(tokens.to_string_lossy().into_owned());
+        config.model_config.num_threads = 4;
+
+        log::info!("Creating Canary Flash recognizer from {}", model_dir.display());
+        let recognizer = create_with_provider(&mut config)
+            .ok_or("Failed to create Canary Flash recognizer")?;
+
+        log::info!("Loaded Canary Flash successfully");
+        Ok(Self { recognizer, model_type: ModelType::CanaryFlash })
     }
 
     /// Transcribe 16kHz mono f32 audio samples
