@@ -209,10 +209,11 @@ export function InkCanvas() {
           if (stateRef.current === 1) {
             const bands = extractBands(dataArray, audioCtx!.sampleRate, analyser.fftSize)
             // Scale down and clamp to keep ink movement controlled
-            amplitudeRef.current = Math.min(bands.rms * 0.5, 0.5)
-            lowRef.current = Math.min(bands.low * 0.5, 0.5)
-            midRef.current = Math.min(bands.mid * 0.5, 0.5)
-            highRef.current = Math.min(bands.high * 0.5, 0.5)
+            // Dialed back from 0.5 (too reactive, 1.6.6 feedback)
+            amplitudeRef.current = Math.min(bands.rms * 0.3, 0.35)
+            lowRef.current = Math.min(bands.low * 0.3, 0.35)
+            midRef.current = Math.min(bands.mid * 0.3, 0.35)
+            highRef.current = Math.min(bands.high * 0.3, 0.35)
           } else {
             // Decay to zero when not recording
             amplitudeRef.current *= 0.9
@@ -292,8 +293,8 @@ export function InkCanvas() {
     const highLoc = gl.getUniformLocation(program, "u_high")
     const stateLoc = gl.getUniformLocation(program, "u_state")
 
-    const lerpFactor = 0.08
-    const stateLerpFactor = 0.05 // Slower spring for state transitions
+    const lerpFactor = 0.05  // Smoothing speed (lower = smoother, less twitchy)
+    const stateLerpFactor = 0.04 // Slower spring for state transitions
 
     const render = () => {
       // Wrap time to prevent float precision issues at large values
@@ -307,10 +308,10 @@ export function InkCanvas() {
       smoothStateRef.current += (stateRef.current - smoothStateRef.current) * stateLerpFactor
 
       // Hard clamp smoothed values
-      smoothAmpRef.current = Math.min(smoothAmpRef.current, 0.7)
-      smoothLowRef.current = Math.min(smoothLowRef.current, 0.7)
-      smoothMidRef.current = Math.min(smoothMidRef.current, 0.7)
-      smoothHighRef.current = Math.min(smoothHighRef.current, 0.7)
+      smoothAmpRef.current = Math.min(smoothAmpRef.current, 0.45)
+      smoothLowRef.current = Math.min(smoothLowRef.current, 0.45)
+      smoothMidRef.current = Math.min(smoothMidRef.current, 0.45)
+      smoothHighRef.current = Math.min(smoothHighRef.current, 0.45)
 
       gl.useProgram(program)
       gl.uniform2f(resLoc, canvas.width, canvas.height)
