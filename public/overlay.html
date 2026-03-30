@@ -9,134 +9,26 @@
       overflow: hidden;
       user-select: none;
       -webkit-user-select: none;
+      width: 97px;
+      height: 97px;
       margin: 0;
       padding: 0;
-      font-family: 'Segoe UI', -apple-system, sans-serif;
-    }
-    .container {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      height: 97px;
     }
     canvas {
       width: 97px;
       height: 97px;
       display: block;
-      flex-shrink: 0;
-    }
-    .text-area {
-      display: none;
-      align-items: center;
-      padding: 8px 16px 8px 4px;
-      max-width: 353px;
-      height: 97px;
-      overflow: hidden;
-    }
-    .text-area.visible {
-      display: flex;
-    }
-    .text-content {
-      color: rgba(240, 239, 232, 0.9);
-      font-size: 14px;
-      line-height: 1.4;
-      max-height: 78px;
-      overflow: hidden;
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      -webkit-box-orient: vertical;
-      word-break: break-word;
-      /* Glass background pill */
-      background: rgba(12, 11, 10, 0.85);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border: 1px solid rgba(240, 239, 232, 0.12);
-      border-radius: 16px;
-      padding: 12px 16px;
-      max-width: 330px;
-      /* Fade in */
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-    .text-content.visible {
-      opacity: 1;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <canvas id="c" width="194" height="194"></canvas>
-    <div class="text-area" id="textArea">
-      <div class="text-content" id="textContent"></div>
-    </div>
-  </div>
-
+  <canvas id="c" width="194" height="194"></canvas>
   <script>
     const canvas = document.getElementById('c');
     canvas.width = 194; canvas.height = 194;
     const ctx = canvas.getContext('2d');
     const W = 194, H = 194, CX = W/2, CY = H/2;
-    const textArea = document.getElementById('textArea');
-    const textContent = document.getElementById('textContent');
 
-    // Listen for partial transcription events from Rust backend
-    let currentText = '';
-    if (window.__TAURI__) {
-      window.__TAURI__.event.listen('partial-transcription', (event) => {
-        const text = event.payload || '';
-        if (text !== currentText) {
-          currentText = text;
-          updateText(text);
-        }
-      });
-
-      // Also clear when recording stops
-      window.__TAURI__.event.listen('recording-state', (event) => {
-        if (!event.payload) {
-          // Recording stopped, clear text
-          currentText = '';
-          updateText('');
-        }
-      });
-    }
-
-    function updateText(text) {
-      if (text && text.trim()) {
-        textContent.textContent = text.trim();
-        textArea.classList.add('visible');
-        textContent.classList.add('visible');
-        // Resize window to fit text
-        resizeWindow(true);
-      } else {
-        textContent.classList.remove('visible');
-        setTimeout(() => {
-          textArea.classList.remove('visible');
-          textContent.textContent = '';
-          resizeWindow(false);
-        }, 150);
-      }
-    }
-
-    function resizeWindow(hasText) {
-      if (window.__TAURI__) {
-        const width = hasText ? 450 : 97;
-        window.__TAURI__.window.getCurrentWindow().setSize(
-          new window.__TAURI__.window.LogicalSize(width, 97)
-        ).catch(() => {});
-        // Re-center horizontally
-        window.__TAURI__.window.getCurrentWindow().outerPosition().then(pos => {
-          if (hasText && pos) {
-            // Shift left to keep centered
-            const shift = (450 - 97) / 2;
-            window.__TAURI__.window.getCurrentWindow().setPosition(
-              new window.__TAURI__.window.LogicalPosition(pos.x - shift, pos.y)
-            ).catch(() => {});
-          }
-        }).catch(() => {});
-      }
-    }
-
-    // --- Ink blob rendering (unchanged) ---
     function noise(x, y) {
       const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
       return (s - Math.floor(s)) * 2 - 1;
@@ -162,6 +54,7 @@
       const t = Date.now() * 0.001;
       ctx.clearRect(0, 0, W, H);
 
+      // Dark ink blob, irregular organic shape
       const baseRadius = 72;
       const segments = 80;
 
@@ -169,19 +62,24 @@
       for (let i = 0; i <= segments; i++) {
         const angle = (i / segments) * Math.PI * 2;
         const nx = Math.cos(angle), ny = Math.sin(angle);
-        const n1 = fbm(nx * 0.8 + t * 0.3, ny * 0.8 - t * 0.2);
-        const n2 = fbm(nx * 1.8 + t * 0.5 + 7, ny * 1.8 - t * 0.4 + 7);
-        const n3 = fbm(nx * 3.5 + t * 0.7 + 15, ny * 3.5 - t * 0.6 + 15);
-        const n4 = smoothNoise(angle * 2.5 + t * 0.6, t * 0.15);
+
+        // Multiple noise layers at different scales for irregular shape
+        const n1 = fbm(nx * 0.8 + t * 0.3, ny * 0.8 - t * 0.2);       // large slow bulges
+        const n2 = fbm(nx * 1.8 + t * 0.5 + 7, ny * 1.8 - t * 0.4 + 7); // medium warps
+        const n3 = fbm(nx * 3.5 + t * 0.7 + 15, ny * 3.5 - t * 0.6 + 15); // small detail
+        const n4 = smoothNoise(angle * 2.5 + t * 0.6, t * 0.15);         // angular asymmetry
         const deform = n1 * 12 + n2 * 6 + n3 * 3 + n4 * 5;
+
         const r = baseRadius + deform;
         const x = CX + nx * r;
         const y = CY + ny * r;
+
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       }
       ctx.closePath();
 
+      // Base dark ink fill
       const baseGrad = ctx.createRadialGradient(CX, CY + 8, 4, CX, CY, baseRadius + 6);
       baseGrad.addColorStop(0, '#141312');
       baseGrad.addColorStop(0.7, '#0c0b0a');
@@ -189,8 +87,9 @@
       ctx.fillStyle = baseGrad;
       ctx.fill();
 
+      // Top-left specular highlight (light catching the ink surface)
       ctx.save();
-      ctx.clip();
+      ctx.clip(); // clip to blob shape
       const specGrad = ctx.createRadialGradient(CX - 14, CY - 16, 2, CX - 10, CY - 10, baseRadius * 0.6);
       specGrad.addColorStop(0, 'rgba(240, 239, 232, 0.12)');
       specGrad.addColorStop(0.3, 'rgba(240, 239, 232, 0.04)');
@@ -198,6 +97,7 @@
       ctx.fillStyle = specGrad;
       ctx.fill();
 
+      // Bottom shadow (depth, gravity pulling the ink down)
       const shadowGrad = ctx.createRadialGradient(CX + 4, CY + 18, 2, CX, CY + 10, baseRadius * 0.8);
       shadowGrad.addColorStop(0, 'rgba(0, 0, 0, 0.3)');
       shadowGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0.1)');
@@ -205,6 +105,7 @@
       ctx.fillStyle = shadowGrad;
       ctx.fill();
 
+      // Secondary subtle highlight on the right edge
       const edgeGrad = ctx.createRadialGradient(CX + 20, CY - 8, 1, CX + 16, CY - 4, baseRadius * 0.4);
       edgeGrad.addColorStop(0, 'rgba(240, 239, 232, 0.05)');
       edgeGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
@@ -212,10 +113,12 @@
       ctx.fill();
       ctx.restore();
 
+      // Cream outline
       ctx.strokeStyle = 'rgba(240, 239, 232, 0.3)';
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
+      // Soundwave bars inside (cream/light on dark blob)
       const barW = 3.5;
       const barGap = 5;
       const totalW = barCount * barW + (barCount - 1) * barGap;
@@ -231,6 +134,7 @@
         const x = startX + i * (barW + barGap);
         const h = barHeights[i];
         const y = CY - h / 2;
+
         ctx.beginPath();
         ctx.roundRect(x, y, barW, h, 2);
         const opacity = i === Math.floor(barCount/2) ? 0.5 : 0.3;
@@ -238,6 +142,7 @@
         ctx.fill();
       }
 
+      // Film grain
       for (let i = 0; i < 40; i++) {
         const gx = Math.random() * W;
         const gy = Math.random() * H;

@@ -35,6 +35,7 @@ pub fn show(app: &AppHandle) {
         .title("Inkwell Recording")
         .inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
         .min_inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+        .max_inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
         .resizable(false)
         .decorations(false)
         .always_on_top(true)

@@ -1,6 +1,5 @@
 use crate::{llm, overlay, paste, recording, style, usage, vad, voicecommand, AppState};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager};
 
 /// Build and register the global shortcut plugin with the hotkey handler (the core dictation pipeline).
@@ -51,23 +50,6 @@ pub fn build_shortcut_plugin(
                         mode,
                         shortcut
                     );
-
-                    // Start pseudo-streaming partial transcription loop
-                    let streaming_handle = handle.clone();
-                    let buffer_ref = audio.recording_buffer.clone();
-                    let sample_rate = audio.sample_rate;
-                    let stop_streaming = Arc::new(AtomicBool::new(false));
-                    *app_state.streaming_stop.lock().unwrap() =
-                        Some(stop_streaming.clone());
-
-                    std::thread::spawn(move || {
-                        run_streaming_loop(
-                            streaming_handle,
-                            buffer_ref,
-                            sample_rate,
-                            stop_streaming,
-                        );
-                    });
                 }
                 drop(guard);
                 let _ = handle.emit("recording-state", true);
@@ -75,16 +57,6 @@ pub fn build_shortcut_plugin(
             }
 
             if should_stop {
-                // Stop the streaming loop first
-                if let Some(stop_flag) =
-                    app_state.streaming_stop.lock().unwrap().take()
-                {
-                    stop_flag.store(true, Ordering::Relaxed);
-                }
-                // Reset overlay to compact mode and clear text
-                overlay::update_text(&handle, "");
-                overlay::resize_for_text(&handle, false);
-
                 let guard = app_state.audio.lock().unwrap();
                 if let Some(audio) = guard.as_ref() {
                     audio.is_recording.store(false, Ordering::Relaxed);
@@ -143,107 +115,6 @@ pub fn build_shortcut_plugin(
             }
         })
         .build()
-}
-
-/// Pseudo-streaming: periodically snapshot the buffer and run offline transcription.
-/// Emits "partial-transcription" events so the overlay can show live text.
-fn run_streaming_loop(
-    handle: tauri::AppHandle,
-    buffer: Arc<Mutex<Vec<f32>>>,
-    sample_rate: usize,
-    stop: Arc<AtomicBool>,
-) {
-    let transcribing = Arc::new(AtomicBool::new(false));
-    let min_samples_05s = (sample_rate as f32 * 0.5) as usize;
-
-    // Initial delay before first partial (let some audio accumulate)
-    std::thread::sleep(std::time::Duration::from_millis(800));
-
-    while !stop.load(Ordering::Relaxed) {
-        // Rate limit: skip if a previous partial transcription is still running
-        if transcribing.load(Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            continue;
-        }
-
-        // Clone current buffer snapshot
-        let snapshot = {
-            let buf = buffer.lock().unwrap();
-            buf.clone()
-        };
-
-        // Skip if buffer too short (<0.5s)
-        if snapshot.len() < min_samples_05s {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            continue;
-        }
-
-        // Run partial transcription in-place (same thread to keep it simple)
-        transcribing.store(true, Ordering::Relaxed);
-
-        let partial_text = run_partial_transcription(&handle, &snapshot, sample_rate);
-
-        if let Some(text) = partial_text {
-            if !text.is_empty() {
-                let _ = handle.emit("partial-transcription", &text);
-                overlay::update_text(&handle, &text);
-                overlay::resize_for_text(&handle, true);
-                log::debug!("Partial transcription: \"{}\"", text);
-            }
-        }
-
-        transcribing.store(false, Ordering::Relaxed);
-
-        // Wait before next cycle
-        std::thread::sleep(std::time::Duration::from_millis(600));
-    }
-
-    log::info!("Streaming transcription loop stopped");
-}
-
-/// Run a single partial transcription on the given samples.
-/// Returns None on error, Some(text) on success.
-fn run_partial_transcription(
-    handle: &tauri::AppHandle,
-    samples: &[f32],
-    source_rate: usize,
-) -> Option<String> {
-    // 1. Resample to 16kHz
-    let resampled = match recording::resample_to_16k(samples, source_rate) {
-        Ok(r) => r,
-        Err(e) => {
-            log::warn!("Partial resample failed: {}", e);
-            return None;
-        }
-    };
-
-    // 2. VAD
-    let app_state = handle.state::<AppState>();
-    let vad_path = app_state.vad_model_path.lock().unwrap().clone();
-    let vad_threshold = app_state.settings.lock().unwrap().vad_threshold;
-    let speech = if !vad_path.is_empty() && std::path::Path::new(&vad_path).exists() {
-        match vad::remove_silence(&resampled, &vad_path, vad_threshold) {
-            Ok(s) if !s.is_empty() => s,
-            _ => resampled,
-        }
-    } else {
-        resampled
-    };
-
-    if speech.is_empty() {
-        return None;
-    }
-
-    // 3. Transcribe (brief lock on engine)
-    let engine_guard = app_state.engine.lock().unwrap();
-    let result = if let Some(engine) = engine_guard.as_ref() {
-        engine.transcribe(&speech).ok()
-    } else {
-        None
-    };
-    drop(engine_guard);
-
-    result
 }
 
 /// The core recording processing pipeline: resample → VAD → transcribe → style → dict → snippet → polish → paste.
