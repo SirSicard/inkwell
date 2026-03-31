@@ -16,7 +16,7 @@ pub async fn send_to_openclaw(
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
-    // Set model on the main session before sending (fire-and-forget)
+    // Set model on the voice session before sending (fire-and-forget)
     let _ = client
         .post(format!("{}/tools/invoke", url))
         .bearer_auth(token)
@@ -24,13 +24,14 @@ pub async fn send_to_openclaw(
         .json(&serde_json::json!({
             "tool": "session_status",
             "args": {
-                "model": model
+                "model": model,
+                "sessionKey": "agent:main:inkwell-voice"
             }
         }))
         .send()
         .await;
 
-    // Send the voice message to the main session
+    // Send the voice message to the dedicated inkwell-voice session
     let resp = client
         .post(format!("{}/tools/invoke", url))
         .bearer_auth(token)
@@ -39,7 +40,7 @@ pub async fn send_to_openclaw(
             "tool": "sessions_send",
             "args": {
                 "message": text,
-                "sessionKey": "agent:main:main"
+                "sessionKey": "agent:main:inkwell-voice"
             }
         }))
         .send()
