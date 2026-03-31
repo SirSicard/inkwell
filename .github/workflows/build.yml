@@ -52,7 +52,8 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
-            libasound2-dev
+            libasound2-dev \
+            libxdo-dev
 
       - name: Install npm dependencies
         run: npm ci
