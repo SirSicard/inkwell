@@ -26,7 +26,7 @@ pub fn show(app: &AppHandle) {
         // Calculate bottom-center position
         let (x, y) = get_bottom_center_position();
 
-        // Create overlay window
+        // Create overlay window - transparent via background_color alpha=0
         match WebviewWindowBuilder::new(
             app,
             OVERLAY_LABEL,
@@ -41,7 +41,6 @@ pub fn show(app: &AppHandle) {
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
-        .transparent(true)
         .background_color(Color(0, 0, 0, 0))
         .position(x, y)
         .build()
