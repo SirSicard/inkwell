@@ -832,35 +832,54 @@ pub fn save_voice_commands(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn save_agent_token(token: String) -> Result<(), String> {
-    let entry = keyring::Entry::new("inkwell", "openclaw")
-        .map_err(|e| format!("Keyring error: {}", e))?;
-    entry.set_password(&token)
-        .map_err(|e| format!("Failed to save token: {}", e))?;
-    log::info!("Agent: OpenClaw token saved to keyring");
+pub fn save_agent_token(state: tauri::State<AppState>, token: String) -> Result<(), String> {
+    // Try keyring first, fall back to settings file
+    let keyring_ok = keyring::Entry::new("inkwell", "openclaw")
+        .ok()
+        .and_then(|e| e.set_password(&token).ok())
+        .is_some();
+
+    if keyring_ok {
+        log::info!("Agent: OpenClaw token saved to keyring");
+    } else {
+        log::warn!("Agent: keyring failed, saving token to settings");
+    }
+
+    // Always save to settings as backup
+    let mut settings = state.settings.lock().unwrap();
+    settings.agent_token = token;
+    let path = state.settings_path.lock().unwrap().clone();
+    let _ = settings.save(std::path::Path::new(&path));
+    log::info!("Agent: token saved to settings");
     Ok(())
 }
 
 #[tauri::command]
-pub fn get_agent_token_status() -> bool {
-    keyring::Entry::new("inkwell", "openclaw")
+pub fn get_agent_token_status(state: tauri::State<AppState>) -> bool {
+    // Check keyring first, then settings
+    let from_keyring = keyring::Entry::new("inkwell", "openclaw")
         .ok()
         .and_then(|e| e.get_password().ok())
         .map(|k| !k.is_empty())
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if from_keyring { return true; }
+
+    let settings = state.settings.lock().unwrap();
+    !settings.agent_token.is_empty()
 }
 
 #[tauri::command]
 pub async fn test_agent_connection(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let url = {
+    let (url, settings_token) = {
         let settings = state.settings.lock().unwrap();
-        settings.agent_url.clone()
+        (settings.agent_url.clone(), settings.agent_token.clone())
     };
 
     let token = keyring::Entry::new("inkwell", "openclaw")
         .ok()
         .and_then(|e| e.get_password().ok())
-        .unwrap_or_default();
+        .filter(|k| !k.is_empty())
+        .unwrap_or(settings_token);
 
     if token.is_empty() {
         return Err("No token configured".to_string());

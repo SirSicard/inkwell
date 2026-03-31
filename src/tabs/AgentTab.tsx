@@ -79,7 +79,7 @@ export function AgentTab() {
                 <div className="text-sm text-text-primary mb-1">Agent Hotkey</div>
                 <GlassInput
                   value={settings.agent_hotkey || "ctrl+shift+space"}
-                  onChange={(v: string) => updateSetting("agent_hotkey", v)}
+                  onChange={(e: any) => updateSetting("agent_hotkey", e.target.value)}
                   placeholder="ctrl+shift+space"
                 />
                 <div className="text-xs text-text-secondary mt-1 leading-relaxed">
@@ -95,7 +95,7 @@ export function AgentTab() {
                 <div className="text-sm text-text-primary mb-1">Gateway URL</div>
                 <GlassInput
                   value={settings.agent_url || "http://127.0.0.1:41738"}
-                  onChange={(v: string) => updateSetting("agent_url", v)}
+                  onChange={(e: any) => updateSetting("agent_url", e.target.value)}
                   placeholder="http://127.0.0.1:41738"
                 />
               </div>
@@ -103,7 +103,7 @@ export function AgentTab() {
                 <div className="text-sm text-text-primary mb-1">Agent ID</div>
                 <GlassInput
                   value={settings.agent_id || "main"}
-                  onChange={(v: string) => updateSetting("agent_id", v)}
+                  onChange={(e: any) => updateSetting("agent_id", e.target.value)}
                   placeholder="main"
                 />
               </div>
@@ -115,7 +115,7 @@ export function AgentTab() {
                   <div className="flex-1">
                     <GlassInput
                       value={token}
-                      onChange={setToken}
+                      onChange={(e: any) => setToken(e.target.value)}
                       placeholder={hasToken ? "Token saved (enter new to replace)" : "Paste your gateway token"}
                       type="password"
                     />

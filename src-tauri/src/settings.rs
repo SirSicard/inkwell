@@ -40,6 +40,8 @@ pub struct Settings {
     pub agent_url: String,
     #[serde(default = "default_agent_id")]
     pub agent_id: String,
+    #[serde(default)]
+    pub agent_token: String,
 }
 
 fn default_style() -> String { "formal".to_string() }
@@ -82,6 +84,7 @@ impl Default for Settings {
             agent_hotkey: default_agent_hotkey(),
             agent_url: default_agent_url(),
             agent_id: default_agent_id(),
+            agent_token: String::new(),
         }
     }
 }

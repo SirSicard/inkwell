@@ -96,11 +96,14 @@ pub fn process_agent_recording(handle: &tauri::AppHandle, samples: Vec<f32>, sou
     let agent_id = settings.agent_id.clone();
     drop(settings);
 
-    // Get token from keyring
+    // Get token: try keyring first, then settings
     let token = keyring::Entry::new("inkwell", "openclaw")
         .ok()
         .and_then(|e| e.get_password().ok())
-        .unwrap_or_default();
+        .filter(|k| !k.is_empty())
+        .unwrap_or_else(|| {
+            app_state.settings.lock().unwrap().agent_token.clone()
+        });
 
     if token.is_empty() {
         log::error!("Agent: no OpenClaw token configured");
