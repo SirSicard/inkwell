@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { GlassCard, GlassToggle, GlassInput, GlassButton } from "../components/ui"
+import { GlassCard, GlassToggle, GlassInput, GlassButton, GlassSelect } from "../components/ui"
 
 export function AgentTab() {
   const [token, setToken] = useState("")
@@ -106,6 +106,20 @@ export function AgentTab() {
                   onChange={(e: any) => updateSetting("agent_id", e.target.value)}
                   placeholder="main"
                 />
+              </div>
+              <div>
+                <div className="text-sm text-text-primary mb-1">Model</div>
+                <GlassSelect
+                  value={settings.agent_model || "sonnet"}
+                  onChange={(v: string) => updateSetting("agent_model", v)}
+                  options={[
+                    { value: "sonnet", label: "Sonnet (fast)" },
+                    { value: "opus", label: "Opus (full power)" },
+                  ]}
+                />
+                <div className="text-xs text-text-secondary mt-1 leading-relaxed">
+                  Sonnet is faster (2-3s). Opus is smarter but slower (5-15s).
+                </div>
               </div>
               <div>
                 <div className="text-sm text-text-primary mb-1">

@@ -42,6 +42,8 @@ pub struct Settings {
     pub agent_id: String,
     #[serde(default)]
     pub agent_token: String,
+    #[serde(default = "default_agent_model")]
+    pub agent_model: String,
 }
 
 fn default_style() -> String { "formal".to_string() }
@@ -55,6 +57,7 @@ fn default_polish_prompt() -> String { crate::llm::DEFAULT_POLISH_PROMPT.to_stri
 fn default_agent_hotkey() -> String { "ctrl+shift+space".to_string() }
 fn default_agent_url() -> String { "http://127.0.0.1:41738".to_string() }
 fn default_agent_id() -> String { "main".to_string() }
+fn default_agent_model() -> String { "sonnet".to_string() }
 pub fn generate_install_id() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -85,6 +88,7 @@ impl Default for Settings {
             agent_url: default_agent_url(),
             agent_id: default_agent_id(),
             agent_token: String::new(),
+            agent_model: default_agent_model(),
         }
     }
 }

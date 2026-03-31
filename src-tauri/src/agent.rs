@@ -1,22 +1,36 @@
 use crate::AppState;
 use tauri::Manager;
 
-/// Send transcribed text to OpenClaw gateway via /tools/invoke (sessions_send).
+/// Send transcribed text to OpenClaw gateway via /tools/invoke.
+/// Uses a dedicated voice session (label-based) with configurable model.
 /// Fire-and-forget: the response shows up in the user's OpenClaw session.
 pub async fn send_to_openclaw(
     url: &str,
     token: &str,
     _agent_id: &str,
     text: &str,
+    model: &str,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
-    // Fire-and-forget: send to OpenClaw, don't wait for the agent response.
-    // The /tools/invoke endpoint blocks until the agent finishes, so we just
-    // check that the request was accepted (not rejected with 4xx immediately).
+    // Set model on the main session before sending (fire-and-forget)
+    let _ = client
+        .post(format!("{}/tools/invoke", url))
+        .bearer_auth(token)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "tool": "session_status",
+            "args": {
+                "model": model
+            }
+        }))
+        .send()
+        .await;
+
+    // Send the voice message to the main session
     let resp = client
         .post(format!("{}/tools/invoke", url))
         .bearer_auth(token)
@@ -104,6 +118,7 @@ pub fn process_agent_recording(handle: &tauri::AppHandle, samples: Vec<f32>, sou
     let settings = app_state.settings.lock().unwrap();
     let url = settings.agent_url.clone();
     let agent_id = settings.agent_id.clone();
+    let agent_model = settings.agent_model.clone();
     drop(settings);
 
     // Get token: try keyring first, then settings
@@ -130,7 +145,7 @@ pub fn process_agent_recording(handle: &tauri::AppHandle, samples: Vec<f32>, sou
     };
 
     let result = std::thread::spawn(move || {
-        rt.block_on(send_to_openclaw(&url, &token, &agent_id, &trimmed))
+        rt.block_on(send_to_openclaw(&url, &token, &agent_id, &trimmed, &agent_model))
     }).join();
 
     match result {
