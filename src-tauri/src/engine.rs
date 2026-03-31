@@ -267,6 +267,42 @@ impl SpeechEngine {
 
     /// Transcribe 16kHz mono f32 audio samples
     pub fn transcribe(&self, samples: &[f32]) -> Result<String, String> {
+        // Chunk long recordings to avoid Parakeet's ~20s limit.
+        // Split at 15s with 0.5s overlap, join results.
+        const CHUNK_SAMPLES: usize = 15 * 16000; // 15s at 16kHz
+        const OVERLAP_SAMPLES: usize = 8000;     // 0.5s overlap
+
+        if samples.len() <= CHUNK_SAMPLES {
+            return self.transcribe_chunk(samples);
+        }
+
+        log::info!("Long audio ({:.1}s): chunking into 15s segments", samples.len() as f32 / 16000.0);
+        let mut parts: Vec<String> = Vec::new();
+        let mut start = 0;
+        while start < samples.len() {
+            let end = (start + CHUNK_SAMPLES).min(samples.len());
+            let chunk = &samples[start..end];
+            match self.transcribe_chunk(chunk) {
+                Ok(t) if !t.is_empty() => parts.push(t),
+                Ok(_) => {}
+                Err(e) => log::warn!("Chunk transcription failed: {}", e),
+            }
+            if end == samples.len() { break; }
+            start += CHUNK_SAMPLES - OVERLAP_SAMPLES;
+        }
+
+        let text = parts.join(" ");
+        log::info!(
+            "Transcribed ({:?}): \"{}\" ({:.1}s audio, {} chunks)",
+            self.model_type,
+            text,
+            samples.len() as f32 / 16000.0,
+            parts.len()
+        );
+        Ok(text)
+    }
+
+    fn transcribe_chunk(&self, samples: &[f32]) -> Result<String, String> {
         let stream = self.recognizer.create_stream();
         stream.accept_waveform(16000, samples);
         self.recognizer.decode(&stream);
