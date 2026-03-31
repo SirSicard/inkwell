@@ -28,9 +28,19 @@ pub fn build_shortcut_plugin(
                 }
             };
             let shortcut_str = format!("{}", shortcut);
+            // Normalize: lowercase, strip spaces, replace "control" with "ctrl", sort modifiers
+            fn normalize_hotkey(s: &str) -> String {
+                let s = s.to_lowercase().replace(" ", "").replace("control", "ctrl");
+                let parts: Vec<&str> = s.split('+').collect();
+                if parts.len() <= 1 { return s; }
+                let key = parts.last().unwrap().to_string();
+                let mut mods: Vec<&str> = parts[..parts.len()-1].iter().copied().collect();
+                mods.sort();
+                format!("{}+{}", mods.join("+"), key)
+            }
             let is_agent_hotkey = agent_hotkey_str
                 .as_ref()
-                .map(|ahk| shortcut_str.to_lowercase().replace(" ", "") == ahk.to_lowercase().replace(" ", ""))
+                .map(|ahk| normalize_hotkey(&shortcut_str) == normalize_hotkey(ahk))
                 .unwrap_or(false);
 
             if is_agent_hotkey {

@@ -1,36 +1,46 @@
 use crate::AppState;
 use tauri::Manager;
 
-/// Send transcribed text to OpenClaw gateway as a chat completion.
+/// Send transcribed text to OpenClaw gateway via /tools/invoke (sessions_send).
 /// Fire-and-forget: the response shows up in the user's OpenClaw session.
 pub async fn send_to_openclaw(
     url: &str,
     token: &str,
-    agent_id: &str,
+    _agent_id: &str,
     text: &str,
 ) -> Result<(), String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    // Fire-and-forget: send to OpenClaw, don't wait for the agent response.
+    // The /tools/invoke endpoint blocks until the agent finishes, so we just
+    // check that the request was accepted (not rejected with 4xx immediately).
     let resp = client
-        .post(format!("{}/v1/chat/completions", url))
+        .post(format!("{}/tools/invoke", url))
         .bearer_auth(token)
         .header("Content-Type", "application/json")
-        .header("x-openclaw-agent-id", agent_id)
         .json(&serde_json::json!({
-            "model": "openclaw",
-            "user": "inkwell-voice",
-            "messages": [{"role": "user", "content": text}]
+            "tool": "sessions_send",
+            "args": {
+                "message": text,
+                "sessionKey": "agent:main:main"
+            }
         }))
         .send()
-        .await
-        .map_err(|e| format!("OpenClaw request failed: {}", e))?;
+        .await;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("OpenClaw error {}: {}", status, body));
+    match resp {
+        Ok(r) if r.status().is_client_error() => {
+            let status = r.status();
+            let body = r.text().await.unwrap_or_default();
+            Err(format!("OpenClaw error {}: {}", status, body))
+        }
+        Ok(_) => Ok(()), // 2xx or timeout on body read = accepted
+        Err(e) if e.is_timeout() => Ok(()), // timeout = request accepted, agent still processing
+        Err(e) => Err(format!("OpenClaw request failed: {}", e)),
     }
-
-    Ok(())
 }
 
 /// Process a recording for agent mode: transcribe and send to OpenClaw.
