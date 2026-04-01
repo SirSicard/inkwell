@@ -50,6 +50,22 @@ pub fn show(app: &AppHandle) {
                 // Remove window shadow
                 let _ = w.set_shadow(false);
 
+                // macOS: set NSWindow to fully transparent
+                #[cfg(target_os = "macos")]
+                {
+                    use cocoa::appkit::{NSColor, NSWindow};
+                    use cocoa::base::{id, nil};
+                    if let Ok(ns_win) = w.ns_window() {
+                        let ns_win = ns_win as id;
+                        unsafe {
+                            let clear = NSColor::clearColor(nil);
+                            ns_win.setBackgroundColor_(clear);
+                            ns_win.setOpaque_(cocoa::base::NO);
+                        }
+                        log::info!("Overlay: macOS NSWindow set to transparent");
+                    }
+                }
+
                 // Position bottom-center
                 if let Ok(monitor) = w.primary_monitor() {
                     if let Some(m) = monitor {
