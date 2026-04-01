@@ -20,6 +20,12 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "done" | "skipped">("idle")
   const [downloadPercent, setDownloadPercent] = useState(0)
   const [downloadFile, setDownloadFile] = useState("")
+  const [micDevices, setMicDevices] = useState<{ id: string; name: string }[]>([])
+  const [selectedMic, setSelectedMic] = useState("auto")
+
+  useEffect(() => {
+    invoke<{ id: string; name: string }[]>("get_input_devices").then(setMicDevices).catch(() => {})
+  }, [])
 
   useEffect(() => {
     const unlisten = listen<string>("transcription", (e) => {
@@ -59,16 +65,35 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
       <p className="text-text-tertiary text-sm">Everything runs locally on your machine. No data leaves your computer.</p>
     </div>,
 
-    // Step 1: Mic check
+    // Step 1: Mic check + device selector
     <div key="mic" className="text-center space-y-5">
       <div className="text-3xl font-sans font-semibold">Microphone</div>
       <p className="text-text-secondary text-base leading-relaxed">
         Inkwell needs access to your microphone to transcribe speech.
         Your audio is processed locally and never sent anywhere.
       </p>
-      <p className="text-text-tertiary text-sm">
-        If your browser asks for mic permission, click Allow.
-      </p>
+      <div className="text-left space-y-2">
+        <label className="text-xs text-text-tertiary uppercase tracking-wider">Input Device</label>
+        <select
+          value={selectedMic}
+          onChange={(e) => {
+            setSelectedMic(e.target.value)
+            invoke("update_settings", { key: "mic_device", value: e.target.value }).catch(() => {})
+          }}
+          className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-bg-surface text-text-primary focus:outline-none focus:border-text-tertiary"
+        >
+          <option value="auto">Auto (recommended)</option>
+          {micDevices.map((d) => (
+            <option key={d.id} value={d.id}>{d.name}</option>
+          ))}
+        </select>
+        {micDevices.length > 0 && (
+          <p className="text-[11px] text-text-tertiary">
+            {micDevices.length} device{micDevices.length !== 1 ? "s" : ""} detected.
+            {selectedMic !== "auto" ? " Restart required to apply." : " Auto skips virtual/AI devices."}
+          </p>
+        )}
+      </div>
     </div>,
 
     // Step 2: Better model offer
