@@ -41,7 +41,6 @@ pub fn show(app: &AppHandle) {
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
-        .transparent(true)
         .background_color(Color(0, 0, 0, 0))
         .position(x, y)
         .build()
