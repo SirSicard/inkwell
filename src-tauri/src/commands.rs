@@ -142,6 +142,14 @@ pub fn update_settings(
         "advanced_mode" => settings.advanced_mode = value == "true",
         "mic_device" => settings.mic_device = value,
         "vad_threshold" => settings.vad_threshold = value.parse().unwrap_or(0.5),
+        "sound_dictation" => {
+            settings.sound_dictation = value == "true";
+            crate::sounds::set_dictation_sounds(settings.sound_dictation);
+        }
+        "sound_agent" => {
+            settings.sound_agent = value == "true";
+            crate::sounds::set_agent_sounds(settings.sound_agent);
+        }
         _ => return Err(format!("Unknown setting: {}", key)),
     }
     let path = state.settings_path.lock().unwrap().clone();

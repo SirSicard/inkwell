@@ -14,6 +14,7 @@ mod pipeline;
 mod polish;
 pub mod recording;
 mod settings;
+pub mod sounds;
 mod setup;
 pub mod snippets;
 pub mod style;

@@ -1,4 +1,4 @@
-use crate::{agent, llm, overlay, paste, recording, style, usage, vad, voicecommand, AppState};
+use crate::{agent, llm, overlay, paste, recording, sounds, style, usage, vad, voicecommand, AppState};
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager};
 
@@ -86,6 +86,7 @@ pub fn build_shortcut_plugin(
                     );
                 }
                 drop(guard);
+                sounds::play_dictation_start();
                 let _ = handle.emit("recording-state", true);
                 overlay::show(&handle);
             }
@@ -109,6 +110,7 @@ pub fn build_shortcut_plugin(
                     );
 
                     drop(guard);
+                    sounds::play_dictation_stop();
                     let _ = handle.emit("recording-state", false);
 
                     let min_samples = (source_rate as f32 * 0.3) as usize;
@@ -168,6 +170,7 @@ fn handle_agent_hotkey(
             log::info!("Agent recording started (shortcut: {:?})", shortcut);
         }
         drop(guard);
+        sounds::play_agent_start();
         let _ = handle.emit("recording-state", true);
         let _ = handle.emit("agent-recording", true);
         overlay::show(handle);
@@ -184,6 +187,7 @@ fn handle_agent_hotkey(
             };
             let source_rate = audio.sample_rate;
             drop(guard);
+            sounds::play_agent_stop();
             let _ = handle.emit("recording-state", false);
             let _ = handle.emit("agent-recording", false);
 

@@ -91,6 +91,8 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
   const [recordingMode, setRecordingMode] = useState("ptt")
   const [style, setStyle] = useState("formal")
   const [advancedMode, setAdvancedMode] = useState(false)
+  const [soundDictation, setSoundDictation] = useState(true)
+  const [soundAgent, setSoundAgent] = useState(true)
 
   useEffect(() => {
     invoke<Settings>("get_settings").then((s) => {
@@ -99,6 +101,8 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
       setStartOnBoot(s.start_on_boot)
       setShowOverlay(s.show_overlay)
       setAdvancedMode(s.advanced_mode)
+      setSoundDictation(s.sound_dictation ?? true)
+      setSoundAgent(s.sound_agent ?? true)
     }).catch(() => {})
   }, [])
 
@@ -188,6 +192,20 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
 
       <SettingRow label="Show Overlay" description="Floating indicator while recording">
         <GlassToggle checked={showOverlay} onChange={handleShowOverlayChange} />
+      </SettingRow>
+
+      <SettingRow label="Dictation Sound" description="Audio feedback when recording starts and stops">
+        <GlassToggle checked={soundDictation} onChange={(v) => {
+          setSoundDictation(v)
+          updateSetting("sound_dictation", v.toString())
+        }} />
+      </SettingRow>
+
+      <SettingRow label="Agent Sound" description="Audio feedback for voice agent hotkey">
+        <GlassToggle checked={soundAgent} onChange={(v) => {
+          setSoundAgent(v)
+          updateSetting("sound_agent", v.toString())
+        }} />
       </SettingRow>
 
       <SettingRow label="Advanced Mode" description="Show all tabs and settings">

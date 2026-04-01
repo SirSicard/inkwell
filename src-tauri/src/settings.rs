@@ -44,6 +44,11 @@ pub struct Settings {
     pub agent_token: String,
     #[serde(default = "default_agent_model")]
     pub agent_model: String,
+    // Sound feedback
+    #[serde(default = "default_true")]
+    pub sound_dictation: bool,
+    #[serde(default = "default_true")]
+    pub sound_agent: bool,
 }
 
 fn default_style() -> String { "formal".to_string() }
@@ -89,6 +94,8 @@ impl Default for Settings {
             agent_id: default_agent_id(),
             agent_token: String::new(),
             agent_model: default_agent_model(),
+            sound_dictation: true,
+            sound_agent: true,
         }
     }
 }

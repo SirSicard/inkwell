@@ -8,6 +8,8 @@ export interface Settings {
   advanced_mode: boolean
   mic_device: string
   vad_threshold: number
+  sound_dictation: boolean
+  sound_agent: boolean
 }
 
 export interface Toast {

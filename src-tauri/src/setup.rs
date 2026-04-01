@@ -76,6 +76,10 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         *app_state.polish_enabled.lock().unwrap() = loaded_settings.polish_enabled;
         *app_state.polish_prompt.lock().unwrap() = loaded_settings.polish_prompt.clone();
 
+        // Apply sound settings
+        crate::sounds::set_dictation_sounds(loaded_settings.sound_dictation);
+        crate::sounds::set_agent_sounds(loaded_settings.sound_agent);
+
         *app_state.settings.lock().unwrap() = loaded_settings.clone();
     }
 
