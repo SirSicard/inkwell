@@ -41,13 +41,14 @@ pub fn show(app: &AppHandle) {
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
+        .transparent(true)
         .background_color(Color(0, 0, 0, 0))
         .position(x, y)
         .build()
         {
             Ok(w) => {
                 let _ = w.set_ignore_cursor_events(true);
-                // Remove window shadow on Windows
+                // Remove window shadow
                 let _ = w.set_shadow(false);
 
                 // Position bottom-center
