@@ -7,6 +7,16 @@
     "overlay"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "global-shortcut:default",
+    "core:event:default",
+    "dialog:default",
+    "dialog:allow-save",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-write-text",
+    "fs:default",
+    "fs:allow-write-text-file",
+    "updater:default",
+    "process:default"
   ]
 }
