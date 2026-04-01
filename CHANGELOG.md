@@ -4,6 +4,26 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] - 2026-04-01
+
+### Added
+
+- Audio feedback on hotkey press/release: soft chime for dictation, distinct synth pulse for agent mode. Configurable in General settings.
+- Mic device selector in onboarding wizard so Bluetooth headsets and non-default inputs can be chosen during first run.
+- New app icon: cream ink drop (visible on dark taskbars and docks).
+- Open source files: MIT license, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, CHANGELOG.md, issue/PR templates.
+- Handy (CJ Pais) attribution in LICENSE and About tab.
+
+### Fixed
+
+- macOS overlay transparency: white background no longer visible behind recording indicator.
+- Homepage download links: repo is now public, downloads no longer return 404.
+- Homepage title overflow on wide desktop screens.
+- Homepage dropdown menus clipped by card overflow.
+- macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
+
+[0.1.1]: https://github.com/SirSicard/inkwell/compare/v0.1.0...v0.1.1
+
 ## [0.1.0] - 2026-03-31
 
 First public release.

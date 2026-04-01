@@ -6,7 +6,7 @@ export function AboutTab() {
         <p className="text-base text-text-secondary">Your voice. Your machine. Nothing leaves.</p>
         <div className="pt-3 space-y-1.5">
           <p className="text-sm text-text-tertiary">Built by Mattias H.</p>
-          <p className="text-[11px] font-mono text-text-tertiary">v0.1.0</p>
+          <p className="text-[11px] font-mono text-text-tertiary">v0.1.1</p>
         </div>
         <div className="pt-4 flex items-center justify-center gap-4">
           <span className="text-xs text-text-tertiary">Tauri + React + sherpa-onnx</span>
