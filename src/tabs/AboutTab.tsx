@@ -11,6 +11,15 @@ export function AboutTab() {
         <div className="pt-4 flex items-center justify-center gap-4">
           <span className="text-xs text-text-tertiary">Tauri + React + sherpa-onnx</span>
         </div>
+        <div className="pt-2">
+          <p className="text-[11px] text-text-tertiary">
+            Built on{" "}
+            <a href="https://github.com/cjpais/Handy" target="_blank" rel="noopener noreferrer" className="underline hover:text-text-secondary transition-colors">
+              Handy
+            </a>
+            {" "}by CJ Pais
+          </p>
+        </div>
       </div>
     </div>
   )

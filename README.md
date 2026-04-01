@@ -1,10 +1,20 @@
-# Inkwell
+<p align="center">
+  <h1 align="center">INKWELL</h1>
+  <p align="center">Local-first speech-to-text for your desktop. Private. Fast. Free.</p>
+</p>
 
-Premium speech-to-text for your desktop. Private by default, beautiful by design.
+<p align="center">
+  <a href="https://github.com/SirSicard/inkwell/releases/latest"><img src="https://img.shields.io/github/v/release/SirSicard/inkwell?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/SirSicard/inkwell/actions"><img src="https://img.shields.io/github/actions/workflow/status/SirSicard/inkwell/build.yml?style=flat-square" alt="Build"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/SirSicard/inkwell?style=flat-square" alt="License"></a>
+  <a href="https://github.com/SirSicard/inkwell/releases"><img src="https://img.shields.io/github/downloads/SirSicard/inkwell/total?style=flat-square" alt="Downloads"></a>
+</p>
 
 **Your voice, your words, your machine.**
 
 Everything runs locally. No accounts, no cloud, no data leaving your computer.
+
+<!-- TODO: Add screenshot or GIF demo here -->
 
 ## Features
 
@@ -84,12 +94,18 @@ All models run locally via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx).
 ## Development
 
 ```bash
-# Prerequisites: Rust toolchain, Node.js 18+
+# Prerequisites: Rust toolchain (rustup.rs), Node.js 18+
+# Platform deps: see https://v2.tauri.app/start/prerequisites/
+
 git clone https://github.com/SirSicard/inkwell.git
 cd inkwell
 npm install
 cargo tauri dev
 ```
+
+The app opens with Moonshine Tiny (bundled, 70 MB). It will prompt to download Parakeet V3 (~670 MB) for better accuracy.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more details on the codebase and how to contribute.
 
 ## Privacy
 
@@ -100,12 +116,23 @@ The optional AI Polish feature sends transcription **text only** (not audio) to 
 - Bring your own API key (direct to provider, Inkwell never sees your text)
 - Disable it entirely (default)
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines and dev setup.
+
+## Community
+
+- [GitHub Issues](https://github.com/SirSicard/inkwell/issues) for bugs and feature requests
+- [GitHub Discussions](https://github.com/SirSicard/inkwell/discussions) for questions and ideas
+
 ## License
 
-All rights reserved. Free for personal use.
+MIT. See [LICENSE](LICENSE).
 
 ## Credits
 
 Built by [Mattias H.](https://mattiasherzig.com)
+
+Originally based on [Handy](https://github.com/cjpais/Handy) by CJ Pais.
 
 Powered by open-source: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [Tauri](https://tauri.app), [Silero VAD](https://github.com/snakers4/silero-vad).
