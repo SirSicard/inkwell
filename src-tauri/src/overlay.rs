@@ -26,8 +26,8 @@ pub fn show(app: &AppHandle) {
         // Calculate bottom-center position
         let (x, y) = get_bottom_center_position();
 
-        // Create overlay window - transparent via background_color alpha=0
-        match WebviewWindowBuilder::new(
+        // Create overlay window - transparent
+        let mut builder = WebviewWindowBuilder::new(
             app,
             OVERLAY_LABEL,
             WebviewUrl::App("overlay.html".into()),
@@ -41,7 +41,15 @@ pub fn show(app: &AppHandle) {
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
-        .background_color(Color(0, 0, 0, 0))
+        .background_color(Color(0, 0, 0, 0));
+
+        // .transparent(true) is needed on Windows/Linux but doesn't exist on macOS builder
+        #[cfg(not(target_os = "macos"))]
+        {
+            builder = builder.transparent(true);
+        }
+
+        match builder
         .position(x, y)
         .build()
         {
