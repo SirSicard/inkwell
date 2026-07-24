@@ -14,9 +14,8 @@ const MODEL_CATALOG = [
   { id: "whisper-tiny", name: "Whisper Tiny", company: "OpenAI", description: "Smallest Whisper model.", size: "98 MB", languages: "99 languages" },
   { id: "whisper-distil-medium-en", name: "Whisper Distil Medium", company: "OpenAI", description: "English only. Distilled for speed.", size: "460 MB", languages: "English" },
   { id: "whisper-distil-small-en", name: "Whisper Distil Small", company: "OpenAI", description: "English only. Compact and fast.", size: "180 MB", languages: "English" },
-  { id: "moonshine-base", name: "Moonshine Base", company: "Useful Sensors", description: "English only. Good accuracy, fast inference. Upgrade from Tiny.", size: "288 MB", languages: "English" },
+  { id: "moonshine-base", name: "Moonshine Base", company: "Useful Sensors", description: "English only. Good accuracy, fast inference.", size: "288 MB", languages: "English" },
   { id: "sense-voice", name: "SenseVoice", company: "Alibaba", description: "Very fast. Chinese, English, Japanese, Korean, Cantonese.", size: "160 MB", languages: "5 languages" },
-  { id: "moonshine-tiny", name: "Moonshine Tiny", company: "Useful Sensors", description: "English only. Ultrafast bundled fallback.", size: "70 MB", languages: "English" },
 ] as const
 
 export function ModelsTab() {

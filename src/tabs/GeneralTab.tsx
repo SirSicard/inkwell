@@ -92,7 +92,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
   const [style, setStyle] = useState("formal")
   const [advancedMode, setAdvancedMode] = useState(false)
   const [soundDictation, setSoundDictation] = useState(true)
-  const [soundAgent, setSoundAgent] = useState(true)
+  const [debugSaveAudio, setDebugSaveAudio] = useState(false)
 
   useEffect(() => {
     invoke<Settings>("get_settings").then((s) => {
@@ -102,7 +102,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
       setShowOverlay(s.show_overlay)
       setAdvancedMode(s.advanced_mode)
       setSoundDictation(s.sound_dictation ?? true)
-      setSoundAgent(s.sound_agent ?? true)
+      setDebugSaveAudio(s.debug_save_audio ?? false)
     }).catch(() => {})
   }, [])
 
@@ -201,16 +201,21 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
         }} />
       </SettingRow>
 
-      <SettingRow label="Agent Sound" description="Audio feedback for voice agent hotkey">
-        <GlassToggle checked={soundAgent} onChange={(v) => {
-          setSoundAgent(v)
-          updateSetting("sound_agent", v.toString())
-        }} />
-      </SettingRow>
-
       <SettingRow label="Advanced Mode" description="Show all tabs and settings">
         <GlassToggle checked={advancedMode} onChange={handleAdvancedModeChange} />
       </SettingRow>
+
+      {advancedMode && (
+        <SettingRow
+          label="Save Debug Audio"
+          description="Writes each dictation's raw audio to a temp file for troubleshooting. Off by default — leave it off unless you are chasing a transcription bug, and delete the files afterwards."
+        >
+          <GlassToggle checked={debugSaveAudio} onChange={(v) => {
+            setDebugSaveAudio(v)
+            updateSetting("debug_save_audio", v.toString())
+          }} />
+        </SettingRow>
+      )}
 
       <HotkeyCapture />
 

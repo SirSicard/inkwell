@@ -24,9 +24,25 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [downloadFile, setDownloadFile] = useState("")
   const [micDevices, setMicDevices] = useState<{ id: string; name: string }[]>([])
   const [selectedMic, setSelectedMic] = useState("auto")
+  // "unknown" also covers a backend that doesn't expose the command yet — in that
+  // case we simply don't claim anything about the permission.
+  const [accessibility, setAccessibility] = useState<"unknown" | "granted" | "denied">("unknown")
+  const [accessChecking, setAccessChecking] = useState(false)
+
+  // Accessibility is a macOS-only concept; the Windows build has no such gate.
+  const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Mac")
+
+  const checkAccessibility = () => {
+    setAccessChecking(true)
+    invoke<boolean>("check_accessibility_permission")
+      .then((ok) => setAccessibility(ok ? "granted" : "denied"))
+      .catch(() => setAccessibility("unknown"))
+      .finally(() => setAccessChecking(false))
+  }
 
   useEffect(() => {
     invoke<{ id: string; name: string }[]>("get_input_devices").then(setMicDevices).catch(() => {})
+    if (isMac) checkAccessibility()
   }, [])
 
   useEffect(() => {
@@ -53,7 +69,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
   const startDownload = () => {
     setDownloadState("downloading")
     setDownloadPercent(0)
-    invoke("download_parakeet").catch((e) => {
+    invoke("download_model", { modelId: "parakeet" }).catch((e) => {
       console.error("Download failed:", e)
       setDownloadState("idle")
     })
@@ -98,22 +114,21 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
       </div>
     </div>,
 
-    // Step 2: Better model offer
+    // Step 2: Install a speech model (nothing is bundled, so this is required)
     <div key="model" className="text-center space-y-5">
-      <div className="text-3xl font-sans font-semibold">Better Accuracy</div>
+      <div className="text-3xl font-sans font-semibold">Install a Model</div>
       <p className="text-text-secondary text-base leading-relaxed">
-        Inkwell ships with a lightweight model that works right away.
-        For significantly better accuracy, download the Parakeet V3 model.
+        Inkwell needs a speech model to turn your voice into text. No model is
+        installed yet, and it runs entirely on your machine once downloaded.
       </p>
       <div className="bg-bg-surface border border-border rounded-lg p-4 text-left space-y-3">
-        <div className="flex justify-between text-sm font-mono">
-          <span className="text-text-secondary">Moonshine Tiny</span>
-          <span className="text-text-tertiary">31 MB · running now</span>
-        </div>
         <div className="flex justify-between text-sm font-mono">
           <span className="text-text-primary font-medium">Parakeet V3</span>
           <span className="text-accent">670 MB · recommended</span>
         </div>
+        <p className="text-xs text-text-tertiary leading-relaxed">
+          Smaller models are available in Settings under Models.
+        </p>
       </div>
 
       {downloadState === "idle" && (
@@ -157,12 +172,59 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
         >
           {downloadState === "done"
             ? "Parakeet V3 downloaded. It will load on next restart."
-            : "No problem. You can download models anytime in the Models tab."}
+            : "Dictation stays inactive until a model is installed. You can do that anytime in the Models tab."}
         </motion.p>
       )}
     </div>,
 
-    // Step 3: Hotkey test
+    // Step 3 (macOS only): Accessibility permission, before the first dictation test
+    ...(isMac ? [
+      <div key="accessibility" className="text-center space-y-5">
+        <div className="text-3xl font-sans font-semibold">Accessibility</div>
+        <p className="text-text-secondary text-base leading-relaxed">
+          To type your words into other apps, macOS needs to grant Inkwell
+          Accessibility permission. Without it dictation still works, but the
+          paste step fails silently and your text only lands on the clipboard.
+        </p>
+        <div className="bg-bg-surface border border-border rounded-lg p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-text-secondary">Permission</span>
+            <span className={`text-sm font-mono ${
+              accessibility === "granted" ? "text-green-400"
+              : accessibility === "denied" ? "text-amber-400"
+              : "text-text-tertiary"
+            }`}>
+              {accessibility === "granted" ? "Granted"
+                : accessibility === "denied" ? "Not granted"
+                : "Unknown"}
+            </span>
+          </div>
+          {accessibility !== "granted" && (
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => { invoke("open_accessibility_settings").catch(() => {}) }}
+                className="px-5 py-2 text-sm font-medium bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors"
+              >
+                Open System Settings
+              </button>
+              <button
+                onClick={checkAccessibility}
+                disabled={accessChecking}
+                className="px-4 py-2 text-sm text-text-tertiary hover:text-text-secondary transition-colors disabled:opacity-40"
+              >
+                {accessChecking ? "Checking..." : "Re-check"}
+              </button>
+            </div>
+          )}
+          <p className="text-[11px] text-text-tertiary leading-relaxed">
+            Enable Inkwell under Privacy &amp; Security &rarr; Accessibility, then
+            hit Re-check. No restart needed. You can skip this and do it later.
+          </p>
+        </div>
+      </div>,
+    ] : []),
+
+    // Step 4: Hotkey test
     <div key="hotkey" className="text-center space-y-5">
       <div className="text-3xl font-sans font-semibold">Try It</div>
       <p className="text-text-secondary text-base leading-relaxed">
@@ -182,7 +244,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
       )}
     </div>,
 
-    // Step 4: Done
+    // Step 5: Done
     <div key="done" className="text-center space-y-5">
       <div className="text-3xl font-sans font-semibold">You're all set</div>
       <p className="text-text-secondary text-base leading-relaxed">
@@ -201,9 +263,11 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
   ]
 
   const isLastStep = step === steps.length - 1
+  // Gate by step identity, not index — the accessibility step only exists on macOS.
+  const currentKey = String(steps[step].key)
   const canProceed =
-    step === 2 ? (downloadState === "done" || downloadState === "skipped") :
-    step === 3 ? hotkeyTested :
+    currentKey === "model" ? (downloadState === "done" || downloadState === "skipped") :
+    currentKey === "hotkey" ? hotkeyTested :
     true
 
   return (
@@ -446,6 +510,15 @@ function App() {
       listen<string>("model-error", (e) => addToast(`Model error: ${e.payload}`, "warning")),
     ]
     return () => { listeners.forEach((p) => p.then((fn) => fn())) }
+  }, [])
+
+  // Tray "Settings" emits this after focusing the window; land on the settings view.
+  useEffect(() => {
+    const unlisten = listen("open-settings", () => {
+      setShowOnboarding(false)
+      setActiveTab("General")
+    })
+    return () => { unlisten.then((fn) => fn()) }
   }, [])
 
   // Load advanced mode setting

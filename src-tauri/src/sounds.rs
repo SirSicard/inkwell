@@ -84,7 +84,6 @@ fn play_tone(notes: &[Note]) {
         }
     }
 
-    let total_samples = samples.len();
     let sample_idx = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let sample_data = std::sync::Arc::new(samples);
     let done = std::sync::Arc::new(AtomicBool::new(false));

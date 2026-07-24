@@ -1,7 +1,47 @@
 use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const WINDOW_SIZE: usize = 512;
+
+/// Whether the Silero model is usable. Tracked globally so the pipeline can say
+/// *why* VAD is off (never installed / still downloading / fetch failed) rather
+/// than skipping silence removal in silence. Set by `setup::ensure_vad_model`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VadStatus {
+    Missing = 0,
+    Downloading = 1,
+    Ready = 2,
+    Failed = 3,
+}
+
+static STATUS: AtomicU8 = AtomicU8::new(VadStatus::Missing as u8);
+
+pub fn set_status(status: VadStatus) {
+    STATUS.store(status as u8, Ordering::Relaxed);
+}
+
+pub fn status() -> VadStatus {
+    match STATUS.load(Ordering::Relaxed) {
+        1 => VadStatus::Downloading,
+        2 => VadStatus::Ready,
+        3 => VadStatus::Failed,
+        _ => VadStatus::Missing,
+    }
+}
+
+/// User-facing explanation for a dictation that had to run without VAD.
+pub fn unavailable_reason() -> &'static str {
+    match status() {
+        VadStatus::Downloading => {
+            "Voice-activity model is still downloading — this recording was transcribed without silence removal."
+        }
+        VadStatus::Failed => {
+            "Voice-activity model could not be downloaded. Dictation still works, but silence is not trimmed. Run scripts/download-models.sh to install it manually."
+        }
+        _ => "Voice-activity model is not installed. Dictation still works, but silence is not trimmed.",
+    }
+}
 
 /// The live detector plus the config it was built from.
 /// Creating one loads the Silero model off disk on every dictation, which is

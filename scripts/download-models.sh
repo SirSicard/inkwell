@@ -29,10 +29,11 @@ fetch() {
 
     echo "Downloading $name..."
     tmp="$dest.part"
+    # -L / redirects matter: GitHub release assets 302 to a signed CDN URL.
     if command -v curl >/dev/null 2>&1; then
-        curl -fL --progress-bar -o "$tmp" "$url"
+        curl -fL --progress-bar -o "$tmp" "$url" || { rm -f "$tmp"; echo "Error: failed to download $name" >&2; exit 1; }
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --show-progress -O "$tmp" "$url"
+        wget -q --show-progress -O "$tmp" "$url" || { rm -f "$tmp"; echo "Error: failed to download $name" >&2; exit 1; }
     else
         echo "Error: neither curl nor wget is available" >&2
         exit 1
@@ -42,6 +43,8 @@ fetch() {
 }
 
 # --- Silero VAD ---
+# The app also fetches this on first run (setup::ensure_vad_model); same URL.
+# This script is the manual fallback when that fetch is blocked or fails.
 fetch "$MODELS_DIR/silero_vad.onnx" \
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 

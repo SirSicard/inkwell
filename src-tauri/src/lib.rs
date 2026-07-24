@@ -113,6 +113,8 @@ pub fn run() {
             commands::save_app_styles,
             commands::get_voice_commands,
             commands::save_voice_commands,
+            paste::check_accessibility_permission,
+            paste::open_accessibility_settings,
             polish::save_api_key,
             polish::get_api_key_status,
             polish::get_polish_settings,

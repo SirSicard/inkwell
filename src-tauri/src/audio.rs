@@ -261,7 +261,22 @@ pub fn restart_audio_capture(app: &AppHandle, preferred_device: &str) -> Result<
     // capture stream on a device the first one still holds.
     *guard = None;
 
-    let new_state = start_audio_capture(app.clone(), preferred_device)?;
+    let new_state = match start_audio_capture(app.clone(), preferred_device) {
+        Ok(s) => s,
+        Err(e) => {
+            // The old stream is already gone, so bailing here would leave the
+            // app with no mic at all. Fall back to the default device and say so.
+            log::error!("Mic switch to '{}' failed: {}", preferred_device, e);
+            let _ = app.emit(
+                "mic-error",
+                format!("Could not open '{}' ({}). Falling back to the default microphone.", preferred_device, e),
+            );
+            let recovered = start_audio_capture(app.clone(), "auto")
+                .map_err(|e2| format!("{} (default device also failed: {})", e, e2))?;
+            *guard = Some(recovered);
+            return Err(e);
+        }
+    };
     *guard = Some(new_state);
     log::info!("Audio capture restarted on '{}'", preferred_device);
     Ok(())
