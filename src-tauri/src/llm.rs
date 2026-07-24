@@ -118,6 +118,25 @@ pub struct ProviderConfig {
     pub model: Option<String>,
 }
 
+/// Providers a BYOK key can be stored under, in preference order.
+pub const PROVIDERS: &[&str] = &["openai", "groq", "anthropic", "openrouter", "custom"];
+
+/// Look up an API key from the OS keyring. Keys are keyring-only, never on disk.
+pub fn api_key_for(provider: &str) -> Option<String> {
+    keyring::Entry::new("inkwell", provider)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .filter(|k| !k.is_empty())
+}
+
+/// First provider the user has a key for. Polish is BYOK-only: no key, no polish.
+pub fn first_configured_provider() -> Option<String> {
+    PROVIDERS
+        .iter()
+        .find(|p| api_key_for(p).is_some())
+        .map(|p| p.to_string())
+}
+
 pub fn build_provider(cfg: ProviderConfig) -> Box<dyn LlmProvider> {
     match cfg.provider.as_str() {
         "anthropic" => Box::new(AnthropicProvider {
@@ -166,55 +185,3 @@ pub const DEFAULT_POLISH_PROMPT: &str =
      \n- Do NOT add greetings, sign-offs, or commentary\
      \n- Do NOT split into paragraphs (input is short dictation, not long-form)\
      \n- Return ONLY the cleaned text, nothing else";
-
-// ---------------------------------------------------------------------------
-// Proxy (free tier) — calls the Inkwell Cloudflare Worker
-// ---------------------------------------------------------------------------
-
-/// The hosted proxy URL. Update after deploying the Worker.
-pub const PROXY_BASE_URL: &str = "https://inkwell-polish.mattias-e67.workers.dev";
-
-#[derive(Debug, serde::Deserialize)]
-pub struct ProxyResponse {
-    pub text: Option<String>,
-    pub error: Option<String>,
-    pub message: Option<String>,
-    pub words_used: Option<u32>,
-    pub limit: Option<u32>,
-    pub remaining: Option<u32>,
-    pub resets_on: Option<String>,
-}
-
-pub async fn call_proxy(
-    install_id: &str,
-    text: &str,
-    system_prompt: &str,
-) -> Result<ProxyResponse, String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{}/v1/polish", PROXY_BASE_URL))
-        .header("Content-Type", "application/json")
-        .header("X-Inkwell-Version", env!("CARGO_PKG_VERSION"))
-        .json(&serde_json::json!({
-            "install_id": install_id,
-            "text": text,
-            "system_prompt": system_prompt,
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Proxy request failed: {}", e))?;
-
-    let status = resp.status();
-    let body: ProxyResponse = resp.json().await
-        .map_err(|e| format!("Proxy response parse error: {}", e))?;
-
-    if status == 429 {
-        return Err(body.message.unwrap_or_else(|| "Weekly limit reached".to_string()));
-    }
-
-    if !status.is_success() {
-        return Err(body.error.unwrap_or_else(|| format!("Proxy error {}", status)));
-    }
-
-    Ok(body)
-}

@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Field names that must never live in settings.json. Secrets belong in the OS
+/// keyring only; these are stripped on load to clean up installs written by
+/// older builds that persisted them in plaintext.
+const PLAINTEXT_SECRET_KEYS: &[&str] = &[
+    "agent_token",
+    "api_key",
+    "openai_key",
+    "groq_key",
+    "anthropic_key",
+    "openrouter_key",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_style")]
@@ -21,34 +33,20 @@ pub struct Settings {
     pub mic_device: String,
     #[serde(default = "default_vad_threshold")]
     pub vad_threshold: f32,
-    /// Unique install ID for rate limiting the free AI Polish tier.
-    /// Generated once on first run, persisted in settings.json.
-    #[serde(default = "generate_install_id")]
-    pub install_id: String,
     /// AI Polish: whether post-transcription LLM cleanup is enabled.
+    /// Polish is BYOK-only — it runs against the user's own API key.
     #[serde(default)]
     pub polish_enabled: bool,
     /// AI Polish: system prompt for the LLM.
     #[serde(default = "default_polish_prompt")]
     pub polish_prompt: String,
-    // Voice Agent (OpenClaw integration)
-    #[serde(default)]
-    pub agent_enabled: bool,
-    #[serde(default = "default_agent_hotkey")]
-    pub agent_hotkey: String,
-    #[serde(default = "default_agent_url")]
-    pub agent_url: String,
-    #[serde(default = "default_agent_id")]
-    pub agent_id: String,
-    #[serde(default)]
-    pub agent_token: String,
-    #[serde(default = "default_agent_model")]
-    pub agent_model: String,
     // Sound feedback
     #[serde(default = "default_true")]
     pub sound_dictation: bool,
-    #[serde(default = "default_true")]
-    pub sound_agent: bool,
+    /// Opt-in only: writes each dictation's resampled audio to the temp dir for
+    /// debugging. Must default to false — this app never leaves voice on disk.
+    #[serde(default)]
+    pub debug_save_audio: bool,
 }
 
 fn default_style() -> String { "formal".to_string() }
@@ -59,19 +57,6 @@ fn default_true() -> bool { true }
 fn default_mic() -> String { "auto".to_string() }
 fn default_vad_threshold() -> f32 { 0.5 }
 fn default_polish_prompt() -> String { crate::llm::DEFAULT_POLISH_PROMPT.to_string() }
-fn default_agent_hotkey() -> String { "ctrl+shift+space".to_string() }
-fn default_agent_url() -> String { "http://127.0.0.1:41738".to_string() }
-fn default_agent_id() -> String { "main".to_string() }
-fn default_agent_model() -> String { "sonnet".to_string() }
-pub fn generate_install_id() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let mut hasher = DefaultHasher::new();
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos().hash(&mut hasher);
-    std::process::id().hash(&mut hasher);
-    format!("ink-{:016x}", hasher.finish())
-}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -85,17 +70,10 @@ impl Default for Settings {
             advanced_mode: false,
             mic_device: default_mic(),
             vad_threshold: default_vad_threshold(),
-            install_id: generate_install_id(),
             polish_enabled: false,
             polish_prompt: default_polish_prompt(),
-            agent_enabled: false,
-            agent_hotkey: default_agent_hotkey(),
-            agent_url: default_agent_url(),
-            agent_id: default_agent_id(),
-            agent_token: String::new(),
-            agent_model: default_agent_model(),
             sound_dictation: true,
-            sound_agent: true,
+            debug_save_audio: false,
         }
     }
 }
@@ -105,6 +83,7 @@ impl Settings {
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
             Ok(contents) => {
+                let contents = strip_plaintext_secrets(path, contents);
                 match serde_json::from_str(&contents) {
                     Ok(s) => {
                         log::info!("Settings loaded from {}", path.display());
@@ -136,5 +115,44 @@ impl Settings {
     /// Get the settings file path in app data dir.
     pub fn path(app_data_dir: &Path) -> PathBuf {
         app_data_dir.join("settings.json")
+    }
+}
+
+/// One-time migration: remove any secret that an older build persisted in
+/// plaintext and rewrite the file so it never gets read (or leaked) again.
+/// Returns the JSON to deserialize from.
+fn strip_plaintext_secrets(path: &Path, contents: String) -> String {
+    let mut value: serde_json::Value = match serde_json::from_str(&contents) {
+        Ok(v) => v,
+        Err(_) => return contents,
+    };
+    let obj = match value.as_object_mut() {
+        Some(o) => o,
+        None => return contents,
+    };
+
+    let mut stripped: Vec<&str> = Vec::new();
+    for key in PLAINTEXT_SECRET_KEYS {
+        if obj.remove(*key).is_some() {
+            stripped.push(key);
+        }
+    }
+    if stripped.is_empty() {
+        return contents;
+    }
+
+    match serde_json::to_string_pretty(&value) {
+        Ok(cleaned) => {
+            match std::fs::write(path, &cleaned) {
+                Ok(_) => log::info!(
+                    "Settings: stripped plaintext secret field(s) {:?} from {}",
+                    stripped,
+                    path.display()
+                ),
+                Err(e) => log::warn!("Settings: could not rewrite after stripping secrets: {}", e),
+            }
+            cleaned
+        }
+        Err(_) => contents,
     }
 }

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the bundled app's Info.plist by the Tauri bundler, and embedded
+  into the binary by tauri-codegen for `tauri dev`. Without the microphone
+  usage string macOS kills the process the moment cpal opens an input device,
+  in dev and in the bundle alike.
+
+  Accessibility (needed for the synthetic Cmd+V paste) has no Info.plist key.
+  It is granted at runtime in System Settings; paste.rs checks AXIsProcessTrusted().
+
+  LSUIElement is deliberately NOT set here: hiding the Dock icon is a product
+  decision (it also stops the app stealing focus from the app being dictated
+  into), not a packaging one. See the rehaul notes before turning it on.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Inkwell records audio only while you hold the dictation shortcut. Speech is transcribed on this Mac and the recording never leaves it.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

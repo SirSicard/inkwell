@@ -3,7 +3,10 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStyleRule {
-    pub process_name: String,  // e.g. "outlook.exe", "slack.exe"
+    /// Substring matched against the foreground app's identity: the executable
+    /// name on Windows ("outlook.exe") or the bundle identifier on macOS
+    /// ("com.microsoft.Outlook"). Field name kept for settings-file compat.
+    pub process_name: String,
     pub style: String,         // "formal", "casual", "relaxed"
 }
 
@@ -33,17 +36,20 @@ impl AppStyleRules {
         if !self.enabled {
             return None;
         }
-        let process = get_foreground_process_name()?;
-        let process_lower = process.to_lowercase();
+        let app_id = get_foreground_app_id()?;
+        let app_id_lower = app_id.to_lowercase();
         self.rules.iter()
-            .find(|r| process_lower.contains(&r.process_name.to_lowercase()))
+            .find(|r| app_id_lower.contains(&r.process_name.to_lowercase()))
             .map(|r| r.style.clone())
     }
 
+    /// Defaults cover both identity shapes. A Windows box never sees a bundle
+    /// id and a Mac never sees an .exe, so one list serves both.
     fn default_rules() -> Self {
         Self {
             enabled: false,
             rules: vec![
+                // Windows: executable names
                 AppStyleRule { process_name: "outlook.exe".into(), style: "formal".into() },
                 AppStyleRule { process_name: "thunderbird.exe".into(), style: "formal".into() },
                 AppStyleRule { process_name: "slack.exe".into(), style: "casual".into() },
@@ -55,14 +61,32 @@ impl AppStyleRules {
                 AppStyleRule { process_name: "signal.exe".into(), style: "relaxed".into() },
                 AppStyleRule { process_name: "code.exe".into(), style: "relaxed".into() },
                 AppStyleRule { process_name: "notepad.exe".into(), style: "relaxed".into() },
+                // macOS: bundle identifiers
+                AppStyleRule { process_name: "com.apple.mail".into(), style: "formal".into() },
+                AppStyleRule { process_name: "com.microsoft.Outlook".into(), style: "formal".into() },
+                AppStyleRule { process_name: "com.readdle.smartemail-Mac".into(), style: "formal".into() },
+                AppStyleRule { process_name: "org.mozilla.thunderbird".into(), style: "formal".into() },
+                AppStyleRule { process_name: "com.tinyspeck.slackmacgap".into(), style: "casual".into() },
+                AppStyleRule { process_name: "com.hnc.Discord".into(), style: "casual".into() },
+                AppStyleRule { process_name: "com.microsoft.teams".into(), style: "casual".into() },
+                AppStyleRule { process_name: "us.zoom.xos".into(), style: "casual".into() },
+                AppStyleRule { process_name: "net.whatsapp.WhatsApp".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "ru.keepcoder.Telegram".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "org.whispersystems.signal-desktop".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "com.apple.MobileSMS".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "com.microsoft.VSCode".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "com.apple.dt.Xcode".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "com.apple.TextEdit".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "com.apple.Terminal".into(), style: "relaxed".into() },
+                AppStyleRule { process_name: "com.googlecode.iterm2".into(), style: "relaxed".into() },
             ],
         }
     }
 }
 
-/// Get the process name of the foreground window (Windows only).
+/// Identity of the frontmost app: executable file name on Windows.
 #[cfg(target_os = "windows")]
-fn get_foreground_process_name() -> Option<String> {
+fn get_foreground_app_id() -> Option<String> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
 
@@ -109,8 +133,60 @@ extern "system" {
     fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
 }
 
-#[cfg(not(target_os = "windows"))]
-fn get_foreground_process_name() -> Option<String> {
-    // TODO: macOS via NSWorkspace, Linux via xdotool/wmctrl
+/// Identity of the frontmost app: bundle identifier on macOS
+/// (e.g. "com.apple.Safari"), via NSWorkspace.frontmostApplication.
+///
+/// Hand-rolled objc dispatch because `cocoa` re-exports the runtime types but
+/// not the `msg_send!` macro, and nothing in the tree exposes NSWorkspace.
+#[cfg(target_os = "macos")]
+fn get_foreground_app_id() -> Option<String> {
+    use cocoa::base::{id, nil, selector, SEL};
+    use cocoa::foundation::NSString;
+    use std::ffi::CStr;
+    use std::os::raw::c_char;
+
+    // objc_msgSend is variadic in C. This fixed (receiver, selector) signature
+    // is only sound because every send below passes zero further arguments.
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> id;
+        fn objc_msgSend(receiver: id, sel: SEL) -> id;
+    }
+
+    // NSWorkspace lives in AppKit; force the framework link from this module
+    // rather than relying on another module happening to pull it in.
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+
+    unsafe {
+        let class = objc_getClass(c"NSWorkspace".as_ptr());
+        if class == nil {
+            return None;
+        }
+        let workspace = objc_msgSend(class, selector("sharedWorkspace"));
+        if workspace == nil {
+            return None;
+        }
+        // nil when the frontmost app is not a regular app (e.g. the login window).
+        let front = objc_msgSend(workspace, selector("frontmostApplication"));
+        if front == nil {
+            return None;
+        }
+        // nil for processes without a bundle, such as a bare executable.
+        let bundle_id = objc_msgSend(front, selector("bundleIdentifier"));
+        if bundle_id == nil {
+            return None;
+        }
+        let utf8 = bundle_id.UTF8String();
+        if utf8.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(utf8).to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn get_foreground_app_id() -> Option<String> {
+    // Linux is best-effort: X11 needs xdotool/wmctrl and Wayland forbids it
+    // outright, so per-app style overrides stay off here.
     None
 }

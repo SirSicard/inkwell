@@ -7,16 +7,45 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies and build output
 node_modules
 dist
 dist-ssr
+build
 *.local
 
 # Rust build artifacts
+target/
 src-tauri/target/
 
-# Tauri updater signing key (NEVER commit)
+# Tauri generated + signing material (NEVER commit)
+src-tauri/gen/
 src-tauri/.tauri-private.key
+*.tauri-private.key
+*.key.pub.bak
+.tauri/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Model weights. Downloaded at runtime into the OS app-data directory,
+# never into the repo. Listed so a stray copy can't be committed.
+*.onnx
+*.onnx.data
+models/
+
+# User data. A dictation app must never ship someone's transcripts or audio.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+transcripts.db
+recordings/
+inkwell_debug*.wav
+# Add sound assets with `git add -f` if any are ever bundled.
+*.wav
 
 # Editor directories and files
 .vscode/*

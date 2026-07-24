@@ -5,22 +5,13 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static SOUNDS_ENABLED: AtomicBool = AtomicBool::new(true);
-static AGENT_SOUNDS_ENABLED: AtomicBool = AtomicBool::new(true);
 
 pub fn set_dictation_sounds(enabled: bool) {
     SOUNDS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-pub fn set_agent_sounds(enabled: bool) {
-    AGENT_SOUNDS_ENABLED.store(enabled, Ordering::Relaxed);
-}
-
 pub fn dictation_sounds_enabled() -> bool {
     SOUNDS_ENABLED.load(Ordering::Relaxed)
-}
-
-pub fn agent_sounds_enabled() -> bool {
-    AGENT_SOUNDS_ENABLED.load(Ordering::Relaxed)
 }
 
 /// Dictation recording started — soft ascending two-note chime.
@@ -38,25 +29,6 @@ pub fn play_dictation_stop() {
     std::thread::spawn(|| play_tone(&[
         Note { freq: 1108.73, duration_ms: 50, volume: 0.10 },
         Note { freq: 830.61, duration_ms: 70, volume: 0.08 },   // Ab5, descending
-    ]));
-}
-
-/// Agent recording started — techy synth pulse (higher pitch, sharper attack).
-pub fn play_agent_start() {
-    if !AGENT_SOUNDS_ENABLED.load(Ordering::Relaxed) { return; }
-    std::thread::spawn(|| play_tone(&[
-        Note { freq: 1318.51, duration_ms: 40, volume: 0.15 },  // E6
-        Note { freq: 1567.98, duration_ms: 40, volume: 0.15 },  // G6
-        Note { freq: 1975.53, duration_ms: 60, volume: 0.12 },  // B6 — ascending triad
-    ]));
-}
-
-/// Agent recording stopped — descending synth.
-pub fn play_agent_stop() {
-    if !AGENT_SOUNDS_ENABLED.load(Ordering::Relaxed) { return; }
-    std::thread::spawn(|| play_tone(&[
-        Note { freq: 1567.98, duration_ms: 40, volume: 0.10 },
-        Note { freq: 1174.66, duration_ms: 60, volume: 0.08 },  // D6, descending
     ]));
 }
 

@@ -1,4 +1,5 @@
 use crate::history::Transcript;
+use serde::Serialize;
 
 /// Format a list of transcripts as plain text.
 pub fn to_txt(transcripts: &[Transcript]) -> String {
@@ -27,10 +28,7 @@ pub fn to_srt(transcripts: &[Transcript]) -> String {
     for t in transcripts {
         let total_ms = t.audio_duration_ms.max(1000) as u64;
         let sentences = split_sentences(&t.text);
-        let total_words: usize = sentences.iter().map(|s| word_count(s)).max_by(|a, b| a.cmp(b)).unwrap_or(1);
         let total_words_sum: usize = sentences.iter().map(|s| word_count(s)).sum::<usize>().max(1);
-
-        let _ = total_words; // suppress unused warning
 
         let mut offset = cumulative_ms;
         for sentence in &sentences {
@@ -56,46 +54,47 @@ pub fn to_srt(transcripts: &[Transcript]) -> String {
     output
 }
 
+/// Envelope for a one-transcript export (singular `transcript` key).
+#[derive(Serialize)]
+struct SingleExport<'a> {
+    version: u32,
+    exported_at: String,
+    transcript: &'a Transcript,
+}
+
+/// Envelope for a multi-transcript export (plural `transcripts` array).
+#[derive(Serialize)]
+struct MultiExport<'a> {
+    version: u32,
+    exported_at: String,
+    count: usize,
+    transcripts: &'a [Transcript],
+}
+
 /// Format a list of transcripts as JSON.
 pub fn to_json(transcripts: &[Transcript]) -> String {
-    if transcripts.len() == 1 {
-        // Single transcript: use singular envelope
-        let t = &transcripts[0];
-        format!(
-            r#"{{"version":1,"exported_at":"{}","transcript":{{"id":{},"text":{},"raw_text":{},"style":{},"model":{},"audio_duration_ms":{},"created_at":{}}}}}"#,
-            chrono_now(),
-            t.id,
-            json_str(&t.text),
-            json_str(&t.raw_text),
-            json_str(&t.style),
-            json_str(&t.model),
-            t.audio_duration_ms,
-            json_str(&t.created_at),
-        )
-    } else {
-        let items: Vec<String> = transcripts
-            .iter()
-            .map(|t| {
-                format!(
-                    r#"{{"id":{},"text":{},"raw_text":{},"style":{},"model":{},"audio_duration_ms":{},"created_at":{}}}"#,
-                    t.id,
-                    json_str(&t.text),
-                    json_str(&t.raw_text),
-                    json_str(&t.style),
-                    json_str(&t.model),
-                    t.audio_duration_ms,
-                    json_str(&t.created_at),
-                )
-            })
-            .collect();
+    let exported_at = now_iso8601();
 
-        format!(
-            r#"{{"version":1,"exported_at":"{}","count":{},"transcripts":[{}]}}"#,
-            chrono_now(),
-            transcripts.len(),
-            items.join(",")
-        )
-    }
+    let json = if transcripts.len() == 1 {
+        // Single transcript: use singular envelope
+        serde_json::to_string(&SingleExport {
+            version: 1,
+            exported_at,
+            transcript: &transcripts[0],
+        })
+    } else {
+        serde_json::to_string(&MultiExport {
+            version: 1,
+            exported_at,
+            count: transcripts.len(),
+            transcripts,
+        })
+    };
+
+    json.unwrap_or_else(|e| {
+        log::error!("JSON export failed: {}", e);
+        String::new()
+    })
 }
 
 /// Format a list of transcripts as CSV (RFC 4180).
@@ -166,60 +165,7 @@ fn ms_to_srt(ms: u64) -> String {
     format!("{:02}:{:02}:{:02},{:03}", h, m, s, millis)
 }
 
-fn json_str(s: &str) -> String {
-    // Basic JSON string escaping
-    let escaped = s
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t");
-    format!("\"{}\"", escaped)
-}
-
-fn chrono_now() -> String {
-    // Simple UTC timestamp without pulling in chrono
-    // Format: 2026-03-27T14:00:00Z (approximate)
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| {
-            let secs = d.as_secs();
-            // Rough ISO 8601 from epoch
-            let s = secs % 60;
-            let m = (secs / 60) % 60;
-            let h = (secs / 3600) % 24;
-            let days = secs / 86400;
-            // Days since epoch to year/month/day (simplified, good enough for export metadata)
-            let (y, mo, d) = days_to_ymd(days);
-            format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, m, s)
-        })
-        .unwrap_or_else(|_| "unknown".to_string())
-}
-
-fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    // Gregorian calendar from days since 1970-01-01
-    let mut remaining = days;
-    let mut year = 1970u64;
-    loop {
-        let days_in_year = if is_leap(year) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        year += 1;
-    }
-    let months = [31, if is_leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1u64;
-    for &days_in_month in &months {
-        if remaining < days_in_month {
-            break;
-        }
-        remaining -= days_in_month;
-        month += 1;
-    }
-    (year, month, remaining + 1)
-}
-
-fn is_leap(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+/// Export metadata stamp. UTC so exports collated from several machines sort.
+fn now_iso8601() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }

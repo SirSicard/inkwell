@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "overlay",
+  "description": "The recording overlay is a standalone canvas page: it animates on its own, never imports @tauri-apps/api and never calls into Rust. It therefore gets no permissions at all — listing it here (rather than leaving it out) is how that stays a decision instead of an oversight. If the overlay ever needs to react to Rust state, add core:event:default and nothing else.",
+  "windows": [
+    "overlay"
+  ],
+  "permissions": []
+}

@@ -1,40 +1,72 @@
 use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig};
 use std::path::{Path, PathBuf};
 
-/// Detect GPU availability and log it. Returns the provider to use.
-/// sherpa-onnx static builds are CPU-only. GPU needs shared builds with
-/// CUDA-specific archives. For now we detect and log for future use.
-fn detect_provider() -> &'static str {
-    use std::sync::OnceLock;
-    static PROVIDER: OnceLock<&'static str> = OnceLock::new();
-
-    PROVIDER.get_or_init(|| {
-        let has_nvidia = std::process::Command::new("nvidia-smi")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if has_nvidia {
-            // GPU detected but static sherpa-onnx builds are CPU-only.
-            // CUDA support requires shared builds with CUDA-specific archives.
-            // TODO: support shared+CUDA builds for GPU acceleration
-            log::info!("NVIDIA GPU detected. Static build = CPU-only inference. \
-                        GPU acceleration requires shared+CUDA build (future release).");
-        } else {
-            log::info!("No NVIDIA GPU detected. Using CPU provider.");
-        }
-
-        "cpu"
-    })
-}
+/// sherpa-onnx is linked statically here, and static builds are CPU-only.
+/// Every accelerator path (CoreML on macOS, CUDA elsewhere) needs a shared
+/// build with provider-specific archives, so there is nothing to probe for.
+const PROVIDER: &str = "cpu";
 
 /// Create a recognizer with the appropriate provider.
 fn create_with_provider(config: &mut OfflineRecognizerConfig) -> Option<OfflineRecognizer> {
-    let provider = detect_provider();
-    config.model_config.provider = Some(provider.to_string());
+    config.model_config.provider = Some(PROVIDER.to_string());
     OfflineRecognizer::create(config)
+}
+
+/// Longest run of words tested for a repeat at a chunk seam. 0.5s of overlap
+/// is at most ~4 words of speech; 24 leaves headroom for fast speakers.
+const MAX_SEAM_WORDS: usize = 24;
+
+/// Shortest normalized match accepted at a seam. Stops a bare "a" or "the"
+/// landing on both sides from eating a real word.
+const MIN_SEAM_CHARS: usize = 4;
+
+/// Compare words ignoring case and punctuation — the model does not place the
+/// same comma in the same spot on both sides of a seam.
+fn normalize_word(word: &str) -> String {
+    word.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// How many leading words of `next` restate the trailing words of `prev`.
+fn seam_overlap(prev: &[String], next: &[String]) -> usize {
+    let max = MAX_SEAM_WORDS.min(prev.len()).min(next.len());
+    for k in (1..=max).rev() {
+        let tail = &prev[prev.len() - k..];
+        let head = &next[..k];
+        if !tail.iter().zip(head).all(|(a, b)| normalize_word(a) == normalize_word(b)) {
+            continue;
+        }
+        let matched_chars: usize = head.iter().map(|w| normalize_word(w).chars().count()).sum();
+        if matched_chars >= MIN_SEAM_CHARS {
+            return k;
+        }
+    }
+    0
+}
+
+/// Join chunk transcripts, dropping the words the overlap made the model emit
+/// twice. Chunks share OVERLAP_SAMPLES of audio, so the tail of one chunk and
+/// the head of the next transcribe the same speech.
+fn merge_chunks(parts: &[String]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for part in parts {
+        let next: Vec<String> = part.split_whitespace().map(|s| s.to_string()).collect();
+        if next.is_empty() {
+            continue;
+        }
+        if out.is_empty() {
+            out = next;
+            continue;
+        }
+        let skip = seam_overlap(&out, &next);
+        if skip > 0 {
+            log::debug!("Seam dedup: dropped {} repeated word(s)", skip);
+        }
+        out.extend_from_slice(&next[skip..]);
+    }
+    out.join(" ")
 }
 
 /// Find first existing file from a list of candidates in a directory
@@ -291,7 +323,7 @@ impl SpeechEngine {
             start += CHUNK_SAMPLES - OVERLAP_SAMPLES;
         }
 
-        let text = parts.join(" ");
+        let text = merge_chunks(&parts);
         log::info!(
             "Transcribed ({:?}): \"{}\" ({:.1}s audio, {} chunks)",
             self.model_type,
@@ -323,5 +355,78 @@ impl SpeechEngine {
 
     pub fn model_type(&self) -> &ModelType {
         &self.model_type
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::{merge_chunks, seam_overlap};
+
+    fn words(s: &str) -> Vec<String> {
+        s.split_whitespace().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn joins_chunks_with_no_overlap() {
+        let parts = vec!["the quick brown fox".to_string(), "jumps over".to_string()];
+        assert_eq!(merge_chunks(&parts), "the quick brown fox jumps over");
+    }
+
+    #[test]
+    fn drops_repeated_seam_words() {
+        let parts = vec![
+            "we should ship it on monday".to_string(),
+            "on monday morning at nine".to_string(),
+        ];
+        assert_eq!(
+            merge_chunks(&parts),
+            "we should ship it on monday morning at nine"
+        );
+    }
+
+    #[test]
+    fn seam_match_ignores_case_and_punctuation() {
+        let parts = vec![
+            "that is the plan, agreed".to_string(),
+            "Agreed? then let's go".to_string(),
+        ];
+        assert_eq!(merge_chunks(&parts), "that is the plan, agreed then let's go");
+    }
+
+    #[test]
+    fn prefers_the_longest_overlap() {
+        let prev = words("alpha beta gamma delta");
+        let next = words("beta gamma delta epsilon");
+        assert_eq!(seam_overlap(&prev, &next), 3);
+    }
+
+    #[test]
+    fn short_common_word_is_not_treated_as_overlap() {
+        // "the" straddling the seam is a coincidence, not a repeat.
+        let prev = words("we looked at the");
+        let next = words("the report was late");
+        assert_eq!(seam_overlap(&prev, &next), 0);
+        assert_eq!(
+            merge_chunks(&[prev.join(" "), next.join(" ")]),
+            "we looked at the the report was late"
+        );
+    }
+
+    #[test]
+    fn skips_empty_chunks() {
+        let parts = vec!["hello".to_string(), String::new(), "world".to_string()];
+        assert_eq!(merge_chunks(&parts), "hello world");
+    }
+
+    #[test]
+    fn single_chunk_is_unchanged() {
+        let parts = vec!["just one chunk".to_string()];
+        assert_eq!(merge_chunks(&parts), "just one chunk");
+    }
+
+    #[test]
+    fn full_chunk_repeat_collapses() {
+        let parts = vec!["identical phrase here".to_string(), "identical phrase here".to_string()];
+        assert_eq!(merge_chunks(&parts), "identical phrase here");
     }
 }

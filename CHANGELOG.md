@@ -4,6 +4,30 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Rehaul. The product is now explicitly free and open source forever, macOS first, and BYOK only.
+
+### Removed
+
+- **Voice Agent mode**, entirely: the second hotkey, the Agent settings tab, the pipeline branch, the agent sounds and the agent settings. It targeted the OpenClaw gateway, which was decommissioned 2026-06-15, and the tab never persisted anything anyway (it sent the wrong invoke shape and the backend had no matching handlers).
+- **The free AI Polish proxy tier.** Polish previously had a "free 4,000 words per week" mode routed through a Cloudflare Worker in front of the maintainer's own Groq key. It cost money and returned nothing. AI polish is now bring your own key, or off.
+- Weekly word-count quota tracking, which existed only to enforce that free tier.
+- Windows-developer-machine workarounds that never belonged in a cross-platform build.
+
+### Changed
+
+- **macOS (Apple Silicon) is the primary platform.** Windows is built in CI and supported as a secondary target. Linux is best effort.
+- Monetization is a voluntary donation link. There is no paid tier, no license key, no activation and no payment code in the app.
+- Documentation rewritten to match what the code actually does, including the unsigned-installer friction on both platforms and the macOS Accessibility permission that synthetic paste requires.
+- PRD rewritten as a lean product definition. The old "closed source, future premium tier" line and the Meeting-mode and Teams/Enterprise roadmap entries are gone.
+- `research/` moved to `docs/research/` with a status index. Model-catalog expansion is shelved. Streaming research is retained as the starting point for a future spike.
+
+### Fixed
+
+- Privacy: the agent token is no longer written in plaintext to `settings.json` (the code previously saved a copy there even when the OS keyring succeeded).
+- Privacy: raw dictation audio is no longer dumped to a temporary WAV file on every recording in the production path.
+
 ## [0.1.1] - 2026-04-01
 
 ### Added

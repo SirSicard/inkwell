@@ -1,9 +1,6 @@
-use crate::{agent, llm, overlay, paste, recording, sounds, style, usage, vad, voicecommand, AppState};
+use crate::{llm, overlay, paste, recording, sounds, style, vad, voicecommand, AppState};
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager};
-
-// Track agent recording state separately
-static AGENT_RECORDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Build and register the global shortcut plugin with the hotkey handler (the core dictation pipeline).
 pub fn build_shortcut_plugin(
@@ -18,37 +15,10 @@ pub fn build_shortcut_plugin(
 
             let app_state = handle.state::<AppState>();
 
-            // Check if this is the agent hotkey
-            let agent_hotkey_str = {
+            let (mode, show_overlay) = {
                 let settings = app_state.settings.lock().unwrap();
-                if settings.agent_enabled {
-                    Some(settings.agent_hotkey.clone())
-                } else {
-                    None
-                }
+                (settings.recording_mode.clone(), settings.show_overlay)
             };
-            let shortcut_str = format!("{}", shortcut);
-            // Normalize: lowercase, strip spaces, replace "control" with "ctrl", sort modifiers
-            fn normalize_hotkey(s: &str) -> String {
-                let s = s.to_lowercase().replace(" ", "").replace("control", "ctrl");
-                let parts: Vec<&str> = s.split('+').collect();
-                if parts.len() <= 1 { return s; }
-                let key = parts.last().unwrap().to_string();
-                let mut mods: Vec<&str> = parts[..parts.len()-1].iter().copied().collect();
-                mods.sort();
-                format!("{}+{}", mods.join("+"), key)
-            }
-            let is_agent_hotkey = agent_hotkey_str
-                .as_ref()
-                .map(|ahk| normalize_hotkey(&shortcut_str) == normalize_hotkey(ahk))
-                .unwrap_or(false);
-
-            if is_agent_hotkey {
-                handle_agent_hotkey(&handle, &app_state, pressed, released, shortcut);
-                return;
-            }
-
-            let mode = app_state.settings.lock().unwrap().recording_mode.clone();
             let is_toggle = mode == "toggle";
 
             let should_start;
@@ -88,7 +58,9 @@ pub fn build_shortcut_plugin(
                 drop(guard);
                 sounds::play_dictation_start();
                 let _ = handle.emit("recording-state", true);
-                overlay::show(&handle);
+                if show_overlay {
+                    overlay::show(&handle);
+                }
             }
 
             if should_stop {
@@ -120,9 +92,7 @@ pub fn build_shortcut_plugin(
                             samples.len(),
                             samples.len() as f32 / source_rate as f32
                         );
-                    }
-
-                    if samples.len() >= min_samples {
+                    } else {
                         let handle_clone = handle.clone();
                         std::thread::spawn(move || {
                             match std::panic::catch_unwind(
@@ -151,71 +121,6 @@ pub fn build_shortcut_plugin(
             }
         })
         .build()
-}
-
-/// Handle the agent hotkey (push-to-talk only, sends to OpenClaw).
-fn handle_agent_hotkey(
-    handle: &tauri::AppHandle,
-    app_state: &tauri::State<AppState>,
-    pressed: bool,
-    released: bool,
-    shortcut: &tauri_plugin_global_shortcut::Shortcut,
-) {
-    if pressed {
-        let guard = app_state.audio.lock().unwrap();
-        if let Some(audio) = guard.as_ref() {
-            audio.recording_buffer.lock().unwrap().clear();
-            audio.is_recording.store(true, Ordering::Relaxed);
-            AGENT_RECORDING.store(true, Ordering::Relaxed);
-            log::info!("Agent recording started (shortcut: {:?})", shortcut);
-        }
-        drop(guard);
-        sounds::play_agent_start();
-        let _ = handle.emit("recording-state", true);
-        let _ = handle.emit("agent-recording", true);
-        overlay::show(handle);
-    }
-
-    if released && AGENT_RECORDING.load(Ordering::Relaxed) {
-        AGENT_RECORDING.store(false, Ordering::Relaxed);
-        let guard = app_state.audio.lock().unwrap();
-        if let Some(audio) = guard.as_ref() {
-            audio.is_recording.store(false, Ordering::Relaxed);
-            let samples: Vec<f32> = {
-                let mut buf = audio.recording_buffer.lock().unwrap();
-                std::mem::take(&mut *buf)
-            };
-            let source_rate = audio.sample_rate;
-            drop(guard);
-            sounds::play_agent_stop();
-            let _ = handle.emit("recording-state", false);
-            let _ = handle.emit("agent-recording", false);
-
-            log::info!(
-                "Agent recording stopped: {} samples ({:.1}s)",
-                samples.len(),
-                samples.len() as f32 / source_rate as f32
-            );
-
-            let min_samples = (source_rate as f32 * 0.3) as usize;
-            if samples.len() >= min_samples {
-                let handle_clone = handle.clone();
-                std::thread::spawn(move || {
-                    agent::process_agent_recording(&handle_clone, samples, source_rate);
-                });
-            }
-        } else {
-            drop(guard);
-            let _ = handle.emit("recording-state", false);
-            let _ = handle.emit("agent-recording", false);
-        }
-        // Hide overlay after a short delay
-        let handle_clone = handle.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(800));
-            overlay::hide(&handle_clone);
-        });
-    }
 }
 
 /// The core recording processing pipeline: resample → VAD → transcribe → style → dict → snippet → polish → paste.
@@ -261,14 +166,27 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
         res_peak
     );
 
-    // Save debug WAV
-    let wav_path = std::env::temp_dir().join("inkwell_debug.wav");
-    let _ = recording::save_wav(&resampled, &wav_path);
+    let app_state = handle.state::<AppState>();
+    let (vad_threshold, debug_save_audio, show_overlay) = {
+        let settings = app_state.settings.lock().unwrap();
+        (
+            settings.vad_threshold,
+            settings.debug_save_audio,
+            settings.show_overlay,
+        )
+    };
+
+    // Opt-in debug WAV. Off by default: voice audio must not be left on disk.
+    if debug_save_audio {
+        let wav_path = std::env::temp_dir().join("inkwell_debug.wav");
+        match recording::save_wav(&resampled, &wav_path) {
+            Ok(_) => log::warn!("Debug audio written to {}", wav_path.display()),
+            Err(e) => log::warn!("Debug audio save failed: {}", e),
+        }
+    }
 
     // 2. VAD: remove silence
-    let app_state = handle.state::<AppState>();
     let vad_path = app_state.vad_model_path.lock().unwrap().clone();
-    let vad_threshold = app_state.settings.lock().unwrap().vad_threshold;
     let speech = if !vad_path.is_empty() && std::path::Path::new(&vad_path).exists() {
         match vad::remove_silence(&resampled, &vad_path, vad_threshold) {
             Ok(s) if !s.is_empty() => s,
@@ -336,7 +254,9 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                         }
 
                         std::thread::sleep(std::time::Duration::from_millis(500));
-                        overlay::hide(handle);
+                        if show_overlay {
+                            overlay::hide(handle);
+                        }
                         return;
                     }
                 }
@@ -370,44 +290,27 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                 let styled = snippet_store.expand(&styled);
                 drop(snippet_store);
 
-                // AI Polish (if enabled, async via tokio)
+                // AI Polish (BYOK only — no key configured means no polish)
                 let polish_enabled = *app_state.polish_enabled.lock().unwrap();
-                let final_text = if polish_enabled && !styled.is_empty() {
-                    let install_id =
-                        app_state.settings.lock().unwrap().install_id.clone();
-                    let prompt =
-                        app_state.polish_prompt.lock().unwrap().clone();
+                let byok_provider = if polish_enabled && !styled.is_empty() {
+                    llm::first_configured_provider()
+                } else {
+                    None
+                };
 
-                    let byok_provider =
-                        ["groq", "openai", "anthropic", "openrouter"]
-                            .iter()
-                            .find(|p| {
-                                keyring::Entry::new("inkwell", p)
-                                    .ok()
-                                    .and_then(|e| e.get_password().ok())
-                                    .map(|k| !k.is_empty())
-                                    .unwrap_or(false)
-                            })
-                            .map(|s| s.to_string());
+                let final_text = match byok_provider {
+                    Some(provider) => {
+                        let prompt =
+                            app_state.polish_prompt.lock().unwrap().clone();
+                        let api_key =
+                            llm::api_key_for(&provider).unwrap_or_default();
+                        let styled_clone = styled.clone();
+                        log::info!("AI Polish: sending to {}", provider);
 
-                    let styled_clone = styled.clone();
-                    log::info!(
-                        "AI Polish: sending to {}",
-                        byok_provider.as_deref().unwrap_or("proxy")
-                    );
-
-                    let rt_result = tokio::runtime::Runtime::new();
-
-                    match rt_result {
-                        Ok(runtime) => {
-                            let result = std::thread::spawn(move || {
-                                runtime.block_on(async {
-                                    if let Some(provider) = byok_provider {
-                                        let api_key =
-                                            keyring::Entry::new("inkwell", &provider)
-                                                .ok()
-                                                .and_then(|e| e.get_password().ok())
-                                                .unwrap_or_default();
+                        match tokio::runtime::Runtime::new() {
+                            Ok(runtime) => {
+                                let result = std::thread::spawn(move || {
+                                    runtime.block_on(async move {
                                         let cfg = llm::ProviderConfig {
                                             provider,
                                             api_key,
@@ -419,78 +322,45 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                                             .await
                                             .map(|r| r.text)
                                             .ok()
-                                    } else {
-                                        match llm::call_proxy(
-                                            &install_id,
-                                            &styled_clone,
-                                            &prompt,
-                                        )
-                                        .await
-                                        {
-                                            Ok(r) => {
-                                                log::info!(
-                                                    "Proxy response: {:?}",
-                                                    r
-                                                );
-                                                r.text
-                                            }
-                                            Err(e) => {
-                                                log::error!(
-                                                    "Proxy call failed: {}",
-                                                    e
-                                                );
-                                                None
-                                            }
-                                        }
-                                    }
+                                    })
                                 })
-                            })
-                            .join()
-                            .ok()
-                            .flatten();
+                                .join()
+                                .ok()
+                                .flatten();
 
-                            match result {
-                                Some(polished) => {
-                                    log::info!(
-                                        "AI Polish result: \"{}\"",
+                                match result {
+                                    Some(polished) => {
+                                        log::info!(
+                                            "AI Polish result: \"{}\"",
+                                            polished
+                                        );
                                         polished
-                                    );
-                                    polished
-                                }
-                                None => {
-                                    log::warn!(
-                                        "AI Polish failed, using unpolished text"
-                                    );
-                                    styled
+                                    }
+                                    None => {
+                                        log::warn!(
+                                            "AI Polish failed, using unpolished text"
+                                        );
+                                        styled
+                                    }
                                 }
                             }
-                        }
-                        Err(_) => {
-                            log::warn!(
-                                "No tokio runtime for AI Polish, skipping"
-                            );
-                            styled
+                            Err(_) => {
+                                log::warn!(
+                                    "No tokio runtime for AI Polish, skipping"
+                                );
+                                styled
+                            }
                         }
                     }
-                } else {
-                    styled
+                    None => {
+                        if polish_enabled && !styled.is_empty() {
+                            log::info!(
+                                "AI Polish enabled but no API key configured, skipping"
+                            );
+                        }
+                        styled
+                    }
                 };
-
-                // Track usage when AI Polish was used
-                if polish_enabled && !final_text.is_empty() {
-                    let mut usage_data = app_state.usage.lock().unwrap();
-                    usage_data.ensure_current();
-                    usage_data.add_words(&final_text);
-                    let usage_path =
-                        app_state.usage_path.lock().unwrap().clone();
-                    let _ =
-                        usage_data.save(std::path::Path::new(&usage_path));
-                    log::info!(
-                        "Usage: {}/{} words this week",
-                        usage_data.words_used,
-                        usage::FREE_TIER_WORDS
-                    );
-                }
 
                 let _ = handle.emit("transcription", &final_text);
 
@@ -541,5 +411,7 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
 
     // Hide overlay after processing
     std::thread::sleep(std::time::Duration::from_millis(800));
-    overlay::hide(handle);
+    if show_overlay {
+        overlay::hide(handle);
+    }
 }

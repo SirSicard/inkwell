@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "IPC surface for the settings window. Scoped to exactly what the frontend calls: app version and event listening (core), the open/save dialogs, writing a file the user just picked in the save dialog, and the check/install/restart update flow. The app's own #[tauri::command]s are not gated by the ACL, so nothing here needs to name them.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "fs:allow-write-text-file",
+    "fs:deny-default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "process:allow-restart"
+  ]
+}

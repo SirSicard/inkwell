@@ -1,6 +1,6 @@
 use crate::{
     appdetect, audio, dictionary, engine, history, pipeline, settings, snippets,
-    style, tray, usage, voicecommand, AppState,
+    style, tray, voicecommand, AppState,
 };
 use tauri::{Emitter, Manager};
 
@@ -12,22 +12,6 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 .level(log::LevelFilter::Info)
                 .build(),
         )?;
-    }
-
-    // List available input devices
-    let devices = audio::list_input_devices();
-    log::info!("Found {} input devices", devices.len());
-
-    // Start audio capture
-    match audio::start_audio_capture(app.handle().clone()) {
-        Ok(state) => {
-            log::info!("Audio capture initialized");
-            let app_state = app.state::<AppState>();
-            *app_state.audio.lock().unwrap() = Some(state);
-        }
-        Err(e) => {
-            log::error!("Failed to start audio: {}", e);
-        }
     }
 
     // Set up models directory
@@ -78,10 +62,31 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
         // Apply sound settings
         crate::sounds::set_dictation_sounds(loaded_settings.sound_dictation);
-        crate::sounds::set_agent_sounds(loaded_settings.sound_agent);
 
         *app_state.settings.lock().unwrap() = loaded_settings.clone();
     }
+
+    // Audio starts after settings load so the saved mic_device can be honored.
+    let devices = audio::list_input_devices();
+    log::info!("Found {} input devices", devices.len());
+
+    match audio::start_audio_capture(app.handle().clone(), &loaded_settings.mic_device) {
+        Ok(state) => {
+            log::info!("Audio capture initialized");
+            let app_state = app.state::<AppState>();
+            *app_state.audio.lock().unwrap() = Some(state);
+        }
+        Err(e) => {
+            log::error!("Failed to start audio: {}", e);
+        }
+    }
+
+    // Autostart: register the plugin, then reconcile the OS state with the setting.
+    app.handle().plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+    ))?;
+    apply_start_on_boot(app.handle(), loaded_settings.start_on_boot);
 
     // Load dictionary
     {
@@ -132,21 +137,6 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         *app_state.voice_commands_path.lock().unwrap() = vc_path.to_string_lossy().to_string();
     }
 
-    // Load usage data
-    {
-        let usage_path = app_data_dir.join("usage.json");
-        let mut usage = usage::UsageData::load(&usage_path);
-        usage.ensure_current();
-        log::info!(
-            "Usage: {}/{} words this week",
-            usage.words_used,
-            usage::FREE_TIER_WORDS
-        );
-        let app_state = app.state::<AppState>();
-        *app_state.usage.lock().unwrap() = usage;
-        *app_state.usage_path.lock().unwrap() = usage_path.to_string_lossy().to_string();
-    }
-
     // Open transcript database
     {
         let db_path = app_data_dir.join("transcripts.db");
@@ -166,52 +156,50 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         vad_model_path.exists()
     );
 
-    // Try to load models: Parakeet V3 (best) > Moonshine Tiny (fallback)
+    // Load the model the user actually chose, then fall back down the list.
     {
         let app_state = app.state::<AppState>();
-        let parakeet_dir = models_dir.join("parakeet-v3");
-        let has_parakeet = parakeet_dir.join("encoder.int8.onnx").exists()
-            || parakeet_dir.join("encoder.onnx").exists();
 
-        let tiny_dir = models_dir.join("moonshine-tiny");
-        let has_tiny = tiny_dir.join("encoder.onnx").exists()
-            || tiny_dir.join("encoder.int8.onnx").exists()
-            || tiny_dir.join("encode.int8.onnx").exists()
-            || tiny_dir.join("encode.onnx").exists();
+        // Saved choice first, then the standard fallbacks. Dedup so a saved
+        // "parakeet" isn't retried a second time as a fallback.
+        let mut candidates: Vec<String> = vec![loaded_settings.model.clone()];
+        for fallback in ["parakeet", "moonshine-tiny"] {
+            if !candidates.iter().any(|c| c == fallback) {
+                candidates.push(fallback.to_string());
+            }
+        }
 
-        let loaded_engine = if has_parakeet {
-            log::info!("Parakeet V3 found, loading...");
-            match engine::SpeechEngine::parakeet(&models_dir) {
-                Ok(e) => Some(e),
+        let mut loaded_engine = None;
+        for (i, id) in candidates.iter().enumerate() {
+            if !model_files_present(&models_dir, id) {
+                log::info!("Model '{}' not installed, skipping", id);
+                continue;
+            }
+            log::info!("Loading model '{}'...", id);
+            match load_engine(&models_dir, id) {
+                Ok(e) => {
+                    loaded_engine = Some(e);
+                    break;
+                }
                 Err(e) => {
-                    log::warn!("Parakeet V3 load failed: {}, trying Moonshine Tiny", e);
-                    let _ = app.emit(
-                        "model-error",
-                        format!("Parakeet failed: {}. Falling back to Moonshine Tiny.", e),
-                    );
-                    if has_tiny {
-                        engine::SpeechEngine::moonshine(&models_dir, "tiny").ok()
-                    } else {
-                        None
+                    log::warn!("Model '{}' load failed: {}", id, e);
+                    // Only surface the saved choice failing — fallbacks are noise.
+                    if i == 0 {
+                        let _ = app.emit(
+                            "model-error",
+                            format!("{} failed to load: {}. Trying fallbacks.", id, e),
+                        );
                     }
                 }
             }
-        } else if has_tiny {
-            log::info!("Parakeet V3 not found, using Moonshine Tiny");
-            match engine::SpeechEngine::moonshine(&models_dir, "tiny") {
-                Ok(e) => Some(e),
-                Err(e) => {
-                    log::warn!("Moonshine Tiny load failed: {}", e);
-                    None
-                }
-            }
-        } else {
+        }
+
+        if loaded_engine.is_none() {
             log::info!(
-                "No models found yet. Download models to: {}",
+                "No usable models found. Download models to: {}",
                 models_dir.display()
             );
-            None
-        };
+        }
 
         let model_name = match &loaded_engine {
             Some(e) => match e.model_type() {
@@ -247,25 +235,6 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.global_shortcut().register(shortcut)?;
     log::info!("Global hotkey registered: {}", hotkey_str);
 
-    // Register agent hotkey (if enabled)
-    {
-        let app_state = app.state::<AppState>();
-        let settings = app_state.settings.lock().unwrap();
-        if settings.agent_enabled {
-            let agent_hotkey_str = settings.agent_hotkey.clone();
-            drop(settings);
-            match agent_hotkey_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
-                Ok(agent_shortcut) => {
-                    app.global_shortcut().register(agent_shortcut)?;
-                    log::info!("Agent hotkey registered: {}", agent_hotkey_str);
-                }
-                Err(e) => {
-                    log::warn!("Failed to parse agent hotkey '{}': {}", agent_hotkey_str, e);
-                }
-            }
-        }
-    }
-
     // System tray
     tray::setup_tray(app)?;
 
@@ -281,4 +250,94 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// On-disk directory for a model id. Must stay in sync with `commands::download_model`.
+fn model_dir_name(model_id: &str) -> Option<&'static str> {
+    Some(match model_id {
+        "parakeet" => "parakeet-v3",
+        "parakeet-v2" => "parakeet-v2",
+        "moonshine-tiny" => "moonshine-tiny",
+        "moonshine-base" => "moonshine-base",
+        "whisper-tiny" => "whisper-tiny",
+        "whisper-base" => "whisper-base",
+        "whisper-small" => "whisper-small",
+        "whisper-medium" => "whisper-medium",
+        "whisper-large-v3" => "whisper-large-v3",
+        "whisper-turbo" => "whisper-turbo",
+        "whisper-distil-small-en" => "whisper-distil-small-en",
+        "whisper-distil-medium-en" => "whisper-distil-medium-en",
+        "sense-voice" => "sense-voice",
+        _ => return None,
+    })
+}
+
+/// Cheap existence check so a missing model falls back instead of erroring at load.
+fn model_files_present(models_dir: &std::path::Path, model_id: &str) -> bool {
+    let dir = match model_dir_name(model_id) {
+        Some(d) => models_dir.join(d),
+        None => return false,
+    };
+
+    let candidates: Vec<String> = if let Some(variant) = model_id.strip_prefix("whisper-") {
+        let variant = match variant {
+            "distil-small-en" => "distil-small.en",
+            "distil-medium-en" => "distil-medium.en",
+            v => v,
+        };
+        vec![
+            format!("{}-encoder.int8.onnx", variant),
+            format!("{}-encoder.onnx", variant),
+        ]
+    } else if model_id == "sense-voice" {
+        vec!["model.int8.onnx".into(), "model.onnx".into()]
+    } else {
+        vec![
+            "encoder.int8.onnx".into(),
+            "encoder.onnx".into(),
+            "encode.int8.onnx".into(),
+            "encode.onnx".into(),
+        ]
+    };
+
+    candidates.iter().any(|f| dir.join(f).exists())
+}
+
+/// Build an engine for a model id. Mirrors `commands::switch_model`.
+fn load_engine(
+    models_dir: &std::path::Path,
+    model_id: &str,
+) -> Result<engine::SpeechEngine, String> {
+    match model_id {
+        "parakeet" => engine::SpeechEngine::parakeet(models_dir),
+        "parakeet-v2" => engine::SpeechEngine::parakeet_v2(models_dir),
+        "moonshine-tiny" => engine::SpeechEngine::moonshine(models_dir, "tiny"),
+        "moonshine-base" => engine::SpeechEngine::moonshine(models_dir, "base"),
+        "whisper-tiny" => engine::SpeechEngine::whisper(models_dir, "tiny"),
+        "whisper-base" => engine::SpeechEngine::whisper(models_dir, "base"),
+        "whisper-small" => engine::SpeechEngine::whisper(models_dir, "small"),
+        "whisper-medium" => engine::SpeechEngine::whisper(models_dir, "medium"),
+        "whisper-large-v3" => engine::SpeechEngine::whisper(models_dir, "large-v3"),
+        "whisper-turbo" => engine::SpeechEngine::whisper(models_dir, "turbo"),
+        "whisper-distil-small-en" => engine::SpeechEngine::whisper(models_dir, "distil-small.en"),
+        "whisper-distil-medium-en" => engine::SpeechEngine::whisper(models_dir, "distil-medium.en"),
+        "sense-voice" => engine::SpeechEngine::sense_voice(models_dir),
+        other => Err(format!("Unknown model: {}", other)),
+    }
+}
+
+/// Enable/disable launch-at-login. Best-effort: a failure here must not block the app.
+pub fn apply_start_on_boot(app: &tauri::AppHandle, enabled: bool) {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    match result {
+        Ok(_) => log::info!("Start on boot: {}", enabled),
+        Err(e) => log::warn!("Start on boot ({}) failed: {}", enabled, e),
+    }
 }

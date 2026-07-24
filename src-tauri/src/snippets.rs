@@ -119,43 +119,62 @@ fn interpolate_variables(text: &str) -> String {
     result
 }
 
+// {date} and {time} are typed into the user's own document, so they follow the
+// machine's local clock, not UTC.
 fn current_date() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs()).unwrap_or(0);
-    let days = secs / 86400;
-    let (y, m, d) = days_to_ymd(days);
-    format!("{:04}-{:02}-{:02}", y, m, d)
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 fn current_time() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs()).unwrap_or(0);
-    let h = (secs / 3600) % 24;
-    let m = (secs / 60) % 60;
-    format!("{:02}:{:02}", h, m)
+    chrono::Local::now().format("%H:%M").to_string()
 }
 
-fn days_to_ymd(days: u64) -> (u64, u64, u64) {
-    let mut remaining = days;
-    let mut year = 1970u64;
-    loop {
-        let diy = if is_leap(year) { 366 } else { 365 };
-        if remaining < diy { break; }
-        remaining -= diy;
-        year += 1;
-    }
-    let months = [31u64, if is_leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1u64;
-    for &dim in &months {
-        if remaining < dim { break; }
-        remaining -= dim;
-        month += 1;
-    }
-    (year, month, remaining + 1)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn is_leap(y: u64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    fn store(trigger: &str, expansion: &str) -> SnippetStore {
+        SnippetStore {
+            snippets: vec![Snippet {
+                id: "t".into(),
+                trigger: trigger.into(),
+                expansion: expansion.into(),
+                category: String::new(),
+                enabled: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn date_variable_uses_local_date() {
+        let before = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let result = store("today", "{date}").expand("today");
+        let after = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert!(
+            result == before || result == after,
+            "expected local date {} or {}, got {}",
+            before,
+            after,
+            result
+        );
+    }
+
+    #[test]
+    fn time_variable_uses_local_clock_not_utc() {
+        // The hour is what differed between local and UTC before this fix.
+        // Sample either side of the call so an hour rollover can't flake it.
+        let before = chrono::Local::now().format("%H").to_string();
+        let result = store("now", "{time}").expand("now");
+        let after = chrono::Local::now().format("%H").to_string();
+
+        assert_eq!(result.len(), 5, "expected HH:MM, got {}", result);
+        assert_eq!(&result[2..3], ":");
+        assert!(
+            result.starts_with(&before) || result.starts_with(&after),
+            "expected local hour {} or {}, got {}",
+            before,
+            after,
+            result
+        );
+    }
 }
