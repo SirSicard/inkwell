@@ -2,12 +2,14 @@ import { useState, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
+import { getVersion } from "@tauri-apps/api/app"
+import type { Update } from "@tauri-apps/plugin-updater"
 import { InkCanvas } from "./components/InkCanvas"
 import type { Settings, Toast, UpdateInfo, Tab } from "./types"
 import { basicTabs, advancedTabs } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
-  AITab, AgentTab, SnippetsTab, AppStylesTab, DictionaryTab,
+  AITab, SnippetsTab, AppStylesTab, DictionaryTab,
   FilesTab, VoiceCommandsTab, AboutTab,
 } from "./tabs"
 
@@ -368,7 +370,6 @@ function TabContent({ tab, onAdvancedChange }: { tab: Tab; onAdvancedChange?: (v
     case "Audio":       return <AudioTab />
     case "Models":      return <ModelsTab />
     case "AI":          return <AITab />
-    case "Agent":       return <AgentTab />
     case "Snippets":    return <SnippetsTab />
     case "App Styles":  return <AppStylesTab />
     case "Dictionary":  return <DictionaryTab />
@@ -390,6 +391,9 @@ function App() {
   const [updateAvailable, setUpdateAvailable] = useState<UpdateInfo | null>(null)
   const [updateDismissed, setUpdateDismissed] = useState(false)
   const [updateProgress, setUpdateProgress] = useState<number | null>(null)
+  const [appVersion, setAppVersion] = useState("")
+  // Holds the live Update handle so the install button can act on it (not a window global).
+  const updateHandle = useRef<Update | null>(null)
 
   const addToast = (message: string, type: Toast["type"] = "error") => {
     const id = ++toastId
@@ -410,7 +414,7 @@ function App() {
             notes: update.body || "Bug fixes and improvements.",
             date: update.date?.split("T")[0] || "",
           })
-          ;(window as any).__inkwell_update = update
+          updateHandle.current = update
         }
       } catch (e) {
         console.log("Update check skipped:", e)
@@ -418,6 +422,11 @@ function App() {
     }
     const timer = setTimeout(checkUpdate, 5000)
     return () => { cancelled = true; clearTimeout(timer) }
+  }, [])
+
+  // Shipped version comes from the bundle, never a hardcoded literal
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {})
   }, [])
 
   // First-run onboarding
@@ -530,18 +539,19 @@ function App() {
                     <div className="flex items-center gap-2 pt-0.5">
                       <button
                         onClick={async () => {
-                          const update = (window as any).__inkwell_update
+                          const update = updateHandle.current
                           if (!update) return
                           setUpdateProgress(0)
                           try {
                             let downloaded = 0
-                            const total = update.rawContentLength || 1
-                            await update.downloadAndInstall((event: any) => {
-                              if (event.event === "Started" && event.data?.contentLength) {
-                                // total known
+                            // Total only arrives with the Started event; stay at 0% until it does.
+                            let total = 0
+                            await update.downloadAndInstall((event) => {
+                              if (event.event === "Started") {
+                                total = event.data.contentLength ?? 0
                               } else if (event.event === "Progress") {
-                                downloaded += event.data?.chunkLength || 0
-                                setUpdateProgress(Math.min(Math.round((downloaded / total) * 100), 99))
+                                downloaded += event.data.chunkLength
+                                if (total > 0) setUpdateProgress(Math.min(Math.round((downloaded / total) * 100), 99))
                               } else if (event.event === "Finished") {
                                 setUpdateProgress(100)
                               }
@@ -603,7 +613,7 @@ function App() {
               <><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />{modelName}</>
             )}
           </span>
-          <span className="text-[11px] font-mono text-text-tertiary">v0.1.0</span>
+          <span className="text-[11px] font-mono text-text-tertiary">{appVersion ? `v${appVersion}` : ""}</span>
         </div>
       </div>
 

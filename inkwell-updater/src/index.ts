@@ -11,6 +11,11 @@
  *   Key: "latest"
  *   Value: JSON manifest (see UpdateManifest type below)
  * 
+ * Artifact names follow productName ("Inkwell") and bundle.createUpdaterArtifacts
+ * = true in tauri.conf.json, so Windows ships the setup .exe directly rather than
+ * the v1-compatible .nsis.zip. Each "signature" is the literal contents of the
+ * .sig file the release build publishes next to the artifact.
+ *
  * Example KV value for "latest":
  * {
  *   "version": "0.2.0",
@@ -18,20 +23,20 @@
  *   "pub_date": "2026-04-01T12:00:00Z",
  *   "platforms": {
  *     "windows-x86_64": {
- *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/inkwell_0.2.0_x64-setup.nsis.zip",
- *       "signature": "<base64 signature from .sig file>"
+ *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/Inkwell_0.2.0_x64-setup.exe",
+ *       "signature": "<contents of the .sig file>"
  *     },
  *     "darwin-aarch64": {
- *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/inkwell_0.2.0_aarch64.app.tar.gz",
- *       "signature": "<base64 signature>"
+ *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/Inkwell_aarch64.app.tar.gz",
+ *       "signature": "<contents of the .sig file>"
  *     },
  *     "darwin-x86_64": {
- *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/inkwell_0.2.0_x64.app.tar.gz",
- *       "signature": "<base64 signature>"
+ *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/Inkwell_x64.app.tar.gz",
+ *       "signature": "<contents of the .sig file>"
  *     },
  *     "linux-x86_64": {
- *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/inkwell_0.2.0_amd64.AppImage.tar.gz",
- *       "signature": "<base64 signature>"
+ *       "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.0/Inkwell_0.2.0_amd64.AppImage",
+ *       "signature": "<contents of the .sig file>"
  *     }
  *   }
  * }
@@ -53,15 +58,33 @@ interface UpdateManifest {
   platforms: Record<string, PlatformEntry>;
 }
 
+function parseVersion(version: string): { nums: number[]; pre: string } {
+  const raw = version.replace(/^v/, "");
+  const dash = raw.indexOf("-");
+  const core = dash === -1 ? raw : raw.slice(0, dash);
+  const pre = dash === -1 ? "" : raw.slice(dash + 1);
+  const nums = core.split(".").map((part) => {
+    const parsed = Number.parseInt(part, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  });
+  return { nums, pre };
+}
+
+// A pre-release sorts below the release it leads to. Number() on a raw "0-rc1"
+// segment used to yield NaN, which made every comparison false and reported
+// "up to date" forever to anyone running a pre-release build.
 function compareVersions(a: string, b: string): number {
-  const pa = a.replace(/^v/, "").split(".").map(Number);
-  const pb = b.replace(/^v/, "").split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
+  const va = parseVersion(a);
+  const vb = parseVersion(b);
+  for (let i = 0; i < Math.max(va.nums.length, vb.nums.length); i++) {
+    const na = va.nums[i] ?? 0;
+    const nb = vb.nums[i] ?? 0;
     if (na > nb) return 1;
     if (na < nb) return -1;
   }
+  if (va.pre && !vb.pre) return -1;
+  if (!va.pre && vb.pre) return 1;
+  if (va.pre !== vb.pre) return va.pre < vb.pre ? -1 : 1;
   return 0;
 }
 
@@ -96,8 +119,9 @@ export default {
     const [, target, arch, currentVersion] = match;
     const platformKey = `${target}-${arch}`;
 
-    // Get latest release manifest from KV
-    const raw = await env.INKWELL_RELEASES.get("latest");
+    // Get latest release manifest from KV. Every running client polls this, so
+    // cache it at the edge; a five minute lag on a new release is invisible.
+    const raw = await env.INKWELL_RELEASES.get("latest", { cacheTtl: 300 });
 
     if (!raw) {
       // No release published yet

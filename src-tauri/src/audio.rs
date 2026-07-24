@@ -3,7 +3,7 @@ use cpal::{SampleFormat, Stream, StreamConfig};
 use ringbuf::{HeapRb, traits::{Producer, Split}};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub struct AudioState {
     pub rms: Arc<Mutex<f32>>,
@@ -13,39 +13,37 @@ pub struct AudioState {
     _stream: Stream,
 }
 
-/// Device info with both the cpal name and friendly Windows name
+/// A selectable input device.
 #[derive(serde::Serialize, Clone)]
 pub struct DeviceInfo {
-    pub id: String,      // cpal internal name (used for selection)
-    pub name: String,     // friendly display name
+    /// cpal device name. This is the selection key stored in `mic_device`.
+    pub id: String,
+    /// Display name, possibly with the manufacturer appended.
+    pub name: String,
 }
 
-/// List available input devices with friendly names from Windows WASAPI.
+fn describe(device: &cpal::Device) -> Option<DeviceInfo> {
+    let desc = device.description().ok()?;
+    let id = desc.name().to_string();
+
+    // `extended()` is a WASAPI-only bag of strings; on CoreAudio it is empty,
+    // so keying the display name off it hid every Mac device behind its raw
+    // cpal name. Manufacturer is the one extra field the backends agree on.
+    let name = match desc.manufacturer() {
+        Some(m) if !m.is_empty() && !id.to_lowercase().contains(&m.to_lowercase()) => {
+            format!("{} ({})", id, m)
+        }
+        _ => id.clone(),
+    };
+
+    Some(DeviceInfo { id, name })
+}
+
+/// List available input devices.
 pub fn list_input_devices() -> Vec<DeviceInfo> {
     let host = cpal::default_host();
     let devices: Vec<DeviceInfo> = host.input_devices()
-        .map(|devices| {
-            devices
-                .filter_map(|d| {
-                    let desc = d.description().ok()?;
-                    let id = desc.name().to_string();
-
-                    // Collect all info cpal gives us
-                    let extended: Vec<String> = desc.extended().iter().map(|s| s.to_string()).collect();
-
-                    // Use the fullest name available
-                    let friendly = if !extended.is_empty() {
-                        extended[0].clone()
-                    } else {
-                        id.clone()
-                    };
-
-                    log::info!("  Device: name='{}' extended={:?}", id, extended);
-
-                    Some(DeviceInfo { id, name: friendly })
-                })
-                .collect()
-        })
+        .map(|devices| devices.filter_map(|d| describe(&d)).collect())
         .unwrap_or_default();
 
     for (i, d) in devices.iter().enumerate() {
@@ -54,38 +52,44 @@ pub fn list_input_devices() -> Vec<DeviceInfo> {
     devices
 }
 
-/// Find the best input device. Try each device with a quick capture test
-/// to find one that actually produces non-zero audio.
-/// The "AI Noise-cancelling Input" on Logitech is a virtual device that
-/// cpal reads as all zeros on Windows. We need to find the real hardware device.
-fn find_preferred_device(host: &cpal::Host) -> Option<cpal::Device> {
-    // Skip virtual/noise-cancelling devices that produce zeros in cpal
-    let skip_keywords = ["ai noise"];
-
-    if let Ok(devices) = host.input_devices() {
-        for device in devices {
-            if let Ok(desc) = device.description() {
-                let name_lower = desc.name().to_lowercase();
-                let should_skip = skip_keywords.iter().any(|kw| name_lower.contains(kw));
-                if should_skip {
-                    log::info!("Skipping virtual device: {}", desc.name());
-                    continue;
+/// Resolve the `mic_device` setting to a device. "auto" (or empty) means the
+/// system default input; anything else is matched against the cpal device name.
+fn resolve_device(host: &cpal::Host, preferred: &str) -> Option<cpal::Device> {
+    let want = preferred.trim();
+    if !want.is_empty() && !want.eq_ignore_ascii_case("auto") {
+        if let Ok(devices) = host.input_devices() {
+            for device in devices {
+                if let Ok(desc) = device.description() {
+                    if desc.name().eq_ignore_ascii_case(want) {
+                        log::info!("Using configured input device: {}", desc.name());
+                        return Some(device);
+                    }
                 }
-                log::info!("Selected input device: {}", desc.name());
-                return Some(device);
             }
         }
+        log::warn!(
+            "Configured mic '{}' not available, falling back to system default",
+            want
+        );
     }
 
-    // Fallback to system default
-    log::info!("No suitable device found, using system default");
-    host.default_input_device()
+    let device = host.default_input_device();
+    if let Some(d) = &device {
+        if let Ok(desc) = d.description() {
+            log::info!("Using default input device: {}", desc.name());
+        }
+    }
+    device
 }
 
-/// Start the always-on audio capture stream
-pub fn start_audio_capture(app_handle: AppHandle) -> Result<AudioState, String> {
+/// Start the always-on audio capture stream on the configured device.
+/// `preferred_device` is the `mic_device` setting ("auto" for system default).
+pub fn start_audio_capture(
+    app_handle: AppHandle,
+    preferred_device: &str,
+) -> Result<AudioState, String> {
     let host = cpal::default_host();
-    let device = find_preferred_device(&host)
+    let device = resolve_device(&host, preferred_device)
         .ok_or("No input device found")?;
 
     let config = device
@@ -235,6 +239,32 @@ pub fn start_audio_capture(app_handle: AppHandle) -> Result<AudioState, String> 
         sample_rate,
         _stream: stream,
     })
+}
+
+/// Tear down the capture stream and reopen it on `preferred_device`.
+/// Call this whenever the `mic_device` setting changes — the stream is bound
+/// to one device at build time, so nothing else makes the setting take effect.
+pub fn restart_audio_capture(app: &AppHandle, preferred_device: &str) -> Result<(), String> {
+    let state = app.state::<crate::AppState>();
+    let mut guard = state
+        .audio
+        .lock()
+        .map_err(|_| "Audio state lock poisoned".to_string())?;
+
+    if let Some(existing) = guard.as_ref() {
+        if existing.is_recording.load(Ordering::Relaxed) {
+            return Err("Cannot switch microphone while recording".to_string());
+        }
+    }
+
+    // Drop the old stream before opening the new one: backends refuse a second
+    // capture stream on a device the first one still holds.
+    *guard = None;
+
+    let new_state = start_audio_capture(app.clone(), preferred_device)?;
+    *guard = Some(new_state);
+    log::info!("Audio capture restarted on '{}'", preferred_device);
+    Ok(())
 }
 
 #[tauri::command]

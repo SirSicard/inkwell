@@ -45,8 +45,12 @@ an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer at mattias@aitappers.io. All complaints will
-be reviewed and investigated promptly and fairly.
+reported to the project maintainer at mattias@aitappers.io. This is a
+solo-maintained project, so that one address is the whole process. Reports are
+handled privately, and the reporter's identity is not shared.
+
+Consequences scale with the behavior: a correction, a warning, a temporary
+block, or a permanent ban from the repo and its discussions.
 
 ## Attribution
 

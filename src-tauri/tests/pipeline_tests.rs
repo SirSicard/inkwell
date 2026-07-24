@@ -1,8 +1,8 @@
 //! Integration tests for the Inkwell dictation pipeline.
-//! Tests the pure-logic stages: style → dictionary → snippets → export → usage.
+//! Tests the pure-logic stages: style → dictionary → snippets → export.
 //! Excludes hardware-dependent stages (audio capture, VAD, STT engine, paste).
 
-use app_lib::{dictionary, export, history, recording, snippets, style, usage, voicecommand};
+use app_lib::{dictionary, export, history, recording, snippets, style, voicecommand};
 
 // ============================================================================
 // Style formatting
@@ -246,77 +246,6 @@ mod snippet_tests {
 }
 
 // ============================================================================
-// Usage tracking
-// ============================================================================
-
-mod usage_tests {
-    use super::*;
-
-    #[test]
-    fn new_week_starts_at_zero() {
-        let u = usage::UsageData::new_week();
-        assert_eq!(u.words_used, 0);
-        assert!(!u.over_limit());
-        assert_eq!(u.remaining(), usage::FREE_TIER_WORDS);
-    }
-
-    #[test]
-    fn add_words_counts_correctly() {
-        let mut u = usage::UsageData::new_week();
-        u.add_words("hello world foo bar");
-        assert_eq!(u.words_used, 4);
-        assert_eq!(u.remaining(), usage::FREE_TIER_WORDS - 4);
-    }
-
-    #[test]
-    fn over_limit_triggers_at_threshold() {
-        let mut u = usage::UsageData::new_week();
-        u.words_used = usage::FREE_TIER_WORDS - 1;
-        assert!(!u.over_limit());
-        u.words_used = usage::FREE_TIER_WORDS;
-        assert!(u.over_limit());
-    }
-
-    #[test]
-    fn ensure_current_resets_on_new_week() {
-        let mut u = usage::UsageData {
-            week_start: "2020-01-06".to_string(), // old Monday
-            words_used: 500,
-        };
-        u.ensure_current();
-        assert_eq!(u.words_used, 0);
-        assert_ne!(u.week_start, "2020-01-06");
-    }
-
-    #[test]
-    fn save_and_load_roundtrip() {
-        let tmp = std::env::temp_dir().join("inkwell_test_usage.json");
-        let mut u = usage::UsageData::new_week();
-        u.add_words("hello world");
-        u.save(&tmp).unwrap();
-
-        let loaded = usage::UsageData::load(&tmp);
-        assert_eq!(loaded.words_used, u.words_used);
-        assert_eq!(loaded.week_start, u.week_start);
-
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    #[test]
-    fn load_missing_file_returns_new_week() {
-        let u = usage::UsageData::load(std::path::Path::new("/nonexistent/usage.json"));
-        assert_eq!(u.words_used, 0);
-    }
-
-    #[test]
-    fn empty_text_adds_zero_words() {
-        let mut u = usage::UsageData::new_week();
-        u.add_words("");
-        assert_eq!(u.words_used, 0);
-    }
-}
-
-// ============================================================================
 // Export
 // ============================================================================
 
@@ -418,6 +347,64 @@ mod export_tests {
         let result = export::to_json(&[t]);
         assert!(result.contains("\\\"hello\\\""));
         assert!(result.contains("\\n"));
+    }
+
+    /// Text a dictation can realistically produce: quotes, newlines, tabs,
+    /// backslashes, control characters and non-ASCII in one string.
+    fn nasty_text() -> String {
+        "He said \"hi\\bye\"\n\ttab\r\nend \u{7} — ünïcode 😀".to_string()
+    }
+
+    #[test]
+    fn json_single_roundtrips_through_a_parser() {
+        let t = history::Transcript {
+            text: nasty_text(),
+            raw_text: nasty_text(),
+            ..sample_transcript()
+        };
+        let result = export::to_json(&[t]);
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("export must be valid JSON");
+        assert_eq!(parsed["version"], 1);
+        assert_eq!(parsed["transcript"]["text"], nasty_text());
+        assert_eq!(parsed["transcript"]["raw_text"], nasty_text());
+        assert_eq!(parsed["transcript"]["audio_duration_ms"], 2000);
+    }
+
+    #[test]
+    fn json_multiple_roundtrips_through_a_parser() {
+        let mut list = two_transcripts();
+        list[0].text = nasty_text();
+        let result = export::to_json(&list);
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("export must be valid JSON");
+        assert_eq!(parsed["count"], 2);
+        assert_eq!(parsed["transcripts"][0]["text"], nasty_text());
+        assert_eq!(parsed["transcripts"][1]["text"], "Goodbye.");
+    }
+
+    #[test]
+    fn json_empty_list_is_valid_and_empty() {
+        let result = export::to_json(&[]);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("export must be valid JSON");
+        assert_eq!(parsed["count"], 0);
+        assert_eq!(parsed["transcripts"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn json_exported_at_is_iso8601() {
+        let result = export::to_json(&[sample_transcript()]);
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let stamp = parsed["exported_at"].as_str().unwrap();
+        // 2026-07-24T09:15:00Z
+        assert_eq!(stamp.len(), 20, "unexpected stamp: {}", stamp);
+        assert!(stamp.ends_with('Z'), "unexpected stamp: {}", stamp);
+        assert_eq!(&stamp[4..5], "-");
+        assert_eq!(&stamp[10..11], "T");
+        assert!(stamp.starts_with("20"), "unexpected stamp: {}", stamp);
     }
 
     #[test]

@@ -127,6 +127,7 @@ pub fn get_settings(state: tauri::State<AppState>) -> settings::Settings {
 
 #[tauri::command]
 pub fn update_settings(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     key: String,
     value: String,
@@ -137,7 +138,10 @@ pub fn update_settings(
         "model" => settings.model = value,
         "hotkey" => settings.hotkey = value,
         "recording_mode" => settings.recording_mode = value,
-        "start_on_boot" => settings.start_on_boot = value == "true",
+        "start_on_boot" => {
+            settings.start_on_boot = value == "true";
+            crate::setup::apply_start_on_boot(&app, settings.start_on_boot);
+        }
         "show_overlay" => settings.show_overlay = value == "true",
         "advanced_mode" => settings.advanced_mode = value == "true",
         "mic_device" => settings.mic_device = value,
@@ -146,10 +150,7 @@ pub fn update_settings(
             settings.sound_dictation = value == "true";
             crate::sounds::set_dictation_sounds(settings.sound_dictation);
         }
-        "sound_agent" => {
-            settings.sound_agent = value == "true";
-            crate::sounds::set_agent_sounds(settings.sound_agent);
-        }
+        "debug_save_audio" => settings.debug_save_audio = value == "true",
         _ => return Err(format!("Unknown setting: {}", key)),
     }
     let path = state.settings_path.lock().unwrap().clone();
@@ -427,87 +428,6 @@ pub async fn transcribe_file(
     }))
 }
 
-#[tauri::command]
-pub async fn download_parakeet(app: tauri::AppHandle) -> Result<(), String> {
-    use futures_util::StreamExt;
-    use std::io::Write;
-
-    let models_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("App data dir error: {}", e))?
-        .join("models")
-        .join("parakeet-v3");
-
-    std::fs::create_dir_all(&models_dir)
-        .map_err(|e| format!("Failed to create model dir: {}", e))?;
-
-    let base = "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main";
-    let files = vec![
-        ("encoder.int8.onnx", 683_000_000u64),
-        ("decoder.int8.onnx", 12_000_000u64),
-        ("joiner.int8.onnx", 7_000_000u64),
-        ("tokens.txt", 96_000u64),
-    ];
-
-    let total_bytes: u64 = files.iter().map(|(_, s)| s).sum();
-    let mut downloaded: u64 = 0;
-
-    let client = reqwest::Client::new();
-
-    for (filename, _expected) in &files {
-        let dest = models_dir.join(filename);
-        if dest.exists() {
-            let file_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
-            downloaded += file_size;
-            let pct = (downloaded * 100 / total_bytes) as u32;
-            let _ = app.emit(
-                "model-download-progress",
-                serde_json::json!({ "percent": pct, "file": filename }),
-            );
-            continue;
-        }
-
-        let url = format!("{}/{}", base, filename);
-        log::info!("Downloading {}", url);
-
-        let resp = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Download failed {}: {}", filename, e))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {} for {}", resp.status(), filename));
-        }
-
-        let mut file =
-            std::fs::File::create(&dest).map_err(|e| format!("Cannot create {}: {}", filename, e))?;
-
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("Stream error: {}", e))?;
-            file.write_all(&chunk)
-                .map_err(|e| format!("Write error: {}", e))?;
-            downloaded += chunk.len() as u64;
-            let pct = (downloaded * 100 / total_bytes).min(99) as u32;
-            let _ = app.emit(
-                "model-download-progress",
-                serde_json::json!({ "percent": pct, "file": filename }),
-            );
-        }
-
-        log::info!("Downloaded {}", filename);
-    }
-
-    let _ = app.emit(
-        "model-download-progress",
-        serde_json::json!({ "percent": 100, "file": "done" }),
-    );
-    log::info!("Parakeet V3 download complete");
-    Ok(())
-}
-
 /// Generic model downloader. Downloads files from HuggingFace to the models directory.
 #[tauri::command]
 pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), String> {
@@ -729,14 +649,6 @@ pub fn remove_model(state: tauri::State<AppState>, model_id: String) -> Result<(
 
     // Don't allow removing the currently active model
     let current = state.model_name.lock().unwrap().clone();
-    let _is_active = match model_id.as_str() {
-        "parakeet" => current == "Parakeet V3",
-        "moonshine-tiny" => current == "Moonshine Tiny",
-        "sense-voice" => current == "SenseVoice",
-        id if id.starts_with("whisper-") => current.to_lowercase().contains("whisper"),
-        _ => false,
-    };
-    // More precise active check for whisper variants
     let is_active = match model_id.as_str() {
         "parakeet" => current == "Parakeet V3",
         "parakeet-v2" => current == "Parakeet V2",
@@ -833,81 +745,4 @@ pub fn save_voice_commands(
     *state.voice_commands.lock().unwrap() = store;
     log::info!("Voice commands saved");
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Agent (OpenClaw) commands
-// ---------------------------------------------------------------------------
-
-#[tauri::command]
-pub fn save_agent_token(state: tauri::State<AppState>, token: String) -> Result<(), String> {
-    // Try keyring first, fall back to settings file
-    let keyring_ok = keyring::Entry::new("inkwell", "openclaw")
-        .ok()
-        .and_then(|e| e.set_password(&token).ok())
-        .is_some();
-
-    if keyring_ok {
-        log::info!("Agent: OpenClaw token saved to keyring");
-    } else {
-        log::warn!("Agent: keyring failed, saving token to settings");
-    }
-
-    // Always save to settings as backup
-    let mut settings = state.settings.lock().unwrap();
-    settings.agent_token = token;
-    let path = state.settings_path.lock().unwrap().clone();
-    let _ = settings.save(std::path::Path::new(&path));
-    log::info!("Agent: token saved to settings");
-    Ok(())
-}
-
-#[tauri::command]
-pub fn get_agent_token_status(state: tauri::State<AppState>) -> bool {
-    // Check keyring first, then settings
-    let from_keyring = keyring::Entry::new("inkwell", "openclaw")
-        .ok()
-        .and_then(|e| e.get_password().ok())
-        .map(|k| !k.is_empty())
-        .unwrap_or(false);
-    if from_keyring { return true; }
-
-    let settings = state.settings.lock().unwrap();
-    !settings.agent_token.is_empty()
-}
-
-#[tauri::command]
-pub async fn test_agent_connection(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let (url, settings_token) = {
-        let settings = state.settings.lock().unwrap();
-        (settings.agent_url.clone(), settings.agent_token.clone())
-    };
-
-    let token = keyring::Entry::new("inkwell", "openclaw")
-        .ok()
-        .and_then(|e| e.get_password().ok())
-        .filter(|k| !k.is_empty())
-        .unwrap_or(settings_token);
-
-    if token.is_empty() {
-        return Err("No token configured".to_string());
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| format!("Client error: {}", e))?;
-
-    let resp = client
-        .get(format!("{}/health", url))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|e| format!("Connection failed: {}", e))?;
-
-    if resp.status().is_success() {
-        Ok("Connected to OpenClaw".to_string())
-    } else {
-        Err(format!("OpenClaw returned status {}", resp.status()))
-    }
 }

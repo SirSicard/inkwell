@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Applied by codesign only when a Developer ID identity is present, so this file
+  is inert on unsigned local and CI builds.
+
+  audio-input is required because hardened runtime blocks microphone access
+  otherwise — for both the cpal capture thread and the WKWebView's getUserMedia
+  call that drives the ink visualiser.
+
+  The App Sandbox is deliberately absent: a sandboxed app cannot register global
+  shortcuts or drive the synthetic Cmd+V paste through the Accessibility API.
+  Distribution is Developer ID + notarization, not the Mac App Store.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

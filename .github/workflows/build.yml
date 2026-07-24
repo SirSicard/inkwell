@@ -9,22 +9,59 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Fails in seconds rather than after a 20 minute Rust build. The updater
+  # keypair is pinned in tauri.conf.json, so the bundler refuses to produce
+  # updater artifacts without the matching private key.
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for the updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error title=Missing updater signing key::Set the repository secret TAURI_SIGNING_PRIVATE_KEY to the contents of src-tauri/.tauri-private.key (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD if the key has one). It must be the key whose public half is pinned in src-tauri/tauri.conf.json (minisign key 93895E304CACA640) or shipped clients will reject the update."
+            exit 1
+          fi
+
   build:
+    name: ${{ matrix.name }}
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: windows-latest
-            rust_target: x86_64-pc-windows-msvc
-          - platform: macos-latest
+          # Primary platform. Everything else is downstream of this one.
+          - name: macOS (Apple Silicon)
+            platform: macos-latest
             rust_target: aarch64-apple-darwin
-          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            best_effort: false
+          - name: macOS (Intel)
+            platform: macos-13
             rust_target: x86_64-apple-darwin
-          - platform: ubuntu-22.04
+            args: --target x86_64-apple-darwin
+            best_effort: true
+          - name: Windows (x64)
+            platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
+            best_effort: false
+          # rpm needs tooling the runner does not have; deb + AppImage only.
+          - name: Linux (x64)
+            platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu --bundles deb,appimage
+            best_effort: true
 
     runs-on: ${{ matrix.platform }}
+    continue-on-error: ${{ matrix.best_effort }}
 
     steps:
       - name: Checkout
@@ -35,14 +72,22 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.rust_target }}
+
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
+      # webkit2gtk for the webview, alsa for cpal capture, xdo for the synthetic
+      # paste, appindicator for the tray.
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -58,18 +103,85 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build Tauri app
+      # Signing and notarization are opt-in: with no Apple Developer account the
+      # secrets are absent, this step exports nothing and the build still ships
+      # an (unsigned) .app and .dmg. The Tauri CLI picks these up from the
+      # environment, so promoting them here is what turns signing on.
+      - name: Enable Apple signing and notarization
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          put() { printf '%s<<__INKWELL_EOF__\n%s\n__INKWELL_EOF__\n' "$1" "$2" >> "$GITHUB_ENV"; }
+
+          if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "::notice title=Unsigned macOS build::No APPLE_CERTIFICATE/APPLE_SIGNING_IDENTITY secrets. Gatekeeper will block the download until the user right-clicks the app and chooses Open."
+            exit 0
+          fi
+
+          put APPLE_CERTIFICATE "$APPLE_CERTIFICATE"
+          put APPLE_CERTIFICATE_PASSWORD "$APPLE_CERTIFICATE_PASSWORD"
+          put APPLE_SIGNING_IDENTITY "$APPLE_SIGNING_IDENTITY"
+
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            put APPLE_ID "$APPLE_ID"
+            put APPLE_PASSWORD "$APPLE_PASSWORD"
+            put APPLE_TEAM_ID "$APPLE_TEAM_ID"
+            echo "::notice title=Signing and notarizing::Developer ID signing plus notarization enabled."
+          else
+            echo "::warning title=Signed but not notarized::APPLE_ID, APPLE_PASSWORD (app-specific) and APPLE_TEAM_ID are needed to notarize. A signed but un-notarized build still trips Gatekeeper on first launch."
+          fi
+
+      - name: Build and bundle
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: --target ${{ matrix.rust_target }}
-          tagName: ${{ github.ref_name }}
-          releaseName: Inkwell ${{ github.ref_name }}
+          args: ${{ matrix.args }}
+          # Both empty on workflow_dispatch, which makes tauri-action build the
+          # bundles without touching releases.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Inkwell {0}', github.ref_name) || '' }}
           releaseBody: |
-            See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+            Inkwell is free and open source. Dictation runs entirely on your machine; AI polish is optional and uses your own API key.
+
+            See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.
+
+            **macOS:** the build is not notarized yet. First launch: right-click the app and choose Open. Inkwell will ask for Microphone access, and for Accessibility (System Settings > Privacy & Security > Accessibility) so it can paste into the app you are typing in.
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
+
+      # A bundle without the usage string is a runtime failure that no compiler
+      # catches: macOS kills the app the moment it opens an input device.
+      - name: Verify macOS bundle
+        if: runner.os == 'macOS'
+        run: |
+          APP="src-tauri/target/${{ matrix.rust_target }}/release/bundle/macos/Inkwell.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error title=No app bundle::Expected $APP"
+            exit 1
+          fi
+          if ! plutil -extract NSMicrophoneUsageDescription raw "$APP/Contents/Info.plist" >/dev/null 2>&1; then
+            echo "::error title=Microphone usage string missing::The bundled Info.plist has no NSMicrophoneUsageDescription, so the app cannot record. Check that src-tauri/Info.plist is being merged (set bundle.macOS.infoPlist explicitly if not)."
+            exit 1
+          fi
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            codesign --verify --strict --verbose=2 "$APP"
+          fi
+
+      - name: Upload bundles (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkwell-${{ matrix.rust_target }}
+          path: src-tauri/target/${{ matrix.rust_target }}/release/bundle/**
+          if-no-files-found: warn
+          retention-days: 14

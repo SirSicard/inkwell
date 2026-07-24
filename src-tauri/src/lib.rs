@@ -1,4 +1,3 @@
-pub mod agent;
 mod appdetect;
 mod audio;
 mod commands;
@@ -8,6 +7,7 @@ pub mod export;
 mod filetranscribe;
 pub mod history;
 mod llm;
+pub mod merge;
 mod overlay;
 mod paste;
 mod pipeline;
@@ -15,11 +15,10 @@ mod polish;
 pub mod recording;
 mod settings;
 pub mod sounds;
-mod setup;
+pub mod setup;
 pub mod snippets;
 pub mod style;
 mod tray;
-pub mod usage;
 mod vad;
 pub mod voicecommand;
 
@@ -40,11 +39,9 @@ pub struct AppState {
     pub dict: Mutex<dictionary::Dictionary>,
     pub dict_path: Mutex<String>,
     pub is_first_run: Mutex<bool>,
-    // AI Polish
+    // AI Polish (BYOK)
     pub polish_enabled: Mutex<bool>,
     pub polish_prompt: Mutex<String>,
-    pub usage: Mutex<usage::UsageData>,
-    pub usage_path: Mutex<String>,
     // Snippets
     pub snippet_store: Mutex<snippets::SnippetStore>,
     pub snippets_path: Mutex<String>,
@@ -74,8 +71,6 @@ pub fn run() {
             is_first_run: Mutex::new(false),
             polish_enabled: Mutex::new(false),
             polish_prompt: Mutex::new(llm::DEFAULT_POLISH_PROMPT.to_string()),
-            usage: Mutex::new(usage::UsageData::new_week()),
-            usage_path: Mutex::new(String::new()),
             snippet_store: Mutex::new(snippets::SnippetStore::default()),
             snippets_path: Mutex::new(String::new()),
             app_styles: Mutex::new(appdetect::AppStyleRules::default()),
@@ -111,7 +106,6 @@ pub fn run() {
             commands::set_hotkey,
             commands::check_first_run,
             commands::export_transcripts,
-            commands::download_parakeet,
             commands::get_snippets,
             commands::save_snippets,
             commands::test_snippet_expansion,
@@ -123,11 +117,7 @@ pub fn run() {
             polish::get_api_key_status,
             polish::get_polish_settings,
             polish::set_polish_settings,
-            polish::get_usage,
             polish::run_ai_polish,
-            commands::save_agent_token,
-            commands::get_agent_token_status,
-            commands::test_agent_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
