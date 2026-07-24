@@ -138,6 +138,9 @@ extern "system" {
 ///
 /// Hand-rolled objc dispatch because `cocoa` re-exports the runtime types but
 /// not the `msg_send!` macro, and nothing in the tree exposes NSWorkspace.
+// The cocoa crate is deprecated in favour of objc2-app-kit. That migration is
+// deferred to its own change; this code is correct against cocoa as pinned.
+#[allow(deprecated)]
 #[cfg(target_os = "macos")]
 fn get_foreground_app_id() -> Option<String> {
     use cocoa::base::{id, nil, selector, SEL};

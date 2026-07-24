@@ -10,7 +10,7 @@ const steps = [
   {
     n: "01",
     title: "Hold the hotkey",
-    body: "Ctrl+Space out of the box, rebindable. Push-to-talk by default; toggle mode if you would rather press once and press again.",
+    body: "Cmd+Shift+Space on macOS, Ctrl+Space on Windows, rebindable to anything. Push-to-talk by default; toggle mode if you would rather press once and press again.",
   },
   {
     n: "02",

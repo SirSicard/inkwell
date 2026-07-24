@@ -48,16 +48,6 @@ fetch() {
 fetch "$MODELS_DIR/silero_vad.onnx" \
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 
-# --- Moonshine Tiny ---
-# V1 layout: preprocessor, encoder, uncached_decoder, cached_decoder, tokens
-MOON_DIR="$MODELS_DIR/moonshine-tiny"
-HF_BASE="https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-tiny-en-int8/resolve/main"
-mkdir -p "$MOON_DIR"
-
-for f in preprocess.onnx encode.int8.onnx uncached_decode.int8.onnx cached_decode.int8.onnx tokens.txt; do
-    fetch "$MOON_DIR/$f" "$HF_BASE/$f"
-done
-
 echo ""
 echo "All models ready!"
 echo "Restart Inkwell to load them."

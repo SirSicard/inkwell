@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app"
 import type { Update } from "@tauri-apps/plugin-updater"
 import { InkCanvas } from "./components/InkCanvas"
 import type { Settings, Toast, UpdateInfo, Tab } from "./types"
+import { formatHotkey } from "./hotkey"
 import { basicTabs, advancedTabs } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
@@ -17,6 +18,8 @@ import {
 
 function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState(0)
+  // Read the real hotkey rather than hardcoding it: the default differs per platform.
+  const [hotkeyLabel, setHotkeyLabel] = useState("")
   const [hotkeyTested, setHotkeyTested] = useState(false)
   const [firstTranscription, setFirstTranscription] = useState("")
   const [downloadState, setDownloadState] = useState<"idle" | "downloading" | "done" | "skipped">("idle")
@@ -42,6 +45,9 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
 
   useEffect(() => {
     invoke<{ id: string; name: string }[]>("get_input_devices").then(setMicDevices).catch(() => {})
+    invoke<Settings>("get_settings")
+      .then((s) => setHotkeyLabel(formatHotkey(s.hotkey)))
+      .catch(() => {})
     if (isMac) checkAccessibility()
   }, [])
 
@@ -228,7 +234,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
     <div key="hotkey" className="text-center space-y-5">
       <div className="text-3xl font-sans font-semibold">Try It</div>
       <p className="text-text-secondary text-base leading-relaxed">
-        Hold <span className="font-mono bg-bg-surface px-2.5 py-1 rounded-md border border-border text-sm">Ctrl + Space</span> and say something.
+        Hold <span className="font-mono bg-bg-surface px-2.5 py-1 rounded-md border border-border text-sm">{hotkeyLabel || "your hotkey"}</span> and say something.
       </p>
       {hotkeyTested ? (
         <motion.div
@@ -508,6 +514,9 @@ function App() {
       listen<string>("paste-error", (e) => addToast(`Paste failed. Text copied to clipboard: ${e.payload}`, "warning")),
       listen<string>("mic-error", (e) => addToast(`Mic error: ${e.payload}`, "warning")),
       listen<string>("model-error", (e) => addToast(`Model error: ${e.payload}`, "warning")),
+      // Without VAD the recognizer still runs, just unsegmented. Say so rather
+      // than degrading silently, which is how this went unnoticed before.
+      listen<string>("vad-unavailable", (e) => addToast(e.payload, "warning")),
     ]
     return () => { listeners.forEach((p) => p.then((fn) => fn())) }
   }, [])
