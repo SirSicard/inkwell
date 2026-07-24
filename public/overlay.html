@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      background: transparent;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      width: 97px;
+      height: 97px;
+      margin: 0;
+      padding: 0;
+    }
+    canvas {
+      width: 97px;
+      height: 97px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="194" height="194"></canvas>
+  <script>
+    const canvas = document.getElementById('c');
+    canvas.width = 194; canvas.height = 194;
+    const ctx = canvas.getContext('2d');
+    const W = 194, H = 194, CX = W/2, CY = H/2;
+
+    function noise(x, y) {
+      const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+      return (s - Math.floor(s)) * 2 - 1;
+    }
+
+    function smoothNoise(x, y) {
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix, fy = y - iy;
+      const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+      const n00 = noise(ix, iy), n10 = noise(ix+1, iy);
+      const n01 = noise(ix, iy+1), n11 = noise(ix+1, iy+1);
+      return n00*(1-sx)*(1-sy) + n10*sx*(1-sy) + n01*(1-sx)*sy + n11*sx*sy;
+    }
+
+    function fbm(x, y) {
+      return smoothNoise(x, y) * 0.6 + smoothNoise(x*2, y*2) * 0.3 + smoothNoise(x*4, y*4) * 0.1;
+    }
+
+    const barCount = 5;
+    let barHeights = new Array(barCount).fill(0);
+
+    function render() {
+      const t = Date.now() * 0.001;
+      ctx.clearRect(0, 0, W, H);
+
+      // Dark ink blob, irregular organic shape
+      const baseRadius = 72;
+      const segments = 80;
+
+      ctx.beginPath();
+      for (let i = 0; i <= segments; i++) {
+        const angle = (i / segments) * Math.PI * 2;
+        const nx = Math.cos(angle), ny = Math.sin(angle);
+
+        // Multiple noise layers at different scales for irregular shape
+        const n1 = fbm(nx * 0.8 + t * 0.3, ny * 0.8 - t * 0.2);       // large slow bulges
+        const n2 = fbm(nx * 1.8 + t * 0.5 + 7, ny * 1.8 - t * 0.4 + 7); // medium warps
+        const n3 = fbm(nx * 3.5 + t * 0.7 + 15, ny * 3.5 - t * 0.6 + 15); // small detail
+        const n4 = smoothNoise(angle * 2.5 + t * 0.6, t * 0.15);         // angular asymmetry
+        const deform = n1 * 12 + n2 * 6 + n3 * 3 + n4 * 5;
+
+        const r = baseRadius + deform;
+        const x = CX + nx * r;
+        const y = CY + ny * r;
+
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+
+      // Base dark ink fill
+      const baseGrad = ctx.createRadialGradient(CX, CY + 8, 4, CX, CY, baseRadius + 6);
+      baseGrad.addColorStop(0, '#141312');
+      baseGrad.addColorStop(0.7, '#0c0b0a');
+      baseGrad.addColorStop(1, '#060505');
+      ctx.fillStyle = baseGrad;
+      ctx.fill();
+
+      // Top-left specular highlight (light catching the ink surface)
+      ctx.save();
+      ctx.clip(); // clip to blob shape
+      const specGrad = ctx.createRadialGradient(CX - 14, CY - 16, 2, CX - 10, CY - 10, baseRadius * 0.6);
+      specGrad.addColorStop(0, 'rgba(240, 239, 232, 0.12)');
+      specGrad.addColorStop(0.3, 'rgba(240, 239, 232, 0.04)');
+      specGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = specGrad;
+      ctx.fill();
+
+      // Bottom shadow (depth, gravity pulling the ink down)
+      const shadowGrad = ctx.createRadialGradient(CX + 4, CY + 18, 2, CX, CY + 10, baseRadius * 0.8);
+      shadowGrad.addColorStop(0, 'rgba(0, 0, 0, 0.3)');
+      shadowGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0.1)');
+      shadowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = shadowGrad;
+      ctx.fill();
+
+      // Secondary subtle highlight on the right edge
+      const edgeGrad = ctx.createRadialGradient(CX + 20, CY - 8, 1, CX + 16, CY - 4, baseRadius * 0.4);
+      edgeGrad.addColorStop(0, 'rgba(240, 239, 232, 0.05)');
+      edgeGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = edgeGrad;
+      ctx.fill();
+      ctx.restore();
+
+      // Cream outline
+      ctx.strokeStyle = 'rgba(240, 239, 232, 0.3)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Soundwave bars inside (cream/light on dark blob)
+      const barW = 3.5;
+      const barGap = 5;
+      const totalW = barCount * barW + (barCount - 1) * barGap;
+      const startX = CX - totalW / 2;
+
+      for (let i = 0; i < barCount; i++) {
+        const phase = i * 0.8;
+        const target = 5 + Math.sin(t * 2.5 + phase) * 7 + Math.sin(t * 4.1 + phase * 1.3) * 3.5 + Math.cos(t * 1.7 + phase * 0.5) * 2.5;
+        barHeights[i] += (Math.max(3, target) - barHeights[i]) * 0.15;
+      }
+
+      for (let i = 0; i < barCount; i++) {
+        const x = startX + i * (barW + barGap);
+        const h = barHeights[i];
+        const y = CY - h / 2;
+
+        ctx.beginPath();
+        ctx.roundRect(x, y, barW, h, 2);
+        const opacity = i === Math.floor(barCount/2) ? 0.5 : 0.3;
+        ctx.fillStyle = `rgba(240, 239, 232, ${opacity})`;
+        ctx.fill();
+      }
+
+      // Film grain
+      for (let i = 0; i < 40; i++) {
+        const gx = Math.random() * W;
+        const gy = Math.random() * H;
+        const dx = gx - CX, dy = gy - CY;
+        if (dx*dx + dy*dy < (baseRadius+5)*(baseRadius+5)) {
+          ctx.fillStyle = `rgba(240, 239, 232, ${Math.random() * 0.025})`;
+          ctx.fillRect(gx, gy, 1, 1);
+        }
+      }
+
+      requestAnimationFrame(render);
+    }
+    render();
+  </script>
+</body>
+</html>

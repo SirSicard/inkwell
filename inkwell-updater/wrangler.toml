@@ -1,0 +1,12 @@
+name = "inkwell-updater"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+[[kv_namespaces]]
+binding = "INKWELL_RELEASES"
+id = "cb634e8c34c347349b8051410d76f44a"
+
+# When inkwell.app DNS is configured, add route:
+# [[routes]]
+# pattern = "inkwell.app/api/update/*"
+# zone_name = "inkwell.app"
