@@ -88,8 +88,12 @@ pub fn show(app: &AppHandle) {
             // Remove window shadow
             let _ = w.set_shadow(false);
 
-            // macOS: set NSWindow to fully transparent
+            // macOS: set NSWindow to fully transparent.
+            // The `cocoa` crate is deprecated in favour of objc2-app-kit, but it
+            // still works and the migration touches every unsafe AppKit call in
+            // the app (appdetect.rs too), so it is deferred to its own pass.
             #[cfg(target_os = "macos")]
+            #[allow(deprecated)]
             {
                 use cocoa::appkit::{NSColor, NSWindow};
                 use cocoa::base::{id, nil};

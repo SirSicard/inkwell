@@ -1,6 +1,6 @@
 use crate::{
     appdetect, audio, dictionary, engine, history, pipeline, settings, snippets,
-    style, tray, voicecommand, AppState,
+    style, tray, vad, voicecommand, AppState,
 };
 use tauri::{Emitter, Manager};
 
@@ -156,6 +156,9 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         vad_model_path.exists()
     );
 
+    // Nothing else fetches the VAD model, so a fresh install has to get it here.
+    ensure_vad_model(app.handle(), vad_model_path.clone());
+
     // Load the model the user actually chose, then fall back down the list.
     {
         let app_state = app.state::<AppState>();
@@ -163,7 +166,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         // Saved choice first, then the standard fallbacks. Dedup so a saved
         // "parakeet" isn't retried a second time as a fallback.
         let mut candidates: Vec<String> = vec![loaded_settings.model.clone()];
-        for fallback in ["parakeet", "moonshine-tiny"] {
+        for fallback in ["parakeet"] {
             if !candidates.iter().any(|c| c == fallback) {
                 candidates.push(fallback.to_string());
             }
@@ -252,12 +255,136 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Silero VAD ships as a sherpa-onnx release asset, not on HuggingFace, so it
+/// cannot reuse `commands::download_model`'s HF table and has its own URL.
+/// Keep in sync with `scripts/download-models.sh` and `scripts/download-models.ps1`.
+const SILERO_VAD_URL: &str =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
+
+/// Fetch silero_vad.onnx if it is missing (~2MB). Without this, a fresh install
+/// has no VAD model, and `pipeline::process_recording` skips silence removal —
+/// invisibly. Runs in the background so it never delays the window, and reports
+/// every outcome on `vad-status` so a failed fetch is surfaced, not swallowed.
+fn ensure_vad_model(app: &tauri::AppHandle, path: std::path::PathBuf) {
+    if path.exists() {
+        vad::set_status(vad::VadStatus::Ready);
+        return;
+    }
+
+    vad::set_status(vad::VadStatus::Downloading);
+    log::info!("VAD model missing, fetching {}", SILERO_VAD_URL);
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = app.emit(
+            "vad-status",
+            serde_json::json!({ "state": "downloading", "percent": 0 }),
+        );
+
+        match fetch_vad_model(&app, &path).await {
+            Ok(bytes) => {
+                vad::set_status(vad::VadStatus::Ready);
+                log::info!(
+                    "VAD model ready: {} ({} bytes)",
+                    path.display(),
+                    bytes
+                );
+                let _ = app.emit("vad-status", serde_json::json!({ "state": "ready" }));
+            }
+            Err(e) => {
+                vad::set_status(vad::VadStatus::Failed);
+                log::error!("VAD model download failed: {}", e);
+                let _ = app.emit(
+                    "vad-status",
+                    serde_json::json!({ "state": "failed", "error": e }),
+                );
+            }
+        }
+    });
+}
+
+/// Download the VAD model to `<path>.part` and rename on success: an interrupted
+/// fetch must not leave a truncated file that the existence check calls installed.
+async fn fetch_vad_model(
+    app: &tauri::AppHandle,
+    path: &std::path::Path,
+) -> Result<u64, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Cannot create {}: {}", parent.display(), e))?;
+    }
+
+    let resp = reqwest::Client::new()
+        .get(SILERO_VAD_URL)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {} for {}", resp.status(), SILERO_VAD_URL));
+    }
+
+    let tmp = path.with_extension("onnx.part");
+    let written = match stream_to_file(app, resp, &tmp).await {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+    };
+
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Cannot move {} into place: {}", tmp.display(), e)
+    })?;
+
+    Ok(written)
+}
+
+/// Stream a response body to `dest`, emitting `vad-status` progress as it goes.
+async fn stream_to_file(
+    app: &tauri::AppHandle,
+    resp: reqwest::Response,
+    dest: &std::path::Path,
+) -> Result<u64, String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = std::fs::File::create(dest)
+        .map_err(|e| format!("Cannot create {}: {}", dest.display(), e))?;
+
+    let mut written: u64 = 0;
+    let mut last_pct: u32 = 0;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Stream error: {}", e))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("Write error: {}", e))?;
+        written += chunk.len() as u64;
+
+        // Only on a whole-percent change — a 2MB body is hundreds of chunks.
+        if total > 0 {
+            let pct = (written * 100 / total).min(99) as u32;
+            if pct > last_pct {
+                last_pct = pct;
+                let _ = app.emit(
+                    "vad-status",
+                    serde_json::json!({ "state": "downloading", "percent": pct }),
+                );
+            }
+        }
+    }
+
+    file.flush().map_err(|e| format!("Flush error: {}", e))?;
+    Ok(written)
+}
+
 /// On-disk directory for a model id. Must stay in sync with `commands::download_model`.
 fn model_dir_name(model_id: &str) -> Option<&'static str> {
     Some(match model_id {
         "parakeet" => "parakeet-v3",
         "parakeet-v2" => "parakeet-v2",
-        "moonshine-tiny" => "moonshine-tiny",
         "moonshine-base" => "moonshine-base",
         "whisper-tiny" => "whisper-tiny",
         "whisper-base" => "whisper-base",
@@ -311,7 +438,6 @@ fn load_engine(
     match model_id {
         "parakeet" => engine::SpeechEngine::parakeet(models_dir),
         "parakeet-v2" => engine::SpeechEngine::parakeet_v2(models_dir),
-        "moonshine-tiny" => engine::SpeechEngine::moonshine(models_dir, "tiny"),
         "moonshine-base" => engine::SpeechEngine::moonshine(models_dir, "base"),
         "whisper-tiny" => engine::SpeechEngine::whisper(models_dir, "tiny"),
         "whisper-base" => engine::SpeechEngine::whisper(models_dir, "base"),

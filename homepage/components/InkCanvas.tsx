@@ -61,13 +61,20 @@ void main() {
   vec2 center = vec2(0.5 * (u_resolution.x / u_resolution.y), 0.5);
   float dist = length(pos - center);
 
-  float warpIntensity = 0.20;
+  // The app uses 0.20 here, but it renders this shader into a 97 px overlay
+  // (public/overlay.html) where a warp of ±0.30 against a 0.38 radius is a few
+  // pixels of wobble. Blown up to a 600 px panel the identical number turns the
+  // ink drop into a Rorschach splatter: the boundary swings ~79% of its own
+  // radius. Halving the warp and widening the edge falloff keeps the same
+  // simplex-noise language and the same silhouette, read at the size the site
+  // actually shows it. Everything else below is byte-identical to the app.
+  float warpIntensity = 0.10;
   float n1 = snoise(pos * 2.0 - vec2(t * 0.2, -t * 0.1));
   float n2 = snoise(pos * 4.0 + vec2(t * 0.1, t * 0.2));
   float warp = n1 * warpIntensity + n2 * (warpIntensity * 0.5);
 
   float blobSize = 0.38;
-  float blob = smoothstep(blobSize + 0.02, blobSize - 0.02, dist + warp);
+  float blob = smoothstep(blobSize + 0.035, blobSize - 0.035, dist + warp);
 
   float n3 = snoise(pos * 8.0 + vec2(t * 0.5, -t * 0.4));
   float detail = n3 * 0.02 * blob;
@@ -206,6 +213,17 @@ export default function InkCanvas() {
     );
     io.observe(canvas);
 
+    // The panel is a grid cell whose height follows the hero's text column, so
+    // it changes size without the window ever resizing — swapped webfonts and
+    // text reflow both do it. A window-resize listener alone leaves the backing
+    // store at its first-paint size and WebGL stretches the blob to fit
+    // (measured: a 492x338 box still holding a 488x365 buffer).
+    const ro = new ResizeObserver(() => {
+      resize();
+      if (!running) draw(0);
+    });
+    ro.observe(canvas);
+
     // Mobile GPUs drop WebGL contexts under memory pressure or on backgrounding.
     // Without this the canvas keeps its last (now blank) framebuffer and the
     // panel reads as an empty hole; unmounting it lets the wrapper's static
@@ -234,7 +252,10 @@ export default function InkCanvas() {
     return () => {
       stop();
       io.disconnect();
+      ro.disconnect();
       canvas.removeEventListener("webglcontextlost", onContextLost);
+      // Kept alongside the ResizeObserver: a browser-zoom or monitor change
+      // moves devicePixelRatio without changing the element's CSS box.
       window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", onVisibility);
       motionQuery.removeEventListener("change", onMotionChange);

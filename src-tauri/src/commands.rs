@@ -28,7 +28,6 @@ pub fn get_installed_models(state: tauri::State<AppState>) -> serde_json::Value 
     ];
 
     serde_json::json!({
-        "moonshine-tiny": check("moonshine-tiny", encoder_files),
         "moonshine-base": check("moonshine-base", encoder_files),
         "parakeet": check("parakeet-v3", encoder_files),
         "parakeet-v2": check("parakeet-v2", encoder_files),
@@ -56,7 +55,6 @@ pub fn switch_model(
     let new_engine = match model.as_str() {
         "parakeet" => engine::SpeechEngine::parakeet(models_path)?,
         "parakeet-v2" => engine::SpeechEngine::parakeet_v2(models_path)?,
-        "moonshine-tiny" => engine::SpeechEngine::moonshine(models_path, "tiny")?,
         "moonshine-base" => engine::SpeechEngine::moonshine(models_path, "base")?,
         "whisper-tiny" => engine::SpeechEngine::whisper(models_path, "tiny")?,
         "whisper-base" => engine::SpeechEngine::whisper(models_path, "base")?,
@@ -132,6 +130,9 @@ pub fn update_settings(
     key: String,
     value: String,
 ) -> Result<(), String> {
+    // The mic can only be swapped once the new choice is persisted and the
+    // settings lock is released; the arm records it and the tail applies it.
+    let mut new_mic: Option<String> = None;
     let mut settings = state.settings.lock().unwrap();
     match key.as_str() {
         "style" => settings.style = value,
@@ -144,7 +145,10 @@ pub fn update_settings(
         }
         "show_overlay" => settings.show_overlay = value == "true",
         "advanced_mode" => settings.advanced_mode = value == "true",
-        "mic_device" => settings.mic_device = value,
+        "mic_device" => {
+            settings.mic_device = value.clone();
+            new_mic = Some(value);
+        }
         "vad_threshold" => settings.vad_threshold = value.parse().unwrap_or(0.5),
         "sound_dictation" => {
             settings.sound_dictation = value == "true";
@@ -154,7 +158,16 @@ pub fn update_settings(
         _ => return Err(format!("Unknown setting: {}", key)),
     }
     let path = state.settings_path.lock().unwrap().clone();
-    settings.save(std::path::Path::new(&path))
+    settings.save(std::path::Path::new(&path))?;
+    drop(settings);
+
+    // Save first, then reopen the capture stream: the setting is persisted even
+    // when the live switch is refused ("Cannot switch microphone while
+    // recording"), and the caller sees that refusal instead of a silent no-op.
+    if let Some(device) = new_mic {
+        crate::audio::restart_audio_capture(&app, &device)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -633,7 +646,6 @@ pub fn remove_model(state: tauri::State<AppState>, model_id: String) -> Result<(
     let dir_name = match model_id.as_str() {
         "parakeet" => "parakeet-v3",
         "parakeet-v2" => "parakeet-v2",
-        "moonshine-tiny" => "moonshine-tiny",
         "moonshine-base" => "moonshine-base",
         "whisper-tiny" => "whisper-tiny",
         "whisper-base" => "whisper-base",
@@ -652,7 +664,6 @@ pub fn remove_model(state: tauri::State<AppState>, model_id: String) -> Result<(
     let is_active = match model_id.as_str() {
         "parakeet" => current == "Parakeet V3",
         "parakeet-v2" => current == "Parakeet V2",
-        "moonshine-tiny" => current == "Moonshine Tiny",
         "moonshine-base" => current == "Moonshine Base",
         "sense-voice" => current == "SenseVoice",
         _ => {

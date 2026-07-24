@@ -1,3 +1,4 @@
+/** Mirrors the Rust `Settings` struct in src-tauri/src/settings.rs — keep in sync. */
 export interface Settings {
   style: string
   model: string
@@ -8,8 +9,10 @@ export interface Settings {
   advanced_mode: boolean
   mic_device: string
   vad_threshold: number
+  polish_enabled: boolean
+  polish_prompt: string
   sound_dictation: boolean
-  sound_agent: boolean
+  debug_save_audio: boolean
 }
 
 export interface Toast {

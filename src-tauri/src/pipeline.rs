@@ -123,6 +123,23 @@ pub fn build_shortcut_plugin(
         .build()
 }
 
+/// A missing VAD model degrades every dictation, so never let it pass quietly:
+/// log it each time, and emit `vad-unavailable` for the UI. The emit is gated on
+/// the reason changing so a permanently missing model isn't a toast per dictation.
+fn warn_vad_unavailable(handle: &tauri::AppHandle) {
+    use std::sync::atomic::AtomicU8;
+
+    let status = vad::status();
+    let reason = vad::unavailable_reason();
+    log::warn!("VAD unavailable ({:?}): {}", status, reason);
+
+    static NOTIFIED: AtomicU8 = AtomicU8::new(u8::MAX);
+    let code = status as u8;
+    if NOTIFIED.swap(code, Ordering::Relaxed) != code {
+        let _ = handle.emit("vad-unavailable", reason);
+    }
+}
+
 /// The core recording processing pipeline: resample → VAD → transcribe → style → dict → snippet → polish → paste.
 fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: usize) {
     // Debug: check raw audio RMS before resampling
@@ -200,7 +217,7 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
             }
         }
     } else {
-        log::info!("No VAD model, skipping silence removal");
+        warn_vad_unavailable(handle);
         resampled.clone()
     };
 

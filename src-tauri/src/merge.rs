@@ -12,6 +12,11 @@
 /// small on purpose: a longer window starts eating genuine repetition.
 const MAX_OVERLAP_WORDS: usize = 8;
 
+/// Fewest normalized characters an overlap run must carry to count as a repeat.
+/// Without it a bare "a" or "the" landing on both sides of a seam eats a real
+/// word. It also rejects punctuation-only runs, which normalize to nothing.
+const MIN_OVERLAP_CHARS: usize = 4;
+
 /// Join transcribed chunks, dropping the words the overlap duplicated.
 pub fn merge_chunks<S: AsRef<str>>(parts: &[S]) -> String {
     let mut merged = String::new();
@@ -41,11 +46,17 @@ pub fn append_chunk(merged: &mut String, next: &str) {
     let mut skip = 0usize;
     for k in (1..=max_k).rev() {
         let key = normalize(&tail[tail.len() - k..]);
-        // An empty key means the run was punctuation only: never a match.
-        if !key.is_empty() && key == normalize(&head[..k]) {
-            skip = k;
-            break;
+        if key != normalize(&head[..k]) {
+            continue;
         }
+        // Too little substance to be a real repeat — see MIN_OVERLAP_CHARS.
+        // Shorter runs are subsets of this one, so they cannot qualify either,
+        // but the loop is cheap and reads clearer than breaking out here.
+        if key.chars().filter(|c| !c.is_whitespace()).count() < MIN_OVERLAP_CHARS {
+            continue;
+        }
+        skip = k;
+        break;
     }
 
     if skip == head.len() {
@@ -79,19 +90,25 @@ fn words(s: &str) -> Vec<(usize, &str)> {
     out
 }
 
-/// Comparison key for a run of words: lowercase, outer punctuation dropped.
-/// Empty when the run is punctuation only; the caller rejects that as a match.
+/// Comparison key for a run of words: lowercase, all punctuation dropped.
+/// Punctuation goes entirely rather than just at the edges because the
+/// recognizer does not place the same comma or apostrophe in the same spot on
+/// both sides of a seam. Empty when the run is punctuation only.
 fn normalize(run: &[(usize, &str)]) -> String {
     let mut key = String::new();
     for (_, word) in run {
-        let w = word.trim_matches(|c: char| c.is_ascii_punctuation());
+        let w: String = word
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(|c| c.to_lowercase())
+            .collect();
         if w.is_empty() {
             continue;
         }
         if !key.is_empty() {
             key.push(' ');
         }
-        key.push_str(&w.to_lowercase());
+        key.push_str(&w);
     }
     key
 }
@@ -150,6 +167,15 @@ mod tests {
     }
 
     #[test]
+    fn prefers_a_three_word_overlap_over_its_shorter_suffixes() {
+        // "beta gamma delta" (3) must win over "gamma delta" (2) and "delta" (1).
+        assert_eq!(
+            merge_chunks(&["alpha beta gamma delta", "beta gamma delta epsilon"]),
+            "alpha beta gamma delta epsilon"
+        );
+    }
+
+    #[test]
     fn fully_duplicated_chunk_adds_nothing() {
         assert_eq!(merge_chunks(&["one two three", "two three"]), "one two three");
     }
@@ -171,9 +197,52 @@ mod tests {
 
     #[test]
     fn three_chunks_merge_pairwise() {
+        // Real words, not single letters: a one-character overlap is below
+        // MIN_OVERLAP_CHARS and is deliberately left alone.
         assert_eq!(
-            merge_chunks(&["a b c", "c d e", "e f g"]),
-            "a b c d e f g"
+            merge_chunks(&["alpha beta gamma", "gamma delta epsilon", "epsilon zeta eta"]),
+            "alpha beta gamma delta epsilon zeta eta"
+        );
+    }
+
+    #[test]
+    fn short_common_word_is_not_treated_as_overlap() {
+        // "the" straddling the seam is a coincidence, not a repeat.
+        assert_eq!(
+            merge_chunks(&["we looked at the", "the report was late"]),
+            "we looked at the the report was late"
+        );
+    }
+
+    #[test]
+    fn overlap_match_ignores_inner_punctuation() {
+        assert_eq!(
+            merge_chunks(&["that is the plan, agreed", "Agreed? then let's go"]),
+            "that is the plan, agreed then let's go"
+        );
+    }
+
+    #[test]
+    fn drops_a_multi_word_seam_repeat() {
+        assert_eq!(
+            merge_chunks(&["we should ship it on monday", "on monday morning at nine"]),
+            "we should ship it on monday morning at nine"
+        );
+    }
+
+    #[test]
+    fn full_chunk_repeat_collapses() {
+        assert_eq!(
+            merge_chunks(&["identical phrase here", "identical phrase here"]),
+            "identical phrase here"
+        );
+    }
+
+    #[test]
+    fn joins_chunks_with_no_overlap() {
+        assert_eq!(
+            merge_chunks(&["the quick brown fox", "jumps over"]),
+            "the quick brown fox jumps over"
         );
     }
 

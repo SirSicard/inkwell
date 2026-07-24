@@ -29,11 +29,11 @@ function AIConsentModal({ onAccept, onDecline }: { onAccept: () => void; onDecli
         </div>
 
         <div className="bg-bg-surface border border-border rounded-lg p-4 space-y-2">
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-sans font-bold text-text-primary">4,000</span>
-            <span className="text-sm text-text-secondary">words/week free</span>
-          </div>
-          <p className="text-xs text-text-tertiary">Resets every Monday. No account needed. Add your own API key for unlimited.</p>
+          <p className="text-sm text-text-primary font-medium">Bring your own key</p>
+          <p className="text-xs text-text-tertiary">
+            Requests go straight from your machine to the provider you configure, using your
+            own API key. There is no Inkwell server in the path, no account, and no quota.
+          </p>
         </div>
 
         <div className="flex gap-3 pt-1">
@@ -56,7 +56,6 @@ export function AITab() {
   const [polishEnabled, setPolishEnabled] = useState(false)
   const [showConsent, setShowConsent] = useState(false)
   const [polishPrompt, setPolishPrompt] = useState("")
-  const [usage, setUsage] = useState({ words_used: 0, free_tier: 4000, remaining: 4000, over_limit: false, week_start: "" })
   const [saving, setSaving] = useState(false)
   const [testText, setTestText] = useState("")
   const [testResult, setTestResult] = useState("")
@@ -65,13 +64,21 @@ export function AITab() {
   const [showTest, setShowTest] = useState(false)
 
   const providers = [
-    { id: "groq", label: "Groq", hint: "llama-3.3-70b", free: true },
+    { id: "groq", label: "Groq", hint: "llama-3.3-70b", freeKey: true },
     { id: "openai", label: "OpenAI", hint: "gpt-4o-mini" },
     { id: "anthropic", label: "Anthropic", hint: "Claude Haiku" },
     { id: "openrouter", label: "OpenRouter", hint: "any model" },
   ] as const
 
   const hasAnyKey = Object.values(keyStatus).some(Boolean)
+
+  // Mirrors llm::PROVIDERS in src-tauri/src/llm.rs: with no explicit provider the
+  // backend polishes with the first key it finds, in exactly this order.
+  const providerOrder = ["openai", "groq", "anthropic", "openrouter", "custom"]
+  const activeProvider = keyStatus[provider]
+    ? provider
+    : providerOrder.find((p) => keyStatus[p]) ?? null
+  const activeLabel = providers.find((p) => p.id === activeProvider)?.label ?? activeProvider
 
   const handleTogglePolish = (enabled: boolean) => {
     if (enabled && !polishEnabled) {
@@ -94,7 +101,6 @@ export function AITab() {
       setPolishEnabled(s.enabled)
       setPolishPrompt(s.prompt)
     }).catch(() => {})
-    invoke<typeof usage>("get_usage").then(setUsage).catch(() => {})
   }, [])
 
   const handleSaveKey = async () => {
@@ -117,21 +123,17 @@ export function AITab() {
     setTesting(true)
     setTestResult("")
     try {
+      // Omitting the provider lets the backend pick the first configured key.
       const useProvider = keyStatus[provider] ? provider : null
-      const result = await invoke<{ text: string; words_used?: number; remaining?: number }>(
+      const result = await invoke<{ text: string }>(
         "run_ai_polish", { text: testText, provider: useProvider, model: null }
       )
       setTestResult(result.text)
-      if (result.remaining !== undefined) {
-        setUsage((u) => ({ ...u, remaining: result.remaining!, words_used: result.words_used ?? u.words_used }))
-      }
     } catch (e) {
       setTestResult(`Error: ${e}`)
     }
     setTesting(false)
   }
-
-  const usagePct = Math.min((usage.words_used / usage.free_tier) * 100, 100)
 
   return (
     <div className="space-y-4">
@@ -153,8 +155,8 @@ export function AITab() {
             <p className="text-xs text-text-tertiary mt-0.5">
               {polishEnabled
                 ? hasAnyKey
-                  ? "Using your API key"
-                  : `Free tier: ${usage.remaining.toLocaleString()} words left this week`
+                  ? `Polishing with your ${activeLabel} key`
+                  : "No API key configured"
                 : "Off. Transcriptions are raw."
               }
             </p>
@@ -162,25 +164,13 @@ export function AITab() {
           <GlassToggle checked={polishEnabled} onChange={handleTogglePolish} />
         </div>
 
-        {/* Inline usage bar (only when enabled + free tier) */}
+        {/* Polish is BYOK-only: enabled without a key does nothing until one is added. */}
         {polishEnabled && !hasAnyKey && (
-          <div className="space-y-1">
-            <div className="w-full bg-bg-base rounded-full h-1 overflow-hidden">
-              <motion.div
-                className={`h-full ${usage.over_limit ? "bg-red-400" : "bg-accent"}`}
-                initial={{ width: 0 }}
-                animate={{ width: `${usagePct}%` }}
-                transition={{ duration: 0.5 }}
-              />
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[10px] font-mono text-text-tertiary">
-                {usage.words_used.toLocaleString()} / {usage.free_tier.toLocaleString()}
-              </span>
-              {usage.over_limit && (
-                <span className="text-[10px] text-red-400">Limit reached. Add an API key below.</span>
-              )}
-            </div>
+          <div className="rounded-lg border border-amber-800/30 bg-amber-950/20 px-3 py-2.5">
+            <p className="text-xs text-amber-200">No API key configured.</p>
+            <p className="text-[11px] text-amber-200/70 mt-0.5">
+              Add one under API Keys below — until then transcriptions stay raw.
+            </p>
           </div>
         )}
       </div>
@@ -190,7 +180,7 @@ export function AITab() {
         <div>
           <p className="text-sm font-medium text-text-primary">API Keys</p>
           <p className="text-xs text-text-tertiary mt-0.5">
-            {hasAnyKey ? "Your key, direct to the model. Unlimited." : "Add a key for unlimited use. Never touches our servers."}
+            {hasAnyKey ? "Your key, direct to the model. Stored in your OS keyring." : "AI Polish needs your own key. It never touches our servers."}
           </p>
         </div>
 
@@ -207,8 +197,8 @@ export function AITab() {
               }`}
             >
               {p.label}
-              {"free" in p && p.free && !keyStatus[p.id] && (
-                <span className="text-[10px] px-1 py-0.5 rounded bg-green-400/10 text-green-400">free</span>
+              {"freeKey" in p && p.freeKey && !keyStatus[p.id] && (
+                <span className="text-[10px] px-1 py-0.5 rounded bg-green-400/10 text-green-400">free key</span>
               )}
               {keyStatus[p.id] && (
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400" title="Configured" />
@@ -335,10 +325,8 @@ export function AITab() {
                   >
                     {testing ? "Polishing..." : "Run"}
                   </button>
-                  {testResult && !testing && (
-                    <span className="text-[10px] text-text-tertiary">
-                      {hasAnyKey ? `via ${provider}` : "via free tier"}
-                    </span>
+                  {testResult && !testing && activeProvider && (
+                    <span className="text-[10px] text-text-tertiary">via {activeProvider}</span>
                   )}
                 </div>
                 {testResult && (
