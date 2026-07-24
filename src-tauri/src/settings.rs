@@ -51,6 +51,11 @@ pub struct Settings {
 
 fn default_style() -> String { "formal".to_string() }
 fn default_model() -> String { "parakeet".to_string() }
+// macOS reserves ctrl+space for "Select previous input source", so a fresh Mac
+// install would collide with the OS on its very first dictation.
+#[cfg(target_os = "macos")]
+fn default_hotkey() -> String { "super+shift+space".to_string() }
+#[cfg(not(target_os = "macos"))]
 fn default_hotkey() -> String { "ctrl+space".to_string() }
 fn default_recording_mode() -> String { "ptt".to_string() }
 fn default_true() -> bool { true }

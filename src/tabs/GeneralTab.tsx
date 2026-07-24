@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { SettingRow, GlassToggle, GlassSelect, GlassButton } from "../components/ui"
 import type { Settings } from "../types"
+import { formatHotkey } from "../hotkey"
 
 function HotkeyCapture() {
   const [hotkey, setHotkey] = useState("ctrl+space")
@@ -60,9 +61,7 @@ function HotkeyCapture() {
       })
   }
 
-  const displayHotkey = capturing ? "Press your hotkey..." : hotkey.split("+").map(
-    (k) => k.charAt(0).toUpperCase() + k.slice(1)
-  ).join(" + ")
+  const displayHotkey = capturing ? "Press your hotkey..." : formatHotkey(hotkey)
 
   return (
     <div className="space-y-1">
