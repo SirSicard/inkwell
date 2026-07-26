@@ -1,4 +1,5 @@
 use crate::{
+    models,
     appdetect, audio, dictionary, engine, history, pipeline, settings, snippets,
     style, tray, vad, voicecommand, AppState,
 };
@@ -163,25 +164,27 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     {
         let app_state = app.state::<AppState>();
 
-        // Saved choice first, then the standard fallbacks. Dedup so a saved
-        // "parakeet" isn't retried a second time as a fallback.
-        let mut candidates: Vec<String> = vec![loaded_settings.model.clone()];
-        for fallback in ["parakeet"] {
-            if !candidates.iter().any(|c| c == fallback) {
-                candidates.push(fallback.to_string());
-            }
+        // Saved choice first, then the default. Dedup so a saved "parakeet"
+        // isn't retried a second time as a fallback.
+        let mut candidates: Vec<&str> = vec![loaded_settings.model.as_str()];
+        if !candidates.contains(&models::DEFAULT_MODEL_ID) {
+            candidates.push(models::DEFAULT_MODEL_ID);
         }
 
-        let mut loaded_engine = None;
+        let mut loaded: Option<(&models::ModelSpec, engine::SpeechEngine)> = None;
         for (i, id) in candidates.iter().enumerate() {
-            if !model_files_present(&models_dir, id) {
+            let Some(spec) = models::find(id) else {
+                log::warn!("Saved model '{}' is not in the registry, skipping", id);
+                continue;
+            };
+            if !spec.is_installed(&models_dir) {
                 log::info!("Model '{}' not installed, skipping", id);
                 continue;
             }
             log::info!("Loading model '{}'...", id);
-            match load_engine(&models_dir, id) {
+            match spec.load(&models_dir) {
                 Ok(e) => {
-                    loaded_engine = Some(e);
+                    loaded = Some((spec, e));
                     break;
                 }
                 Err(e) => {
@@ -197,29 +200,19 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if loaded_engine.is_none() {
+        if loaded.is_none() {
             log::info!(
                 "No usable models found. Download models to: {}",
                 models_dir.display()
             );
         }
 
-        let model_name = match &loaded_engine {
-            Some(e) => match e.model_type() {
-                engine::ModelType::MoonshineTiny => "Moonshine Tiny",
-                engine::ModelType::MoonshineBase => "Moonshine Base",
-                engine::ModelType::MoonshineMedium => "Moonshine Medium",
-                engine::ModelType::Parakeet => "Parakeet V3",
-                engine::ModelType::ParakeetV2 => "Parakeet V2",
-                engine::ModelType::Whisper(name) => name.as_str(),
-                engine::ModelType::SenseVoice => "SenseVoice",
-                engine::ModelType::CanaryFlash => "Canary Flash",
-            },
-            None => "No model loaded",
-        };
+        // Same source as switch_model, so the name does not depend on whether
+        // the model was loaded at startup or picked later.
+        let model_name = loaded.as_ref().map_or("No model loaded", |(s, _)| s.display);
         *app_state.model_name.lock().unwrap() = model_name.to_string();
         let _ = app.emit("model-loaded", model_name);
-        *app_state.engine.lock().unwrap() = loaded_engine;
+        *app_state.engine.lock().unwrap() = loaded.map(|(_, e)| e);
     }
 
     // Register global hotkey
@@ -409,59 +402,6 @@ fn model_dir_name(model_id: &str) -> Option<&'static str> {
         "sense-voice" => "sense-voice",
         _ => return None,
     })
-}
-
-/// Cheap existence check so a missing model falls back instead of erroring at load.
-fn model_files_present(models_dir: &std::path::Path, model_id: &str) -> bool {
-    let dir = match model_dir_name(model_id) {
-        Some(d) => models_dir.join(d),
-        None => return false,
-    };
-
-    let candidates: Vec<String> = if let Some(variant) = model_id.strip_prefix("whisper-") {
-        let variant = match variant {
-            "distil-small-en" => "distil-small.en",
-            "distil-medium-en" => "distil-medium.en",
-            v => v,
-        };
-        vec![
-            format!("{}-encoder.int8.onnx", variant),
-            format!("{}-encoder.onnx", variant),
-        ]
-    } else if model_id == "sense-voice" {
-        vec!["model.int8.onnx".into(), "model.onnx".into()]
-    } else {
-        vec![
-            "encoder.int8.onnx".into(),
-            "encoder.onnx".into(),
-            "encode.int8.onnx".into(),
-            "encode.onnx".into(),
-        ]
-    };
-
-    candidates.iter().any(|f| dir.join(f).exists())
-}
-
-/// Build an engine for a model id. Mirrors `commands::switch_model`.
-fn load_engine(
-    models_dir: &std::path::Path,
-    model_id: &str,
-) -> Result<engine::SpeechEngine, String> {
-    match model_id {
-        "parakeet" => engine::SpeechEngine::parakeet(models_dir),
-        "parakeet-v2" => engine::SpeechEngine::parakeet_v2(models_dir),
-        "moonshine-base" => engine::SpeechEngine::moonshine(models_dir, "base"),
-        "whisper-tiny" => engine::SpeechEngine::whisper(models_dir, "tiny"),
-        "whisper-base" => engine::SpeechEngine::whisper(models_dir, "base"),
-        "whisper-small" => engine::SpeechEngine::whisper(models_dir, "small"),
-        "whisper-medium" => engine::SpeechEngine::whisper(models_dir, "medium"),
-        "whisper-large-v3" => engine::SpeechEngine::whisper(models_dir, "large-v3"),
-        "whisper-turbo" => engine::SpeechEngine::whisper(models_dir, "turbo"),
-        "whisper-distil-small-en" => engine::SpeechEngine::whisper(models_dir, "distil-small.en"),
-        "whisper-distil-medium-en" => engine::SpeechEngine::whisper(models_dir, "distil-medium.en"),
-        "sense-voice" => engine::SpeechEngine::sense_voice(models_dir),
-        other => Err(format!("Unknown model: {}", other)),
-    }
 }
 
 /// Enable/disable launch-at-login. Best-effort: a failure here must not block the app.

@@ -146,6 +146,9 @@ export function InkCanvas() {
 
   // Listen for recording state changes from Rust backend
   const analyserRef = useRef<AnalyserNode | null>(null)
+  // Assigned by the analysis effect below; called from the recording listener.
+  const startAnalysisRef = useRef<() => void>(() => {})
+  const stopAnalysisRef = useRef<() => void>(() => {})
   useEffect(() => {
     const unlisten = listen<boolean>("recording-state", (event) => {
       const wasRecording = stateRef.current === 1
@@ -161,11 +164,15 @@ export function InkCanvas() {
         smoothLowRef.current = 0
         smoothMidRef.current = 0
         smoothHighRef.current = 0
-        // Flush analyser buffer
-        if (analyserRef.current) {
-          const flush = new Uint8Array(analyserRef.current.frequencyBinCount)
-          analyserRef.current.getByteFrequencyData(flush)
-        }
+        startAnalysisRef.current()
+      } else if (!event.payload && wasRecording) {
+        // Zeroing the targets lets the render loop's lerp decay the blob to
+        // rest, which the analyser pump used to do frame by frame.
+        stopAnalysisRef.current()
+        amplitudeRef.current = 0
+        lowRef.current = 0
+        midRef.current = 0
+        highRef.current = 0
       }
     })
     return () => { unlisten.then((fn) => fn()) }
@@ -179,64 +186,82 @@ export function InkCanvas() {
     return () => { unlisten.then((fn) => fn()) }
   }, [])
 
-  // Web Audio API: frequency analysis (frontend-only, zero latency)
+  // Frequency analysis for the shader, via the WebView's own capture.
+  //
+  // This is a second microphone stream alongside Rust's cpal, and it used to be
+  // opened at mount and held for the life of the process — which parked a
+  // permanent orange mic indicator in the macOS menu bar for an app whose whole
+  // promise is that it is not listening to you. It now opens on recording start
+  // and is fully torn down on stop, so the indicator means what it says.
+  //
+  // Rust's audio-amplitude events (above) still drive the base reaction, so the
+  // ~100ms while getUserMedia resolves is covered; the analyser only adds the
+  // low/mid/high split once it is live.
   useEffect(() => {
-    let active = true
-    let audioCtx: AudioContext | null = null
-    let analyser: AnalyserNode | null = null
-    let dataArray: Uint8Array | null = null
+    let disposed = false
+    let ctx: AudioContext | null = null
+    let stream: MediaStream | null = null
+    let raf = 0
 
-    async function initWebAudio() {
+    const stop = () => {
+      if (raf) cancelAnimationFrame(raf)
+      raf = 0
+      analyserRef.current = null
+      stream?.getTracks().forEach((t) => t.stop())
+      stream = null
+      ctx?.close().catch(() => {})
+      ctx = null
+    }
+
+    const start = async () => {
+      if (ctx || stream || disposed) return
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        if (!active) return
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        // Recording can end while the permission round-trip is in flight; if it
+        // did, release the device rather than leaving it hot.
+        if (disposed || stateRef.current !== 1) {
+          stream.getTracks().forEach((t) => t.stop())
+          stream = null
+          return
+        }
 
-        audioCtx = new AudioContext()
-        const source = audioCtx.createMediaStreamSource(stream)
-        analyser = audioCtx.createAnalyser()
+        ctx = new AudioContext()
+        const analyser = ctx.createAnalyser()
         analyser.fftSize = 2048
         analyser.smoothingTimeConstant = 0.6
-        source.connect(analyser)
+        ctx.createMediaStreamSource(stream).connect(analyser)
         analyserRef.current = analyser
 
-        dataArray = new Uint8Array(analyser.frequencyBinCount)
+        const data = new Uint8Array(analyser.frequencyBinCount)
+        const sampleRate = ctx.sampleRate
 
-        // Pump frequency data every frame, but only feed shader when recording
-        function pump() {
-          if (!active || !analyser || !dataArray) return
-          analyser.getByteFrequencyData(dataArray as Uint8Array<ArrayBuffer>)
-
-          if (stateRef.current === 1) {
-            const bands = extractBands(dataArray, audioCtx!.sampleRate, analyser.fftSize)
-            // Scale down and clamp to keep ink movement controlled
-            // Dialed back from 0.5 (too reactive, 1.6.6 feedback)
-            amplitudeRef.current = Math.min(bands.rms * 0.3, 0.35)
-            lowRef.current = Math.min(bands.low * 0.3, 0.35)
-            midRef.current = Math.min(bands.mid * 0.3, 0.35)
-            highRef.current = Math.min(bands.high * 0.3, 0.35)
-          } else {
-            // Decay to zero when not recording
-            amplitudeRef.current *= 0.9
-            lowRef.current *= 0.9
-            midRef.current *= 0.9
-            highRef.current *= 0.9
-          }
-
-          requestAnimationFrame(pump)
+        const pump = () => {
+          if (analyserRef.current !== analyser) return
+          analyser.getByteFrequencyData(data as Uint8Array<ArrayBuffer>)
+          const bands = extractBands(data, sampleRate, analyser.fftSize)
+          // Scale down and clamp to keep ink movement controlled
+          // Dialed back from 0.5 (too reactive, 1.6.6 feedback)
+          amplitudeRef.current = Math.min(bands.rms * 0.3, 0.35)
+          lowRef.current = Math.min(bands.low * 0.3, 0.35)
+          midRef.current = Math.min(bands.mid * 0.3, 0.35)
+          highRef.current = Math.min(bands.high * 0.3, 0.35)
+          raf = requestAnimationFrame(pump)
         }
         pump()
       } catch (err) {
-        // Web Audio not available (e.g. no mic permission in webview)
-        // Fall back to Tauri events (already set up above)
+        // No mic permission in the webview: the Rust amplitude events still
+        // drive the blob, just without the frequency split.
         console.warn("Web Audio unavailable, using Tauri amplitude events:", err)
+        stop()
       }
     }
 
-    initWebAudio()
+    startAnalysisRef.current = () => { void start() }
+    stopAnalysisRef.current = stop
 
     return () => {
-      active = false
-      if (audioCtx) audioCtx.close()
+      disposed = true
+      stop()
     }
   }, [])
 

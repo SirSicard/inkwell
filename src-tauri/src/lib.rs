@@ -8,6 +8,7 @@ pub mod filetranscribe;
 pub mod history;
 mod llm;
 pub mod merge;
+pub mod models;
 mod overlay;
 mod paste;
 mod pipeline;
@@ -87,7 +88,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             audio::get_input_devices,
             commands::get_model_name,
-            commands::get_installed_models,
+            commands::list_models,
             commands::switch_model,
             commands::transcribe_file,
             commands::download_model,

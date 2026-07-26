@@ -1,6 +1,6 @@
 use crate::AppState;
 use crate::{
-    appdetect, dictionary, engine, export, filetranscribe, history, settings, snippets,
+    appdetect, dictionary, export, filetranscribe, history, models, settings, snippets,
     style, voicecommand,
 };
 use tauri::{Emitter, Manager};
@@ -10,37 +10,12 @@ pub fn get_model_name(state: tauri::State<AppState>) -> String {
     state.model_name.lock().unwrap().clone()
 }
 
+/// The model catalogue with installed state, so the UI does not keep its own
+/// copy of the list (it used to, and the two drifted).
 #[tauri::command]
-pub fn get_installed_models(state: tauri::State<AppState>) -> serde_json::Value {
+pub fn list_models(state: tauri::State<AppState>) -> Vec<models::ModelInfo> {
     let models_dir = state.models_dir.lock().unwrap().clone();
-    let models_path = std::path::Path::new(&models_dir);
-
-    let check = |dir: &str, files: &[&str]| -> bool {
-        let d = models_path.join(dir);
-        files.iter().any(|f| d.join(f).exists())
-    };
-
-    let encoder_files = &[
-        "encoder.int8.onnx",
-        "encoder.onnx",
-        "encode.int8.onnx",
-        "encode.onnx",
-    ];
-
-    serde_json::json!({
-        "moonshine-base": check("moonshine-base", encoder_files),
-        "parakeet": check("parakeet-v3", encoder_files),
-        "parakeet-v2": check("parakeet-v2", encoder_files),
-        "whisper-tiny": check("whisper-tiny", &["tiny-encoder.int8.onnx", "tiny-encoder.onnx"]),
-        "whisper-base": check("whisper-base", &["base-encoder.int8.onnx", "base-encoder.onnx"]),
-        "whisper-small": check("whisper-small", &["small-encoder.int8.onnx", "small-encoder.onnx"]),
-        "whisper-medium": check("whisper-medium", &["medium-encoder.int8.onnx", "medium-encoder.onnx"]),
-        "whisper-large-v3": check("whisper-large-v3", &["large-v3-encoder.int8.onnx", "large-v3-encoder.onnx"]),
-        "whisper-turbo": check("whisper-turbo", &["turbo-encoder.int8.onnx", "turbo-encoder.onnx"]),
-        "whisper-distil-small-en": check("whisper-distil-small-en", &["distil-small.en-encoder.int8.onnx", "distil-small.en-encoder.onnx"]),
-        "whisper-distil-medium-en": check("whisper-distil-medium-en", &["distil-medium.en-encoder.int8.onnx", "distil-medium.en-encoder.onnx"]),
-        "sense-voice": check("sense-voice", &["model.int8.onnx", "model.onnx"]),
-    })
+    models::catalog(std::path::Path::new(&models_dir))
 }
 
 #[tauri::command]
@@ -52,34 +27,14 @@ pub fn switch_model(
     let models_dir = state.models_dir.lock().unwrap().clone();
     let models_path = std::path::Path::new(&models_dir);
 
-    let new_engine = match model.as_str() {
-        "parakeet" => engine::SpeechEngine::parakeet(models_path)?,
-        "parakeet-v2" => engine::SpeechEngine::parakeet_v2(models_path)?,
-        "moonshine-base" => engine::SpeechEngine::moonshine(models_path, "base")?,
-        "whisper-tiny" => engine::SpeechEngine::whisper(models_path, "tiny")?,
-        "whisper-base" => engine::SpeechEngine::whisper(models_path, "base")?,
-        "whisper-small" => engine::SpeechEngine::whisper(models_path, "small")?,
-        "whisper-medium" => engine::SpeechEngine::whisper(models_path, "medium")?,
-        "whisper-large-v3" => engine::SpeechEngine::whisper(models_path, "large-v3")?,
-        "whisper-turbo" => engine::SpeechEngine::whisper(models_path, "turbo")?,
-        "whisper-distil-small-en" => engine::SpeechEngine::whisper(models_path, "distil-small.en")?,
-        "whisper-distil-medium-en" => {
-            engine::SpeechEngine::whisper(models_path, "distil-medium.en")?
-        }
-        "sense-voice" => engine::SpeechEngine::sense_voice(models_path)?,
-        _ => return Err(format!("Unknown model: {}", model)),
-    };
+    let spec = models::find(&model).ok_or_else(|| format!("Unknown model: {}", model))?;
+    let new_engine = spec.load(models_path)?;
 
-    let name_str = match new_engine.model_type() {
-        engine::ModelType::MoonshineTiny => "Moonshine Tiny".to_string(),
-        engine::ModelType::MoonshineBase => "Moonshine Base".to_string(),
-        engine::ModelType::MoonshineMedium => "Moonshine Medium".to_string(),
-        engine::ModelType::Parakeet => "Parakeet V3".to_string(),
-        engine::ModelType::ParakeetV2 => "Parakeet V2".to_string(),
-        engine::ModelType::Whisper(n) => format!("Whisper {}", n),
-        engine::ModelType::SenseVoice => "SenseVoice".to_string(),
-        engine::ModelType::CanaryFlash => "Canary Flash".to_string(),
-    };
+    // Name comes from the spec, not from ModelType. Deriving it here as well
+    // gave two sources for the same string, and they disagreed on casing
+    // ("Whisper turbo" vs "Whisper Turbo"), which silently broke the
+    // active-model check in remove_model.
+    let name_str = spec.display.to_string();
 
     *state.model_name.lock().unwrap() = name_str.clone();
     *state.engine.lock().unwrap() = Some(new_engine);
@@ -447,124 +402,10 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(
     use futures_util::StreamExt;
     use std::io::Write;
 
-    let (dir_name, files): (&str, Vec<(&str, u64)>) = match model_id.as_str() {
-        "parakeet" => (
-            "parakeet-v3",
-            vec![
-                ("encoder.int8.onnx", 683_000_000),
-                ("decoder.int8.onnx", 12_000_000),
-                ("joiner.int8.onnx", 7_000_000),
-                ("tokens.txt", 96_000),
-            ],
-        ),
-        "parakeet-v2" => (
-            "parakeet-v2",
-            vec![
-                ("encoder.int8.onnx", 683_000_000),
-                ("decoder.int8.onnx", 12_000_000),
-                ("joiner.int8.onnx", 7_000_000),
-                ("tokens.txt", 96_000),
-            ],
-        ),
-        "moonshine-base" => (
-            "moonshine-base",
-            vec![
-                ("preprocess.onnx", 14_100_000),
-                ("encode.int8.onnx", 50_300_000),
-                ("cached_decode.int8.onnx", 100_000_000),
-                ("uncached_decode.int8.onnx", 122_000_000),
-                ("tokens.txt", 437_000),
-            ],
-        ),
-        "whisper-tiny" => (
-            "whisper-tiny",
-            vec![
-                ("tiny-encoder.int8.onnx", 12_000_000),
-                ("tiny-decoder.int8.onnx", 86_000_000),
-                ("tiny-tokens.txt", 800_000),
-            ],
-        ),
-        "whisper-base" => (
-            "whisper-base",
-            vec![
-                ("base-encoder.int8.onnx", 20_000_000),
-                ("base-decoder.int8.onnx", 114_000_000),
-                ("base-tokens.txt", 800_000),
-            ],
-        ),
-        "whisper-small" => (
-            "whisper-small",
-            vec![
-                ("small-encoder.int8.onnx", 72_000_000),
-                ("small-decoder.int8.onnx", 305_000_000),
-                ("small-tokens.txt", 800_000),
-            ],
-        ),
-        "whisper-medium" => (
-            "whisper-medium",
-            vec![
-                ("medium-encoder.int8.onnx", 193_000_000),
-                ("medium-decoder.int8.onnx", 823_000_000),
-                ("medium-tokens.txt", 800_000),
-            ],
-        ),
-        "whisper-large-v3" => (
-            "whisper-large-v3",
-            vec![
-                ("large-v3-encoder.int8.onnx", 397_000_000),
-                ("large-v3-decoder.int8.onnx", 1_100_000_000),
-                ("large-v3-tokens.txt", 800_000),
-            ],
-        ),
-        "whisper-turbo" => (
-            "whisper-turbo",
-            vec![
-                ("turbo-encoder.int8.onnx", 397_000_000),
-                ("turbo-decoder.int8.onnx", 409_000_000),
-                ("turbo-tokens.txt", 800_000),
-            ],
-        ),
-        "whisper-distil-small-en" => (
-            "whisper-distil-small-en",
-            vec![
-                ("distil-small.en-encoder.int8.onnx", 72_000_000),
-                ("distil-small.en-decoder.int8.onnx", 108_000_000),
-                ("distil-small.en-tokens.txt", 800_000),
-            ],
-        ),
-        "whisper-distil-medium-en" => (
-            "whisper-distil-medium-en",
-            vec![
-                ("distil-medium.en-encoder.int8.onnx", 193_000_000),
-                ("distil-medium.en-decoder.int8.onnx", 270_000_000),
-                ("distil-medium.en-tokens.txt", 800_000),
-            ],
-        ),
-        "sense-voice" => (
-            "sense-voice",
-            vec![
-                ("model.int8.onnx", 160_000_000),
-                ("tokens.txt", 50_000),
-            ],
-        ),
-        _ => return Err(format!("Unknown model: {}", model_id)),
-    };
-
-    let hf_base = match model_id.as_str() {
-        "parakeet" => "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main",
-        "parakeet-v2" => "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main",
-        "moonshine-base" => "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-base-en-int8/resolve/main",
-        "whisper-tiny" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main",
-        "whisper-base" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main",
-        "whisper-small" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main",
-        "whisper-medium" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main",
-        "whisper-large-v3" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main",
-        "whisper-turbo" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main",
-        "whisper-distil-small-en" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-distil-small.en/resolve/main",
-        "whisper-distil-medium-en" => "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-distil-medium.en/resolve/main",
-        "sense-voice" => "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main",
-        _ => return Err(format!("No download URL for: {}", model_id)),
-    };
+    let spec = models::find(&model_id).ok_or_else(|| format!("Unknown model: {}", model_id))?;
+    let dir_name = spec.dir;
+    let files = spec.files;
+    let hf_base = spec.hf_base;
 
     let models_dir = app
         .path()
@@ -576,11 +417,11 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(
     std::fs::create_dir_all(&models_dir)
         .map_err(|e| format!("Failed to create model dir: {}", e))?;
 
-    let total_bytes: u64 = files.iter().map(|(_, s)| s).sum();
+    let total_bytes: u64 = spec.total_bytes();
     let mut downloaded: u64 = 0;
     let client = reqwest::Client::new();
 
-    for (filename, _) in &files {
+    for (filename, _) in files {
         let dest = models_dir.join(filename);
         if dest.exists() {
             let file_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
@@ -643,36 +484,14 @@ pub fn remove_model(state: tauri::State<AppState>, model_id: String) -> Result<(
     let models_dir = state.models_dir.lock().unwrap().clone();
     let models_path = std::path::Path::new(&models_dir);
 
-    let dir_name = match model_id.as_str() {
-        "parakeet" => "parakeet-v3",
-        "parakeet-v2" => "parakeet-v2",
-        "moonshine-base" => "moonshine-base",
-        "whisper-tiny" => "whisper-tiny",
-        "whisper-base" => "whisper-base",
-        "whisper-small" => "whisper-small",
-        "whisper-medium" => "whisper-medium",
-        "whisper-large-v3" => "whisper-large-v3",
-        "whisper-turbo" => "whisper-turbo",
-        "whisper-distil-small-en" => "whisper-distil-small-en",
-        "whisper-distil-medium-en" => "whisper-distil-medium-en",
-        "sense-voice" => "sense-voice",
-        _ => return Err(format!("Unknown model: {}", model_id)),
-    };
+    let spec = models::find(&model_id).ok_or_else(|| format!("Unknown model: {}", model_id))?;
+    let dir_name = spec.dir;
 
-    // Don't allow removing the currently active model
+    // Don't allow removing the currently active model. model_name holds the
+    // spec's display string, so this is a direct comparison rather than the
+    // per-family string rebuilding it used to do.
     let current = state.model_name.lock().unwrap().clone();
-    let is_active = match model_id.as_str() {
-        "parakeet" => current == "Parakeet V3",
-        "parakeet-v2" => current == "Parakeet V2",
-        "moonshine-base" => current == "Moonshine Base",
-        "sense-voice" => current == "SenseVoice",
-        _ => {
-            let variant_name = dir_name.replace("whisper-", "");
-            current == format!("Whisper {}", variant_name)
-        }
-    };
-
-    if is_active {
+    if current == spec.display {
         return Err(
             "Cannot remove the currently active model. Switch to another model first.".to_string(),
         );

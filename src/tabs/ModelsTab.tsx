@@ -3,31 +3,30 @@ import { motion } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
 
-const MODEL_CATALOG = [
-  { id: "parakeet", name: "Parakeet V3", company: "NVIDIA", description: "Fast and accurate. 25 European languages, auto-detect.", size: "670 MB", languages: "25 languages" },
-  { id: "parakeet-v2", name: "Parakeet V2", company: "NVIDIA", description: "English-specialized. Same architecture as V3 but tuned for English.", size: "670 MB", languages: "English" },
-  { id: "whisper-turbo", name: "Whisper Turbo", company: "OpenAI", description: "Balanced accuracy and speed.", size: "800 MB", languages: "99 languages" },
-  { id: "whisper-large-v3", name: "Whisper Large V3", company: "OpenAI", description: "Best accuracy, but slow.", size: "1.5 GB", languages: "99 languages" },
-  { id: "whisper-medium", name: "Whisper Medium", company: "OpenAI", description: "Good accuracy, medium speed.", size: "1.0 GB", languages: "99 languages" },
-  { id: "whisper-small", name: "Whisper Small", company: "OpenAI", description: "Fast and fairly accurate.", size: "375 MB", languages: "99 languages" },
-  { id: "whisper-base", name: "Whisper Base", company: "OpenAI", description: "Lightweight multilingual.", size: "135 MB", languages: "99 languages" },
-  { id: "whisper-tiny", name: "Whisper Tiny", company: "OpenAI", description: "Smallest Whisper model.", size: "98 MB", languages: "99 languages" },
-  { id: "whisper-distil-medium-en", name: "Whisper Distil Medium", company: "OpenAI", description: "English only. Distilled for speed.", size: "460 MB", languages: "English" },
-  { id: "whisper-distil-small-en", name: "Whisper Distil Small", company: "OpenAI", description: "English only. Compact and fast.", size: "180 MB", languages: "English" },
-  { id: "moonshine-base", name: "Moonshine Base", company: "Useful Sensors", description: "English only. Good accuracy, fast inference.", size: "288 MB", languages: "English" },
-  { id: "sense-voice", name: "SenseVoice", company: "Alibaba", description: "Very fast. Chinese, English, Japanese, Korean, Cantonese.", size: "160 MB", languages: "5 languages" },
-] as const
+/// Mirrors models::ModelInfo in src-tauri/src/models.rs, which is the single
+/// source of truth. This list used to be hardcoded here as well, and the two
+/// drifted: moonshine-tiny sat in the UI catalogue with no download arm in the
+/// backend, so its Download button just returned "Unknown model".
+type ModelInfo = {
+  id: string
+  name: string
+  company: string
+  description: string
+  size: string
+  languages: string
+  installed: boolean
+}
 
 export function ModelsTab() {
   const [activeModel, setActiveModel] = useState("")
-  const [installed, setInstalled] = useState<Record<string, boolean>>({})
+  const [catalog, setCatalog] = useState<ModelInfo[]>([])
   const [switching, setSwitching] = useState<string | null>(null)
   const [downloading, setDownloading] = useState<string | null>(null)
   const [downloadPercent, setDownloadPercent] = useState(0)
   const [removing, setRemoving] = useState<string | null>(null)
 
   const refreshInstalled = () => {
-    invoke<Record<string, boolean>>("get_installed_models").then(setInstalled).catch(() => {})
+    invoke<ModelInfo[]>("list_models").then(setCatalog).catch(() => {})
   }
 
   useEffect(() => {
@@ -94,18 +93,17 @@ export function ModelsTab() {
     setSwitching(null)
   }
 
-  const isActive = (modelId: string) => {
-    const catalog = MODEL_CATALOG.find((m) => m.id === modelId)
-    if (!catalog) return false
-    return activeModel === catalog.name || activeModel.includes(catalog.name)
-  }
+  // The backend sets model_name from the same spec.display this list carries,
+  // so an exact match is enough; no substring guessing.
+  const isActive = (modelId: string) =>
+    catalog.find((m) => m.id === modelId)?.name === activeModel
 
   // Group by installed/available, then by company
-  const installedModels = MODEL_CATALOG.filter((m) => installed[m.id])
-  const availableModels = MODEL_CATALOG.filter((m) => !installed[m.id])
+  const installedModels = catalog.filter((m) => m.installed)
+  const availableModels = catalog.filter((m) => !m.installed)
 
-  const groupByCompany = (models: typeof MODEL_CATALOG) => {
-    const groups: Record<string, typeof MODEL_CATALOG[number][]> = {}
+  const groupByCompany = (models: ModelInfo[]) => {
+    const groups: Record<string, ModelInfo[]> = {}
     for (const m of models) {
       if (!groups[m.company]) groups[m.company] = []
       groups[m.company].push(m)
@@ -113,9 +111,9 @@ export function ModelsTab() {
     return Object.entries(groups)
   }
 
-  const ModelCard = ({ model }: { model: typeof MODEL_CATALOG[number] }) => {
+  const ModelCard = ({ model }: { model: ModelInfo }) => {
     const active = isActive(model.id)
-    const isInstalled = installed[model.id] ?? false
+    const isInstalled = model.installed
     const isSwitching = switching === model.id
     const isDownloading = downloading === model.id
     const isRemoving = removing === model.id
@@ -200,7 +198,7 @@ export function ModelsTab() {
       {availableModels.length > 0 && (
         <div className="space-y-5">
           <p className="text-[11px] font-mono text-text-tertiary uppercase tracking-wider">Available to Download</p>
-          {groupByCompany(availableModels as unknown as typeof MODEL_CATALOG).map(([company, models]) => (
+          {groupByCompany(availableModels).map(([company, models]) => (
             <div key={company} className="space-y-1.5">
               <p className="text-[10px] font-mono text-text-tertiary uppercase tracking-widest">{company}</p>
               {models.map((m) => <ModelCard key={m.id} model={m} />)}
