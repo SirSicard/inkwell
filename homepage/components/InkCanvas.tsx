@@ -64,8 +64,9 @@ void main() {
   // it here changes the whole animation together and keeps the motion coherent
   // — the alternative, nudging the individual 0.2 / 0.1 / 0.5 factors on each
   // snoise call, would drift the layers out of relation to each other.
-  // 0.15 was the app's value; 0.165 is that 10% faster.
-  float t = u_time * 0.165;
+  // 0.15 was the app's value. Tuned up in two passes on the owner's eye:
+  // +10% to 0.165, then +5% to 0.17325 — 15.5% above the app overall.
+  float t = u_time * 0.17325;
 
   vec2 center = vec2(0.5 * (u_resolution.x / u_resolution.y), 0.5);
   float dist = length(pos - center);
