@@ -122,9 +122,12 @@ const VARIANTS: Record<
   { bg: [number, number, number]; ink: [number, number, number]; blobSize: number; warp: number }
 > = {
   panel: { bg: [0.94, 0.93, 0.91], ink: [0.06, 0.06, 0.06], blobSize: 0.38, warp: 0.1 },
-  // #0e0e11 page, lifted to roughly #221c17 in the ink — warm, and dark enough
-  // that white text over it still clears WCAG AA by a wide margin.
-  backdrop: { bg: [0.055, 0.055, 0.067], ink: [0.152, 0.125, 0.10], blobSize: 0.58, warp: 0.16 },
+  // #0e0e11 page, lifted to roughly #4b3c2d in the ink: a warm pigment rather
+  // than a grey, and bright enough to actually read as a shape at full window
+  // width. Measured contrast of the hero text over this is ~9.9:1, still well
+  // clear of WCAG AAA (7:1), so the visibility is bought out of headroom rather
+  // than out of legibility.
+  backdrop: { bg: [0.055, 0.055, 0.067], ink: [0.294, 0.235, 0.176], blobSize: 0.58, warp: 0.16 },
 };
 
 export default function InkCanvas({ variant = "panel" }: { variant?: InkVariant } = {}) {
