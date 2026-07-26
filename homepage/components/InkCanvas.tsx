@@ -60,7 +60,12 @@ void main() {
   vec2 pos = st;
   pos.x *= u_resolution.x / u_resolution.y;
 
-  float t = u_time * 0.15;
+  // The single speed dial. Every noise sample below is driven off t, so scaling
+  // it here changes the whole animation together and keeps the motion coherent
+  // — the alternative, nudging the individual 0.2 / 0.1 / 0.5 factors on each
+  // snoise call, would drift the layers out of relation to each other.
+  // 0.15 was the app's value; 0.165 is that 10% faster.
+  float t = u_time * 0.165;
 
   vec2 center = vec2(0.5 * (u_resolution.x / u_resolution.y), 0.5);
   float dist = length(pos - center);
