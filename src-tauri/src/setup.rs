@@ -1,6 +1,6 @@
 use crate::{
     models,
-    appdetect, audio, dictionary, engine, history, pipeline, settings, snippets,
+    appdetect, audio, dictionary, history, pipeline, settings, snippets,
     style, tray, vad, voicecommand, AppState,
 };
 use tauri::{Emitter, Manager};
@@ -94,9 +94,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let dict_path = app_data_dir.join("dictionary.json");
         let dict = dictionary::Dictionary::load(&dict_path);
         log::info!("Dictionary: {} entries", dict.entries.len());
-        let app_state = app.state::<AppState>();
-        *app_state.dict.lock().unwrap() = dict;
-        *app_state.dict_path.lock().unwrap() = dict_path.to_string_lossy().to_string();
+        app.state::<AppState>().dict.set(dict, dict_path);
     }
 
     // Load snippets
@@ -104,9 +102,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let snippets_path = app_data_dir.join("snippets.json");
         let store = snippets::SnippetStore::load(&snippets_path);
         log::info!("Snippets: {} loaded", store.snippets.len());
-        let app_state = app.state::<AppState>();
-        *app_state.snippet_store.lock().unwrap() = store;
-        *app_state.snippets_path.lock().unwrap() = snippets_path.to_string_lossy().to_string();
+        app.state::<AppState>().snippet_store.set(store, snippets_path);
     }
 
     // Load per-app style rules
@@ -118,10 +114,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             rules.rules.len(),
             rules.enabled
         );
-        let app_state = app.state::<AppState>();
-        *app_state.app_styles.lock().unwrap() = rules;
-        *app_state.app_styles_path.lock().unwrap() =
-            app_styles_path.to_string_lossy().to_string();
+        app.state::<AppState>().app_styles.set(rules, app_styles_path);
     }
 
     // Load voice commands
@@ -133,9 +126,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             vc_store.commands.len(),
             vc_store.enabled
         );
-        let app_state = app.state::<AppState>();
-        *app_state.voice_commands.lock().unwrap() = vc_store;
-        *app_state.voice_commands_path.lock().unwrap() = vc_path.to_string_lossy().to_string();
+        app.state::<AppState>().voice_commands.set(vc_store, vc_path);
     }
 
     // Open transcript database
@@ -171,7 +162,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             candidates.push(models::DEFAULT_MODEL_ID);
         }
 
-        let mut loaded: Option<(&models::ModelSpec, engine::SpeechEngine)> = None;
+        let mut loaded_name: Option<String> = None;
         for (i, id) in candidates.iter().enumerate() {
             let Some(spec) = models::find(id) else {
                 log::warn!("Saved model '{}' is not in the registry, skipping", id);
@@ -182,9 +173,9 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
             log::info!("Loading model '{}'...", id);
-            match spec.load(&models_dir) {
-                Ok(e) => {
-                    loaded = Some((spec, e));
+            match app_state.engine.load(spec, models_dir.clone()) {
+                Ok(name) => {
+                    loaded_name = Some(name);
                     break;
                 }
                 Err(e) => {
@@ -200,19 +191,14 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if loaded.is_none() {
+        if loaded_name.is_none() {
             log::info!(
                 "No usable models found. Download models to: {}",
                 models_dir.display()
             );
         }
 
-        // Same source as switch_model, so the name does not depend on whether
-        // the model was loaded at startup or picked later.
-        let model_name = loaded.as_ref().map_or("No model loaded", |(s, _)| s.display);
-        *app_state.model_name.lock().unwrap() = model_name.to_string();
-        let _ = app.emit("model-loaded", model_name);
-        *app_state.engine.lock().unwrap() = loaded.map(|(_, e)| e);
+        let _ = app.emit("model-loaded", app_state.engine.name());
     }
 
     // Register global hotkey
@@ -383,25 +369,6 @@ async fn stream_to_file(
 
     file.flush().map_err(|e| format!("Flush error: {}", e))?;
     Ok(written)
-}
-
-/// On-disk directory for a model id. Must stay in sync with `commands::download_model`.
-fn model_dir_name(model_id: &str) -> Option<&'static str> {
-    Some(match model_id {
-        "parakeet" => "parakeet-v3",
-        "parakeet-v2" => "parakeet-v2",
-        "moonshine-base" => "moonshine-base",
-        "whisper-tiny" => "whisper-tiny",
-        "whisper-base" => "whisper-base",
-        "whisper-small" => "whisper-small",
-        "whisper-medium" => "whisper-medium",
-        "whisper-large-v3" => "whisper-large-v3",
-        "whisper-turbo" => "whisper-turbo",
-        "whisper-distil-small-en" => "whisper-distil-small-en",
-        "whisper-distil-medium-en" => "whisper-distil-medium-en",
-        "sense-voice" => "sense-voice",
-        _ => return None,
-    })
 }
 
 /// Enable/disable launch-at-login. Best-effort: a failure here must not block the app.

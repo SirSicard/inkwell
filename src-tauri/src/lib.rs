@@ -3,6 +3,7 @@ mod audio;
 mod commands;
 pub mod dictionary;
 pub mod engine;
+pub mod engine_service;
 pub mod export;
 pub mod filetranscribe;
 pub mod history;
@@ -18,40 +19,36 @@ mod settings;
 pub mod sounds;
 pub mod setup;
 pub mod snippets;
+pub mod store;
 pub mod style;
 mod tray;
 mod vad;
 pub mod voicecommand;
 
 use audio::AudioState;
-use engine::SpeechEngine;
+use engine_service::EngineService;
 use std::sync::Mutex;
 
 pub struct AppState {
     pub audio: Mutex<Option<AudioState>>,
-    pub engine: Mutex<Option<SpeechEngine>>,
+    pub engine: EngineService,
     pub models_dir: Mutex<String>,
     pub vad_model_path: Mutex<String>,
-    pub model_name: Mutex<String>,
     pub style: Mutex<style::Style>,
     pub settings: Mutex<settings::Settings>,
     pub settings_path: Mutex<String>,
     pub db: Mutex<Option<history::TranscriptDb>>,
-    pub dict: Mutex<dictionary::Dictionary>,
-    pub dict_path: Mutex<String>,
+    pub dict: store::Store<dictionary::Dictionary>,
     pub is_first_run: Mutex<bool>,
     // AI Polish (BYOK)
     pub polish_enabled: Mutex<bool>,
     pub polish_prompt: Mutex<String>,
     // Snippets
-    pub snippet_store: Mutex<snippets::SnippetStore>,
-    pub snippets_path: Mutex<String>,
+    pub snippet_store: store::Store<snippets::SnippetStore>,
     // Per-app styles
-    pub app_styles: Mutex<appdetect::AppStyleRules>,
-    pub app_styles_path: Mutex<String>,
+    pub app_styles: store::Store<appdetect::AppStyleRules>,
     // Voice commands
-    pub voice_commands: Mutex<voicecommand::VoiceCommandStore>,
-    pub voice_commands_path: Mutex<String>,
+    pub voice_commands: store::Store<voicecommand::VoiceCommandStore>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -59,25 +56,20 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState {
             audio: Mutex::new(None),
-            engine: Mutex::new(None),
+            engine: EngineService::start(),
             models_dir: Mutex::new(String::new()),
             vad_model_path: Mutex::new(String::new()),
-            model_name: Mutex::new("Loading...".to_string()),
             style: Mutex::new(style::Style::default()),
             settings: Mutex::new(settings::Settings::default()),
             settings_path: Mutex::new(String::new()),
             db: Mutex::new(None),
-            dict: Mutex::new(dictionary::Dictionary::default()),
-            dict_path: Mutex::new(String::new()),
+            dict: store::Store::new(dictionary::Dictionary::default()),
             is_first_run: Mutex::new(false),
             polish_enabled: Mutex::new(false),
             polish_prompt: Mutex::new(llm::DEFAULT_POLISH_PROMPT.to_string()),
-            snippet_store: Mutex::new(snippets::SnippetStore::default()),
-            snippets_path: Mutex::new(String::new()),
-            app_styles: Mutex::new(appdetect::AppStyleRules::default()),
-            app_styles_path: Mutex::new(String::new()),
-            voice_commands: Mutex::new(voicecommand::VoiceCommandStore::default()),
-            voice_commands_path: Mutex::new(String::new()),
+            snippet_store: store::Store::new(snippets::SnippetStore::default()),
+            app_styles: store::Store::new(appdetect::AppStyleRules::default()),
+            voice_commands: store::Store::new(voicecommand::VoiceCommandStore::default()),
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

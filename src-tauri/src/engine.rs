@@ -37,15 +37,21 @@ pub enum ModelType {
 }
 
 /// A speech recognition engine wrapping sherpa-onnx OfflineRecognizer.
-/// Safety: sherpa-onnx's C API is thread-safe. The raw pointer inside
-/// OfflineRecognizer is only accessed through its safe Rust methods.
 pub struct SpeechEngine {
     recognizer: OfflineRecognizer,
     model_type: ModelType,
 }
 
+// Safety: the engine is owned by a single thread (see `engine_service`), which
+// receives it once by value and never shares it. `Send` covers that move; the
+// underlying sherpa-onnx handle is not aliased across threads.
+//
+// `Sync` was also asserted here, with no argument beyond "the C API is thread
+// safe". It was only ever sound because non-async Tauri commands serialise on
+// the main thread, and would have quietly stopped holding the moment one of
+// them became async — which switch_model now is. Confining the engine to one
+// thread removes the need for it entirely.
 unsafe impl Send for SpeechEngine {}
-unsafe impl Sync for SpeechEngine {}
 
 impl SpeechEngine {
     /// Create a Moonshine engine

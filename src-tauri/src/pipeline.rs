@@ -229,21 +229,20 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
         resampled.clone()
     };
 
-    // 3. Transcribe
-    let engine_guard = app_state.engine.lock().unwrap();
-    if let Some(engine) = engine_guard.as_ref() {
-        match engine.transcribe(&speech) {
+    // 3. Transcribe. The engine lives on its own thread; this blocks the
+    // pipeline worker until it answers, which is what we want here.
+    {
+        match app_state.engine.transcribe(speech.clone()) {
             Ok(text) => {
                 log::info!("Raw: \"{}\"", text);
 
                 // Check for voice commands before processing as dictation
                 {
-                    let vc_store = app_state.voice_commands.lock().unwrap();
-                    if let Some(cmd) = vc_store.detect(&text) {
+                    let detected = app_state.voice_commands.with(|vc| vc.detect(&text).cloned());
+                    if let Some(cmd) = detected {
                         log::info!("Voice command detected: {:?}", cmd.action);
                         let cmd_id = cmd.id.clone();
                         let action = cmd.action.clone();
-                        drop(vc_store);
 
                         let _ = handle.emit(
                             "voice-command",
@@ -288,32 +287,25 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
 
                 // Apply style formatting (per-app override if enabled)
                 let current_style = {
-                    let app_rules = app_state.app_styles.lock().unwrap();
-                    if let Some(override_style) = app_rules.get_override() {
-                        log::info!("Per-app style override: {}", override_style);
-                        serde_json::from_str::<style::Style>(&format!(
-                            "\"{}\"",
-                            override_style
-                        ))
-                        .unwrap_or_else(|_| {
-                            app_state.style.lock().unwrap().clone()
-                        })
-                    } else {
-                        app_state.style.lock().unwrap().clone()
+                    let override_style =
+                        app_state.app_styles.with(|rules| rules.get_override());
+                    match override_style {
+                        Some(name) => {
+                            log::info!("Per-app style override: {}", name);
+                            serde_json::from_str::<style::Style>(&format!("\"{}\"", name))
+                                .unwrap_or_else(|_| app_state.style.lock().unwrap().clone())
+                        }
+                        None => app_state.style.lock().unwrap().clone(),
                     }
                 };
                 let styled = current_style.format(&text);
                 log::info!("Styled ({:?}): \"{}\"", current_style, styled);
 
                 // Apply dictionary corrections
-                let dict = app_state.dict.lock().unwrap();
-                let styled = dict.apply(&styled);
-                drop(dict);
+                let styled = app_state.dict.with(|d| d.apply(&styled));
 
                 // Apply snippet expansions
-                let snippet_store = app_state.snippet_store.lock().unwrap();
-                let styled = snippet_store.expand(&styled);
-                drop(snippet_store);
+                let styled = app_state.snippet_store.with(|s| s.expand(&styled));
 
                 // AI Polish (BYOK only — no key configured means no polish)
                 let polish_enabled = *app_state.polish_enabled.lock().unwrap();
@@ -395,8 +387,7 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                         (speech.len() as f32 / 16.0) as i64;
                     let style_name =
                         format!("{:?}", current_style).to_lowercase();
-                    let model_name =
-                        app_state.model_name.lock().unwrap().clone();
+                    let model_name = app_state.engine.name();
                     let db_guard = app_state.db.lock().unwrap();
                     if let Some(db) = db_guard.as_ref() {
                         let _ = db.insert(
@@ -429,9 +420,6 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                 let _ = handle.emit("transcription-error", e);
             }
         }
-    } else {
-        log::warn!("No speech engine loaded, skipping transcription");
-        let _ = handle.emit("recording-processed", speech.len());
     }
 
     // Hide overlay after processing
