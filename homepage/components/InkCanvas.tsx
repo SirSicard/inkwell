@@ -26,6 +26,10 @@ const FRAGMENT_SRC = `
 precision highp float;
 uniform vec2 u_resolution;
 uniform float u_time;
+uniform vec3 u_bg;
+uniform vec3 u_ink;
+uniform float u_blobSize;
+uniform float u_warp;
 
 vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
 
@@ -68,12 +72,12 @@ void main() {
   // radius. Halving the warp and widening the edge falloff keeps the same
   // simplex-noise language and the same silhouette, read at the size the site
   // actually shows it. Everything else below is byte-identical to the app.
-  float warpIntensity = 0.10;
+  float warpIntensity = u_warp;
   float n1 = snoise(pos * 2.0 - vec2(t * 0.2, -t * 0.1));
   float n2 = snoise(pos * 4.0 + vec2(t * 0.1, t * 0.2));
   float warp = n1 * warpIntensity + n2 * (warpIntensity * 0.5);
 
-  float blobSize = 0.38;
+  float blobSize = u_blobSize;
   float blob = smoothstep(blobSize + 0.035, blobSize - 0.035, dist + warp);
 
   float n3 = snoise(pos * 8.0 + vec2(t * 0.5, -t * 0.4));
@@ -81,8 +85,8 @@ void main() {
 
   float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 
-  vec3 bgColor = vec3(0.94, 0.93, 0.91) + grain * 0.02;
-  vec3 inkColor = vec3(0.06 + detail) + grain * 0.015;
+  vec3 bgColor = u_bg + grain * 0.02;
+  vec3 inkColor = u_ink + detail + grain * 0.015;
   gl_FragColor = vec4(mix(bgColor, inkColor, blob), 1.0);
 }
 `;
@@ -103,7 +107,27 @@ function compile(
   return shader;
 }
 
-export default function InkCanvas() {
+/**
+ * "panel" is the app's own inversion: dark ink on a cream field, framed by the
+ * charcoal page. "backdrop" is the full-bleed hero treatment — the same motion
+ * and grain, but drawn as charcoal-on-charcoal with a faint warm lift, because
+ * a cream field behind body copy would blow out the page and leave the text
+ * fighting a moving background for contrast. The blob is also larger and softer
+ * there, since it is reading as a field rather than an object.
+ */
+export type InkVariant = "panel" | "backdrop";
+
+const VARIANTS: Record<
+  InkVariant,
+  { bg: [number, number, number]; ink: [number, number, number]; blobSize: number; warp: number }
+> = {
+  panel: { bg: [0.94, 0.93, 0.91], ink: [0.06, 0.06, 0.06], blobSize: 0.38, warp: 0.1 },
+  // #0e0e11 page, lifted to roughly #221c17 in the ink — warm, and dark enough
+  // that white text over it still clears WCAG AA by a wide margin.
+  backdrop: { bg: [0.055, 0.055, 0.067], ink: [0.152, 0.125, 0.10], blobSize: 0.58, warp: 0.16 },
+};
+
+export default function InkCanvas({ variant = "panel" }: { variant?: InkVariant } = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [failed, setFailed] = useState(false);
 
@@ -145,6 +169,11 @@ export default function InkCanvas() {
 
     const uRes = gl.getUniformLocation(program, "u_resolution");
     const uTime = gl.getUniformLocation(program, "u_time");
+    const uBg = gl.getUniformLocation(program, "u_bg");
+    const uInk = gl.getUniformLocation(program, "u_ink");
+    const uBlobSize = gl.getUniformLocation(program, "u_blobSize");
+    const uWarp = gl.getUniformLocation(program, "u_warp");
+    const palette = VARIANTS[variant];
 
     const start = performance.now();
     let raf = 0;
@@ -155,6 +184,10 @@ export default function InkCanvas() {
       gl.useProgram(program);
       gl.uniform2f(uRes, canvas.width, canvas.height);
       gl.uniform1f(uTime, elapsedSeconds);
+      gl.uniform3fv(uBg, palette.bg);
+      gl.uniform3fv(uInk, palette.ink);
+      gl.uniform1f(uBlobSize, palette.blobSize);
+      gl.uniform1f(uWarp, palette.warp);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     };
 
@@ -264,16 +297,21 @@ export default function InkCanvas() {
       gl.deleteShader(fs);
       gl.deleteBuffer(buf);
     };
-  }, []);
+  }, [variant]);
 
   return (
     <div
       aria-hidden="true"
       className="absolute inset-0 overflow-hidden rounded-[inherit]"
       style={{
-        // Doubles as the no-WebGL fallback: static cream field, soft ink core.
+        // Doubles as the no-WebGL fallback, per variant: the panel keeps the
+        // cream field and dark core; the backdrop stays on the page colour so a
+        // WebGL failure degrades to a plain dark hero rather than a bright slab
+        // with unreadable text over it.
         background:
-          "radial-gradient(circle at 50% 50%, #101010 0%, #151515 30%, #efeee9 32%, #f3f1ec 100%)",
+          variant === "backdrop"
+            ? "radial-gradient(circle at 50% 45%, #221c17 0%, #16151a 45%, #0e0e11 100%)"
+            : "radial-gradient(circle at 50% 50%, #101010 0%, #151515 30%, #efeee9 32%, #f3f1ec 100%)",
       }}
     >
       {!failed && <canvas ref={canvasRef} className="block h-full w-full" />}

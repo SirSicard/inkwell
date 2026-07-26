@@ -7,9 +7,51 @@ export default function Hero() {
   return (
     <section
       aria-labelledby="hero-title"
-      className="relative mx-auto grid max-w-6xl items-center gap-14 px-6 pb-20 pt-20 sm:pt-28 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16 lg:pb-28"
+      className="relative isolate overflow-hidden"
     >
-      <div>
+      {/* The ink as a full-bleed backdrop rather than a framed panel.
+          Three layers, in order:
+            1. the shader, in its charcoal-on-charcoal "backdrop" palette
+            2. a centre scrim, so the copy sits on near-solid ground instead of
+               on whatever the blob happens to be doing behind that word
+            3. top and bottom fades to the page colour, so the hero dissolves
+               into the sticky header above and the next section below instead
+               of ending on a hard edge
+          All of it is aria-hidden and pointer-events-none: it is texture, and it
+          must never intercept a click meant for the download button. */}
+      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+        <InkCanvas variant="backdrop" />
+        <div
+          className="absolute inset-0"
+          style={{
+            // Deliberately light. Measured contrast of the body text over the
+            // densest part of the ink is 14.4:1, so the scrim is not carrying
+            // legibility — the palette already does. Its only job is to take the
+            // edge off the grain and motion directly behind the words. An
+            // opaque centre scrim also cancels the blob exactly where the blob
+            // is strongest, since both are centred, which leaves the ink
+            // visible only at the corners.
+            background:
+              "radial-gradient(62% 55% at 50% 46%, rgba(14,14,17,0.55) 0%, rgba(14,14,17,0.34) 45%, rgba(14,14,17,0.12) 75%, rgba(14,14,17,0) 100%)",
+          }}
+        />
+        <div
+          className="absolute inset-x-0 top-0 h-28"
+          style={{
+            background:
+              "linear-gradient(to bottom, var(--bg-base) 0%, rgba(14,14,17,0) 100%)",
+          }}
+        />
+        <div
+          className="absolute inset-x-0 bottom-0 h-40"
+          style={{
+            background:
+              "linear-gradient(to top, var(--bg-base) 0%, rgba(14,14,17,0) 100%)",
+          }}
+        />
+      </div>
+
+      <div className="mx-auto flex max-w-3xl flex-col items-center px-6 pb-28 pt-24 text-center sm:pt-32 lg:pb-36 lg:pt-40">
         <p
           className="font-mono text-[0.6875rem] uppercase tracking-[0.22em]"
           style={{ color: "var(--text-tertiary)" }}
@@ -18,13 +60,12 @@ export default function Hero() {
         </p>
 
         {/* The h1 carries the proposition, not the wordmark. "Inkwell" is
-            already in the sticky header two rows above and in the meta line
-            directly overhead; spending the largest type on the page repeating
-            it would leave the loudest thing on the page saying nothing. The
-            brand is the ink, and the ink is the panel. */}
+            already in the sticky header and in the meta line directly overhead;
+            spending the largest type on the page repeating it would leave the
+            loudest thing on the page saying nothing. */}
         <h1
           id="hero-title"
-          className="mt-5 max-w-2xl text-balance text-[clamp(2.25rem,5.2vw,3.75rem)] font-semibold leading-[1.02] tracking-tight"
+          className="mt-6 text-balance text-[clamp(2.5rem,6.4vw,4.5rem)] font-semibold leading-[1.02] tracking-tight"
         >
           Hold a key, speak, let go.
         </h1>
@@ -41,7 +82,7 @@ export default function Hero() {
           leaves it. Free forever, open source, no account, no telemetry.
         </p>
 
-        <div className="mt-9 flex flex-wrap items-center gap-3">
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
           <DownloadButton />
           <a href={GITHUB_URL} className="btn btn-secondary">
             <GitHubIcon size={17} />
@@ -50,7 +91,7 @@ export default function Hero() {
         </div>
 
         <p
-          className="mt-5 max-w-md text-sm leading-relaxed"
+          className="mt-6 max-w-md text-sm leading-relaxed"
           style={{ color: "var(--text-tertiary)" }}
         >
           Builds are not code signed yet — first launch needs one extra step.{" "}
@@ -62,23 +103,6 @@ export default function Hero() {
             How to open it
           </a>
           .
-        </p>
-      </div>
-
-      {/* The ink panel: the app's cream shader framed by the charcoal page,
-          the same inversion the desktop UI uses. */}
-      <div className="relative">
-        <div
-          className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl sm:aspect-[16/11]"
-          style={{ border: "1px solid var(--border-strong)" }}
-        >
-          <InkCanvas />
-        </div>
-        <p
-          className="mt-3 text-center font-mono text-[0.6875rem] tracking-wide"
-          style={{ color: "var(--text-tertiary)" }}
-        >
-          The ink reacts to your voice inside the app.
         </p>
       </div>
     </section>
