@@ -4,6 +4,11 @@ use tauri::{Emitter, Manager};
 
 fn focus_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        // Back to a normal app while a window is on screen, or an Accessory app
+        // cannot properly take focus and the window opens behind whatever the
+        // user was in. Dropped back to Accessory when the window is closed.
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
         let _ = window.show();
         let _ = window.set_focus();
     }

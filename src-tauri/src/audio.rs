@@ -84,6 +84,42 @@ fn resolve_device(host: &cpal::Host, preferred: &str) -> Option<cpal::Device> {
 
 /// Start the always-on audio capture stream on the configured device.
 /// `preferred_device` is the `mic_device` setting ("auto" for system default).
+/// Collapse one interleaved frame to mono.
+///
+/// Averaging is right for mono and true stereo, but wrong for the multi-mic
+/// arrays built into MacBooks: those channels are spatially separated, so the
+/// same voice arrives phase-shifted on each one and summing them comb-filters
+/// the speech instead of reinforcing it. For arrays, take the primary channel.
+fn downmix(frame: &[f32], channels: usize) -> f32 {
+    if channels > 2 {
+        frame.first().copied().unwrap_or(0.0)
+    } else {
+        frame.iter().sum::<f32>() / channels as f32
+    }
+}
+
+#[cfg(test)]
+mod downmix_tests {
+    use super::downmix;
+
+    #[test]
+    fn mono_passes_through() {
+        assert_eq!(downmix(&[0.5], 1), 0.5);
+    }
+
+    #[test]
+    fn stereo_averages() {
+        assert_eq!(downmix(&[0.4, 0.6], 2), 0.5);
+    }
+
+    #[test]
+    fn array_takes_the_primary_channel_instead_of_cancelling() {
+        // Same voice, phase-shifted across an array: averaging would cancel it
+        // to near zero, which is exactly the bug this avoids.
+        assert_eq!(downmix(&[0.6, -0.6, 0.6], 3), 0.6);
+    }
+}
+
 pub fn start_audio_capture(
     app_handle: AppHandle,
     preferred_device: &str,
@@ -143,7 +179,7 @@ pub fn start_audio_capture(
                     let recording = is_recording_reader.load(Ordering::Relaxed);
 
                     for frame in data.chunks(channels) {
-                        let mono: f32 = frame.iter().sum::<f32>() / channels as f32;
+                        let mono: f32 = downmix(frame, channels);
 
                         // Always push to ring buffer (standby)
                         let _ = producer.try_push(mono);
@@ -189,8 +225,11 @@ pub fn start_audio_capture(
                     let recording = is_recording_reader.load(Ordering::Relaxed);
 
                     for frame in data.chunks(channels) {
-                        let mono: f32 =
-                            frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / channels as f32;
+                        let mono: f32 = if channels > 2 {
+                            frame.first().map(|&s| s as f32 / 32768.0).unwrap_or(0.0)
+                        } else {
+                            frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / channels as f32
+                        };
 
                         let _ = producer.try_push(mono);
 

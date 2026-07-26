@@ -183,6 +183,14 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
         res_peak
     );
 
+    // Raw CoreAudio capture from the built-in mic array arrives with no AGC —
+    // Apple's voice processing is what normally lifts it — so real speech lands
+    // around -65 dBFS. VAD then classifies all of it as silence and the
+    // recogniser has to work from a near-flat signal. Normalise to a usable
+    // peak first, with a noise floor so a genuinely silent room is not amplified
+    // into hiss.
+    let resampled = recording::normalize_peak(resampled);
+
     let app_state = handle.state::<AppState>();
     let (vad_threshold, debug_save_audio, show_overlay) = {
         let settings = app_state.settings.lock().unwrap();

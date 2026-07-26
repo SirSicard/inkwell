@@ -60,9 +60,24 @@ fn send_paste_keystroke() -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
+    // The V key, by raw virtual keycode rather than by character.
+    //
+    // Key::Unicode('v') looks tempting, but on macOS enigo resolves it through
+    // get_layoutdependent_keycode, which calls the Text Services Manager
+    // (TSMGetInputSourceProperty). TSM asserts it is on the main thread, and
+    // this runs on the pipeline's worker thread, so libdispatch raises SIGTRAP
+    // and kills the process — every single successful dictation, right after
+    // the clipboard write. It is not a Rust panic, so catch_unwind never sees
+    // it. The raw keycode skips that lookup entirely (and skips the 256 TSM
+    // calls the layout scan costs per paste).
+    #[cfg(target_os = "macos")]
+    const V_KEY: Key = Key::Other(0x09); // kVK_ANSI_V
+    #[cfg(not(target_os = "macos"))]
+    const V_KEY: Key = Key::Unicode('v');
+
     enigo.key(modifier, enigo::Direction::Press)
         .map_err(|e| format!("Key press failed: {}", e))?;
-    let click = enigo.key(Key::Unicode('v'), enigo::Direction::Click);
+    let click = enigo.key(V_KEY, enigo::Direction::Click);
     // Release the modifier even if the click failed, or the user is left with a
     // stuck Cmd/Ctrl.
     let release = enigo.key(modifier, enigo::Direction::Release);
