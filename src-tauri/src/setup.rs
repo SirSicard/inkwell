@@ -241,13 +241,25 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // System tray
     tray::setup_tray(app)?;
 
-    // Hide to tray on close instead of quitting
+    // Hide to tray on close instead of quitting.
+    //
+    // Dropping to Accessory on the way out is what stops dictation stealing
+    // focus: as a Regular app, showing the recording overlay activates Inkwell
+    // and hiding it promotes the main window, so the synthetic Cmd+V landed in
+    // Inkwell instead of whatever the user was typing into. An Accessory app
+    // has no Dock tile and never takes focus on its own, which is the correct
+    // shape for a tray-resident dictation tool anyway.
     if let Some(window) = app.get_webview_window("main") {
         let w = window.clone();
+        let handle = app.handle().clone();
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = w.hide();
+                #[cfg(target_os = "macos")]
+                let _ = handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                #[cfg(not(target_os = "macos"))]
+                let _ = &handle;
             }
         });
     }

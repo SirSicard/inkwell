@@ -66,3 +66,83 @@ pub fn save_wav(samples: &[f32], path: &PathBuf) -> Result<(), String> {
 
     Ok(())
 }
+
+/// Peak-normalise a recording to a usable level for VAD and recognition.
+///
+/// Built-in mic arrays on macOS are read through the raw HAL, which bypasses the
+/// voice processing (AGC, beamforming) that normally lifts them, so ordinary
+/// speech arrives around -65 dBFS. Left alone, VAD scores the whole buffer as
+/// silence and the recogniser decodes a near-flat signal.
+///
+/// Gain is capped so a quiet room is not amplified into hiss, and buffers below
+/// the noise floor are returned untouched — there is no signal there to rescue.
+pub fn normalize_peak(mut samples: Vec<f32>) -> Vec<f32> {
+    const TARGET_PEAK: f32 = 0.35;
+    /// Below this the buffer is silence, not quiet speech. Leave it alone so
+    /// VAD still sees silence and reports honestly.
+    const NOISE_FLOOR: f32 = 0.0005;
+    /// Caps how far a faint buffer can be lifted, so room tone stays room tone.
+    const MAX_GAIN: f32 = 60.0;
+
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    if peak < NOISE_FLOOR || peak >= TARGET_PEAK {
+        return samples;
+    }
+
+    let gain = (TARGET_PEAK / peak).min(MAX_GAIN);
+    for s in samples.iter_mut() {
+        *s = (*s * gain).clamp(-1.0, 1.0);
+    }
+    log::info!("Normalised audio: peak {:.6} -> {:.6} (gain {:.1}x)", peak, peak * gain, gain);
+    samples
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_peak;
+
+    #[test]
+    fn lifts_a_quiet_recording_to_the_target() {
+        // Peak 0.01 needs 35x, inside the cap, so it reaches the target exactly.
+        let quiet = vec![0.01, -0.01, 0.005, -0.005];
+        let out = normalize_peak(quiet);
+        let peak = out.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!((peak - 0.35).abs() < 0.01, "expected ~0.35 peak, got {peak}");
+    }
+
+    #[test]
+    fn preserves_relative_dynamics() {
+        let out = normalize_peak(vec![0.01, -0.005]);
+        // The quieter sample must stay half the loud one, not be squashed flat.
+        assert!((out[0] / out[1].abs() - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn leaves_a_healthy_recording_alone() {
+        let healthy = vec![0.5, -0.5, 0.25];
+        let out = normalize_peak(healthy.clone());
+        assert_eq!(out, healthy);
+    }
+
+    #[test]
+    fn does_not_amplify_silence_into_hiss() {
+        let silence = vec![0.00001, -0.00002, 0.0];
+        let out = normalize_peak(silence.clone());
+        assert_eq!(out, silence, "sub-noise-floor buffers must pass through");
+    }
+
+    #[test]
+    fn gain_is_capped() {
+        // Just above the noise floor: uncapped gain would be ~583x.
+        let faint = vec![0.0006, -0.0006];
+        let out = normalize_peak(faint);
+        let peak = out.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(peak <= 0.0006 * 60.0 + 1e-6, "gain exceeded the cap: {peak}");
+    }
+
+    #[test]
+    fn never_clips() {
+        let out = normalize_peak(vec![0.01, -0.01, 0.005]);
+        assert!(out.iter().all(|s| s.abs() <= 1.0));
+    }
+}
