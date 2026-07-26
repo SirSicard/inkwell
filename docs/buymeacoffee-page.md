@@ -1,24 +1,29 @@
 # Buy Me a Coffee page copy
 
-Paste-ready text for the Inkwell donation page. Written to match the site's
-voice: plain, specific, no guilt. Every claim here is true of the shipped app.
-If a feature changes, change this too.
+Paste-ready text for the donation page. Written about the maker rather than about
+Inkwell, so the page survives the next tool: Inkwell is named as what is out now,
+not as the whole identity. Voice matches the site: plain, specific, no guilt.
+
+Every claim here is either true today or vague enough to stay true. If a
+statement stops being either, change it.
 
 **Before publishing:** create the account yourself, then put the real handle in
 `homepage/lib/constants.ts` (`DONATION_URL`) and in the app's
 `src/constants.ts`. Both currently point at `buymeacoffee.com/REPLACE_ME`.
+
+**Left off on purpose:** any employer or client. This is a personal tip jar for
+personal projects, and naming a day job on it invites questions about whose time
+built what. Add it only if you want that association.
 
 ---
 
 ## Page name
 
 ```
-Inkwell
+Mattias
 ```
 
 ## What people are buying
-
-BMC asks what a supporter is buying. Keep it literal:
 
 ```
 a coffee
@@ -27,17 +32,17 @@ a coffee
 ## Short bio (the line under your name)
 
 ```
-I build Inkwell: free, open-source dictation that runs entirely on your own machine. No account, no subscription, no telemetry.
+I build small desktop tools that run on your own machine instead of someone else's. Free, open source, no accounts, no telemetry.
 ```
 
 Alternates, if you want a different emphasis:
 
 ```
-Hold a key, speak, let go. Inkwell turns your voice into text on your own machine, and never sends it anywhere.
+Local-first software, given away. Your data stays on your computer, because that is the whole point.
 ```
 
 ```
-Free local dictation for macOS and Windows. Your voice never leaves your computer, and it never will.
+I make the kind of tools I wanted to exist: fast, private, free, and finished.
 ```
 
 ---
@@ -45,33 +50,41 @@ Free local dictation for macOS and Windows. Your voice never leaves your compute
 ## About section
 
 ```
-Inkwell is a dictation app for macOS and Windows. You hold a hotkey, speak, let
-go, and the text lands in whatever app you were already typing in.
+I build small desktop tools, and I give them away.
 
-The whole point is that it runs on your machine. Speech recognition happens
-locally through a model you download once. Nothing is uploaded, there is no
-account to make, and there is no telemetry of any kind. Your voice is not a
-training set, a subscription, or a growth metric.
+The thread running through all of them is that your data stays on your machine.
+No account to create, no server holding your files, no telemetry reporting what
+you did with it. Not as a privacy policy you have to trust, but as an
+architecture: if the software never sends anything, there is nothing to promise.
 
-It is free. Not free-for-now, not free-until-the-seed-round: there is no paid
-tier, no licence key, and no feature sitting behind a paywall. The source is MIT
-licensed and on GitHub, so if I ever stopped maintaining it you could keep it
+Everything I release is free and open source. Not free-for-now, not
+free-until-the-funding-runs-out. No paid tier, no licence key, no feature waiting
+behind a wall. The source is public, so if I ever wandered off you could keep it
 running yourself.
 
-Why the tip jar, then? Two things about shipping a desktop app cost real money no
-matter how the code is licensed. Signing and notarising a macOS build needs a
-paid Apple developer account, and until that is in place every download greets
-you with a scary warning and a workaround. A domain to host it on is the other.
-Coffee covers those.
+Out now:
 
-To be clear about what a tip buys you: nothing. You already have the whole app.
-Tipping does not unlock anything, does not move your bug up a queue, and does not
-get you a different version. It just means the next person's download is less
-frightening.
+Inkwell, dictation for macOS and Windows. Hold a hotkey, speak, let go, and the
+text lands in whatever app you were already typing in. Speech recognition runs
+locally through a model you download once, so your voice never leaves your
+computer.
 
-And honestly, the unpaid help is worth more than the coffee. Tell me what broke
-on your hardware, which model got your accent wrong, or which app it refused to
-paste into. That is the stuff I cannot get any other way.
+More is coming. I would rather show you a finished thing than a roadmap, so I
+will not promise dates.
+
+Why a tip jar, then? Shipping desktop software costs money regardless of how the
+code is licensed. A signed, notarised macOS build needs a paid Apple developer
+account, and without one every download greets you with a warning and a
+workaround. Domains and the odd bit of hosting are the rest. Coffee covers that.
+
+To be clear about what a tip buys you: nothing. You already have everything.
+Tipping unlocks no features, moves no bug up a queue, and gets you no different
+version. It just means the next person's download is less frightening than yours
+was.
+
+Honestly, the unpaid help is worth more than the coffee. Tell me what broke on
+your hardware, what confused you in the first five minutes, or what you wanted it
+to do and it wouldn't. That is the stuff I cannot get any other way.
 
 Mattias
 ```
@@ -83,9 +96,9 @@ Mattias
 ```
 Thank you, that genuinely helps.
 
-If you have thirty seconds: tell me what you use Inkwell for and what has annoyed
-you about it. Bug reports and rough edges are the most useful thing you can send
-me, and they cost nothing.
+If you have thirty seconds: tell me what you are using it for and what has
+annoyed you about it. Bug reports and rough edges are the most useful thing you
+can send me, and they cost nothing.
 ```
 
 ---
@@ -95,10 +108,12 @@ me, and they cost nothing.
 - **No user counts or social proof.** The published build has a couple of dozen
   downloads. Claiming momentum it does not have would be the one thing that makes
   the rest of the page untrustworthy.
-- **No roadmap promises.** Live-as-you-speak transcription does not exist in
-  Inkwell, so it is not hinted at here.
-- **No "support development or it dies" framing.** The app is MIT and finished
-  enough to use; implying otherwise would be a manufactured deadline.
-- **Signing and domain are named as the actual costs** rather than a vague
-  "supports development", because they are specific, verifiable, and currently
-  true: the builds really are unsigned today.
+- **No roadmap.** "More is coming" is as specific as it gets. Naming unbuilt
+  tools turns a tip jar into a pre-order, and dates you miss are worse than
+  silence.
+- **No "support development or it dies" framing.** The tools are open source and
+  finished enough to use; implying otherwise would be a manufactured deadline.
+- **Signing, domains and hosting are named as the actual costs** rather than a
+  vague "supports development", because they are specific, verifiable, and
+  currently true. The builds really are unsigned today.
+- **Nothing about employers or clients.** See the note at the top.
