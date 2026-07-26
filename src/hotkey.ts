@@ -1,6 +1,6 @@
 // Hotkeys are stored as lowercase "+"-joined tokens (e.g. "super+shift+space").
 // The Cmd key serializes as "super", which must never be shown to a Mac user as
-// the literal word — macOS expects the glyphs, in modifier order.
+// the literal word, because macOS expects the glyphs, in modifier order.
 
 const IS_MAC = typeof navigator !== "undefined" && navigator.userAgent.includes("Mac")
 

@@ -75,7 +75,7 @@ pub fn save_wav(samples: &[f32], path: &PathBuf) -> Result<(), String> {
 /// silence and the recogniser decodes a near-flat signal.
 ///
 /// Gain is capped so a quiet room is not amplified into hiss, and buffers below
-/// the noise floor are returned untouched — there is no signal there to rescue.
+/// the noise floor are returned untouched, since there is no signal there to rescue.
 pub fn normalize_peak(mut samples: Vec<f32>) -> Vec<f32> {
     const TARGET_PEAK: f32 = 0.35;
     /// Below this the buffer is silence, not quiet speech. Leave it alone so

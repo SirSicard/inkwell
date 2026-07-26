@@ -61,11 +61,11 @@ void main() {
   pos.x *= u_resolution.x / u_resolution.y;
 
   // The single speed dial. Every noise sample below is driven off t, so scaling
-  // it here changes the whole animation together and keeps the motion coherent
-  // — the alternative, nudging the individual 0.2 / 0.1 / 0.5 factors on each
+  // it here changes the whole animation together and keeps the motion coherent.
+  // The alternative, nudging the individual 0.2 / 0.1 / 0.5 factors on each
   // snoise call, would drift the layers out of relation to each other.
   // 0.15 was the app's value. Tuned up in two passes on the owner's eye:
-  // +10% to 0.165, then +5% to 0.17325 — 15.5% above the app overall.
+  // +10% to 0.165, then +5% to 0.17325, 15.5% above the app overall.
   float t = u_time * 0.17325;
 
   vec2 center = vec2(0.5 * (u_resolution.x / u_resolution.y), 0.5);
@@ -115,7 +115,7 @@ function compile(
 
 /**
  * "panel" is the app's own inversion: dark ink on a cream field, framed by the
- * charcoal page. "backdrop" is the full-bleed hero treatment — the same motion
+ * charcoal page. "backdrop" is the full-bleed hero treatment: the same motion
  * and grain, but drawn as charcoal-on-charcoal with a faint warm lift, because
  * a cream field behind body copy would blow out the page and leave the text
  * fighting a moving background for contrast. The blob is also larger and softer
@@ -130,7 +130,7 @@ const VARIANTS: Record<
   panel: { bg: [0.94, 0.93, 0.91], ink: [0.06, 0.06, 0.06], blobSize: 0.38, warp: 0.1 },
   // #0e0e11 page, lifted to roughly #4b3c2d in the ink: a warm pigment rather
   // than a grey, and bright enough to actually read as a shape at full window
-  // width. Measured contrast of the hero text over this is ~9.9:1, still well
+  // width. Measured contrast of the hero text over this is 9.07:1, still well
   // clear of WCAG AAA (7:1), so the visibility is bought out of headroom rather
   // than out of legibility.
   backdrop: { bg: [0.055, 0.055, 0.067], ink: [0.294, 0.235, 0.176], blobSize: 0.58, warp: 0.16 },
@@ -256,7 +256,7 @@ export default function InkCanvas({ variant = "panel" }: { variant?: InkVariant 
     io.observe(canvas);
 
     // The panel is a grid cell whose height follows the hero's text column, so
-    // it changes size without the window ever resizing — swapped webfonts and
+    // it changes size without the window ever resizing; swapped webfonts and
     // text reflow both do it. A window-resize listener alone leaves the backing
     // store at its first-paint size and WebGL stretches the blob to fit
     // (measured: a 492x338 box still holding a 488x365 buffer).
@@ -269,7 +269,7 @@ export default function InkCanvas({ variant = "panel" }: { variant?: InkVariant 
     // Mobile GPUs drop WebGL contexts under memory pressure or on backgrounding.
     // Without this the canvas keeps its last (now blank) framebuffer and the
     // panel reads as an empty hole; unmounting it lets the wrapper's static
-    // radial gradient — the same fallback used when WebGL is unavailable —
+    // radial gradient, the same fallback used when WebGL is unavailable,
     // show through instead.
     const onContextLost = (e: Event) => {
       e.preventDefault();

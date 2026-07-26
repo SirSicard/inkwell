@@ -66,7 +66,7 @@ fn send_paste_keystroke() -> Result<(), String> {
     // get_layoutdependent_keycode, which calls the Text Services Manager
     // (TSMGetInputSourceProperty). TSM asserts it is on the main thread, and
     // this runs on the pipeline's worker thread, so libdispatch raises SIGTRAP
-    // and kills the process — every single successful dictation, right after
+    // and kills the process on every single successful dictation, right after
     // the clipboard write. It is not a Rust panic, so catch_unwind never sees
     // it. The raw keycode skips that lookup entirely (and skips the 256 TSM
     // calls the layout scan costs per paste).
@@ -90,7 +90,7 @@ fn send_paste_keystroke() -> Result<(), String> {
 /// macOS: does this process hold Accessibility permission?
 ///
 /// Without it the synthetic Cmd+V is swallowed by the window server and the
-/// paste fails with no error. Non-prompting by design — call it from
+/// paste fails with no error. Non-prompting by design, so call it from
 /// onboarding/settings so the user can be guided, never on the paste path.
 #[cfg(target_os = "macos")]
 #[tauri::command]

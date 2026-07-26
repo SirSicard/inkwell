@@ -19,4 +19,4 @@ Any other approaches you've thought about.
 Inkwell transcribes locally and only calls out to an AI provider when you supply your own key. Say so if your idea needs a network call, and what it would send.
 
 **Additional context**
-Screenshots, mockups, links, or anything else. Say if you'd like to build it — PRs are welcome.
+Screenshots, mockups, links, or anything else. Say if you'd like to build it; PRs are welcome.

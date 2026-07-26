@@ -1,8 +1,8 @@
-# Buy Me a Coffee — page copy
+# Buy Me a Coffee page copy
 
 Paste-ready text for the Inkwell donation page. Written to match the site's
-voice: plain, specific, no guilt. Every claim here is true of the shipped app —
-if a feature changes, change this too.
+voice: plain, specific, no guilt. Every claim here is true of the shipped app.
+If a feature changes, change this too.
 
 **Before publishing:** create the account yourself, then put the real handle in
 `homepage/lib/constants.ts` (`DONATION_URL`) and in the app's
@@ -27,7 +27,7 @@ a coffee
 ## Short bio (the line under your name)
 
 ```
-I build Inkwell — free, open-source dictation that runs entirely on your own machine. No account, no subscription, no telemetry.
+I build Inkwell: free, open-source dictation that runs entirely on your own machine. No account, no subscription, no telemetry.
 ```
 
 Alternates, if you want a different emphasis:
@@ -49,7 +49,7 @@ Inkwell is a dictation app for macOS and Windows. You hold a hotkey, speak, let
 go, and the text lands in whatever app you were already typing in.
 
 The whole point is that it runs on your machine. Speech recognition happens
-locally through a model you download once — nothing is uploaded, there is no
+locally through a model you download once. Nothing is uploaded, there is no
 account to make, and there is no telemetry of any kind. Your voice is not a
 training set, a subscription, or a growth metric.
 
@@ -73,7 +73,7 @@ And honestly, the unpaid help is worth more than the coffee. Tell me what broke
 on your hardware, which model got your accent wrong, or which app it refused to
 paste into. That is the stuff I cannot get any other way.
 
-— Mattias
+Mattias
 ```
 
 ---
@@ -81,7 +81,7 @@ paste into. That is the stuff I cannot get any other way.
 ## Thank-you message (shown after a donation)
 
 ```
-Thank you — that genuinely helps.
+Thank you, that genuinely helps.
 
 If you have thirty seconds: tell me what you use Inkwell for and what has annoyed
 you about it. Bug reports and rough edges are the most useful thing you can send
@@ -101,4 +101,4 @@ me, and they cost nothing.
   enough to use; implying otherwise would be a manufactured deadline.
 - **Signing and domain are named as the actual costs** rather than a vague
   "supports development", because they are specific, verifiable, and currently
-  true — the builds really are unsigned today.
+  true: the builds really are unsigned today.

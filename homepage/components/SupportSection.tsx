@@ -35,7 +35,7 @@ export default function SupportSection() {
             style={{ color: "var(--text-secondary)" }}
           >
             There is no paid tier, no licence key and no feature waiting behind a
-            paywall — and there never will be. If Inkwell saves you time, you can
+            paywall, and there never will be. If Inkwell saves you time, you can
             buy me a coffee. {DONATION_SUGGESTED} is the suggested amount and it
             changes nothing about the app.
           </p>

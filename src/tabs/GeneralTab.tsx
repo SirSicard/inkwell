@@ -183,7 +183,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
       {advancedMode && (
         <SettingRow
           label="Save Debug Audio"
-          description="Writes each dictation's raw audio to a temp file for troubleshooting. Off by default — leave it off unless you are chasing a transcription bug, and delete the files afterwards."
+          description="Writes each dictation's raw audio to a temp file for troubleshooting. Off by default. Leave it off unless you are chasing a transcription bug, and delete the files afterwards."
         >
           <GlassToggle checked={debugSaveAudio} onChange={(v) => setSetting("debug_save_audio", v)} />
         </SettingRow>

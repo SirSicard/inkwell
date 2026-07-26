@@ -34,7 +34,7 @@ pub struct Settings {
     #[serde(default = "default_vad_threshold")]
     pub vad_threshold: f32,
     /// AI Polish: whether post-transcription LLM cleanup is enabled.
-    /// Polish is BYOK-only — it runs against the user's own API key.
+    /// Polish is BYOK-only: it runs against the user's own API key.
     #[serde(default)]
     pub polish_enabled: bool,
     /// AI Polish: system prompt for the LLM.
@@ -44,7 +44,7 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub sound_dictation: bool,
     /// Opt-in only: writes each dictation's resampled audio to the temp dir for
-    /// debugging. Must default to false — this app never leaves voice on disk.
+    /// debugging. Must default to false, because this app never leaves voice on disk.
     #[serde(default)]
     pub debug_save_audio: bool,
 }

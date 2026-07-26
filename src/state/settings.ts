@@ -7,7 +7,7 @@ import { toast } from "./toasts"
 ///
 /// Every tab used to call get_settings on mount and write fields back
 /// independently, so twelve components each held their own copy with no cache
-/// coherence — mic_device, for instance, was editable from both onboarding and
+/// coherence. mic_device, for instance, was editable from both onboarding and
 /// the Audio tab through separate code paths, and neither knew when the other
 /// changed it. Failures were swallowed by empty catch blocks, so a rejected
 /// write left the UI showing a value the backend had never accepted.
@@ -32,7 +32,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       const settings = await invoke<Settings>("get_settings")
       set({ settings, loaded: true })
     } catch (e) {
-      // Not fatal — the app still runs on backend defaults — but the user
+      // Not fatal, since the app still runs on backend defaults, but the user
       // should know the panel they are looking at may be stale.
       toast(`Could not load settings: ${e}`)
       set({ loaded: true })

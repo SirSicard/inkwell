@@ -281,7 +281,7 @@ pub fn start_audio_capture(
 }
 
 /// Tear down the capture stream and reopen it on `preferred_device`.
-/// Call this whenever the `mic_device` setting changes — the stream is bound
+/// Call this whenever the `mic_device` setting changes, because the stream is bound
 /// to one device at build time, so nothing else makes the setting take effect.
 pub fn restart_audio_capture(app: &AppHandle, preferred_device: &str) -> Result<(), String> {
     let state = app.state::<crate::AppState>();

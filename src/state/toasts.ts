@@ -2,7 +2,7 @@ import { create } from "zustand"
 import type { Toast } from "../types"
 
 /// Toasts used to be local state inside App.tsx, which meant anything outside
-/// the component tree — the settings store, an event listener — had no way to
+/// the component tree, such as the settings store or an event listener, had no way to
 /// tell the user something failed. That is why roughly forty invoke() calls
 /// ended in `.catch(() => {})`: there was nowhere for the error to go.
 

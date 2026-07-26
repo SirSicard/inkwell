@@ -1,4 +1,4 @@
-/** Mirrors the Rust `Settings` struct in src-tauri/src/settings.rs — keep in sync. */
+/** Mirrors the Rust `Settings` struct in src-tauri/src/settings.rs; keep in sync. */
 export interface Settings {
   style: string
   model: string

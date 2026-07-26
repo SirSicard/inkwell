@@ -12,7 +12,7 @@ export const GITHUB_LICENSE_URL = `${GITHUB_URL}/blob/main/LICENSE`;
 export const GITHUB_README_URL = `${GITHUB_URL}/blob/main/README.md`;
 
 /**
- * DONATION LINK — PLACEHOLDER.
+ * DONATION LINK: PLACEHOLDER.
  *
  * The owner MUST replace `REPLACE_ME` with the real Buy Me a Coffee handle
  * before this site goes live. Until then this URL resolves to a 404 page.
@@ -25,7 +25,7 @@ export const DONATION_URL = "https://buymeacoffee.com/REPLACE_ME";
 export const DONATION_SUGGESTED = "€10";
 
 /**
- * Canonical site origin — PLACEHOLDER.
+ * Canonical site origin: PLACEHOLDER.
  * Replace with the real domain once the site is deployed; it drives the
  * canonical URL and the absolute OG image URL in app/layout.tsx.
  */
@@ -34,7 +34,7 @@ export const SITE_URL = "https://inkwell.example";
 /**
  * Matches `version` in src-tauri/tauri.conf.json. Bump both together.
  *
- * ⚠ SHIP BLOCKER — do not deploy this site until a release exists that matches
+ * ⚠ SHIP BLOCKER: do not deploy this site until a release exists that matches
  * this copy. The rehaul (agent mode removed, free polish proxy removed, BYOK
  * only) is still under `## [Unreleased]` in CHANGELOG.md. The newest *published*
  * release is v0.1.1 from 2026-04-01, which predates all of it: that build still

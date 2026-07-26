@@ -13,11 +13,11 @@ import { AppleIcon, LinuxIcon, WindowsIcon } from "./icons";
 
 /*
   Per-platform facts come from .github/workflows/build.yml (targets built by CI:
-  aarch64 + x86_64 macOS, x86_64 Windows, x86_64 Linux — the Linux job passes
+  aarch64 + x86_64 macOS, x86_64 Windows, x86_64 Linux. The Linux job passes
   `--bundles deb,appimage`, so there is no .rpm to advertise) and from the app
   README. macOS Intel and Linux are `best_effort: true` in the matrix, i.e.
   continue-on-error, so a release can legitimately ship without them.
-  Nothing here links to a guessed asset filename — the buttons point at the
+  Nothing here links to a guessed asset filename; the buttons point at the
   GitHub release page, which always lists what CI actually produced.
 */
 const platforms: {
@@ -38,7 +38,7 @@ const platforms: {
       "Drag Inkwell into Applications.",
       "The app is not notarised, so Gatekeeper will refuse the first launch. Right-click it and choose Open, or run xattr -cr /Applications/Inkwell.app in Terminal.",
       "Allow Microphone access when asked.",
-      "Allow Accessibility access. Inkwell pastes with a synthetic keystroke, which macOS blocks until you grant this — without it you get a transcript and no text.",
+      "Allow Accessibility access. Inkwell pastes with a synthetic keystroke, which macOS blocks until you grant this. Without it you get a transcript and no text.",
     ],
   },
   {
@@ -80,7 +80,7 @@ export default function DownloadSection() {
         eyebrow="Download"
         id="download-title"
         title={`Inkwell ${APP_VERSION}, free, no account.`}
-        intro="Builds for every platform live on the GitHub releases page. Pick your file there — nothing here asks for an email address."
+        intro="Builds for every platform live on the GitHub releases page. Pick your file there. Nothing here asks for an email address."
       />
 
       <Reveal className="mb-10 flex flex-col items-center gap-4">
@@ -182,7 +182,7 @@ export default function DownloadSection() {
             and a Windows certificate both cost money every year, and Inkwell has
             no revenue. So macOS and Windows treat the builds as unknown
             software and say so loudly. That is the trade for a free app, not a
-            sign that something is wrong — the source and the build workflow that
+            sign that something is wrong. The source and the build workflow that
             produced these files are public, and you can build it yourself.
           </p>
         </div>

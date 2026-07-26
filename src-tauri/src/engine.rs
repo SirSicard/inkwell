@@ -49,7 +49,7 @@ pub struct SpeechEngine {
 // `Sync` was also asserted here, with no argument beyond "the C API is thread
 // safe". It was only ever sound because non-async Tauri commands serialise on
 // the main thread, and would have quietly stopped holding the moment one of
-// them became async — which switch_model now is. Confining the engine to one
+// them became async, which switch_model now is. Confining the engine to one
 // thread removes the need for it entirely.
 unsafe impl Send for SpeechEngine {}
 

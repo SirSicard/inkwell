@@ -12,7 +12,7 @@ pub fn save_api_key(provider: String, key: String) -> Result<(), String> {
             .set_password(&key)
             .map_err(|e| format!("Failed to save key: {}", e))?;
     }
-    // Keyring only — an API key is never written to settings.json.
+    // Keyring only: an API key is never written to settings.json.
     log::info!("API key saved for provider: {}", provider);
     Ok(())
 }

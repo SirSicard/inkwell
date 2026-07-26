@@ -6,7 +6,7 @@
 //! frontend. Adding a model meant editing eight places, and forgetting one was
 //! silent: `moonshine-tiny` shipped in the UI catalogue with no download arm,
 //! so its button returned `Unknown model`, and it was simultaneously the last
-//! entry in the startup fallback chain — a fallback that could never load.
+//! entry in the startup fallback chain, a fallback that could never load.
 //!
 //! Everything now reads from `MODELS`. The frontend gets the same data over
 //! `list_models`, so the catalogue cannot drift from what the backend can
@@ -55,7 +55,7 @@ impl ModelSpec {
         models_dir.join(self.dir)
     }
 
-    /// Is the model present on disk? Presence only — this does not verify that
+    /// Is the model present on disk? Presence only; this does not verify that
     /// a partially downloaded file is complete.
     pub fn is_installed(&self, models_dir: &Path) -> bool {
         let dir = self.dir_in(models_dir);

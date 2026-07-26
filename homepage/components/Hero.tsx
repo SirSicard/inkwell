@@ -26,7 +26,7 @@ export default function Hero() {
           style={{
             // Deliberately light. Measured contrast of the body text over the
             // densest part of the ink is 14.4:1, so the scrim is not carrying
-            // legibility — the palette already does. Its only job is to take the
+            // legibility; the palette already does. Its only job is to take the
             // edge off the grain and motion directly behind the words. An
             // opaque centre scrim also cancels the blob exactly where the blob
             // is strongest, since both are centred, which leaves the ink
@@ -53,7 +53,7 @@ export default function Hero() {
 
       <div className="mx-auto flex max-w-3xl flex-col items-center px-6 pb-28 pt-24 text-center sm:pt-32 lg:pb-36 lg:pt-40">
         {/* Secondary rather than tertiary, and measured: --text-tertiary is 58%
-            alpha, which over the brightest part of the ink lands at 4.43:1 —
+            alpha, which over the brightest part of the ink lands at 4.43:1,
             under the 4.5:1 AA floor for body text. The rest of the page can
             afford tertiary because it sits on the flat page colour; inside the
             hero the same token does not clear the bar. Underlining still
@@ -100,7 +100,7 @@ export default function Hero() {
           className="mt-6 max-w-md text-sm leading-relaxed"
           style={{ color: "var(--text-secondary)" }}
         >
-          Builds are not code signed yet — first launch needs one extra step.{" "}
+          Builds are not code signed yet, so first launch needs one extra step.{" "}
           <a
             href="#download"
             className="underline decoration-dotted underline-offset-4"

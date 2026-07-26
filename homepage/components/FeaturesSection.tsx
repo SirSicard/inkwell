@@ -13,7 +13,7 @@ import {
 /*
   Every claim below is checked against the app source:
   - model catalogue: src/tabs/ModelsTab.tsx (MODEL_CATALOG, 13 entries) cross-checked
-    against the `hf_base` match in src-tauri/src/commands.rs — only 12 have a download
+    against the `hf_base` match in src-tauri/src/commands.rs; only 12 have a download
     URL. moonshine-tiny falls through to `Err("No download URL")`, so it is never
     offered here as something a user can actually get.
   - CPU-only inference: src-tauri/src/engine.rs (PROVIDER is the constant "cpu")
@@ -24,7 +24,7 @@ import {
   - file formats: src-tauri/src/filetranscribe.rs (SUPPORTED_EXTENSIONS)
   - export formats: src-tauri/src/commands.rs (txt | srt | json | csv)
   - tray + overlay: src-tauri/src/tray.rs, src-tauri/src/overlay.rs
-  - clipboard restore: src-tauri/src/paste.rs (text only — arboard cannot
+  - clipboard restore: src-tauri/src/paste.rs (text only; arboard cannot
     round-trip images or custom flavours, so those stay replaced)
   - polish providers: src-tauri/src/llm.rs (BYOK only, key in OS keyring)
   - Advanced Mode gate: src/types.ts (basicTabs is Dashboard/General/About only)
@@ -41,27 +41,27 @@ const features: { icon: ReactNode; title: string; body: string }[] = [
   {
     icon: <PenIcon />,
     title: "Formatting without a model",
-    body: "Three styles: Formal capitalises and punctuates, Casual keeps it light, Relaxed strips it back to lowercase. Per-app rules can swap style by whatever app is in front — formal in Outlook, relaxed in a terminal — on macOS and Windows, off until you enable it. A custom dictionary fixes the names and jargon your model keeps mangling: case-insensitive, matched on word boundaries.",
+    body: "Three styles: Formal capitalises and punctuates, Casual keeps it light, Relaxed strips it back to lowercase. Per-app rules can swap style by whatever app is in front (formal in Outlook, relaxed in a terminal) on macOS and Windows, off until you enable it. A custom dictionary fixes the names and jargon your model keeps mangling: case-insensitive, matched on word boundaries.",
   },
   {
     icon: <KeyboardIcon />,
     title: "Snippets and voice commands",
-    body: "Trigger phrases expand into full blocks of text, with {date}, {time} and {clipboard} filled in as you dictate. Voice commands listen for a wake prefix — “inkwell, scratch that”, “inkwell, formal mode” — and are off until you switch them on.",
+    body: "Trigger phrases expand into full blocks of text, with {date}, {time} and {clipboard} filled in as you dictate. Voice commands listen for a wake prefix (“inkwell, scratch that”, “inkwell, formal mode”) and are off until you switch them on.",
   },
   {
     icon: <FileIcon />,
     title: "Files, history and export",
-    body: "Drop in audio or video — MP3, WAV, FLAC, OGG, M4A, AAC, MP4, MOV, MKV, WebM, AVI, WMA — and transcribe it with the same local model. Transcripts land in a searchable SQLite history you can export as TXT, SRT, JSON or CSV.",
+    body: "Drop in audio or video (MP3, WAV, FLAC, OGG, M4A, AAC, MP4, MOV, MKV, WebM, AVI, WMA) and transcribe it with the same local model. Transcripts land in a searchable SQLite history you can export as TXT, SRT, JSON or CSV.",
   },
   {
     icon: <TrayIcon />,
     title: "Out of the way",
-    body: "Inkwell sits in the tray; the hotkey works with the window hidden. A small always-on-top ink blob shows that it is listening, and whatever text you had on the clipboard is put back after the paste. An image on the clipboard is not restored — it stays replaced rather than wiped.",
+    body: "Inkwell sits in the tray; the hotkey works with the window hidden. A small always-on-top ink blob shows that it is listening, and whatever text you had on the clipboard is put back after the paste. An image on the clipboard is not restored; it stays replaced rather than wiped.",
   },
   {
     icon: <LockIcon />,
     title: "Optional AI polish, your key",
-    body: "Turn it on and the transcribed text — never the audio — is sent from your machine to a provider you choose: OpenAI, Groq, Anthropic, OpenRouter, or any OpenAI-compatible endpoint including a local one. Your key lives in the OS keyring. Off by default.",
+    body: "Turn it on and the transcribed text, never the audio, is sent from your machine to a provider you choose: OpenAI, Groq, Anthropic, OpenRouter, or any OpenAI-compatible endpoint including a local one. Your key lives in the OS keyring. Off by default.",
   },
 ];
 
@@ -84,7 +84,7 @@ export default function FeaturesSection() {
         eyebrow="What it does"
         id="features-title"
         title="Everything on this page runs on your hardware."
-        intro="A fresh install shows you three tabs. Models, dictionary, snippets, files, per-app styles, voice commands and AI polish appear once you turn on Advanced Mode in General settings — one switch, off by default, so the first run stays a hotkey and nothing else."
+        intro="A fresh install shows you three tabs. Models, dictionary, snippets, files, per-app styles, voice commands and AI polish appear once you turn on Advanced Mode in General settings: one switch, off by default, so the first run stays a hotkey and nothing else."
       />
 
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -121,7 +121,7 @@ export default function FeaturesSection() {
                 style={{ color: "var(--text-tertiary)" }}
               >
                 <span aria-hidden="true" style={{ color: "var(--border-strong)" }}>
-                  —
+                  ·
                 </span>
                 <span>{item}</span>
               </li>

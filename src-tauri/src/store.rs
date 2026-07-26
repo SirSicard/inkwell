@@ -1,7 +1,7 @@
 //! A JSON-file-backed value plus the path it came from, in one place.
 //!
-//! `AppState` used to carry these as separate fields — `dict` and `dict_path`,
-//! `snippet_store` and `snippets_path`, and so on — five pairs in total. Every
+//! `AppState` used to carry these as separate fields: `dict` and `dict_path`,
+//! `snippet_store` and `snippets_path`, and so on, five pairs in total. Every
 //! save site had to take two locks in the right order and remember which path
 //! belonged to which value, and nothing stopped them being set inconsistently
 //! (in fact several were populated dozens of lines apart during setup).

@@ -7,11 +7,11 @@ import SectionHeading from "./SectionHeading";
   stripped from settings.json), src-tauri/src/history.rs + setup.rs (SQLite in
   the app data dir), src-tauri/src/llm.rs (BYOK providers, keyring lookup),
   src-tauri/tauri.conf.json (updater endpoint), src-tauri/src/commands.rs
-  (`hf_base` — model files come from Hugging Face), src/App.tsx (the update
+  (`hf_base`; model files come from Hugging Face), src/App.tsx (the update
   check is a 5000 ms setTimeout on mount; no setting disables it).
 
   "Only three network calls" is meant literally: grepping every http(s) URL in
-  src-tauri/src yields exactly these three destinations — Hugging Face model
+  src-tauri/src yields exactly these three destinations: Hugging Face model
   repos, the updater worker, and the BYOK LLM endpoints. Fonts are local
   (public/fonts) and the Tauri CSP has no remote connect-src.
 */
@@ -20,7 +20,7 @@ const local = [
   "Your voice. Audio is captured, resampled to 16 kHz and transcribed in memory by a model on your own CPU. It is never uploaded.",
   "Your transcripts. History lives in a SQLite file in Inkwell's app data directory. Nothing syncs anywhere.",
   "Your settings, snippets, dictionary and voice commands. Plain files on your disk.",
-  "Your API key, if you add one. Stored in the OS keyring, never in a config file — and any key an older build wrote in plain text is stripped the next time settings load.",
+  "Your API key, if you add one. Stored in the OS keyring, never in a config file, and any key an older build wrote in plain text is stripped the next time settings load.",
 ];
 
 const leaves = [
@@ -33,7 +33,7 @@ const leaves = [
     body: "Five seconds after launch the app asks the release endpoint whether a newer version exists, and shows a dismissible toast if so. It runs automatically; there is no switch for it yet.",
   },
   {
-    title: "AI polish — only if you enable it",
+    title: "AI polish, only if you enable it",
     body: "Off by default. When on, the transcribed text (never the audio) goes straight from your machine to the provider whose key you supplied. There is no Inkwell server in the middle: earlier builds had a free proxy tier and it has been removed. Bring your own key or the feature does nothing.",
   },
 ];
@@ -123,7 +123,7 @@ export default function PrivacySection() {
               }}
             >
               With polish off and your model already on disk, the update check is
-              the only thing Inkwell sends — and dictation itself keeps working
+              the only thing Inkwell sends, and dictation itself keeps working
               with the network unplugged.
             </p>
           </div>

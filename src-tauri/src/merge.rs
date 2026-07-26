@@ -49,7 +49,7 @@ pub fn append_chunk(merged: &mut String, next: &str) {
         if key != normalize(&head[..k]) {
             continue;
         }
-        // Too little substance to be a real repeat — see MIN_OVERLAP_CHARS.
+        // Too little substance to be a real repeat; see MIN_OVERLAP_CHARS.
         // Shorter runs are subsets of this one, so they cannot qualify either,
         // but the loop is cheap and reads clearer than breaking out here.
         if key.chars().filter(|c| !c.is_whitespace()).count() < MIN_OVERLAP_CHARS {
