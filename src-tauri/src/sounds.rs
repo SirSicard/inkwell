@@ -1,5 +1,5 @@
 //! Synthesized audio feedback for hotkey events.
-//! Generates tones at runtime — no external files needed.
+//! Generates tones at runtime, so no external files are needed.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +14,7 @@ pub fn dictation_sounds_enabled() -> bool {
     SOUNDS_ENABLED.load(Ordering::Relaxed)
 }
 
-/// Dictation recording started — soft ascending two-note chime.
+/// Dictation recording started: soft ascending two-note chime.
 pub fn play_dictation_start() {
     if !SOUNDS_ENABLED.load(Ordering::Relaxed) { return; }
     std::thread::spawn(|| play_tone(&[
@@ -23,7 +23,7 @@ pub fn play_dictation_start() {
     ]));
 }
 
-/// Dictation recording stopped — soft descending tone.
+/// Dictation recording stopped: soft descending tone.
 pub fn play_dictation_stop() {
     if !SOUNDS_ENABLED.load(Ordering::Relaxed) { return; }
     std::thread::spawn(|| play_tone(&[

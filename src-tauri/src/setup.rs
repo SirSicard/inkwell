@@ -180,7 +180,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     log::warn!("Model '{}' load failed: {}", id, e);
-                    // Only surface the saved choice failing — fallbacks are noise.
+                    // Only surface the saved choice failing; fallbacks are noise.
                     if i == 0 {
                         let _ = app.emit(
                             "model-error",
@@ -253,7 +253,7 @@ const SILERO_VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
 
 /// Fetch silero_vad.onnx if it is missing (~2MB). Without this, a fresh install
-/// has no VAD model, and `pipeline::process_recording` skips silence removal —
+/// has no VAD model, and `pipeline::process_recording` skips silence removal,
 /// invisibly. Runs in the background so it never delays the window, and reports
 /// every outcome on `vad-status` so a failed fetch is surfaced, not swallowed.
 fn ensure_vad_model(app: &tauri::AppHandle, path: std::path::PathBuf) {
@@ -354,7 +354,7 @@ async fn stream_to_file(
             .map_err(|e| format!("Write error: {}", e))?;
         written += chunk.len() as u64;
 
-        // Only on a whole-percent change — a 2MB body is hundreds of chunks.
+        // Only on a whole-percent change; a 2MB body is hundreds of chunks.
         if total > 0 {
             let pct = (written * 100 / total).min(99) as u32;
             if pct > last_pct {

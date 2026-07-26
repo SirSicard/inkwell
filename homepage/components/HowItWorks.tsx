@@ -20,7 +20,7 @@ const steps = [
   {
     n: "03",
     title: "Let go",
-    body: "Transcription starts on release and runs on your CPU through a local model. There is no live-as-you-speak preview — that does not exist yet.",
+    body: "Transcription starts on release and runs on your CPU through a local model. There is no live-as-you-speak preview; that does not exist yet.",
   },
   {
     n: "04",

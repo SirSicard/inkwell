@@ -34,7 +34,7 @@ pub fn status() -> VadStatus {
 pub fn unavailable_reason() -> &'static str {
     match status() {
         VadStatus::Downloading => {
-            "Voice-activity model is still downloading — this recording was transcribed without silence removal."
+            "Voice-activity model is still downloading, so this recording was transcribed without silence removal."
         }
         VadStatus::Failed => {
             "Voice-activity model could not be downloaded. Dictation still works, but silence is not trimmed. Run scripts/download-models.sh to install it manually."

@@ -14,7 +14,7 @@ npm run dev      # http://localhost:3000
 
 Other scripts: `npm run build` (production build), `npm start` (serve the build).
 
-Node 20+ is expected — the app's CI uses it.
+Node 20+ is expected, since the app's CI uses it.
 
 ## Where things live
 
@@ -42,7 +42,7 @@ lib/
 
 ## Constants you must edit before launch
 
-All of them are in **`lib/constants.ts`**. Nothing is hardcoded a second time anywhere else — change it there and the whole page follows.
+All of them are in **`lib/constants.ts`**. Nothing is hardcoded a second time anywhere else; change it there and the whole page follows.
 
 | Constant | Status | What to do |
 | --- | --- | --- |
@@ -54,26 +54,26 @@ All of them are in **`lib/constants.ts`**. Nothing is hardcoded a second time an
 
 ## Assets still missing
 
-- `public/og.png` — 1200×630 social card, referenced by `app/layout.tsx`. Suggested: charcoal field, cream ink blob, the word INKWELL. Until it exists, link previews fall back to no image.
+- `public/og.png`: 1200x630 social card, referenced by `app/layout.tsx`. Suggested: charcoal field, cream ink blob, the word INKWELL. Until it exists, link previews fall back to no image.
 - Product screenshots. There is no screenshot section yet because there are no exportable shots of the app; when they exist, add them between "How it works" and "Features".
 
 ## Copy rules
 
-Everything factual on this page is checked against the app source in `../src` and `../src-tauri` — model names and sizes against `src/tabs/ModelsTab.tsx`, the pipeline against `src-tauri/src/pipeline.rs`, formats against `src-tauri/src/filetranscribe.rs` and `src-tauri/src/export.rs`, build targets against `.github/workflows/build.yml`. If you cannot point at a file, the claim does not go on the page.
+Everything factual on this page is checked against the app source in `../src` and `../src-tauri`: model names and sizes against `src/tabs/ModelsTab.tsx`, the pipeline against `src-tauri/src/pipeline.rs`, formats against `src-tauri/src/filetranscribe.rs` and `src-tauri/src/export.rs`, build targets against `.github/workflows/build.yml`. If you cannot point at a file, the claim does not go on the page.
 
 Three things are deliberately stated rather than hidden: the builds are unsigned, per-app style overrides are Windows-only, and there is no live-as-you-speak transcription.
 
 ## Design notes
 
 - **Solid surfaces, not glass.** The app UI uses opaque panels; the site now matches. Stacked `backdrop-filter` over a live WebGL canvas costs GPU and hurts text contrast, so depth comes from elevation and hairline borders instead.
-- **Tokens mirror the app.** `#0e0e11` base, `#18181d` surface, `#f0ede8` text, `#c8956c` copper accent — the same values as `../src/index.css`.
+- **Tokens mirror the app.** `#0e0e11` base, `#18181d` surface, `#f0ede8` text, `#c8956c` copper accent, the same values as `../src/index.css`.
 - **The ink is the brand.** `InkCanvas` runs the app's simplex-noise shader with the audio uniforms pinned at zero. It pauses off-screen and when the tab is hidden, and under `prefers-reduced-motion` it paints exactly one frame. Without WebGL a static gradient stands in.
 
 ## Deploy
 
 Vercel is the path of least resistance: import the repo, set the **root directory** to `homepage`, and take the framework defaults (`next build`). Set the production domain to whatever `SITE_URL` says.
 
-Anything that runs Node works too — `npm run build && npm start` behind a reverse proxy. The site is fully static apart from React hydration, so `output: "export"` in `next.config.ts` would also work if a plain static host is preferred.
+Anything that runs Node works too: `npm run build && npm start` behind a reverse proxy. The site is fully static apart from React hydration, so `output: "export"` in `next.config.ts` would also work if a plain static host is preferred.
 
 ## Licence
 

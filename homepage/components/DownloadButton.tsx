@@ -6,7 +6,7 @@ import { AppleIcon, DownloadIcon, LinuxIcon, WindowsIcon } from "./icons";
 
 /**
  * Primary call to action. Always points at the GitHub "latest release" page
- * rather than a guessed asset filename — release artifacts are produced by CI
+ * rather than a guessed asset filename. Release artifacts are produced by CI
  * per target and the exact names change between builds, so linking the page is
  * the only link that cannot rot.
  */

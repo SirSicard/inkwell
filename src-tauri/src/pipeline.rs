@@ -183,8 +183,8 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
         res_peak
     );
 
-    // Raw CoreAudio capture from the built-in mic array arrives with no AGC —
-    // Apple's voice processing is what normally lifts it — so real speech lands
+    // Raw CoreAudio capture from the built-in mic array arrives with no AGC,
+    // because Apple's voice processing is what normally lifts it, so real speech lands
     // around -65 dBFS. VAD then classifies all of it as silence and the
     // recogniser has to work from a near-flat signal. Normalise to a usable
     // peak first, with a noise floor so a genuinely silent room is not amplified
@@ -307,7 +307,7 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                 // Apply snippet expansions
                 let styled = app_state.snippet_store.with(|s| s.expand(&styled));
 
-                // AI Polish (BYOK only — no key configured means no polish)
+                // AI Polish (BYOK only: no key configured means no polish)
                 let polish_enabled = *app_state.polish_enabled.lock().unwrap();
                 let byok_provider = if polish_enabled && !styled.is_empty() {
                     llm::first_configured_provider()

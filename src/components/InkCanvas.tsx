@@ -189,7 +189,7 @@ export function InkCanvas() {
   // Frequency analysis for the shader, via the WebView's own capture.
   //
   // This is a second microphone stream alongside Rust's cpal, and it used to be
-  // opened at mount and held for the life of the process — which parked a
+  // opened at mount and held for the life of the process, which parked a
   // permanent orange mic indicator in the macOS menu bar for an app whose whole
   // promise is that it is not listening to you. It now opens on recording start
   // and is fully torn down on stop, so the indicator means what it says.

@@ -29,7 +29,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [downloadFile, setDownloadFile] = useState("")
   const [micDevices, setMicDevices] = useState<{ id: string; name: string }[]>([])
   const [selectedMic, setSelectedMic] = useState("auto")
-  // "unknown" also covers a backend that doesn't expose the command yet — in that
+  // "unknown" also covers a backend that doesn't expose the command yet. In that
   // case we simply don't claim anything about the permission.
   const [accessibility, setAccessibility] = useState<"unknown" | "granted" | "denied">("unknown")
   const [accessChecking, setAccessChecking] = useState(false)
@@ -273,7 +273,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
   ]
 
   const isLastStep = step === steps.length - 1
-  // Gate by step identity, not index — the accessibility step only exists on macOS.
+  // Gate by step identity, not index: the accessibility step only exists on macOS.
   const currentKey = String(steps[step].key)
   const canProceed =
     currentKey === "model" ? (downloadState === "done" || downloadState === "skipped") :

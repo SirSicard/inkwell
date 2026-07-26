@@ -12,7 +12,7 @@ pub trait LlmProvider: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// OpenAI-compatible (OpenAI, Groq, Cerebras, OpenRouter — same /v1/chat/completions)
+// OpenAI-compatible (OpenAI, Groq, Cerebras, OpenRouter, all on /v1/chat/completions)
 // ---------------------------------------------------------------------------
 
 pub struct OpenAICompatible {

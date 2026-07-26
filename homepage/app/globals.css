@@ -22,7 +22,7 @@
   --accent: #c8956c;
   --accent-soft: rgba(200, 149, 108, 0.12);
 
-  /* Cream side of the ink inversion — matches the shader background. */
+  /* Cream side of the ink inversion; matches the shader background. */
   --cream: #f0eee8;
 }
 

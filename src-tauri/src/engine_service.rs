@@ -9,7 +9,7 @@
 //!   dictation blocked until the file was done.
 //! - `SpeechEngine` carried `unsafe impl Sync` with no real safety argument. It
 //!   happened to be sound only because non-async Tauri commands serialise on
-//!   the main thread — a property that would have silently stopped holding the
+//!   the main thread, a property that would have silently stopped holding the
 //!   moment any command became async.
 //!
 //! Confining the engine to one thread fixes all three. Work is queued as
@@ -88,7 +88,7 @@ impl EngineService {
     }
 
     /// Load a model, blocking until it is ready. Callers on the main thread
-    /// must go through `spawn_blocking` — this can take seconds.
+    /// must go through `spawn_blocking`, since this can take seconds.
     pub fn load(&self, spec: &'static ModelSpec, models_dir: PathBuf) -> Result<String, String> {
         let (reply, wait) = channel();
         self.tx

@@ -19,7 +19,7 @@ export function AudioTab() {
       .catch((e) => toast(`Could not list input devices: ${e}`, "warning"))
   }, [])
 
-  // The store owns the value and reverts if the backend refuses — switching the
+  // The store owns the value and reverts if the backend refuses. Switching the
   // mic mid-recording is rejected, and that refusal is now visible.
   const handleMicChange = (value: string) => setSetting("mic_device", value)
 

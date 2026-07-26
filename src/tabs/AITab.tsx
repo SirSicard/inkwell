@@ -170,7 +170,7 @@ export function AITab() {
           <div className="rounded-lg border border-amber-800/30 bg-amber-950/20 px-3 py-2.5">
             <p className="text-xs text-amber-200">No API key configured.</p>
             <p className="text-[11px] text-amber-200/70 mt-0.5">
-              Add one under API Keys below — until then transcriptions stay raw.
+              Add one under API Keys below. Until then transcriptions stay raw.
             </p>
           </div>
         )}

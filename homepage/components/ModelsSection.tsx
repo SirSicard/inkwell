@@ -81,7 +81,7 @@ export default function ModelsSection() {
               sherpa-onnx
             </a>
             . Six are below; the other six are five more Whisper sizes and an
-            English-tuned Parakeet V2. Nothing ships inside the installer — the
+            English-tuned Parakeet V2. Nothing ships inside the installer. The
             files come from Hugging Face when you pick one, and after that
             download it needs no internet at all.
           </>

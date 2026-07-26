@@ -9,7 +9,7 @@ Fixes #
 ## Checklist
 
 - [ ] `cargo fmt` and `cargo test` pass (the pipeline tests are the safety net)
-- [ ] Tested manually on my platform — say which one; macOS on Apple Silicon is the primary target
+- [ ] Tested manually on my platform. Say which one: macOS on Apple Silicon is the primary target
 - [ ] Screenshots included (if UI change)
 - [ ] CHANGELOG.md updated (if user-facing change)
 - [ ] No new dependency, or the PR says why it earns its place
