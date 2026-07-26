@@ -32,7 +32,7 @@ export default function Hero() {
             // is strongest, since both are centred, which leaves the ink
             // visible only at the corners.
             background:
-              "radial-gradient(62% 55% at 50% 46%, rgba(14,14,17,0.55) 0%, rgba(14,14,17,0.34) 45%, rgba(14,14,17,0.12) 75%, rgba(14,14,17,0) 100%)",
+              "radial-gradient(62% 55% at 50% 46%, rgba(14,14,17,0.42) 0%, rgba(14,14,17,0.24) 45%, rgba(14,14,17,0.08) 75%, rgba(14,14,17,0) 100%)",
           }}
         />
         <div
@@ -52,9 +52,15 @@ export default function Hero() {
       </div>
 
       <div className="mx-auto flex max-w-3xl flex-col items-center px-6 pb-28 pt-24 text-center sm:pt-32 lg:pb-36 lg:pt-40">
+        {/* Secondary rather than tertiary, and measured: --text-tertiary is 58%
+            alpha, which over the brightest part of the ink lands at 4.43:1 —
+            under the 4.5:1 AA floor for body text. The rest of the page can
+            afford tertiary because it sits on the flat page colour; inside the
+            hero the same token does not clear the bar. Underlining still
+            distinguishes the link below, so no hierarchy is lost. */}
         <p
           className="font-mono text-[0.6875rem] uppercase tracking-[0.22em]"
-          style={{ color: "var(--text-tertiary)" }}
+          style={{ color: "var(--text-secondary)" }}
         >
           Inkwell v{APP_VERSION} · MIT licensed · free forever
         </p>
@@ -92,7 +98,7 @@ export default function Hero() {
 
         <p
           className="mt-6 max-w-md text-sm leading-relaxed"
-          style={{ color: "var(--text-tertiary)" }}
+          style={{ color: "var(--text-secondary)" }}
         >
           Builds are not code signed yet — first launch needs one extra step.{" "}
           <a
