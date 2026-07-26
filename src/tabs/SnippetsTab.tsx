@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "../state/toasts"
 import type { SnippetItem } from "../types"
 
 export function SnippetsTab() {
@@ -11,12 +12,12 @@ export function SnippetsTab() {
   const [testOutput, setTestOutput] = useState("")
 
   useEffect(() => {
-    invoke<SnippetItem[]>("get_snippets").then(setSnippets).catch(() => {})
+    invoke<SnippetItem[]>("get_snippets").then(setSnippets).catch((e) => toast(`Could not load snippets: ${e}`, "warning"))
   }, [])
 
   const saveAll = (updated: SnippetItem[]) => {
     setSnippets(updated)
-    invoke("save_snippets", { items: updated }).catch(() => {})
+    invoke("save_snippets", { items: updated }).catch((e) => toast(`Could not save snippets: ${e}`))
   }
 
   const handleAdd = () => {

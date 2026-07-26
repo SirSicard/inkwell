@@ -5,8 +5,10 @@ import { invoke } from "@tauri-apps/api/core"
 import { getVersion } from "@tauri-apps/api/app"
 import type { Update } from "@tauri-apps/plugin-updater"
 import { InkCanvas } from "./components/InkCanvas"
-import type { Settings, Toast, UpdateInfo, Tab } from "./types"
+import type { Settings, UpdateInfo, Tab } from "./types"
 import { formatHotkey } from "./hotkey"
+import { useToasts, toast } from "./state/toasts"
+import { useSettings } from "./state/settings"
 import { basicTabs, advancedTabs } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
@@ -48,7 +50,9 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
     invoke<Settings>("get_settings")
       .then((s) => setHotkeyLabel(formatHotkey(s.hotkey)))
       .catch(() => {})
-    if (isMac) checkAccessibility()
+    // Deferred a tick: calling it inline made this a synchronous setState
+    // inside an effect body, which cascades renders.
+    if (isMac) queueMicrotask(checkAccessibility)
   }, [])
 
   useEffect(() => {
@@ -102,7 +106,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
           value={selectedMic}
           onChange={(e) => {
             setSelectedMic(e.target.value)
-            invoke("update_settings", { key: "mic_device", value: e.target.value }).catch(() => {})
+            invoke("update_settings", { key: "mic_device", value: e.target.value }).catch((err) => toast(`Could not set microphone: ${err}`))
           }}
           className="w-full px-3 py-2 text-sm rounded-lg border border-border bg-bg-surface text-text-primary focus:outline-none focus:border-text-tertiary"
         >
@@ -208,7 +212,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
           {accessibility !== "granted" && (
             <div className="flex justify-center gap-3">
               <button
-                onClick={() => { invoke("open_accessibility_settings").catch(() => {}) }}
+                onClick={() => { invoke("open_accessibility_settings").catch((e) => toast(`Could not open System Settings: ${e}`, "warning")) }}
                 className="px-5 py-2 text-sm font-medium bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors"
               >
                 Open System Settings
@@ -451,25 +455,20 @@ function TabContent({ tab, onAdvancedChange }: { tab: Tab; onAdvancedChange?: (v
 
 // --- App ---
 
-let toastId = 0
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("Dashboard")
   const [modelName, setModelName] = useState("Loading...")
   const [advancedMode, setAdvancedMode] = useState(false)
-  const [toasts, setToasts] = useState<Toast[]>([])
+  const toasts = useToasts((s) => s.toasts)
+  const dismissToast = useToasts((s) => s.dismiss)
+  const addToast = useToasts((s) => s.push)
   const [updateAvailable, setUpdateAvailable] = useState<UpdateInfo | null>(null)
   const [updateDismissed, setUpdateDismissed] = useState(false)
   const [updateProgress, setUpdateProgress] = useState<number | null>(null)
   const [appVersion, setAppVersion] = useState("")
   // Holds the live Update handle so the install button can act on it (not a window global).
   const updateHandle = useRef<Update | null>(null)
-
-  const addToast = (message: string, type: Toast["type"] = "error") => {
-    const id = ++toastId
-    setToasts((prev) => [...prev, { id, message, type }])
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000)
-  }
 
   // Check for updates on mount
   useEffect(() => {
@@ -530,12 +529,16 @@ function App() {
     return () => { unlisten.then((fn) => fn()) }
   }, [])
 
-  // Load advanced mode setting
+  // Hydrate the settings store once for the whole app. Every panel reads from
+  // it, so this is the only get_settings call in the settings path.
+  const loadSettings = useSettings((s) => s.load)
+  const storedAdvanced = useSettings((s) => s.settings?.advanced_mode)
   useEffect(() => {
-    invoke<Settings>("get_settings").then((s) => {
-      setAdvancedMode(s.advanced_mode)
-    }).catch(() => {})
-  }, [])
+    void loadSettings()
+  }, [loadSettings])
+  useEffect(() => {
+    if (storedAdvanced !== undefined) setAdvancedMode(storedAdvanced)
+  }, [storedAdvanced])
 
   const tabs = advancedMode ? advancedTabs : basicTabs
 
@@ -723,7 +726,7 @@ function App() {
                   ? "bg-amber-950/80 border-amber-800/50 text-amber-200"
                   : "bg-bg-surface border-border text-text-primary"
               }`}
-              onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))}
+              onClick={() => dismissToast(toast.id)}
             >
               {toast.message}
             </motion.div>

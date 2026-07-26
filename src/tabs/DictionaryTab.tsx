@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "../state/toasts"
 import type { DictEntry } from "../types"
 
 export function DictionaryTab() {
@@ -8,12 +9,12 @@ export function DictionaryTab() {
   const [newReplace, setNewReplace] = useState("")
 
   useEffect(() => {
-    invoke<DictEntry[]>("get_dictionary").then(setEntries).catch(() => {})
+    invoke<DictEntry[]>("get_dictionary").then(setEntries).catch((e) => toast(`Could not load dictionary: ${e}`, "warning"))
   }, [])
 
   const save = (updated: DictEntry[]) => {
     setEntries(updated)
-    invoke("set_dictionary", { entries: updated }).catch((e) => console.error("set_dictionary failed:", e))
+    invoke("set_dictionary", { entries: updated }).catch((e) => toast(`Could not save dictionary: ${e}`))
   }
 
   const handleAdd = () => {

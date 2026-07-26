@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "../state/toasts"
 
 /// Mirrors models::ModelInfo in src-tauri/src/models.rs, which is the single
 /// source of truth. This list used to be hardcoded here as well, and the two
@@ -26,7 +27,7 @@ export function ModelsTab() {
   const [removing, setRemoving] = useState<string | null>(null)
 
   const refreshInstalled = () => {
-    invoke<ModelInfo[]>("list_models").then(setCatalog).catch(() => {})
+    invoke<ModelInfo[]>("list_models").then(setCatalog).catch((e) => toast(`Could not load the model list: ${e}`, "warning"))
   }
 
   useEffect(() => {
@@ -61,8 +62,8 @@ export function ModelsTab() {
       await invoke("remove_model", { modelId })
       refreshInstalled()
     } catch (e) {
-      console.error("Remove failed:", e)
-      alert(String(e))
+      // Was a raw alert(); the app has a toast system.
+      toast(`Could not remove model: ${e}`)
     }
     setRemoving(null)
   }
@@ -72,12 +73,17 @@ export function ModelsTab() {
     setDownloadPercent(0)
     try {
       await invoke("download_model", { modelId })
+      // Switching straight after a download is a convenience, not the point of
+      // the action: report it, but a failure here does not mean the download
+      // failed.
       try {
         const name = await invoke<string>("switch_model", { model: modelId })
         setActiveModel(name)
-      } catch (_) {}
+      } catch (e) {
+        toast(`Downloaded, but could not activate it: ${e}`, "warning")
+      }
     } catch (e) {
-      console.error("Download failed:", e)
+      toast(`Download failed: ${e}`)
     }
     setDownloading(null)
   }
@@ -88,7 +94,7 @@ export function ModelsTab() {
       const name = await invoke<string>("switch_model", { model: modelId })
       setActiveModel(name)
     } catch (e) {
-      console.error("Switch failed:", e)
+      toast(`Could not switch model: ${e}`)
     }
     setSwitching(null)
   }

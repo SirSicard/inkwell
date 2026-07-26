@@ -1,17 +1,17 @@
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { SettingRow, GlassToggle, GlassSelect, GlassButton } from "../components/ui"
-import type { Settings } from "../types"
+import { useSettings } from "../state/settings"
+import { toast } from "../state/toasts"
 import { formatHotkey } from "../hotkey"
 
 function HotkeyCapture() {
-  const [hotkey, setHotkey] = useState("ctrl+space")
+  // The hotkey lives in the shared store; set_hotkey is a separate command
+  // because it re-registers the global shortcut, so it is invoked directly and
+  // the store is corrected to match on success.
+  const hotkey = useSettings((s) => s.settings?.hotkey ?? "")
   const [capturing, setCapturing] = useState(false)
   const [error, setError] = useState("")
-
-  useEffect(() => {
-    invoke<Settings>("get_settings").then((s) => setHotkey(s.hotkey)).catch(() => {})
-  }, [])
 
   const formatKey = (e: KeyboardEvent) => {
     const parts: string[] = []
@@ -53,7 +53,7 @@ function HotkeyCapture() {
 
     invoke("set_hotkey", { hotkey: combo })
       .then(() => {
-        setHotkey(combo)
+        void useSettings.getState().load()
         setError("")
       })
       .catch((err) => {
@@ -85,53 +85,32 @@ function HotkeyCapture() {
 }
 
 export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolean) => void }) {
-  const [startOnBoot, setStartOnBoot] = useState(false)
-  const [showOverlay, setShowOverlay] = useState(true)
-  const [recordingMode, setRecordingMode] = useState("ptt")
-  const [style, setStyle] = useState("formal")
-  const [advancedMode, setAdvancedMode] = useState(false)
-  const [soundDictation, setSoundDictation] = useState(true)
-  const [debugSaveAudio, setDebugSaveAudio] = useState(false)
+  // Read straight from the store rather than mirroring it into local state:
+  // the mirrors were the reason two panels could disagree about the same value.
+  const settings = useSettings((s) => s.settings)
+  const setSetting = useSettings((s) => s.set)
 
-  useEffect(() => {
-    invoke<Settings>("get_settings").then((s) => {
-      setStyle(s.style)
-      setRecordingMode(s.recording_mode)
-      setStartOnBoot(s.start_on_boot)
-      setShowOverlay(s.show_overlay)
-      setAdvancedMode(s.advanced_mode)
-      setSoundDictation(s.sound_dictation ?? true)
-      setDebugSaveAudio(s.debug_save_audio ?? false)
-    }).catch(() => {})
-  }, [])
-
-  const updateSetting = (key: string, value: string) => {
-    invoke("update_settings", { key, value }).catch((e) => console.error("update_settings failed:", e))
-  }
+  const startOnBoot = settings?.start_on_boot ?? false
+  const showOverlay = settings?.show_overlay ?? true
+  const recordingMode = settings?.recording_mode ?? "ptt"
+  const style = settings?.style ?? "formal"
+  const advancedMode = settings?.advanced_mode ?? false
+  const soundDictation = settings?.sound_dictation ?? true
+  const debugSaveAudio = settings?.debug_save_audio ?? false
 
   const handleStyleChange = (value: string) => {
-    setStyle(value)
-    invoke("set_style", { styleName: value }).catch((e) => console.error("set_style failed:", e))
+    // set_style is its own command (it also updates the live pipeline style),
+    // so keep the store in step explicitly.
+    void setSetting("style", value)
+    invoke("set_style", { styleName: value }).catch((e) => toast(`Could not set style: ${e}`))
   }
 
-  const handleRecordingModeChange = (value: string) => {
-    setRecordingMode(value)
-    updateSetting("recording_mode", value)
-  }
-
-  const handleStartOnBootChange = (value: boolean) => {
-    setStartOnBoot(value)
-    updateSetting("start_on_boot", value.toString())
-  }
-
-  const handleShowOverlayChange = (value: boolean) => {
-    setShowOverlay(value)
-    updateSetting("show_overlay", value.toString())
-  }
+  const handleRecordingModeChange = (value: string) => setSetting("recording_mode", value)
+  const handleStartOnBootChange = (value: boolean) => setSetting("start_on_boot", value)
+  const handleShowOverlayChange = (value: boolean) => setSetting("show_overlay", value)
 
   const handleAdvancedModeChange = (value: boolean) => {
-    setAdvancedMode(value)
-    updateSetting("advanced_mode", value.toString())
+    void setSetting("advanced_mode", value)
     onAdvancedChange?.(value)
   }
 
@@ -194,10 +173,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
       </SettingRow>
 
       <SettingRow label="Dictation Sound" description="Audio feedback when recording starts and stops">
-        <GlassToggle checked={soundDictation} onChange={(v) => {
-          setSoundDictation(v)
-          updateSetting("sound_dictation", v.toString())
-        }} />
+        <GlassToggle checked={soundDictation} onChange={(v) => setSetting("sound_dictation", v)} />
       </SettingRow>
 
       <SettingRow label="Advanced Mode" description="Show all tabs and settings">
@@ -209,10 +185,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
           label="Save Debug Audio"
           description="Writes each dictation's raw audio to a temp file for troubleshooting. Off by default — leave it off unless you are chasing a transcription bug, and delete the files afterwards."
         >
-          <GlassToggle checked={debugSaveAudio} onChange={(v) => {
-            setDebugSaveAudio(v)
-            updateSetting("debug_save_audio", v.toString())
-          }} />
+          <GlassToggle checked={debugSaveAudio} onChange={(v) => setSetting("debug_save_audio", v)} />
         </SettingRow>
       )}
 
@@ -220,10 +193,10 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
 
       <div className="flex gap-2 pt-2">
         <GlassButton variant="ghost" onClick={() => {
-          invoke("update_settings", { key: "style", value: "formal" }).catch(() => {})
-          invoke("update_settings", { key: "recording_mode", value: "ptt" }).catch(() => {})
-          invoke("update_settings", { key: "show_overlay", value: "true" }).catch(() => {})
-          invoke("update_settings", { key: "start_on_boot", value: "false" }).catch(() => {})
+          void setSetting("style", "formal")
+          void setSetting("recording_mode", "ptt")
+          void setSetting("show_overlay", true)
+          void setSetting("start_on_boot", false)
           window.location.reload()
         }}>Reset Defaults</GlassButton>
       </div>

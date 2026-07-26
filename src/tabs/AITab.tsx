@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "../state/toasts"
 import { GlassToggle } from "../components/ui"
 
 function AIConsentModal({ onAccept, onDecline }: { onAccept: () => void; onDecline: () => void }) {
@@ -85,18 +86,18 @@ export function AITab() {
       setShowConsent(true)
     } else {
       setPolishEnabled(false)
-      invoke("set_polish_settings", { enabled: false, prompt: polishPrompt }).catch(() => {})
+      invoke("set_polish_settings", { enabled: false, prompt: polishPrompt }).catch((e) => toast(`Could not disable polish: ${e}`))
     }
   }
 
   const handleConsentAccept = () => {
     setShowConsent(false)
     setPolishEnabled(true)
-    invoke("set_polish_settings", { enabled: true, prompt: polishPrompt }).catch(() => {})
+    invoke("set_polish_settings", { enabled: true, prompt: polishPrompt }).catch((e) => toast(`Could not enable polish: ${e}`))
   }
 
   useEffect(() => {
-    invoke<Record<string, boolean>>("get_api_key_status").then(setKeyStatus).catch(() => {})
+    invoke<Record<string, boolean>>("get_api_key_status").then(setKeyStatus).catch((e) => toast(`Could not read key status: ${e}`, "warning"))
     invoke<{ enabled: boolean; prompt: string }>("get_polish_settings").then((s) => {
       setPolishEnabled(s.enabled)
       setPolishPrompt(s.prompt)
@@ -115,7 +116,7 @@ export function AITab() {
   }
 
   const handleSavePolish = () => {
-    invoke("set_polish_settings", { enabled: polishEnabled, prompt: polishPrompt }).catch(() => {})
+    invoke("set_polish_settings", { enabled: polishEnabled, prompt: polishPrompt }).catch((e) => toast(`Could not save polish settings: ${e}`))
   }
 
   const handleTest = async () => {
