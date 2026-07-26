@@ -9,7 +9,7 @@ import type { Settings, UpdateInfo, Tab } from "./types"
 import { formatHotkey } from "./hotkey"
 import { useToasts, toast } from "./state/toasts"
 import { useSettings } from "./state/settings"
-import { basicTabs, advancedTabs } from "./types"
+import { basicTabs, advancedTabs, tabGroups } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
   AITab, SnippetsTab, AppStylesTab, DictionaryTab,
@@ -333,105 +333,69 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
 
 // --- Tab Bar ---
 
-function TabBar({ tabs, activeTab, onTabChange }: { tabs: readonly string[]; activeTab: string; onTabChange: (t: Tab) => void }) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [showMenu, setShowMenu] = useState(false)
-  const [containerWidth, setContainerWidth] = useState(999)
+function Sidebar({
+  tabs,
+  activeTab,
+  onTabChange,
+}: {
+  tabs: readonly string[]
+  activeTab: string
+  onTabChange: (t: Tab) => void
+}) {
+  // Only groups with at least one visible tab render, so basic mode collapses
+  // to the handful of items it should show instead of swapping the whole set.
+  const groups = tabGroups
+    .map((g) => ({ label: g.label, tabs: g.tabs.filter((t) => tabs.includes(t)) }))
+    .filter((g) => g.tabs.length > 0)
 
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const observer = new ResizeObserver((entries) => {
-      setContainerWidth(entries[0].contentRect.width)
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
-
-  const maxVisible = Math.max(1, Math.floor((containerWidth - 40) / 80))
-  const needsOverflow = tabs.length > maxVisible
-  const visibleTabs = needsOverflow ? tabs.slice(0, maxVisible) : tabs
-  const overflowTabs = needsOverflow ? tabs.slice(maxVisible) : []
+  const flat = groups.flatMap((g) => g.tabs)
 
   return (
-    <div ref={containerRef} role="tablist" className="relative flex items-center gap-0.5 px-5 pt-3 pb-0 border-b border-border"
+    <nav
+      role="tablist"
+      aria-orientation="vertical"
+      aria-label="Settings sections"
+      className="w-[172px] shrink-0 h-full overflow-y-auto border-r border-border px-2 py-3 space-y-4"
       onKeyDown={(e) => {
-        const allTabs = [...tabs]
-        const idx = allTabs.indexOf(activeTab)
-        if (e.key === "ArrowRight" && idx < allTabs.length - 1) { e.preventDefault(); onTabChange(allTabs[idx + 1] as Tab) }
-        if (e.key === "ArrowLeft" && idx > 0) { e.preventDefault(); onTabChange(allTabs[idx - 1] as Tab) }
-        if (e.key === "Home") { e.preventDefault(); onTabChange(allTabs[0] as Tab) }
-        if (e.key === "End") { e.preventDefault(); onTabChange(allTabs[allTabs.length - 1] as Tab) }
+        const idx = flat.indexOf(activeTab as Tab)
+        if (idx < 0) return
+        if (e.key === "ArrowDown" && idx < flat.length - 1) { e.preventDefault(); onTabChange(flat[idx + 1]) }
+        if (e.key === "ArrowUp" && idx > 0) { e.preventDefault(); onTabChange(flat[idx - 1]) }
+        if (e.key === "Home") { e.preventDefault(); onTabChange(flat[0]) }
+        if (e.key === "End") { e.preventDefault(); onTabChange(flat[flat.length - 1]) }
       }}
     >
-      {visibleTabs.map((tab) => (
-        <button
-          key={tab}
-          role="tab"
-          aria-selected={activeTab === tab}
-          tabIndex={activeTab === tab ? 0 : -1}
-          onClick={() => { onTabChange(tab as Tab); setShowMenu(false) }}
-          className={`relative px-3 py-2.5 text-[11px] font-medium tracking-wide transition-colors whitespace-nowrap focus:outline-none ${
-            activeTab === tab
-              ? "text-text-primary"
-              : "text-text-tertiary hover:text-text-secondary"
-          }`}
-        >
-          {tab}
-          {activeTab === tab && (
-            <motion.div
-              layoutId="tab-underline"
-              className="absolute bottom-0 left-3 right-3 h-[2px] bg-accent rounded-full"
-              transition={{ type: "spring", stiffness: 400, damping: 35 }}
-            />
-          )}
-        </button>
-      ))}
-
-      {needsOverflow && (
-        <div className="ml-auto relative pb-2">
-          <button
-            onClick={() => setShowMenu(!showMenu)}
-            className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors ${
-              showMenu || overflowTabs.includes(activeTab)
-                ? "text-text-primary bg-bg-hover"
-                : "text-text-tertiary hover:text-text-secondary"
-            }`}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <circle cx="3" cy="8" r="1.2" fill="currentColor" />
-              <circle cx="8" cy="8" r="1.2" fill="currentColor" />
-              <circle cx="13" cy="8" r="1.2" fill="currentColor" />
-            </svg>
-          </button>
-          <AnimatePresence>
-            {showMenu && (
-              <motion.div
-                initial={{ opacity: 0, y: -4, scale: 0.97 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -4, scale: 0.97 }}
-                transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                className="absolute right-0 top-full mt-1 z-50 min-w-[140px] bg-bg-overlay border border-border-default rounded-lg shadow-xl py-1"
-              >
-                {overflowTabs.map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => { onTabChange(tab as Tab); setShowMenu(false) }}
-                    className={`w-full text-left px-3 py-2 text-[11px] font-medium tracking-wide transition-colors ${
-                      activeTab === tab
-                        ? "text-text-primary bg-bg-hover"
-                        : "text-text-tertiary hover:text-text-secondary hover:bg-bg-hover"
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
+      {groups.map((group) => (
+        <div key={group.label} className="space-y-0.5">
+          <p className="px-2.5 pb-1 text-[10px] font-mono uppercase tracking-wider text-text-tertiary/70">
+            {group.label}
+          </p>
+          {group.tabs.map((tab) => (
+            <button
+              key={tab}
+              role="tab"
+              aria-selected={activeTab === tab}
+              tabIndex={activeTab === tab ? 0 : -1}
+              onClick={() => onTabChange(tab)}
+              className={`relative w-full text-left px-2.5 py-1.5 rounded-md text-[13px] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+                activeTab === tab
+                  ? "text-text-primary bg-bg-hover"
+                  : "text-text-secondary hover:text-text-primary hover:bg-bg-hover/50"
+              }`}
+            >
+              {activeTab === tab && (
+                <motion.span
+                  layoutId="tab-indicator"
+                  className="absolute left-0 top-1 bottom-1 w-[2px] bg-accent rounded-full"
+                  transition={{ type: "spring", stiffness: 400, damping: 35 }}
+                />
+              )}
+              {tab}
+            </button>
+          ))}
         </div>
-      )}
-    </div>
+      ))}
+    </nav>
   )
 }
 
@@ -673,9 +637,10 @@ function App() {
 
       {/* Right: Content Zone */}
       <div className="flex-1 h-full flex flex-col border-l border-border bg-bg-base">
-        <TabBar tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
+        <div className="flex-1 flex min-h-0">
+          <Sidebar tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
 
-        <div role="tabpanel" className="flex-1 overflow-y-auto px-5 py-5">
+          <div role="tabpanel" className="flex-1 overflow-y-auto px-6 py-5">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -687,6 +652,7 @@ function App() {
               <TabContent tab={activeTab} onAdvancedChange={setAdvancedMode} />
             </motion.div>
           </AnimatePresence>
+          </div>
         </div>
 
         {/* Status Bar */}

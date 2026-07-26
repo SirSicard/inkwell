@@ -84,3 +84,20 @@ export interface FileTranscribeResult {
 export const basicTabs = ["Dashboard", "General", "About"] as const
 export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Snippets", "App Styles", "Dictionary", "Files", "Commands", "About"] as const
 export type Tab = (typeof advancedTabs)[number]
+
+/**
+ * Sidebar grouping.
+ *
+ * Twelve flat tabs across the top overflowed into a three-dot menu at the
+ * default 800px window, hiding roughly half the app, and basic/advanced swapped
+ * the whole tab set so nothing stayed where the user left it. Grouping them
+ * down the side removes the overflow entirely and keeps every item in a fixed
+ * position; advanced mode now reveals extra items in place rather than
+ * replacing the list.
+ */
+export const tabGroups: readonly { label: string; tabs: readonly Tab[] }[] = [
+  { label: "History", tabs: ["Dashboard", "Files"] },
+  { label: "Dictation", tabs: ["General", "Audio", "Models"] },
+  { label: "Intelligence", tabs: ["AI", "Snippets", "Dictionary", "Commands", "App Styles"] },
+  { label: "System", tabs: ["About"] },
+]
