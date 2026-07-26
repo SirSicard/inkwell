@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "../state/toasts"
 import type { Transcript } from "../types"
 
 function ExportMenu({
@@ -110,7 +111,7 @@ export function DashboardTab() {
   const handleDelete = (id: number) => {
     invoke("delete_transcript", { id }).then(() => {
       setTranscripts((prev) => prev.filter((t) => t.id !== id))
-    }).catch(() => {})
+    }).catch((e) => toast(`Could not delete transcript: ${e}`))
   }
 
   const handleExportFile = async () => {

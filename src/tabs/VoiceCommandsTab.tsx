@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "../state/toasts"
 import { GlassToggle } from "../components/ui"
 import type { VoiceCommandItem, VoiceCommandStoreData } from "../types"
 
@@ -10,7 +11,7 @@ export function VoiceCommandsTab() {
   const [lastCommand, setLastCommand] = useState("")
 
   useEffect(() => {
-    invoke<VoiceCommandStoreData>("get_voice_commands").then(setStore).catch(() => {})
+    invoke<VoiceCommandStoreData>("get_voice_commands").then(setStore).catch((e) => toast(`Could not load voice commands: ${e}`, "warning"))
     const unlisten = listen<{ id: string }>("voice-command", (e) => {
       setLastCommand(e.payload.id)
       setTimeout(() => setLastCommand(""), 3000)
@@ -20,7 +21,7 @@ export function VoiceCommandsTab() {
 
   const saveStore = (updated: VoiceCommandStoreData) => {
     setStore(updated)
-    invoke("save_voice_commands", { store: updated }).catch(() => {})
+    invoke("save_voice_commands", { store: updated }).catch((e) => toast(`Could not save voice commands: ${e}`))
   }
 
   const toggleEnabled = (enabled: boolean) => {

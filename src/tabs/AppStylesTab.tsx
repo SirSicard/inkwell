@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "../state/toasts"
 import { GlassToggle } from "../components/ui"
 import type { AppStyleRule } from "../types"
 
@@ -19,7 +20,7 @@ export function AppStylesTab() {
   const saveAll = (en: boolean, r: AppStyleRule[]) => {
     setEnabled(en)
     setRules(r)
-    invoke("save_app_styles", { rules: { enabled: en, rules: r } }).catch(() => {})
+    invoke("save_app_styles", { rules: { enabled: en, rules: r } }).catch((e) => toast(`Could not save app rules: ${e}`))
   }
 
   const handleAdd = () => {

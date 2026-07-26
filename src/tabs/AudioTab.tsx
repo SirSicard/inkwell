@@ -1,29 +1,33 @@
 import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { SettingRow, GlassSelect } from "../components/ui"
-import type { Settings, DeviceInfo } from "../types"
+import type { DeviceInfo } from "../types"
+import { useSettings } from "../state/settings"
+import { toast } from "../state/toasts"
 
 export function AudioTab() {
   const [devices, setDevices] = useState<DeviceInfo[]>([])
-  const [selectedMic, setSelectedMic] = useState("auto")
-  const [vadThreshold, setVadThreshold] = useState(0.5)
+  const settings = useSettings((s) => s.settings)
+  const setSetting = useSettings((s) => s.set)
+
+  const selectedMic = settings?.mic_device ?? "auto"
+  const vadThreshold = settings?.vad_threshold ?? 0.5
 
   useEffect(() => {
-    invoke<DeviceInfo[]>("get_input_devices").then(setDevices).catch(() => {})
-    invoke<Settings>("get_settings").then((s) => {
-      setSelectedMic(s.mic_device)
-      setVadThreshold(s.vad_threshold)
-    }).catch(() => {})
+    invoke<DeviceInfo[]>("get_input_devices")
+      .then(setDevices)
+      .catch((e) => toast(`Could not list input devices: ${e}`, "warning"))
   }, [])
 
-  const handleMicChange = (value: string) => {
-    setSelectedMic(value)
-    invoke("update_settings", { key: "mic_device", value }).catch(() => {})
-  }
+  // The store owns the value and reverts if the backend refuses — switching the
+  // mic mid-recording is rejected, and that refusal is now visible.
+  const handleMicChange = (value: string) => setSetting("mic_device", value)
 
   const handleVadChange = (value: number) => {
-    setVadThreshold(value)
-    invoke("set_vad_threshold", { threshold: value }).catch(() => {})
+    setSetting("vad_threshold", value)
+    invoke("set_vad_threshold", { threshold: value }).catch((e) =>
+      toast(`Could not apply VAD threshold: ${e}`)
+    )
   }
 
   const vadLabel = vadThreshold < 0.3 ? "Very sensitive" :
