@@ -26,6 +26,31 @@ pub fn get_style(state: tauri::State<AppState>) -> String {
     }
 }
 
+/// Pause or resume the recording in progress. Returns the new paused state.
+///
+/// Refuses when nothing is recording rather than silently setting a flag that
+/// the next recording would inherit: a stale pause would make the following
+/// dictation capture nothing at all, which is the worst failure this feature
+/// could introduce.
+#[tauri::command]
+pub fn toggle_pause(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<bool, String> {
+    use std::sync::atomic::Ordering;
+    use tauri::Emitter;
+
+    let guard = state.audio.lock().unwrap();
+    let audio = guard.as_ref().ok_or("No audio device")?;
+
+    if !audio.is_recording.load(Ordering::Relaxed) {
+        return Err("Nothing is recording".to_string());
+    }
+
+    let paused = !audio.is_paused.load(Ordering::Relaxed);
+    audio.is_paused.store(paused, Ordering::Relaxed);
+    log::info!("Recording {}", if paused { "paused" } else { "resumed" });
+    let _ = app.emit("recording-paused", paused);
+    Ok(paused)
+}
+
 #[tauri::command]
 pub fn get_settings(state: tauri::State<AppState>) -> settings::Settings {
     state.settings.lock().unwrap().clone()
@@ -65,6 +90,7 @@ pub fn update_settings(
             crate::sounds::set_dictation_sounds(settings.sound_dictation);
         }
         "debug_save_audio" => settings.debug_save_audio = value == "true",
+        "remove_fillers" => settings.remove_fillers = value == "true",
         _ => return Err(format!("Unknown setting: {}", key)),
     }
     let path = state.settings_path.lock().unwrap().clone();

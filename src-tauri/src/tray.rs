@@ -44,11 +44,13 @@ fn copy_last_transcript(app: &tauri::AppHandle) {
 pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show_item = MenuItemBuilder::with_id("show", "Show Inkwell").build(app)?;
     let copy_item = MenuItemBuilder::with_id("copy-last", "Copy Last Transcript").build(app)?;
+    let pause_item = MenuItemBuilder::with_id("pause", "Pause / Resume Recording").build(app)?;
     let settings_item = MenuItemBuilder::with_id("settings", "Settings...").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
     let tray_menu = MenuBuilder::new(app)
         .item(&show_item)
         .item(&copy_item)
+        .item(&pause_item)
         .separator()
         .item(&settings_item)
         .separator()
@@ -81,6 +83,14 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => focus_main(app),
             "copy-last" => copy_last_transcript(app),
+            "pause" => {
+                // The command refuses when nothing is recording, which is the
+                // right answer for a menu item that is always visible.
+                match crate::commands::toggle_pause(app.clone(), app.state::<crate::AppState>()) {
+                    Ok(paused) => log::info!("Tray: recording {}", if paused { "paused" } else { "resumed" }),
+                    Err(e) => log::info!("Tray: pause ignored ({})", e),
+                }
+            }
             "settings" => {
                 focus_main(app);
                 let _ = app.emit("open-settings", ());

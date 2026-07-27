@@ -48,6 +48,10 @@ pub fn build_shortcut_plugin(
                 let guard = app_state.audio.lock().unwrap();
                 if let Some(audio) = guard.as_ref() {
                     audio.recording_buffer.lock().unwrap().clear();
+                    // Clear pause on start as well as stop. A flag surviving
+                    // into the next session would make that dictation capture
+                    // nothing, with no visible cause.
+                    audio.is_paused.store(false, Ordering::Relaxed);
                     audio.is_recording.store(true, Ordering::Relaxed);
                     log::info!(
                         "Recording started ({}, shortcut: {:?})",
@@ -67,6 +71,7 @@ pub fn build_shortcut_plugin(
                 let guard = app_state.audio.lock().unwrap();
                 if let Some(audio) = guard.as_ref() {
                     audio.is_recording.store(false, Ordering::Relaxed);
+                    audio.is_paused.store(false, Ordering::Relaxed);
 
                     let samples: Vec<f32> = {
                         let mut buf = audio.recording_buffer.lock().unwrap();
@@ -284,6 +289,21 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                         return;
                     }
                 }
+
+                // Strip disfluencies before styling, not after: removing a
+                // leading "Um" can leave the next word lowercase, and style is
+                // the stage that fixes casing. Doing it the other way round
+                // pastes "um can you hear me" with the capital in the wrong
+                // place.
+                let text = if app_state.settings.lock().unwrap().remove_fillers {
+                    let cleaned = crate::cleanup::remove_disfluencies(&text);
+                    if cleaned != text {
+                        log::info!("Disfluencies removed: {:?} -> {:?}", text, cleaned);
+                    }
+                    cleaned
+                } else {
+                    text
+                };
 
                 // Apply style formatting (per-app override if enabled)
                 let current_style = {

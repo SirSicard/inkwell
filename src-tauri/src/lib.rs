@@ -1,6 +1,7 @@
 mod appdetect;
 mod audio;
 mod commands;
+pub mod cleanup;
 pub mod dictionary;
 pub mod engine;
 pub mod engine_service;
@@ -89,6 +90,7 @@ pub fn run() {
             commands::get_style,
             commands::get_settings,
             commands::update_settings,
+            commands::toggle_pause,
             commands::get_transcripts,
             commands::search_transcripts,
             commands::delete_transcript,

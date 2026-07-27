@@ -431,6 +431,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>("Dashboard")
   const [modelName, setModelName] = useState("No model loaded")
   const [isRecording, setIsRecording] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
   const [advancedMode, setAdvancedMode] = useState(false)
   const toasts = useToasts((s) => s.toasts)
   const dismissToast = useToasts((s) => s.dismiss)
@@ -537,7 +538,12 @@ function App() {
     invoke<string>("get_model_name").then(setModelName).catch(() => {})
     const subs = [
       listen<string>("model-loaded", (event) => setModelName(event.payload)),
-      listen<boolean>("recording-state", (e) => setIsRecording(e.payload)),
+      listen<boolean>("recording-state", (e) => {
+        setIsRecording(e.payload)
+        // Pause cannot outlive the session that owns it.
+        if (!e.payload) setIsPaused(false)
+      }),
+      listen<boolean>("recording-paused", (e) => setIsPaused(e.payload)),
     ]
     return () => { subs.forEach((p) => p.then((fn) => fn())) }
   }, [])
@@ -684,10 +690,12 @@ function App() {
             {isRecording ? (
               <>
                 <span
-                  className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
-                  style={{ background: "var(--color-accent-recording)" }}
+                  className={`inline-block w-1.5 h-1.5 rounded-full ${isPaused ? "" : "animate-pulse"}`}
+                  style={{ background: isPaused ? "var(--color-text-tertiary)" : "var(--color-accent-recording)" }}
                 />
-                <span style={{ color: "var(--color-accent-recording)" }}>Recording</span>
+                <span style={{ color: isPaused ? "var(--color-text-tertiary)" : "var(--color-accent-recording)" }}>
+                  {isPaused ? "Paused" : "Recording"}
+                </span>
               </>
             ) : modelName === "No model loaded" ? (
               <><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" />{modelName}</>

@@ -14,6 +14,7 @@ export interface Settings {
   polish_enabled: boolean
   polish_prompt: string
   sound_dictation: boolean
+  remove_fillers: boolean
   debug_save_audio: boolean
 }
 
