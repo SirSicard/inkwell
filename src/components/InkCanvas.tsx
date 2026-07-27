@@ -17,6 +17,7 @@ const fragmentShader = `
   uniform float u_mid;    // 300-2kHz: voice presence, consonants
   uniform float u_high;   // 2k-8kHz: sibilance, detail
   uniform float u_state;  // 0 = idle, 1 = recording (spring-interpolated)
+  uniform sampler2D u_text; // wordmark alpha, composited as a true inversion
 
   vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
 
@@ -43,51 +44,100 @@ const fragmentShader = `
     return 130.0 * dot(m, g);
   }
 
+  // Fractal noise: several octaves of simplex. One octave gives the smooth,
+  // faintly circular wobble the old blob had; stacking them is what produces an
+  // edge that reads as liquid rather than as a warped circle.
+  float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; i++) {
+      v += a * snoise(p);
+      p *= 2.03;
+      a *= 0.5;
+    }
+    return v;
+  }
+
+  // Metaball field. Summing inverse-square falloff from several centres and
+  // thresholding the total is what makes droplets bulge toward each other and
+  // merge with a neck, the way ink does, instead of overlapping like discs.
+  float droplet(vec2 p, vec2 c, float r) {
+    vec2 d = p - c;
+    return (r * r) / max(dot(d, d), 1e-5);
+  }
+
   void main() {
     vec2 st = gl_FragCoord.xy / u_resolution.xy;
+    float aspect = u_resolution.x / u_resolution.y;
     vec2 pos = st;
-    pos.x *= u_resolution.x / u_resolution.y;
+    pos.x *= aspect;
 
-    // Recording state boosts all parameters
     float amp = u_amplitude;
     float stateBoost = u_state * 0.3;
-
-    // Time speed: idle = slow, recording = faster (even without audio)
     float t = u_time * (0.15 + amp * 0.25 + u_low * 0.1 + stateBoost * 0.2);
 
-    vec2 center = vec2(0.5 * (u_resolution.x / u_resolution.y), 0.5);
-    float dist = length(pos - center);
+    vec2 center = vec2(0.5 * aspect, 0.5);
 
-    // Warp: recording state adds baseline distortion.
-    //
-    // The 0.20 baseline was set for the 97px overlay, where a swing of that size
-    // against a 0.38 radius is a few pixels of wobble. In the main window the
-    // same number is drawn across a ~400px column, where the boundary swings
-    // most of its own radius and the ink drop reads as a Rorschach splatter
-    // rather than a drop of ink. Halved here, with the edge falloff widened
-    // below to match. The overlay keeps its own copy of the shader and its own
-    // 0.20, because there the original number is correct.
-    float warpIntensity = 0.10 + amp * 0.3 + u_mid * 0.2 + stateBoost * 0.15;
-    float n1 = snoise(pos * 2.0 - vec2(t * 0.2, -t * 0.1));
-    float n2 = snoise(pos * 4.0 + vec2(t * 0.1, t * 0.2));
-    float warp = n1 * warpIntensity + n2 * (warpIntensity * 0.5);
+    // Everything below is expressed in units of the panel's NARROW axis. The
+    // field is evaluated in a space where y spans 0..1 and x spans 0..aspect, so
+    // a radius written as a fraction of height covers most of the width in a
+    // tall column like this one, which is why the first pass filled the panel
+    // with a single mass instead of reading as droplets.
+    float s = min(aspect, 1.0);
 
-    // Blob size: recording state makes it expand
-    float blobSize = 0.38 + u_low * 0.12 + amp * 0.08 + stateBoost * 0.06;
-    float blob = smoothstep(blobSize + 0.035, blobSize - 0.035, dist + warp);
+    // Domain warp: displace the sampling position before evaluating the field,
+    // so the whole mass deforms as one body. Warping the threshold instead,
+    // which is what this used to do, only ever wobbles the outline.
+    vec2 warp = vec2(
+      fbm(pos * 2.1 + vec2(t * 0.20, t * 0.11)),
+      fbm(pos * 2.1 + vec2(-t * 0.13, t * 0.17) + 31.4)
+    );
+    float warpAmt = s * (0.13 + amp * 0.18 + u_mid * 0.10 + stateBoost * 0.08);
+    vec2 wp = pos + warp * warpAmt;
 
-    // Surface detail
-    float n3 = snoise(pos * 8.0 + vec2(t * 0.5, -t * 0.4));
-    float detail = n3 * (0.02 + u_high * 0.06 + stateBoost * 0.03) * blob;
+    // A main mass plus three satellites, at different sizes and drift rates.
+    // The offsets are deliberately uneven: evenly spaced droplets read as a
+    // pattern, uneven ones read as a spill.
+    float pulse = u_low * 0.10 + amp * 0.06 + stateBoost * 0.05;
 
-    // Film grain
+    float field = 0.0;
+    // Sized to leave cream on every side. The mass plus its warp has to stay
+    // inside the panel, or it stops reading as a spill on paper and starts
+    // reading as a dark background with a light strip down one edge.
+    // Main mass, a little below centre.
+    field += droplet(wp, center + s * vec2(0.02 * sin(t * 0.5), 0.06 + 0.03 * cos(t * 0.4)), s * (0.30 + pulse));
+    // Satellites: the first stays close enough to hold a neck to the body, the
+    // others separate and rejoin as the warp moves past them.
+    field += droplet(wp, center + s * vec2(-0.26 + 0.04 * sin(t * 0.7 + 1.0), -0.30 + 0.04 * cos(t * 0.6)), s * (0.15 + pulse * 0.6));
+    field += droplet(wp, center + s * vec2(0.30 + 0.04 * cos(t * 0.55 + 2.0), 0.34 + 0.04 * sin(t * 0.5 + 0.7)), s * (0.12 + pulse * 0.5));
+    field += droplet(wp, center + s * vec2(0.22 + 0.03 * sin(t * 0.8 + 3.1), -0.58 + 0.04 * cos(t * 0.7 + 1.7)), s * (0.085 + pulse * 0.4));
+
+    // A tight threshold keeps the edge crisp. Ink has a defined boundary with a
+    // little bleed, not an airbrushed falloff, and the old wide smoothstep over
+    // a plain distance field was most of why it read as a smudge.
+    float edge = 0.055 + u_high * 0.02;
+    float blob = smoothstep(1.0 - edge, 1.0 + edge, field);
+
+    // Feathered bleed just outside the body, like ink wicking into paper.
+    float bleed = smoothstep(1.0 - edge * 5.0, 1.0 - edge, field) * (1.0 - blob);
+
+    float detail = fbm(wp * 6.0 + t * 0.25) * (0.020 + u_high * 0.05 + stateBoost * 0.03) * blob;
     float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 
-    // Cream background, dark ink blob
     vec3 bgColor = vec3(0.94, 0.93, 0.91) + grain * 0.02;
     vec3 inkColor = vec3(0.06 + detail) + grain * 0.015;
 
     vec3 finalColor = mix(bgColor, inkColor, blob);
+    finalColor = mix(finalColor, inkColor, bleed * 0.22);
+
+    // The wordmark, composited here rather than as a DOM element above the
+    // canvas. It was a <span> with mix-blend-difference, which inverts correctly
+    // in Chromium but not in the WKWebView this app ships in: a WebGL canvas is
+    // a hardware-composited layer, and WebKit will not reliably blend DOM
+    // against one, so the letters stayed white over the cream field instead of
+    // turning dark. Inverting in the shader is exact and engine-independent.
+    float mark = texture2D(u_text, vec2(st.x, 1.0 - st.y)).a;
+    finalColor = mix(finalColor, 1.0 - finalColor, mark);
 
     gl_FragColor = vec4(finalColor, 1.0);
   }
@@ -306,6 +356,52 @@ export function InkCanvas() {
     gl.enableVertexAttribArray(posLoc)
     gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
 
+    const textLoc = gl.getUniformLocation(program, "u_text")
+
+    // The wordmark as a texture. Rendered to an offscreen 2D canvas at the
+    // panel's pixel size, uploaded once, and re-rendered on resize. Waits for
+    // document.fonts.ready: without it the first upload can land in a fallback
+    // face and then never update, since this is not redrawn per frame.
+    const textTex = gl.createTexture()
+    const textCanvas = document.createElement("canvas")
+    let textReady = false
+
+    const drawWordmark = () => {
+      const w = canvas.width
+      const h = canvas.height
+      if (w < 2 || h < 2) return
+      textCanvas.width = w
+      textCanvas.height = h
+      const c = textCanvas.getContext("2d")
+      if (!c) return
+
+      c.clearRect(0, 0, w, h)
+      // Scale with the panel so the mark keeps its proportion at any width, and
+      // cap it so it cannot overflow a narrow window.
+      const size = Math.min(w * 0.17, h * 0.11)
+      c.font = `900 ${size}px "Geist Sans", system-ui, sans-serif`
+      c.textAlign = "center"
+      c.textBaseline = "top"
+      c.fillStyle = "#fff"
+      // Alpha is all the shader reads; the colour here is irrelevant.
+      c.fillText("INKWELL", w / 2, h * 0.045)
+
+      gl.bindTexture(gl.TEXTURE_2D, textTex)
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      textReady = true
+    }
+
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(drawWordmark).catch(drawWordmark)
+    } else {
+      drawWordmark()
+    }
+
     const resize = () => {
       const rect = canvas.parentElement!.getBoundingClientRect()
       const dpr = Math.min(window.devicePixelRatio || 1, 2)
@@ -314,6 +410,7 @@ export function InkCanvas() {
       canvas.style.width = rect.width + "px"
       canvas.style.height = rect.height + "px"
       gl.viewport(0, 0, canvas.width, canvas.height)
+      drawWordmark()
     }
     resize()
     window.addEventListener("resize", resize)
@@ -325,6 +422,7 @@ export function InkCanvas() {
     const midLoc = gl.getUniformLocation(program, "u_mid")
     const highLoc = gl.getUniformLocation(program, "u_high")
     const stateLoc = gl.getUniformLocation(program, "u_state")
+
 
     const lerpFactor = 0.05  // Smoothing speed (lower = smoother, less twitchy)
     const stateLerpFactor = 0.04 // Slower spring for state transitions
@@ -354,6 +452,11 @@ export function InkCanvas() {
       gl.uniform1f(midLoc, smoothMidRef.current)
       gl.uniform1f(highLoc, smoothHighRef.current)
       gl.uniform1f(stateLoc, smoothStateRef.current)
+      if (textReady) {
+        gl.activeTexture(gl.TEXTURE0)
+        gl.bindTexture(gl.TEXTURE_2D, textTex)
+        gl.uniform1i(textLoc, 0)
+      }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
 
       rafRef.current = requestAnimationFrame(render)
