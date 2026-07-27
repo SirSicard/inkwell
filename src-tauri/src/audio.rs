@@ -8,6 +8,10 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct AudioState {
     pub rms: Arc<Mutex<f32>>,
     pub is_recording: Arc<AtomicBool>,
+    /// Set while a recording is held open but not accumulating. The session
+    /// stays alive and the buffer keeps what it already has; only the append
+    /// stops. That is the whole of "pause", and it is why this costs one flag.
+    pub is_paused: Arc<AtomicBool>,
     pub recording_buffer: Arc<Mutex<Vec<f32>>>,
     pub sample_rate: usize,
     _stream: Stream,
@@ -153,6 +157,9 @@ pub fn start_audio_capture(
     let is_recording = Arc::new(AtomicBool::new(false));
     let is_recording_reader = is_recording.clone();
 
+    let is_paused = Arc::new(AtomicBool::new(false));
+    let is_paused_reader = is_paused.clone();
+
     let recording_buffer = Arc::new(Mutex::new(Vec::<f32>::new()));
     let recording_buffer_writer = recording_buffer.clone();
 
@@ -176,7 +183,8 @@ pub fn start_audio_capture(
             .build_input_stream(
                 &stream_config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let recording = is_recording_reader.load(Ordering::Relaxed);
+                    let recording = is_recording_reader.load(Ordering::Relaxed)
+                        && !is_paused_reader.load(Ordering::Relaxed);
 
                     for frame in data.chunks(channels) {
                         let mono: f32 = downmix(frame, channels);
@@ -230,7 +238,8 @@ pub fn start_audio_capture(
             .build_input_stream(
                 &stream_config,
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    let recording = is_recording_reader.load(Ordering::Relaxed);
+                    let recording = is_recording_reader.load(Ordering::Relaxed)
+                        && !is_paused_reader.load(Ordering::Relaxed);
 
                     for frame in data.chunks(channels) {
                         let mono: f32 = if channels > 2 {
@@ -290,6 +299,7 @@ pub fn start_audio_capture(
     Ok(AudioState {
         rms,
         is_recording,
+        is_paused,
         recording_buffer,
         sample_rate,
         _stream: stream,

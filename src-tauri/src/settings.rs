@@ -54,6 +54,11 @@ pub struct Settings {
     // Sound feedback
     #[serde(default = "default_true")]
     pub sound_dictation: bool,
+    /// Strip "um", "uh" and immediate stutters before pasting. On by default:
+    /// leaving them in is the single most-cited complaint in this category, and
+    /// the removal is conservative enough that it cannot change a sentence.
+    #[serde(default = "default_true")]
+    pub remove_fillers: bool,
     /// Opt-in only: writes each dictation's resampled audio to the temp dir for
     /// debugging. Must default to false, because this app never leaves voice on disk.
     #[serde(default)]
@@ -93,6 +98,7 @@ impl Default for Settings {
             polish_enabled: false,
             polish_prompt: default_polish_prompt(),
             sound_dictation: true,
+            remove_fillers: true,
             debug_save_audio: false,
         }
     }

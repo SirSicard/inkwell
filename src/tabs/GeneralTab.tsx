@@ -98,6 +98,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
   const style = settings?.style ?? "formal"
   const advancedMode = settings?.advanced_mode ?? false
   const soundDictation = settings?.sound_dictation ?? true
+  const removeFillers = settings?.remove_fillers ?? true
   const debugSaveAudio = settings?.debug_save_audio ?? false
 
   const handleStyleChange = (value: string) => {
@@ -202,6 +203,13 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
           />
         </SettingRow>
       )}
+
+      <SettingRow
+        label="Clean Up Speech"
+        description="Remove um, uh and repeated words before pasting. Conservative: it never drops a word that carries meaning."
+      >
+        <InkToggle checked={removeFillers} onChange={(v) => setSetting("remove_fillers", v)} />
+      </SettingRow>
 
       <SettingRow label="Dictation Sound" description="Audio feedback when recording starts and stops">
         <InkToggle checked={soundDictation} onChange={(v) => setSetting("sound_dictation", v)} />
