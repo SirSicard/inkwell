@@ -121,7 +121,7 @@ export function FilesTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <h2 className="text-[15px] font-sans font-semibold text-text-primary">File Transcription</h2>
+        <h2 className="text-heading font-sans font-semibold text-text-primary">File Transcription</h2>
         {!processing && (
           <button
             onClick={handlePickFile}
@@ -157,7 +157,7 @@ export function FilesTab() {
                 transition={{ ease: "linear" }}
               />
             </div>
-            <p className="text-[10px] font-mono text-text-tertiary">{progress.percent}%</p>
+            <p className="text-meta font-mono text-text-tertiary">{progress.percent}%</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -180,7 +180,7 @@ export function FilesTab() {
       {/* Results */}
       {results.length > 0 && (
         <div className="space-y-3">
-          <p className="text-[11px] font-medium text-text-tertiary tracking-wide">Results</p>
+          <p className="text-body font-medium text-text-tertiary tracking-wide">Results</p>
           {results.map((r, i) => (
             <motion.div
               key={`${r.filename}-${i}`}

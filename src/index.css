@@ -19,6 +19,15 @@
 
 /* ── Design Tokens ── */
 @theme {
+  /* Type scale: four steps, nothing else. The app had 65 arbitrary sizes with
+     no ramp (26x 11px, 17x 10px, down to a 9px label), which is the main reason
+     it read as a cramped web app rather than a native tool. Body moves 11 -> 13,
+     matching what the system and every competitor use. */
+  --text-meta: 11px;
+  --text-body: 13px;
+  --text-heading: 15px;
+  --text-title: 20px;
+
   --font-sans: "Geist Sans", "Inter", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, monospace;
   --font-body: "Inter", "Geist Sans", system-ui, sans-serif;
@@ -40,14 +49,17 @@
   --color-bg-glass: #18181d;
 
   /* Borders */
-  --color-border: rgba(255, 255, 255, 0.10);
-  --color-border-default: rgba(255, 255, 255, 0.16);
+  /* Dividers at 0.10 were effectively invisible against the base background. */
+  --color-border: rgba(255, 255, 255, 0.14);
+  --color-border-default: rgba(255, 255, 255, 0.20);
   --color-border-accent: rgba(200, 149, 108, 0.30);
 
   /* Text */
   --color-text-primary: rgba(255, 255, 255, 0.95);
   --color-text-secondary: rgba(255, 255, 255, 0.60);
-  --color-text-tertiary: rgba(255, 255, 255, 0.35);
+  /* Was 0.35, which composited to 3.17:1 on the base background and failed the
+     4.5:1 AA floor in all 118 places it is used. 0.55 measures ~6:1. */
+  --color-text-tertiary: rgba(255, 255, 255, 0.55);
 
   /* Accent */
   --color-accent: #c8956c;
@@ -61,6 +73,57 @@
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* ── Light theme ──────────────────────────────────────────────────────────
+   Not a new palette: the ink panel's cream field and charcoal ink were already
+   a complete light theme sitting inside the app doing decorative duty. This
+   inverts the shell to match it and follows the system appearance, which is
+   what macOS users expect and what every competitor does.
+
+   The one real trap is the accent. #c8956c measures about 2.3:1 on cream, so it
+   darkens to #8a5c33 here rather than carrying over. Every value below was
+   measured on the cream, not picked by eye: a first pass at 0.52 tertiary and
+   #9c6b3f accent came out at 4.12:1 and 3.92:1, both under the 4.5:1 AA floor.
+   White-on-accent buttons stay correct in both modes because the accent stays
+   dark enough to carry white.
+
+   Overrides Tailwind's generated custom properties rather than redefining
+   @theme, so every existing utility follows without touching a component. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --color-bg-base: #f0ede8;
+    --color-bg-surface: #ffffff;
+    --color-bg-hover: #e6e2d9;
+    --color-bg-overlay: #ffffff;
+
+    --color-bg-primary: #f0ede8;
+    --color-bg-elevated: #ffffff;
+    --color-bg-glass: #ffffff;
+
+    --color-border: rgba(0, 0, 0, 0.14);
+    --color-border-default: rgba(0, 0, 0, 0.22);
+    --color-border-accent: rgba(138, 92, 51, 0.35);
+
+    --color-text-primary: rgba(0, 0, 0, 0.90);
+    --color-text-secondary: rgba(0, 0, 0, 0.68);
+    --color-text-tertiary: rgba(0, 0, 0, 0.62);
+
+    --color-accent: #8a5c33;
+  }
+
+  * {
+    scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.16);
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.26);
+  }
+  *:focus-visible {
+    outline-color: rgba(138, 92, 51, 0.6) !important;
+  }
 }
 
 /* ── Base ── */

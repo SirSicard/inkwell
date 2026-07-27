@@ -2,7 +2,7 @@ import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { invoke } from "@tauri-apps/api/core"
 import { toast } from "../state/toasts"
-import { GlassToggle } from "../components/ui"
+import { InkToggle } from "../components/ui"
 
 function AIConsentModal({ onAccept, onDecline }: { onAccept: () => void; onDecline: () => void }) {
   return (
@@ -162,14 +162,14 @@ export function AITab() {
               }
             </p>
           </div>
-          <GlassToggle checked={polishEnabled} onChange={handleTogglePolish} />
+          <InkToggle checked={polishEnabled} onChange={handleTogglePolish} />
         </div>
 
         {/* Polish is BYOK-only: enabled without a key does nothing until one is added. */}
         {polishEnabled && !hasAnyKey && (
           <div className="rounded-lg border border-amber-800/30 bg-amber-950/20 px-3 py-2.5">
             <p className="text-xs text-amber-200">No API key configured.</p>
-            <p className="text-[11px] text-amber-200/70 mt-0.5">
+            <p className="text-body text-amber-200/70 mt-0.5">
               Add one under API Keys below. Until then transcriptions stay raw.
             </p>
           </div>
@@ -199,7 +199,7 @@ export function AITab() {
             >
               {p.label}
               {"freeKey" in p && p.freeKey && !keyStatus[p.id] && (
-                <span className="text-[10px] px-1 py-0.5 rounded bg-green-400/10 text-green-400">free key</span>
+                <span className="text-body px-1 py-0.5 rounded bg-green-400/10 text-green-400">free key</span>
               )}
               {keyStatus[p.id] && (
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400" title="Configured" />
@@ -238,7 +238,7 @@ export function AITab() {
           ) : null}
         </div>
 
-        <p className="text-[10px] text-text-tertiary">
+        <p className="text-body text-text-tertiary">
           {providers.find(p => p.id === provider)?.hint}
           {provider === "groq" && !keyStatus.groq && " \u00b7 get a free key at console.groq.com"}
         </p>
@@ -252,7 +252,7 @@ export function AITab() {
         >
           <div>
             <p className="text-sm text-text-secondary">Polish Prompt</p>
-            <p className="text-[10px] text-text-tertiary">How the LLM processes your text</p>
+            <p className="text-body text-text-tertiary">How the LLM processes your text</p>
           </div>
           <motion.span
             animate={{ rotate: showPrompt ? 180 : 0 }}
@@ -292,7 +292,7 @@ export function AITab() {
         >
           <div>
             <p className="text-sm text-text-secondary">Test</p>
-            <p className="text-[10px] text-text-tertiary">Try AI Polish on sample text</p>
+            <p className="text-body text-text-tertiary">Try AI Polish on sample text</p>
           </div>
           <motion.span
             animate={{ rotate: showTest ? 180 : 0 }}
@@ -327,7 +327,7 @@ export function AITab() {
                     {testing ? "Polishing..." : "Run"}
                   </button>
                   {testResult && !testing && activeProvider && (
-                    <span className="text-[10px] text-text-tertiary">via {activeProvider}</span>
+                    <span className="text-body text-text-tertiary">via {activeProvider}</span>
                   )}
                 </div>
                 {testResult && (

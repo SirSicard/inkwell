@@ -1,11 +1,11 @@
 import { type ReactNode } from "react"
 
-interface GlassSurfaceProps {
+interface InkSurfaceProps {
   children: ReactNode
   className?: string
 }
 
-export function GlassSurface({ children, className = "" }: GlassSurfaceProps) {
+export function InkSurface({ children, className = "" }: InkSurfaceProps) {
   return (
     <div
       className={`

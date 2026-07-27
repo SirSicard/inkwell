@@ -28,15 +28,76 @@ export function DictionaryTab() {
     save(entries.filter((_, i) => i !== index))
   }
 
+  // CSV import. superwhisper ships the same dictionary feature with CSV import
+  // and calls it custom vocabulary; the difference was purely the affordance.
+  // Accepts "find,replace" per line, tolerates a header row and quoted fields,
+  // and merges rather than replacing so an import cannot wipe existing entries.
+  const handleImport = (file: File) => {
+    const reader = new FileReader()
+    reader.onerror = () => toast("Could not read that file")
+    reader.onload = () => {
+      const text = String(reader.result ?? "")
+      const rows = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          // Split on the first comma only, so a replacement may contain commas.
+          const i = line.indexOf(",")
+          if (i < 0) return null
+          const strip = (v: string) => v.trim().replace(/^"(.*)"$/s, "$1").trim()
+          return { find: strip(line.slice(0, i)), replace: strip(line.slice(i + 1)) }
+        })
+        .filter((r): r is DictEntry => !!r && r.find.length > 0)
+
+      if (rows.length === 0) {
+        toast("No usable rows found. Expected one find,replace pair per line.", "warning")
+        return
+      }
+
+      // Drop a header row only if it looks like one, never by position alone.
+      const first = rows[0].find.toLowerCase()
+      const body = first === "find" || first === "word" || first === "from" ? rows.slice(1) : rows
+
+      const byFind = new Map(entries.map((e) => [e.find.toLowerCase(), e]))
+      let added = 0
+      let updated = 0
+      for (const row of body) {
+        if (byFind.has(row.find.toLowerCase())) updated++
+        else added++
+        byFind.set(row.find.toLowerCase(), row)
+      }
+      save([...byFind.values()])
+      toast(`Imported ${added} new, updated ${updated}.`, "info")
+    }
+    reader.readAsText(file)
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">
-        <h2 className="text-[15px] font-sans font-semibold text-text-primary">Dictionary</h2>
+        <h2 className="text-heading font-sans font-semibold text-text-primary">Dictionary</h2>
         <span className="text-xs font-mono text-text-tertiary">{entries.length} entries</span>
       </div>
-      <p className="text-xs text-text-tertiary">
-        Auto-correct words after transcription. Case-insensitive matching, word boundaries only.
-      </p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs text-text-tertiary">
+          Auto-correct words after transcription. Case-insensitive matching, word boundaries only.
+        </p>
+        <label className="shrink-0 px-3 py-1.5 text-xs font-mono rounded-md border border-border text-text-secondary hover:text-text-primary hover:border-border-default transition-colors cursor-pointer">
+          Import CSV
+          <input
+            type="file"
+            accept=".csv,text/csv,text/plain"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) handleImport(f)
+              // Reset so choosing the same file twice still fires onChange.
+              e.target.value = ""
+            }}
+          />
+        </label>
+      </div>
 
       <div className="flex gap-2 items-end">
         <div className="flex-1">

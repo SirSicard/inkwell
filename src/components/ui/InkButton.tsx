@@ -1,13 +1,13 @@
 import { motion } from "framer-motion"
 import { type ButtonHTMLAttributes, type ReactNode } from "react"
 
-interface GlassButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface InkButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: "ghost" | "primary"
   children: ReactNode
 }
 
-export function GlassButton({ variant = "ghost", children, className = "", onClick, disabled, type, form }: GlassButtonProps) {
-  const base = "px-4 py-2 rounded-lg text-[12px] font-medium cursor-pointer transition-all duration-150 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
+export function InkButton({ variant = "ghost", children, className = "", onClick, disabled, type, form }: InkButtonProps) {
+  const base = "px-4 py-2 rounded-lg text-body font-medium cursor-pointer transition-all duration-150 focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed"
 
   const variants = {
     ghost: "border border-border text-text-secondary hover:text-text-primary hover:border-border-default hover:bg-bg-hover",

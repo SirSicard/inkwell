@@ -58,15 +58,23 @@ const fragmentShader = `
     vec2 center = vec2(0.5 * (u_resolution.x / u_resolution.y), 0.5);
     float dist = length(pos - center);
 
-    // Warp: recording state adds baseline distortion
-    float warpIntensity = 0.20 + amp * 0.3 + u_mid * 0.2 + stateBoost * 0.15;
+    // Warp: recording state adds baseline distortion.
+    //
+    // The 0.20 baseline was set for the 97px overlay, where a swing of that size
+    // against a 0.38 radius is a few pixels of wobble. In the main window the
+    // same number is drawn across a ~400px column, where the boundary swings
+    // most of its own radius and the ink drop reads as a Rorschach splatter
+    // rather than a drop of ink. Halved here, with the edge falloff widened
+    // below to match. The overlay keeps its own copy of the shader and its own
+    // 0.20, because there the original number is correct.
+    float warpIntensity = 0.10 + amp * 0.3 + u_mid * 0.2 + stateBoost * 0.15;
     float n1 = snoise(pos * 2.0 - vec2(t * 0.2, -t * 0.1));
     float n2 = snoise(pos * 4.0 + vec2(t * 0.1, t * 0.2));
     float warp = n1 * warpIntensity + n2 * (warpIntensity * 0.5);
 
     // Blob size: recording state makes it expand
     float blobSize = 0.38 + u_low * 0.12 + amp * 0.08 + stateBoost * 0.06;
-    float blob = smoothstep(blobSize + 0.02, blobSize - 0.02, dist + warp);
+    float blob = smoothstep(blobSize + 0.035, blobSize - 0.035, dist + warp);
 
     // Surface detail
     float n3 = snoise(pos * 8.0 + vec2(t * 0.5, -t * 0.4));

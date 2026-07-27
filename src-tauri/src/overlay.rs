@@ -11,7 +11,13 @@ const OVERLAY_BOTTOM_MARGIN: f64 = 80.0;
 /// coordinates. Uses the work area, so the Dock, the taskbar and the macOS
 /// menu bar / notch are excluded. Physical coords because logical ones are
 /// per-monitor and ambiguous across a mixed-DPI desktop.
-fn bottom_center_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
+fn overlay_position_setting(app: &AppHandle) -> String {
+    app.try_state::<crate::AppState>()
+        .and_then(|s| s.settings.lock().ok().map(|g| g.overlay_position.clone()))
+        .unwrap_or_else(|| "bottom-center".to_string())
+}
+
+fn placement_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
     let monitor = app
         .cursor_position()
         .ok()
@@ -25,8 +31,20 @@ fn bottom_center_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
     let h = (OVERLAY_HEIGHT * scale).round() as i32;
     let margin = (OVERLAY_BOTTOM_MARGIN * scale).round() as i32;
 
-    let x = area.position.x + (area.size.width as i32 - w) / 2;
-    let y = area.position.y + area.size.height as i32 - h - margin;
+    // Corner placements keep the same margin off both edges so the blob sits at
+    // a consistent distance whichever corner it is in.
+    let placement = overlay_position_setting(app);
+    let (vertical, horizontal) = placement.split_once('-').unwrap_or(("bottom", "center"));
+
+    let x = match horizontal {
+        "left" => area.position.x + margin,
+        "right" => area.position.x + area.size.width as i32 - w - margin,
+        _ => area.position.x + (area.size.width as i32 - w) / 2,
+    };
+    let y = match vertical {
+        "top" => area.position.y + margin,
+        _ => area.position.y + area.size.height as i32 - h - margin,
+    };
     Some(PhysicalPosition::new(x, y))
 }
 
@@ -47,7 +65,7 @@ pub fn show(app: &AppHandle) {
 
     if let Some(overlay) = app.get_webview_window(OVERLAY_LABEL) {
         // Re-place it: the user may have moved to another display since.
-        if let Some(pos) = bottom_center_position(app) {
+        if let Some(pos) = placement_position(app) {
             let _ = overlay.set_position(tauri::Position::Physical(pos));
         }
         let _ = overlay.show();
@@ -108,10 +126,10 @@ pub fn show(app: &AppHandle) {
                 }
             }
 
-            match bottom_center_position(app) {
+            match placement_position(app) {
                 Some(pos) => {
                     let _ = w.set_position(tauri::Position::Physical(pos));
-                    log::info!("Overlay positioned: bottom-center ({}, {})", pos.x, pos.y);
+                    log::info!("Overlay positioned: {} ({}, {})", overlay_position_setting(app), pos.x, pos.y);
                 }
                 None => log::warn!("No monitor found; overlay left at its default position"),
             }

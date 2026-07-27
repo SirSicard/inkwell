@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { SettingRow, GlassToggle, GlassSelect, GlassButton } from "../components/ui"
+import { SettingRow, InkToggle, InkSelect, InkButton } from "../components/ui"
 import { useSettings } from "../state/settings"
 import { toast } from "../state/toasts"
 import { formatHotkey } from "../hotkey"
@@ -92,6 +92,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
 
   const startOnBoot = settings?.start_on_boot ?? false
   const showOverlay = settings?.show_overlay ?? true
+  const overlayPosition = settings?.overlay_position ?? "bottom-center"
   const recordingMode = settings?.recording_mode ?? "ptt"
   const style = settings?.style ?? "formal"
   const advancedMode = settings?.advanced_mode ?? false
@@ -116,10 +117,10 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
 
   return (
     <div className="space-y-3">
-      <h2 className="text-[15px] font-sans font-semibold text-text-primary">General</h2>
+      <h2 className="text-heading font-sans font-semibold text-text-primary">General</h2>
 
       <SettingRow label="Recording Mode" description="How the hotkey behaves">
-        <GlassSelect
+        <InkSelect
           value={recordingMode}
           onChange={handleRecordingModeChange}
           options={[
@@ -132,8 +133,8 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
       {/* Style cards */}
       <div className="space-y-2">
         <div>
-          <p className="text-[13px] font-medium text-text-primary">Text Style</p>
-          <p className="text-[11px] text-text-tertiary mt-0.5">Controls how your transcribed text is formatted</p>
+          <p className="text-body font-medium text-text-primary">Text Style</p>
+          <p className="text-body text-text-tertiary mt-0.5">Controls how your transcribed text is formatted</p>
         </div>
         <div className="grid grid-cols-3 gap-2">
           {([
@@ -150,9 +151,9 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
                   : "bg-bg-surface border-border hover:border-border-default"
               }`}
             >
-              <p className={`text-[13px] font-semibold ${style === s.id ? "text-text-primary" : "text-text-secondary"}`}>{s.label}</p>
-              <p className="text-[10px] text-text-tertiary mt-0.5">{s.sub}</p>
-              <div className={`mt-2.5 p-2.5 rounded-md text-[11px] leading-relaxed ${
+              <p className={`text-body font-semibold ${style === s.id ? "text-text-primary" : "text-text-secondary"}`}>{s.label}</p>
+              <p className="text-body text-text-tertiary mt-0.5">{s.sub}</p>
+              <div className={`mt-2.5 p-2.5 rounded-md text-body leading-relaxed ${
                 style === s.id
                   ? "bg-bg-base text-text-secondary"
                   : "bg-bg-hover/50 text-text-tertiary"
@@ -165,19 +166,36 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
       </div>
 
       <SettingRow label="Start on Boot" description="Launch Inkwell when you log in">
-        <GlassToggle checked={startOnBoot} onChange={handleStartOnBootChange} />
+        <InkToggle checked={startOnBoot} onChange={handleStartOnBootChange} />
       </SettingRow>
 
       <SettingRow label="Show Overlay" description="Floating indicator while recording">
-        <GlassToggle checked={showOverlay} onChange={handleShowOverlayChange} />
+        <InkToggle checked={showOverlay} onChange={handleShowOverlayChange} />
       </SettingRow>
 
+      {showOverlay && (
+        <SettingRow label="Overlay Position" description="Where the indicator sits while you dictate">
+          <InkSelect
+            value={overlayPosition}
+            onChange={(v) => setSetting("overlay_position", v)}
+            options={[
+              { label: "Top left", value: "top-left" },
+              { label: "Top center", value: "top-center" },
+              { label: "Top right", value: "top-right" },
+              { label: "Bottom left", value: "bottom-left" },
+              { label: "Bottom center", value: "bottom-center" },
+              { label: "Bottom right", value: "bottom-right" },
+            ]}
+          />
+        </SettingRow>
+      )}
+
       <SettingRow label="Dictation Sound" description="Audio feedback when recording starts and stops">
-        <GlassToggle checked={soundDictation} onChange={(v) => setSetting("sound_dictation", v)} />
+        <InkToggle checked={soundDictation} onChange={(v) => setSetting("sound_dictation", v)} />
       </SettingRow>
 
       <SettingRow label="Advanced Mode" description="Show all tabs and settings">
-        <GlassToggle checked={advancedMode} onChange={handleAdvancedModeChange} />
+        <InkToggle checked={advancedMode} onChange={handleAdvancedModeChange} />
       </SettingRow>
 
       {advancedMode && (
@@ -185,20 +203,20 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
           label="Save Debug Audio"
           description="Writes each dictation's raw audio to a temp file for troubleshooting. Off by default. Leave it off unless you are chasing a transcription bug, and delete the files afterwards."
         >
-          <GlassToggle checked={debugSaveAudio} onChange={(v) => setSetting("debug_save_audio", v)} />
+          <InkToggle checked={debugSaveAudio} onChange={(v) => setSetting("debug_save_audio", v)} />
         </SettingRow>
       )}
 
       <HotkeyCapture />
 
       <div className="flex gap-2 pt-2">
-        <GlassButton variant="ghost" onClick={() => {
+        <InkButton variant="ghost" onClick={() => {
           void setSetting("style", "formal")
           void setSetting("recording_mode", "ptt")
           void setSetting("show_overlay", true)
           void setSetting("start_on_boot", false)
           window.location.reload()
-        }}>Reset Defaults</GlassButton>
+        }}>Reset Defaults</InkButton>
       </div>
     </div>
   )
