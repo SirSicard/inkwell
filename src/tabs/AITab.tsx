@@ -259,6 +259,16 @@ export function AITab() {
           {providers.find(p => p.id === provider)?.hint}
           {provider === "groq" && !keyStatus.groq && " \u00b7 get a free key at console.groq.com"}
         </p>
+
+        {/* macOS asks the user to authorize each read of a keychain item, and the
+            dialog only names the app, not what it wants or why. Saying so here
+            turns an alarming prompt into an expected one. */}
+        {keyStatus[provider] && (
+          <p className="text-body text-text-tertiary">
+            Kept in your system keychain, never in Inkwell's settings. macOS may ask you to
+            allow access the first time it is used to polish a dictation.
+          </p>
+        )}
       </div>
 
       {/* -- Section 3: Collapsible prompt editor -- */}
