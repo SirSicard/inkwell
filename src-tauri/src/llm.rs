@@ -121,6 +121,12 @@ pub struct ProviderConfig {
 /// Providers a BYOK key can be stored under, in preference order.
 pub const PROVIDERS: &[&str] = &["openai", "groq", "anthropic", "openrouter", "custom"];
 
+/// Keychain service name for every stored key. One constant because the writer
+/// and the existence check must agree: were they to drift, saving a key and
+/// asking whether one exists would look at different items and the UI would
+/// disagree with reality with nothing to show for it.
+pub const KEYRING_SERVICE: &str = "inkwell";
+
 /// Look up an API key from the OS keyring. Keys are keyring-only, never on disk.
 ///
 /// On macOS this is not a cheap read: the system asks the user to authorize
@@ -128,21 +134,47 @@ pub const PROVIDERS: &[&str] = &["openai", "groq", "anthropic", "openrouter", "c
 /// call is a potential password dialog. Call it when the key is about to be
 /// used, never to find out whether one exists.
 pub fn api_key_for(provider: &str) -> Option<String> {
-    keyring::Entry::new("inkwell", provider)
+    keyring::Entry::new(KEYRING_SERVICE, provider)
         .ok()
         .and_then(|e| e.get_password().ok())
         .filter(|k| !k.is_empty())
 }
 
-/// Ask the keyring which providers have a key, by reading each one.
+/// Whether a key is stored for `provider`, without reading it.
 ///
-/// Deliberately named a probe rather than a getter: it costs one authorization
-/// prompt per stored key on macOS. It exists only to reconcile an install that
-/// predates `Settings::configured_providers`, and runs once.
-pub fn probe_configured_providers() -> Vec<String> {
+/// macOS gates access to a keychain item's *secret*, not to its metadata, so an
+/// attributes-only query answers the boolean with no dialog. That distinction is
+/// the whole bug: asking `get_password` in order to learn a yes/no put a system
+/// authorization prompt in front of the user for information it then threw away.
+#[cfg(target_os = "macos")]
+pub fn has_api_key(provider: &str) -> bool {
+    use security_framework::item::{ItemClass, ItemSearchOptions};
+
+    // load_attributes without load_data is what keeps this promptless: ask for
+    // the secret here and the dialog comes straight back.
+    ItemSearchOptions::new()
+        .class(ItemClass::generic_password())
+        .service(KEYRING_SERVICE)
+        .account(provider)
+        .load_attributes(true)
+        .search()
+        .map(|found| !found.is_empty())
+        .unwrap_or(false)
+}
+
+/// Non-macOS platforms have no promptless existence query worth the complexity:
+/// Windows' credential store does not prompt on read, and secret-service unlocks
+/// once per session rather than per item.
+#[cfg(not(target_os = "macos"))]
+pub fn has_api_key(provider: &str) -> bool {
+    api_key_for(provider).is_some()
+}
+
+/// Providers with a key stored, in preference order. Safe to call on a UI path.
+pub fn configured_providers() -> Vec<String> {
     PROVIDERS
         .iter()
-        .filter(|p| api_key_for(p).is_some())
+        .filter(|p| has_api_key(p))
         .map(|p| p.to_string())
         .collect()
 }
@@ -195,3 +227,39 @@ pub const DEFAULT_POLISH_PROMPT: &str =
      \n- Do NOT add greetings, sign-offs, or commentary\
      \n- Do NOT split into paragraphs (input is short dictation, not long-form)\
      \n- Return ONLY the cleaned text, nothing else";
+
+#[cfg(test)]
+mod keychain_tests {
+    use super::*;
+
+    /// The bug this guards: `has_api_key` must see an item that `save_api_key`
+    /// wrote, and must see it *without* reading the secret. If the service name
+    /// or item class ever drift apart between writer and checker, the app saves a
+    /// key and then reports that no key is configured, which is exactly the state
+    /// a user cannot debug.
+    ///
+    /// Uses its own account name so it can never touch a real provider entry.
+    #[test]
+    fn existence_check_agrees_with_what_was_stored() {
+        let account = "inkwell-selftest-provider";
+        let entry = match keyring::Entry::new(KEYRING_SERVICE, account) {
+            Ok(e) => e,
+            Err(_) => return, // no credential store on this machine, nothing to assert
+        };
+        let _ = entry.delete_credential();
+
+        assert!(
+            !has_api_key(account),
+            "reported a key before one was stored"
+        );
+
+        if entry.set_password("test-value-not-a-real-key").is_err() {
+            return; // headless CI with no unlocked keychain
+        }
+        assert!(has_api_key(account), "did not see the key it just stored");
+
+        let _ = entry.delete_credential();
+        assert!(!has_api_key(account), "still saw the key after deleting it");
+    }
+}
+

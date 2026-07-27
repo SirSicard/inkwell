@@ -63,20 +63,12 @@ pub struct Settings {
     /// debugging. Must default to false, because this app never leaves voice on disk.
     #[serde(default)]
     pub debug_save_audio: bool,
-    /// Which providers have a key in the keyring. The keys themselves stay in the
-    /// keyring; only the yes/no lives here, and a list of provider names is not a
-    /// secret.
-    ///
-    /// This exists because macOS asks the user to authorize every *read* of a
-    /// keychain item, and keyring's only read primitive returns the secret. The
-    /// AI tab asked "is a key set?" by fetching the key, so opening the tab put a
-    /// system password dialog in front of the user every single time.
-    ///
-    /// `None` means never reconciled, which is what an install from before this
-    /// field looks like. That triggers exactly one keyring probe, whose result is
-    /// written here.
-    #[serde(default)]
-    pub configured_providers: Option<Vec<String>>,
+    // Which providers have a key was briefly cached here, to spare the user a
+    // keychain prompt per AI-tab open. It was the wrong fix: a lookup that failed
+    // for any reason other than absence got written down as "no key" forever.
+    // llm::has_api_key answers it without a prompt instead, so there is nothing
+    // to cache. Any leftover `configured_providers` in an existing settings.json
+    // is ignored on load and dropped on the next save.
 }
 
 fn default_style() -> String { "formal".to_string() }
@@ -114,7 +106,6 @@ impl Default for Settings {
             sound_dictation: true,
             remove_fillers: true,
             debug_save_audio: false,
-            configured_providers: None,
         }
     }
 }
@@ -202,37 +193,14 @@ fn strip_plaintext_secrets(path: &Path, contents: String) -> String {
 mod tests {
     use super::*;
 
-    /// The migration hinges on telling "never reconciled" apart from
-    /// "reconciled, found nothing". If `configured_providers` were ever
-    /// simplified to a plain `Vec<String>`, a missing field would deserialize to
-    /// an empty list, the probe would never run, and a user with a key already in
-    /// the keychain would see the AI tab claim they had none, permanently.
+    /// Live settings files still carry `configured_providers` from the build that
+    /// briefly cached it. Loading must ignore it rather than fail, or the upgrade
+    /// resets every setting the user has.
     #[test]
-    fn settings_from_before_the_field_reconcile_rather_than_report_empty() {
-        let old: Settings = serde_json::from_str(r#"{"style":"formal"}"#).unwrap();
-        assert_eq!(old.configured_providers, None);
-    }
-
-    #[test]
-    fn a_recorded_empty_list_is_not_a_missing_one() {
-        let reconciled: Settings =
-            serde_json::from_str(r#"{"configured_providers":[]}"#).unwrap();
-        assert_eq!(reconciled.configured_providers, Some(vec![]));
-    }
-
-    #[test]
-    fn recorded_providers_survive_a_save_and_load() {
-        let dir = std::env::temp_dir().join("inkwell-settings-roundtrip");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("settings.json");
-
-        let mut s = Settings::default();
-        s.configured_providers = Some(vec!["groq".to_string()]);
-        s.save(&path).unwrap();
-
-        let loaded = Settings::load(&path);
-        assert_eq!(loaded.configured_providers, Some(vec!["groq".to_string()]));
-        std::fs::remove_dir_all(&dir).ok();
+    fn a_field_from_the_abandoned_cache_does_not_break_load() {
+        let s: Settings =
+            serde_json::from_str(r#"{"style":"casual","configured_providers":[]}"#).unwrap();
+        assert_eq!(s.style, "casual");
     }
 
     /// A provider name is not a secret, but the key is. The stripper must not
@@ -244,16 +212,15 @@ mod tests {
         let path = dir.join("settings.json");
         std::fs::write(
             &path,
-            r#"{"configured_providers":["groq"],"groq_key":"sk-leaked"}"#,
+            r#"{"style":"casual","groq_key":"sk-leaked"}"#,
         )
         .unwrap();
 
         let loaded = Settings::load(&path);
-        assert_eq!(loaded.configured_providers, Some(vec!["groq".to_string()]));
+        assert_eq!(loaded.style, "casual", "the stripper ate a real setting");
 
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert!(!on_disk.contains("sk-leaked"), "plaintext key survived load");
-        assert!(on_disk.contains("groq"), "the record was stripped too");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
