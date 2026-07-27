@@ -55,45 +55,67 @@ float snoise(vec2 v) {
   return 130.0 * dot(m, g);
 }
 
+// Two octaves, low frequency, for the shape. More octaves put fine noise on the
+// boundary, which reads as facets rather than liquid: surface tension does not
+// produce corners.
+float fbmSoft(vec2 p) {
+  return snoise(p) * 0.68 + snoise(p * 2.0 + 5.2) * 0.32;
+}
+
+// Metaball field. Summed inverse-square falloff from several centres, then
+// thresholded, so droplets bulge toward each other and merge with a neck the way
+// ink does rather than overlapping like discs.
+float droplet(vec2 p, vec2 c, float r) {
+  vec2 d = p - c;
+  return (r * r) / max(dot(d, d), 1e-5);
+}
+
 void main() {
   vec2 st = gl_FragCoord.xy / u_resolution.xy;
+  float aspect = u_resolution.x / u_resolution.y;
   vec2 pos = st;
-  pos.x *= u_resolution.x / u_resolution.y;
+  pos.x *= aspect;
 
   // The single speed dial. Every noise sample below is driven off t, so scaling
   // it here changes the whole animation together and keeps the motion coherent.
-  // The alternative, nudging the individual 0.2 / 0.1 / 0.5 factors on each
-  // snoise call, would drift the layers out of relation to each other.
-  // 0.15 was the app's value. Tuned up in two passes on the owner's eye:
-  // +10% to 0.165, then +5% to 0.17325, 15.5% above the app overall.
   float t = u_time * 0.17325;
 
-  vec2 center = vec2(0.5 * (u_resolution.x / u_resolution.y), 0.5);
-  float dist = length(pos - center);
+  vec2 center = vec2(0.5 * aspect, 0.5);
 
-  // The app uses 0.20 here, but it renders this shader into a 97 px overlay
-  // (public/overlay.html) where a warp of ±0.30 against a 0.38 radius is a few
-  // pixels of wobble. Blown up to a 600 px panel the identical number turns the
-  // ink drop into a Rorschach splatter: the boundary swings ~79% of its own
-  // radius. Halving the warp and widening the edge falloff keeps the same
-  // simplex-noise language and the same silhouette, read at the size the site
-  // actually shows it. Everything else below is byte-identical to the app.
-  float warpIntensity = u_warp;
-  float n1 = snoise(pos * 2.0 - vec2(t * 0.2, -t * 0.1));
-  float n2 = snoise(pos * 4.0 + vec2(t * 0.1, t * 0.2));
-  float warp = n1 * warpIntensity + n2 * (warpIntensity * 0.5);
+  // Sizes are in units of the narrow axis. The field is evaluated where y spans
+  // 0..1 and x spans 0..aspect, so a radius written as a fraction of height
+  // covers far more of the width in a non-square panel.
+  float s = min(aspect, 1.0);
 
-  float blobSize = u_blobSize;
-  float blob = smoothstep(blobSize + 0.035, blobSize - 0.035, dist + warp);
+  // Domain warp: displace the sampling position before evaluating the field, so
+  // the whole mass deforms as a body. Warping the threshold instead, which is
+  // what the previous single-blob version did, only ever wobbles an outline.
+  vec2 warp = vec2(
+    fbmSoft(pos * 1.75 + vec2(t * 0.17, t * 0.10)),
+    fbmSoft(pos * 1.75 + vec2(-t * 0.12, t * 0.15) + 19.7)
+  );
+  vec2 wp = pos + warp * (s * u_warp);
 
-  float n3 = snoise(pos * 8.0 + vec2(t * 0.5, -t * 0.4));
-  float detail = n3 * 0.02 * blob;
+  float field = 0.0;
+  field += droplet(wp, center + s * vec2(0.05 * sin(t * 0.9), 0.06 + 0.05 * cos(t * 0.7)), s * u_blobSize);
+  field += droplet(wp, center + s * vec2(-0.26 + 0.09 * sin(t * 1.10 + 1.0), -0.30 + 0.08 * cos(t * 0.95)), s * u_blobSize * 0.53);
+  field += droplet(wp, center + s * vec2(0.30 + 0.08 * cos(t * 0.85 + 2.0), 0.34 + 0.09 * sin(t * 1.05 + 0.7)), s * u_blobSize * 0.46);
+  field += droplet(wp, center + s * vec2(0.22 + 0.07 * sin(t * 1.20 + 3.1), -0.58 + 0.08 * cos(t * 1.00 + 1.7)), s * u_blobSize * 0.35);
 
+  // Tight threshold, with the wicking done by a separate bleed outside it. Ink
+  // has a defined boundary that seeps, not an airbrushed falloff.
+  float edge = 0.07;
+  float blob = smoothstep(1.0 - edge, 1.0 + edge, field);
+  float bleed = smoothstep(1.0 - edge * 4.0, 1.0 - edge, field) * (1.0 - blob);
+
+  float detail = fbmSoft(wp * 6.0 + t * 0.25) * 0.02 * blob;
   float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
 
   vec3 bgColor = u_bg + grain * 0.02;
   vec3 inkColor = u_ink + detail + grain * 0.015;
-  gl_FragColor = vec4(mix(bgColor, inkColor, blob), 1.0);
+  vec3 col = mix(bgColor, inkColor, blob);
+  col = mix(col, inkColor, bleed * 0.30);
+  gl_FragColor = vec4(col, 1.0);
 }
 `;
 
@@ -127,13 +149,13 @@ const VARIANTS: Record<
   InkVariant,
   { bg: [number, number, number]; ink: [number, number, number]; blobSize: number; warp: number }
 > = {
-  panel: { bg: [0.94, 0.93, 0.91], ink: [0.06, 0.06, 0.06], blobSize: 0.38, warp: 0.1 },
+  panel: { bg: [0.94, 0.93, 0.91], ink: [0.06, 0.06, 0.06], blobSize: 0.30, warp: 0.26 },
   // #0e0e11 page, lifted to roughly #4b3c2d in the ink: a warm pigment rather
   // than a grey, and bright enough to actually read as a shape at full window
   // width. Measured contrast of the hero text over this is 9.07:1, still well
   // clear of WCAG AAA (7:1), so the visibility is bought out of headroom rather
   // than out of legibility.
-  backdrop: { bg: [0.055, 0.055, 0.067], ink: [0.294, 0.235, 0.176], blobSize: 0.58, warp: 0.16 },
+  backdrop: { bg: [0.055, 0.055, 0.067], ink: [0.294, 0.235, 0.176], blobSize: 0.42, warp: 0.30 },
 };
 
 export default function InkCanvas({ variant = "panel" }: { variant?: InkVariant } = {}) {
