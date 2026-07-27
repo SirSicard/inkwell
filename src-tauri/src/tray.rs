@@ -55,8 +55,19 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .item(&quit_item)
         .build()?;
 
+    // A dedicated menu-bar mark rather than the app icon. The app icon is a
+    // 128px white drop with an inner nib; flagged as a template macOS keeps only
+    // its alpha, which flattens it to a solid blob with no breathing room at
+    // menu-bar size. This asset is drawn for 22pt: pure black, shape carried by
+    // the alpha channel, the nib punched out so it survives, and a margin so it
+    // does not crowd its neighbours.
+    #[cfg(target_os = "macos")]
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    #[cfg(not(target_os = "macos"))]
+    let tray_icon = app.default_window_icon().cloned().unwrap();
+
     let builder = TrayIconBuilder::new()
-        .icon(app.default_window_icon().cloned().unwrap())
+        .icon(tray_icon)
         .tooltip("Inkwell")
         .menu(&tray_menu);
 

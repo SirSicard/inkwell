@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
@@ -85,7 +85,10 @@ export function DashboardTab() {
   const [exportFormat, setExportFormat] = useState<"txt" | "srt" | "json" | "csv">("txt")
   const [exporting, setExporting] = useState(false)
 
-  const loadTranscripts = () => {
+  // useCallback so the effect below can depend on it rather than on `search`
+  // alone. The old list claimed the effect only cared about the query while it
+  // actually closed over the loader too.
+  const loadTranscripts = useCallback(() => {
     if (search.trim()) {
       invoke<Transcript[]>("search_transcripts", { query: search, limit: 50 })
         .then(setTranscripts).catch(() => {})
@@ -93,7 +96,7 @@ export function DashboardTab() {
       invoke<Transcript[]>("get_transcripts", { limit: 50 })
         .then(setTranscripts).catch(() => {})
     }
-  }
+  }, [search])
 
   useEffect(() => {
     loadTranscripts()
@@ -102,7 +105,7 @@ export function DashboardTab() {
       setTimeout(loadTranscripts, 200)
     })
     return () => { unlisten.then((fn) => fn()) }
-  }, [search])
+  }, [loadTranscripts])
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text)

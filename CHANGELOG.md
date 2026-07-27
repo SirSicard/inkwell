@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Rehaul. The product is now explicitly free and open source forever, macOS first, and BYOK only.
 
+### Added
+
+- **Light theme**, following the system appearance. The ink panel's cream field and charcoal ink were already a complete light palette sitting inside the app doing decorative duty; the shell now inverts to match. In light mode the ink panel merges with the page, so the mark reads as ink on paper.
+- **Overlay position.** Six placements instead of a hardcoded bottom-centre.
+- **Dictionary CSV import.** Merges rather than replaces, splits on the first comma so replacements may contain commas, and only drops a header row when it looks like one.
+- **A dedicated menu-bar icon.** The tray previously reused the 128px app icon, which macOS flattens to a solid silhouette at menu-bar size. The new asset is drawn for 22pt with the nib preserved and a margin so it does not crowd its neighbours.
+- **Recording state in the status bar.** `--color-accent-recording` had been defined since the first build and used nowhere; this is what it was for.
+
 ### Removed
 
 - **Voice Agent mode**, entirely: the second hotkey, the Agent settings tab, the pipeline branch, the agent sounds and the agent settings. It targeted the OpenClaw gateway, which was decommissioned 2026-06-15, and the tab never persisted anything anyway (it sent the wrong invoke shape and the backend had no matching handlers).
@@ -22,9 +30,14 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Documentation rewritten to match what the code actually does, including the unsigned-installer friction on both platforms and the macOS Accessibility permission that synthetic paste requires.
 - PRD rewritten as a lean product definition. The old "closed source, future premium tier" line and the Meeting-mode and Teams/Enterprise roadmap entries are gone.
 - `research/` moved to `docs/research/` with a status index. Model-catalog expansion is shelved. Streaming research is retained as the starting point for a future spike.
+- **Type scale.** 65 arbitrary font sizes replaced by four steps (11 / 13 / 15 / 20). Body text moves from 11px to 13px, matching the system and every competitor; the 9px and 10px labels are gone.
+- **Contrast, measured in both themes.** Tertiary text was `rgba(255,255,255,0.35)`, which composited to 3.17:1 and failed the 4.5:1 AA floor in all 118 places it was used. It is now 6.28:1. Borders moved from 0.10 to 0.14, since dividers were effectively invisible.
+- **The ink column no longer eats the window.** It was a flat 35% at every width; it is now capped, and its warp halved, because the 0.20 baseline was tuned for the 97px overlay and read as a splatter at 400px.
+- `Glass*` components renamed `Ink*`. They described a backdrop blur they never had.
 
 ### Fixed
 
+- **The recording overlay no longer lies.** Its level bars were a sine of elapsed time: they animated identically whether the microphone heard a voice or silence. They now follow the real `audio-amplitude` events, which is exactly the signal that would have made a 35 dB capture bug visible instead of invisible.
 - Privacy: the agent token is no longer written in plaintext to `settings.json` (the code previously saved a copy there even when the OS keyring succeeded).
 - Privacy: raw dictation audio is no longer dumped to a temporary WAV file on every recording in the production path.
 
