@@ -333,7 +333,7 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                 // the latter asked macOS to authorize a keychain read on every
                 // dictation, which is a password dialog in the middle of typing.
                 let byok_provider = if polish_enabled && !styled.is_empty() {
-                    crate::polish::preferred_provider(&app_state)
+                    crate::polish::preferred_provider()
                 } else {
                     None
                 };

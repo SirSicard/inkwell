@@ -55,6 +55,11 @@ symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "aac", "
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"
 keyring = { version = "3", features = ["apple-native"] }
+# Every read path keyring exposes returns the secret, and macOS authorizes each
+# one with a dialog. Used directly to ask whether an item *exists*, which is an
+# attributes-only query the OS does not gate. Already in the tree as a transitive
+# dependency of keyring, so this pins no new code, only names it.
+security-framework = "3"
 
 [target."cfg(target_os = \"windows\")".dependencies]
 keyring = { version = "3", features = ["windows-native"] }
