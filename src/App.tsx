@@ -545,8 +545,19 @@ function App() {
       <div className="w-[35%] min-w-[220px] max-w-[380px] h-full relative bg-ink-bg flex flex-col overflow-visible">
         <div className="flex-1 relative overflow-hidden">
           <InkCanvas />
-          <div className="absolute inset-0 pointer-events-none flex justify-center pt-8">
-            <span className="mix-blend-difference text-5xl font-sans font-bold uppercase tracking-tight text-white">
+          {/* The wordmark inverts against whatever is behind it, which is the
+              nice trick: white over the cream field reads near-black, white over
+              the ink reads near-white. What it could not handle was the blob's
+              soft edge, where the background sits at mid grey and difference
+              returns mid grey too, so the letters dissolved exactly where they
+              crossed it. The halo below is white and blurred, so it inverts with
+              the same rule and lifts local contrast through that band instead of
+              fighting it. Heavier and larger for the same reason. */}
+          <div className="absolute inset-0 pointer-events-none flex justify-center pt-7">
+            <span
+              className="mix-blend-difference text-6xl font-sans font-black uppercase tracking-tight text-white"
+              style={{ textShadow: "0 0 22px rgba(255,255,255,0.55), 0 0 6px rgba(255,255,255,0.4)" }}
+            >
               INKWELL
             </span>
           </div>

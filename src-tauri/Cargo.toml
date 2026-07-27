@@ -42,7 +42,11 @@ tauri-plugin-autostart = "2"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
-keyring = "3"
+# keyring 3 ships NO credential store by default: every backend is behind a
+# feature flag. Declared as a bare `keyring = "3"` it compiles and runs, and
+# then fails at the first set_password because there is no store behind it,
+# which is why saving an API key silently did nothing. Backends are selected
+# per platform below.
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 aho-corasick = "1"
@@ -50,3 +54,10 @@ symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "aac", "
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"
+keyring = { version = "3", features = ["apple-native"] }
+
+[target."cfg(target_os = \"windows\")".dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target."cfg(target_os = \"linux\")".dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
