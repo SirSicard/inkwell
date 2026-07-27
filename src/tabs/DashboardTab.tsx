@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
 import { toast } from "../state/toasts"
-import type { Transcript } from "../types"
+import type { Transcript, DictEntry } from "../types"
 
 function ExportMenu({
   exportFormat, setExportFormat, onSave, onCopy, exporting,
@@ -84,6 +84,10 @@ export function DashboardTab() {
   const [search, setSearch] = useState("")
   const [exportFormat, setExportFormat] = useState<"txt" | "srt" | "json" | "csv">("txt")
   const [exporting, setExporting] = useState(false)
+  // Which transcript is showing the teach row, and what is typed into it.
+  const [teachingId, setTeachingId] = useState<number | null>(null)
+  const [heard, setHeard] = useState("")
+  const [shouldBe, setShouldBe] = useState("")
 
   // useCallback so the effect below can depend on it rather than on `search`
   // alone. The old list claimed the effect only cared about the query while it
@@ -106,6 +110,30 @@ export function DashboardTab() {
     })
     return () => { unlisten.then((fn) => fn()) }
   }, [loadTranscripts])
+
+  /// Turn a bad transcript into a dictionary entry.
+  ///
+  /// The dictionary has always existed and has always been empty, because it
+  /// asks the user to predict which words the model will get wrong. This starts
+  /// from the evidence instead: you can see "Claud" in front of you, so fix it
+  /// here. Reads the current entries before writing so a save cannot drop the
+  /// ones already there.
+  const handleTeach = async () => {
+    const find = heard.trim()
+    const replace = shouldBe.trim()
+    if (!find || !replace) return
+    try {
+      const existing = await invoke<DictEntry[]>("get_dictionary")
+      const without = existing.filter((e) => e.find.toLowerCase() !== find.toLowerCase())
+      await invoke("set_dictionary", { entries: [...without, { find, replace }] })
+      toast(`"${find}" will become "${replace}" from now on.`, "info")
+      setTeachingId(null)
+      setHeard("")
+      setShouldBe("")
+    } catch (e) {
+      toast(`Could not save that correction: ${e}`)
+    }
+  }
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text)
@@ -220,6 +248,17 @@ export function DashboardTab() {
                       Copy
                     </button>
                     <button
+                      onClick={() => {
+                        setTeachingId(teachingId === t.id ? null : t.id)
+                        setHeard("")
+                        setShouldBe("")
+                      }}
+                      aria-label="Teach a correction from this transcript"
+                      className="px-2 py-1 text-body text-text-tertiary hover:text-text-primary rounded transition-colors"
+                    >
+                      Teach
+                    </button>
+                    <button
                       onClick={() => handleDelete(t.id)}
                       aria-label="Delete transcript"
                       className="px-2 py-1 text-body text-text-tertiary hover:text-red-400 rounded transition-colors"
@@ -228,6 +267,34 @@ export function DashboardTab() {
                     </button>
                   </div>
                 </div>
+                {teachingId === t.id && (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    <input
+                      autoFocus
+                      value={heard}
+                      onChange={(e) => setHeard(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleTeach()}
+                      placeholder="It heard..."
+                      className="flex-1 min-w-[7rem] px-2.5 py-1.5 text-body bg-bg-base border border-border rounded-md text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-default"
+                    />
+                    <span className="text-body text-text-tertiary">becomes</span>
+                    <input
+                      value={shouldBe}
+                      onChange={(e) => setShouldBe(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleTeach()}
+                      placeholder="Should be..."
+                      className="flex-1 min-w-[7rem] px-2.5 py-1.5 text-body bg-bg-base border border-border rounded-md text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-default"
+                    />
+                    <button
+                      onClick={handleTeach}
+                      disabled={!heard.trim() || !shouldBe.trim()}
+                      className="px-3 py-1.5 text-body font-medium bg-accent text-white rounded-md hover:bg-accent/90 transition-colors disabled:opacity-40"
+                    >
+                      Save
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-2.5 mt-1">
                   <span className="text-meta font-mono text-text-tertiary">{formatTime(t.created_at)}</span>
                   <span className="text-meta font-mono text-text-tertiary">{(t.audio_duration_ms / 1000).toFixed(1)}s</span>
