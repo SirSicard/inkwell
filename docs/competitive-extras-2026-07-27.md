@@ -30,7 +30,7 @@ SpeakMac, Handy, Hex, OpenWispr, Whispering.
 | Extra | Who ships it | What it is |
 |---|---|---|
 | **Modes** | superwhisper, VoiceInk, Raycast, Amical | A named bundle: model + prompt + formatting + per-app activation + its own shortcut. superwhisper's is called "best in class" and is the main reason people pay $249. |
-| **Voice editing / Command Mode** | Wispr Flow, Spokenly | Select text, hold key, say "make this shorter" — it rewrites in place rather than inserting. |
+| **Voice editing / Command Mode** | Wispr Flow, Spokenly | Select text, hold key, say "make this shorter", and it rewrites in place rather than inserting. |
 | **Learning from corrections** | Willow ("smart memory", "vocabulary learning"), VoiceInk ("dictionary training") | The app notices what you fix and stops making that mistake. |
 | **Filler-word cleanup** | Typeless, VoiceInk, Willow | Strips *um*, *uh*, repetitions, false starts before pasting. |
 | **Mid-sentence correction** | Typeless | "…meet at three, no wait, four" resolves to "four". |
@@ -45,10 +45,10 @@ These come from superwhisper's public request board (vote counts) and repeated
 review complaints. They are the clearest openings, because even the leader has
 not closed them:
 
-- **Pause / resume a recording** — 156 votes, and independently the single named
+- **Pause / resume a recording**: 156 votes, and independently the single named
   complaint in an open-source roundup. Nobody ships it well.
-- **Automatic language detection** — 94 votes.
-- **Cross-device sync** — 286 votes (not viable for a local-first app, and worth
+- **Automatic language detection**: 94 votes.
+- **Cross-device sync**: 286 votes (not viable for a local-first app, and worth
   declining out loud rather than quietly).
 - **Manual transcript cleanup** is the most-cited complaint category overall,
   especially on long recordings. That is the filler-word and false-start problem.
