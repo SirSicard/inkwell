@@ -58,6 +58,14 @@ const fragmentShader = `
     return v;
   }
 
+  // Two octaves, low frequency, for the shape itself. Four octaves warp the
+  // boundary at fine scales, which is what made the mass read as faceted rather
+  // than liquid: surface tension does not produce that. The full fbm above is
+  // kept for interior texture, where fine noise is welcome.
+  float fbmSoft(vec2 p) {
+    return snoise(p) * 0.68 + snoise(p * 2.0 + 5.2) * 0.32;
+  }
+
   // Metaball field. Summing inverse-square falloff from several centres and
   // thresholding the total is what makes droplets bulge toward each other and
   // merge with a neck, the way ink does, instead of overlapping like discs.
@@ -74,7 +82,9 @@ const fragmentShader = `
 
     float amp = u_amplitude;
     float stateBoost = u_state * 0.3;
-    float t = u_time * (0.15 + amp * 0.25 + u_low * 0.1 + stateBoost * 0.2);
+    // Roughly double the previous rate. The composition is smaller now, and a
+    // small shape drifting at the speed of a large one reads as stalled.
+    float t = u_time * (0.32 + amp * 0.35 + u_low * 0.12 + stateBoost * 0.25);
 
     vec2 center = vec2(0.5 * aspect, 0.5);
 
@@ -89,10 +99,14 @@ const fragmentShader = `
     // so the whole mass deforms as one body. Warping the threshold instead,
     // which is what this used to do, only ever wobbles the outline.
     vec2 warp = vec2(
-      fbm(pos * 2.1 + vec2(t * 0.20, t * 0.11)),
-      fbm(pos * 2.1 + vec2(-t * 0.13, t * 0.17) + 31.4)
+      fbmSoft(pos * 1.75 + vec2(t * 0.17, t * 0.10)),
+      fbmSoft(pos * 1.75 + vec2(-t * 0.12, t * 0.15) + 19.7)
     );
-    float warpAmt = s * (0.13 + amp * 0.18 + u_mid * 0.10 + stateBoost * 0.08);
+    // Frequency and amount are a pair, and both extremes fail. Four octaves at
+    // 2.1 faceted the edge; two octaves at 1.15 mostly translated the shape and
+    // left a smooth egg. Mid frequency with a larger amount deforms the whole
+    // body into something irregular while keeping the curvature liquid.
+    float warpAmt = s * (0.26 + amp * 0.22 + u_mid * 0.12 + stateBoost * 0.10);
     vec2 wp = pos + warp * warpAmt;
 
     // A main mass plus three satellites, at different sizes and drift rates.
@@ -105,21 +119,22 @@ const fragmentShader = `
     // inside the panel, or it stops reading as a spill on paper and starts
     // reading as a dark background with a light strip down one edge.
     // Main mass, a little below centre.
-    field += droplet(wp, center + s * vec2(0.02 * sin(t * 0.5), 0.06 + 0.03 * cos(t * 0.4)), s * (0.30 + pulse));
+    field += droplet(wp, center + s * vec2(0.05 * sin(t * 0.9), 0.06 + 0.05 * cos(t * 0.7)), s * (0.30 + pulse));
     // Satellites: the first stays close enough to hold a neck to the body, the
     // others separate and rejoin as the warp moves past them.
-    field += droplet(wp, center + s * vec2(-0.26 + 0.04 * sin(t * 0.7 + 1.0), -0.30 + 0.04 * cos(t * 0.6)), s * (0.15 + pulse * 0.6));
-    field += droplet(wp, center + s * vec2(0.30 + 0.04 * cos(t * 0.55 + 2.0), 0.34 + 0.04 * sin(t * 0.5 + 0.7)), s * (0.12 + pulse * 0.5));
-    field += droplet(wp, center + s * vec2(0.22 + 0.03 * sin(t * 0.8 + 3.1), -0.58 + 0.04 * cos(t * 0.7 + 1.7)), s * (0.085 + pulse * 0.4));
+    field += droplet(wp, center + s * vec2(-0.26 + 0.09 * sin(t * 1.10 + 1.0), -0.30 + 0.08 * cos(t * 0.95)), s * (0.16 + pulse * 0.6));
+    field += droplet(wp, center + s * vec2(0.30 + 0.08 * cos(t * 0.85 + 2.0), 0.34 + 0.09 * sin(t * 1.05 + 0.7)), s * (0.14 + pulse * 0.5));
+    // Was 0.085, which at this scale rendered as a speck rather than a droplet.
+    field += droplet(wp, center + s * vec2(0.22 + 0.07 * sin(t * 1.20 + 3.1), -0.58 + 0.08 * cos(t * 1.00 + 1.7)), s * (0.105 + pulse * 0.4));
 
     // A tight threshold keeps the edge crisp. Ink has a defined boundary with a
     // little bleed, not an airbrushed falloff, and the old wide smoothstep over
     // a plain distance field was most of why it read as a smudge.
-    float edge = 0.055 + u_high * 0.02;
+    float edge = 0.07 + u_high * 0.02;
     float blob = smoothstep(1.0 - edge, 1.0 + edge, field);
 
     // Feathered bleed just outside the body, like ink wicking into paper.
-    float bleed = smoothstep(1.0 - edge * 5.0, 1.0 - edge, field) * (1.0 - blob);
+    float bleed = smoothstep(1.0 - edge * 4.0, 1.0 - edge, field) * (1.0 - blob);
 
     float detail = fbm(wp * 6.0 + t * 0.25) * (0.020 + u_high * 0.05 + stateBoost * 0.03) * blob;
     float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -128,7 +143,7 @@ const fragmentShader = `
     vec3 inkColor = vec3(0.06 + detail) + grain * 0.015;
 
     vec3 finalColor = mix(bgColor, inkColor, blob);
-    finalColor = mix(finalColor, inkColor, bleed * 0.22);
+    finalColor = mix(finalColor, inkColor, bleed * 0.30);
 
     // The wordmark, composited here rather than as a DOM element above the
     // canvas. It was a <span> with mix-blend-difference, which inverts correctly
