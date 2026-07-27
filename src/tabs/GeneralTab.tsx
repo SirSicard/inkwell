@@ -93,6 +93,7 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
   const startOnBoot = settings?.start_on_boot ?? false
   const showOverlay = settings?.show_overlay ?? true
   const overlayPosition = settings?.overlay_position ?? "bottom-center"
+  const theme = settings?.theme ?? "system"
   const recordingMode = settings?.recording_mode ?? "ptt"
   const style = settings?.style ?? "formal"
   const advancedMode = settings?.advanced_mode ?? false
@@ -164,6 +165,18 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
           ))}
         </div>
       </div>
+
+      <SettingRow label="Appearance" description="Follow the system, or pick one">
+        <InkSelect
+          value={theme}
+          onChange={(v) => setSetting("theme", v)}
+          options={[
+            { label: "System", value: "system" },
+            { label: "Light", value: "light" },
+            { label: "Dark", value: "dark" },
+          ]}
+        />
+      </SettingRow>
 
       <SettingRow label="Start on Boot" description="Launch Inkwell when you log in">
         <InkToggle checked={startOnBoot} onChange={handleStartOnBootChange} />

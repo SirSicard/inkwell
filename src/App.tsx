@@ -9,6 +9,7 @@ import type { Settings, UpdateInfo, Tab } from "./types"
 import { formatHotkey } from "./hotkey"
 import { useToasts, toast } from "./state/toasts"
 import { useSettings } from "./state/settings"
+import { watchTheme, type ThemeChoice } from "./theme"
 import { basicTabs, advancedTabs, tabGroups } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
@@ -510,6 +511,12 @@ function App() {
   useEffect(() => {
     void loadSettings()
   }, [loadSettings])
+
+  // Resolve the theme choice to a concrete attribute, and keep following the OS
+  // while the choice is "system". Re-runs on change so switching away from
+  // system detaches the listener rather than stacking another one.
+  const themeChoice = (useSettings((s) => s.settings?.theme) ?? "system") as ThemeChoice
+  useEffect(() => watchTheme(themeChoice), [themeChoice])
   useEffect(() => {
     if (storedAdvanced !== undefined) setAdvancedMode(storedAdvanced)
   }, [storedAdvanced])

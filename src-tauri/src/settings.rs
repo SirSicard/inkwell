@@ -27,6 +27,11 @@ pub struct Settings {
     pub start_on_boot: bool,
     #[serde(default = "default_true")]
     pub show_overlay: bool,
+    /// "system", "light" or "dark". Shipping light mode as a bare
+    /// prefers-color-scheme media query meant the app followed the OS with no
+    /// way to disagree with it, which is not a preference, it is a constraint.
+    #[serde(default = "default_theme")]
+    pub theme: String,
     /// Where the recording overlay sits. Wispr Flow hardcodes bottom-centre and
     /// someone shipped a whole third-party utility just to move it, which is a
     /// loud signal about a small feature.
@@ -67,6 +72,7 @@ fn default_recording_mode() -> String { "ptt".to_string() }
 fn default_true() -> bool { true }
 fn default_mic() -> String { "auto".to_string() }
 fn default_overlay_position() -> String { "bottom-center".to_string() }
+fn default_theme() -> String { "system".to_string() }
 fn default_vad_threshold() -> f32 { 0.5 }
 fn default_polish_prompt() -> String { crate::llm::DEFAULT_POLISH_PROMPT.to_string() }
 
@@ -79,6 +85,7 @@ impl Default for Settings {
             recording_mode: default_recording_mode(),
             start_on_boot: false,
             show_overlay: true,
+            theme: default_theme(),
             overlay_position: default_overlay_position(),
             advanced_mode: false,
             mic_device: default_mic(),

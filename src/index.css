@@ -88,42 +88,46 @@
    White-on-accent buttons stay correct in both modes because the accent stays
    dark enough to carry white.
 
+   Applied by an explicit data-theme attribute rather than a bare
+   prefers-color-scheme query. The media query alone meant the app followed the
+   OS and offered no way to disagree with it: someone on a light desktop could
+   not get the dark UI back. src/theme.ts resolves "system" to a concrete value
+   and stamps it here, so the system is the default rather than the ceiling.
+
    Overrides Tailwind's generated custom properties rather than redefining
    @theme, so every existing utility follows without touching a component. */
-@media (prefers-color-scheme: light) {
-  :root {
-    --color-bg-base: #f0ede8;
-    --color-bg-surface: #ffffff;
-    --color-bg-hover: #e6e2d9;
-    --color-bg-overlay: #ffffff;
+:root[data-theme="light"] {
+  --color-bg-base: #f0ede8;
+  --color-bg-surface: #ffffff;
+  --color-bg-hover: #e6e2d9;
+  --color-bg-overlay: #ffffff;
 
-    --color-bg-primary: #f0ede8;
-    --color-bg-elevated: #ffffff;
-    --color-bg-glass: #ffffff;
+  --color-bg-primary: #f0ede8;
+  --color-bg-elevated: #ffffff;
+  --color-bg-glass: #ffffff;
 
-    --color-border: rgba(0, 0, 0, 0.14);
-    --color-border-default: rgba(0, 0, 0, 0.22);
-    --color-border-accent: rgba(138, 92, 51, 0.35);
+  --color-border: rgba(0, 0, 0, 0.14);
+  --color-border-default: rgba(0, 0, 0, 0.22);
+  --color-border-accent: rgba(138, 92, 51, 0.35);
 
-    --color-text-primary: rgba(0, 0, 0, 0.90);
-    --color-text-secondary: rgba(0, 0, 0, 0.68);
-    --color-text-tertiary: rgba(0, 0, 0, 0.62);
+  --color-text-primary: rgba(0, 0, 0, 0.90);
+  --color-text-secondary: rgba(0, 0, 0, 0.68);
+  --color-text-tertiary: rgba(0, 0, 0, 0.62);
 
-    --color-accent: #8a5c33;
-  }
+  --color-accent: #8a5c33;
+}
 
-  * {
-    scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
-  }
-  *::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.16);
-  }
-  *::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.26);
-  }
-  *:focus-visible {
-    outline-color: rgba(138, 92, 51, 0.6) !important;
-  }
+:root[data-theme="light"] * {
+  scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
+}
+:root[data-theme="light"] *::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.16);
+}
+:root[data-theme="light"] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.26);
+}
+:root[data-theme="light"] *:focus-visible {
+  outline-color: rgba(138, 92, 51, 0.6) !important;
 }
 
 /* ── Base ── */
