@@ -16,6 +16,10 @@ import {
   FilesTab, VoiceCommandsTab, AboutTab,
 } from "./tabs"
 
+// The platform cannot change while the app is running, so this is computed once
+// rather than per render.
+const IS_MAC = typeof navigator !== "undefined" && navigator.userAgent.includes("Mac")
+
 // --- Onboarding ---
 
 function Onboarding({ onComplete }: { onComplete: () => void }) {
@@ -35,7 +39,9 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [accessChecking, setAccessChecking] = useState(false)
 
   // Accessibility is a macOS-only concept; the Windows build has no such gate.
-  const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Mac")
+  // Module scope, not component scope: the value cannot change at runtime, and
+  // hoisting it keeps it out of every effect's dependency list honestly rather
+  // than by suppressing the rule.
 
   const checkAccessibility = () => {
     setAccessChecking(true)
@@ -52,7 +58,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
       .catch(() => {})
     // Deferred a tick: calling it inline made this a synchronous setState
     // inside an effect body, which cascades renders.
-    if (isMac) queueMicrotask(checkAccessibility)
+    if (IS_MAC) queueMicrotask(checkAccessibility)
   }, [])
 
   useEffect(() => {
@@ -188,7 +194,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
     </div>,
 
     // Step 3 (macOS only): Accessibility permission, before the first dictation test
-    ...(isMac ? [
+    ...(IS_MAC ? [
       <div key="accessibility" className="text-center space-y-5">
         <div className="text-3xl font-sans font-semibold">Accessibility</div>
         <p className="text-text-secondary text-base leading-relaxed">
@@ -422,7 +428,8 @@ function TabContent({ tab, onAdvancedChange }: { tab: Tab; onAdvancedChange?: (v
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>("Dashboard")
-  const [modelName, setModelName] = useState("Loading...")
+  const [modelName, setModelName] = useState("No model loaded")
+  const [isRecording, setIsRecording] = useState(false)
   const [advancedMode, setAdvancedMode] = useState(false)
   const toasts = useToasts((s) => s.toasts)
   const dismissToast = useToasts((s) => s.dismiss)
@@ -470,16 +477,19 @@ function App() {
     }).catch(() => {})
   }, [])
 
-  // Error event listeners
+  // Error event listeners. These use the module-level toast() rather than the
+  // component-bound push: the store is the same either way, and a plain module
+  // function has no place in a dependency list, so the effect can declare an
+  // empty one truthfully.
   useEffect(() => {
     const listeners = [
-      listen<string>("transcription-error", (e) => addToast(`Transcription failed: ${e.payload}`)),
-      listen<string>("paste-error", (e) => addToast(`Paste failed. Text copied to clipboard: ${e.payload}`, "warning")),
-      listen<string>("mic-error", (e) => addToast(`Mic error: ${e.payload}`, "warning")),
-      listen<string>("model-error", (e) => addToast(`Model error: ${e.payload}`, "warning")),
+      listen<string>("transcription-error", (e) => toast(`Transcription failed: ${e.payload}`)),
+      listen<string>("paste-error", (e) => toast(`Paste failed. Text copied to clipboard: ${e.payload}`, "warning")),
+      listen<string>("mic-error", (e) => toast(`Mic error: ${e.payload}`, "warning")),
+      listen<string>("model-error", (e) => toast(`Model error: ${e.payload}`, "warning")),
       // Without VAD the recognizer still runs, just unsegmented. Say so rather
       // than degrading silently, which is how this went unnoticed before.
-      listen<string>("vad-unavailable", (e) => addToast(e.payload, "warning")),
+      listen<string>("vad-unavailable", (e) => toast(e.payload, "warning")),
     ]
     return () => { listeners.forEach((p) => p.then((fn) => fn())) }
   }, [])
@@ -506,20 +516,23 @@ function App() {
 
   const tabs = advancedMode ? advancedTabs : basicTabs
 
-  // Reset tab if not available in current mode
+  // Reset the tab when a mode change hides the one that is open. Written with
+  // the functional setter so the effect can depend on `tabs` honestly instead
+  // of listing only advancedMode and lying about what it reads.
   useEffect(() => {
-    if (!(tabs as readonly string[]).includes(activeTab)) {
-      setActiveTab("Dashboard")
-    }
-  }, [advancedMode])
+    setActiveTab((current) =>
+      (tabs as readonly string[]).includes(current) ? current : "Dashboard",
+    )
+  }, [tabs])
 
   // Model name tracking
   useEffect(() => {
     invoke<string>("get_model_name").then(setModelName).catch(() => {})
-    const unlisten = listen<string>("model-loaded", (event) => {
-      setModelName(event.payload)
-    })
-    return () => { unlisten.then((fn) => fn()) }
+    const subs = [
+      listen<string>("model-loaded", (event) => setModelName(event.payload)),
+      listen<boolean>("recording-state", (e) => setIsRecording(e.payload)),
+    ]
+    return () => { subs.forEach((p) => p.then((fn) => fn())) }
   }, [])
 
   return (
@@ -659,11 +672,23 @@ function App() {
           </div>
         </div>
 
-        {/* Status Bar */}
+        {/* Status Bar.
+            Recording is the state a user most needs to see and the app never
+            showed it here, even though the event was already being listened to
+            for the ink canvas. --color-accent-recording had been defined since
+            the first build and used nowhere; this is what it was for. */}
         <div className="flex items-center justify-between px-5 py-2.5 border-t border-border">
           <span className="text-meta font-mono text-text-tertiary tracking-wide flex items-center gap-1.5">
-            {modelName === "Loading..." || modelName === "No model loaded" ? (
-              <><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />{modelName}</>
+            {isRecording ? (
+              <>
+                <span
+                  className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+                  style={{ background: "var(--color-accent-recording)" }}
+                />
+                <span style={{ color: "var(--color-accent-recording)" }}>Recording</span>
+              </>
+            ) : modelName === "No model loaded" ? (
+              <><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400" />{modelName}</>
             ) : (
               <><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />{modelName}</>
             )}
