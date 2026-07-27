@@ -110,9 +110,22 @@ export function AITab() {
       await invoke("save_api_key", { provider, key: apiKey })
       const status = await invoke<Record<string, boolean>>("get_api_key_status")
       setKeyStatus(status)
+      // Only clear the field once the backend confirms the key is stored.
+      // Clearing first made a failed save look identical to a successful one.
+      if (!status[provider]) {
+        toast("The key did not persist to the system keyring.")
+        return
+      }
       setApiKey("")
-    } catch (e) { console.error(e) }
-    setSaving(false)
+      toast(`${provider} key saved.`, "info")
+    } catch (e) {
+      // This used to be console.error, so a keyring failure looked exactly like
+      // nothing happening. It was in fact failing for everyone: keyring 3 ships
+      // no credential store unless a backend feature is enabled.
+      toast(`Could not save the key: ${e}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleSavePolish = () => {
@@ -230,7 +243,11 @@ export function AITab() {
             </button>
           ) : keyStatus[provider] ? (
             <button
-              onClick={() => { invoke("save_api_key", { provider, key: "" }).then(() => invoke<Record<string, boolean>>("get_api_key_status").then(setKeyStatus)) }}
+              onClick={() => {
+                invoke("save_api_key", { provider, key: "" })
+                  .then(() => invoke<Record<string, boolean>>("get_api_key_status").then(setKeyStatus))
+                  .catch((e) => toast(`Could not remove the key: ${e}`))
+              }}
               className="px-3 py-2 text-xs font-mono text-red-400/70 hover:text-red-400 transition-colors"
             >
               Remove

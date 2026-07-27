@@ -40,3 +40,20 @@ fn transcribes_known_speech() {
         assert!(got.contains(word), "expected {word:?} in transcript, got {text:?}");
     }
 }
+
+/// The OS keyring is reachable and round-trips a secret.
+///
+/// keyring 3 ships no credential store unless a backend feature is enabled, and
+/// with none selected `set_password` fails at runtime while everything still
+/// compiles. That is exactly how the AI-polish API key came to silently not
+/// save. This test fails the moment the backend feature is dropped again.
+///
+/// Ignored by default: it touches the real login keychain.
+#[test]
+#[ignore = "touches the real OS keyring"]
+fn keyring_round_trips_a_secret() {
+    let entry = keyring::Entry::new("inkwell-selftest", "probe").expect("no keyring entry");
+    entry.set_password("hunter2").expect("set_password failed: no backend?");
+    assert_eq!(entry.get_password().expect("get_password failed"), "hunter2");
+    entry.delete_credential().expect("delete failed");
+}
