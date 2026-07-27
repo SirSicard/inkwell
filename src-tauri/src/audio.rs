@@ -197,7 +197,15 @@ pub fn start_audio_capture(
 
                         if sample_count >= emit_interval {
                             let raw_rms = (sum_squares / sample_count as f32).sqrt();
-                            smooth_rms += (raw_rms - smooth_rms) * 0.15;
+                            // Asymmetric: snap up, ease down. A single 0.15
+                            // coefficient gave a ~330ms time constant in both
+                            // directions, which is why the level felt like it
+                            // lagged behind the voice rather than tracking it.
+                            // Fast attack makes speech onsets land immediately;
+                            // the slower release keeps the meter from strobing
+                            // between syllables.
+                            let coeff = if raw_rms > smooth_rms { 0.55 } else { 0.18 };
+                            smooth_rms += (raw_rms - smooth_rms) * coeff;
 
                             if let Ok(mut rms_val) = rms_writer.lock() {
                                 *rms_val = smooth_rms;
@@ -244,7 +252,15 @@ pub fn start_audio_capture(
 
                         if sample_count >= emit_interval {
                             let raw_rms = (sum_squares / sample_count as f32).sqrt();
-                            smooth_rms += (raw_rms - smooth_rms) * 0.15;
+                            // Asymmetric: snap up, ease down. A single 0.15
+                            // coefficient gave a ~330ms time constant in both
+                            // directions, which is why the level felt like it
+                            // lagged behind the voice rather than tracking it.
+                            // Fast attack makes speech onsets land immediately;
+                            // the slower release keeps the meter from strobing
+                            // between syllables.
+                            let coeff = if raw_rms > smooth_rms { 0.55 } else { 0.18 };
+                            smooth_rms += (raw_rms - smooth_rms) * coeff;
 
                             if let Ok(mut rms_val) = rms_writer.lock() {
                                 *rms_val = smooth_rms;

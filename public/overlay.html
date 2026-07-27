@@ -38,10 +38,28 @@
     const levels = new Array(BAR_COUNT_MAX).fill(0);
     let lastLevelAt = 0;
 
+    // Adaptive gain, because a fixed multiplier cannot serve both machines.
+    // The MacBook mic array is read through the raw HAL with no AGC, so speech
+    // arrives around 0.0005 RMS; the previous fixed "rms * 12" mapped that to
+    // 0.6% of the bar range, which is why the meter technically moved and
+    // visibly did not. Normalising against a decaying running peak instead
+    // means the loudest thing you have said recently is full height, whatever
+    // your microphone's absolute level happens to be.
+    const NOISE_FLOOR = 0.0004;   // below this it is a quiet room, not speech
+    const MIN_PEAK = 0.0015;      // stops silence being amplified into noise
+    let peak = MIN_PEAK;
+
     function pushLevel(rms) {
-      // The pipeline's RMS sits well under 0.1 for normal speech, so scale to a
-      // usable 0..1 and clamp rather than letting a loud room peg every bar.
-      const v = Math.max(0, Math.min(1, rms * 12));
+      // Rise to a new peak at once; decay slowly so one loud syllable does not
+      // permanently flatten everything after it.
+      peak = rms > peak ? rms : Math.max(peak * 0.985, MIN_PEAK);
+
+      const norm = rms <= NOISE_FLOOR ? 0 : Math.min(1, rms / peak);
+      // Perceptual curve. Loudness is not linear, and speech spends most of its
+      // time in the bottom third of its own range, so a straight ratio leaves
+      // normal talking looking almost flat.
+      const v = Math.pow(norm, 0.55);
+
       levels.shift();
       levels.push(v);
       lastLevelAt = performance.now();
@@ -161,8 +179,11 @@
         // Take the newest barCount samples, oldest-left, so the bars read like
         // a waveform scrolling past. Indexed from the end so the buffer length
         // and the bar count can differ without silently rendering stale audio.
-        const target = 3 + levels[levels.length - barCount + i] * 26;
-        barHeights[i] += (target - barHeights[i]) * 0.35;
+        const target = 2 + levels[levels.length - barCount + i] * 30;
+        // Asymmetric again, for the same reason as the Rust side: a voice
+        // starts abruptly and trails off, so the bars snap up and ease down.
+        const k = target > barHeights[i] ? 0.6 : 0.2;
+        barHeights[i] += (target - barHeights[i]) * k;
       }
 
       for (let i = 0; i < barCount; i++) {
