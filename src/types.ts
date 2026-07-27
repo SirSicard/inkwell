@@ -7,6 +7,7 @@ export interface Settings {
   start_on_boot: boolean
   show_overlay: boolean
   overlay_position: string
+  theme: string
   advanced_mode: boolean
   mic_device: string
   vad_threshold: number
