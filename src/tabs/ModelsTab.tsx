@@ -136,31 +136,31 @@ export function ModelsTab() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${active ? "bg-accent" : "bg-text-tertiary"}`} />
-              <span className="text-[13px] font-semibold text-text-primary">{model.name}</span>
-              <span className="text-[10px] font-mono text-text-tertiary uppercase tracking-wider">{model.company}</span>
+              <span className="text-body font-semibold text-text-primary">{model.name}</span>
+              <span className="text-meta font-mono text-text-tertiary uppercase tracking-wider">{model.company}</span>
             </div>
-            <p className="text-[12px] text-text-secondary mt-1 ml-[14px]">{model.description}</p>
+            <p className="text-body text-text-secondary mt-1 ml-[14px]">{model.description}</p>
             <div className="flex items-center gap-2 mt-1.5 ml-[14px]">
-              <span className="text-[10px] text-text-tertiary">{model.languages}</span>
+              <span className="text-body text-text-tertiary">{model.languages}</span>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <span className="text-[12px] font-mono text-text-tertiary">{model.size}</span>
+            <span className="text-body font-mono text-text-tertiary">{model.size}</span>
             {active ? (
-              <span className="text-[11px] font-medium text-accent">Active</span>
+              <span className="text-body font-medium text-accent">Active</span>
             ) : isDownloading ? (
               <div className="w-20 space-y-1">
                 <div className="w-full bg-bg-base rounded-full h-1 overflow-hidden">
                   <motion.div className="h-full bg-accent" animate={{ width: `${downloadPercent}%` }} />
                 </div>
-                <p className="text-[9px] font-mono text-text-tertiary text-right">{downloadPercent}%</p>
+                <p className="text-meta font-mono text-text-tertiary text-right">{downloadPercent}%</p>
               </div>
             ) : isInstalled ? (
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => handleSwitch(model.id)}
                   disabled={isSwitching}
-                  className="text-[11px] text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
+                  className="text-body text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
                 >
                   {isSwitching ? "..." : "Switch"}
                 </button>
@@ -168,7 +168,7 @@ export function ModelsTab() {
                 <button
                   onClick={() => handleRemove(model.id)}
                   disabled={isRemoving}
-                  className="text-[11px] text-text-tertiary hover:text-red-400 transition-colors disabled:opacity-50"
+                  className="text-body text-text-tertiary hover:text-red-400 transition-colors disabled:opacity-50"
                 >
                   {isRemoving ? "..." : "Del"}
                 </button>
@@ -195,7 +195,7 @@ export function ModelsTab() {
       {/* Downloaded models */}
       {installedModels.length > 0 && (
         <div className="space-y-2">
-          <p className="text-[11px] font-mono text-text-tertiary uppercase tracking-wider">Downloaded Models</p>
+          <p className="text-meta font-mono text-text-tertiary uppercase tracking-wider">Downloaded Models</p>
           {installedModels.map((m) => <ModelCard key={m.id} model={m} />)}
         </div>
       )}
@@ -203,10 +203,10 @@ export function ModelsTab() {
       {/* Available to download, grouped by company */}
       {availableModels.length > 0 && (
         <div className="space-y-5">
-          <p className="text-[11px] font-mono text-text-tertiary uppercase tracking-wider">Available to Download</p>
+          <p className="text-meta font-mono text-text-tertiary uppercase tracking-wider">Available to Download</p>
           {groupByCompany(availableModels).map(([company, models]) => (
             <div key={company} className="space-y-1.5">
-              <p className="text-[10px] font-mono text-text-tertiary uppercase tracking-widest">{company}</p>
+              <p className="text-meta font-mono text-text-tertiary uppercase tracking-widest">{company}</p>
               {models.map((m) => <ModelCard key={m.id} model={m} />)}
             </div>
           ))}

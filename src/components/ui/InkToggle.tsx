@@ -1,11 +1,11 @@
 import { motion } from "framer-motion"
 
-interface GlassToggleProps {
+interface InkToggleProps {
   checked: boolean
   onChange: (checked: boolean) => void
 }
 
-export function GlassToggle({ checked, onChange }: GlassToggleProps) {
+export function InkToggle({ checked, onChange }: InkToggleProps) {
   return (
     <button
       role="switch"

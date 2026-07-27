@@ -116,7 +116,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
           ))}
         </select>
         {micDevices.length > 0 && (
-          <p className="text-[11px] text-text-tertiary">
+          <p className="text-body text-text-tertiary">
             {micDevices.length} device{micDevices.length !== 1 ? "s" : ""} detected.
             {selectedMic !== "auto" ? " Restart required to apply." : " Auto skips virtual/AI devices."}
           </p>
@@ -226,7 +226,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
               </button>
             </div>
           )}
-          <p className="text-[11px] text-text-tertiary leading-relaxed">
+          <p className="text-body text-text-tertiary leading-relaxed">
             Enable Inkwell under Privacy &amp; Security &rarr; Accessibility, then
             hit Re-check. No restart needed. You can skip this and do it later.
           </p>
@@ -367,7 +367,7 @@ function Sidebar({
     >
       {groups.map((group) => (
         <div key={group.label} className="space-y-0.5">
-          <p className="px-2.5 pb-1 text-[10px] font-mono uppercase tracking-wider text-text-tertiary/70">
+          <p className="px-2.5 pb-1 text-meta font-mono uppercase tracking-wider text-text-tertiary/70">
             {group.label}
           </p>
           {group.tabs.map((tab) => (
@@ -377,7 +377,7 @@ function Sidebar({
               aria-selected={activeTab === tab}
               tabIndex={activeTab === tab ? 0 : -1}
               onClick={() => onTabChange(tab)}
-              className={`relative w-full text-left px-2.5 py-1.5 rounded-md text-[13px] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+              className={`relative w-full text-left px-2.5 py-1.5 rounded-md text-body transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
                 activeTab === tab
                   ? "text-text-primary bg-bg-hover"
                   : "text-text-secondary hover:text-text-primary hover:bg-bg-hover/50"
@@ -525,7 +525,11 @@ function App() {
   return (
     <div className="h-screen flex bg-bg-base">
       {/* Left: Ink Zone */}
-      <div className="w-[35%] min-w-[240px] h-full relative bg-ink-bg flex flex-col overflow-visible">
+      {/* The ink column was a flat 35% of every view at every width, so on a wide
+          window a third of the app was ornament while the content scrolled in
+          the remaining two thirds. It now has a ceiling: it still reads as the
+          brand at small sizes, and stops growing once it has made its point. */}
+      <div className="w-[35%] min-w-[220px] max-w-[380px] h-full relative bg-ink-bg flex flex-col overflow-visible">
         <div className="flex-1 relative overflow-hidden">
           <InkCanvas />
           <div className="absolute inset-0 pointer-events-none flex justify-center pt-8">
@@ -558,7 +562,7 @@ function App() {
                       </div>
                       <div>
                         <p className="text-sm font-medium text-text-primary">Update available</p>
-                        <p className="text-[11px] font-mono text-emerald-400">v{updateAvailable.version}</p>
+                        <p className="text-meta font-mono text-emerald-400">v{updateAvailable.version}</p>
                       </div>
                     </div>
                     <button
@@ -581,7 +585,7 @@ function App() {
                           transition={{ duration: 0.3 }}
                         />
                       </div>
-                      <p className="text-[10px] font-mono text-text-tertiary text-right">{updateProgress}%</p>
+                      <p className="text-meta font-mono text-text-tertiary text-right">{updateProgress}%</p>
                     </div>
                   )}
                   {updateProgress === null && (
@@ -657,14 +661,14 @@ function App() {
 
         {/* Status Bar */}
         <div className="flex items-center justify-between px-5 py-2.5 border-t border-border">
-          <span className="text-[11px] font-mono text-text-tertiary tracking-wide flex items-center gap-1.5">
+          <span className="text-meta font-mono text-text-tertiary tracking-wide flex items-center gap-1.5">
             {modelName === "Loading..." || modelName === "No model loaded" ? (
               <><span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />{modelName}</>
             ) : (
               <><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />{modelName}</>
             )}
           </span>
-          <span className="text-[11px] font-mono text-text-tertiary">{appVersion ? `v${appVersion}` : ""}</span>
+          <span className="text-meta font-mono text-text-tertiary">{appVersion ? `v${appVersion}` : ""}</span>
         </div>
       </div>
 

@@ -2,14 +2,14 @@ import * as Select from "@radix-ui/react-select"
 import { motion, AnimatePresence } from "framer-motion"
 import { useState } from "react"
 
-interface GlassSelectProps {
+interface InkSelectProps {
   value: string
   onChange: (value: string) => void
   options: { label: string; value: string }[]
   placeholder?: string
 }
 
-export function GlassSelect({ value, onChange, options, placeholder }: GlassSelectProps) {
+export function InkSelect({ value, onChange, options, placeholder }: InkSelectProps) {
   const [open, setOpen] = useState(false)
   const selectedLabel = options.find((o) => o.value === value)?.label
 
@@ -17,7 +17,7 @@ export function GlassSelect({ value, onChange, options, placeholder }: GlassSele
     <Select.Root value={value} onValueChange={onChange} open={open} onOpenChange={setOpen}>
       <Select.Trigger
         className="
-          inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[12px] font-mono
+          inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-body font-mono
           bg-bg-surface border border-border text-text-primary
           hover:border-border-default focus:outline-none
           cursor-pointer transition-colors duration-150
@@ -52,7 +52,7 @@ export function GlassSelect({ value, onChange, options, placeholder }: GlassSele
                       key={option.value}
                       value={option.value}
                       className="
-                        px-3 py-1.5 text-[12px] font-mono text-text-secondary rounded-md
+                        px-3 py-1.5 text-body font-mono text-text-secondary rounded-md
                         hover:bg-bg-hover hover:text-text-primary
                         focus:outline-none focus:bg-bg-hover focus:text-text-primary
                         cursor-pointer transition-colors duration-100

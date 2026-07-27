@@ -1,16 +1,16 @@
 import { type ReactNode } from "react"
-import { GlassSurface } from "./GlassSurface"
+import { InkSurface } from "./InkSurface"
 
-interface GlassCardProps {
+interface InkCardProps {
   children: ReactNode
   className?: string
 }
 
-export function GlassCard({ children, className = "" }: GlassCardProps) {
+export function InkCard({ children, className = "" }: InkCardProps) {
   return (
-    <GlassSurface className={`p-4 ${className}`}>
+    <InkSurface className={`p-4 ${className}`}>
       {children}
-    </GlassSurface>
+    </InkSurface>
   )
 }
 
@@ -22,16 +22,16 @@ interface SettingRowProps {
 
 export function SettingRow({ label, description, children }: SettingRowProps) {
   return (
-    <GlassCard>
+    <InkCard>
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-[13px] font-medium text-text-primary">{label}</p>
+          <p className="text-body font-medium text-text-primary">{label}</p>
           {description && (
-            <p className="text-[11px] text-text-tertiary mt-0.5">{description}</p>
+            <p className="text-body text-text-tertiary mt-0.5">{description}</p>
           )}
         </div>
         {children}
       </div>
-    </GlassCard>
+    </InkCard>
   )
 }

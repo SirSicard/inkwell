@@ -52,6 +52,7 @@ pub fn update_settings(
             crate::setup::apply_start_on_boot(&app, settings.start_on_boot);
         }
         "show_overlay" => settings.show_overlay = value == "true",
+        "overlay_position" => settings.overlay_position = value,
         "advanced_mode" => settings.advanced_mode = value == "true",
         "mic_device" => {
             settings.mic_device = value.clone();

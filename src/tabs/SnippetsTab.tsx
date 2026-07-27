@@ -54,7 +54,7 @@ export function SnippetsTab() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <h2 className="text-[15px] font-sans font-semibold text-text-primary">Snippets</h2>
+        <h2 className="text-heading font-sans font-semibold text-text-primary">Snippets</h2>
         <span className="text-xs font-mono text-text-tertiary">{snippets.length} snippets</span>
       </div>
 
@@ -121,7 +121,7 @@ export function SnippetsTab() {
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-mono text-accent">{s.trigger}</span>
                   {s.category && (
-                    <span className="text-[10px] px-1 py-0.5 rounded bg-bg-base text-text-tertiary">{s.category}</span>
+                    <span className="text-body px-1 py-0.5 rounded bg-bg-base text-text-tertiary">{s.category}</span>
                   )}
                 </div>
                 <p className="text-xs text-text-tertiary truncate mt-0.5">{s.expansion}</p>
@@ -139,7 +139,7 @@ export function SnippetsTab() {
 
       {/* Test panel */}
       <div className="space-y-2 pt-2 border-t border-border/50">
-        <p className="text-[11px] font-medium text-text-tertiary tracking-wide">Test</p>
+        <p className="text-body font-medium text-text-tertiary tracking-wide">Test</p>
         <div className="flex gap-2">
           <input
             value={testInput}

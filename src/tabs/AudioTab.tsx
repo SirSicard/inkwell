@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
-import { SettingRow, GlassSelect } from "../components/ui"
+import { SettingRow, InkSelect } from "../components/ui"
 import type { DeviceInfo } from "../types"
 import { useSettings } from "../state/settings"
 import { toast } from "../state/toasts"
@@ -37,10 +37,10 @@ export function AudioTab() {
 
   return (
     <div className="space-y-3">
-      <h2 className="text-[15px] font-sans font-semibold text-text-primary">Audio</h2>
+      <h2 className="text-heading font-sans font-semibold text-text-primary">Audio</h2>
 
       <SettingRow label="Microphone" description="Which input device to use">
-        <GlassSelect
+        <InkSelect
           value={selectedMic}
           onChange={handleMicChange}
           options={[
@@ -77,7 +77,7 @@ export function AudioTab() {
       </div>
 
       <div className="p-3 bg-bg-surface border border-border rounded-lg">
-        <h3 className="text-[11px] font-medium text-text-tertiary tracking-wide mb-2">Detected devices</h3>
+        <h3 className="text-body font-medium text-text-tertiary tracking-wide mb-2">Detected devices</h3>
         {devices.length === 0 ? (
           <p className="text-sm text-text-tertiary">No input devices found. Check your mic connection.</p>
         ) : (

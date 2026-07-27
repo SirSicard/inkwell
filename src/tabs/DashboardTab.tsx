@@ -40,7 +40,7 @@ function ExportMenu({
             transition={{ type: "spring", stiffness: 400, damping: 30 }}
             className="absolute right-0 top-full mt-1 z-50 bg-bg-base border border-border rounded-lg shadow-lg p-3 space-y-3 min-w-[180px]"
           >
-            <p className="text-[11px] font-medium text-text-tertiary tracking-wide">Export</p>
+            <p className="text-body font-medium text-text-tertiary tracking-wide">Export</p>
             <div className="flex gap-1">
               {(["txt", "srt", "json", "csv"] as const).map((fmt) => (
                 <button
@@ -166,8 +166,8 @@ export function DashboardTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <h2 className="text-[15px] font-sans font-semibold text-text-primary">Dashboard</h2>
-        <span className="text-[11px] font-mono text-text-tertiary">{transcripts.length}</span>
+        <h2 className="text-heading font-sans font-semibold text-text-primary">Dashboard</h2>
+        <span className="text-meta font-mono text-text-tertiary">{transcripts.length}</span>
 
         {/* Export menu */}
         {transcripts.length > 0 && (
@@ -187,11 +187,11 @@ export function DashboardTab() {
         onChange={(e) => setSearch(e.target.value)}
         placeholder="Search transcripts..."
         aria-label="Search transcripts"
-        className="w-full px-3 py-2 text-[13px] bg-bg-surface border border-border rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-default transition-colors"
+        className="w-full px-3 py-2 text-body bg-bg-surface border border-border rounded-lg text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-default transition-colors"
       />
 
       {transcripts.length === 0 ? (
-        <p className="text-[13px] text-text-tertiary py-12 text-center">
+        <p className="text-body text-text-tertiary py-12 text-center">
           {search ? "No matching transcripts." : "No transcripts yet. Press your hotkey to start dictating."}
         </p>
       ) : (
@@ -207,28 +207,28 @@ export function DashboardTab() {
                 className="group px-3.5 py-3 bg-bg-surface border border-border rounded-lg hover:border-border-default transition-all duration-150"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <p className="text-[13px] text-text-primary flex-1 leading-[1.6]">{t.text}</p>
+                  <p className="text-body text-text-primary flex-1 leading-[1.6]">{t.text}</p>
                   <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                     <button
                       onClick={() => handleCopy(t.text)}
                       aria-label="Copy transcript"
-                      className="px-2 py-1 text-[11px] text-text-tertiary hover:text-text-primary rounded transition-colors"
+                      className="px-2 py-1 text-body text-text-tertiary hover:text-text-primary rounded transition-colors"
                     >
                       Copy
                     </button>
                     <button
                       onClick={() => handleDelete(t.id)}
                       aria-label="Delete transcript"
-                      className="px-2 py-1 text-[11px] text-text-tertiary hover:text-red-400 rounded transition-colors"
+                      className="px-2 py-1 text-body text-text-tertiary hover:text-red-400 rounded transition-colors"
                     >
                       Del
                     </button>
                   </div>
                 </div>
                 <div className="flex items-center gap-2.5 mt-1">
-                  <span className="text-[10px] font-mono text-text-tertiary">{formatTime(t.created_at)}</span>
-                  <span className="text-[10px] font-mono text-text-tertiary">{(t.audio_duration_ms / 1000).toFixed(1)}s</span>
-                  <span className="text-[10px] font-mono text-text-tertiary">{t.model}</span>
+                  <span className="text-meta font-mono text-text-tertiary">{formatTime(t.created_at)}</span>
+                  <span className="text-meta font-mono text-text-tertiary">{(t.audio_duration_ms / 1000).toFixed(1)}s</span>
+                  <span className="text-meta font-mono text-text-tertiary">{t.model}</span>
                 </div>
               </motion.div>
             ))}

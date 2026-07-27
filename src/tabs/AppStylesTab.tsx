@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { toast } from "../state/toasts"
-import { GlassToggle } from "../components/ui"
+import { InkToggle } from "../components/ui"
 import type { AppStyleRule } from "../types"
 
 export function AppStylesTab() {
@@ -43,7 +43,7 @@ export function AppStylesTab() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
-        <h2 className="text-[15px] font-sans font-semibold text-text-primary">Per-App Styles</h2>
+        <h2 className="text-heading font-sans font-semibold text-text-primary">Per-App Styles</h2>
       </div>
 
       <p className="text-xs text-text-tertiary">
@@ -55,7 +55,7 @@ export function AppStylesTab() {
           <p className="text-sm text-text-primary">Enable per-app styles</p>
           <p className="text-xs text-text-tertiary mt-0.5">Override the global style based on the focused application</p>
         </div>
-        <GlassToggle checked={enabled} onChange={(v) => saveAll(v, rules)} />
+        <InkToggle checked={enabled} onChange={(v) => saveAll(v, rules)} />
       </div>
 
       {/* Add rule */}

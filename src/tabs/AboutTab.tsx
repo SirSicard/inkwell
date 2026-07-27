@@ -17,16 +17,16 @@ export function AboutTab() {
         <p className="text-base text-text-secondary">Your voice. Your machine. Nothing leaves.</p>
         <div className="pt-3 space-y-1.5">
           <p className="text-sm text-text-tertiary">Built by Mattias H.</p>
-          <p className="text-[11px] font-mono text-text-tertiary">{appVersion ? `v${appVersion}` : ""}</p>
+          <p className="text-meta font-mono text-text-tertiary">{appVersion ? `v${appVersion}` : ""}</p>
         </div>
         <div className="pt-4 flex items-center justify-center gap-4">
           <span className="text-xs text-text-tertiary">Tauri + React + sherpa-onnx</span>
         </div>
         <div className="pt-2 space-y-1.5">
-          <p className="text-[11px] text-text-tertiary">
+          <p className="text-body text-text-tertiary">
             Free and open source. No accounts, no telemetry, no paid tier.
           </p>
-          <p className="text-[11px] text-text-tertiary">
+          <p className="text-body text-text-tertiary">
             <a href={DONATION_URL} target="_blank" rel="noopener noreferrer" className="underline hover:text-text-secondary transition-colors">
               Support Inkwell
             </a>
@@ -34,7 +34,7 @@ export function AboutTab() {
           </p>
         </div>
         <div className="pt-2">
-          <p className="text-[11px] text-text-tertiary">
+          <p className="text-body text-text-tertiary">
             Built on{" "}
             <a href="https://github.com/cjpais/Handy" target="_blank" rel="noopener noreferrer" className="underline hover:text-text-secondary transition-colors">
               Handy

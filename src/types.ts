@@ -6,6 +6,7 @@ export interface Settings {
   recording_mode: string
   start_on_boot: boolean
   show_overlay: boolean
+  overlay_position: string
   advanced_mode: boolean
   mic_device: string
   vad_threshold: number

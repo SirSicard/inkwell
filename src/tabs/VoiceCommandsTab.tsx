@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
 import { toast } from "../state/toasts"
-import { GlassToggle } from "../components/ui"
+import { InkToggle } from "../components/ui"
 import type { VoiceCommandItem, VoiceCommandStoreData } from "../types"
 
 export function VoiceCommandsTab() {
@@ -121,7 +121,7 @@ export function VoiceCommandsTab() {
               }
             </p>
           </div>
-          <GlassToggle checked={store.enabled} onChange={toggleEnabled} />
+          <InkToggle checked={store.enabled} onChange={toggleEnabled} />
         </div>
 
         {store.enabled && (
@@ -174,7 +174,7 @@ export function VoiceCommandsTab() {
                   </span>
                 ))}
               </div>
-              <p className="text-[10px] text-text-tertiary mt-0.5">{actionLabel(cmd.action)}</p>
+              <p className="text-body text-text-tertiary mt-0.5">{actionLabel(cmd.action)}</p>
             </div>
             {cmd.id.startsWith("custom-") && (
               <button
