@@ -1,6 +1,6 @@
 use crate::{
     models,
-    appdetect, audio, dictionary, history, pipeline, settings, snippets,
+    appdetect, audio, dictionary, history, modes, pipeline, settings, snippets,
     style, tray, vad, voicecommand, AppState,
 };
 use tauri::{Emitter, Manager};
@@ -115,6 +115,37 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             rules.enabled
         );
         app.state::<AppState>().app_styles.set(rules, app_styles_path);
+    }
+
+    // Load modes, migrating an install that predates them.
+    //
+    // Migration runs only when no modes file exists, so it happens once and a
+    // user who later empties their modes does not get the old rules resurrected.
+    {
+        let modes_path = app_data_dir.join("modes.json");
+        let store = if modes_path.exists() {
+            modes::ModeStore::load(&modes_path)
+        } else {
+            let app_state = app.state::<AppState>();
+            let rules: Vec<(String, String)> = app_state
+                .app_styles
+                .with(|r| r.rules.iter().map(|x| (x.process_name.clone(), x.style.clone())).collect());
+            let migrated = modes::ModeStore::migrate_from(
+                &loaded_settings.style,
+                loaded_settings.polish_enabled,
+                &loaded_settings.polish_prompt,
+                loaded_settings.remove_fillers,
+                &rules,
+            );
+            log::info!(
+                "Modes: migrated {} mode(s) from existing style and per-app rules",
+                migrated.modes.len()
+            );
+            let _ = migrated.save(&modes_path);
+            migrated
+        };
+        log::info!("Modes: {} loaded, default '{}'", store.modes.len(), store.default_id);
+        app.state::<AppState>().modes.set(store, modes_path);
     }
 
     // Load voice commands

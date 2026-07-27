@@ -13,7 +13,7 @@ import { watchTheme, type ThemeChoice } from "./theme"
 import { basicTabs, advancedTabs, tabGroups } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
-  AITab, SnippetsTab, AppStylesTab, DictionaryTab,
+  AITab, SnippetsTab, ModesTab, DictionaryTab,
   FilesTab, VoiceCommandsTab, AboutTab,
 } from "./tabs"
 
@@ -416,7 +416,7 @@ function TabContent({ tab, onAdvancedChange }: { tab: Tab; onAdvancedChange?: (v
     case "Models":      return <ModelsTab />
     case "AI":          return <AITab />
     case "Snippets":    return <SnippetsTab />
-    case "App Styles":  return <AppStylesTab />
+    case "Modes":       return <ModesTab />
     case "Dictionary":  return <DictionaryTab />
     case "Files":       return <FilesTab />
     case "Commands":    return <VoiceCommandsTab />

@@ -16,6 +16,14 @@ pub struct AppStyleRules {
     pub rules: Vec<AppStyleRule>,
 }
 
+/// The frontmost application's identity, or None when it cannot be determined.
+///
+/// Public because mode resolution needs it too. The three platform-specific
+/// implementations below stay private; this is the one door to them.
+pub fn foreground_app_id() -> Option<String> {
+    get_foreground_app_id()
+}
+
 impl AppStyleRules {
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
