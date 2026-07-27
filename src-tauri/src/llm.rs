@@ -122,6 +122,11 @@ pub struct ProviderConfig {
 pub const PROVIDERS: &[&str] = &["openai", "groq", "anthropic", "openrouter", "custom"];
 
 /// Look up an API key from the OS keyring. Keys are keyring-only, never on disk.
+///
+/// On macOS this is not a cheap read: the system asks the user to authorize
+/// access to the item unless the calling binary is already in its ACL, so every
+/// call is a potential password dialog. Call it when the key is about to be
+/// used, never to find out whether one exists.
 pub fn api_key_for(provider: &str) -> Option<String> {
     keyring::Entry::new("inkwell", provider)
         .ok()
@@ -129,12 +134,17 @@ pub fn api_key_for(provider: &str) -> Option<String> {
         .filter(|k| !k.is_empty())
 }
 
-/// First provider the user has a key for. Polish is BYOK-only: no key, no polish.
-pub fn first_configured_provider() -> Option<String> {
+/// Ask the keyring which providers have a key, by reading each one.
+///
+/// Deliberately named a probe rather than a getter: it costs one authorization
+/// prompt per stored key on macOS. It exists only to reconcile an install that
+/// predates `Settings::configured_providers`, and runs once.
+pub fn probe_configured_providers() -> Vec<String> {
     PROVIDERS
         .iter()
-        .find(|p| api_key_for(p).is_some())
+        .filter(|p| api_key_for(p).is_some())
         .map(|p| p.to_string())
+        .collect()
 }
 
 pub fn build_provider(cfg: ProviderConfig) -> Box<dyn LlmProvider> {

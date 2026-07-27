@@ -329,8 +329,11 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
 
                 // AI Polish (BYOK only: no key configured means no polish)
                 let polish_enabled = *app_state.polish_enabled.lock().unwrap();
+                // From the settings record, not by scanning the keyring: doing
+                // the latter asked macOS to authorize a keychain read on every
+                // dictation, which is a password dialog in the middle of typing.
                 let byok_provider = if polish_enabled && !styled.is_empty() {
-                    llm::first_configured_provider()
+                    crate::polish::preferred_provider(&app_state)
                 } else {
                     None
                 };
