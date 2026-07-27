@@ -10,6 +10,7 @@ pub mod filetranscribe;
 pub mod history;
 mod llm;
 pub mod merge;
+pub mod modes;
 pub mod models;
 mod overlay;
 mod paste;
@@ -48,6 +49,7 @@ pub struct AppState {
     pub snippet_store: store::Store<snippets::SnippetStore>,
     // Per-app styles
     pub app_styles: store::Store<appdetect::AppStyleRules>,
+    pub modes: store::Store<modes::ModeStore>,
     // Voice commands
     pub voice_commands: store::Store<voicecommand::VoiceCommandStore>,
 }
@@ -70,6 +72,7 @@ pub fn run() {
             polish_prompt: Mutex::new(llm::DEFAULT_POLISH_PROMPT.to_string()),
             snippet_store: store::Store::new(snippets::SnippetStore::default()),
             app_styles: store::Store::new(appdetect::AppStyleRules::default()),
+            modes: store::Store::new(modes::ModeStore::default()),
             voice_commands: store::Store::new(voicecommand::VoiceCommandStore::default()),
         })
         .plugin(tauri_plugin_dialog::init())
@@ -106,6 +109,9 @@ pub fn run() {
             commands::test_snippet_expansion,
             commands::get_app_styles,
             commands::save_app_styles,
+            commands::get_modes,
+            commands::save_modes,
+            commands::get_foreground_app,
             commands::get_voice_commands,
             commands::save_voice_commands,
             paste::check_accessibility_permission,

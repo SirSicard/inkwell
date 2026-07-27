@@ -18,6 +18,23 @@ export interface Settings {
   debug_save_audio: boolean
 }
 
+/** Mirrors modes::Mode in src-tauri/src/modes.rs. */
+export interface Mode {
+  id: string
+  name: string
+  style: string
+  model: string
+  polish_prompt: string
+  polish_enabled: boolean
+  apps: string[]
+  remove_fillers: boolean
+}
+
+export interface ModeStore {
+  default_id: string
+  modes: Mode[]
+}
+
 export interface Toast {
   id: number
   message: string
@@ -85,7 +102,7 @@ export interface FileTranscribeResult {
 }
 
 export const basicTabs = ["Dashboard", "General", "About"] as const
-export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Snippets", "App Styles", "Dictionary", "Files", "Commands", "About"] as const
+export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Snippets", "Modes", "Dictionary", "Files", "Commands", "About"] as const
 export type Tab = (typeof advancedTabs)[number]
 
 /**
@@ -100,7 +117,7 @@ export type Tab = (typeof advancedTabs)[number]
  */
 export const tabGroups: readonly { label: string; tabs: readonly Tab[] }[] = [
   { label: "History", tabs: ["Dashboard", "Files"] },
-  { label: "Dictation", tabs: ["General", "Audio", "Models"] },
-  { label: "Intelligence", tabs: ["AI", "Snippets", "Dictionary", "Commands", "App Styles"] },
+  { label: "Dictation", tabs: ["General", "Modes", "Audio", "Models"] },
+  { label: "Intelligence", tabs: ["AI", "Snippets", "Dictionary", "Commands"] },
   { label: "System", tabs: ["About"] },
 ]

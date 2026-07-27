@@ -35,8 +35,8 @@ import {
 const features: { icon: ReactNode; title: string; body: string }[] = [
   {
     icon: <WaveIcon />,
-    title: "Twelve local models",
-    body: "Parakeet V3 (670 MB, 25 European languages) is the default. Whisper spans 99 languages from a 98 MB Tiny to a 1.5 GB Large V3, and SenseVoice covers Chinese, English, Japanese, Korean and Cantonese in 160 MB. Download, switch and delete them inside the app. Inference is CPU only.",
+    title: "Twelve local models, and it knows your language",
+    body: "Parakeet V3 (670 MB) is the default, and it detects which of 25 European languages you are speaking without you setting anything. Whisper spans 99 languages from a 98 MB Tiny to a 1.5 GB Large V3, and SenseVoice covers Chinese, English, Japanese, Korean and Cantonese in 160 MB. Download, switch and delete them inside the app. Inference is CPU only.",
   },
   {
     icon: <PenIcon />,

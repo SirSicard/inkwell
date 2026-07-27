@@ -77,3 +77,31 @@ pub fn save_voice_commands(
     log::info!("Voice commands saved");
     Ok(())
 }
+
+#[tauri::command]
+pub fn get_modes(state: tauri::State<AppState>) -> crate::modes::ModeStore {
+    state.modes.get()
+}
+
+#[tauri::command]
+pub fn save_modes(
+    state: tauri::State<AppState>,
+    store: crate::modes::ModeStore,
+) -> Result<(), String> {
+    // A store with no modes would make resolve() panic, and there is no sensible
+    // UI for "no way to write text". Refuse rather than persist it.
+    if store.modes.is_empty() {
+        return Err("At least one mode is required".to_string());
+    }
+    let count = store.modes.len();
+    state.modes.replace(store, |s, p| s.save(p))?;
+    log::info!("Modes saved: {} mode(s)", count);
+    Ok(())
+}
+
+/// The frontmost app's identity, so the UI can offer "add the app I was just in"
+/// instead of asking the user to know their own bundle identifiers.
+#[tauri::command]
+pub fn get_foreground_app() -> Option<String> {
+    crate::appdetect::foreground_app_id()
+}

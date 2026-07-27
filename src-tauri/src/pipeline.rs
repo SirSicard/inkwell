@@ -290,12 +290,20 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                     }
                 }
 
+                // Resolve the mode for the app about to receive the text. One
+                // lookup now decides style, cleanup and polish, where three
+                // separate settings used to decide them independently and could
+                // not vary together.
+                let active_mode = {
+                    let app_id = crate::appdetect::foreground_app_id();
+                    app_state.modes.with(|store| store.resolve(app_id.as_deref()).clone())
+                };
+                log::info!("Mode: {}", active_mode.name);
+
                 // Strip disfluencies before styling, not after: removing a
-                // leading "Um" can leave the next word lowercase, and style is
-                // the stage that fixes casing. Doing it the other way round
-                // pastes "um can you hear me" with the capital in the wrong
-                // place.
-                let text = if app_state.settings.lock().unwrap().remove_fillers {
+                // leading "Um" leaves the next word lowercase, and style is the
+                // stage that fixes casing.
+                let text = if active_mode.remove_fillers {
                     let cleaned = crate::cleanup::remove_disfluencies(&text);
                     if cleaned != text {
                         log::info!("Disfluencies removed: {:?} -> {:?}", text, cleaned);
@@ -305,19 +313,11 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
                     text
                 };
 
-                // Apply style formatting (per-app override if enabled)
-                let current_style = {
-                    let override_style =
-                        app_state.app_styles.with(|rules| rules.get_override());
-                    match override_style {
-                        Some(name) => {
-                            log::info!("Per-app style override: {}", name);
-                            serde_json::from_str::<style::Style>(&format!("\"{}\"", name))
-                                .unwrap_or_else(|_| app_state.style.lock().unwrap().clone())
-                        }
-                        None => app_state.style.lock().unwrap().clone(),
-                    }
-                };
+                let current_style = serde_json::from_str::<style::Style>(
+                    &format!("\"{}\"", active_mode.style),
+                )
+                .unwrap_or_else(|_| app_state.style.lock().unwrap().clone());
+
                 let styled = current_style.format(&text);
                 log::info!("Styled ({:?}): \"{}\"", current_style, styled);
 
