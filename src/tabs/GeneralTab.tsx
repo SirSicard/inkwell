@@ -2,7 +2,6 @@ import { useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { SettingRow, InkToggle, InkSelect, InkButton } from "../components/ui"
 import { useSettings } from "../state/settings"
-import { toast } from "../state/toasts"
 import { formatHotkey } from "../hotkey"
 
 function HotkeyCapture() {
@@ -84,7 +83,7 @@ function HotkeyCapture() {
   )
 }
 
-export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolean) => void }) {
+export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?: (v: boolean) => void; onNavigate?: (tab: "Modes") => void }) {
   // Read straight from the store rather than mirroring it into local state:
   // the mirrors were the reason two panels could disagree about the same value.
   const settings = useSettings((s) => s.settings)
@@ -95,18 +94,9 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
   const overlayPosition = settings?.overlay_position ?? "bottom-center"
   const theme = settings?.theme ?? "system"
   const recordingMode = settings?.recording_mode ?? "ptt"
-  const style = settings?.style ?? "formal"
   const advancedMode = settings?.advanced_mode ?? false
   const soundDictation = settings?.sound_dictation ?? true
-  const removeFillers = settings?.remove_fillers ?? true
   const debugSaveAudio = settings?.debug_save_audio ?? false
-
-  const handleStyleChange = (value: string) => {
-    // set_style is its own command (it also updates the live pipeline style),
-    // so keep the store in step explicitly.
-    void setSetting("style", value)
-    invoke("set_style", { styleName: value }).catch((e) => toast(`Could not set style: ${e}`))
-  }
 
   const handleRecordingModeChange = (value: string) => setSetting("recording_mode", value)
   const handleStartOnBootChange = (value: boolean) => setSetting("start_on_boot", value)
@@ -132,40 +122,17 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
         />
       </SettingRow>
 
-      {/* Style cards */}
-      <div className="space-y-2">
-        <div>
-          <p className="text-body font-medium text-text-primary">Text Style</p>
-          <p className="text-body text-text-tertiary mt-0.5">Controls how your transcribed text is formatted</p>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {([
-            { id: "formal", label: "Formal.", sub: "Caps + Punctuation", example: "Hey, are you free for lunch tomorrow? Let's do 12 if that works for you." },
-            { id: "casual", label: "Casual", sub: "Caps + Less punctuation", example: "Hey are you free for lunch tomorrow? Lets do 12 if that works for you" },
-            { id: "relaxed", label: "very casual", sub: "No caps + Minimal punctuation", example: "hey are you free for lunch tomorrow, lets do 12 if that works for you" },
-          ] as const).map((s) => (
-            <button
-              key={s.id}
-              onClick={() => handleStyleChange(s.id)}
-              className={`text-left p-3 rounded-lg border transition-all duration-150 ${
-                style === s.id
-                  ? "bg-accent/[0.06] border-accent/25"
-                  : "bg-bg-surface border-border hover:border-border-default"
-              }`}
-            >
-              <p className={`text-body font-semibold ${style === s.id ? "text-text-primary" : "text-text-secondary"}`}>{s.label}</p>
-              <p className="text-body text-text-tertiary mt-0.5">{s.sub}</p>
-              <div className={`mt-2.5 p-2.5 rounded-md text-body leading-relaxed ${
-                style === s.id
-                  ? "bg-bg-base text-text-secondary"
-                  : "bg-bg-hover/50 text-text-tertiary"
-              }`}>
-                {s.example}
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Text style and speech cleanup both used to be set here, writing
+          settings.style and settings.remove_fillers. The pipeline now resolves
+          both from the active mode, so these controls had become switches that
+          silently did nothing: exactly the "two places to set one thing" problem
+          modes existed to remove. They are edited where they are read. */}
+      <SettingRow
+        label="Text Style and Cleanup"
+        description="Formatting, speech cleanup and polish belong to a mode now, so they can differ per app."
+      >
+        <InkButton onClick={() => onNavigate?.("Modes")}>Open Modes</InkButton>
+      </SettingRow>
 
       <SettingRow label="Appearance" description="Follow the system, or pick one">
         <InkSelect
@@ -203,13 +170,6 @@ export function GeneralTab({ onAdvancedChange }: { onAdvancedChange?: (v: boolea
           />
         </SettingRow>
       )}
-
-      <SettingRow
-        label="Clean Up Speech"
-        description="Remove um, uh and repeated words before pasting. Conservative: it never drops a word that carries meaning."
-      >
-        <InkToggle checked={removeFillers} onChange={(v) => setSetting("remove_fillers", v)} />
-      </SettingRow>
 
       <SettingRow label="Dictation Sound" description="Audio feedback when recording starts and stops">
         <InkToggle checked={soundDictation} onChange={(v) => setSetting("sound_dictation", v)} />

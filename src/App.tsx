@@ -408,10 +408,10 @@ function Sidebar({
 
 // --- Tab Router ---
 
-function TabContent({ tab, onAdvancedChange }: { tab: Tab; onAdvancedChange?: (v: boolean) => void }) {
+function TabContent({ tab, onAdvancedChange, onNavigate }: { tab: Tab; onAdvancedChange?: (v: boolean) => void; onNavigate?: (t: Tab) => void }) {
   switch (tab) {
     case "Dashboard":   return <DashboardTab />
-    case "General":     return <GeneralTab onAdvancedChange={onAdvancedChange} />
+    case "General":     return <GeneralTab onAdvancedChange={onAdvancedChange} onNavigate={onNavigate} />
     case "Audio":       return <AudioTab />
     case "Models":      return <ModelsTab />
     case "AI":          return <AITab />
@@ -674,7 +674,7 @@ function App() {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.12 }}
             >
-              <TabContent tab={activeTab} onAdvancedChange={setAdvancedMode} />
+              <TabContent tab={activeTab} onAdvancedChange={setAdvancedMode} onNavigate={setActiveTab} />
             </motion.div>
           </AnimatePresence>
           </div>
