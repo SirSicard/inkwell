@@ -82,7 +82,7 @@ pub async fn transcribe_file(
             }),
         );
 
-        match state.engine.transcribe(chunk.clone()) {
+        match state.engine.transcribe(chunk.clone(), state.dict.with(|d| d.hotwords())) {
             Ok(text) if !text.is_empty() => {
                 let end_ms = start_ms + (chunk.len() as u64 * 1000 / 16000);
                 segments.push(json!({

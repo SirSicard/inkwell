@@ -47,7 +47,34 @@ pub fn build_shortcut_plugin(
             if should_start {
                 let guard = app_state.audio.lock().unwrap();
                 if let Some(audio) = guard.as_ref() {
-                    audio.recording_buffer.lock().unwrap().clear();
+                    {
+                        let mut buf = audio.recording_buffer.lock().unwrap();
+                        buf.clear();
+                        // People start speaking as they press, not after: seed
+                        // the take with the last 300ms the always-on pre-roll
+                        // already heard, so the first word keeps its first
+                        // phoneme. (The transcript history had "Cl." for
+                        // "Claude" on exactly this failure.) Clamped to what an
+                        // earlier take already claimed, so a rapid re-press
+                        // does not re-transcribe the previous take's tail.
+                        let w = audio.preroll.mark();
+                        let want = audio.sample_rate * 3 / 10;
+                        let from = w.saturating_sub(want).max(
+                            audio.preroll_claimed.load(Ordering::Relaxed),
+                        );
+                        let lead = audio.preroll.since(from, w.saturating_sub(from));
+                        audio.lead_len.store(lead.len(), Ordering::Relaxed);
+                        buf.extend_from_slice(&lead);
+                        // Reserve the first minute up front so the realtime
+                        // callback is not growing the Vec sample by sample.
+                        // Takes beyond 60s still grow by amortized doubling on
+                        // the audio thread; rare enough to accept, not fixed.
+                        let reserve = audio.sample_rate * 60;
+                        if buf.capacity() < reserve {
+                            let needed = reserve - buf.len();
+                            buf.reserve(needed);
+                        }
+                    }
                     // Clear pause on start as well as stop. A flag surviving
                     // into the next session would make that dictation capture
                     // nothing, with no visible cause.
@@ -73,11 +100,26 @@ pub fn build_shortcut_plugin(
                     audio.is_recording.store(false, Ordering::Relaxed);
                     audio.is_paused.store(false, Ordering::Relaxed);
 
-                    let samples: Vec<f32> = {
+                    let mut samples: Vec<f32> = {
                         let mut buf = audio.recording_buffer.lock().unwrap();
                         std::mem::take(&mut *buf)
                     };
                     let source_rate = audio.sample_rate;
+                    // The last word is still decaying when the key comes up.
+                    // Mark the pre-roll position now; the worker sleeps briefly
+                    // and then collects what the mic heard in the 300ms after
+                    // release. Reading the tail from the global pre-roll,
+                    // rather than keeping the shared buffer open, means a
+                    // rapid next dictation can start immediately without
+                    // racing this one's tail.
+                    let tail_mark = audio.preroll.mark();
+                    let tail_len = source_rate * 3 / 10;
+                    let preroll = audio.preroll.clone();
+                    // Claim through the tail so the next take's lead starts
+                    // after it, and measure how much of this take was pre-roll
+                    // seed rather than live speech.
+                    audio.preroll_claimed.store(tail_mark + tail_len, Ordering::Relaxed);
+                    let lead_len = audio.lead_len.swap(0, Ordering::Relaxed);
 
                     log::info!(
                         "Recording stopped: {} samples ({:.1}s at {}Hz)",
@@ -90,16 +132,26 @@ pub fn build_shortcut_plugin(
                     sounds::play_dictation_stop();
                     let _ = handle.emit("recording-state", false);
 
+                    // Gate on LIVE audio, excluding the seeded lead: the buffer
+                    // now always starts ~300ms full, so gating on total length
+                    // would let a stray hotkey tap transcribe pre-press room
+                    // noise and paste it somewhere.
                     let min_samples = (source_rate as f32 * 0.3) as usize;
-                    if samples.len() < min_samples {
+                    let live_samples = samples.len().saturating_sub(lead_len);
+                    if live_samples < min_samples {
                         log::info!(
-                            "Recording too short ({} samples, {:.1}s), skipping",
-                            samples.len(),
-                            samples.len() as f32 / source_rate as f32
+                            "Recording too short ({} live samples, {:.1}s), skipping",
+                            live_samples,
+                            live_samples as f32 / source_rate as f32
                         );
                     } else {
                         let handle_clone = handle.clone();
                         std::thread::spawn(move || {
+                            // Wait out the release tail, then append it. 350ms
+                            // of added latency buys the final word's ending;
+                            // transcription itself takes longer than this.
+                            std::thread::sleep(std::time::Duration::from_millis(350));
+                            samples.extend(preroll.since(tail_mark, tail_len));
                             match std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(|| {
                                     process_recording(
@@ -218,7 +270,7 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
     // 2. VAD: remove silence
     let vad_path = app_state.vad_model_path.lock().unwrap().clone();
     let speech = if !vad_path.is_empty() && std::path::Path::new(&vad_path).exists() {
-        match vad::remove_silence(&resampled, &vad_path, vad_threshold) {
+        match vad::trim_silence(&resampled, &vad_path, vad_threshold) {
             Ok(s) if !s.is_empty() => s,
             Ok(_) => {
                 log::warn!("VAD returned empty, using raw audio");
@@ -237,7 +289,10 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
     // 3. Transcribe. The engine lives on its own thread; this blocks the
     // pipeline worker until it answers, which is what we want here.
     {
-        match app_state.engine.transcribe(speech.clone()) {
+        // The dictionary's correction targets ride along as decoder hotwords,
+        // so "Inkwell" can win during decoding instead of being patched after.
+        let hotwords = app_state.dict.with(|d| d.hotwords());
+        match app_state.engine.transcribe(speech.clone(), hotwords) {
             Ok(text) => {
                 log::info!("Raw: \"{}\"", text);
 

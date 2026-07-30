@@ -119,7 +119,7 @@ pub fn vad_chunk(
     let min_speech_samples = (0.25 * 16000.0) as usize; // 250ms minimum
 
     // Run VAD to get speech regions
-    let speech = crate::vad::remove_silence(samples, vad_model_path, vad_threshold)?;
+    let speech = crate::vad::trim_silence(samples, vad_model_path, vad_threshold)?;
 
     if speech.is_empty() {
         return Err("No speech detected in file".to_string());

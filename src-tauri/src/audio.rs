@@ -1,9 +1,78 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
-use ringbuf::{HeapRb, traits::{Producer, Split}};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+
+/// A rolling window of the most recent capture, always written, read at
+/// recording start and stop. This is what makes push-to-talk forgiving:
+/// people begin speaking as they press the key and keep speaking as they
+/// release it, so the recording proper is bracketed with audio that only this
+/// buffer still has.
+///
+/// Lock-free by construction rather than by cleverness: the capture callback is
+/// the only writer, readers tolerate a racy snapshot (the window is 300ms out
+/// of a 3s buffer, so the writer would need to lap 90% of the ring during a
+/// microsecond memcpy for a read to tear), and each slot is an AtomicU32 of
+/// f32 bits so no torn sample is ever read.
+///
+/// Its predecessor was a ringbuf::HeapRb whose consumer was dropped at
+/// creation: pushes failed forever once it filled, and no pre-roll was ever
+/// read. This replaces it outright.
+pub struct Preroll {
+    buf: Vec<AtomicU32>,
+    /// Total samples ever written; monotonic. The ring position is write % len.
+    write: AtomicUsize,
+}
+
+impl Preroll {
+    fn new(capacity: usize) -> Self {
+        let mut buf = Vec::with_capacity(capacity);
+        buf.resize_with(capacity, || AtomicU32::new(0));
+        Self { buf, write: AtomicUsize::new(0) }
+    }
+
+    /// Callback side. The slot store may be Relaxed, but the index store is
+    /// Release so a reader that observes index w also observes every slot
+    /// written before it; with both Relaxed, the newest few samples of a
+    /// `last()` snapshot could still hold the previous lap's audio.
+    #[inline]
+    fn push(&self, sample: f32) {
+        let w = self.write.load(Ordering::Relaxed);
+        self.buf[w % self.buf.len()].store(sample.to_bits(), Ordering::Relaxed);
+        self.write.store(w + 1, Ordering::Release);
+    }
+
+    /// Absolute position marker, for `since`.
+    pub fn mark(&self) -> usize {
+        self.write.load(Ordering::Acquire)
+    }
+
+    /// The last `n` samples before now, oldest first.
+    pub fn last(&self, n: usize) -> Vec<f32> {
+        let w = self.write.load(Ordering::Acquire);
+        let n = n.min(w).min(self.buf.len());
+        self.range(w - n, w)
+    }
+
+    /// Samples written after `mark`, capped at `max`, oldest first. Used to
+    /// collect the release tail: mark at stop, read 300ms later.
+    pub fn since(&self, mark: usize, max: usize) -> Vec<f32> {
+        let w = self.write.load(Ordering::Acquire);
+        let end = w.min(mark + max);
+        if end <= mark || w - mark > self.buf.len() {
+            // Nothing new, or the ring has already lapped the mark.
+            return Vec::new();
+        }
+        self.range(mark, end)
+    }
+
+    fn range(&self, from: usize, to: usize) -> Vec<f32> {
+        (from..to)
+            .map(|i| f32::from_bits(self.buf[i % self.buf.len()].load(Ordering::Relaxed)))
+            .collect()
+    }
+}
 
 pub struct AudioState {
     pub rms: Arc<Mutex<f32>>,
@@ -13,6 +82,18 @@ pub struct AudioState {
     /// stops. That is the whole of "pause", and it is why this costs one flag.
     pub is_paused: Arc<AtomicBool>,
     pub recording_buffer: Arc<Mutex<Vec<f32>>>,
+    /// Rolling recent-capture window; see [`Preroll`].
+    pub preroll: Arc<Preroll>,
+    /// Absolute pre-roll position up to which audio was already claimed by an
+    /// earlier take (its lead or its release tail). The next take's lead reads
+    /// from here at the earliest, so rapid back-to-back dictations never
+    /// transcribe (and paste) the same 600ms twice.
+    pub preroll_claimed: Arc<AtomicUsize>,
+    /// Pre-roll samples seeded into the current take, so the stop path can
+    /// gate on live speech rather than on a buffer that always starts 300ms
+    /// full. Without this, the too-short guard was dead and a stray hotkey tap
+    /// transcribed whatever the room said before the tap.
+    pub lead_len: Arc<AtomicUsize>,
     pub sample_rate: usize,
     _stream: Stream,
 }
@@ -145,10 +226,11 @@ pub fn start_audio_capture(
         dev_name, sample_rate, channels, config.sample_format()
     );
 
-    // Ring buffer: 3 seconds standby
-    let rb_size = sample_rate * 3;
-    let rb = HeapRb::<f32>::new(rb_size);
-    let (mut producer, _consumer) = rb.split();
+    let preroll = Arc::new(Preroll::new(sample_rate * 3));
+    let preroll_writer = preroll.clone();
+    let preroll_writer_i16 = preroll.clone();
+    let preroll_claimed = Arc::new(AtomicUsize::new(0));
+    let lead_len = Arc::new(AtomicUsize::new(0));
 
     // Shared state
     let rms = Arc::new(Mutex::new(0.0f32));
@@ -186,17 +268,22 @@ pub fn start_audio_capture(
                     let recording = is_recording_reader.load(Ordering::Relaxed)
                         && !is_paused_reader.load(Ordering::Relaxed);
 
+                    // One lock per callback, not one per sample: the previous
+                    // shape acquired the mutex for every sample on the realtime
+                    // audio thread, thousands of times per callback.
+                    let mut buf_guard = if recording {
+                        recording_buffer_writer.lock().ok()
+                    } else {
+                        None
+                    };
+
                     for frame in data.chunks(channels) {
                         let mono: f32 = downmix(frame, channels);
 
-                        // Always push to ring buffer (standby)
-                        let _ = producer.try_push(mono);
+                        preroll_writer.push(mono);
 
-                        // If recording, also push to recording buffer
-                        if recording {
-                            if let Ok(mut buf) = recording_buffer_writer.lock() {
-                                buf.push(mono);
-                            }
+                        if let Some(buf) = buf_guard.as_mut() {
+                            buf.push(mono);
                         }
 
                         // RMS computation
@@ -241,6 +328,12 @@ pub fn start_audio_capture(
                     let recording = is_recording_reader.load(Ordering::Relaxed)
                         && !is_paused_reader.load(Ordering::Relaxed);
 
+                    let mut buf_guard = if recording {
+                        recording_buffer_writer.lock().ok()
+                    } else {
+                        None
+                    };
+
                     for frame in data.chunks(channels) {
                         let mono: f32 = if channels > 2 {
                             frame.first().map(|&s| s as f32 / 32768.0).unwrap_or(0.0)
@@ -248,12 +341,10 @@ pub fn start_audio_capture(
                             frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / channels as f32
                         };
 
-                        let _ = producer.try_push(mono);
+                        preroll_writer_i16.push(mono);
 
-                        if recording {
-                            if let Ok(mut buf) = recording_buffer_writer.lock() {
-                                buf.push(mono);
-                            }
+                        if let Some(buf) = buf_guard.as_mut() {
+                            buf.push(mono);
                         }
 
                         sum_squares += mono * mono;
@@ -294,13 +385,16 @@ pub fn start_audio_capture(
     };
 
     stream.play().map_err(|e| format!("Failed to start stream: {}", e))?;
-    log::info!("Audio capture started (always-on, ring buffer {}s)", 3);
+    log::info!("Audio capture started (always-on, {}s pre-roll window)", 3);
 
     Ok(AudioState {
         rms,
         is_recording,
         is_paused,
         recording_buffer,
+        preroll,
+        preroll_claimed,
+        lead_len,
         sample_rate,
         _stream: stream,
     })
@@ -350,4 +444,66 @@ pub fn restart_audio_capture(app: &AppHandle, preferred_device: &str) -> Result<
 #[tauri::command]
 pub fn get_input_devices() -> Vec<DeviceInfo> {
     list_input_devices()
+}
+
+#[cfg(test)]
+mod preroll_tests {
+    use super::Preroll;
+
+    #[test]
+    fn last_returns_most_recent_samples_in_order() {
+        let p = Preroll::new(8);
+        for i in 0..5 {
+            p.push(i as f32);
+        }
+        assert_eq!(p.last(3), vec![2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn last_survives_wraparound() {
+        let p = Preroll::new(4);
+        for i in 0..10 {
+            p.push(i as f32);
+        }
+        assert_eq!(p.last(3), vec![7.0, 8.0, 9.0]);
+        // Asking for more than the ring holds returns what exists.
+        assert_eq!(p.last(100), vec![6.0, 7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn last_on_an_empty_ring_is_empty() {
+        let p = Preroll::new(4);
+        assert!(p.last(3).is_empty());
+    }
+
+    #[test]
+    fn since_returns_only_what_came_after_the_mark() {
+        let p = Preroll::new(8);
+        p.push(1.0);
+        let mark = p.mark();
+        p.push(2.0);
+        p.push(3.0);
+        assert_eq!(p.since(mark, 10), vec![2.0, 3.0]);
+        // Capped at max.
+        assert_eq!(p.since(mark, 1), vec![2.0]);
+    }
+
+    #[test]
+    fn since_a_lapped_mark_returns_nothing_rather_than_garbage() {
+        let p = Preroll::new(4);
+        let mark = p.mark();
+        for i in 0..9 {
+            p.push(i as f32);
+        }
+        // The ring wrapped past the mark; the honest answer is nothing.
+        assert!(p.since(mark, 4).is_empty());
+    }
+
+    #[test]
+    fn since_with_no_new_samples_is_empty() {
+        let p = Preroll::new(4);
+        p.push(1.0);
+        let mark = p.mark();
+        assert!(p.since(mark, 10).is_empty());
+    }
 }

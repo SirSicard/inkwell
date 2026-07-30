@@ -19,21 +19,41 @@ pub fn resample_to_16k(samples: &[f32], source_rate: usize) -> Result<Vec<f32>, 
 
     let ratio = TARGET_SAMPLE_RATE as f64 / source_rate as f64;
 
+    // Input length includes the flush padding added below; SincFixedIn wants
+    // its exact chunk size up front.
+    let pad = 256; // >= sinc_len / 2 input samples of flush
     let mut resampler = SincFixedIn::<f32>::new(
         ratio,
         2.0,
         params,
-        samples.len(),
+        samples.len() + pad,
         1, // mono
     )
     .map_err(|e| format!("Failed to create resampler: {}", e))?;
 
-    let input = vec![samples.to_vec()]; // 1 channel
-    let output = resampler
+    // The sinc filter delays its output by half the kernel and keeps that much
+    // input as history a single process() call never emits, which used to
+    // silently drop the final ~2.7ms of every recording, i.e. the end of the
+    // last word. Pad the input with enough zeros to flush the history through,
+    // then trim the warm-up delay from the head and cut to the exact expected
+    // length, so the output aligns 1:1 with the input.
+    let mut padded = Vec::with_capacity(samples.len() + pad);
+    padded.extend_from_slice(samples);
+    padded.resize(samples.len() + pad, 0.0);
+
+    let input = vec![padded]; // 1 channel
+    let mut output = resampler
         .process(&input, None)
         .map_err(|e| format!("Resampling failed: {}", e))?;
 
-    Ok(output[0].clone())
+    let mut result = output.swap_remove(0);
+    let delay = resampler.output_delay();
+    if delay < result.len() {
+        result.drain(..delay);
+    }
+    let expected = (samples.len() as f64 * ratio).round() as usize;
+    result.truncate(expected);
+    Ok(result)
 }
 
 /// Save f32 mono samples as a 16kHz WAV file (for debugging)
@@ -83,23 +103,73 @@ pub fn normalize_peak(mut samples: Vec<f32>) -> Vec<f32> {
     const NOISE_FLOOR: f32 = 0.0005;
     /// Caps how far a faint buffer can be lifted, so room tone stays room tone.
     const MAX_GAIN: f32 = 60.0;
+    /// 20ms at the 16kHz this function receives (it runs after resampling).
+    const FRAME: usize = 320;
+    /// How many of the loudest frames to discount as possible transients. A
+    /// keyboard click spans one or two 20ms frames; real speech spans dozens.
+    const TRANSIENT_FRAMES: usize = 8;
 
-    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-    if peak < NOISE_FLOOR || peak >= TARGET_PEAK {
+    // Gain is keyed to a robust loudness estimate, not the absolute peak. The
+    // absolute peak belongs to whichever single sample is loudest, and on a
+    // push-to-talk app that is routinely the hotkey press itself: one keyboard
+    // transient at full scale used to make this function decide the take was
+    // already loud enough and leave -60 dBFS speech untouched, losing the whole
+    // dictation.
+    //
+    // The estimate is the Nth-loudest frame peak, not a percentile of all
+    // frames: a percentile over the whole take keys the gain to however much
+    // silence surrounds the speech, so a long recording with a short utterance
+    // in it read as "room tone" and got the speech amplified into a square
+    // wave. Skipping a fixed handful of top frames ignores clicks whatever the
+    // speech-to-silence ratio is, and lands inside the speech itself for any
+    // utterance longer than a fraction of a second.
+    let mut frame_peaks: Vec<f32> = samples
+        .chunks(FRAME)
+        .map(|f| f.iter().map(|s| s.abs()).fold(0.0f32, f32::max))
+        .collect();
+    if frame_peaks.is_empty() {
+        return samples;
+    }
+    frame_peaks.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let robust_peak = frame_peaks[TRANSIENT_FRAMES.min(frame_peaks.len() - 1)];
+
+    if robust_peak < NOISE_FLOOR || robust_peak >= TARGET_PEAK {
         return samples;
     }
 
-    let gain = (TARGET_PEAK / peak).min(MAX_GAIN);
+    let gain = (TARGET_PEAK / robust_peak).min(MAX_GAIN);
     for s in samples.iter_mut() {
+        // The rare transient above the robust estimate hard-clips; a shaved
+        // click is harmless where an unamplified dictation was not.
         *s = (*s * gain).clamp(-1.0, 1.0);
     }
-    log::info!("Normalised audio: peak {:.6} -> {:.6} (gain {:.1}x)", peak, peak * gain, gain);
+    log::info!(
+        "Normalised audio: robust peak {:.6} -> {:.6} (gain {:.1}x)",
+        robust_peak,
+        robust_peak * gain,
+        gain
+    );
     samples
 }
 
 #[cfg(test)]
 mod normalize_tests {
     use super::normalize_peak;
+
+    #[test]
+    fn a_single_click_does_not_veto_amplifying_quiet_speech() {
+        // 2s of -54dBFS speech-level signal with one full-scale keyboard click.
+        // The old absolute-peak logic saw the click and returned the buffer
+        // untouched; the robust estimate must ignore it and lift the speech.
+        let mut samples = vec![0.002f32; 96000];
+        samples[48000] = 0.9;
+        let out = normalize_peak(samples);
+        let speech_level = out[1000].abs();
+        assert!(
+            speech_level > 0.05,
+            "quiet speech was not amplified past a transient: {speech_level}"
+        );
+    }
 
     #[test]
     fn lifts_a_quiet_recording_to_the_target() {

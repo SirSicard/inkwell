@@ -31,7 +31,7 @@ fn transcribes_known_speech() {
     println!("decoded {} samples", samples.len());
 
     let eng = engine::SpeechEngine::parakeet(&models_dir()).expect("model load failed");
-    let text = eng.transcribe(&samples).expect("transcribe failed");
+    let text = eng.transcribe(&samples, None).expect("transcribe failed");
     println!("transcript: {text:?}");
 
     // Compare loosely: recognizers vary on casing and punctuation.
@@ -56,4 +56,30 @@ fn keyring_round_trips_a_secret() {
     entry.set_password("hunter2").expect("set_password failed: no backend?");
     assert_eq!(entry.get_password().expect("get_password failed"), "hunter2");
     entry.delete_credential().expect("delete failed");
+}
+
+/// The hotword path exercises three things plain decoding does not: the
+/// synthesized bpe.vocab parses, modified_beam_search accepts it, and a biased
+/// stream still decodes ordinary speech correctly. sherpa aborts the process on
+/// a config it rejects, which is exactly why this runs here and not first at a
+/// user's dictation.
+#[test]
+#[ignore = "needs an installed model and a generated wav"]
+fn hotword_biasing_does_not_break_ordinary_speech() {
+    let wav = PathBuf::from("/tmp/inkwell_test.wav");
+    assert!(wav.exists(), "generate the fixture first (see module docs)");
+
+    let samples = filetranscribe::decode_to_pcm(&wav).expect("decode failed");
+    let eng = engine::SpeechEngine::parakeet(&models_dir()).expect("model load failed");
+
+    let hotwords = "Inkwell\nClaude\nVercel";
+    let text = eng
+        .transcribe(&samples, Some(hotwords))
+        .expect("hotword transcribe failed");
+    println!("hotword transcript: {text:?}");
+
+    let got = text.to_lowercase();
+    for word in ["quick", "brown", "fox", "lazy", "dog"] {
+        assert!(got.contains(word), "expected {word:?} in transcript, got {text:?}");
+    }
 }

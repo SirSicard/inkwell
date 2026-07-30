@@ -83,13 +83,14 @@ fn create_detector(model_path: &str, threshold: f32) -> Result<VoiceActivityDete
         .ok_or_else(|| "Failed to create VoiceActivityDetector".to_string())
 }
 
-/// Run Silero VAD on audio samples to extract only speech segments.
-/// Input: 16kHz mono f32 samples.
-/// Returns: samples with silence removed.
+/// Trim leading and trailing silence from 16kHz mono samples using Silero VAD.
+/// Everything between the first and last detected speech, pauses included,
+/// survives; only the dead air at the ends is removed. Returns an empty vec
+/// when no speech is detected, and callers fall back to the raw buffer.
 ///
 /// The detector is cached across calls and rebuilt only when the model path or
 /// threshold changes. Concurrent callers serialize on the cache mutex.
-pub fn remove_silence(samples: &[f32], model_path: &str, threshold: f32) -> Result<Vec<f32>, String> {
+pub fn trim_silence(samples: &[f32], model_path: &str, threshold: f32) -> Result<Vec<f32>, String> {
     // A panic mid-detection must not disable VAD for the rest of the session.
     let mut guard = cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
 
@@ -113,36 +114,56 @@ pub fn remove_silence(samples: &[f32], model_path: &str, threshold: f32) -> Resu
     vad.reset();
     vad.clear();
 
-    let mut speech_samples = Vec::new();
+    // Trim, don't gate. This used to butt-join every detected speech segment
+    // and throw the pauses away, which harmed accuracy twice over: mid-speech
+    // pauses longer than 250ms were excised (splicing unrelated phonemes hard
+    // against each other), and the spliced stream left the long-audio chunker
+    // no silence to cut at, so chunk seams landed mid-word by construction.
+    // The transcript history showed both signatures. Dictation only needs the
+    // dead air at the ends removed; the model handles pauses fine.
+    let mut first_start: Option<usize> = None;
+    let mut last_end: usize = 0;
+
+    let mut note = |seg_start: i32, seg_len: usize| {
+        let start = seg_start.max(0) as usize;
+        if first_start.is_none() {
+            first_start = Some(start);
+        }
+        last_end = last_end.max(start + seg_len);
+    };
 
     for chunk in samples.chunks(WINDOW_SIZE) {
         vad.accept_waveform(chunk);
-
         while let Some(seg) = vad.front() {
-            speech_samples.extend_from_slice(seg.samples());
+            note(seg.start(), seg.samples().len());
             vad.pop();
         }
     }
-
-    // Flush remaining
     vad.flush();
     while let Some(seg) = vad.front() {
-        speech_samples.extend_from_slice(seg.samples());
+        note(seg.start(), seg.samples().len());
         vad.pop();
     }
 
-    let removed_pct = if !samples.is_empty() {
-        100.0 * (1.0 - speech_samples.len() as f32 / samples.len() as f32)
-    } else {
-        0.0
+    let Some(first_start) = first_start else {
+        // No speech found at all; the caller falls back to the raw buffer.
+        log::info!("VAD: no speech detected in {} samples", samples.len());
+        return Ok(Vec::new());
     };
 
+    // Silero's onset trigger lags soft attacks, and the last word's decay
+    // matters too; keep a pad on both ends so no phoneme is shaved off.
+    const EDGE_PAD: usize = 4000; // 250ms at 16kHz
+    let lo = first_start.saturating_sub(EDGE_PAD);
+    let hi = (last_end + EDGE_PAD).min(samples.len());
+    let trimmed = samples[lo..hi].to_vec();
+
     log::info!(
-        "VAD: {} -> {} samples ({:.1}% silence removed)",
+        "VAD: trimmed {} -> {} samples ({:.1}s of edge silence removed)",
         samples.len(),
-        speech_samples.len(),
-        removed_pct
+        trimmed.len(),
+        (samples.len() - trimmed.len()) as f32 / 16000.0
     );
 
-    Ok(speech_samples)
+    Ok(trimmed)
 }
