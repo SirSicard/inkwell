@@ -28,6 +28,33 @@ impl Dictionary {
         Ok(())
     }
 
+    /// The dictionary's correction targets as decoder bias phrases, one per
+    /// line, or None when there is nothing to bias toward.
+    ///
+    /// The `replace` side is what the user actually means ("Inkwell"); feeding
+    /// it to the recognizer as a hotword lets the model decode the word right
+    /// in the first place, instead of this module repairing whatever came out.
+    /// The find/replace pass still runs afterwards, both as a backstop and for
+    /// models that do not support biasing.
+    pub fn hotwords(&self) -> Option<String> {
+        let mut seen = std::collections::HashSet::new();
+        let words: Vec<&str> = self
+            .entries
+            .iter()
+            .map(|e| e.replace.trim())
+            .filter(|w| !w.is_empty() && w.chars().any(|c| c.is_alphabetic()))
+            .filter(|w| seen.insert(w.to_lowercase()))
+            // A huge bias list dilutes itself and slows the beam; nobody's
+            // personal vocabulary needs more than this.
+            .take(100)
+            .collect();
+        if words.is_empty() {
+            None
+        } else {
+            Some(words.join("\n"))
+        }
+    }
+
     /// Apply all dictionary replacements to text (case-insensitive find, exact replace).
     pub fn apply(&self, text: &str) -> String {
         let mut result = text.to_string();

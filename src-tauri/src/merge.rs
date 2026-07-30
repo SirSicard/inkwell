@@ -7,10 +7,12 @@
 //! These helpers drop the duplicated head words before joining.
 
 /// Most trailing words we will treat as an overlap duplicate.
-/// The engine overlaps chunks by 0.5s, which is ~3 words at fast speech; the
-/// headroom covers the recognizer stretching a word across the boundary. Kept
-/// small on purpose: a longer window starts eating genuine repetition.
-const MAX_OVERLAP_WORDS: usize = 8;
+/// Sized for the engine's chunk overlap: 2s of shared audio is ~8 words at a
+/// fast 240wpm, and dedup only fires when the window spans the WHOLE duplicated
+/// region, so the cap must exceed the worst realistic case or every seam in
+/// fast speech duplicates its full overlap verbatim. Still bounded, because an
+/// unbounded window starts eating genuine repetition.
+const MAX_OVERLAP_WORDS: usize = 16;
 
 /// Fewest normalized characters an overlap run must carry to count as a repeat.
 /// Without it a bare "a" or "the" landing on both sides of a seam eats a real

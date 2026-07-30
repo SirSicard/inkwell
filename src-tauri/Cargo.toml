@@ -24,7 +24,6 @@ log = "0.4"
 tauri = { version = "2.10.3", features = ["tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-log = "2"
 cpal = "0.17"
-ringbuf = "0.4"
 tauri-plugin-global-shortcut = "2.3.1"
 hound = "3.5.1"
 rubato = "0.16"

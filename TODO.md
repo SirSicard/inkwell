@@ -35,19 +35,35 @@ The build question is answered: sherpa-onnx compiles on MSVC and the v0.2.0 msi/
 - [ ] Owner: keep daily-driving. AI polish confirmed working end to end 2026-07-30 (three consecutive dictations polished after Allow was granted).
 - [ ] Next tag: confirm `macos-15-intel` actually supplies runners. macos-13 was retired, which is why v0.2.0 has no Intel build; the new label is unproven.
 
-## 5. Features, in the order the research ranks them
+## 5. Transcription accuracy (opened after the 2026-07-30 deep dive)
+
+The diagnosis, from the owner's own 29-transcript history (docs of record: the
+transcription-quality workflow results): proper nouns failed from vocabulary,
+not acoustics ("Inkwell" 0-for-5); every duplicated-word artifact came from 15s
+chunk seams; short clips lost word edges to push-to-talk timing. Mic and core
+model were explicitly exonerated. Fixed in-tree the same day: hotword biasing
+from the dictionary + beam search, trim-only VAD, quiet-point 60s chunking,
+transient-proof normalization, pre-roll/release-tail capture, resampler flush.
+
+- [ ] Owner: add the words that matter to the Dictionary (Inkwell, Claude, Vercel, Fable...); they now bias the decoder itself, not just post-editing.
+- [ ] A/B harness on the owner's saved debug-audio WAVs before/after any model change; measure, don't vibe.
+- [ ] Accuracy tier candidate #1: Qwen3-ASR-0.6B int8 (Apache-2.0, published accented-English win, Swedish-aware, hotword support; needs sherpa-onnx crate upgrade past 1.12.34). #2: Parakeet v2-EN fp16 A/B for English-only use. #3: fp32 Parakeet v3 to quantify what int8 costs.
+- [ ] filetranscribe still blind-cuts at 30s with no overlap or merge; route it through the engine chunker (costs per-segment timestamps, decide the tradeoff).
+- [ ] transcripts.audio_duration_ms now includes pauses and 600ms of edge pads; decide whether stats should measure speech or wall clock.
+
+## 6. Features, in the order the research ranks them
 
 - [ ] Voice editing / Command Mode: select text, hold a second hotkey, speak an instruction, get the rewrite pasted over the selection. The last converged competitor gap. Nothing blocks it.
 - [ ] Streaming spike: streaming Zipformer vs Moonshine v2 vs an Apple SpeechAnalyzer sidecar. Parakeet is offline-only in sherpa-onnx, so live partials need a second model either way. Research: [docs/research/raw/08-streaming.md](docs/research/raw/08-streaming.md).
 - [ ] If the spike survives: two-pass pipeline, streaming partials in the overlay, final pass rescored offline.
 
-## 6. Distribution polish
+## 7. Distribution polish
 
 - [ ] Move the updater endpoint off `workers.dev` onto the owned domain (route stubbed in `inkwell-updater/wrangler.toml`), then re-verify.
 - [ ] Homebrew cask (possible now that the release is public; nicer after signing).
 - [ ] Screenshot and demo GIF in the README.
 
-## 7. Housekeeping (low urgency)
+## 8. Housekeeping (low urgency)
 
 - [ ] Fold `debug_save_audio` into a Troubleshooting section instead of General.
 - [ ] Decide whether voice commands fold into Modes or stay a separate concept.

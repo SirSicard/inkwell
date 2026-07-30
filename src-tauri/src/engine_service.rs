@@ -31,6 +31,7 @@ enum Request {
     },
     Transcribe {
         samples: Vec<f32>,
+        hotwords: Option<String>,
         reply: Sender<Result<String, String>>,
     },
 }
@@ -69,9 +70,9 @@ impl EngineService {
                             }
                             let _ = reply.send(result);
                         }
-                        Request::Transcribe { samples, reply } => {
+                        Request::Transcribe { samples, hotwords, reply } => {
                             let result = match engine.as_ref() {
-                                Some(e) => e.transcribe(&samples),
+                                Some(e) => e.transcribe(&samples, hotwords.as_deref()),
                                 None => Err(
                                     "No speech engine loaded. Download a model first.".to_string()
                                 ),
@@ -106,10 +107,11 @@ impl EngineService {
     }
 
     /// Transcribe 16 kHz mono samples, blocking until the result is ready.
-    pub fn transcribe(&self, samples: Vec<f32>) -> Result<String, String> {
+    /// `hotwords`: newline-separated bias phrases, or None for plain decoding.
+    pub fn transcribe(&self, samples: Vec<f32>, hotwords: Option<String>) -> Result<String, String> {
         let (reply, wait) = channel();
         self.tx
-            .send(Request::Transcribe { samples, reply })
+            .send(Request::Transcribe { samples, hotwords, reply })
             .map_err(|_| "Engine thread is gone".to_string())?;
         wait.recv()
             .map_err(|_| "Engine thread stopped responding".to_string())?
