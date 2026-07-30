@@ -329,21 +329,36 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
 
                 // AI Polish (BYOK only: no key configured means no polish)
                 let polish_enabled = *app_state.polish_enabled.lock().unwrap();
-                // From the settings record, not by scanning the keyring: doing
-                // the latter asked macOS to authorize a keychain read on every
-                // dictation, which is a password dialog in the middle of typing.
+                // The key is fetched here, together with the decision to polish,
+                // because the fetch can fail: reading the keychain item makes
+                // macOS ask the user, and the user can say no. This used to be
+                // unwrap_or_default() further down, which turned a denial into an
+                // empty key and sent the transcript to the provider anyway, to be
+                // rejected with a 401. Saying no to the keychain must mean the
+                // text never leaves the machine, not that it leaves and bounces.
                 let byok_provider = if polish_enabled && !styled.is_empty() {
-                    crate::polish::preferred_provider()
+                    crate::polish::preferred_provider().and_then(|provider| {
+                        match llm::api_key_for(&provider) {
+                            Some(key) => Some((provider, key)),
+                            None => {
+                                log::warn!(
+                                    "AI Polish skipped: keychain access for {} \
+                                     denied or key missing; keeping the local \
+                                     transcript",
+                                    provider
+                                );
+                                None
+                            }
+                        }
+                    })
                 } else {
                     None
                 };
 
                 let final_text = match byok_provider {
-                    Some(provider) => {
+                    Some((provider, api_key)) => {
                         let prompt =
                             app_state.polish_prompt.lock().unwrap().clone();
-                        let api_key =
-                            llm::api_key_for(&provider).unwrap_or_default();
                         let styled_clone = styled.clone();
                         log::info!("AI Polish: sending to {}", provider);
 
