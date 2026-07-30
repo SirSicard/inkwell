@@ -1,77 +1,61 @@
 # Inkwell - Roadmap
 
-*Replaces the old pre-launch build checklist, which was complete and stale.*
 *Ordered by dependency, not by date. No dates are promised.*
+*State audited 2026-07-30. The rehaul itself (sections 0 to 3 of the old file) is done and lives in the git log and CHANGELOG; this file only tracks what is left.*
 
-Source of the analysis behind this list: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-analysis-2026-07-24.md). Target architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Analysis behind the rehaul: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-analysis-2026-07-24.md). Feature research: [docs/competitive-extras-2026-07-27.md](docs/competitive-extras-2026-07-27.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
-## 0. Rehaul (in progress)
+## 1. Ship v0.2.0 (critical path, in order)
 
-- [x] Delete voice agent mode (module, tab, hotkey, sounds, settings, pipeline branch)
-- [x] Delete the free AI polish proxy tier and its quota tracking
-- [x] Documentation, licensing and repo identity pass
-- [x] Delete `inkwell-worker/` (the Cloudflare Worker that served the dead free tier)
-- [ ] Shut the deployed worker down at Cloudflare. Deleting the source does not stop the running service.
-- [ ] Secure the minisign updater private key outside of GitHub Actions secrets. Losing it permanently breaks the update chain for every installed copy.
-- [ ] Fix `src-tauri/Cargo.toml` scaffold metadata (`description = "A Tauri App"`, `authors = ["you"]`, empty license and repository)
+The repo has zero releases. Every download link 404s until this section is done.
 
-## 1. macOS platform pass
+- [ ] Owner: set the `TAURI_SIGNING_PRIVATE_KEY` repo secret from `src-tauri/.tauri-private.key`. CI preflight hard-fails without it, by design.
+- [ ] Owner: back the minisign private key up outside GitHub secrets (password manager). Losing it permanently breaks the update chain for every installed copy.
+- [ ] Local `tauri build` dry run to prove the bundler produces a `.dmg` before the first tag burns a CI run.
+- [ ] Bump `0.1.1` to `0.2.0` in `src-tauri/tauri.conf.json` + `Cargo.toml`, fix `package.json` (still `0.0.0`) and `APP_VERSION` in `homepage/lib/constants.ts`. Write release notes from the commit range.
+- [ ] Tag `v0.2.0`. First-ever run of `build.yml`; macOS arm64 and Windows are `best_effort: false`.
+- [ ] Owner: make the repo public. Renamed to `SirSicard/inkwell` 2026-07-30; still private.
+- [ ] Owner: pick the real domain, set `SITE_URL` (still `inkwell.example`).
+- [ ] Deploy the homepage (local-only today, no Vercel link).
 
-The unlock. Everything downstream is easier once the app is a good macOS citizen.
+## 2. Signing (the two recurring costs)
 
-- [ ] `NSMicrophoneUsageDescription` in the bundle Info.plist. Without it a bundled build gets killed by TCC.
-- [ ] Accessibility permission flow: check before the first synthetic paste, explain it in onboarding, link straight to the settings pane
-- [ ] Kill the permanent `getUserMedia` stream in InkCanvas. A privacy-branded app must not hold the mic indicator on from launch. Drive the shader from Rust-emitted band events instead (the fallback path already exists).
-- [ ] Ship `silero_vad.onnx` or download it on first run. Right now silence trimming silently no-ops because nothing fetches the file.
-- [ ] Bundle-ID based app detection to replace the Windows-only process-name matching, so per-app styles work on macOS
-- [ ] Default hotkey that does not collide with macOS input-source switching
-- [ ] Menu bar template icon
-- [ ] Mac QA checklist: TCC grant and revoke, Secure Input fields, AirPods and Bluetooth mic sample rates, multi-display overlay placement, first-run on a clean machine
+- [ ] Owner: Apple Developer account ($99/yr). Unblocks Developer ID + notarization (already wired in `build.yml`, degrades to unsigned), and is the real fix for the keychain "Always Allow" never sticking to dev builds.
+- [ ] Add the Apple secrets to CI and verify a signed, notarized build.
+- [ ] Windows signing: Azure Trusted Signing (~$10/mo) if individual eligibility checks out, else an OV cert. Until then SmartScreen warns on every download.
 
-## 2. Strangle the debt
+## 3. Windows platform pass
 
-Keep the 60 pipeline tests green through every step.
+- [ ] `workflow_dispatch` test build first: sherpa-onnx 1.12 static has never been compiled on MSVC. Same risk class as the Apple Silicon linking was. Do this before spending anything on Windows.
+- [ ] Win11 test environment. Unactivated Win11 in a VM is legal and enough for dev testing. Parallels on the Mac runs Windows ARM and emulates x64: fine for "does the hotkey work", meaningless for inference benchmarks.
+- [ ] Windows QA: hotkey, paste target, overlay, keyring (windows-native), per-app detection (process-name path).
 
-- [ ] Extract the dictation pipeline out of the global-shortcut closure into a staged async service
-- [ ] Split `commands.rs` (913 lines) by domain
-- [ ] One model registry table instead of six hardcoded match statements, plus checksums and `.partial` downloads so an interrupted download does not wedge permanently
-- [ ] Collapse AppState's 22 mutex fields into a few coarse services, `spawn_blocking` for inference
-- [ ] Restore the saved model at launch (setup currently hardcodes Parakeet else Moonshine and ignores `settings.model`)
-- [ ] Honor `mic_device`, `start_on_boot` and `show_overlay`, which are persisted and then ignored
-- [ ] Re-enable CSP and narrow the window capabilities
-- [ ] Dedupe the 15s chunk overlap so words stop repeating at boundaries
-- [ ] Save and restore the user's clipboard around paste
-- [ ] Delete dead code: standby ring buffer, `download_parakeet`, hand-rolled calendar math, hand-written JSON
+## 4. Verification before calling it launched
 
-## 3. UI rehaul
+- [ ] End-to-end updater test with a real version hop (0.2.0 to 0.2.1-pre). The worker answers 204 today; a full update has never happened.
+- [ ] Clean-machine first-run: onboarding, model download, mic + accessibility permission flow.
+- [ ] Owner: daily-driver pilot of the new features (modes, cleanup, pause, teach-from-transcript, polish with the keychain granted).
+- [ ] Owner: confirm in the Cloudflare dashboard that the old free-tier worker (`inkwell-worker`) is actually deleted, not just its source. It 404s today, which suggests gone; wrangler is not authenticated locally so it is unconfirmed.
 
-- [ ] Replace 12 horizontal tabs with a grouped sidebar. Half of them hide behind an overflow menu at the default window width.
-- [ ] One zustand settings store, one error-toast path. Roughly 30 empty `.catch(() => {})` sites currently swallow every failure.
-- [ ] Real type scale with a 13px floor. The 40-plus arbitrary `text-[Npx]` values are the single biggest reason screenshots read as dated.
-- [ ] Feed real audio into the overlay bars. They are a sine wave of time today, on the one surface the user watches during every dictation.
-- [ ] Delete the ~527 dead frontend lines (unimported `App.css`, stale duplicate Onboarding/TabBar/StatusBar) and the dead deps (7 of 8 Radix packages, geist npm, one of the two loaded font families)
-- [ ] Confirm before destructive actions, replace `alert()`, label the toggle dots, make hover-only buttons reachable
-- [ ] Single version source. The status bar and the About tab currently disagree.
-- [ ] Trim the model catalog to a curated three or four
+## 5. Features, in the order the research ranks them
 
-## 4. Streaming spike
+- [ ] Voice editing / Command Mode: select text, hold a second hotkey, speak an instruction, get the rewrite pasted over the selection. The last converged competitor gap. Was gated on BYOK polish working, which it now does.
+- [ ] Streaming spike: streaming Zipformer vs Moonshine v2 vs an Apple SpeechAnalyzer sidecar. Parakeet is offline-only in sherpa-onnx, so live partials need a second model either way. Research: [docs/research/raw/08-streaming.md](docs/research/raw/08-streaming.md).
+- [ ] If the spike survives: two-pass pipeline, streaming partials in the overlay, final pass rescored offline.
 
-The one feature gap users actually notice. Research starting point: [docs/research/raw/08-streaming.md](docs/research/raw/08-streaming.md), with the caveat that its Streaming Zipformer assumption predates better options.
+## 6. Distribution polish
 
-- [ ] Spike: streaming Zipformer vs Moonshine v2 vs an Apple SpeechAnalyzer sidecar. Parakeet is offline-only in sherpa-onnx, so partials need a second model either way.
-- [ ] If it survives the spike: two-pass pipeline, streaming front end for instant partials, final pass rescored by the offline model
-- [ ] Partial and final text rendering in the overlay
+- [ ] Move the updater endpoint off `workers.dev` onto the owned domain (route is already stubbed in `inkwell-updater/wrangler.toml`), then re-verify an update on both platforms.
+- [ ] Homebrew cask.
+- [ ] Screenshot and demo GIF in the README.
 
-## 5. Distribution
+## 7. Housekeeping (low urgency)
 
-- [ ] Apple Developer ID signing plus notarization in the existing `build.yml`
-- [ ] Windows signing
-- [ ] Move the updater endpoint off `workers.dev` onto an owned domain, then verify an end-to-end update on both platforms
-- [ ] Homebrew cask
-- [ ] Replace `DONATION_URL`'s placeholder with the real link
-- [ ] Screenshot and demo GIF in the README, homepage rebuild
+- [ ] Fold `debug_save_audio` into a Troubleshooting section instead of General.
+- [ ] Decide whether voice commands fold into Modes or stay a separate concept.
+- [ ] Intel macOS and Linux builds stay `best_effort: true`; promote only if users show up.
 
 ## Not doing
 
