@@ -51,6 +51,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 aho-corasick = "1"
 symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "aac", "isomp4", "mkv", "pcm", "vorbis", "alac"] }
+tauri-plugin-single-instance = "2.4.3"
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"
