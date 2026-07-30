@@ -57,6 +57,20 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Registered before everything else so a second launch dies before it
+        // initializes audio or tries to register the global shortcut. Without
+        // this, Start on Boot plus macOS window-restore could launch two copies
+        // that fight over the microphone and the hotkey; the loser's shortcut
+        // registration fails silently and dictation "randomly" stops working.
+        // The duplicate's launch attempt fronts the settings window of the
+        // surviving instance instead, which is what the user was after.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(AppState {
             audio: Mutex::new(None),
             engine: EngineService::start(),
