@@ -15,7 +15,7 @@ The latest release only. This is a solo-maintained free project, so there are no
 
 Preferred: use GitHub's private vulnerability reporting on this repo (Security tab > Report a vulnerability). It is private and needs no email round trip.
 
-Alternative: email **mattias@aitappers.io**.
+Alternative: email **mattias@aiadvantage.com**.
 
 What to expect: acknowledgement within a few days, an honest assessment of whether and when it will be fixed, and credit in the release notes unless you would rather stay anonymous. No bounty, this project has no revenue.
 
