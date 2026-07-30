@@ -21,11 +21,11 @@ export const DONATION_URL = "https://buymeacoffee.com/mattiasherzig";
 export const DONATION_SUGGESTED = "€10";
 
 /**
- * Canonical site origin: PLACEHOLDER.
- * Replace with the real domain once the site is deployed; it drives the
- * canonical URL and the absolute OG image URL in app/layout.tsx.
+ * Canonical site origin. The Vercel project alias until an owned domain
+ * exists; it drives the canonical URL and the absolute OG image URL in
+ * app/layout.tsx. Update when the real domain lands.
  */
-export const SITE_URL = "https://inkwell.example";
+export const SITE_URL = "https://inkwell-mattias-herzigs.vercel.app";
 
 /**
  * Matches `version` in src-tauri/tauri.conf.json. Bump both together.
