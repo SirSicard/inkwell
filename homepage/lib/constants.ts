@@ -12,14 +12,10 @@ export const GITHUB_LICENSE_URL = `${GITHUB_URL}/blob/main/LICENSE`;
 export const GITHUB_README_URL = `${GITHUB_URL}/blob/main/README.md`;
 
 /**
- * DONATION LINK: PLACEHOLDER.
- *
- * The owner MUST replace `REPLACE_ME` with the real Buy Me a Coffee handle
- * before this site goes live. Until then this URL resolves to a 404 page.
- * Do not guess a handle: an invented-but-plausible donation URL could send
- * money to a stranger.
+ * The owner's verified Buy Me a Coffee page. Must match DONATION_URL in the
+ * app's src/constants.ts; there is no build-time check tying them together.
  */
-export const DONATION_URL = "https://buymeacoffee.com/REPLACE_ME";
+export const DONATION_URL = "https://buymeacoffee.com/mattiasherzig";
 
 /** Suggested (entirely voluntary) tip. Nothing in the app is gated behind it. */
 export const DONATION_SUGGESTED = "€10";

@@ -92,13 +92,13 @@ All models run locally on CPU. No internet is needed once a model is downloaded.
 - **Speaker diarization, meeting mode, calendar integration.** Not planned.
 - **GPU acceleration.** CPU inference only.
 - **Voice agent mode.** Removed in this rehaul. It targeted a gateway that no longer exists.
-- **Silence trimming (Silero VAD)** is wired up but the app does not fetch `silero_vad.onnx` yet. Until the file is present in the models directory, the step is skipped.
+- **Silence trimming (Silero VAD)** downloads its model (`silero_vad.onnx`) on first run. Until that finishes, dictation works but silence is not trimmed, and the app says so rather than failing quietly.
 
 ## Support the project
 
 Inkwell is free and will not be paywalled. If it saves you time, you can leave a tip:
 
-> **https://buymeacoffee.com/REPLACE_ME** (placeholder, the maintainer must replace this URL before release)
+> **https://buymeacoffee.com/mattiasherzig**
 
 Suggested: EUR 10. Entirely voluntary, nothing in the app is gated behind it.
 

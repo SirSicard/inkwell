@@ -7,9 +7,9 @@ not as the whole identity. Voice matches the site: plain, specific, no guilt.
 Every claim here is either true today or vague enough to stay true. If a
 statement stops being either, change it.
 
-**Before publishing:** create the account yourself, then put the real handle in
-`homepage/lib/constants.ts` (`DONATION_URL`) and in the app's
-`src/constants.ts`. Both currently point at `buymeacoffee.com/REPLACE_ME`.
+**Done 2026-07-30:** the account exists and both `homepage/lib/constants.ts`
+(`DONATION_URL`) and the app's `src/constants.ts` point at the real page,
+`buymeacoffee.com/mattiasherzig`.
 
 **Left off on purpose:** any employer or client. This is a personal tip jar for
 personal projects, and naming a day job on it invites questions about whose time

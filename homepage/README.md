@@ -46,7 +46,7 @@ All of them are in **`lib/constants.ts`**. Nothing is hardcoded a second time an
 
 | Constant | Status | What to do |
 | --- | --- | --- |
-| `DONATION_URL` | **placeholder** (`buymeacoffee.com/REPLACE_ME`) | Replace with the real handle. Until then the donate button 404s. |
+| `DONATION_URL` | live (`buymeacoffee.com/mattiasherzig`) | Keep in step with `DONATION_URL` in the app's `src/constants.ts`. |
 | `SITE_URL` | **placeholder** (`https://inkwell.example`) | Set the real domain; it drives the canonical URL and the absolute OG image URL. |
 | `APP_VERSION` | `0.1.1` | Keep in step with `version` in `../src-tauri/tauri.conf.json`. |
 | `GITHUB_URL` | live | Repo, and the base for the releases/issues/licence links. |
