@@ -7,13 +7,13 @@ Analysis behind the rehaul: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-ana
 
 ---
 
-## 1. Launch tail (small, high leverage)
+## 1. Launch tail: DONE 2026-07-30 evening
 
-- [ ] Owner: disable Vercel deployment protection so the site is public. vercel.com > project inkwell > Settings > Deployment Protection > Vercel Authentication > Disabled. Until then https://getinkwell.vercel.app bounces every visitor to a Vercel login.
-- [ ] Owner: `npx wrangler login` in `inkwell-updater/` (browser OAuth, cannot be done for you).
-- [ ] Then me: push the 0.2.0 manifest to the `INKWELL_RELEASES` KV key and verify the endpoint serves it. The worker reads KV, not GitHub, so until this push no installed copy is ever offered 0.2.0.
-- [ ] Then me: confirm the old free-tier worker (`inkwell-worker`) is deleted at Cloudflare, not just 404ing.
-- [ ] Owner, optional: buy a real domain. getinkwell.vercel.app works and is name-neutral; an owned domain upgrades the homepage, the updater endpoint and the OG links in one move.
+- [x] Homepage public at https://getinkwell.vercel.app (deployment protection off, verified serving with the real donate link).
+- [x] Updater live end to end: 0.2.0 manifest pushed to KV, a 0.1.1 client is offered 0.2.0 with a valid signature, a 0.2.0 client gets 204. The worker itself was redeployed (the running copy was from March and predated the pre-release comparison fix).
+- [x] Old free-tier worker confirmed deleted at Cloudflare (API error 10007, does not exist), not just 404ing.
+- [x] After every future release run `inkwell-updater/publish-latest.sh`: the worker reads KV, not GitHub, so a release nobody pushes to KV updates nobody.
+- [ ] Owner, someday: buy a real domain. getinkwell.vercel.app works and is name-neutral; an owned domain upgrades the homepage, the updater endpoint and the OG links in one move.
 
 ## 2. Signing (the two recurring costs)
 
