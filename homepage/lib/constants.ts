@@ -25,7 +25,7 @@ export const DONATION_SUGGESTED = "€10";
  * exists; it drives the canonical URL and the absolute OG image URL in
  * app/layout.tsx. Update when the real domain lands.
  */
-export const SITE_URL = "https://inkwell-mattias-herzigs.vercel.app";
+export const SITE_URL = "https://getinkwell.vercel.app";
 
 /**
  * Matches `version` in src-tauri/tauri.conf.json. Bump both together.
