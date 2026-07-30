@@ -44,7 +44,10 @@ jobs:
             args: --target aarch64-apple-darwin
             best_effort: false
           - name: macOS (Intel)
-            platform: macos-13
+            # macos-13 was retired by GitHub (the v0.2.0 run sat queued for
+            # hours against a pool that no longer exists); macos-15-intel is
+            # the current free x64 label.
+            platform: macos-15-intel
             rust_target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
             best_effort: true
