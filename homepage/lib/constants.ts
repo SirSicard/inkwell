@@ -30,16 +30,13 @@ export const SITE_URL = "https://inkwell.example";
 /**
  * Matches `version` in src-tauri/tauri.conf.json. Bump both together.
  *
- * ⚠ SHIP BLOCKER: do not deploy this site until a release exists that matches
- * this copy. The rehaul (agent mode removed, free polish proxy removed, BYOK
- * only) is still under `## [Unreleased]` in CHANGELOG.md. The newest *published*
- * release is v0.1.1 from 2026-04-01, which predates all of it: that build still
- * contains Voice Agent mode and the free proxy tier this page says do not exist.
- * Every "Download" link points at /releases/latest, so shipping now would hand
- * visitors the exact software the page disclaims. Cut a release (0.2.0), bump
- * tauri.conf.json and this constant, then deploy.
+ * The site may only be deployed while a release with this exact version exists,
+ * because every "Download" link points at /releases/latest and the page
+ * describes the software it hands out. That held this constant at 0.1.1 (a
+ * pre-rehaul build with agent mode and the free proxy tier) until v0.2.0 was
+ * cut on 2026-07-30.
  */
-export const APP_VERSION = "0.1.1";
+export const APP_VERSION = "0.2.0";
 
 /** Author. */
 export const AUTHOR_NAME = "Mattias Herzig";

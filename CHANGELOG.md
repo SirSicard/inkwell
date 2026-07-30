@@ -4,12 +4,18 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-07-30
 
 Rehaul. The product is now explicitly free and open source forever, macOS first, and BYOK only.
 
 ### Added
 
+- **Modes.** One bundle holds the text style, speech cleanup, polish prompt and the list of apps it applies to; the first mode whose apps match the frontmost application wins. This replaces three settings that used to decide independently how a dictation was written (global style, per-app style rules, global polish prompt), so "formal, polished, only in email" is expressible for the first time. Existing per-app rules migrate automatically, once.
+- **Speech cleanup.** "um", "uh" and immediate stutters are stripped before pasting, on by default per mode. The stutter collapse works from a curated list of function words, because "he had had enough" and "I know that that is true" are valid English and a cleanup step must never change what a sentence says.
+- **Pause and resume** during a dictation, from the tray menu. Paused audio is simply not captured; the flag clears on both start and stop so a leftover pause can never silently eat the next dictation.
+- **Teach from a transcript.** The dictionary could always fix a recurring mistranscription, but asked you to predict one in advance; now you correct it from the transcript in front of you and the correction is saved.
+- **Automatic language detection, surfaced.** The default model always transcribed 25 European languages without being told which one; nothing in the app or the homepage said so.
+- **Grouped sidebar navigation.** Twelve horizontal tabs, half of them behind an overflow menu at the default window width, became grouped sections with an Advanced toggle.
 - **Light theme**, following the system appearance. The ink panel's cream field and charcoal ink were already a complete light palette sitting inside the app doing decorative duty; the shell now inverts to match. In light mode the ink panel merges with the page, so the mark reads as ink on paper.
 - **Overlay position.** Six placements instead of a hardcoded bottom-centre.
 - **Dictionary CSV import.** Merges rather than replaces, splits on the first comma so replacements may contain commas, and only drops a header row when it looks like one.
@@ -34,9 +40,18 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - **Contrast, measured in both themes.** Tertiary text was `rgba(255,255,255,0.35)`, which composited to 3.17:1 and failed the 4.5:1 AA floor in all 118 places it was used. It is now 6.28:1. Borders moved from 0.10 to 0.14, since dividers were effectively invisible.
 - **The ink column no longer eats the window.** It was a flat 35% at every width; it is now capped, and its warp halved, because the 0.20 baseline was tuned for the 97px overlay and read as a splatter at 400px.
 - `Glass*` components renamed `Ink*`. They described a backdrop blur they never had.
+- **Internals**, for anyone reading the diff: the speech engine moved to a dedicated thread (removing an `unsafe impl Sync`), the eight duplicated model tables became one, the 913-line command file split by domain, blocking commands went async so the UI stops freezing during them, and the 22-mutex app state collapsed into a few coarse services. 132 tests, up from 60.
 
 ### Fixed
 
+- **The app crashed on every successful dictation on macOS.** The synthetic Cmd+V used a layout-dependent keycode lookup that goes through the Text Services Manager, which asserts it is on the main thread; the pipeline pastes from a worker. Not a Rust panic, so no handler could catch it. The V key is now pressed by its raw hardware keycode.
+- **Captured audio was ~35 dB too quiet** on some microphones: raw CoreAudio capture bypasses the system's input gain, and multi-mic arrays were averaged across channels, which phase-cancels the voice. Recordings are now peak-normalized and arrays contribute their primary channel.
+- **Pasting could land in Inkwell itself** instead of the app you were dictating into, because showing any Inkwell window activated it. The app now retreats to menu-bar-only (Accessory) when its windows close.
+- **API keys were silently never saved.** keyring 3 ships no credential store unless a backend feature is enabled, so every save failed invisibly. Platform backends are now enabled explicitly and a round-trip test guards them.
+- **Opening the AI tab asked macOS for keychain access every time.** Rendering "key configured" fetched the actual secret, which macOS gates behind an authorization dialog. Whether a key exists is now answered by an attributes-only query, which the OS does not gate; the secret is read only at the moment polish uses it.
+- **Denying that keychain prompt no longer sends your transcript out anyway.** A denied read used to become an empty API key and the dictation was posted to the provider regardless, to be rejected there. Saying no now means the text never leaves the machine.
+- **Dark mode was unreachable** after the light theme shipped following the system with no override. Appearance is now System, Light or Dark.
+- **First-run onboarding invoked a download command that no longer existed**, so a fresh install could never fetch its model; and the catalog offered a model with no download URLs. Both gone.
 - **The recording overlay no longer lies.** Its level bars were a sine of elapsed time: they animated identically whether the microphone heard a voice or silence. They now follow the real `audio-amplitude` events, which is exactly the signal that would have made a 35 dB capture bug visible instead of invisible.
 - Privacy: the agent token is no longer written in plaintext to `settings.json` (the code previously saved a copy there even when the OS keyring succeeded).
 - Privacy: raw dictation audio is no longer dumped to a temporary WAV file on every recording in the production path.
@@ -59,7 +74,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
-[0.1.1]: https://github.com/SirSicard/inkwell/compare/v0.1.0...v0.1.1
+[0.2.0]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.0
 
 ## [0.1.0] - 2026-03-31
 
@@ -98,4 +113,3 @@ First public release.
 - Auto-updater endpoint not yet live (needs domain)
 - Parakeet model load time is 18-22 seconds on first use
 
-[0.1.0]: https://github.com/SirSicard/inkwell/releases/tag/v0.1.0
