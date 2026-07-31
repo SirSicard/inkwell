@@ -1,77 +1,82 @@
 # Inkwell - Roadmap
 
 *Ordered by dependency, not by date. No dates are promised.*
-*State audited 2026-07-30, evening. v0.2.0 shipped that day: repo public as SirSicard/inkwell, release live with signed artifacts for Apple Silicon, Windows x64 and Linux x64, homepage deployed to Vercel, donation link real. The rehaul history lives in CHANGELOG.md and the git log.*
+*State audited 2026-07-31. v0.2.1 is the current release, all four platforms green, updater serving it. The launch is done; what follows is trust (signing), reach (Windows, Homebrew) and accuracy.*
 
-Analysis behind the rehaul: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-analysis-2026-07-24.md). Feature research: [docs/competitive-extras-2026-07-27.md](docs/competitive-extras-2026-07-27.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Analysis behind the rehaul: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-analysis-2026-07-24.md). Feature research: [docs/competitive-extras-2026-07-27.md](docs/competitive-extras-2026-07-27.md). Streaming verdict: [docs/streaming-spike-2026-07-31.md](docs/streaming-spike-2026-07-31.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
-## 1. Launch tail: DONE 2026-07-30 evening
+## 1. Apple signing (in progress, blocked on account activation)
 
-- [x] Homepage public at https://getinkwell.vercel.app (deployment protection off, verified serving with the real donate link).
-- [x] Updater live end to end: 0.2.0 manifest pushed to KV, a 0.1.1 client is offered 0.2.0 with a valid signature, a 0.2.0 client gets 204. The worker itself was redeployed (the running copy was from March and predated the pre-release comparison fix).
-- [x] Old free-tier worker confirmed deleted at Cloudflare (API error 10007, does not exist), not just 404ing.
-- [x] After every future release run `inkwell-updater/publish-latest.sh`: the worker reads KV, not GitHub, so a release nobody pushes to KV updates nobody.
-- [ ] Owner, someday: buy a real domain. getinkwell.vercel.app works and is name-neutral; an owned domain upgrades the homepage, the updater endpoint and the OG links in one move.
+The whole point: an unsigned app makes Gatekeeper block the download, and makes
+macOS forget the keychain grant on every rebuild. Both stop the day this lands.
+`build.yml` already reads all six secrets and degrades to unsigned without them.
 
-## 2. Signing (the two recurring costs)
+- [x] Owner: Apple Developer account purchased 2026-07-31. Waiting on activation.
+- [x] Me: private key and CSR generated at `~/Documents/inkwell-signing/`.
+- [ ] Owner: create a **Developer ID Application** certificate from that CSR at developer.apple.com, download the `.cer` into the same folder. Needs the Account Holder role.
+- [ ] Owner: app-specific password at appleid.apple.com, set with `gh secret set APPLE_PASSWORD -R SirSicard/inkwell` so it is typed by the owner and never passes through anyone else.
+- [ ] Owner: paste the Team ID and the developer-account Apple ID (neither is secret; both are embedded in every signed build).
+- [ ] Me: convert `.cer` plus key to `.p12`, set `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`.
+- [ ] Me: cut 0.2.2 and verify with `spctl --assess` and `stapler validate` on the downloaded dmg, not by trusting a green CI run.
+- [ ] Me: once notarized, delete the quarantine workaround from the Homebrew cask and the `xattr -cr` instructions from the README. They exist only because the app is unsigned.
+- [ ] Owner: back up `~/Documents/inkwell-signing/developer-id.key`. Apple can reissue a certificate; that private key cannot be recovered.
 
-- [ ] Owner: Apple Developer account ($99/yr). Unblocks Developer ID + notarization (already wired in `build.yml`, degrades to unsigned) and permanently ends the keychain re-prompt loop that dev builds cause.
-- [ ] Me: add the Apple secrets to CI, cut a signed 0.2.1, verify notarization.
-- [ ] Owner: Windows signing, Azure Trusted Signing (~$10/mo) if individual eligibility checks out. Until then SmartScreen warns on every download.
+## 2. Windows
 
-## 3. Windows QA
+Building is solved (sherpa-onnx compiles on MSVC, v0.2.1 ships msi and exe).
+Nothing about *using* it has ever been checked.
 
-The build question is answered: sherpa-onnx compiles on MSVC and the v0.2.0 msi/exe exist. What remains is using it.
+- [ ] Owner: a Win11 test environment. Unactivated Win11 in a VM is legal and enough. Parallels on Apple Silicon runs Windows ARM and emulates x64: fine for behaviour, meaningless for inference speed.
+- [ ] Me/owner: QA pass. Hotkey, paste target, overlay placement, keyring (windows-native backend), per-app detection (process-name path, never exercised), voice editing's copy keystroke.
+- [ ] Owner: Windows code signing, Azure Trusted Signing (~$10/mo) if individual eligibility checks out. Until then SmartScreen warns on every download.
 
-- [ ] Owner: a Win11 test environment. Unactivated Win11 in a VM is legal and enough. Parallels on the Mac runs Windows ARM and emulates x64: fine for behaviour, meaningless for inference benchmarks.
-- [ ] Me/owner: QA pass, including hotkey, paste target, overlay, keyring (windows-native), per-app detection (process-name path).
+## 3. Accuracy, round two
 
-## 4. Verification before calling it launched
+Round one shipped in 0.2.1: hotword biasing from the dictionary, trim-only VAD,
+quiet-point chunking, pre-roll and release-tail capture, transient-proof
+normalisation. The tooling to judge round two exists and is unused.
 
-- [ ] End-to-end updater test with a real version hop, after the KV push.
-- [ ] Clean-machine first-run: fresh macOS account, install the released dmg, walk onboarding (model download, mic + accessibility permissions).
-- [ ] Owner: keep daily-driving. AI polish confirmed working end to end 2026-07-30 (three consecutive dictations polished after Allow was granted).
-- [ ] Next tag: confirm `macos-15-intel` actually supplies runners. macos-13 was retired, which is why v0.2.0 has no Intel build; the new label is unproven.
+- [ ] Owner: record a corpus. Troubleshooting > Save Debug Audio, dictate ten varied sentences including the words that get mangled, switch it off. Then write what you actually said into `take-NNNN.txt` beside each wav in `~/Documents/Inkwell Debug Audio`.
+- [ ] Me: run `cargo run --release --example ab_models` over that corpus to rank Parakeet V3 int8, V2 fp16 and V3 full precision on the owner's own voice. Until then, model choice is a guess with numbers attached to the wrong thing.
+- [ ] Me: Qwen3-ASR-0.6B needs sherpa-onnx 1.12 to 1.13, which swaps the static libraries under everything. Do it alone so a broken upgrade cannot hold anything else hostage. It is the only candidate with a published accented-English win.
+- [ ] Me: decide `advanced_mode`'s future. It gates which tabs appear, which is navigation, not dictation; it may belong in the sidebar rather than in General.
 
-## 5. Transcription accuracy (opened after the 2026-07-30 deep dive)
+## 4. Streaming partials (designed, not built)
 
-The diagnosis, from the owner's own 29-transcript history (docs of record: the
-transcription-quality workflow results): proper nouns failed from vocabulary,
-not acoustics ("Inkwell" 0-for-5); every duplicated-word artifact came from 15s
-chunk seams; short clips lost word edges to push-to-talk timing. Mic and core
-model were explicitly exonerated. Fixed in-tree the same day: hotword biasing
-from the dictionary + beam search, trim-only VAD, quiet-point 60s chunking,
-transient-proof normalization, pre-roll/release-tail capture, resampler flush.
+Spike verdict: viable at 40x real time with no dependency upgrade, but streaming
+output has no casing or punctuation and drops the last word, so it can never be
+the text the user keeps.
 
-- [x] Owner added 13 dictionary entries 2026-07-30; they now bias the decoder itself, not just post-editing.
-- [x] A/B harness: `cargo run --release --example ab_models` scores every installed model over a corpus by word error rate, biased with the app's own dictionary. Validated on synthetic speech.
-- [x] Debug audio writes one file per take to ~/Documents/Inkwell Debug Audio. It used to overwrite a single file in the system temp dir, so a corpus could never accumulate, which is why the first attempt at collecting one produced nothing.
-- [x] Candidates #2 and #3 are in the model list and installable: Parakeet V2 fp16 (1.3 GB) and Parakeet V3 full precision (2.5 GB, external weights file).
-- [ ] Candidate #1, Qwen3-ASR-0.6B int8: needs the sherpa-onnx crate to go 1.12 -> 1.13 (new static libs, unproven API). Deliberately not bundled into the 0.2.1 release; do it on its own so a broken upgrade cannot hold accuracy fixes hostage.
-- [x] filetranscribe cuts at the quietest point near each 30s boundary instead of a blind offset.
-- [x] transcripts.audio_duration_ms now records the length of the user's actual press, not of whatever reached the recognizer, so internal padding changes stop silently rewriting stored stats.
-- [ ] Owner: record a corpus (Save Debug Audio on, dictate, write take-NNNN.txt next to each wav), then run the harness to decide between the three Parakeet builds on your own voice.
+- [ ] Me: streaming model feeds the overlay while the key is held. Never pasted, never stored. Offline pass unchanged.
+- [ ] Me: render partials lowercase, or the switch to properly-cased final text reads as a glitch rather than as refinement.
+- [ ] Me: opt-in setting defaulting to off, described as "show words as you speak" rather than as a second model. Costs a 296 MB download.
 
-## 6. Features, in the order the research ranks them
+## 5. Distribution
 
-- [x] Voice editing / Command Mode shipped: second hotkey captures the selection, records an instruction, applies it via the BYOK provider, pastes the rewrite over the selection. Verified end to end against the real recognizer.
-- [x] Streaming spike done, verdict in [docs/streaming-spike-2026-07-31.md](docs/streaming-spike-2026-07-31.md): viable for feedback only, at 40x real time with no dependency upgrade, but streaming output loses the last word and has no casing or punctuation, so it can never be the text the user keeps.
-- [ ] Build it as designed: streaming partials in the overlay while the key is held, offline pass unchanged on release, partials rendered lowercase, opt-in setting defaulting to off, 296 MB extra download.
+- [ ] Owner: buy a domain. One purchase upgrades the homepage, the updater endpoint and the OG links. `getinkwell.vercel.app` works and is name-neutral until then.
+- [ ] Owner: create a public `homebrew-tap` repo. The cask is written and passes `brew audit --strict`; it needs somewhere to live before `brew install --cask sirsicard/tap/inkwell` is real.
+- [ ] Me, after the domain: move the updater off `workers.dev` (route already stubbed in `inkwell-updater/wrangler.toml`), then re-verify a version hop.
+- [ ] Me: per-tab screenshots. The dashboard shot is in the README; the sidebar is a webview and synthetic clicks would not switch tabs, so the rest are worth doing by hand.
+- [ ] Me: demo GIF. Best recorded against a throwaway profile, like the screenshot, so no real transcript is ever published.
 
-## 7. Distribution polish
+## Standing rules learned the hard way
 
-- [ ] Move the updater endpoint off `workers.dev` onto the owned domain (route stubbed in `inkwell-updater/wrangler.toml`), then re-verify.
-- [ ] Homebrew cask (possible now that the release is public; nicer after signing).
-- [ ] Screenshot and demo GIF in the README.
+- After every release run `inkwell-updater/publish-latest.sh`. The worker serves from KV, not from GitHub, so a release nobody pushes to KV updates nobody.
+- After every homepage deploy, `vercel alias set <deployment-url> getinkwell.vercel.app`. Vercel does not move the alias itself.
+- Never screenshot the owner's own profile. Use a throwaway HOME with symlinked models; the real dashboard shows real transcripts and publishing is permanent.
 
-## 8. Housekeeping (low urgency)
+## Done, for the record
 
-- [x] `debug_save_audio` moved to its own Troubleshooting tab with a button that reveals the recordings folder. It is a diagnostic you switch on for an hour, not a preference you set once.
-- [x] Voice commands stay a separate concept: a command is an action, a mode is a way of writing, and folding them would make "mode" mean two things. But the style commands were fixed, because they had been dead since modes took ownership of style: they wrote a field the pipeline no longer reads. They now pin a mode, the pin beats app matching, and the Modes tab shows it with a Clear button so it is never invisible state.
-- [ ] Homepage deploys must re-point the alias afterwards: `vercel alias set <deployment-url> getinkwell.vercel.app`. Automate or document in CI if deploys become frequent.
+v0.2.0 and v0.2.1 released and public. Repo public as `SirSicard/inkwell`.
+Homepage live. Updater verified end to end. Voice editing shipped. Clean-machine
+first run verified with zero panics and every catalogue URL live. Homebrew cask
+written and audited. Debug audio, Troubleshooting tab, voice-command mode
+pinning, README screenshot.
 
 ## Not doing
 
-Meeting mode, speaker diarization, calendar integration, agent mode, chainable transform chains, portable mode, GPU and CUDA plumbing, mobile, browser extension, telemetry, any paid tier.
+Meeting mode, speaker diarization, calendar integration, agent mode, chainable
+transform chains, portable mode, GPU and CUDA plumbing, mobile, browser
+extension, telemetry, any paid tier.
