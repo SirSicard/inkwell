@@ -14,7 +14,7 @@ import { basicTabs, advancedTabs, tabGroups } from "./types"
 import {
   DashboardTab, GeneralTab, AudioTab, ModelsTab,
   AITab, SnippetsTab, ModesTab, DictionaryTab,
-  FilesTab, VoiceCommandsTab, AboutTab,
+  FilesTab, VoiceCommandsTab, TroubleshootingTab, AboutTab,
 } from "./tabs"
 
 // The platform cannot change while the app is running, so this is computed once
@@ -420,6 +420,7 @@ function TabContent({ tab, onAdvancedChange, onNavigate }: { tab: Tab; onAdvance
     case "Dictionary":  return <DictionaryTab />
     case "Files":       return <FilesTab />
     case "Commands":    return <VoiceCommandsTab />
+    case "Troubleshooting": return <TroubleshootingTab />
     case "About":       return <AboutTab />
   }
 }

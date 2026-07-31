@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { InkButton } from "../components/ui"
 import { toast } from "../state/toasts"
 import type { Mode, ModeStore } from "../types"
@@ -24,14 +25,30 @@ const STYLES = [
 export function ModesTab() {
   const [store, setStore] = useState<ModeStore | null>(null)
   const [saving, setSaving] = useState(false)
+  // A voice command can pin a mode, overriding app matching. That has to be
+  // visible here: a pin the user cannot see explains nothing when every
+  // dictation suddenly comes out in the wrong style.
+  const [pinned, setPinned] = useState<string | null>(null)
 
   const load = useCallback(() => {
     invoke<ModeStore>("get_modes")
       .then(setStore)
       .catch((e) => toast(`Could not load modes: ${e}`, "warning"))
+    invoke<string | null>("get_pinned_mode").then(setPinned).catch(() => {})
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const un = listen<string>("mode-pinned", (e) => setPinned(e.payload))
+    return () => { un.then((f) => f()) }
+  }, [])
+
+  const clearPin = () => {
+    invoke("set_pinned_mode", { modeId: null })
+      .then(() => { setPinned(null); toast("Mode pin cleared.", "info") })
+      .catch((e) => toast(`Could not clear the pin: ${e}`))
+  }
 
   const persist = async (next: ModeStore) => {
     setStore(next)
@@ -119,6 +136,18 @@ export function ModesTab() {
         </div>
         <InkButton onClick={addMode} disabled={saving}>Add mode</InkButton>
       </div>
+
+      {pinned && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/[0.07] px-3.5 py-2.5">
+          <p className="text-body text-text-secondary">
+            A voice command pinned <span className="text-text-primary font-medium">{pinned}</span>.
+            It is used everywhere until cleared, ignoring the app lists below.
+          </p>
+          <button onClick={clearPin} className="text-body text-text-tertiary hover:text-text-primary transition-colors shrink-0">
+            Clear pin
+          </button>
+        </div>
+      )}
 
       <div className="space-y-2.5">
         {store.modes.map((m, i) => {

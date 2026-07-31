@@ -37,6 +37,12 @@ pub struct AppState {
     pub models_dir: Mutex<String>,
     pub vad_model_path: Mutex<String>,
     pub style: Mutex<style::Style>,
+    /// Mode id pinned by a voice command, overriding app matching until
+    /// changed. Voice commands used to write `style` above, which stopped
+    /// meaning anything the moment modes took ownership of style: the pipeline
+    /// reads the resolved mode, so "formal mode" set a field nobody read. This
+    /// is the field that makes those commands real again.
+    pub pinned_mode: Mutex<Option<String>>,
     pub settings: Mutex<settings::Settings>,
     pub settings_path: Mutex<String>,
     pub db: Mutex<Option<history::TranscriptDb>>,
@@ -77,6 +83,7 @@ pub fn run() {
             models_dir: Mutex::new(String::new()),
             vad_model_path: Mutex::new(String::new()),
             style: Mutex::new(style::Style::default()),
+            pinned_mode: Mutex::new(None),
             settings: Mutex::new(settings::Settings::default()),
             settings_path: Mutex::new(String::new()),
             db: Mutex::new(None),
@@ -126,6 +133,9 @@ pub fn run() {
             commands::get_modes,
             commands::save_modes,
             commands::get_foreground_app,
+            commands::get_pinned_mode,
+            commands::set_pinned_mode,
+            commands::open_debug_audio_folder,
             commands::get_voice_commands,
             commands::save_voice_commands,
             paste::check_accessibility_permission,

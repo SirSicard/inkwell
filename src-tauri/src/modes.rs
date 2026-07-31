@@ -110,12 +110,39 @@ impl ModeStore {
     /// user can reorder to disambiguate. Falls back to the default mode, which
     /// is why this cannot return None.
     pub fn resolve(&self, app_id: Option<&str>) -> &Mode {
+        self.resolve_with_override(app_id, None)
+    }
+
+    /// As `resolve`, but an explicit pin wins over app matching.
+    ///
+    /// The pin exists for voice commands: saying "formal mode" has to change
+    /// something the pipeline reads, and since modes took ownership of style
+    /// that has to be the mode, not the old global style field.
+    pub fn resolve_with_override(&self, app_id: Option<&str>, pinned: Option<&str>) -> &Mode {
+        if let Some(id) = pinned {
+            if let Some(m) = self.modes.iter().find(|m| m.id == id) {
+                return m;
+            }
+        }
         if let Some(id) = app_id {
             if let Some(m) = self.modes.iter().find(|m| m.matches_app(id)) {
                 return m;
             }
         }
         self.default_mode()
+    }
+
+    /// The first mode written in `style`, for voice commands that name a style
+    /// ("formal mode") rather than a mode.
+    pub fn first_with_style(&self, style: &str) -> Option<&Mode> {
+        self.modes.iter().find(|m| m.style == style)
+    }
+
+    /// A mode by spoken name, matched loosely because speech recognition will
+    /// not reproduce capitalisation or surrounding punctuation.
+    pub fn find_by_name(&self, name: &str) -> Option<&Mode> {
+        let want = name.trim().to_lowercase();
+        self.modes.iter().find(|m| m.name.trim().to_lowercase() == want)
     }
 
     /// Build modes from an install that predates them.
@@ -180,6 +207,59 @@ fn capitalize(s: &str) -> String {
     match c.next() {
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    fn store() -> ModeStore {
+        ModeStore {
+            default_id: "default".into(),
+            modes: vec![
+                Mode { id: "default".into(), name: "Default".into(), style: "formal".into(), model: String::new(), polish_prompt: String::new(), polish_enabled: false, apps: vec![], remove_fillers: true },
+                Mode { id: "chat".into(), name: "Chat".into(), style: "casual".into(), model: String::new(), polish_prompt: String::new(), polish_enabled: false, apps: vec!["com.tinyspeck.slackmacgap".into()], remove_fillers: true },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_pin_beats_app_matching() {
+        // Slack would resolve to Chat; the pin must win, or a voice command
+        // would appear to do nothing the moment the user is in a matched app.
+        let s = store();
+        let m = s.resolve_with_override(Some("com.tinyspeck.slackmacgap"), Some("default"));
+        assert_eq!(m.id, "default");
+    }
+
+    #[test]
+    fn no_pin_falls_back_to_app_matching() {
+        let s = store();
+        assert_eq!(s.resolve_with_override(Some("com.tinyspeck.slackmacgap"), None).id, "chat");
+    }
+
+    #[test]
+    fn a_stale_pin_does_not_strand_the_user() {
+        // The pinned mode was deleted. Resolution must carry on rather than
+        // panic or return nothing.
+        let s = store();
+        let m = s.resolve_with_override(Some("com.tinyspeck.slackmacgap"), Some("deleted-mode"));
+        assert_eq!(m.id, "chat");
+    }
+
+    #[test]
+    fn style_lookup_finds_the_mode_a_spoken_command_means() {
+        let s = store();
+        assert_eq!(s.first_with_style("casual").map(|m| m.id.as_str()), Some("chat"));
+        assert!(s.first_with_style("relaxed").is_none());
+    }
+
+    #[test]
+    fn name_lookup_ignores_case_and_padding_from_speech() {
+        let s = store();
+        assert_eq!(s.find_by_name("  chat ").map(|m| m.id.as_str()), Some("chat"));
+        assert!(s.find_by_name("nonexistent").is_none());
     }
 }
 
