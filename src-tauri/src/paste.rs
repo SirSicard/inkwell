@@ -3,6 +3,31 @@ use enigo::{Enigo, Key, Keyboard, Settings};
 use std::thread;
 use std::time::Duration;
 
+
+/// Input settings that never raise a system dialog.
+///
+/// enigo's defaults set `open_prompt_to_get_permissions: true`, so constructing
+/// it calls AXIsProcessTrustedWithOptions with the prompt flag, and macOS shows
+/// "Inkwell would like to control this computer" whenever the process is not
+/// trusted. That is once per paste, which means once per dictation, forever.
+///
+/// It also fires when Accessibility *looks* granted: the toggle stays on in
+/// System Settings, but TCC keys the grant to the app's code identity, and an
+/// ad-hoc signed build gets a new identity every time it is rebuilt or
+/// replaced. Updating the app therefore invalidates the grant while leaving the
+/// switch on, which is unfalsifiable from the user's side.
+///
+/// So: never prompt from the paste path. Construction fails cleanly instead,
+/// the caller falls back to leaving the text on the clipboard, and the app asks
+/// for the permission from onboarding and settings, where there is screen to
+/// explain why. Developer ID signing is what makes the grant survive updates.
+fn input_settings() -> Settings {
+    Settings {
+        open_prompt_to_get_permissions: false,
+        ..Default::default()
+    }
+}
+
 /// Gap between writing the clipboard and sending the paste keystroke.
 /// Load-bearing: both the macOS pasteboard and the Windows OLE clipboard
 /// publish asynchronously to the calling process, so a keystroke sent in the
@@ -52,8 +77,19 @@ pub fn paste_text(text: &str) -> Result<(), String> {
 }
 
 fn send_paste_keystroke() -> Result<(), String> {
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("Failed to create Enigo: {}", e))?;
+    let mut enigo = Enigo::new(&input_settings()).map_err(|e| match e {
+        // Name the actual remedy. "Failed to create Enigo: NoPermission" tells
+        // the user nothing they can act on, and this is the error they are most
+        // likely to see, since it fires whenever the Accessibility grant does
+        // not match the running binary.
+        enigo::NewConError::NoPermission => "Accessibility permission is missing, \
+             so Inkwell cannot paste. Grant it in System Settings, Privacy and \
+             Security, Accessibility. If Inkwell is already listed there, remove \
+             it with the minus button and add it again: the grant is tied to the \
+             exact app it was given to, and updating the app replaces that."
+            .to_string(),
+        other => format!("Could not simulate input: {}", other),
+    })?;
 
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
@@ -187,8 +223,19 @@ pub fn restore_clipboard(previous: Option<String>) {
 }
 
 fn send_copy_keystroke() -> Result<(), String> {
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("Failed to create Enigo: {}", e))?;
+    let mut enigo = Enigo::new(&input_settings()).map_err(|e| match e {
+        // Name the actual remedy. "Failed to create Enigo: NoPermission" tells
+        // the user nothing they can act on, and this is the error they are most
+        // likely to see, since it fires whenever the Accessibility grant does
+        // not match the running binary.
+        enigo::NewConError::NoPermission => "Accessibility permission is missing, \
+             so Inkwell cannot paste. Grant it in System Settings, Privacy and \
+             Security, Accessibility. If Inkwell is already listed there, remove \
+             it with the minus button and add it again: the grant is tied to the \
+             exact app it was given to, and updating the app replaces that."
+            .to_string(),
+        other => format!("Could not simulate input: {}", other),
+    })?;
 
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
