@@ -99,7 +99,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aho-corasick",
  "arboard",
@@ -4818,9 +4818,9 @@ dependencies = [
 
 [[package]]
 name = "sherpa-onnx"
-version = "1.12.33"
+version = "1.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66a8c07c7041b63715b75a3b3f06ba5540c3e9f50d4634a28f37d42ec2cd89ec"
+checksum = "0b142d3f255cb4e4b7808ea25869db6f5714e0a3550da355234483b4db552055"
 dependencies = [
  "serde",
  "serde_json",
@@ -4829,9 +4829,9 @@ dependencies = [
 
 [[package]]
 name = "sherpa-onnx-sys"
-version = "1.12.33"
+version = "1.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38f554a5e9f4af18ab4ce0d43ef042f81b1a0c111545962708fbb5941893932a"
+checksum = "ffc951af03dc0653c0622158ca8a585a6f2bc43b7b06048cf0e5b5020005c227"
 dependencies = [
  "bzip2",
  "tar",

@@ -28,6 +28,7 @@ pub enum EngineKind {
     /// Whisper variant name, e.g. "tiny", "large-v3".
     Whisper(&'static str),
     SenseVoice,
+    Qwen3,
 }
 
 pub struct ModelSpec {
@@ -70,6 +71,7 @@ impl ModelSpec {
             EngineKind::Moonshine(v) => SpeechEngine::moonshine(models_dir, v),
             EngineKind::Whisper(v) => SpeechEngine::whisper(models_dir, v),
             EngineKind::SenseVoice => SpeechEngine::sense_voice(models_dir),
+            EngineKind::Qwen3 => SpeechEngine::qwen3(models_dir),
         }
     }
 
@@ -167,6 +169,23 @@ pub const MODELS: &[ModelSpec] = &[
         ],
         encoder_files: &["model.int8.onnx", "model.onnx"],
         kind: EngineKind::SenseVoice,
+    },
+    ModelSpec {
+        id: "qwen3-asr",
+        display: "Qwen3 ASR",
+        dir: "qwen3-asr",
+        company: "Alibaba",
+        description: "SPIKE ENTRY, not for release until measured. 30 languages including Swedish, and the only model with a published accented-English result.",
+        size: "940 MB",
+        languages: "30 languages",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/resolve/main",
+        files: &[
+            ("conv_frontend.onnx", 43_000_000),
+            ("encoder.int8.onnx", 182_000_000),
+            ("decoder.int8.onnx", 756_000_000),
+        ],
+        encoder_files: &["encoder.int8.onnx", "encoder.onnx"],
+        kind: EngineKind::Qwen3,
     },
     ModelSpec {
         id: "whisper-turbo",

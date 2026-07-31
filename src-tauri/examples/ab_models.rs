@@ -137,6 +137,17 @@ fn main() {
         None => println!("Hotwords: none (dictionary is empty)\n"),
     }
 
+    // Qwen3 reads its bias phrases from a file next to the model, because its
+    // config takes them at construction rather than per utterance. Write them
+    // there so every model in the comparison gets the same biasing and the
+    // numbers are about the models, not about which one we remembered to help.
+    if let Some(h) = &hotwords {
+        let qdir = models_dir.join("qwen3-asr");
+        if qdir.exists() {
+            let _ = std::fs::write(qdir.join("hotwords.txt"), h);
+        }
+    }
+
     let wanted: Option<Vec<String>> = arg("--models")
         .map(|m| m.split(',').map(|s| s.trim().to_string()).collect());
 
