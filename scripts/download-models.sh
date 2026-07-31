@@ -1,6 +1,6 @@
 #!/bin/sh
 # Download Inkwell models to the app data directory (macOS / Linux).
-# POSIX equivalent of download-models.ps1 — same models, same destination.
+# POSIX equivalent of download-models.ps1, same models, same destination.
 # Run this once to set up models for testing.
 
 set -eu

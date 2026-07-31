@@ -5,7 +5,7 @@
   is inert on unsigned local and CI builds.
 
   audio-input is required because hardened runtime blocks microphone access
-  otherwise — for both the cpal capture thread and the WKWebView's getUserMedia
+  otherwise, for both the cpal capture thread and the WKWebView's getUserMedia
   call that drives the ink visualiser.
 
   The App Sandbox is deliberately absent: a sandboxed app cannot register global

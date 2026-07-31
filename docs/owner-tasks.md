@@ -97,7 +97,7 @@ Taken: `getinkwell.com`, `inkwell.app`, `useinkwell.com`, `inkwell.sh`,
 Apparently free (no nameservers, which is a strong hint but not proof, so
 confirm at the registrar):
 
-- **`inkwell.tools`** — shortest, and the TLD says what it is
+- **`inkwell.tools`**: shortest, and the TLD says what it is
 - `writeinkwell.com`
 - `inkwelldictation.com`
 - `hey-inkwell.com`

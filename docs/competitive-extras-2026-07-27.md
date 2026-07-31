@@ -33,7 +33,7 @@ SpeakMac, Handy, Hex, OpenWispr, Whispering.
 | **Voice editing / Command Mode** | Wispr Flow, Spokenly | Select text, hold key, say "make this shorter", and it rewrites in place rather than inserting. |
 | **Learning from corrections** | Willow ("smart memory", "vocabulary learning"), VoiceInk ("dictionary training") | The app notices what you fix and stops making that mistake. |
 | **Filler-word cleanup** | Typeless, VoiceInk, Willow | Strips *um*, *uh*, repetitions, false starts before pasting. |
-| **Mid-sentence correction** | Typeless | "…meet at three, no wait, four" resolves to "four". |
+| **Mid-sentence correction** | Typeless | "...meet at three, no wait, four" resolves to "four". |
 | **Screen / selection context** | Alter, Aqua, Monologue, VoiceInk (OCR) | Reads what is on screen or selected to inform formatting. |
 | **Shell command triggers** | superwhisper | Pipe the transcript through a script after transcription. |
 | **Translation** | Typeless, Paraspeech | Dictate in one language, insert another. |
