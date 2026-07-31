@@ -38,8 +38,10 @@ Round one shipped in 0.2.1: hotword biasing from the dictionary, trim-only VAD,
 quiet-point chunking, pre-roll and release-tail capture, transient-proof
 normalisation. The tooling to judge round two exists and is unused.
 
-- [ ] Owner: record a corpus. Step by step in [docs/owner-tasks.md](docs/owner-tasks.md), including which five kinds of sentence to cover and why each one tests a different stage. Note the toggle is in **General** in v0.2.1, not Troubleshooting: that tab exists only in later builds.
-- [ ] Me: run `cargo run --release --example ab_models` over that corpus to rank Parakeet V3 int8, V2 fp16 and V3 full precision on the owner's own voice. Until then, model choice is a guess with numbers attached to the wrong thing.
+- [x] Owner recorded a corpus 2026-07-31: eight scripted takes in `~/Documents/Inkwell Debug Audio/corpus`, with references written from the scripts.
+- [x] Measured on the owner's voice: **Parakeet V2 int8 8.0% WER, V2 fp16 8.0%, V3 int8 11.7%** (the current default). The win is English specialisation, not precision: the two V2 builds score identically, so the extra 600 MB for fp16 buys about 20% speed and no accuracy. Both V2 builds transcribed "to Vercel" and "changelog" correctly where V3 produced "the Versal" and "change log", which is the proper-noun failure that started this. Eight clips is directional, not a benchmark.
+- [ ] Owner: decide whether to switch the default to V2. It is a free upgrade for English (same download size, 32% fewer errors) and a regression the day you dictate in Swedish, since V2 is English-only.
+- [x] Parakeet V3 full precision removed from the catalogue. It ships weights as ONNX external data, which this sherpa-onnx build cannot resolve; the failure arrives as a foreign exception that aborts the process instead of returning an error, so listing it meant a 2.5 GB download that kills the app on selection.
 - [ ] Me: Qwen3-ASR-0.6B needs sherpa-onnx 1.12 to 1.13, which swaps the static libraries under everything. Do it alone so a broken upgrade cannot hold anything else hostage. It is the only candidate with a published accented-English win.
 - [ ] Me: decide `advanced_mode`'s future. It gates which tabs appear, which is navigation, not dictation; it may belong in the sidebar rather than in General.
 
