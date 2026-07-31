@@ -15,7 +15,9 @@ Hold a hotkey, speak, release. The text lands in whatever app you were typing in
 
 Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no accounts, no telemetry.
 
-<!-- TODO: screenshot / demo GIF -->
+<p align="center">
+  <img src="docs/media/inkwell-dashboard.png" alt="Inkwell showing transcript history, with the sidebar and the ink panel" width="900">
+</p>
 
 ## What it does
 
