@@ -4,6 +4,31 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-07-30
+
+Transcription accuracy. Diagnosed from a real transcript history rather than from impressions: the microphone and the model's core acoustics were fine, and the errors traced to vocabulary, chunk seams and word edges.
+
+### Added
+
+- **The dictionary now biases the recogniser.** Its correction targets are fed to the decoder as hotwords, so a custom word can be recognised correctly in the first place instead of being repaired afterwards. Decoding moved from greedy to beam search to support it. Add "Inkwell" and the model stops guessing "Inco".
+- **Parakeet V2 (fp16)** and **Parakeet V3 (full precision)** in the model list, for measuring what int8 quantisation costs on your own voice.
+- **A model comparison tool** (`cargo run --release --example ab_models`) that scores every installed model over a corpus of your recordings by word error rate.
+- Debug recordings are kept per take in `~/Documents/Inkwell Debug Audio`, so a corpus can accumulate.
+
+### Fixed
+
+- **The first phoneme of a dictation is no longer lost.** People start speaking as they press, so the 300ms before the keypress is now included, along with the 300ms after release for the last word's ending. The buffer that was supposed to do this had been dead code since it was written: its consumer was dropped at creation, so it filled once and silently discarded everything after.
+- **Words no longer duplicate or split at chunk boundaries** in long dictations. Audio was cut at blind 15-second offsets, and because silence removal ran first, every cut was guaranteed to land inside continuous speech. Cuts now fall at the quietest moment near a 60-second mark, and the "20-second Parakeet limit" that justified the old window did not exist.
+- **Pauses reach the model.** Silence removal used to delete every pause and splice the remaining speech together, which put unrelated phonemes hard against each other. It now trims only the dead air at the ends.
+- **One loud click no longer ruins a whole dictation.** Recording level was set from the single loudest sample, so a keyboard press at full scale made the app conclude the take was loud enough and leave quiet speech untouched.
+- The last few milliseconds of every recording stopped being silently dropped by the resampler.
+- A second launch fronts the running app instead of racing it for the microphone and hotkey.
+- File transcription cuts at quiet points rather than blindly at 30 seconds.
+
+### Changed
+
+- History records how long you held the key, rather than how much audio survived processing, so internal changes stop rewriting what past entries mean.
+
 ## [0.2.0] - 2026-07-30
 
 Rehaul. The product is now explicitly free and open source forever, macOS first, and BYOK only.
@@ -74,6 +99,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.1]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.1
 [0.2.0]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.0
 
 ## [0.1.0] - 2026-03-31
