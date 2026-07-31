@@ -125,13 +125,20 @@ pub fn vad_chunk(
         return Err("No speech detected in file".to_string());
     }
 
-    // For now, simple fixed-size chunking of the VAD-cleaned audio.
-    // Each chunk gets a timestamp based on its position.
+    // Cut at the quietest moment near each boundary rather than at a blind
+    // offset. Blind cuts split words in half, and this path has no overlap and
+    // no merge to repair that, so the half-words reached the transcript intact
+    // (the "pro prolific" artifact, in file transcription's own version).
     let mut chunks = Vec::new();
     let mut offset = 0usize;
 
     while offset < speech.len() {
-        let end = (offset + max_chunk_samples).min(speech.len());
+        let target = offset + max_chunk_samples;
+        let end = if target >= speech.len() {
+            speech.len()
+        } else {
+            crate::engine::quietest_cut(&speech, target, 16000)
+        };
         let chunk = speech[offset..end].to_vec();
 
         if chunk.len() >= min_speech_samples {
@@ -139,6 +146,9 @@ pub fn vad_chunk(
             chunks.push((start_ms, chunk));
         }
 
+        if end <= offset {
+            break; // defensive: never spin on a non-advancing cut
+        }
         offset = end;
     }
 

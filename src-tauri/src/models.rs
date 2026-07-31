@@ -19,8 +19,10 @@ use std::path::Path;
 /// Which `SpeechEngine` constructor loads this model.
 #[derive(Debug, Clone, Copy)]
 pub enum EngineKind {
-    Parakeet,
-    ParakeetV2,
+    /// Parakeet directory suffix: "v3", "v2", "v3-fp32", "v2-fp16"...
+    /// Carries the variant rather than hardcoding two, so a new precision or
+    /// language build is a table row instead of an engine change.
+    Parakeet(&'static str),
     /// Moonshine variant name, e.g. "base".
     Moonshine(&'static str),
     /// Whisper variant name, e.g. "tiny", "large-v3".
@@ -64,8 +66,7 @@ impl ModelSpec {
 
     pub fn load(&self, models_dir: &Path) -> Result<SpeechEngine, String> {
         match self.kind {
-            EngineKind::Parakeet => SpeechEngine::parakeet(models_dir),
-            EngineKind::ParakeetV2 => SpeechEngine::parakeet_v2(models_dir),
+            EngineKind::Parakeet(v) => SpeechEngine::parakeet_variant(models_dir, v),
             EngineKind::Moonshine(v) => SpeechEngine::moonshine(models_dir, v),
             EngineKind::Whisper(v) => SpeechEngine::whisper(models_dir, v),
             EngineKind::SenseVoice => SpeechEngine::sense_voice(models_dir),
@@ -93,6 +94,7 @@ pub struct ModelInfo {
 const ENCODER_FILES: &[&str] = &[
     "encoder.int8.onnx",
     "encoder.onnx",
+    "encoder.fp16.onnx",
     "encode.int8.onnx",
     "encode.onnx",
 ];
@@ -115,7 +117,7 @@ pub const MODELS: &[ModelSpec] = &[
             ("tokens.txt", 96_000),
         ],
         encoder_files: ENCODER_FILES,
-        kind: EngineKind::Parakeet,
+        kind: EngineKind::Parakeet("v3"),
     },
     ModelSpec {
         id: "parakeet-v2",
@@ -133,7 +135,47 @@ pub const MODELS: &[ModelSpec] = &[
             ("tokens.txt", 96_000),
         ],
         encoder_files: ENCODER_FILES,
-        kind: EngineKind::ParakeetV2,
+        kind: EngineKind::Parakeet("v2"),
+    },
+    ModelSpec {
+        id: "parakeet-v2-fp16",
+        display: "Parakeet V2 (fp16)",
+        dir: "parakeet-v2-fp16",
+        company: "NVIDIA",
+        description: "English only, half precision instead of int8. Bigger download for whatever accuracy quantisation was costing. Experimental: compare it against Parakeet V3 on your own voice before keeping it.",
+        size: "1.3 GB",
+        languages: "English",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16/resolve/main",
+        files: &[
+            ("encoder.fp16.onnx", 1_239_245_548),
+            ("decoder.fp16.onnx", 14_446_596),
+            ("joiner.fp16.onnx", 3_456_459),
+            ("tokens.txt", 9_384),
+        ],
+        encoder_files: ENCODER_FILES,
+        kind: EngineKind::Parakeet("v2-fp16"),
+    },
+    ModelSpec {
+        id: "parakeet-v3-fp32",
+        display: "Parakeet V3 (full precision)",
+        dir: "parakeet-v3-fp32",
+        company: "NVIDIA",
+        description: "The same 25-language model as the default, unquantised. 2.5 GB, and the encoder's weights arrive as a separate file. Experimental: this exists to measure what int8 costs on your voice, not because it is the better default.",
+        size: "2.5 GB",
+        languages: "25 languages",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/main",
+        files: &[
+            ("encoder.onnx", 41_766_257),
+            // ONNX external data: encoder.onnx references this by name and
+            // onnxruntime resolves it beside the model, so the two must land in
+            // the same directory or loading fails at runtime, not at download.
+            ("encoder.weights", 2_435_420_160),
+            ("decoder.onnx", 47_233_743),
+            ("joiner.onnx", 25_286_330),
+            ("tokens.txt", 93_939),
+        ],
+        encoder_files: ENCODER_FILES,
+        kind: EngineKind::Parakeet("v3-fp32"),
     },
     ModelSpec {
         id: "whisper-turbo",
