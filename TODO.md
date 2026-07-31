@@ -28,9 +28,9 @@ macOS forget the keychain grant on every rebuild. Both stop the day this lands.
 Building is solved (sherpa-onnx compiles on MSVC, v0.2.1 ships msi and exe).
 Nothing about *using* it has ever been checked.
 
-- [ ] Owner: a Win11 test environment. Unactivated Win11 in a VM is legal and enough. Parallels on Apple Silicon runs Windows ARM and emulates x64: fine for behaviour, meaningless for inference speed.
+- [ ] Owner: a Win11 test environment. Free route (UTM plus CrystalFetch) written up in [docs/owner-tasks.md](docs/owner-tasks.md). Unactivated Windows is legal and sufficient; the VM emulates x64 on Apple Silicon, so it proves behaviour and says nothing about speed.
 - [ ] Me/owner: QA pass. Hotkey, paste target, overlay placement, keyring (windows-native backend), per-app detection (process-name path, never exercised), voice editing's copy keystroke.
-- [ ] Owner: Windows code signing, Azure Trusted Signing (~$10/mo) if individual eligibility checks out. Until then SmartScreen warns on every download.
+- [ ] Owner: Windows code signing, least urgent of the four. Routes and the eligibility check first in [docs/owner-tasks.md](docs/owner-tasks.md). With current download numbers this buys little; reasonable to defer until someone reports being blocked.
 
 ## 3. Accuracy, round two
 
@@ -38,7 +38,7 @@ Round one shipped in 0.2.1: hotword biasing from the dictionary, trim-only VAD,
 quiet-point chunking, pre-roll and release-tail capture, transient-proof
 normalisation. The tooling to judge round two exists and is unused.
 
-- [ ] Owner: record a corpus. Troubleshooting > Save Debug Audio, dictate ten varied sentences including the words that get mangled, switch it off. Then write what you actually said into `take-NNNN.txt` beside each wav in `~/Documents/Inkwell Debug Audio`.
+- [ ] Owner: record a corpus. Step by step in [docs/owner-tasks.md](docs/owner-tasks.md), including which five kinds of sentence to cover and why each one tests a different stage. Note the toggle is in **General** in v0.2.1, not Troubleshooting: that tab exists only in later builds.
 - [ ] Me: run `cargo run --release --example ab_models` over that corpus to rank Parakeet V3 int8, V2 fp16 and V3 full precision on the owner's own voice. Until then, model choice is a guess with numbers attached to the wrong thing.
 - [ ] Me: Qwen3-ASR-0.6B needs sherpa-onnx 1.12 to 1.13, which swaps the static libraries under everything. Do it alone so a broken upgrade cannot hold anything else hostage. It is the only candidate with a published accented-English win.
 - [ ] Me: decide `advanced_mode`'s future. It gates which tabs appear, which is navigation, not dictation; it may belong in the sidebar rather than in General.
@@ -55,7 +55,7 @@ the text the user keeps.
 
 ## 5. Distribution
 
-- [ ] Owner: buy a domain. One purchase upgrades the homepage, the updater endpoint and the OG links. `getinkwell.vercel.app` works and is name-neutral until then.
+- [ ] Owner: buy a domain. Availability checked 2026-07-31 and candidates listed in [docs/owner-tasks.md](docs/owner-tasks.md); every short option is gone, `inkwell.tools` and two-word `.com`s are the realistic tier.
 - [ ] Owner, deferred on purpose: a `homebrew-tap` repo. The cask is written and passes `brew audit --strict`, so this is two minutes whenever it is wanted, but the value is currently thin and worth stating rather than assuming. The official homebrew-cask repo needs notability the project does not have (0 stars, 0 forks, 0 watchers as of 2026-07-31), so a personal tap is the only route, and `brew install --cask sirsicard/tap/inkwell` is a longer instruction than downloading the dmg. Homebrew's other draw, `brew upgrade`, is already covered by the app's own updater. Against that it adds a permanent chore: the sha256 must be bumped every release or installs fail on a checksum mismatch. Publish it when somebody asks for brew, or when traction allows submitting to homebrew-cask proper and earning the short name.
 - [ ] Me, after the domain: move the updater off `workers.dev` (route already stubbed in `inkwell-updater/wrangler.toml`), then re-verify a version hop.
 - [ ] Me: per-tab screenshots. The dashboard shot is in the README; the sidebar is a webview and synthetic clicks would not switch tabs, so the rest are worth doing by hand.
