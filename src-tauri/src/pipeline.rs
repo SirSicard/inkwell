@@ -348,13 +348,28 @@ fn process_recording(
                             voicecommand::CommandAction::ChangeStyle {
                                 style: s,
                             } => {
-                                if let Ok(new_style) =
-                                    serde_json::from_str::<style::Style>(
-                                        &format!("\"{}\"", s),
-                                    )
-                                {
-                                    *app_state.style.lock().unwrap() = new_style;
-                                    log::info!("Voice: style changed to {}", s);
+                                // Pin the first mode written in that style.
+                                // Writing app_state.style here (what this did
+                                // before) changed a field the pipeline stopped
+                                // reading when modes took over styling, so the
+                                // command silently did nothing.
+                                let target = app_state.modes.with(|store| {
+                                    store
+                                        .first_with_style(&s)
+                                        .or_else(|| store.find_by_name(&s))
+                                        .map(|m| (m.id.clone(), m.name.clone()))
+                                });
+                                match target {
+                                    Some((id, name)) => {
+                                        *app_state.pinned_mode.lock().unwrap() =
+                                            Some(id);
+                                        log::info!("Voice: pinned mode {}", name);
+                                        let _ = handle.emit("mode-pinned", name);
+                                    }
+                                    None => log::warn!(
+                                        "Voice: no mode is written in style {}",
+                                        s
+                                    ),
                                 }
                             }
                             voicecommand::CommandAction::TogglePolish => {
@@ -383,7 +398,12 @@ fn process_recording(
                 // not vary together.
                 let active_mode = {
                     let app_id = crate::appdetect::foreground_app_id();
-                    app_state.modes.with(|store| store.resolve(app_id.as_deref()).clone())
+                    let pinned = app_state.pinned_mode.lock().unwrap().clone();
+                    app_state.modes.with(|store| {
+                        store
+                            .resolve_with_override(app_id.as_deref(), pinned.as_deref())
+                            .clone()
+                    })
                 };
                 log::info!("Mode: {}", active_mode.name);
 

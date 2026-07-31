@@ -68,8 +68,8 @@ transient-proof normalization, pre-roll/release-tail capture, resampler flush.
 
 ## 8. Housekeeping (low urgency)
 
-- [ ] Fold `debug_save_audio` into a Troubleshooting section instead of General.
-- [ ] Decide whether voice commands fold into Modes or stay a separate concept.
+- [x] `debug_save_audio` moved to its own Troubleshooting tab with a button that reveals the recordings folder. It is a diagnostic you switch on for an hour, not a preference you set once.
+- [x] Voice commands stay a separate concept: a command is an action, a mode is a way of writing, and folding them would make "mode" mean two things. But the style commands were fixed, because they had been dead since modes took ownership of style: they wrote a field the pipeline no longer reads. They now pin a mode, the pin beats app matching, and the Modes tab shows it with a Clear button so it is never invisible state.
 - [ ] Homepage deploys must re-point the alias afterwards: `vercel alias set <deployment-url> getinkwell.vercel.app`. Automate or document in CI if deploys become frequent.
 
 ## Not doing

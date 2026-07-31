@@ -83,7 +83,7 @@ function HotkeyCapture() {
   )
 }
 
-export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?: (v: boolean) => void; onNavigate?: (tab: "Modes") => void }) {
+export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?: (v: boolean) => void; onNavigate?: (tab: "Modes" | "Troubleshooting") => void }) {
   // Read straight from the store rather than mirroring it into local state:
   // the mirrors were the reason two panels could disagree about the same value.
   const settings = useSettings((s) => s.settings)
@@ -96,8 +96,7 @@ export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?
   const recordingMode = settings?.recording_mode ?? "ptt"
   const advancedMode = settings?.advanced_mode ?? false
   const soundDictation = settings?.sound_dictation ?? true
-  const debugSaveAudio = settings?.debug_save_audio ?? false
-
+  
   const handleRecordingModeChange = (value: string) => setSetting("recording_mode", value)
   const handleStartOnBootChange = (value: boolean) => setSetting("start_on_boot", value)
   const handleShowOverlayChange = (value: boolean) => setSetting("show_overlay", value)
@@ -179,14 +178,19 @@ export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?
         <InkToggle checked={advancedMode} onChange={handleAdvancedModeChange} />
       </SettingRow>
 
+      {/* Debug audio recording used to sit here behind Advanced Mode. It is a
+          diagnostic you switch on for an hour, not a preference you set once,
+          and it writes voice to disk while on, so it lives with the other
+          diagnostics instead of beside the theme picker. */}
       {advancedMode && (
         <SettingRow
-          label="Save Debug Audio"
-          description="Writes each dictation's raw audio to a temp file for troubleshooting. Off by default. Leave it off unless you are chasing a transcription bug, and delete the files afterwards."
+          label="Diagnostics"
+          description="Debug recording and transcription troubleshooting."
         >
-          <InkToggle checked={debugSaveAudio} onChange={(v) => setSetting("debug_save_audio", v)} />
+          <InkButton onClick={() => onNavigate?.("Troubleshooting")}>Open Troubleshooting</InkButton>
         </SettingRow>
       )}
+
 
       <HotkeyCapture />
 

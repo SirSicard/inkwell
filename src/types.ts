@@ -102,7 +102,7 @@ export interface FileTranscribeResult {
 }
 
 export const basicTabs = ["Dashboard", "General", "About"] as const
-export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Snippets", "Modes", "Dictionary", "Files", "Commands", "About"] as const
+export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Snippets", "Modes", "Dictionary", "Files", "Commands", "Troubleshooting", "About"] as const
 export type Tab = (typeof advancedTabs)[number]
 
 /**
@@ -119,5 +119,5 @@ export const tabGroups: readonly { label: string; tabs: readonly Tab[] }[] = [
   { label: "History", tabs: ["Dashboard", "Files"] },
   { label: "Dictation", tabs: ["General", "Modes", "Audio", "Models"] },
   { label: "Intelligence", tabs: ["AI", "Snippets", "Dictionary", "Commands"] },
-  { label: "System", tabs: ["About"] },
+  { label: "System", tabs: ["Troubleshooting", "About"] },
 ]

@@ -105,3 +105,49 @@ pub fn save_modes(
 pub fn get_foreground_app() -> Option<String> {
     crate::appdetect::foreground_app_id()
 }
+
+/// The mode pinned by a voice command, if any. Returned as the mode's name so
+/// the UI can say which one without resolving ids itself.
+#[tauri::command]
+pub fn get_pinned_mode(state: tauri::State<AppState>) -> Option<String> {
+    let id = state.pinned_mode.lock().unwrap().clone()?;
+    state.modes.with(|s| s.modes.iter().find(|m| m.id == id).map(|m| m.name.clone()))
+}
+
+/// Pin a mode by id, or clear the pin with None. A pin set by voice must be
+/// clearable by hand: state the user cannot see and cannot undo is worse than
+/// no feature.
+#[tauri::command]
+pub fn set_pinned_mode(state: tauri::State<AppState>, mode_id: Option<String>) {
+    *state.pinned_mode.lock().unwrap() = mode_id.clone();
+    match mode_id {
+        Some(id) => log::info!("Mode pinned: {}", id),
+        None => log::info!("Mode pin cleared; app matching resumes"),
+    }
+}
+
+/// Reveal the debug-audio folder in the system file manager.
+///
+/// Recorded takes are only useful if the user can reach them: the workflow is
+/// record, then write a .txt of what was said beside each wav, then run the
+/// comparison tool. A path printed in a log nobody reads is not a workflow.
+#[tauri::command]
+pub fn open_debug_audio_folder() -> Result<String, String> {
+    let dir = std::path::PathBuf::from(std::env::var("HOME").map_err(|_| "No HOME".to_string())?)
+        .join("Documents")
+        .join("Inkwell Debug Audio");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {}", dir.display(), e))?;
+
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    #[cfg(target_os = "linux")]
+    let opener = "xdg-open";
+
+    std::process::Command::new(opener)
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("Could not open the folder: {}", e))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
