@@ -138,6 +138,7 @@ pub fn build_shortcut_plugin(
                     // noise and paste it somewhere.
                     let min_samples = (source_rate as f32 * 0.3) as usize;
                     let live_samples = samples.len().saturating_sub(lead_len);
+                    let live_ms = (live_samples as f32 * 1000.0 / source_rate as f32) as i64;
                     if live_samples < min_samples {
                         log::info!(
                             "Recording too short ({} live samples, {:.1}s), skipping",
@@ -158,6 +159,7 @@ pub fn build_shortcut_plugin(
                                         &handle_clone,
                                         samples,
                                         source_rate,
+                                        live_ms,
                                     );
                                 }),
                             ) {
@@ -198,7 +200,18 @@ fn warn_vad_unavailable(handle: &tauri::AppHandle) {
 }
 
 /// The core recording processing pipeline: resample → VAD → transcribe → style → dict → snippet → polish → paste.
-fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: usize) {
+/// `live_ms` is the wall-clock length of the user's actual press, excluding the
+/// pre-roll lead and release tail this pipeline adds. History records that
+/// rather than the length of whatever reached the recognizer, because the
+/// latter moved every time VAD or padding changed, silently rewriting what
+/// stored stats meant. This one answers "how long did I dictate", which is the
+/// question the history view is actually asking.
+fn process_recording(
+    handle: &tauri::AppHandle,
+    samples: Vec<f32>,
+    source_rate: usize,
+    live_ms: i64,
+) {
     // Debug: check raw audio RMS before resampling
     let raw_rms =
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
@@ -259,11 +272,30 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
     };
 
     // Opt-in debug WAV. Off by default: voice audio must not be left on disk.
+    //
+    // Written to a findable folder under Documents with a unique name per take,
+    // because the previous fixed path in the system temp dir was wrong twice
+    // over: every dictation overwrote the last, so a corpus could never
+    // accumulate, and macOS periodically sweeps that directory, so the one file
+    // that did exist could vanish before anyone looked. Accuracy work needs a
+    // set of recordings, not the most recent one.
     if debug_save_audio {
-        let wav_path = std::env::temp_dir().join("inkwell_debug.wav");
-        match recording::save_wav(&resampled, &wav_path) {
-            Ok(_) => log::warn!("Debug audio written to {}", wav_path.display()),
-            Err(e) => log::warn!("Debug audio save failed: {}", e),
+        let dir = dirs_documents().join("Inkwell Debug Audio");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("Debug audio dir {} could not be created: {}", dir.display(), e);
+        } else {
+            // Counter, not a clock: names must be unique and ordered, and this
+            // cannot collide with itself the way a second-resolution timestamp
+            // can when two takes land in the same second.
+            use std::sync::atomic::{AtomicU32, Ordering as O};
+            static SEQ: AtomicU32 = AtomicU32::new(0);
+            let existing = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
+            let n = existing as u32 + SEQ.fetch_add(1, O::Relaxed) + 1;
+            let wav_path = dir.join(format!("take-{:04}.wav", n));
+            match recording::save_wav(&resampled, &wav_path) {
+                Ok(_) => log::warn!("Debug audio written to {}", wav_path.display()),
+                Err(e) => log::warn!("Debug audio save failed: {}", e),
+            }
         }
     }
 
@@ -476,8 +508,7 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
 
                 // Save to transcript history (skip empty)
                 if !final_text.is_empty() {
-                    let duration_ms =
-                        (speech.len() as f32 / 16.0) as i64;
+                    let duration_ms = live_ms;
                     let style_name =
                         format!("{:?}", current_style).to_lowercase();
                     let model_name = app_state.engine.name();
@@ -520,4 +551,12 @@ fn process_recording(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: 
     if show_overlay {
         overlay::hide(handle);
     }
+}
+
+/// The user's Documents folder, or the temp dir if HOME is somehow unset.
+/// Debug recordings go somewhere a person can actually find and delete them.
+fn dirs_documents() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join("Documents"))
+        .unwrap_or_else(|_| std::env::temp_dir())
 }

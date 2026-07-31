@@ -45,11 +45,14 @@ model were explicitly exonerated. Fixed in-tree the same day: hotword biasing
 from the dictionary + beam search, trim-only VAD, quiet-point 60s chunking,
 transient-proof normalization, pre-roll/release-tail capture, resampler flush.
 
-- [ ] Owner: add the words that matter to the Dictionary (Inkwell, Claude, Vercel, Fable...); they now bias the decoder itself, not just post-editing.
-- [ ] A/B harness on the owner's saved debug-audio WAVs before/after any model change; measure, don't vibe.
-- [ ] Accuracy tier candidate #1: Qwen3-ASR-0.6B int8 (Apache-2.0, published accented-English win, Swedish-aware, hotword support; needs sherpa-onnx crate upgrade past 1.12.34). #2: Parakeet v2-EN fp16 A/B for English-only use. #3: fp32 Parakeet v3 to quantify what int8 costs.
-- [ ] filetranscribe still blind-cuts at 30s with no overlap or merge; route it through the engine chunker (costs per-segment timestamps, decide the tradeoff).
-- [ ] transcripts.audio_duration_ms now includes pauses and 600ms of edge pads; decide whether stats should measure speech or wall clock.
+- [x] Owner added 13 dictionary entries 2026-07-30; they now bias the decoder itself, not just post-editing.
+- [x] A/B harness: `cargo run --release --example ab_models` scores every installed model over a corpus by word error rate, biased with the app's own dictionary. Validated on synthetic speech.
+- [x] Debug audio writes one file per take to ~/Documents/Inkwell Debug Audio. It used to overwrite a single file in the system temp dir, so a corpus could never accumulate, which is why the first attempt at collecting one produced nothing.
+- [x] Candidates #2 and #3 are in the model list and installable: Parakeet V2 fp16 (1.3 GB) and Parakeet V3 full precision (2.5 GB, external weights file).
+- [ ] Candidate #1, Qwen3-ASR-0.6B int8: needs the sherpa-onnx crate to go 1.12 -> 1.13 (new static libs, unproven API). Deliberately not bundled into the 0.2.1 release; do it on its own so a broken upgrade cannot hold accuracy fixes hostage.
+- [x] filetranscribe cuts at the quietest point near each 30s boundary instead of a blind offset.
+- [x] transcripts.audio_duration_ms now records the length of the user's actual press, not of whatever reached the recognizer, so internal padding changes stop silently rewriting stored stats.
+- [ ] Owner: record a corpus (Save Debug Audio on, dictate, write take-NNNN.txt next to each wav), then run the harness to decide between the three Parakeet builds on your own voice.
 
 ## 6. Features, in the order the research ranks them
 

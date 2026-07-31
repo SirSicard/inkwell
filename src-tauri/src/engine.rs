@@ -118,29 +118,27 @@ impl SpeechEngine {
         Ok(Self { recognizer, model_type, hotwords_ready: false })
     }
 
-    /// Create a Parakeet engine (NeMo transducer)
-    /// variant: "v3" (25 European languages) or "v2" (English only)
+    /// Create a Parakeet engine (NeMo transducer) on the default variant.
     pub fn parakeet(models_dir: &Path) -> Result<Self, String> {
         Self::parakeet_variant(models_dir, "v3")
     }
 
-    pub fn parakeet_v2(models_dir: &Path) -> Result<Self, String> {
-        Self::parakeet_variant(models_dir, "v2")
-    }
-
-    fn parakeet_variant(models_dir: &Path, variant: &str) -> Result<Self, String> {
+    /// `variant` is the directory suffix: "v3", "v2", "v2-fp16", "v3-fp32".
+    /// Precision shows up only as a filename, so one loader covers them all.
+    pub fn parakeet_variant(models_dir: &Path, variant: &str) -> Result<Self, String> {
         let model_dir = models_dir.join(format!("parakeet-{}", variant));
 
-        let encoder = find_file(&model_dir, &["encoder.int8.onnx", "encoder.onnx"])
-            .ok_or(format!("Parakeet V3 encoder not found in {}", model_dir.display()))?;
-        let decoder = find_file(&model_dir, &["decoder.int8.onnx", "decoder.onnx"])
-            .ok_or(format!("Parakeet V3 decoder not found in {}", model_dir.display()))?;
-        let joiner = find_file(&model_dir, &["joiner.int8.onnx", "joiner.onnx"])
-            .ok_or(format!("Parakeet V3 joiner not found in {}", model_dir.display()))?;
+        // int8 first, then fp16, then plain: whichever precision is on disk.
+        let encoder = find_file(&model_dir, &["encoder.int8.onnx", "encoder.fp16.onnx", "encoder.onnx"])
+            .ok_or(format!("Parakeet {} encoder not found in {}", variant, model_dir.display()))?;
+        let decoder = find_file(&model_dir, &["decoder.int8.onnx", "decoder.fp16.onnx", "decoder.onnx"])
+            .ok_or(format!("Parakeet {} decoder not found in {}", variant, model_dir.display()))?;
+        let joiner = find_file(&model_dir, &["joiner.int8.onnx", "joiner.fp16.onnx", "joiner.onnx"])
+            .ok_or(format!("Parakeet {} joiner not found in {}", variant, model_dir.display()))?;
         let tokens = model_dir.join("tokens.txt");
 
         if !tokens.exists() {
-            return Err(format!("Parakeet V3 tokens not found at {}", tokens.display()));
+            return Err(format!("Parakeet {} tokens not found at {}", variant, tokens.display()));
         }
 
         let mut config = OfflineRecognizerConfig::default();
@@ -186,9 +184,10 @@ impl SpeechEngine {
             variant.to_uppercase(),
             if hotwords_ready { "ready" } else { "unavailable" }
         );
-        let model_type = match variant {
-            "v2" => ModelType::ParakeetV2,
-            _ => ModelType::Parakeet,
+        let model_type = if variant.starts_with("v2") {
+            ModelType::ParakeetV2
+        } else {
+            ModelType::Parakeet
         };
         Ok(Self { recognizer, model_type, hotwords_ready })
     }
@@ -407,7 +406,7 @@ fn synthesize_bpe_vocab(tokens_path: &std::path::Path, out_path: &std::path::Pat
 /// a pause or between words instead of mid-phoneme, which is what turned 15s
 /// chunk seams into duplicated half-words ("pro prolific") in the transcript
 /// history.
-fn quietest_cut(samples: &[f32], target: usize, radius: usize) -> usize {
+pub fn quietest_cut(samples: &[f32], target: usize, radius: usize) -> usize {
     const FRAME: usize = 320; // 20ms at 16kHz
     let lo = target.saturating_sub(radius);
     let hi = (target + radius).min(samples.len().saturating_sub(1));
