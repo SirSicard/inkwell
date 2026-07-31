@@ -15,7 +15,7 @@
 # for an unsigned app: without notarization, the checksum is the only thing
 # standing between the user and a substituted download.
 cask "inkwell" do
-  version "0.2.4"
+  version "0.2.5"
   sha256 "79e4b86df4e9bd89eb9fe1cdaec2cf5d3c13f6b808b4a88a8baab085456d1207"
 
   # No `verified:` here: it is only for urls whose domain differs from the
