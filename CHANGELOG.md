@@ -4,6 +4,17 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.3] - 2026-07-31
+
+### Added
+
+- **Qwen3 ASR**, the most accurate model measured here: 5.6% word error rate against 8.0% for the best previous option, on the same recordings. It is also the only model that covers English and the Nordic languages at once, so it does not force a choice between them. Larger download and about twice the transcription time, which is still under a second for a short dictation. Offered as an accuracy tier, not as the default.
+- **The dictionary now applies to models that read it at load time.** Qwen3 takes its bias phrases when the engine is built rather than per dictation, so saving the dictionary rebuilds the engine. Without this, an edit would have saved successfully and silently done nothing until the next restart.
+
+### Changed
+
+- Updated the speech engine (sherpa-onnx 1.12 to 1.13). Existing models load and score within noise of their previous numbers.
+
 ## [0.2.2] - 2026-07-31
 
 ### Added
@@ -118,6 +129,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.3]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.3
 [0.2.2]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.2
 [0.2.1]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.1
 [0.2.0]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.0
