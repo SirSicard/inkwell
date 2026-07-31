@@ -1,0 +1,49 @@
+# Alerts say a dependency is vulnerable. This opens the pull request that fixes
+# it. Without it, the backlog rebuilds quietly: enabling alerts on this repo
+# surfaced 49 advisories that had accumulated unnoticed, including 23 against
+# a deployed public site.
+#
+# Grouped and monthly on purpose. A solo project drowned in daily single-package
+# PRs stops reading them, which is worse than not having them.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      dev-tooling:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /homepage
+    schedule:
+      interval: monthly
+    groups:
+      homepage:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /inkwell-updater
+    schedule:
+      interval: monthly
+    groups:
+      worker:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: monthly
+    groups:
+      rust:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

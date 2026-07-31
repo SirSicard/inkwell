@@ -1,0 +1,4 @@
+# Puts a Sponsor button on the repository page. The donation link already exists
+# in the app and on the site; this is the one place GitHub itself will surface
+# it, and it costs nothing to state.
+buy_me_a_coffee: mattiasherzig
