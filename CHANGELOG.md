@@ -4,6 +4,25 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-07-31
+
+### Added
+
+- **Voice editing.** Select text anywhere, hold a second hotkey (Cmd+Shift+E on macOS), say what to change, and the rewrite replaces the selection. "Make this shorter", "fix the grammar", "turn this into bullet points". Needs an API key, because rewriting text to order is a language-model job; dictation itself stays entirely local. Clear the hotkey in General to switch the feature off and free the shortcut.
+- **A Troubleshooting section**, with debug recording and a button that opens the folder it writes to. That toggle used to sit in General next to the theme picker, though it is a tool you switch on to investigate something and off again, and it writes your voice to disk while it is on.
+
+### Changed
+
+- **The model list is four models instead of thirteen**, each answering a different question, with word error rates measured on real recordings rather than quoted from a leaderboard. Parakeet V2 is the most accurate for English (8.0%), SenseVoice is a quarter of the size and twice the speed at 9.3%, Whisper Turbo reaches the languages the others cannot, and Parakeet V3 remains the default because it detects 25 European languages for you. The models that left lost on every axis at once: smaller Whisper builds were both less accurate and slower than Parakeet, and the English-distilled ones were beaten by Parakeet V2 at a similar size.
+- If your saved model is one of the retired ones, the app says so instead of quietly loading a different one.
+
+### Fixed
+
+- **macOS asked for permission to control the computer on every single dictation.** The input library's defaults prompt when the process is not trusted, and the paste path builds one per dictation. Worse, it fired while the Accessibility switch read as granted: macOS ties that grant to the app's code identity, and an unsigned build gets a new identity every time it is replaced, so updating the app invalidated the permission while leaving the toggle on. The paste path no longer prompts; when the permission really is missing, one message names the fix, including that an already-listed Inkwell has to be removed and re-added.
+- Saying "formal mode" had done nothing since modes shipped. The command wrote a setting the pipeline stopped reading when modes took ownership of styling. Style commands now pin a mode, and the Modes tab shows the pin with a Clear button so it is never invisible.
+- Debug recordings were numbered 1, 3, 5, 7, because the sequence added a per-session counter to a directory count.
+- Onboarding described the app as "premium speech-to-text", a line left over from a planned paid tier that no longer exists.
+
 ## [0.2.1] - 2026-07-30
 
 Transcription accuracy. Diagnosed from a real transcript history rather than from impressions: the microphone and the model's core acoustics were fine, and the errors traced to vocabulary, chunk seams and word edges.
@@ -99,6 +118,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.2]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.2
 [0.2.1]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.1
 [0.2.0]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.0
 
