@@ -38,7 +38,11 @@ tauri-plugin-process = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-autostart = "2"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# rustls rather than the default native-tls, which pulls in openssl and with it
+# the largest block of advisories against this project. Also removes a C
+# dependency from every build. rustls-tls bundles the Mozilla root store, which
+# is more predictable across the three platforms than each OS trust store.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "charset", "http2"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 # keyring 3 ships NO credential store by default: every backend is behind a

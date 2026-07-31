@@ -109,3 +109,38 @@ fn a_spoken_instruction_survives_transcription() {
     assert!(message.contains("hey whats up"));
     println!("message to model:\n{message}");
 }
+
+/// HTTPS still works after the TLS backend change.
+///
+/// reqwest moved from native-tls to rustls to drop openssl, and a broken TLS
+/// stack would not show up in any other test: everything here runs offline, and
+/// the failure would first appear when a user tries to download a model or use
+/// AI polish. Checks the two hosts the app actually depends on.
+#[test]
+#[ignore = "needs network"]
+fn https_works_against_the_hosts_the_app_uses() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        for url in [
+            // Model downloads.
+            "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main/tokens.txt",
+            // Update checks.
+            "https://api.github.com/repos/SirSicard/inkwell/releases/latest",
+        ] {
+            let resp = reqwest::Client::builder()
+                .user_agent("inkwell-tls-smoke")
+                .build()
+                .expect("client")
+                .get(url)
+                .send()
+                .await
+                .unwrap_or_else(|e| panic!("TLS or network failure for {url}: {e}"));
+            assert!(
+                resp.status().is_success(),
+                "{url} returned {}",
+                resp.status()
+            );
+            println!("ok {} -> {}", url, resp.status());
+        }
+    });
+}
