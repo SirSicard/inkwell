@@ -6,6 +6,7 @@
 //! same lock as the change.
 
 use crate::{appdetect, dictionary, snippets, voicecommand, AppState};
+use tauri::Manager;
 
 #[tauri::command]
 pub fn get_dictionary(state: tauri::State<AppState>) -> Vec<dictionary::DictEntry> {
@@ -13,15 +14,43 @@ pub fn get_dictionary(state: tauri::State<AppState>) -> Vec<dictionary::DictEntr
 }
 
 #[tauri::command]
-pub fn set_dictionary(
-    state: tauri::State<AppState>,
+pub async fn set_dictionary(
+    app: tauri::AppHandle,
     entries: Vec<dictionary::DictEntry>,
 ) -> Result<(), String> {
     let count = entries.len();
-    state
-        .dict
-        .update(|d| d.entries = entries, |d, p| d.save(p))?;
+    let (hotwords, models_dir) = {
+        let state = app.state::<AppState>();
+        state
+            .dict
+            .update(|d| d.entries = entries, |d, p| d.save(p))?;
+        let hw = state.dict.with(|d| d.hotwords());
+        let dir = std::path::PathBuf::from(state.models_dir.lock().unwrap().clone());
+        (hw, dir)
+    };
     log::info!("Dictionary saved: {} entries", count);
+
+    // Models that read bias phrases per utterance pick this up on the next
+    // dictation for free. Models that read them at construction, currently
+    // Qwen3, would go on using the phrases they were built with, so the file is
+    // rewritten and the engine rebuilt. Skipping this would make the dictionary
+    // save successfully and then do nothing until restart, which is worse than
+    // it not saving at all.
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        for spec in crate::models::MODELS.iter().filter(|m| m.hotwords_at_load()) {
+            if let Err(e) = spec.write_hotwords(&models_dir, hotwords.as_deref()) {
+                log::warn!("Could not write hotwords for {}: {}", spec.id, e);
+            }
+        }
+        if let Err(e) = state.engine.reload_for_hotwords() {
+            log::warn!("Engine rebuild after dictionary change failed: {}", e);
+        }
+    })
+    .await
+    .map_err(|e| format!("Dictionary applied but the engine rebuild failed: {}", e))?;
+
     Ok(())
 }
 
