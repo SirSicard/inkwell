@@ -13,9 +13,9 @@ The latest release only. This is a solo-maintained free project, so there are no
 
 **Do not open a public issue for a security vulnerability.**
 
-Preferred: use GitHub's private vulnerability reporting on this repo (Security tab > Report a vulnerability). It is private and needs no email round trip.
+Use GitHub's private vulnerability reporting on this repo: **Security tab > Report a vulnerability**. It is private, it reaches the maintainer directly, and it needs no email address to exist anywhere public.
 
-Alternative: email **mattias@aiadvantage.com**.
+That is the only channel. There is deliberately no email address here: a published address on a public repository is scraped within days, and the GitHub route is both private and easier to act on.
 
 What to expect: acknowledgement within a few days, an honest assessment of whether and when it will be fixed, and credit in the release notes unless you would rather stay anonymous. No bounty, this project has no revenue.
 
