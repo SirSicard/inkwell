@@ -94,6 +94,12 @@ All models run locally on CPU. No internet is needed once a model is downloaded.
 - **Voice agent mode.** Removed in this rehaul. It targeted a gateway that no longer exists.
 - **Silence trimming (Silero VAD)** downloads its model (`silero_vad.onnx`) on first run. Until that finishes, dictation works but silence is not trimmed, and the app says so rather than failing quietly.
 
+## Voice editing
+
+Select text anywhere, hold the edit hotkey (Cmd+Shift+E on macOS, Ctrl+Shift+E elsewhere), say what to change, and the rewrite replaces the selection. "Make this shorter", "fix the grammar", "turn this into bullet points".
+
+This needs an API key, because rewriting text to order is a language-model job and Inkwell has no model of its own to do it with. Dictation itself stays entirely local and needs no key. Clear the hotkey in General to turn the feature off and free the shortcut.
+
 ## Support the project
 
 Inkwell is free and will not be paywalled. If it saves you time, you can leave a tip:

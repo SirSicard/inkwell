@@ -1,4 +1,4 @@
-use crate::{llm, overlay, paste, recording, sounds, style, vad, voicecommand, AppState};
+use crate::{llm, overlay, paste, recording, sounds, style, vad, voicecommand, voiceedit, AppState, Intent};
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager};
 
@@ -15,10 +15,28 @@ pub fn build_shortcut_plugin(
 
             let app_state = handle.state::<AppState>();
 
-            let (mode, show_overlay) = {
+            let (mode, show_overlay, edit_hotkey) = {
                 let settings = app_state.settings.lock().unwrap();
-                (settings.recording_mode.clone(), settings.show_overlay)
+                (
+                    settings.recording_mode.clone(),
+                    settings.show_overlay,
+                    settings.edit_hotkey.clone(),
+                )
             };
+
+            // Which hotkey fired decides what the recording is for. Both share
+            // one audio buffer: a second buffer would let a dictation and an
+            // edit interleave and produce a transcript made of half of each.
+            let is_edit = !edit_hotkey.trim().is_empty()
+                && edit_hotkey
+                    .parse::<tauri_plugin_global_shortcut::Shortcut>()
+                    .map(|s| &s == shortcut)
+                    .unwrap_or(false);
+
+            // Edits are always push to talk. Toggle would leave the user
+            // holding a captured selection with no visible indication that the
+            // app is waiting for an instruction.
+            let mode = if is_edit { "ptt".to_string() } else { mode };
             let is_toggle = mode == "toggle";
 
             let should_start;
@@ -44,7 +62,37 @@ pub fn build_shortcut_plugin(
                 should_stop = released;
             }
 
+            if should_start && is_edit {
+                // Capture the selection before recording, while the user's
+                // focus is still where they left it. Failing here must stop the
+                // flow: recording an instruction with nothing to apply it to
+                // wastes the user's breath and then says so 5 seconds later.
+                match paste::copy_selection() {
+                    Ok((Some(sel), previous)) => {
+                        paste::restore_clipboard(previous);
+                        log::info!("Voice edit: captured {} chars", sel.chars().count());
+                        *app_state.edit_selection.lock().unwrap() = Some(sel);
+                    }
+                    Ok((None, previous)) => {
+                        paste::restore_clipboard(previous);
+                        log::info!("Voice edit: nothing selected");
+                        let _ = handle.emit(
+                            "voice-edit-error",
+                            "Select some text first, then hold the edit hotkey and say what to change.",
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        log::warn!("Voice edit: selection capture failed: {}", e);
+                        let _ = handle.emit("voice-edit-error", format!("Could not read the selection: {}", e));
+                        return;
+                    }
+                }
+            }
+
             if should_start {
+                *app_state.recording_intent.lock().unwrap() =
+                    if is_edit { Intent::Edit } else { Intent::Dictate };
                 let guard = app_state.audio.lock().unwrap();
                 if let Some(audio) = guard.as_ref() {
                     {
@@ -120,6 +168,7 @@ pub fn build_shortcut_plugin(
                     // seed rather than live speech.
                     audio.preroll_claimed.store(tail_mark + tail_len, Ordering::Relaxed);
                     let lead_len = audio.lead_len.swap(0, Ordering::Relaxed);
+                    let intent = *app_state.recording_intent.lock().unwrap();
 
                     log::info!(
                         "Recording stopped: {} samples ({:.1}s at {}Hz)",
@@ -155,12 +204,19 @@ pub fn build_shortcut_plugin(
                             samples.extend(preroll.since(tail_mark, tail_len));
                             match std::panic::catch_unwind(
                                 std::panic::AssertUnwindSafe(|| {
-                                    process_recording(
-                                        &handle_clone,
-                                        samples,
-                                        source_rate,
-                                        live_ms,
-                                    );
+                                    match intent {
+                                        Intent::Dictate => process_recording(
+                                            &handle_clone,
+                                            samples,
+                                            source_rate,
+                                            live_ms,
+                                        ),
+                                        Intent::Edit => process_edit(
+                                            &handle_clone,
+                                            samples,
+                                            source_rate,
+                                        ),
+                                    }
                                 }),
                             ) {
                                 Ok(_) => {}
@@ -579,4 +635,128 @@ fn dirs_documents() -> std::path::PathBuf {
     std::env::var("HOME")
         .map(|h| std::path::PathBuf::from(h).join("Documents"))
         .unwrap_or_else(|_| std::env::temp_dir())
+}
+
+/// The voice-edit pipeline: resample -> trim -> transcribe the instruction ->
+/// apply it to the captured selection -> paste over that selection.
+///
+/// Deliberately not a branch inside `process_recording`. The two share three
+/// early steps and disagree about everything after: no styling, no dictionary,
+/// no snippets, no cleanup, and the output replaces text rather than being
+/// inserted. Folding them together would mean a chain of `if intent ==` down
+/// the length of the function.
+fn process_edit(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: usize) {
+    let app_state = handle.state::<AppState>();
+
+    let selection = match app_state.edit_selection.lock().unwrap().take() {
+        Some(s) => s,
+        None => {
+            log::warn!("Voice edit: no selection captured, nothing to do");
+            return;
+        }
+    };
+
+    let resampled = match recording::resample_to_16k(&samples, source_rate) {
+        Ok(r) => recording::normalize_peak(r),
+        Err(e) => {
+            log::error!("Voice edit: resampling failed: {}", e);
+            let _ = handle.emit("voice-edit-error", format!("Audio processing failed: {}", e));
+            return;
+        }
+    };
+
+    let (vad_threshold, vad_path) = {
+        let settings = app_state.settings.lock().unwrap();
+        (
+            settings.vad_threshold,
+            app_state.vad_model_path.lock().unwrap().clone(),
+        )
+    };
+    let speech = match vad::trim_silence(&resampled, &vad_path, vad_threshold) {
+        Ok(s) if !s.is_empty() => s,
+        _ => resampled,
+    };
+
+    // The dictionary biases here too: an instruction naming a product the model
+    // mishears would be applied as the wrong instruction.
+    let hotwords = app_state.dict.with(|d| d.hotwords());
+    let instruction = match app_state.engine.transcribe(speech, hotwords) {
+        Ok(t) if !t.trim().is_empty() => t,
+        Ok(_) => {
+            log::info!("Voice edit: no instruction heard");
+            let _ = handle.emit("voice-edit-error", "No instruction was heard, so nothing was changed.");
+            return;
+        }
+        Err(e) => {
+            log::error!("Voice edit: transcription failed: {}", e);
+            let _ = handle.emit("voice-edit-error", format!("Could not transcribe the instruction: {}", e));
+            return;
+        }
+    };
+    log::info!("Voice edit instruction: \"{}\"", instruction);
+
+    let provider = match crate::polish::preferred_provider() {
+        Some(p) => p,
+        None => {
+            let _ = handle.emit(
+                "voice-edit-error",
+                "Voice editing needs an API key. Add one in Settings, AI.",
+            );
+            return;
+        }
+    };
+    let api_key = match llm::api_key_for(&provider) {
+        Some(k) => k,
+        None => {
+            let _ = handle.emit(
+                "voice-edit-error",
+                "Keychain access was denied, so the selection was left alone.",
+            );
+            return;
+        }
+    };
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Voice edit: no runtime: {}", e);
+            return;
+        }
+    };
+    let sel = selection.clone();
+    let instr = instruction.clone();
+    let result = std::thread::spawn(move || {
+        runtime.block_on(async move {
+            voiceedit::apply_edit(&provider, &api_key, None, &sel, &instr).await
+        })
+    })
+    .join();
+
+    match result {
+        Ok(Ok(rewritten)) => {
+            log::info!(
+                "Voice edit: {} chars -> {} chars",
+                selection.chars().count(),
+                rewritten.chars().count()
+            );
+            // The selection is still selected in the target app, so pasting
+            // replaces it. Nothing re-selects it first: doing so would need
+            // synthetic arrow keys and would break wherever the user clicked
+            // in the meantime.
+            if let Err(e) = paste::paste_text(&rewritten) {
+                log::error!("Voice edit: paste failed: {}", e);
+                let _ = handle.emit("voice-edit-error", format!("Could not paste the rewrite: {}", e));
+                return;
+            }
+            let _ = handle.emit("voice-edit-done", rewritten);
+        }
+        Ok(Err(e)) => {
+            log::warn!("Voice edit failed: {}", e);
+            let _ = handle.emit("voice-edit-error", e);
+        }
+        Err(_) => {
+            log::error!("Voice edit: worker thread panicked");
+            let _ = handle.emit("voice-edit-error", "The edit failed unexpectedly.");
+        }
+    }
 }

@@ -83,3 +83,29 @@ fn hotword_biasing_does_not_break_ordinary_speech() {
         assert!(got.contains(word), "expected {word:?} in transcript, got {text:?}");
     }
 }
+
+/// Voice editing end to end, minus the LLM call and the keystrokes: speak an
+/// instruction, transcribe it, and build the message the model would receive.
+/// This covers the seam that unit tests cannot, namely that a spoken
+/// instruction survives the real recognizer intact enough to act on.
+#[test]
+#[ignore = "needs an installed model and a generated wav"]
+fn a_spoken_instruction_survives_transcription() {
+    use app_lib::voiceedit;
+
+    let wav = PathBuf::from("/tmp/inkwell_edit_test.wav");
+    assert!(wav.exists(), "generate the fixture first: say -o /tmp/inkwell_edit_test.wav --data-format=LEI16@16000 \"make this more formal\"");
+
+    let samples = filetranscribe::decode_to_pcm(&wav).expect("decode failed");
+    let eng = engine::SpeechEngine::parakeet(&models_dir()).expect("model load failed");
+    let instruction = eng.transcribe(&samples, None).expect("transcribe failed");
+    println!("instruction heard: {instruction:?}");
+
+    let got = instruction.to_lowercase();
+    assert!(got.contains("formal"), "instruction lost its verb: {instruction:?}");
+
+    let message = voiceedit::build_user_message("hey whats up", &instruction);
+    assert!(message.contains("Instruction:"));
+    assert!(message.contains("hey whats up"));
+    println!("message to model:\n{message}");
+}

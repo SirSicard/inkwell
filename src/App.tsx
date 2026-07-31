@@ -493,6 +493,11 @@ function App() {
       // Without VAD the recognizer still runs, just unsegmented. Say so rather
       // than degrading silently, which is how this went unnoticed before.
       listen<string>("vad-unavailable", (e) => toast(e.payload, "warning")),
+      // Voice editing replaces text the user can see, so both outcomes are
+      // reported: silence after speaking an instruction is indistinguishable
+      // from the feature not existing.
+      listen<string>("voice-edit-error", (e) => toast(e.payload, "warning")),
+      listen<string>("voice-edit-done", () => toast("Selection rewritten.", "info")),
     ]
     return () => { listeners.forEach((p) => p.then((fn) => fn())) }
   }, [])

@@ -4,11 +4,23 @@ import { SettingRow, InkToggle, InkSelect, InkButton } from "../components/ui"
 import { useSettings } from "../state/settings"
 import { formatHotkey } from "../hotkey"
 
-function HotkeyCapture() {
-  // The hotkey lives in the shared store; set_hotkey is a separate command
+function HotkeyCapture({
+  label = "Hotkey",
+  field = "hotkey",
+  command = "set_hotkey",
+  hint,
+  clearable = false,
+}: {
+  label?: string
+  field?: "hotkey" | "edit_hotkey"
+  command?: "set_hotkey" | "set_edit_hotkey"
+  hint?: string
+  clearable?: boolean
+}) {
+  // The hotkey lives in the shared store; the setter is a separate command
   // because it re-registers the global shortcut, so it is invoked directly and
   // the store is corrected to match on success.
-  const hotkey = useSettings((s) => s.settings?.hotkey ?? "")
+  const hotkey = useSettings((s) => s.settings?.[field] ?? "")
   const [capturing, setCapturing] = useState(false)
   const [error, setError] = useState("")
 
@@ -50,7 +62,7 @@ function HotkeyCapture() {
       return
     }
 
-    invoke("set_hotkey", { hotkey: combo })
+    invoke(command, { hotkey: combo })
       .then(() => {
         void useSettings.getState().load()
         setError("")
@@ -60,11 +72,21 @@ function HotkeyCapture() {
       })
   }
 
-  const displayHotkey = capturing ? "Press your hotkey..." : formatHotkey(hotkey)
+  const clear = () => {
+    invoke(command, { hotkey: "" })
+      .then(() => { void useSettings.getState().load(); setError("") })
+      .catch((err) => setError(String(err)))
+  }
+
+  const displayHotkey = capturing
+    ? "Press your hotkey..."
+    : hotkey
+      ? formatHotkey(hotkey)
+      : "Disabled"
 
   return (
     <div className="space-y-1">
-      <label className="text-xs text-text-tertiary uppercase tracking-wider">Hotkey</label>
+      <label className="text-xs text-text-tertiary uppercase tracking-wider">{label}</label>
       <div
         tabIndex={0}
         onClick={() => { setCapturing(true); setError("") }}
@@ -78,6 +100,15 @@ function HotkeyCapture() {
       >
         {displayHotkey}
       </div>
+      {hint && <p className="text-body text-text-tertiary">{hint}</p>}
+      {clearable && hotkey && (
+        <button
+          onClick={clear}
+          className="text-body text-text-tertiary hover:text-text-primary transition-colors"
+        >
+          Turn off
+        </button>
+      )}
       {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
   )
@@ -193,6 +224,14 @@ export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?
 
 
       <HotkeyCapture />
+
+      <HotkeyCapture
+        label="Voice Edit Hotkey"
+        field="edit_hotkey"
+        command="set_edit_hotkey"
+        clearable
+        hint="Select text anywhere, hold this, and say what to change. Needs an API key, since rewriting is the model's job."
+      />
 
       <div className="flex gap-2 pt-2">
         <InkButton variant="ghost" onClick={() => {

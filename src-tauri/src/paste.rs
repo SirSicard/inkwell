@@ -126,3 +126,89 @@ pub fn open_accessibility_settings() -> Result<(), String> {
 pub fn open_accessibility_settings() -> Result<(), String> {
     Ok(())
 }
+
+/// Gap between sending Cmd+C and reading the clipboard. The copy travels
+/// through the target app's run loop, so reading immediately returns whatever
+/// was on the clipboard before.
+const COPY_SETTLE_MS: u64 = 120;
+
+/// Copy the frontmost app's current selection and return it.
+///
+/// There is no cross-platform API for "what is selected in another
+/// application", so this does what a person would: press copy, then look at the
+/// clipboard. Returns None when the clipboard did not change, which is the only
+/// available signal that nothing was selected.
+///
+/// The caller gets the user's previous clipboard back in `restore`, and must
+/// use it: leaving a stolen selection on the clipboard is a side effect nobody
+/// asked for.
+pub fn copy_selection() -> Result<(Option<String>, Option<String>), String> {
+    let mut clipboard = Clipboard::new()
+        .map_err(|e| format!("Failed to access clipboard: {}", e))?;
+    let previous = clipboard.get_text().ok();
+
+    // A sentinel makes "nothing was selected" distinguishable from "the
+    // selection happens to equal the clipboard". Without it, editing the same
+    // text twice in a row would look like an empty selection the second time.
+    let sentinel = "\u{0}inkwell-no-selection\u{0}";
+    let _ = clipboard.set_text(sentinel);
+    thread::sleep(Duration::from_millis(CLIPBOARD_SETTLE_MS));
+
+    send_copy_keystroke()?;
+    thread::sleep(Duration::from_millis(COPY_SETTLE_MS));
+
+    let copied = clipboard.get_text().ok();
+    let selection = match copied {
+        Some(t) if t != sentinel && !t.trim().is_empty() => Some(t),
+        _ => None,
+    };
+    Ok((selection, previous))
+}
+
+/// Put back what the user had on the clipboard before `copy_selection`.
+///
+/// `None` means there was no text to restore, which happens when the clipboard
+/// held an image or was empty. That case still needs clearing rather than
+/// skipping: `copy_selection` wrote a sentinel, and if nothing was selected the
+/// sentinel is still there, so returning early would leave the user's clipboard
+/// holding an internal marker string.
+///
+/// An image on the clipboard cannot survive this technique at all, since
+/// reading a selection means writing to the clipboard first. Clearing is the
+/// honest end state rather than pretending otherwise.
+pub fn restore_clipboard(previous: Option<String>) {
+    let result = match previous {
+        Some(prev) => Clipboard::new().and_then(|mut c| c.set_text(prev)),
+        None => Clipboard::new().and_then(|mut c| c.clear()),
+    };
+    if let Err(e) = result {
+        log::warn!("Failed to restore the clipboard: {}", e);
+    }
+}
+
+fn send_copy_keystroke() -> Result<(), String> {
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to create Enigo: {}", e))?;
+
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    // Raw keycode for the same reason V is: Key::Unicode('c') goes through
+    // macOS Text Services, which asserts it is on the main thread and kills the
+    // process from a worker. See send_paste_keystroke.
+    #[cfg(target_os = "macos")]
+    const C_KEY: Key = Key::Other(0x08); // kVK_ANSI_C
+    #[cfg(not(target_os = "macos"))]
+    const C_KEY: Key = Key::Unicode('c');
+
+    enigo.key(modifier, enigo::Direction::Press)
+        .map_err(|e| format!("Key press failed: {}", e))?;
+    let click = enigo.key(C_KEY, enigo::Direction::Click);
+    let release = enigo.key(modifier, enigo::Direction::Release);
+
+    click.map_err(|e| format!("Key click failed: {}", e))?;
+    release.map_err(|e| format!("Key release failed: {}", e))?;
+    Ok(())
+}
