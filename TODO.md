@@ -57,8 +57,8 @@ transient-proof normalization, pre-roll/release-tail capture, resampler flush.
 ## 6. Features, in the order the research ranks them
 
 - [x] Voice editing / Command Mode shipped: second hotkey captures the selection, records an instruction, applies it via the BYOK provider, pastes the rewrite over the selection. Verified end to end against the real recognizer.
-- [ ] Streaming spike: streaming Zipformer vs Moonshine v2 vs an Apple SpeechAnalyzer sidecar. Parakeet is offline-only in sherpa-onnx, so live partials need a second model either way. Research: [docs/research/raw/08-streaming.md](docs/research/raw/08-streaming.md).
-- [ ] If the spike survives: two-pass pipeline, streaming partials in the overlay, final pass rescored offline.
+- [x] Streaming spike done, verdict in [docs/streaming-spike-2026-07-31.md](docs/streaming-spike-2026-07-31.md): viable for feedback only, at 40x real time with no dependency upgrade, but streaming output loses the last word and has no casing or punctuation, so it can never be the text the user keeps.
+- [ ] Build it as designed: streaming partials in the overlay while the key is held, offline pass unchanged on release, partials rendered lowercase, opt-in setting defaulting to off, 296 MB extra download.
 
 ## 7. Distribution polish
 
