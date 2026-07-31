@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -76,15 +76,15 @@ jobs:
           targets: ${{ matrix.rust_target }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: src-tauri -> target
           key: ${{ matrix.rust_target }}
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       # webkit2gtk for the webview, alsa for cpal capture, xdo for the synthetic
@@ -146,7 +146,7 @@ jobs:
       # is otherwise expensive to redo, so give the whole bundle step one retry
       # rather than having a person notice and press the button.
       - name: Build and bundle
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -165,7 +165,12 @@ jobs:
             **macOS:** ${{ secrets.APPLE_CERTIFICATE != '' && 'signed and notarized by Apple, so it opens like any other app.' || 'this build is not notarized. First launch: right-click the app and choose Open.' }} Inkwell will ask for Microphone access, and for Accessibility (System Settings > Privacy & Security > Accessibility) so it can paste into the app you are typing in.
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
+          # Apple's notary service is queue-based and the wait is unbounded: the
+          # first signed build polled for 51 minutes and then died on a network
+          # error, with a 20 minute compile behind it. Retrying inside the action
+          # avoids paying for that compile twice.
+          retryAttempts: 2
 
       # A bundle without the usage string is a runtime failure that no compiler
       # catches: macOS kills the app the moment it opens an input device.
@@ -187,7 +192,7 @@ jobs:
 
       - name: Upload bundles (manual runs)
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: inkwell-${{ matrix.rust_target }}
           path: src-tauri/target/${{ matrix.rust_target }}/release/bundle/**
