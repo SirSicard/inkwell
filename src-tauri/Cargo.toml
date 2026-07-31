@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.2.4"
+version = "0.2.5"
 description = "Inkwell, local-first dictation"
 authors = ["Mattias Herzig"]
 license = "MIT"

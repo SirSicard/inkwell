@@ -4,6 +4,13 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.5] - 2026-07-31
+
+### Changed
+
+- **macOS builds are signed and notarised by Apple.** Previously macOS refused to open Inkwell on first launch and you had to right-click and choose Open, or clear the quarantine flag by hand. That step is gone: the app opens like any other.
+- A consequence worth knowing if you have used Inkwell before: macOS ties permissions to an app's signature, so the Microphone and Accessibility permissions will be requested once more after updating. Once granted to this signed build, they survive future updates rather than resetting each time.
+
 ## [0.2.4] - 2026-07-31
 
 ### Changed
@@ -139,6 +146,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.5]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.5
 [0.2.4]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.4
 [0.2.3]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.3
 [0.2.2]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.2
