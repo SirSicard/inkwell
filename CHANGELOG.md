@@ -4,6 +4,16 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.4] - 2026-07-31
+
+### Changed
+
+- **Network connections now use a pure-Rust TLS stack.** Inkwell previously linked OpenSSL for its HTTPS connections, which accounted for the largest group of known vulnerabilities against the project. Nothing changes in how the app behaves; model downloads, update checks and AI polish were each verified against the real servers after the switch.
+
+### Fixed
+
+- Dependencies across the app, the website and the update service brought current. The website had 23 unpatched advisories against it, which mattered more than the rest because it is the only part of this project reachable from the internet.
+
 ## [0.2.3] - 2026-07-31
 
 ### Added
@@ -129,6 +139,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.4]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.4
 [0.2.3]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.3
 [0.2.2]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.2
 [0.2.1]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.1
