@@ -41,6 +41,15 @@ pub struct EngineService {
     /// Display name of the loaded model, or empty when none is loaded. Cached
     /// so status reads do not need a round trip through the worker.
     name: Arc<Mutex<String>>,
+    /// What was last loaded, so the engine can rebuild itself.
+    ///
+    /// Needed because not every model takes its bias phrases the same way.
+    /// Parakeet accepts them per utterance, so a dictionary edit applies to the
+    /// next dictation for free. Qwen3 takes them in its model config, at
+    /// construction, so the only way to apply an edit is to build the engine
+    /// again. Without this the dictionary would appear to save and then quietly
+    /// do nothing until the next restart.
+    loaded: Arc<Mutex<Option<(&'static ModelSpec, PathBuf)>>>,
 }
 
 impl EngineService {
@@ -85,12 +94,13 @@ impl EngineService {
             })
             .expect("failed to spawn engine thread");
 
-        Self { tx, name }
+        Self { tx, name, loaded: Arc::new(Mutex::new(None)) }
     }
 
     /// Load a model, blocking until it is ready. Callers on the main thread
     /// must go through `spawn_blocking`, since this can take seconds.
     pub fn load(&self, spec: &'static ModelSpec, models_dir: PathBuf) -> Result<String, String> {
+        let models_dir_for_reload = models_dir.clone();
         let (reply, wait) = channel();
         self.tx
             .send(Request::Load {
@@ -103,7 +113,26 @@ impl EngineService {
             .map_err(|_| "Engine thread stopped responding".to_string())??;
 
         *self.name.lock().unwrap() = spec.display.to_string();
+        *self.loaded.lock().unwrap() = Some((spec, models_dir_for_reload));
         Ok(spec.display.to_string())
+    }
+
+    /// Rebuild the current model in place, picking up anything it reads at
+    /// construction. No-op when nothing is loaded, or when the loaded model
+    /// takes its bias phrases per utterance and so has nothing to re-read.
+    ///
+    /// Blocking and slow, the same as `load`, so main-thread callers must go
+    /// through `spawn_blocking`.
+    pub fn reload_for_hotwords(&self) -> Result<(), String> {
+        let current = self.loaded.lock().unwrap().clone();
+        let Some((spec, models_dir)) = current else {
+            return Ok(());
+        };
+        if !spec.hotwords_at_load() {
+            return Ok(());
+        }
+        log::info!("Rebuilding {} to apply dictionary changes", spec.display);
+        self.load(spec, models_dir).map(|_| ())
     }
 
     /// Transcribe 16 kHz mono samples, blocking until the result is ready.
