@@ -340,14 +340,30 @@ fn process_recording(
         if let Err(e) = std::fs::create_dir_all(&dir) {
             log::warn!("Debug audio dir {} could not be created: {}", dir.display(), e);
         } else {
-            // Counter, not a clock: names must be unique and ordered, and this
-            // cannot collide with itself the way a second-resolution timestamp
-            // can when two takes land in the same second.
-            use std::sync::atomic::{AtomicU32, Ordering as O};
-            static SEQ: AtomicU32 = AtomicU32::new(0);
-            let existing = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
-            let n = existing as u32 + SEQ.fetch_add(1, O::Relaxed) + 1;
-            let wav_path = dir.join(format!("take-{:04}.wav", n));
+            // Highest existing number plus one. The previous version added a
+            // per-session counter to the directory count, so both grew with
+            // every take and the names went 1, 3, 5, 7: unique and ordered, but
+            // visibly wrong, and it made "take-0013" impossible to relate to
+            // "the thirteenth thing I said".
+            //
+            // Reads the numbers rather than counting entries, so the paired
+            // .txt files a corpus needs do not shift the numbering either.
+            let next = std::fs::read_dir(&dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter_map(|e| {
+                            let name = e.file_name().to_string_lossy().into_owned();
+                            name.strip_prefix("take-")
+                                .and_then(|r| r.split('.').next())
+                                .and_then(|d| d.parse::<u32>().ok())
+                        })
+                        .max()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0)
+                + 1;
+            let wav_path = dir.join(format!("take-{:04}.wav", next));
             match recording::save_wav(&resampled, &wav_path) {
                 Ok(_) => log::warn!("Debug audio written to {}", wav_path.display()),
                 Err(e) => log::warn!("Debug audio save failed: {}", e),

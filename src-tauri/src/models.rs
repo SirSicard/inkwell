@@ -124,7 +124,7 @@ pub const MODELS: &[ModelSpec] = &[
         display: "Parakeet V2",
         dir: "parakeet-v2",
         company: "NVIDIA",
-        description: "English-specialized. Same architecture as V3 but tuned for English.",
+        description: "English only, and measurably more accurate at it than V3: 8.0% vs 11.7% word error rate on the maintainer's own voice, same download size. Notably better on names and product words. Choose V3 instead if you ever dictate in another language.",
         size: "670 MB",
         languages: "English",
         hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main",
@@ -142,7 +142,7 @@ pub const MODELS: &[ModelSpec] = &[
         display: "Parakeet V2 (fp16)",
         dir: "parakeet-v2-fp16",
         company: "NVIDIA",
-        description: "English only, half precision instead of int8. Bigger download for whatever accuracy quantisation was costing. Experimental: compare it against Parakeet V3 on your own voice before keeping it.",
+        description: "The same English model as Parakeet V2, at half precision instead of int8. Measured identical accuracy (8.0% word error rate on both) and about 20% faster, so this buys speed, not correctness, for twice the download.",
         size: "1.3 GB",
         languages: "English",
         hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16/resolve/main",
@@ -155,28 +155,15 @@ pub const MODELS: &[ModelSpec] = &[
         encoder_files: ENCODER_FILES,
         kind: EngineKind::Parakeet("v2-fp16"),
     },
-    ModelSpec {
-        id: "parakeet-v3-fp32",
-        display: "Parakeet V3 (full precision)",
-        dir: "parakeet-v3-fp32",
-        company: "NVIDIA",
-        description: "The same 25-language model as the default, unquantised. 2.5 GB, and the encoder's weights arrive as a separate file. Experimental: this exists to measure what int8 costs on your voice, not because it is the better default.",
-        size: "2.5 GB",
-        languages: "25 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/main",
-        files: &[
-            ("encoder.onnx", 41_766_257),
-            // ONNX external data: encoder.onnx references this by name and
-            // onnxruntime resolves it beside the model, so the two must land in
-            // the same directory or loading fails at runtime, not at download.
-            ("encoder.weights", 2_435_420_160),
-            ("decoder.onnx", 47_233_743),
-            ("joiner.onnx", 25_286_330),
-            ("tokens.txt", 93_939),
-        ],
-        encoder_files: ENCODER_FILES,
-        kind: EngineKind::Parakeet("v3-fp32"),
-    },
+    // Parakeet V3 full precision is deliberately absent. It exists
+    // (csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3, 2.5 GB) and was listed
+    // here briefly, but it ships its encoder weights as a separate
+    // encoder.weights file via ONNX external data, and this sherpa-onnx build
+    // cannot resolve that: onnxruntime throws during Initialize and the failure
+    // arrives as a foreign exception, which aborts the process rather than
+    // returning an error a caller could report. Verified on a complete,
+    // correctly named 2,435,420,160 byte download. Listing it would let someone
+    // spend 2.5 GB to make the app die on selection.
     ModelSpec {
         id: "whisper-turbo",
         display: "Whisper Turbo",
