@@ -130,10 +130,16 @@ fn main() {
 
     // Bias with the same dictionary the app uses, so this measures the shipped
     // configuration rather than a bare recognizer nobody runs.
+    // --no-hotwords measures what the models do unaided. Worth having as a
+    // flag rather than by hand-editing files, because the harness writes the
+    // hotword file for construction-time models and would silently undo the
+    // edit, which is exactly the mistake that made one comparison meaningless.
+    let no_hotwords = args.iter().any(|a| a == "--no-hotwords");
     let dict = dictionary::Dictionary::load(&app_data().join("dictionary.json"));
-    let hotwords = dict.hotwords();
+    let hotwords = if no_hotwords { None } else { dict.hotwords() };
     match &hotwords {
         Some(h) => println!("Hotwords: {}\n", h.replace('\n', ", ")),
+        None if no_hotwords => println!("Hotwords: disabled with --no-hotwords\n"),
         None => println!("Hotwords: none (dictionary is empty)\n"),
     }
 
@@ -141,10 +147,9 @@ fn main() {
     // config takes them at construction rather than per utterance. Write them
     // there so every model in the comparison gets the same biasing and the
     // numbers are about the models, not about which one we remembered to help.
-    if let Some(h) = &hotwords {
-        let qdir = models_dir.join("qwen3-asr");
-        if qdir.exists() {
-            let _ = std::fs::write(qdir.join("hotwords.txt"), h);
+    for spec in models::MODELS.iter().filter(|m| m.hotwords_at_load()) {
+        if spec.is_installed(&models_dir) {
+            let _ = spec.write_hotwords(&models_dir, hotwords.as_deref());
         }
     }
 

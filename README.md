@@ -76,8 +76,9 @@ Best effort. CI produces `.AppImage`, `.deb` and `.rpm`. Not regularly tested.
 
 | Model | Size | Languages | Word error rate | Pick it when |
 |---|---|---|---|---|
-| **Parakeet V3** | 670 MB | 25 European | 11.7% | Default. You switch between European languages, or want it detected for you |
-| **Parakeet V2** | 670 MB | English | **8.0%** | You only dictate in English. Most accurate, especially on names |
+| **Qwen3 ASR** | 940 MB | 30 incl. Nordic | **5.6%** | Best accuracy measured, and the only one covering English and Nordic languages at once. Twice the transcription time, still under a second for a short dictation |
+| **Parakeet V3** | 670 MB | 25 European | 10.5% | Default. You switch between European languages, or want it detected for you |
+| **Parakeet V2** | 670 MB | English | 8.0% | English only, and the fastest of the accurate ones |
 | **SenseVoice** | 240 MB | en, zh, ja, ko, yue | 9.3% | Small disk, slow connection, older machine, or you need CJK. Twice as fast |
 | **Whisper Turbo** | 800 MB | 99 | 8.6% | You need a language the others do not cover. Five times slower |
 
