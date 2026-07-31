@@ -56,7 +56,7 @@ the text the user keeps.
 ## 5. Distribution
 
 - [ ] Owner: buy a domain. One purchase upgrades the homepage, the updater endpoint and the OG links. `getinkwell.vercel.app` works and is name-neutral until then.
-- [ ] Owner: create a public `homebrew-tap` repo. The cask is written and passes `brew audit --strict`; it needs somewhere to live before `brew install --cask sirsicard/tap/inkwell` is real.
+- [ ] Owner, deferred on purpose: a `homebrew-tap` repo. The cask is written and passes `brew audit --strict`, so this is two minutes whenever it is wanted, but the value is currently thin and worth stating rather than assuming. The official homebrew-cask repo needs notability the project does not have (0 stars, 0 forks, 0 watchers as of 2026-07-31), so a personal tap is the only route, and `brew install --cask sirsicard/tap/inkwell` is a longer instruction than downloading the dmg. Homebrew's other draw, `brew upgrade`, is already covered by the app's own updater. Against that it adds a permanent chore: the sha256 must be bumped every release or installs fail on a checksum mismatch. Publish it when somebody asks for brew, or when traction allows submitting to homebrew-cask proper and earning the short name.
 - [ ] Me, after the domain: move the updater off `workers.dev` (route already stubbed in `inkwell-updater/wrangler.toml`), then re-verify a version hop.
 - [ ] Me: per-tab screenshots. The dashboard shot is in the README; the sidebar is a webview and synthetic clicks would not switch tabs, so the rest are worth doing by hand.
 - [ ] Me: demo GIF. Best recorded against a throwaway profile, like the screenshot, so no real transcript is ever published.
