@@ -96,7 +96,10 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
     // Step 0: Welcome
     <div key="welcome" className="text-center space-y-5">
       <div className="text-6xl font-sans font-bold tracking-tight">INKWELL</div>
-      <p className="text-text-secondary text-base">Premium speech-to-text. Private by default.</p>
+      {/* "Premium speech-to-text" survived from the version that planned a paid
+          tier. It is the first line a new user reads, and it contradicted the
+          whole repositioning: free, open source, no tier to upgrade to. */}
+      <p className="text-text-secondary text-base">Free speech-to-text. Private by default.</p>
       <p className="text-text-tertiary text-sm">Everything runs locally on your machine. No data leaves your computer.</p>
     </div>,
 
