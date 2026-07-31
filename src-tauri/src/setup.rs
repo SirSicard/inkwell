@@ -196,7 +196,23 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let mut loaded_name: Option<String> = None;
         for (i, id) in candidates.iter().enumerate() {
             let Some(spec) = models::find(id) else {
-                log::warn!("Saved model '{}' is not in the registry, skipping", id);
+                // The catalogue was curated down from thirteen models, so a
+                // saved choice can name one that no longer exists. Silently
+                // loading something else would leave the user believing they
+                // are on a model they are not, which is the kind of thing that
+                // makes people distrust the transcript rather than the app.
+                log::warn!("Saved model '{}' is no longer in the catalogue", id);
+                if i == 0 {
+                    let _ = app.emit(
+                        "model-error",
+                        format!(
+                            "{} has been retired from the model list, so Inkwell loaded its \
+                             default instead. Pick a model in Settings, Models. Its files are \
+                             still on disk and can be deleted by hand from the models folder.",
+                            id
+                        ),
+                    );
+                }
                 continue;
             };
             if !spec.is_installed(&models_dir) {

@@ -101,12 +101,27 @@ const ENCODER_FILES: &[&str] = &[
 
 /// Order is the order the UI shows them in: recommended default first.
 pub const MODELS: &[ModelSpec] = &[
+    // Curated, not comprehensive. This was thirteen models, which asked the user
+    // to research speech recognition before they could dictate a sentence, and
+    // most of them lost on every axis at once: the small Whisper builds were
+    // less accurate AND slower than Parakeet, and the English-distilled ones
+    // were beaten by Parakeet V2 at a similar size.
+    //
+    // What is left answers four different questions, measured on real recordings
+    // (see the ab_models example): which language do I speak, how good does it
+    // need to be, and how much disk and time can I spare.
+    //
+    // Dropped after measuring: Parakeet V2 fp16 (identical accuracy to V2 int8
+    // for twice the download), Moonshine Base (SenseVoice is smaller and more
+    // accurate), Whisper large-v3/medium/small/base/tiny and the two distil-en
+    // builds (all dominated by something above), Parakeet V3 full precision
+    // (external-data weights this build cannot load; it aborts the process).
     ModelSpec {
         id: "parakeet",
         display: "Parakeet V3",
         dir: "parakeet-v3",
         company: "NVIDIA",
-        description: "Fast and accurate. Detects which of 25 European languages you are speaking, with no setting to change.",
+        description: "Detects which of 25 European languages you are speaking, with no setting to change. The safe default, and the only choice here if you switch languages mid-sentence. If you only ever dictate in English, Parakeet V2 is measurably better.",
         size: "670 MB",
         languages: "25 languages",
         hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main",
@@ -124,7 +139,7 @@ pub const MODELS: &[ModelSpec] = &[
         display: "Parakeet V2",
         dir: "parakeet-v2",
         company: "NVIDIA",
-        description: "English only, and measurably more accurate at it than V3: 8.0% vs 11.7% word error rate on the maintainer's own voice, same download size. Notably better on names and product words. Choose V3 instead if you ever dictate in another language.",
+        description: "The most accurate option for English: 8.0% word error rate against 11.7% for the multilingual default, on the same recordings, at the same download size. Gets names and product words right where the others do not. English only.",
         size: "670 MB",
         languages: "English",
         hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main",
@@ -138,38 +153,27 @@ pub const MODELS: &[ModelSpec] = &[
         kind: EngineKind::Parakeet("v2"),
     },
     ModelSpec {
-        id: "parakeet-v2-fp16",
-        display: "Parakeet V2 (fp16)",
-        dir: "parakeet-v2-fp16",
-        company: "NVIDIA",
-        description: "The same English model as Parakeet V2, at half precision instead of int8. Measured identical accuracy (8.0% word error rate on both) and about 20% faster, so this buys speed, not correctness, for twice the download.",
-        size: "1.3 GB",
-        languages: "English",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16/resolve/main",
+        id: "sense-voice",
+        display: "SenseVoice",
+        dir: "sense-voice",
+        company: "Alibaba",
+        description: "A quarter of the size and twice the speed of the others, and still close to the best: 9.3% word error rate. The right pick on a small disk, a slow connection, or an older machine, and the only small model here that also handles Chinese, Japanese, Korean and Cantonese.",
+        size: "240 MB",
+        languages: "5 languages",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main",
         files: &[
-            ("encoder.fp16.onnx", 1_239_245_548),
-            ("decoder.fp16.onnx", 14_446_596),
-            ("joiner.fp16.onnx", 3_456_459),
-            ("tokens.txt", 9_384),
+            ("model.int8.onnx", 160_000_000),
+            ("tokens.txt", 50_000),
         ],
-        encoder_files: ENCODER_FILES,
-        kind: EngineKind::Parakeet("v2-fp16"),
+        encoder_files: &["model.int8.onnx", "model.onnx"],
+        kind: EngineKind::SenseVoice,
     },
-    // Parakeet V3 full precision is deliberately absent. It exists
-    // (csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3, 2.5 GB) and was listed
-    // here briefly, but it ships its encoder weights as a separate
-    // encoder.weights file via ONNX external data, and this sherpa-onnx build
-    // cannot resolve that: onnxruntime throws during Initialize and the failure
-    // arrives as a foreign exception, which aborts the process rather than
-    // returning an error a caller could report. Verified on a complete,
-    // correctly named 2,435,420,160 byte download. Listing it would let someone
-    // spend 2.5 GB to make the app die on selection.
     ModelSpec {
         id: "whisper-turbo",
         display: "Whisper Turbo",
         dir: "whisper-turbo",
         company: "OpenAI",
-        description: "Balanced accuracy and speed.",
+        description: "For the roughly 70 languages the others do not cover. Accurate (8.6%) but five times slower than Parakeet on the same audio, because of how the model is built rather than how big it is. Choose it for reach, not for speed.",
         size: "800 MB",
         languages: "99 languages",
         hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main",
@@ -180,166 +184,6 @@ pub const MODELS: &[ModelSpec] = &[
         ],
         encoder_files: &["turbo-encoder.int8.onnx", "turbo-encoder.onnx"],
         kind: EngineKind::Whisper("turbo"),
-    },
-    ModelSpec {
-        id: "whisper-large-v3",
-        display: "Whisper large-v3",
-        dir: "whisper-large-v3",
-        company: "OpenAI",
-        description: "Best accuracy, but slow.",
-        size: "1.5 GB",
-        languages: "99 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-large-v3/resolve/main",
-        files: &[
-            ("large-v3-encoder.int8.onnx", 397_000_000),
-            ("large-v3-decoder.int8.onnx", 1_100_000_000),
-            ("large-v3-tokens.txt", 800_000),
-        ],
-        encoder_files: &["large-v3-encoder.int8.onnx", "large-v3-encoder.onnx"],
-        kind: EngineKind::Whisper("large-v3"),
-    },
-    ModelSpec {
-        id: "whisper-medium",
-        display: "Whisper medium",
-        dir: "whisper-medium",
-        company: "OpenAI",
-        description: "Good accuracy, medium speed.",
-        size: "1.0 GB",
-        languages: "99 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-medium/resolve/main",
-        files: &[
-            ("medium-encoder.int8.onnx", 193_000_000),
-            ("medium-decoder.int8.onnx", 823_000_000),
-            ("medium-tokens.txt", 800_000),
-        ],
-        encoder_files: &["medium-encoder.int8.onnx", "medium-encoder.onnx"],
-        kind: EngineKind::Whisper("medium"),
-    },
-    ModelSpec {
-        id: "whisper-small",
-        display: "Whisper small",
-        dir: "whisper-small",
-        company: "OpenAI",
-        description: "Fast and fairly accurate.",
-        size: "375 MB",
-        languages: "99 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main",
-        files: &[
-            ("small-encoder.int8.onnx", 72_000_000),
-            ("small-decoder.int8.onnx", 305_000_000),
-            ("small-tokens.txt", 800_000),
-        ],
-        encoder_files: &["small-encoder.int8.onnx", "small-encoder.onnx"],
-        kind: EngineKind::Whisper("small"),
-    },
-    ModelSpec {
-        id: "whisper-base",
-        display: "Whisper base",
-        dir: "whisper-base",
-        company: "OpenAI",
-        description: "Lightweight multilingual.",
-        size: "135 MB",
-        languages: "99 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-base/resolve/main",
-        files: &[
-            ("base-encoder.int8.onnx", 20_000_000),
-            ("base-decoder.int8.onnx", 114_000_000),
-            ("base-tokens.txt", 800_000),
-        ],
-        encoder_files: &["base-encoder.int8.onnx", "base-encoder.onnx"],
-        kind: EngineKind::Whisper("base"),
-    },
-    ModelSpec {
-        id: "whisper-tiny",
-        display: "Whisper tiny",
-        dir: "whisper-tiny",
-        company: "OpenAI",
-        description: "Smallest Whisper model.",
-        size: "98 MB",
-        languages: "99 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny/resolve/main",
-        files: &[
-            ("tiny-encoder.int8.onnx", 12_000_000),
-            ("tiny-decoder.int8.onnx", 86_000_000),
-            ("tiny-tokens.txt", 800_000),
-        ],
-        encoder_files: &["tiny-encoder.int8.onnx", "tiny-encoder.onnx"],
-        kind: EngineKind::Whisper("tiny"),
-    },
-    ModelSpec {
-        id: "whisper-distil-medium-en",
-        display: "Whisper distil-medium.en",
-        dir: "whisper-distil-medium-en",
-        company: "OpenAI",
-        description: "English only. Distilled for speed.",
-        size: "460 MB",
-        languages: "English",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-distil-medium.en/resolve/main",
-        files: &[
-            ("distil-medium.en-encoder.int8.onnx", 193_000_000),
-            ("distil-medium.en-decoder.int8.onnx", 270_000_000),
-            ("distil-medium.en-tokens.txt", 800_000),
-        ],
-        encoder_files: &[
-            "distil-medium.en-encoder.int8.onnx",
-            "distil-medium.en-encoder.onnx",
-        ],
-        kind: EngineKind::Whisper("distil-medium.en"),
-    },
-    ModelSpec {
-        id: "whisper-distil-small-en",
-        display: "Whisper distil-small.en",
-        dir: "whisper-distil-small-en",
-        company: "OpenAI",
-        description: "English only. Compact and fast.",
-        size: "180 MB",
-        languages: "English",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-distil-small.en/resolve/main",
-        files: &[
-            ("distil-small.en-encoder.int8.onnx", 72_000_000),
-            ("distil-small.en-decoder.int8.onnx", 108_000_000),
-            ("distil-small.en-tokens.txt", 800_000),
-        ],
-        encoder_files: &[
-            "distil-small.en-encoder.int8.onnx",
-            "distil-small.en-encoder.onnx",
-        ],
-        kind: EngineKind::Whisper("distil-small.en"),
-    },
-    ModelSpec {
-        id: "moonshine-base",
-        display: "Moonshine Base",
-        dir: "moonshine-base",
-        company: "Useful Sensors",
-        description: "English only. Good accuracy, fast inference.",
-        size: "288 MB",
-        languages: "English",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-base-en-int8/resolve/main",
-        files: &[
-            ("preprocess.onnx", 14_100_000),
-            ("encode.int8.onnx", 50_300_000),
-            ("cached_decode.int8.onnx", 100_000_000),
-            ("uncached_decode.int8.onnx", 122_000_000),
-            ("tokens.txt", 437_000),
-        ],
-        encoder_files: ENCODER_FILES,
-        kind: EngineKind::Moonshine("base"),
-    },
-    ModelSpec {
-        id: "sense-voice",
-        display: "SenseVoice",
-        dir: "sense-voice",
-        company: "Alibaba",
-        description: "Very fast. Detects Chinese, English, Japanese, Korean and Cantonese automatically.",
-        size: "160 MB",
-        languages: "5 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main",
-        files: &[
-            ("model.int8.onnx", 160_000_000),
-            ("tokens.txt", 50_000),
-        ],
-        encoder_files: &["model.int8.onnx", "model.onnx"],
-        kind: EngineKind::SenseVoice,
     },
 ];
 

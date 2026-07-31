@@ -22,7 +22,7 @@ Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no 
 ## What it does
 
 - **Dictation anywhere.** Global hotkey, push to talk or toggle. Transcribes, then pastes into the focused app.
-- **Local speech recognition.** 13 models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx): Parakeet V3 (default), Parakeet V2, Whisper (8 variants), Moonshine Tiny/Base, SenseVoice. Download and switch in the app.
+- **Local speech recognition.** Four models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), each answering a different question about your language, disk and patience. Downloaded on first use and switchable in the app. See the table below.
 - **Style formatting.** Formal, Casual, Relaxed. Controls capitalization and punctuation without touching a model.
 - **Custom dictionary.** Fix the words your model keeps getting wrong. Case insensitive, word boundary matching.
 - **Snippets.** Trigger phrases expand to full text. Variables: `{date}`, `{time}`, `{clipboard}`.
@@ -68,25 +68,29 @@ Best effort. CI produces `.AppImage`, `.deb` and `.rpm`. Not regularly tested.
 ## Quick start
 
 1. Launch Inkwell and finish the short onboarding (mic picker, model download, hotkey test).
-2. Pick a model. Parakeet V3 (670 MB) is the recommended default. Models are downloaded on first use, they are not shipped inside the installer.
+2. Pick a model. Parakeet V3 (670 MB) is the default and detects the language for you; if you only dictate in English, switch to Parakeet V2, which is measurably more accurate. Models download on first use, they are not inside the installer.
 3. Set your record hotkey in Settings > General. On macOS pick a combination that does not collide with Spotlight or input source switching.
 4. Hold the hotkey, speak, release. The text is pasted where your cursor is.
 
 ## Models
 
-| Model | Size | Languages | Notes |
-|---|---|---|---|
-| **Parakeet V3** | 670 MB | 25 European | Default. Best accuracy/speed balance |
-| Parakeet V2 | 670 MB | English | English-specialized variant |
-| Whisper Turbo | 800 MB | 99 | Good all rounder |
-| Whisper Large V3 | 1.5 GB | 99 | Best multilingual accuracy, slow |
-| Whisper Medium / Small / Base / Tiny | 1.0 GB / 375 MB / 135 MB / 98 MB | 99 | Size and speed tradeoffs |
-| Whisper Distil Medium / Small (EN) | 460 MB / 180 MB | English | Distilled for speed |
-| Moonshine Base | 288 MB | English | Fast, moderate size |
-| Moonshine Tiny | 70 MB | English | Smallest, lowest accuracy |
-| SenseVoice | 160 MB | zh, en, ja, ko, yue | Very fast |
+| Model | Size | Languages | Word error rate | Pick it when |
+|---|---|---|---|---|
+| **Parakeet V3** | 670 MB | 25 European | 11.7% | Default. You switch between European languages, or want it detected for you |
+| **Parakeet V2** | 670 MB | English | **8.0%** | You only dictate in English. Most accurate, especially on names |
+| **SenseVoice** | 240 MB | en, zh, ja, ko, yue | 9.3% | Small disk, slow connection, older machine, or you need CJK. Twice as fast |
+| **Whisper Turbo** | 800 MB | 99 | 8.6% | You need a language the others do not cover. Five times slower |
 
-All models run locally on CPU. No internet is needed once a model is downloaded. The catalog is deliberately going to shrink, see [TODO.md](TODO.md).
+Word error rates are measured, not quoted: eight recordings of one voice, scored
+against what was actually said, with the tool in `src-tauri/examples/ab_models.rs`.
+Eight clips is directional, not a benchmark, and your voice is not that voice.
+Measure your own with Save Debug Audio and the same tool.
+
+The list is short on purpose. It was thirteen models, most of which lost on
+every axis at once, which asked you to research speech recognition before
+dictating a sentence.
+
+All models run locally on CPU. No internet is needed once a model is downloaded.
 
 ## Not built (so you do not have to ask)
 
