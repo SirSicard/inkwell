@@ -172,6 +172,43 @@ jobs:
           # avoids paying for that compile twice.
           retryAttempts: 2
 
+      # Tauri notarizes and staples the .app, then wraps it in a .dmg that is
+      # never notarized itself. Verified on 0.2.5: the app inside reported
+      # "Notarized Developer ID" and a valid ticket, while the dmg a user
+      # actually double-clicks reported "rejected: Unnotarized Developer ID"
+      # once quarantined, which is the warning this whole exercise exists to
+      # remove. So the dmg gets its own round, and is stapled so the check works
+      # offline. Then it replaces the copy tauri-action already uploaded.
+      - name: Notarize and staple the DMG
+        if: runner.os == 'macOS' && env.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DMG=$(find "src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg" -name "*.dmg" | head -1)
+          if [ -z "$DMG" ]; then
+            echo "::error title=No dmg::Nothing to notarize"
+            exit 1
+          fi
+          echo "Notarizing $DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 2h
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          # Prove it from the outside before shipping it, the same way a user's
+          # Mac will: a green submission is not the same as a passing verdict.
+          spctl --assess -vv --type open --context context:primary-signature "$DMG"
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            gh release upload "${{ github.ref_name }}" "$DMG" --clobber --repo "${{ github.repository }}"
+            echo "Stapled dmg uploaded over the unstapled one"
+          fi
+
       # A bundle without the usage string is a runtime failure that no compiler
       # catches: macOS kills the app the moment it opens an input device.
       - name: Verify macOS bundle
