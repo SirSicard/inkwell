@@ -25,7 +25,17 @@ pub mod store;
 pub mod style;
 mod tray;
 mod vad;
+pub mod voiceedit;
 pub mod voicecommand;
+
+/// What the current recording will be used for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Intent {
+    /// Transcribe and paste as text.
+    Dictate,
+    /// Transcribe as an instruction, apply it to the captured selection.
+    Edit,
+}
 
 use audio::AudioState;
 use engine_service::EngineService;
@@ -43,6 +53,13 @@ pub struct AppState {
     /// reads the resolved mode, so "formal mode" set a field nobody read. This
     /// is the field that makes those commands real again.
     pub pinned_mode: Mutex<Option<String>>,
+    /// What the in-flight recording is for. Both hotkeys share one audio
+    /// buffer, so the stop handler needs to know which pipeline to run; a
+    /// second buffer would let the two interleave and produce a dictation made
+    /// of half an edit instruction.
+    pub recording_intent: Mutex<Intent>,
+    /// Text captured from the frontmost app when an edit recording started.
+    pub edit_selection: Mutex<Option<String>>,
     pub settings: Mutex<settings::Settings>,
     pub settings_path: Mutex<String>,
     pub db: Mutex<Option<history::TranscriptDb>>,
@@ -84,6 +101,8 @@ pub fn run() {
             vad_model_path: Mutex::new(String::new()),
             style: Mutex::new(style::Style::default()),
             pinned_mode: Mutex::new(None),
+            recording_intent: Mutex::new(Intent::Dictate),
+            edit_selection: Mutex::new(None),
             settings: Mutex::new(settings::Settings::default()),
             settings_path: Mutex::new(String::new()),
             db: Mutex::new(None),
@@ -123,6 +142,7 @@ pub fn run() {
             commands::get_vad_threshold,
             commands::set_vad_threshold,
             commands::set_hotkey,
+            commands::set_edit_hotkey,
             commands::check_first_run,
             commands::export_transcripts,
             commands::get_snippets,

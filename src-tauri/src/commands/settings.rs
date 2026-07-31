@@ -133,6 +133,20 @@ pub fn set_hotkey(
         .register(shortcut)
         .map_err(|e| format!("Failed to register '{}': {}", hotkey, e))?;
 
+    // unregister_all took the edit hotkey with it. Without this, changing the
+    // dictation hotkey silently turned voice editing off until the next
+    // restart, which is the kind of failure nobody connects to what they did.
+    let edit_hotkey = state.settings.lock().unwrap().edit_hotkey.clone();
+    if !edit_hotkey.trim().is_empty() {
+        if let Ok(sc) = edit_hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+            if sc != shortcut {
+                if let Err(e) = manager.register(sc) {
+                    log::warn!("Could not re-register the edit hotkey: {}", e);
+                }
+            }
+        }
+    }
+
     let mut settings = state.settings.lock().unwrap();
     settings.hotkey = hotkey.clone();
     let path = state.settings_path.lock().unwrap().clone();
@@ -154,5 +168,52 @@ pub fn set_vad_threshold(state: tauri::State<AppState>, threshold: f32) -> Resul
     let path = state.settings_path.lock().unwrap().clone();
     settings.save(std::path::Path::new(&path))?;
     log::info!("VAD threshold set to: {:.2}", settings.vad_threshold);
+    Ok(())
+}
+
+/// Change the voice-edit hotkey, or disable the feature with an empty string.
+///
+/// Registers before persisting, so a combination the OS refuses leaves the
+/// working one in place instead of saving a setting that does nothing.
+#[tauri::command]
+pub fn set_edit_hotkey(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    hotkey: String,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let manager = app.global_shortcut();
+    let dictation = state.settings.lock().unwrap().hotkey.clone();
+    let dictation_sc = dictation.parse::<tauri_plugin_global_shortcut::Shortcut>().ok();
+
+    let old = state.settings.lock().unwrap().edit_hotkey.clone();
+    if let Ok(sc) = old.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+        if Some(&sc) != dictation_sc.as_ref() {
+            let _ = manager.unregister(sc);
+        }
+    }
+
+    let trimmed = hotkey.trim().to_string();
+    if !trimmed.is_empty() {
+        let sc: tauri_plugin_global_shortcut::Shortcut = trimmed
+            .parse()
+            .map_err(|e| format!("Invalid hotkey '{}': {}", trimmed, e))?;
+        if Some(&sc) == dictation_sc.as_ref() {
+            return Err("That is already the dictation hotkey.".to_string());
+        }
+        manager
+            .register(sc)
+            .map_err(|e| format!("Failed to register '{}': {}", trimmed, e))?;
+    }
+
+    let mut settings = state.settings.lock().unwrap();
+    settings.edit_hotkey = trimmed.clone();
+    let path = state.settings_path.lock().unwrap().clone();
+    let _ = settings.save(std::path::Path::new(&path));
+    log::info!(
+        "Edit hotkey set to {}",
+        if trimmed.is_empty() { "(disabled)" } else { &trimmed }
+    );
     Ok(())
 }

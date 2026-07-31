@@ -248,6 +248,31 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.global_shortcut().register(shortcut)?;
     log::info!("Global hotkey registered: {}", hotkey_str);
 
+    // Voice editing's hotkey. Registered separately and non-fatally: a
+    // collision with another app must not stop dictation from working, which
+    // is what returning the error here would do.
+    let edit_hotkey_str = {
+        let app_state = app.state::<AppState>();
+        let settings = app_state.settings.lock().unwrap();
+        settings.edit_hotkey.clone()
+    };
+    if !edit_hotkey_str.trim().is_empty() {
+        match edit_hotkey_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+            Ok(sc) if sc != shortcut => match app.global_shortcut().register(sc) {
+                Ok(_) => log::info!("Edit hotkey registered: {}", edit_hotkey_str),
+                Err(e) => log::warn!(
+                    "Edit hotkey '{}' could not be registered ({}); voice editing is off",
+                    edit_hotkey_str, e
+                ),
+            },
+            Ok(_) => log::warn!(
+                "Edit hotkey '{}' is the same as the dictation hotkey; voice editing is off",
+                edit_hotkey_str
+            ),
+            Err(e) => log::warn!("Edit hotkey '{}' is not valid ({})", edit_hotkey_str, e),
+        }
+    }
+
     // System tray
     tray::setup_tray(app)?;
 

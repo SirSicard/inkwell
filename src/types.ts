@@ -3,6 +3,7 @@ export interface Settings {
   style: string
   model: string
   hotkey: string
+  edit_hotkey: string
   recording_mode: string
   start_on_boot: boolean
   show_overlay: boolean

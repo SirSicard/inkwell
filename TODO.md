@@ -56,7 +56,7 @@ transient-proof normalization, pre-roll/release-tail capture, resampler flush.
 
 ## 6. Features, in the order the research ranks them
 
-- [ ] Voice editing / Command Mode: select text, hold a second hotkey, speak an instruction, get the rewrite pasted over the selection. The last converged competitor gap. Nothing blocks it.
+- [x] Voice editing / Command Mode shipped: second hotkey captures the selection, records an instruction, applies it via the BYOK provider, pastes the rewrite over the selection. Verified end to end against the real recognizer.
 - [ ] Streaming spike: streaming Zipformer vs Moonshine v2 vs an Apple SpeechAnalyzer sidecar. Parakeet is offline-only in sherpa-onnx, so live partials need a second model either way. Research: [docs/research/raw/08-streaming.md](docs/research/raw/08-streaming.md).
 - [ ] If the spike survives: two-pass pipeline, streaming partials in the overlay, final pass rescored offline.
 

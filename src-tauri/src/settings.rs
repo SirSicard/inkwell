@@ -63,6 +63,12 @@ pub struct Settings {
     /// debugging. Must default to false, because this app never leaves voice on disk.
     #[serde(default)]
     pub debug_save_audio: bool,
+    /// Second hotkey: hold it to speak an instruction that rewrites whatever is
+    /// selected in the frontmost app. Empty disables the feature and leaves the
+    /// shortcut unregistered, so it cannot collide with anything for users who
+    /// do not want it.
+    #[serde(default = "default_edit_hotkey")]
+    pub edit_hotkey: String,
     // Which providers have a key was briefly cached here, to spare the user a
     // keychain prompt per AI-tab open. It was the wrong fix: a lookup that failed
     // for any reason other than absence got written down as "no key" forever.
@@ -86,6 +92,12 @@ fn default_overlay_position() -> String { "bottom-center".to_string() }
 fn default_theme() -> String { "system".to_string() }
 fn default_vad_threshold() -> f32 { 0.5 }
 fn default_polish_prompt() -> String { crate::llm::DEFAULT_POLISH_PROMPT.to_string() }
+// Shift distinguishes it from the dictation hotkey on both platforms, and E is
+// the only mnemonic that is not already spoken for by the OS.
+#[cfg(target_os = "macos")]
+fn default_edit_hotkey() -> String { "super+shift+e".to_string() }
+#[cfg(not(target_os = "macos"))]
+fn default_edit_hotkey() -> String { "ctrl+shift+e".to_string() }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -106,6 +118,7 @@ impl Default for Settings {
             sound_dictation: true,
             remove_fillers: true,
             debug_save_audio: false,
+            edit_hotkey: default_edit_hotkey(),
         }
     }
 }
