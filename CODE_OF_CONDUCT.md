@@ -44,10 +44,18 @@ an individual is officially representing the community in public spaces.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer at mattias@aitappers.io. This is a
-solo-maintained project, so that one address is the whole process. Reports are
-handled privately, and the reporter's identity is not shared.
+Report unacceptable behavior through GitHub, which keeps the report private and
+means no personal email address has to sit on a public repository:
+
+- **If it is sensitive or involves the maintainer**, use GitHub's own abuse
+  reporting at https://github.com/contact/report-abuse. It reaches GitHub
+  directly and does not depend on the maintainer to act.
+- **Otherwise**, open an issue on this repository, or use the Security tab's
+  private reporting form if you would rather it stayed unlisted.
+
+This is a solo-maintained project, so there is no committee and no appeals
+process. Reports are read by one person, handled privately, and the reporter's
+identity is not shared.
 
 Consequences scale with the behavior: a correction, a warning, a temporary
 block, or a permanent ban from the repo and its discussions.
