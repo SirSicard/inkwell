@@ -39,16 +39,6 @@ cask "inkwell" do
 
   app "Inkwell.app"
 
-  # Removes the quarantine flag Gatekeeper sets on downloads. Needed only
-  # because the app is not yet signed with a Developer ID; delete this once
-  # notarization lands, since it is a real security measure and skipping it
-  # should stop the moment it is no longer necessary.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-cr", "#{appdir}/Inkwell.app"],
-                   sudo: false
-  end
-
   uninstall quit: "com.inkwell.app"
 
   # Models are large downloads the user chose to make and may want to keep
@@ -60,9 +50,6 @@ cask "inkwell" do
   ]
 
   caveats <<~EOS
-    Inkwell is not signed or notarized yet. This cask clears the quarantine
-    flag for you, so it should open normally.
-
     On first launch, grant:
       Microphone     (System Settings > Privacy & Security > Microphone)
       Accessibility  (System Settings > Privacy & Security > Accessibility)

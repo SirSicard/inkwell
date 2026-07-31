@@ -45,17 +45,13 @@ Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no 
 
 ## Install
 
-Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases). Nothing is code signed yet, so both platforms will warn you on first launch. Signing (Apple Developer ID plus notarization, and a Windows certificate) is planned but not done.
+Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases). macOS builds are signed with a Developer ID and notarized by Apple, so they open normally. Windows is not signed yet, so SmartScreen still warns there.
 
 ### macOS (Apple Silicon, primary platform)
 
-1. Download the `.dmg`, drag Inkwell to Applications.
-2. Gatekeeper will refuse to open it because the app is unsigned. Either right click the app and choose Open, or clear the quarantine attribute:
-   ```bash
-   xattr -cr /Applications/Inkwell.app
-   ```
-3. Grant **Microphone** access when prompted (System Settings > Privacy & Security > Microphone).
-4. Grant **Accessibility** access (System Settings > Privacy & Security > Accessibility). Inkwell types the result into the focused app with a synthetic paste, which macOS blocks until this is granted. Without it, transcription works but nothing appears.
+1. Download the `.dmg`, drag Inkwell to Applications, open it. No security warning to click past: the app is signed and notarized.
+2. Grant **Microphone** access when prompted (System Settings > Privacy & Security > Microphone).
+3. Grant **Accessibility** access (System Settings > Privacy & Security > Accessibility). Inkwell types the result into the focused app with a synthetic paste, which macOS blocks until this is granted. Without it, transcription works but nothing appears.
 
 Known macOS limitations: synthetic paste is blocked by Secure Input, so dictation into password fields and some terminals will silently do nothing. Per-app style overrides do not work yet.
 

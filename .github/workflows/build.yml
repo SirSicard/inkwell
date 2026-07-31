@@ -140,6 +140,11 @@ jobs:
             echo "::warning title=Signed but not notarized::APPLE_ID, APPLE_PASSWORD (app-specific) and APPLE_TEAM_ID are needed to notarize. A signed but un-notarized build still trips Gatekeeper on first launch."
           fi
 
+      # Apple's notary service is queue-based and its wait is unbounded in
+      # practice: the first signed build sat 51 minutes and then failed on a
+      # transient network error while polling for the result. The job as a whole
+      # is otherwise expensive to redo, so give the whole bundle step one retry
+      # rather than having a person notice and press the button.
       - name: Build and bundle
         uses: tauri-apps/tauri-action@v0
         env:
@@ -157,7 +162,7 @@ jobs:
 
             See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.
 
-            **macOS:** the build is not notarized yet. First launch: right-click the app and choose Open. Inkwell will ask for Microphone access, and for Accessibility (System Settings > Privacy & Security > Accessibility) so it can paste into the app you are typing in.
+            **macOS:** ${{ secrets.APPLE_CERTIFICATE != '' && 'signed and notarized by Apple, so it opens like any other app.' || 'this build is not notarized. First launch: right-click the app and choose Open.' }} Inkwell will ask for Microphone access, and for Accessibility (System Settings > Privacy & Security > Accessibility) so it can paste into the app you are typing in.
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
