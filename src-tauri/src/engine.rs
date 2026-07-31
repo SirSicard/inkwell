@@ -34,6 +34,7 @@ pub enum ModelType {
     Whisper(String), // model name, e.g. "small", "turbo"
     SenseVoice,
     CanaryFlash,
+    Qwen3,
 }
 
 /// A speech recognition engine wrapping sherpa-onnx OfflineRecognizer.
@@ -278,6 +279,56 @@ impl SpeechEngine {
 
         log::info!("Loaded Canary Flash successfully");
         Ok(Self { recognizer, model_type: ModelType::CanaryFlash, hotwords_ready: false })
+    }
+
+    /// Create a Qwen3-ASR engine.
+    ///
+    /// Unlike every other model here this one decodes with a language model,
+    /// so its config carries sampling parameters. They are pinned to a
+    /// near-zero temperature and a fixed seed: dictation must return the same
+    /// text for the same audio, and a model that paraphrases itself between
+    /// runs is unusable for a tool whose output you paste and keep.
+    pub fn qwen3(models_dir: &Path) -> Result<Self, String> {
+        let model_dir = models_dir.join("qwen3-asr");
+
+        let conv = find_file(&model_dir, &["conv_frontend.onnx"])
+            .ok_or(format!("Qwen3 conv_frontend not found in {}", model_dir.display()))?;
+        let encoder = find_file(&model_dir, &["encoder.int8.onnx", "encoder.onnx"])
+            .ok_or(format!("Qwen3 encoder not found in {}", model_dir.display()))?;
+        let decoder = find_file(&model_dir, &["decoder.int8.onnx", "decoder.onnx"])
+            .ok_or(format!("Qwen3 decoder not found in {}", model_dir.display()))?;
+        let tokenizer = model_dir.join("tokenizer");
+        if !tokenizer.exists() {
+            return Err(format!("Qwen3 tokenizer directory not found at {}", tokenizer.display()));
+        }
+
+        let mut config = OfflineRecognizerConfig::default();
+        config.model_config.qwen3_asr.conv_frontend = Some(conv.to_string_lossy().into_owned());
+        config.model_config.qwen3_asr.encoder = Some(encoder.to_string_lossy().into_owned());
+        config.model_config.qwen3_asr.decoder = Some(decoder.to_string_lossy().into_owned());
+        config.model_config.qwen3_asr.tokenizer = Some(tokenizer.to_string_lossy().into_owned());
+        config.model_config.qwen3_asr.temperature = 1e-6;
+        config.model_config.qwen3_asr.seed = 42;
+
+        // Qwen3 takes its bias phrases at construction rather than per stream,
+        // so they arrive as a file beside the model instead of through
+        // transcribe(). Written by whoever owns the dictionary; absent is fine
+        // and simply means no biasing.
+        let hotwords_file = model_dir.join("hotwords.txt");
+        if let Ok(words) = std::fs::read_to_string(&hotwords_file) {
+            let joined: Vec<&str> = words.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            if !joined.is_empty() {
+                log::info!("Qwen3: biasing toward {} phrase(s)", joined.len());
+                config.model_config.qwen3_asr.hotwords = Some(joined.join("\n"));
+            }
+        }
+        config.model_config.num_threads = 4;
+
+        log::info!("Creating Qwen3 recognizer from {}", model_dir.display());
+        let recognizer = create_with_provider(&mut config)
+            .ok_or("Failed to create Qwen3 recognizer")?;
+        log::info!("Loaded Qwen3 successfully");
+        Ok(Self { recognizer, model_type: ModelType::Qwen3, hotwords_ready: false })
     }
 
     /// Transcribe 16kHz mono f32 audio samples.
