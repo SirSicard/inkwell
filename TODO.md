@@ -39,10 +39,11 @@ quiet-point chunking, pre-roll and release-tail capture, transient-proof
 normalisation. The tooling to judge round two exists and is unused.
 
 - [x] Owner recorded a corpus 2026-07-31: eight scripted takes in `~/Documents/Inkwell Debug Audio/corpus`, with references written from the scripts.
-- [x] Measured on the owner's voice: **Parakeet V2 int8 8.0% WER, V2 fp16 8.0%, V3 int8 11.7%** (the current default). The win is English specialisation, not precision: the two V2 builds score identically, so the extra 600 MB for fp16 buys about 20% speed and no accuracy. Both V2 builds transcribed "to Vercel" and "changelog" correctly where V3 produced "the Versal" and "change log", which is the proper-noun failure that started this. Eight clips is directional, not a benchmark.
-- [ ] Owner: decide whether to switch the default to V2. It is a free upgrade for English (same download size, 32% fewer errors) and a regression the day you dictate in Swedish, since V2 is English-only.
+- [x] Measured on the owner's voice, five models: **Qwen3 5.6%, Parakeet V2 8.0%, SenseVoice 9.3%, Whisper Turbo 9.3%, Parakeet V3 10.5%**. The win is English specialisation, not precision: the two V2 builds score identically, so the extra 600 MB for fp16 buys about 20% speed and no accuracy. Both V2 builds transcribed "to Vercel" and "changelog" correctly where V3 produced "the Versal" and "change log", which is the proper-noun failure that started this. Eight clips is directional, not a benchmark.
+- [x] Owner switched to Parakeet V2 2026-07-31. Qwen3 is now the more accurate option and covers Nordic languages too, so it is worth trying next.
+- [ ] Owner, superseded: whether to switch the default to V2. It is a free upgrade for English (same download size, 32% fewer errors) and a regression the day you dictate in Swedish, since V2 is English-only.
 - [x] Parakeet V3 full precision removed from the catalogue. It ships weights as ONNX external data, which this sherpa-onnx build cannot resolve; the failure arrives as a foreign exception that aborts the process instead of returning an error, so listing it meant a 2.5 GB download that kills the app on selection.
-- [ ] Me: Qwen3-ASR-0.6B needs sherpa-onnx 1.12 to 1.13, which swaps the static libraries under everything. Do it alone so a broken upgrade cannot hold anything else hostage. It is the only candidate with a published accented-English win.
+- [x] Qwen3-ASR shipped in 0.2.3 as the accuracy tier: 5.6% against 8.0%, the sherpa-onnx 1.13 upgrade compiled clean, and the hotword lifecycle it needed (rebuild the engine when the dictionary changes) is built and verified. Write-up in [docs/qwen3-spike-2026-07-31.md](docs/qwen3-spike-2026-07-31.md).
 - [ ] Me: decide `advanced_mode`'s future. It gates which tabs appear, which is navigation, not dictation; it may belong in the sidebar rather than in General.
 
 ## 4. Streaming partials (designed, not built)

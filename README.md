@@ -27,11 +27,13 @@ Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no 
 - **Custom dictionary.** Fix the words your model keeps getting wrong. Case insensitive, word boundary matching.
 - **Snippets.** Trigger phrases expand to full text. Variables: `{date}`, `{time}`, `{clipboard}`.
 - **Voice commands.** Wake prefix plus action, for example "inkwell, scratch that" or "inkwell, formal mode".
-- **Per-app styles.** Different style per application. Windows only today, macOS support is on the roadmap.
+- **Modes.** One bundle of style, speech cleanup and AI polish, activated by which app you are typing into. Formal and polished in email, lowercase and unpunctuated in a terminal, without touching a setting. Works on macOS and Windows.
 - **File transcription.** Drag in audio or video. MP3, WAV, FLAC, OGG, M4A, MP4, MKV and more.
 - **History and export.** SQLite-backed transcript history, searchable and editable. Export TXT, SRT, JSON, CSV.
 - **Tray and overlay.** Lives in the tray. A small always-on-top overlay shows recording state. The hotkey works with the window hidden.
-- **AI polish (optional, off by default).** Bring your own API key to clean up grammar, filler words and false starts. See below.
+- **Voice editing.** Select text anywhere, hold a second hotkey, say what to change, and the rewrite replaces the selection. Needs an API key.
+- **Speech cleanup.** "um", "uh" and immediate stutters removed before the text is pasted, without changing what the sentence says.
+- **AI polish (optional, off by default).** Bring your own API key to clean up grammar and false starts. See below.
 
 ## Privacy
 
@@ -93,6 +95,12 @@ dictating a sentence.
 
 All models run locally on CPU. No internet is needed once a model is downloaded.
 
+## Voice editing
+
+Select text anywhere, hold the edit hotkey (Cmd+Shift+E on macOS, Ctrl+Shift+E elsewhere), say what to change, and the rewrite replaces the selection. "Make this shorter", "fix the grammar", "turn this into bullet points".
+
+This needs an API key, because rewriting text to order is a language-model job and Inkwell has no model of its own to do it with. Dictation itself stays entirely local and needs no key. Clear the hotkey in General to turn the feature off and free the shortcut.
+
 ## Not built (so you do not have to ask)
 
 - **Streaming / live partial text while you speak.** Not implemented. Transcription starts when you release the hotkey.
@@ -101,11 +109,6 @@ All models run locally on CPU. No internet is needed once a model is downloaded.
 - **Voice agent mode.** Removed in this rehaul. It targeted a gateway that no longer exists.
 - **Silence trimming (Silero VAD)** downloads its model (`silero_vad.onnx`) on first run. Until that finishes, dictation works but silence is not trimmed, and the app says so rather than failing quietly.
 
-## Voice editing
-
-Select text anywhere, hold the edit hotkey (Cmd+Shift+E on macOS, Ctrl+Shift+E elsewhere), say what to change, and the rewrite replaces the selection. "Make this shorter", "fix the grammar", "turn this into bullet points".
-
-This needs an API key, because rewriting text to order is a language-model job and Inkwell has no model of its own to do it with. Dictation itself stays entirely local and needs no key. Clear the hotkey in General to turn the feature off and free the shortcut.
 
 ## Support the project
 
