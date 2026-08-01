@@ -36,7 +36,7 @@ export const SITE_URL = "https://getinkwell.vercel.app";
  * pre-rehaul build with agent mode and the free proxy tier) until v0.2.0 was
  * cut on 2026-07-30.
  */
-export const APP_VERSION = "0.2.5";
+export const APP_VERSION = "0.2.6";
 
 /** Author. */
 export const AUTHOR_NAME = "Mattias Herzig";

@@ -188,7 +188,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          DMG=$(find "src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg" -name "*.dmg" | head -1)
+          # -print -quit rather than `| head -1`: under pipefail, head closing
+          # the pipe early makes find die of SIGPIPE and takes the step with it.
+          DMG=$(find "src-tauri/target/${{ matrix.rust_target }}/release/bundle/dmg" -name "*.dmg" -print -quit 2>/dev/null || true)
           if [ -z "$DMG" ]; then
             echo "::error title=No dmg::Nothing to notarize"
             exit 1
