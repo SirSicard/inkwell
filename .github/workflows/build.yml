@@ -106,6 +106,14 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # Bundle filenames carry the version without the leading "v", and GitHub
+      # expressions have no substring function, so it is derived here for the
+      # download table in the release body.
+      - name: Derive version from the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
       # Signing and notarization are opt-in: with no Apple Developer account the
       # secrets are absent, this step exports nothing and the build still ships
       # an (unsigned) .app and .dmg. The Tauri CLI picks these up from the
@@ -157,12 +165,38 @@ jobs:
           # bundles without touching releases.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Inkwell {0}', github.ref_name) || '' }}
+          # The Assets list is alphabetical, which puts the updater's
+          # `aarch64.app.tar.gz` above the `aarch64.dmg` a person actually
+          # wants, and "aarch64" vs "x64" means nothing to most people. Of the
+          # fifteen files below only four are meant to be clicked, so the body
+          # says which one and dismisses the rest by name.
           releaseBody: |
+            ## Which file do I download?
+
+            | Your machine | Download |
+            |---|---|
+            | **Mac with Apple Silicon** (M1 or newer) | `Inkwell_${{ env.VERSION }}_aarch64.dmg` |
+            | **Mac with Intel** | `Inkwell_${{ env.VERSION }}_x64.dmg` |
+            | **Windows** | `Inkwell_${{ env.VERSION }}_x64-setup.exe` |
+            | **Linux** | `Inkwell_${{ env.VERSION }}_amd64.AppImage` or `Inkwell_${{ env.VERSION }}_amd64.deb` |
+
+            Not sure which Mac you have? Apple menu > About This Mac. If the chip says M1, M2, M3 or M4, take the Apple Silicon one.
+
+            Everything else in the Assets list below (`.sig`, `.app.tar.gz`, `latest.json`, `.msi`) is machinery for the in-app updater. You never need to download it.
+
+            ## Installing
+
+            **macOS:** ${{ secrets.APPLE_CERTIFICATE != '' && 'signed with a Developer ID and notarized by Apple, so it opens like any other app, with no warning to click past.' || 'this build is not notarized. First launch: right-click the app and choose Open.' }} Inkwell will ask for Microphone access, and for Accessibility (System Settings > Privacy & Security > Accessibility) so it can paste into whatever app you are typing in. Without Accessibility it transcribes fine and nothing appears.
+
+            **Windows:** not code signed yet. SmartScreen will block the installer with "Windows protected your PC" — click **More info**, then **Run anyway**.
+
+            **Linux:** best effort, not regularly tested.
+
+            ## About this release
+
             Inkwell is free and open source. Dictation runs entirely on your machine; AI polish is optional and uses your own API key.
 
             See the [changelog](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed.
-
-            **macOS:** ${{ secrets.APPLE_CERTIFICATE != '' && 'signed and notarized by Apple, so it opens like any other app.' || 'this build is not notarized. First launch: right-click the app and choose Open.' }} Inkwell will ask for Microphone access, and for Accessibility (System Settings > Privacy & Security > Accessibility) so it can paste into the app you are typing in.
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
