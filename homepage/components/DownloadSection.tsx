@@ -36,7 +36,7 @@ const platforms: {
     artifacts: "Apple Silicon disk image; Intel is best-effort",
     steps: [
       "Drag Inkwell into Applications.",
-      "The app is not notarised, so Gatekeeper will refuse the first launch. Right-click it and choose Open, or run xattr -cr /Applications/Inkwell.app in Terminal.",
+      "Open it. The app and the disk image are both signed with a Developer ID and notarised by Apple, so there is no warning to click past.",
       "Allow Microphone access when asked.",
       "Allow Accessibility access. Inkwell pastes with a synthetic keystroke, which macOS blocks until you grant this. Without it you get a transcript and no text.",
     ],
@@ -142,8 +142,8 @@ export default function DownloadSection() {
                 </p>
 
                 {/* Ordered: these are first-launch steps in sequence, and the
-                    macOS pair (Gatekeeper, then Accessibility) only makes sense
-                    read in order. */}
+                    macOS run (install, open, then the two permissions) only
+                    makes sense read in order. */}
                 <ol className="mt-4 space-y-2">
                   {p.steps.map((s) => (
                     <li

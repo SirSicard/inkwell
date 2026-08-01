@@ -3,58 +3,57 @@ import Reveal from "./Reveal";
 import SectionHeading from "./SectionHeading";
 
 /*
-  A curated slice of the in-app catalogue, copied verbatim from
-  src/tabs/ModelsTab.tsx (MODEL_CATALOG). Sizes and language counts are the ones
-  the app itself shows.
+  The whole catalogue, matching MODELS in src-tauri/src/models.rs. It is five
+  entries, not the thirteen this table used to list: the rest lost on every axis
+  at once and were cut in 0.2.2, so a visitor was being sold a choice the app no
+  longer offers.
 
-  The catalogue lists 13 entries but only 12 are obtainable: the `hf_base` match
-  in src-tauri/src/commands.rs has no URL for "moonshine-tiny", so pressing
-  Download on it returns Err("No download URL for: moonshine-tiny"). It is
-  therefore deliberately absent from this table, and Whisper Tiny (98 MB, and
-  genuinely downloadable) stands in as the small end of the range.
+  Word error rates are measured, not quoted from a leaderboard. Source is
+  docs/qwen3-spike-2026-07-31.md, eight recordings of one voice scored with
+  src-tauri/examples/ab_models.rs. Re-measure before editing a number here, and
+  keep it in step with docs/media/models-*.svg, which is generated from the same
+  figures by scripts/gen-model-chart.py.
 */
 const models = [
+  {
+    name: "Qwen3 ASR",
+    vendor: "Alibaba",
+    size: "940 MB",
+    wer: "5.6%",
+    languages: "30, incl. Nordic",
+    note: "Most accurate, and the only one covering English and Nordic together.",
+  },
   {
     name: "Parakeet V3",
     vendor: "NVIDIA",
     size: "670 MB",
+    wer: "10.5%",
     languages: "25 European",
-    note: "Default. Best accuracy-to-speed balance.",
+    note: "The default. Detects the language for you.",
+  },
+  {
+    name: "Parakeet V2",
+    vendor: "NVIDIA",
+    size: "670 MB",
+    wer: "8.0%",
+    languages: "English",
+    note: "Same download as V3, more accurate if you only speak English.",
+  },
+  {
+    name: "SenseVoice",
+    vendor: "Alibaba",
+    size: "240 MB",
+    wer: "9.3%",
+    languages: "en, zh, ja, ko, yue",
+    note: "A quarter of the size, and the fastest here.",
   },
   {
     name: "Whisper Turbo",
     vendor: "OpenAI",
     size: "800 MB",
+    wer: "9.3%",
     languages: "99",
-    note: "Balanced multilingual all-rounder.",
-  },
-  {
-    name: "Whisper Large V3",
-    vendor: "OpenAI",
-    size: "1.5 GB",
-    languages: "99",
-    note: "Best multilingual accuracy, slowest.",
-  },
-  {
-    name: "Moonshine Base",
-    vendor: "Useful Sensors",
-    size: "288 MB",
-    languages: "English",
-    note: "Fast, modest download.",
-  },
-  {
-    name: "SenseVoice",
-    vendor: "Alibaba",
-    size: "160 MB",
-    languages: "5",
-    note: "Chinese, English, Japanese, Korean, Cantonese.",
-  },
-  {
-    name: "Whisper Tiny",
-    vendor: "OpenAI",
-    size: "98 MB",
-    languages: "99",
-    note: "Smallest download, lowest accuracy.",
+    note: "For the languages the others do not reach.",
   },
 ];
 
@@ -71,8 +70,8 @@ export default function ModelsSection() {
         title="Pick the trade-off you want."
         intro={
           <>
-            Twelve speech-to-text models download from inside the app, all
-            running locally through{" "}
+            Five speech-to-text models download from inside the app, all running
+            locally through{" "}
             <a
               href={SHERPA_ONNX_URL}
               className="underline decoration-dotted underline-offset-4"
@@ -80,10 +79,10 @@ export default function ModelsSection() {
             >
               sherpa-onnx
             </a>
-            . Six are below; the other six are five more Whisper sizes and an
-            English-tuned Parakeet V2. Nothing ships inside the installer. The
-            files come from Hugging Face when you pick one, and after that
-            download it needs no internet at all.
+            . Every one is here for a stated reason; the list was three times
+            longer until the ones that lost on every axis were cut. Nothing
+            ships inside the installer. The files come from Hugging Face when
+            you pick one, and after that it needs no internet at all.
           </>
         }
       />
@@ -102,6 +101,9 @@ export default function ModelsSection() {
                 </th>
                 <th scope="col" className="px-5 py-3 font-mono text-[0.6875rem] uppercase tracking-widest">
                   Size
+                </th>
+                <th scope="col" className="px-5 py-3 font-mono text-[0.6875rem] uppercase tracking-widest">
+                  Errors
                 </th>
                 <th scope="col" className="px-5 py-3 font-mono text-[0.6875rem] uppercase tracking-widest">
                   Languages
@@ -130,6 +132,12 @@ export default function ModelsSection() {
                     {m.size}
                   </td>
                   <td
+                    className="whitespace-nowrap px-5 py-4 align-top font-mono text-[0.8125rem]"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    {m.wer}
+                  </td>
+                  <td
                     className="whitespace-nowrap px-5 py-4 align-top"
                     style={{ color: "var(--text-secondary)" }}
                   >
@@ -146,6 +154,17 @@ export default function ModelsSection() {
             </tbody>
           </table>
         </div>
+      </Reveal>
+
+      <Reveal>
+        <p
+          className="mt-4 text-sm"
+          style={{ color: "var(--text-tertiary)" }}
+        >
+          Error rates are measured rather than quoted: eight recordings of one
+          voice, scored against what was actually said. Directional, not a
+          benchmark, and your voice is not that voice.
+        </p>
       </Reveal>
     </section>
   );
