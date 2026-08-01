@@ -1,13 +1,16 @@
-<p align="center">
-  <h1 align="center">INKWELL</h1>
-  <p align="center">Local-first speech to text for your desktop. Free, open source, no account.</p>
-</p>
+<div align="center">
 
-<p align="center">
-  <a href="https://github.com/SirSicard/inkwell/releases/latest"><img src="https://img.shields.io/github/v/release/SirSicard/inkwell?style=flat-square" alt="Release"></a>
-  <a href="https://github.com/SirSicard/inkwell/actions"><img src="https://img.shields.io/github/actions/workflow/status/SirSicard/inkwell/build.yml?style=flat-square" alt="Build"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/SirSicard/inkwell?style=flat-square" alt="License"></a>
-</p>
+# Inkwell
+
+**Local-first speech to text for your desktop. Free, open source, no account.**
+
+[![Release](https://img.shields.io/github/v/release/SirSicard/inkwell?style=flat-square&color=0969da)](https://github.com/SirSicard/inkwell/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/SirSicard/inkwell/build.yml?style=flat-square)](https://github.com/SirSicard/inkwell/actions)
+[![Downloads](https://img.shields.io/github/downloads/SirSicard/inkwell/total?style=flat-square&color=1a7f37)](https://github.com/SirSicard/inkwell/releases)
+[![License](https://img.shields.io/github/license/SirSicard/inkwell?style=flat-square)](LICENSE)
+[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](#install)
+
+</div>
 
 **Your voice, your words, your machine.**
 
@@ -22,7 +25,7 @@ Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no 
 ## What it does
 
 - **Dictation anywhere.** Global hotkey, push to talk or toggle. Transcribes, then pastes into the focused app.
-- **Local speech recognition.** Four models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), each answering a different question about your language, disk and patience. Downloaded on first use and switchable in the app. See the table below.
+- **Local speech recognition.** Five models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), each answering a different question about your language, disk and patience. Downloaded on first use and switchable in the app. See [Models](#models).
 - **Style formatting.** Formal, Casual, Relaxed. Controls capitalization and punctuation without touching a model.
 - **Custom dictionary.** Fix the words your model keeps getting wrong. Case insensitive, word boundary matching.
 - **Snippets.** Trigger phrases expand to full text. Variables: `{date}`, `{time}`, `{clipboard}`.
@@ -53,32 +56,43 @@ Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases)
 2. Grant **Microphone** access when prompted (System Settings > Privacy & Security > Microphone).
 3. Grant **Accessibility** access (System Settings > Privacy & Security > Accessibility). Inkwell types the result into the focused app with a synthetic paste, which macOS blocks until this is granted. Without it, transcription works but nothing appears.
 
+> [!NOTE]
+> Accessibility is the one people miss. Without it dictation transcribes fine and nothing appears, which reads like the app is broken.
+
 Known macOS limitations: synthetic paste is blocked by Secure Input, so dictation into password fields and some terminals will silently do nothing. Per-app style overrides do not work yet.
 
 ### Windows (secondary, built in CI)
 
-Download the NSIS installer (recommended) or the MSI. SmartScreen will show a warning on an unsigned installer: click "More info" then "Run anyway".
+Download the NSIS installer (recommended) or the MSI.
+
+> [!WARNING]
+> Windows builds are not code signed. SmartScreen will block the installer with "Windows protected your PC": click **More info**, then **Run anyway**. Your browser may also flag the download as uncommon. Only macOS is signed today.
 
 ### Linux
 
-Best effort. CI produces `.AppImage`, `.deb` and `.rpm`. Not regularly tested.
+Best effort. CI produces `.AppImage` and `.deb`. Not regularly tested.
 
 ## Quick start
 
 1. Launch Inkwell and finish the short onboarding (mic picker, model download, hotkey test).
-2. Pick a model. Parakeet V3 (670 MB) is the default and detects the language for you; if you only dictate in English, switch to Parakeet V2, which is measurably more accurate. Models download on first use, they are not inside the installer.
+2. Pick a model. Parakeet V3 (670 MB) is the default and detects the language for you. If you only dictate in English, switch to Parakeet V2, which is measurably more accurate at the same size. If you want the best accuracy and do not mind a bigger download, take Qwen3 ASR. Models download on first use, they are not inside the installer.
 3. Set your record hotkey in Settings > General. On macOS pick a combination that does not collide with Spotlight or input source switching.
 4. Hold the hotkey, speak, release. The text is pasted where your cursor is.
 
 ## Models
 
-| Model | Size | Languages | Word error rate | Pick it when |
-|---|---|---|---|---|
-| **Qwen3 ASR** | 940 MB | 30 incl. Nordic | **5.6%** | Best accuracy measured, and the only one covering English and Nordic languages at once. Twice the transcription time, still under a second for a short dictation |
-| **Parakeet V3** | 670 MB | 25 European | 10.5% | Default. You switch between European languages, or want it detected for you |
-| **Parakeet V2** | 670 MB | English | 8.0% | English only, and the fastest of the accurate ones |
-| **SenseVoice** | 240 MB | en, zh, ja, ko, yue | 9.3% | Small disk, slow connection, older machine, or you need CJK. Twice as fast |
-| **Whisper Turbo** | 800 MB | 99 | 8.6% | You need a language the others do not cover. Five times slower |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/models-dark.svg">
+  <img src="docs/media/models-light.svg" alt="Accuracy and speed of the five models. Qwen3 ASR has the lowest word error rate at 5.6%; SenseVoice is the fastest at 1.7 seconds." width="920">
+</picture>
+
+| Model | Languages | Pick it when |
+|---|---|---|
+| **Qwen3 ASR** | 30, incl. Nordic | You want the best accuracy, or you move between English and a Nordic language. The only model here that does not force that choice |
+| **Parakeet V3** | 25 European | The default. You switch between European languages, or want it detected for you |
+| **Parakeet V2** | English | You only dictate in English. Same download as V3, meaningfully more accurate |
+| **SenseVoice** | en, zh, ja, ko, yue | Small disk, slow connection, or an older machine. A quarter of the size and the fastest here, at the same accuracy as Whisper |
+| **Whisper Turbo** | 99 | You need a language the others do not reach. Nothing else recommends it |
 
 Word error rates are measured, not quoted: eight recordings of one voice, scored
 against what was actually said, with the tool in `src-tauri/examples/ab_models.rs`.
@@ -138,7 +152,7 @@ Rust + [Tauri v2](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sh
 
 - macOS on Apple Silicon, Windows 10/11, or a recent Linux desktop
 - 2 GB free RAM with Parakeet V3, less with the small models
-- Disk: about 50 MB for the app plus the model you choose (70 MB to 1.5 GB)
+- Disk: about 50 MB for the app plus the model you choose (240 MB to 940 MB)
 - Any microphone
 
 ## Contributing

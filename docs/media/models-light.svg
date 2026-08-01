@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="340" viewBox="0 0 920 340" font-family='-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif' role="img" aria-label="Model comparison: word error rate and transcription time">
+<text x="140" y="30" font-size="14" font-weight="600" fill="#1f2328">Accuracy</text>
+<text x="140" y="50" font-size="12" fill="#59636e">word error rate, lower is better</text>
+<text x="530" y="30" font-size="14" font-weight="600" fill="#1f2328">Speed</text>
+<text x="530" y="50" font-size="12" fill="#59636e">seconds to transcribe 57s of audio</text>
+<text x="130" y="93" text-anchor="end" font-size="13" font-weight="500" fill="#1f2328">Qwen3 ASR</text>
+<text x="130" y="108" text-anchor="end" font-size="11" fill="#59636e">940 MB</text>
+<rect x="140" y="82" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="140" y="82" width="121.3" height="14" rx="7" fill="#1a7f37"/>
+<text x="410" y="93" font-size="12" font-weight="600" fill="#1f2328">5.6%</text>
+<rect x="530" y="82" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="530" y="82" width="113.9" height="14" rx="7" fill="#0969da"/>
+<text x="800" y="93" font-size="12" font-weight="600" fill="#1f2328">9.2s</text>
+<text x="130" y="139" text-anchor="end" font-size="13" font-weight="500" fill="#1f2328">Parakeet V2</text>
+<text x="130" y="154" text-anchor="end" font-size="11" fill="#59636e">670 MB</text>
+<rect x="140" y="128" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="140" y="128" width="173.3" height="14" rx="7" fill="#0969da"/>
+<text x="410" y="139" font-size="12" font-weight="600" fill="#1f2328">8.0%</text>
+<rect x="530" y="128" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="530" y="128" width="44.6" height="14" rx="7" fill="#0969da"/>
+<text x="800" y="139" font-size="12" font-weight="600" fill="#1f2328">3.6s</text>
+<text x="130" y="185" text-anchor="end" font-size="13" font-weight="500" fill="#1f2328">SenseVoice</text>
+<text x="130" y="200" text-anchor="end" font-size="11" fill="#59636e">240 MB</text>
+<rect x="140" y="174" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="140" y="174" width="201.5" height="14" rx="7" fill="#0969da"/>
+<text x="410" y="185" font-size="12" font-weight="600" fill="#1f2328">9.3%</text>
+<rect x="530" y="174" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="530" y="174" width="21.0" height="14" rx="7" fill="#1a7f37"/>
+<text x="800" y="185" font-size="12" font-weight="600" fill="#1f2328">1.7s</text>
+<text x="130" y="231" text-anchor="end" font-size="13" font-weight="500" fill="#1f2328">Whisper Turbo</text>
+<text x="130" y="246" text-anchor="end" font-size="11" fill="#59636e">800 MB</text>
+<rect x="140" y="220" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="140" y="220" width="201.5" height="14" rx="7" fill="#0969da"/>
+<text x="410" y="231" font-size="12" font-weight="600" fill="#1f2328">9.3%</text>
+<rect x="530" y="220" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="530" y="220" width="245.1" height="14" rx="7" fill="#0969da"/>
+<text x="800" y="231" font-size="12" font-weight="600" fill="#1f2328">19.8s</text>
+<text x="130" y="277" text-anchor="end" font-size="13" font-weight="500" fill="#1f2328">Parakeet V3</text>
+<text x="130" y="292" text-anchor="end" font-size="11" fill="#59636e">670 MB</text>
+<rect x="140" y="266" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="140" y="266" width="227.5" height="14" rx="7" fill="#0969da"/>
+<text x="410" y="277" font-size="12" font-weight="600" fill="#1f2328">10.5%</text>
+<rect x="530" y="266" width="260" height="14" rx="7" fill="#d1d9e0"/>
+<rect x="530" y="266" width="45.8" height="14" rx="7" fill="#0969da"/>
+<text x="800" y="277" font-size="12" font-weight="600" fill="#1f2328">3.7s</text>
+<text x="140" y="330" font-size="11" fill="#59636e">Eight recordings of one voice. Directional, not a benchmark. Measure your own with cargo run --release --example ab_models.</text>
+</svg>
