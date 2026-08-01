@@ -11,12 +11,13 @@
 #     shasum -a 256 Inkwell_<version>_aarch64.dmg
 #
 # The alternative is `sha256 :no_check`, which tells Homebrew to install
-# whatever the URL happens to serve. That is exactly the check worth keeping
-# for an unsigned app: without notarization, the checksum is the only thing
-# standing between the user and a substituted download.
+# whatever the URL happens to serve. Worth keeping even now that the dmg is
+# signed and notarised: Gatekeeper tells you the download came from this
+# Developer ID, and the checksum tells you it is the exact build this cask was
+# written against. They answer different questions.
 cask "inkwell" do
-  version "0.2.5"
-  sha256 "79e4b86df4e9bd89eb9fe1cdaec2cf5d3c13f6b808b4a88a8baab085456d1207"
+  version "0.2.6"
+  sha256 "5c936ceb33523d3843425543788d3105e7b2d0a4100dc5bd80fd4eff0919350c"
 
   # No `verified:` here: it is only for urls whose domain differs from the
   # homepage, and brew audit rejects it as redundant when they match.
