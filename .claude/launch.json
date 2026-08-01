@@ -2,10 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "homepage",
+      "name": "inkwell-homepage",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "cwd": "homepage",
+      "runtimeArgs": ["run", "dev", "--prefix", "homepage"],
       "port": 3000
     }
   ]

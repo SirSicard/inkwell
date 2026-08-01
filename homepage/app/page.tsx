@@ -4,6 +4,7 @@ import Hero from "@/components/Hero";
 import HowItWorks from "@/components/HowItWorks";
 import ModelsSection from "@/components/ModelsSection";
 import PrivacySection from "@/components/PrivacySection";
+import ScreenshotSection from "@/components/ScreenshotSection";
 import SiteFooter from "@/components/SiteFooter";
 import SiteHeader from "@/components/SiteHeader";
 import SupportSection from "@/components/SupportSection";
@@ -20,6 +21,7 @@ export default function Home() {
         <Hero />
         <HowItWorks />
         <FeaturesSection />
+        <ScreenshotSection />
         <ModelsSection />
         <PrivacySection />
         <DownloadSection />

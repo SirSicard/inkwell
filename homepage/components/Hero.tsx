@@ -100,13 +100,14 @@ export default function Hero() {
           className="mt-6 max-w-md text-sm leading-relaxed"
           style={{ color: "var(--text-secondary)" }}
         >
-          Builds are not code signed yet, so first launch needs one extra step.{" "}
+          macOS builds are signed and notarised by Apple, so they open like any
+          other app. Windows is not signed yet.{" "}
           <a
             href="#download"
             className="underline decoration-dotted underline-offset-4"
             style={{ color: "var(--text-secondary)" }}
           >
-            How to open it
+            What to expect on first launch
           </a>
           .
         </p>
