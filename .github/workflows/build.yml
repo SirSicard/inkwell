@@ -245,6 +245,31 @@ jobs:
             echo "Stapled dmg uploaded over the unstapled one"
           fi
 
+      # Each .sig is byte-identical to the matching "signature" field that
+      # tauri-action already inlines into latest.json, and the updater reads it
+      # from there rather than fetching the .sig URL. Verified on 0.2.6 for all
+      # six platform keys. So they add six entries to a list where only four of
+      # fifteen were ever meant to be clicked, and answer no question a visitor
+      # has. Dropped after latest.json is uploaded, never before.
+      - name: Drop the redundant .sig assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+               --json assets --jq '.assets[].name' | grep -q '^latest\.json$'; then
+            echo "::notice title=Keeping .sig files::latest.json is not on the release yet, so the signatures it inlines cannot be relied on."
+            exit 0
+          fi
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name | select(endswith(".sig"))' \
+          | while read -r a; do
+              gh release delete-asset "$GITHUB_REF_NAME" "$a" --yes --repo "$GITHUB_REPOSITORY" \
+                && echo "dropped $a"
+            done
+
       # A bundle without the usage string is a runtime failure that no compiler
       # catches: macOS kills the app the moment it opens an input device.
       - name: Verify macOS bundle
