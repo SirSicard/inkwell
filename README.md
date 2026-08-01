@@ -38,6 +38,14 @@ Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no 
 - **Speech cleanup.** "um", "uh" and immediate stutters removed before the text is pasted, without changing what the sentence says.
 - **AI polish (optional, off by default).** Bring your own API key to clean up grammar and false starts. See below.
 
+### Modes, the part that is hard to picture
+
+A mode bundles a writing style, speech cleanup and AI polish, and switches itself on based on which app you are typing into. Formal and polished in email, lowercase and unpunctuated in Slack, without touching a setting. The first mode whose app list matches wins; otherwise the default applies.
+
+<picture>
+  <img src="docs/media/inkwell-modes.png" alt="The Modes tab, showing a Default mode plus Casual and Relaxed modes bound to lists of application identifiers" width="900">
+</picture>
+
 ## Privacy
 
 - Audio is captured, resampled and transcribed locally. It is never uploaded.
@@ -110,6 +118,28 @@ All models run locally on CPU. No internet is needed once a model is downloaded.
 Select text anywhere, hold the edit hotkey (Cmd+Shift+E on macOS, Ctrl+Shift+E elsewhere), say what to change, and the rewrite replaces the selection. "Make this shorter", "fix the grammar", "turn this into bullet points".
 
 This needs an API key, because rewriting text to order is a language-model job and Inkwell has no model of its own to do it with. Dictation itself stays entirely local and needs no key. Clear the hotkey in General to turn the feature off and free the shortcut.
+
+## Getting a free API key
+
+Voice editing and AI polish are the only features that need one. Groq has a free tier that covers ordinary personal use, needs no credit card, and is fast enough that the rewrite feels instant. It takes about two minutes.
+
+1. Go to **[console.groq.com](https://console.groq.com)** and sign in with Google, GitHub or email.
+2. Open **API Keys** in the left sidebar, then **Create API Key**. Name it anything, "Inkwell" is fine.
+3. Copy the key **now**. It starts with `gsk_`, and Groq shows it once. If you lose it, delete that key and make another.
+4. In Inkwell, open **AI** in the sidebar. Groq is the first tab, marked `free key`.
+5. Paste the key into the field and it saves itself. The warning at the top disappears.
+6. Turn on the **AI Polish** toggle if you want it applied to ordinary dictation as well. Voice editing works either way.
+
+<picture>
+  <img src="docs/media/inkwell-ai.png" alt="The AI tab, showing the API key field with Groq selected and marked as a free key" width="900">
+</picture>
+
+Your key is stored in the operating system keyring, macOS Keychain or the Windows Credential Manager, never in a config file in plain text. It is sent directly from your machine to the provider you chose. There is no server belonging to this project in the path.
+
+> [!IMPORTANT]
+> Dictation never needs a key and never leaves your machine. This is only for the two features that rewrite text. If you skip this section entirely, everything else still works.
+
+Prefer a different provider? OpenAI, Anthropic and OpenRouter are on the same screen, as is any OpenAI-compatible endpoint if you run your own.
 
 ## Not built (so you do not have to ask)
 
