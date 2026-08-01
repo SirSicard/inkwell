@@ -4,6 +4,12 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.6] - 2026-08-01
+
+### Fixed
+
+- **The macOS disk image is now notarised too.** 0.2.5 notarised the app but not the `.dmg` it ships inside, so the file you actually download still raised a warning on first open even though the app within it was fine. The disk image now gets its own notarisation and carries the ticket with it, so the check passes without an internet connection. If you are on 0.2.5 and it opened without complaint, nothing about the app itself changes here.
+
 ## [0.2.5] - 2026-07-31
 
 ### Changed
@@ -146,6 +152,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.6]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.6
 [0.2.5]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.5
 [0.2.4]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.4
 [0.2.3]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.3
