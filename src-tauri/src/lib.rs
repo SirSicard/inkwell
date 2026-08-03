@@ -28,6 +28,23 @@ mod vad;
 pub mod voiceedit;
 pub mod voicecommand;
 
+/// Render transcribed text for a log line: the text itself in debug builds, a
+/// character count in release.
+///
+/// Release builds log to a file the user never opens, cannot search, and does
+/// not clear when they delete their history. Writing dictations into it would
+/// quietly outlive the delete button in the Dashboard, in an app whose whole
+/// claim is that your words stay where you can see them. A length is what
+/// diagnosing a pipeline problem actually needs: it tells you whether a stage
+/// dropped the text, doubled it, or returned nothing.
+pub fn redact(text: &str) -> String {
+    if cfg!(debug_assertions) {
+        format!("\"{}\"", text)
+    } else {
+        format!("{} chars", text.chars().count())
+    }
+}
+
 /// What the current recording will be used for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {
@@ -159,6 +176,7 @@ pub fn run() {
             commands::get_voice_commands,
             commands::save_voice_commands,
             paste::check_accessibility_permission,
+            paste::request_accessibility_permission,
             paste::open_accessibility_settings,
             polish::save_api_key,
             polish::get_api_key_status,
@@ -168,4 +186,44 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact;
+
+    /// The point of `redact` is that a release build never writes a dictation to
+    /// disk. Asserted per build profile rather than skipped, so whichever way
+    /// the suite is run, one of these two is doing the work.
+    #[test]
+    fn release_logs_a_length_and_never_the_words() {
+        let secret = "my bank password is hunter2";
+        let out = redact(secret);
+        if cfg!(debug_assertions) {
+            assert_eq!(out, format!("\"{}\"", secret));
+        } else {
+            assert!(!out.contains("hunter2"), "release build leaked text: {out}");
+            assert!(!out.contains("bank"), "release build leaked text: {out}");
+            assert_eq!(out, "27 chars");
+        }
+    }
+
+    /// Counts characters, not bytes, so a length is not a proxy for the encoding.
+    #[test]
+    fn counts_characters_not_bytes() {
+        let out = redact("héllo wörld");
+        if !cfg!(debug_assertions) {
+            assert_eq!(out, "11 chars");
+        }
+    }
+
+    #[test]
+    fn handles_empty() {
+        let out = redact("");
+        if cfg!(debug_assertions) {
+            assert_eq!(out, "\"\"");
+        } else {
+            assert_eq!(out, "0 chars");
+        }
+    }
 }

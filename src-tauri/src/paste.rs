@@ -145,6 +145,93 @@ pub fn check_accessibility_permission() -> bool {
     true
 }
 
+/// macOS: ask the system for Accessibility, showing the standard dialog.
+///
+/// The paste path deliberately never prompts, because enigo's default asked
+/// once per dictation forever. That left no way back in: a user whose grant
+/// stops matching, which is what happens when the app's code identity changes,
+/// saw no prompt and no error, and the toggle in System Settings still read as
+/// on. Opening the settings pane does not help either, since an entry that is
+/// already listed cannot be re-granted by looking at it.
+///
+/// So the prompt lives here, behind a button the user presses on purpose.
+/// Returns the trust state *before* prompting: macOS answers immediately and
+/// the dialog resolves out of band, so `false` means "we asked", not "denied".
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn request_accessibility_permission() -> bool {
+    use std::ffi::c_void;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> u8;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFAllocatorDefault: *const c_void;
+        static kCFTypeDictionaryKeyCallBacks: c_void;
+        static kCFTypeDictionaryValueCallBacks: c_void;
+        static kCFBooleanTrue: *const c_void;
+        fn CFDictionaryCreate(
+            allocator: *const c_void,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: isize,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> *const c_void;
+        fn CFStringCreateWithBytes(
+            alloc: *const c_void,
+            bytes: *const u8,
+            num_bytes: isize,
+            encoding: u32,
+            is_external: u8,
+        ) -> *const c_void;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    // kAXTrustedCheckOptionPrompt is exported as a CFStringRef, but linking the
+    // symbol directly is fragile across SDKs, so the key is built by value. It
+    // is documented API and has not changed.
+    const KEY: &[u8] = b"AXTrustedCheckOptionPrompt";
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    unsafe {
+        let key = CFStringCreateWithBytes(
+            kCFAllocatorDefault,
+            KEY.as_ptr(),
+            KEY.len() as isize,
+            K_CF_STRING_ENCODING_UTF8,
+            0,
+        );
+        if key.is_null() {
+            return AXIsProcessTrustedWithOptions(std::ptr::null()) != 0;
+        }
+        let keys = [key];
+        let values = [kCFBooleanTrue];
+        let options = CFDictionaryCreate(
+            kCFAllocatorDefault,
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        );
+        let trusted = AXIsProcessTrustedWithOptions(options) != 0;
+        if !options.is_null() {
+            CFRelease(options);
+        }
+        CFRelease(key);
+        trusted
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn request_accessibility_permission() -> bool {
+    true
+}
+
 /// macOS: open System Settings on the Accessibility privacy pane so the user
 /// can grant the permission `check_accessibility_permission` reports missing.
 #[cfg(target_os = "macos")]

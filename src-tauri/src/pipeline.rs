@@ -398,7 +398,7 @@ fn process_recording(
         let hotwords = app_state.dict.with(|d| d.hotwords());
         match app_state.engine.transcribe(speech.clone(), hotwords) {
             Ok(text) => {
-                log::info!("Raw: \"{}\"", text);
+                log::info!("Raw: {}", crate::redact(&text));
 
                 // Check for voice commands before processing as dictation
                 {
@@ -498,7 +498,7 @@ fn process_recording(
                 .unwrap_or_else(|_| app_state.style.lock().unwrap().clone());
 
                 let styled = current_style.format(&text);
-                log::info!("Styled ({:?}): \"{}\"", current_style, styled);
+                log::info!("Styled ({:?}): {}", current_style, crate::redact(&styled));
 
                 // Apply dictionary corrections
                 let styled = app_state.dict.with(|d| d.apply(&styled));
@@ -565,8 +565,8 @@ fn process_recording(
                                 match result {
                                     Some(polished) => {
                                         log::info!(
-                                            "AI Polish result: \"{}\"",
-                                            polished
+                                            "AI Polish result: {}",
+                                            crate::redact(&polished)
                                         );
                                         polished
                                     }
@@ -709,7 +709,7 @@ fn process_edit(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: usize
             return;
         }
     };
-    log::info!("Voice edit instruction: \"{}\"", instruction);
+    log::info!("Voice edit instruction: {}", crate::redact(&instruction));
 
     let provider = match crate::polish::preferred_provider() {
         Some(p) => p,
