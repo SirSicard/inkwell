@@ -180,3 +180,32 @@ pub fn open_debug_audio_folder() -> Result<String, String> {
         .map_err(|e| format!("Could not open the folder: {}", e))?;
     Ok(dir.to_string_lossy().into_owned())
 }
+
+/// Reveal the folder the log is written to.
+///
+/// Release builds started logging in 0.2.7, which is worth nothing if the only
+/// way to find the file is to be told the path by the person you are reporting
+/// the bug to. Resolved through Tauri rather than hardcoded, because the log
+/// directory differs per platform and the plugin picks it, not us.
+#[tauri::command]
+pub fn open_log_folder(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("No log directory: {}", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {}", dir.display(), e))?;
+
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    #[cfg(target_os = "linux")]
+    let opener = "xdg-open";
+
+    std::process::Command::new(opener)
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("Could not open the folder: {}", e))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
