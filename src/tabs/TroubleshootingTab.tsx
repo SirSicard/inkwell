@@ -18,11 +18,18 @@ export function TroubleshootingTab() {
   const setSetting = useSettings((s) => s.set)
   const debugSaveAudio = settings?.debug_save_audio ?? false
   const [folder, setFolder] = useState("")
+  const [logFolder, setLogFolder] = useState("")
 
   const openFolder = () => {
     invoke<string>("open_debug_audio_folder")
       .then(setFolder)
       .catch((e) => toast(`Could not open the folder: ${e}`))
+  }
+
+  const openLogFolder = () => {
+    invoke<string>("open_log_folder")
+      .then(setLogFolder)
+      .catch((e) => toast(`Could not open the log folder: ${e}`))
   }
 
   return (
@@ -49,6 +56,16 @@ export function TroubleshootingTab() {
             {folder && <span className="text-meta font-mono text-text-tertiary truncate">{folder}</span>}
           </div>
         </div>
+      )}
+
+      <SettingRow
+        label="Log"
+        description="A running record of what the app did: which model loaded, how long each recording was, how many characters each stage produced, and anything that failed. Your dictated text is not written to it, only its length, so the log can be attached to a bug report without sending your words along with it."
+      >
+        <InkButton variant="ghost" onClick={openLogFolder}>Open log folder</InkButton>
+      </SettingRow>
+      {logFolder && (
+        <p className="px-3.5 text-meta font-mono text-text-tertiary truncate">{logFolder}</p>
       )}
 
       <SettingRow

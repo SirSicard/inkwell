@@ -173,6 +173,7 @@ pub fn run() {
             commands::get_pinned_mode,
             commands::set_pinned_mode,
             commands::open_debug_audio_folder,
+            commands::open_log_folder,
             commands::get_voice_commands,
             commands::save_voice_commands,
             paste::check_accessibility_permission,
