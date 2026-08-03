@@ -378,9 +378,9 @@ impl SpeechEngine {
         // duplicated words.
         let text = crate::merge::merge_chunks(&parts);
         log::info!(
-            "Transcribed ({:?}): \"{}\" ({:.1}s audio, {} chunks)",
+            "Transcribed ({:?}): {} ({:.1}s audio, {} chunks)",
             self.model_type,
-            text,
+            crate::redact(&text),
             samples.len() as f32 / 16000.0,
             parts.len()
         );
@@ -405,9 +405,9 @@ impl SpeechEngine {
 
         let text = result.text.trim().to_string();
         log::info!(
-            "Transcribed ({:?}): \"{}\" ({:.1}s audio)",
+            "Transcribed ({:?}): {} ({:.1}s audio)",
             self.model_type,
-            text,
+            crate::redact(&text),
             samples.len() as f32 / 16000.0
         );
 

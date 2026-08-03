@@ -7,13 +7,23 @@ use tauri::{Emitter, Manager};
 
 /// The main app setup closure. Initializes audio, loads settings/models/data, registers hotkeys, tray, etc.
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    if cfg!(debug_assertions) {
-        app.handle().plugin(
-            tauri_plugin_log::Builder::default()
-                .level(log::LevelFilter::Info)
-                .build(),
-        )?;
-    }
+    // Registered unconditionally. It used to be gated on debug_assertions, so
+    // every build a user actually runs wrote nothing at all, and "it stopped
+    // pasting" arrived with no trace to read. The transcript itself is not
+    // written in release (see crate::redact); this records the shape of a run,
+    // not its contents.
+    //
+    // The plugin's default max_file_size is 40 KB, which one afternoon of
+    // dictation reaches, after which the log is worth little. Raised, and the
+    // rotation made explicit so it keeps recent history without growing
+    // without bound.
+    app.handle().plugin(
+        tauri_plugin_log::Builder::default()
+            .level(log::LevelFilter::Info)
+            .max_file_size(2_000_000)
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+            .build(),
+    )?;
 
     // Set up models directory
     let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");

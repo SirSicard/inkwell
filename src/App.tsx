@@ -52,6 +52,42 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
       .finally(() => setAccessChecking(false))
   }
 
+  // Asks macOS for Accessibility, which shows the system dialog. The paste path
+  // never prompts (see src-tauri/src/paste.rs), so without this there is no way
+  // back once a grant stops matching: the entry still reads as on in System
+  // Settings, and looking at it changes nothing.
+  //
+  // The system call returns the trust state from *before* the dialog, so the
+  // answer arrives out of band. Hence the poll: the user leaves, ticks the box,
+  // comes back, and the panel has already turned green rather than needing
+  // Re-check pressed.
+  const requestAccessibility = () => {
+    invoke<boolean>("request_accessibility_permission")
+      .then((alreadyTrusted) => {
+        if (alreadyTrusted) {
+          setAccessibility("granted")
+          return
+        }
+        toast("Approve the dialog, then add Inkwell under Accessibility", "info")
+        let elapsed = 0
+        const timer = setInterval(() => {
+          elapsed += 2000
+          invoke<boolean>("check_accessibility_permission")
+            .then((ok) => {
+              if (ok) {
+                clearInterval(timer)
+                setAccessibility("granted")
+                toast("Accessibility granted", "info")
+              } else if (elapsed >= 120000) {
+                clearInterval(timer)
+              }
+            })
+            .catch(() => clearInterval(timer))
+        }, 2000)
+      })
+      .catch((e) => toast(`Could not ask for permission: ${e}`, "warning"))
+  }
+
   useEffect(() => {
     invoke<{ id: string; name: string }[]>("get_input_devices").then(setMicDevices).catch(() => {})
     invoke<Settings>("get_settings")
@@ -222,8 +258,14 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
           {accessibility !== "granted" && (
             <div className="flex justify-center gap-3">
               <button
-                onClick={() => { invoke("open_accessibility_settings").catch((e) => toast(`Could not open System Settings: ${e}`, "warning")) }}
+                onClick={requestAccessibility}
                 className="px-5 py-2 text-sm font-medium bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors"
+              >
+                Grant permission
+              </button>
+              <button
+                onClick={() => { invoke("open_accessibility_settings").catch((e) => toast(`Could not open System Settings: ${e}`, "warning")) }}
+                className="px-4 py-2 text-sm text-text-tertiary hover:text-text-secondary transition-colors"
               >
                 Open System Settings
               </button>
