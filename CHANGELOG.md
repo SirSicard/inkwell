@@ -4,6 +4,17 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.7] - 2026-08-03
+
+### Fixed
+
+- **A way to get Accessibility back once it stops working.** macOS ties this permission to an app's signature, so updating to the signed build invalidated the old grant while leaving the switch in System Settings still showing as on. Dictation transcribed and nothing appeared, with no dialog and no error. There is now a **Grant permission** button in Settings that asks macOS directly and notices when you have granted it. Opening System Settings, which was the only option before, cannot fix an entry that is already listed.
+- **The word error rates shown in the app were out of date.** Parakeet V3 has been 10.5% and Whisper Turbo 9.3% since the speech engine was updated in 0.2.3, but the model descriptions still quoted the older 11.7% and 8.6%, and disagreed with the same numbers on the website.
+
+### Changed
+
+- **Inkwell now keeps a log you can send to a bug report.** Logging had only ever been switched on in development builds, so an installed copy recorded nothing and there was nothing to look at when something went wrong. Your dictated text is deliberately **not** written to it: the log records how long a recording was and how many characters each stage produced, never the words themselves. Transcripts stay in the history list, where the delete button reaches them.
+
 ## [0.2.6] - 2026-08-01
 
 ### Changed
@@ -148,6 +159,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.7]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.7
 [0.2.6]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.6
 [0.2.4]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.4
 [0.2.3]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.3
