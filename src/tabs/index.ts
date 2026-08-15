@@ -1,4 +1,5 @@
 export { DashboardTab } from "./DashboardTab"
+export { StatsTab } from "./StatsTab"
 export { GeneralTab } from "./GeneralTab"
 export { AudioTab } from "./AudioTab"
 export { ModelsTab } from "./ModelsTab"

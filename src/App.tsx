@@ -12,7 +12,7 @@ import { useSettings } from "./state/settings"
 import { watchTheme, type ThemeChoice } from "./theme"
 import { basicTabs, advancedTabs, tabGroups } from "./types"
 import {
-  DashboardTab, GeneralTab, AudioTab, ModelsTab,
+  DashboardTab, StatsTab, GeneralTab, AudioTab, ModelsTab,
   AITab, SnippetsTab, ModesTab, DictionaryTab,
   FilesTab, VoiceCommandsTab, TroubleshootingTab, AboutTab,
 } from "./tabs"
@@ -456,6 +456,7 @@ function Sidebar({
 function TabContent({ tab, onAdvancedChange, onNavigate }: { tab: Tab; onAdvancedChange?: (v: boolean) => void; onNavigate?: (t: Tab) => void }) {
   switch (tab) {
     case "Dashboard":   return <DashboardTab />
+    case "Stats":       return <StatsTab />
     case "General":     return <GeneralTab onAdvancedChange={onAdvancedChange} onNavigate={onNavigate} />
     case "Audio":       return <AudioTab />
     case "Models":      return <ModelsTab />

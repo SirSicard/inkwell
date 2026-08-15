@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **A space after each dictation.** Dictating twice in a row used to fuse the last word of one with the first word of the next. One trailing space is appended at the paste; the history keeps exactly what was said. Can be turned off in General.
 - **An Open Log Folder button** in Troubleshooting, so the log that release builds now write can actually be found and attached to a bug report.
+- **A Stats page.** Words dictated, time spent speaking, an estimate of time saved over typing (the assumption is printed next to it), a day streak, the last 14 days of activity, and which models did the work. Everything is computed from your transcript history on the spot; nothing is counted separately, so deleting your history genuinely resets the numbers too.
 
 ## [0.2.7] - 2026-08-03
 

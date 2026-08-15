@@ -66,3 +66,14 @@ pub fn export_transcripts(
     );
     Ok(content)
 }
+
+/// Aggregates for the Stats view, derived from the transcripts table at ask
+/// time. `today` comes from the backend clock so the streak logic and the
+/// zero-filled day strip agree with the dates `insert` stamps (both are the
+/// machine's local time).
+#[tauri::command]
+pub fn get_stats(state: tauri::State<crate::AppState>) -> Result<crate::history::Stats, String> {
+    let db_guard = state.db.lock().unwrap();
+    let db = db_guard.as_ref().ok_or("History database is not open")?;
+    db.stats(chrono::Local::now().date_naive())
+}

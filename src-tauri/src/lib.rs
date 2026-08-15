@@ -162,6 +162,7 @@ pub fn run() {
             commands::update_settings,
             commands::toggle_pause,
             commands::get_transcripts,
+            commands::get_stats,
             commands::search_transcripts,
             commands::delete_transcript,
             commands::get_dictionary,
