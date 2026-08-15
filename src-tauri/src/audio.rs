@@ -437,6 +437,9 @@ pub fn restart_audio_capture(app: &AppHandle, preferred_device: &str) -> Result<
         }
     };
     *guard = Some(new_state);
+    // A deliberate reopen counts as use: without this, an old timestamp could
+    // hand the just-opened stream straight back to the idle watchdog.
+    *state.mic_last_used.lock().unwrap() = std::time::Instant::now();
     log::info!("Audio capture restarted on '{}'", preferred_device);
     Ok(())
 }

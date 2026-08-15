@@ -39,18 +39,19 @@ pub fn build_shortcut_plugin(
             let mode = if is_edit { "ptt".to_string() } else { mode };
             let is_toggle = mode == "toggle";
 
+            let is_recording = app_state
+                .audio
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|a| a.is_recording.load(Ordering::Relaxed))
+                .unwrap_or(false);
+
             let should_start;
             let should_stop;
 
             if is_toggle {
                 if pressed {
-                    let is_recording = app_state
-                        .audio
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .map(|a| a.is_recording.load(Ordering::Relaxed))
-                        .unwrap_or(false);
                     should_start = !is_recording;
                     should_stop = is_recording;
                 } else {
@@ -58,8 +59,14 @@ pub fn build_shortcut_plugin(
                     should_stop = false;
                 }
             } else {
-                should_start = pressed;
-                should_stop = released;
+                // Guarded on state, not just the event. A Pressed while
+                // already recording used to clear the buffer and start over,
+                // so a repeated press (or the stuck-recording case, where the
+                // Released event was lost) silently discarded everything said
+                // so far. A Released with nothing in flight ran the whole stop
+                // path against an empty buffer.
+                should_start = pressed && !is_recording;
+                should_stop = released && is_recording;
             }
 
             if should_start && is_edit {
@@ -91,6 +98,34 @@ pub fn build_shortcut_plugin(
             }
 
             if should_start {
+                *app_state.mic_last_used.lock().unwrap() = std::time::Instant::now();
+
+                // The idle watchdog may have dropped the capture stream to
+                // release the microphone; reopen it before recording. A
+                // reopened stream starts with an empty pre-roll, so the first
+                // dictation after a long idle loses its 300ms lead. That is
+                // the price of the machine being able to sleep, paid once per
+                // idle period rather than per dictation.
+                let need_open = app_state.audio.lock().unwrap().is_none();
+                if need_open {
+                    let mic_device =
+                        app_state.settings.lock().unwrap().mic_device.clone();
+                    match crate::audio::start_audio_capture(handle.clone(), &mic_device) {
+                        Ok(s) => {
+                            *app_state.audio.lock().unwrap() = Some(s);
+                            log::info!("Mic reopened after idle release");
+                        }
+                        Err(e) => {
+                            log::error!("Mic reopen failed: {}", e);
+                            let _ = handle.emit(
+                                "mic-error",
+                                format!("Could not open the microphone: {}", e),
+                            );
+                            return;
+                        }
+                    }
+                }
+
                 *app_state.recording_intent.lock().unwrap() =
                     if is_edit { Intent::Edit } else { Intent::Dictate };
                 let guard = app_state.audio.lock().unwrap();
@@ -128,6 +163,8 @@ pub fn build_shortcut_plugin(
                     // nothing, with no visible cause.
                     audio.is_paused.store(false, Ordering::Relaxed);
                     audio.is_recording.store(true, Ordering::Relaxed);
+                    *app_state.recording_started.lock().unwrap() =
+                        Some(std::time::Instant::now());
                     log::info!(
                         "Recording started ({}, shortcut: {:?})",
                         mode,
@@ -143,99 +180,185 @@ pub fn build_shortcut_plugin(
             }
 
             if should_stop {
-                let guard = app_state.audio.lock().unwrap();
-                if let Some(audio) = guard.as_ref() {
-                    audio.is_recording.store(false, Ordering::Relaxed);
-                    audio.is_paused.store(false, Ordering::Relaxed);
-
-                    let mut samples: Vec<f32> = {
-                        let mut buf = audio.recording_buffer.lock().unwrap();
-                        std::mem::take(&mut *buf)
-                    };
-                    let source_rate = audio.sample_rate;
-                    // The last word is still decaying when the key comes up.
-                    // Mark the pre-roll position now; the worker sleeps briefly
-                    // and then collects what the mic heard in the 300ms after
-                    // release. Reading the tail from the global pre-roll,
-                    // rather than keeping the shared buffer open, means a
-                    // rapid next dictation can start immediately without
-                    // racing this one's tail.
-                    let tail_mark = audio.preroll.mark();
-                    let tail_len = source_rate * 3 / 10;
-                    let preroll = audio.preroll.clone();
-                    // Claim through the tail so the next take's lead starts
-                    // after it, and measure how much of this take was pre-roll
-                    // seed rather than live speech.
-                    audio.preroll_claimed.store(tail_mark + tail_len, Ordering::Relaxed);
-                    let lead_len = audio.lead_len.swap(0, Ordering::Relaxed);
-                    let intent = *app_state.recording_intent.lock().unwrap();
-
-                    log::info!(
-                        "Recording stopped: {} samples ({:.1}s at {}Hz)",
-                        samples.len(),
-                        samples.len() as f32 / source_rate as f32,
-                        source_rate
-                    );
-
-                    drop(guard);
-                    sounds::play_dictation_stop();
-                    let _ = handle.emit("recording-state", false);
-
-                    // Gate on LIVE audio, excluding the seeded lead: the buffer
-                    // now always starts ~300ms full, so gating on total length
-                    // would let a stray hotkey tap transcribe pre-press room
-                    // noise and paste it somewhere.
-                    let min_samples = (source_rate as f32 * 0.3) as usize;
-                    let live_samples = samples.len().saturating_sub(lead_len);
-                    let live_ms = (live_samples as f32 * 1000.0 / source_rate as f32) as i64;
-                    if live_samples < min_samples {
-                        log::info!(
-                            "Recording too short ({} live samples, {:.1}s), skipping",
-                            live_samples,
-                            live_samples as f32 / source_rate as f32
-                        );
-                    } else {
-                        let handle_clone = handle.clone();
-                        std::thread::spawn(move || {
-                            // Wait out the release tail, then append it. 350ms
-                            // of added latency buys the final word's ending;
-                            // transcription itself takes longer than this.
-                            std::thread::sleep(std::time::Duration::from_millis(350));
-                            samples.extend(preroll.since(tail_mark, tail_len));
-                            match std::panic::catch_unwind(
-                                std::panic::AssertUnwindSafe(|| {
-                                    match intent {
-                                        Intent::Dictate => process_recording(
-                                            &handle_clone,
-                                            samples,
-                                            source_rate,
-                                            live_ms,
-                                        ),
-                                        Intent::Edit => process_edit(
-                                            &handle_clone,
-                                            samples,
-                                            source_rate,
-                                        ),
-                                    }
-                                }),
-                            ) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    log::error!(
-                                        "Transcription thread panicked: {:?}",
-                                        e
-                                    );
-                                }
-                            }
-                        });
-                    }
-                } else {
-                    drop(guard);
-                    let _ = handle.emit("recording-state", false);
-                }
+                stop_and_process(&handle, "hotkey");
             }
         })
         .build()
+}
+
+/// Stop the in-flight recording and hand it to the pipeline.
+///
+/// Factored out of the hotkey handler so the watchdog can run the identical
+/// path when the hotkey's Released event never arrives. The stuck case and the
+/// normal case must not drift apart: whatever the user said is processed and
+/// pasted either way, not discarded.
+pub fn stop_and_process(handle: &tauri::AppHandle, reason: &str) {
+    let app_state = handle.state::<AppState>();
+    *app_state.mic_last_used.lock().unwrap() = std::time::Instant::now();
+    *app_state.recording_started.lock().unwrap() = None;
+    log::info!("Stopping recording ({})", reason);
+
+    let guard = app_state.audio.lock().unwrap();
+    if let Some(audio) = guard.as_ref() {
+        audio.is_recording.store(false, Ordering::Relaxed);
+        audio.is_paused.store(false, Ordering::Relaxed);
+
+        let mut samples: Vec<f32> = {
+            let mut buf = audio.recording_buffer.lock().unwrap();
+            std::mem::take(&mut *buf)
+        };
+        let source_rate = audio.sample_rate;
+        // The last word is still decaying when the key comes up.
+        // Mark the pre-roll position now; the worker sleeps briefly
+        // and then collects what the mic heard in the 300ms after
+        // release. Reading the tail from the global pre-roll,
+        // rather than keeping the shared buffer open, means a
+        // rapid next dictation can start immediately without
+        // racing this one's tail.
+        let tail_mark = audio.preroll.mark();
+        let tail_len = source_rate * 3 / 10;
+        let preroll = audio.preroll.clone();
+        // Claim through the tail so the next take's lead starts
+        // after it, and measure how much of this take was pre-roll
+        // seed rather than live speech.
+        audio.preroll_claimed.store(tail_mark + tail_len, Ordering::Relaxed);
+        let lead_len = audio.lead_len.swap(0, Ordering::Relaxed);
+        let intent = *app_state.recording_intent.lock().unwrap();
+
+        log::info!(
+            "Recording stopped: {} samples ({:.1}s at {}Hz)",
+            samples.len(),
+            samples.len() as f32 / source_rate as f32,
+            source_rate
+        );
+
+        drop(guard);
+        sounds::play_dictation_stop();
+        let _ = handle.emit("recording-state", false);
+
+        // Gate on LIVE audio, excluding the seeded lead: the buffer
+        // now always starts ~300ms full, so gating on total length
+        // would let a stray hotkey tap transcribe pre-press room
+        // noise and paste it somewhere.
+        let min_samples = (source_rate as f32 * 0.3) as usize;
+        let live_samples = samples.len().saturating_sub(lead_len);
+        let live_ms = (live_samples as f32 * 1000.0 / source_rate as f32) as i64;
+        if live_samples < min_samples {
+            log::info!(
+                "Recording too short ({} live samples, {:.1}s), skipping",
+                live_samples,
+                live_samples as f32 / source_rate as f32
+            );
+        } else {
+            let handle_clone = handle.clone();
+            std::thread::spawn(move || {
+                // Wait out the release tail, then append it. 350ms
+                // of added latency buys the final word's ending;
+                // transcription itself takes longer than this.
+                std::thread::sleep(std::time::Duration::from_millis(350));
+                samples.extend(preroll.since(tail_mark, tail_len));
+                match std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        match intent {
+                            Intent::Dictate => process_recording(
+                                &handle_clone,
+                                samples,
+                                source_rate,
+                                live_ms,
+                            ),
+                            Intent::Edit => process_edit(
+                                &handle_clone,
+                                samples,
+                                source_rate,
+                            ),
+                        }
+                    }),
+                ) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::error!(
+                            "Transcription thread panicked: {:?}",
+                            e
+                        );
+                    }
+                }
+            });
+        }
+    } else {
+        drop(guard);
+        let _ = handle.emit("recording-state", false);
+    }
+}
+
+
+/// Runs for the life of the app, checking every five seconds for the two
+/// failure modes that only happen when nobody is looking.
+///
+/// 1. A push-to-talk recording that has run implausibly long, because the
+///    hotkey's Released event never arrived. Seen in the field: the overlay
+///    showed live audio levels for minutes while no key did anything, since
+///    the handler was waiting for an event that was already lost. The
+///    recording is stopped and processed, not discarded; the user did speak.
+///    Toggle mode is exempt, because there a long take is plausibly
+///    deliberate and the stop is its own press. Edits are always
+///    push-to-talk, so they are covered regardless of the mode setting.
+///
+/// 2. An idle capture stream. Holding the mic open held a
+///    PreventUserIdleSystemSleep assertion through coreaudiod (verified with
+///    pmset -g assertions against Inkwell's pid), so the machine never
+///    idle-slept, never auto-locked, and showed the mic indicator all day.
+///    After the configured idle time the stream is dropped, which releases
+///    the device and the assertion; the next hotkey press reopens it.
+pub fn watchdog_loop(handle: tauri::AppHandle) {
+    const STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(180);
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let app_state = handle.state::<AppState>();
+
+        let recording_for = app_state
+            .recording_started
+            .lock()
+            .unwrap()
+            .map(|t| t.elapsed());
+
+        if let Some(elapsed) = recording_for {
+            let intent = *app_state.recording_intent.lock().unwrap();
+            let mode = app_state.settings.lock().unwrap().recording_mode.clone();
+            let ptt = intent == Intent::Edit || mode != "toggle";
+            if ptt && elapsed > STUCK_AFTER {
+                log::warn!(
+                    "Recording ran {:.0}s with no Released event; forcing a stop",
+                    elapsed.as_secs_f32()
+                );
+                stop_and_process(&handle, "watchdog: release event never arrived");
+            }
+            // Recording (or just force-stopped): never idle-release beneath it.
+            continue;
+        }
+
+        let idle_mins = app_state.settings.lock().unwrap().mic_idle_release_mins;
+        if idle_mins == 0 {
+            continue;
+        }
+        if app_state.mic_last_used.lock().unwrap().elapsed()
+            < std::time::Duration::from_secs(idle_mins * 60)
+        {
+            continue;
+        }
+        let mut guard = app_state.audio.lock().unwrap();
+        let releasable = guard
+            .as_ref()
+            .map(|a| !a.is_recording.load(Ordering::Relaxed))
+            .unwrap_or(false);
+        if releasable {
+            *guard = None;
+            log::info!(
+                "Mic released after {}min idle; the next dictation reopens it",
+                idle_mins
+            );
+        }
+    }
 }
 
 /// A missing VAD model degrades every dictation, so never let it pass quietly:
@@ -618,10 +741,22 @@ fn process_recording(
 
                 // Paste into focused app
                 if !final_text.is_empty() {
+                    // One trailing space, so back-to-back dictations do not
+                    // run together (dictate, dictate again, and the words
+                    // fused). Trailing rather than leading: a leading space is
+                    // wrong at the start of an empty field, which is where a
+                    // first dictation lands. Added at the paste only; the
+                    // history row and the transcription event stay exactly
+                    // what was said.
+                    let to_paste = if app_state.settings.lock().unwrap().append_space {
+                        format!("{} ", final_text)
+                    } else {
+                        final_text.clone()
+                    };
                     std::thread::sleep(std::time::Duration::from_millis(
                         100,
                     ));
-                    match paste::paste_text(&final_text) {
+                    match paste::paste_text(&to_paste) {
                         Ok(_) => {}
                         Err(e) => {
                             log::error!("Paste failed: {}", e);

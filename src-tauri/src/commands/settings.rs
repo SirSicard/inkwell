@@ -85,6 +85,10 @@ pub fn update_settings(
             new_mic = Some(value);
         }
         "vad_threshold" => settings.vad_threshold = value.parse().unwrap_or(0.5),
+        "mic_idle_release_mins" => {
+            settings.mic_idle_release_mins = value.parse().unwrap_or(3)
+        }
+        "append_space" => settings.append_space = value == "true",
         "sound_dictation" => {
             settings.sound_dictation = value == "true";
             crate::sounds::set_dictation_sounds(settings.sound_dictation);

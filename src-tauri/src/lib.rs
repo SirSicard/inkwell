@@ -77,6 +77,14 @@ pub struct AppState {
     pub recording_intent: Mutex<Intent>,
     /// Text captured from the frontmost app when an edit recording started.
     pub edit_selection: Mutex<Option<String>>,
+    /// Last moment the mic was used for anything: press, stop, or stream
+    /// (re)open. The idle watchdog measures from here before releasing the
+    /// capture stream, which is what lets the machine sleep again.
+    pub mic_last_used: Mutex<std::time::Instant>,
+    /// When the in-flight recording started, None otherwise. Exists so the
+    /// watchdog can distinguish "recording for 4 minutes because the Released
+    /// event was lost" from "not recording at all".
+    pub recording_started: Mutex<Option<std::time::Instant>>,
     pub settings: Mutex<settings::Settings>,
     pub settings_path: Mutex<String>,
     pub db: Mutex<Option<history::TranscriptDb>>,
@@ -120,6 +128,8 @@ pub fn run() {
             pinned_mode: Mutex::new(None),
             recording_intent: Mutex::new(Intent::Dictate),
             edit_selection: Mutex::new(None),
+            mic_last_used: Mutex::new(std::time::Instant::now()),
+            recording_started: Mutex::new(None),
             settings: Mutex::new(settings::Settings::default()),
             settings_path: Mutex::new(String::new()),
             db: Mutex::new(None),

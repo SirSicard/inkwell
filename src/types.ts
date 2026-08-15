@@ -17,6 +17,8 @@ export interface Settings {
   sound_dictation: boolean
   remove_fillers: boolean
   debug_save_audio: boolean
+  mic_idle_release_mins: number
+  append_space: boolean
 }
 
 /** Mirrors modes::Mode in src-tauri/src/modes.rs. */

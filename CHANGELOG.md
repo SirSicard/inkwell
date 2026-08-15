@@ -4,6 +4,18 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Inkwell no longer keeps your Mac awake.** The microphone stream stayed open from launch to quit, and macOS treats an open mic as a reason not to sleep: a machine with Inkwell running never idle-slept, never auto-locked, and showed the orange microphone indicator all day. The mic is now released after a few idle minutes (configurable under Audio, including "never") and reopened on the next dictation. The one cost: the first dictation after a long idle loses its 300ms head start, so its first word may need a beat.
+- **A recording can no longer get stuck.** If the key-release event never reaches the app, which is what made it look frozen while still showing audio levels, a watchdog now stops the recording after 3 minutes and processes what was said rather than discarding it. A repeated key press while recording also no longer silently wipes the take and starts over.
+
+### Added
+
+- **A space after each dictation.** Dictating twice in a row used to fuse the last word of one with the first word of the next. One trailing space is appended at the paste; the history keeps exactly what was said. Can be turned off in General.
+- **An Open Log Folder button** in Troubleshooting, so the log that release builds now write can actually be found and attached to a bug report.
+
 ## [0.2.7] - 2026-08-03
 
 ### Fixed

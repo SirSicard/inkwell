@@ -152,6 +152,16 @@ export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?
         />
       </SettingRow>
 
+      <SettingRow
+        label="Space After Dictation"
+        description="Appends one space after each pasted dictation, so dictating twice in a row does not fuse the last word of one with the first of the next."
+      >
+        <InkToggle
+          checked={settings?.append_space ?? true}
+          onChange={(v) => setSetting("append_space", v)}
+        />
+      </SettingRow>
+
       {/* Text style and speech cleanup both used to be set here, writing
           settings.style and settings.remove_fillers. The pipeline now resolves
           both from the active mode, so these controls had become switches that

@@ -69,6 +69,20 @@ pub struct Settings {
     /// do not want it.
     #[serde(default = "default_edit_hotkey")]
     pub edit_hotkey: String,
+    /// Minutes of inactivity before the capture stream is dropped and the
+    /// microphone released. 0 keeps the old always-on behaviour. The always-on
+    /// stream held a CoreAudio power assertion (verified with
+    /// `pmset -g assertions`: PreventUserIdleSystemSleep, created for
+    /// Inkwell's pid), so a machine with Inkwell running never idle-slept and
+    /// never auto-locked, and the orange mic indicator was on all day in an
+    /// app whose whole pitch is privacy.
+    #[serde(default = "default_mic_idle_release_mins")]
+    pub mic_idle_release_mins: u64,
+    /// Append one space after a pasted dictation, so consecutive dictations do
+    /// not run together. Only dictation pastes: voice edits replace a
+    /// selection exactly and must not grow it by a character.
+    #[serde(default = "default_true")]
+    pub append_space: bool,
     // Which providers have a key was briefly cached here, to spare the user a
     // keychain prompt per AI-tab open. It was the wrong fix: a lookup that failed
     // for any reason other than absence got written down as "no key" forever.
@@ -98,6 +112,7 @@ fn default_polish_prompt() -> String { crate::llm::DEFAULT_POLISH_PROMPT.to_stri
 fn default_edit_hotkey() -> String { "super+shift+e".to_string() }
 #[cfg(not(target_os = "macos"))]
 fn default_edit_hotkey() -> String { "ctrl+shift+e".to_string() }
+fn default_mic_idle_release_mins() -> u64 { 3 }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -119,6 +134,8 @@ impl Default for Settings {
             remove_fillers: true,
             debug_save_audio: false,
             edit_hotkey: default_edit_hotkey(),
+            mic_idle_release_mins: default_mic_idle_release_mins(),
+            append_space: true,
         }
     }
 }
