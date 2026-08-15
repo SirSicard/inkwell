@@ -4,7 +4,7 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.8] - 2026-08-15
 
 ### Fixed
 
@@ -172,6 +172,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[0.2.8]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.8
 [0.2.7]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.7
 [0.2.6]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.6
 [0.2.4]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.4
