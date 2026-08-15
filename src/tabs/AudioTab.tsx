@@ -50,6 +50,22 @@ export function AudioTab() {
         />
       </SettingRow>
 
+      <SettingRow
+        label="Release Microphone When Idle"
+        description="Keeping the mic held between dictations shows the recording indicator all day and stops the machine from sleeping or auto-locking. Released after this long unused; the next dictation reopens it, at the cost of that one take's 300ms head start."
+      >
+        <InkSelect
+          value={String(settings?.mic_idle_release_mins ?? 3)}
+          onChange={(v) => setSetting("mic_idle_release_mins", Number(v))}
+          options={[
+            { label: "After 1 minute", value: "1" },
+            { label: "After 3 minutes", value: "3" },
+            { label: "After 10 minutes", value: "10" },
+            { label: "Never (always on)", value: "0" },
+          ]}
+        />
+      </SettingRow>
+
       <div className="p-4 bg-bg-surface border border-border rounded-lg space-y-3">
         <div className="flex items-center justify-between">
           <div>

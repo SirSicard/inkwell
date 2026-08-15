@@ -92,6 +92,12 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Stuck-recording and idle-mic watchdog; see pipeline::watchdog_loop.
+    {
+        let wd_handle = app.handle().clone();
+        std::thread::spawn(move || crate::pipeline::watchdog_loop(wd_handle));
+    }
+
     // Autostart: register the plugin, then reconcile the OS state with the setting.
     app.handle().plugin(tauri_plugin_autostart::init(
         tauri_plugin_autostart::MacosLauncher::LaunchAgent,
