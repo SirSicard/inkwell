@@ -125,12 +125,12 @@ export function StatsTab() {
             {recentTotal.toLocaleString()} dictation{recentTotal === 1 ? "" : "s"}
           </span>
         </div>
-        <div className="flex items-end gap-[3px] h-20" role="img"
+        <div className="flex items-stretch gap-[3px] h-24" role="img"
           aria-label={`Dictations per day over the last 14 days, up to ${maxCount} in one day`}>
           {stats.recent_days.map(([date, count, words]) => (
             <div
               key={date}
-              className="flex-1 flex flex-col items-center gap-1 min-w-0"
+              className="flex-1 h-full flex flex-col items-center gap-1 min-w-0"
               title={`${fmtDay(date)}: ${count} dictation${count === 1 ? "" : "s"}, ${words} words`}
             >
               {/* Labels selectively: only the busiest day carries its number. */}
