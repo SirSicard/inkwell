@@ -33,6 +33,7 @@ Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no 
 - **Modes.** One bundle of style, speech cleanup and AI polish, activated by which app you are typing into. Formal and polished in email, lowercase and unpunctuated in a terminal, without touching a setting. Works on macOS and Windows.
 - **File transcription.** Drag in audio or video. MP3, WAV, FLAC, OGG, M4A, MP4, MKV and more.
 - **History and export.** SQLite-backed transcript history, searchable and editable. Export TXT, SRT, JSON, CSV.
+- **Stats.** Words dictated, speaking time, streak, daily activity and model usage, computed from the history you can see and delete, not from a hidden counter.
 - **Tray and overlay.** Lives in the tray. A small always-on-top overlay shows recording state. The hotkey works with the window hidden.
 - **Voice editing.** Select text anywhere, hold a second hotkey, say what to change, and the rewrite replaces the selection. Needs an API key.
 - **Speech cleanup.** "um", "uh" and immediate stutters removed before the text is pasted, without changing what the sentence says.

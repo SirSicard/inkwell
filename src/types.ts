@@ -104,8 +104,21 @@ export interface FileTranscribeResult {
   segments: { start_ms: number; end_ms: number; text: string }[]
 }
 
-export const basicTabs = ["Dashboard", "General", "About"] as const
-export const advancedTabs = ["Dashboard", "General", "Audio", "Models", "AI", "Snippets", "Modes", "Dictionary", "Files", "Commands", "Troubleshooting", "About"] as const
+/** Mirrors history::Stats in src-tauri/src/history.rs. Serde renders the Rust
+ * tuples as JSON arrays, which is why these are tuple types rather than objects. */
+export interface Stats {
+  total_count: number
+  total_words: number
+  total_speaking_ms: number
+  days_active: number
+  streak_days: number
+  best_day: [string, number] | null
+  recent_days: [string, number, number][]
+  per_model: [string, number][]
+}
+
+export const basicTabs = ["Dashboard", "Stats", "General", "About"] as const
+export const advancedTabs = ["Dashboard", "Stats", "General", "Audio", "Models", "AI", "Snippets", "Modes", "Dictionary", "Files", "Commands", "Troubleshooting", "About"] as const
 export type Tab = (typeof advancedTabs)[number]
 
 /**
@@ -119,7 +132,7 @@ export type Tab = (typeof advancedTabs)[number]
  * replacing the list.
  */
 export const tabGroups: readonly { label: string; tabs: readonly Tab[] }[] = [
-  { label: "History", tabs: ["Dashboard", "Files"] },
+  { label: "History", tabs: ["Dashboard", "Stats", "Files"] },
   { label: "Dictation", tabs: ["General", "Modes", "Audio", "Models"] },
   { label: "Intelligence", tabs: ["AI", "Snippets", "Dictionary", "Commands"] },
   { label: "System", tabs: ["Troubleshooting", "About"] },
