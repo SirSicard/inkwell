@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **The Fn (globe) key, right Command, right Option and right Control can be the hotkey.** Pick them with one click under the hotkey field. These keys never reach the normal hotkey system, because a modifier alone produces no key event, so Inkwell watches for them separately, and only on macOS. The watch is listen-only: the key keeps working as a modifier everywhere else. Two caveats come with the territory: macOS gives the globe key its own job by default (set "Press globe key to" to Do Nothing in System Settings, or dictating will also open the emoji picker), and the left-side modifiers are deliberately not offered, since a hotkey on left Command would fire on every copy and paste. Requires the Accessibility permission Inkwell already uses for pasting.
 - **A hotkey can be a single key.** F1 through F24, Insert, Pause and Scroll Lock now work on their own, no modifier held. Keys you type with still need one, and the reason is stated when you try: a global hotkey swallows its key in every application, so a bare letter would stop that letter working everywhere the moment it saved. The same guard now also catches Shift plus a typing key, which had always been allowed and had exactly the same problem.
 
 ## [0.2.8] - 2026-08-15

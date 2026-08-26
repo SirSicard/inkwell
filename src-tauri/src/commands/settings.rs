@@ -126,27 +126,43 @@ pub fn set_hotkey(
 ) -> Result<(), String> {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey
-        .parse()
-        .map_err(|e| format!("Invalid hotkey '{}': {}", hotkey, e))?;
+    let edit_hotkey = state.settings.lock().unwrap().edit_hotkey.clone();
+    if !hotkey.is_empty() && hotkey == edit_hotkey {
+        return Err("That is already the voice-edit hotkey.".to_string());
+    }
 
     let manager = app.global_shortcut();
     let _ = manager.unregister_all();
 
-    manager
-        .register(shortcut)
-        .map_err(|e| format!("Failed to register '{}': {}", hotkey, e))?;
+    // A modifier-only token (fn, right_cmd, ...) never goes near the OS
+    // hotkey API: it is bound in the flagsChanged tap instead. Whichever kind
+    // the new hotkey is, the other kind's binding for this slot is cleared,
+    // or switching from fn to a combo would leave fn still dictating.
+    match crate::modkey::ModKey::from_token(&hotkey) {
+        Some(mk) => {
+            crate::modkey::set_binding(&app, crate::modkey::SLOT_MAIN, Some(mk))?;
+        }
+        None => {
+            let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey
+                .parse()
+                .map_err(|e| format!("Invalid hotkey '{}': {}", hotkey, e))?;
+            manager
+                .register(shortcut)
+                .map_err(|e| format!("Failed to register '{}': {}", hotkey, e))?;
+            let _ = crate::modkey::set_binding(&app, crate::modkey::SLOT_MAIN, None);
+        }
+    }
 
     // unregister_all took the edit hotkey with it. Without this, changing the
     // dictation hotkey silently turned voice editing off until the next
     // restart, which is the kind of failure nobody connects to what they did.
-    let edit_hotkey = state.settings.lock().unwrap().edit_hotkey.clone();
-    if !edit_hotkey.trim().is_empty() {
+    // A modifier-token edit hotkey lives in the tap and was not affected.
+    if !edit_hotkey.trim().is_empty()
+        && crate::modkey::ModKey::from_token(&edit_hotkey).is_none()
+    {
         if let Ok(sc) = edit_hotkey.parse::<tauri_plugin_global_shortcut::Shortcut>() {
-            if sc != shortcut {
-                if let Err(e) = manager.register(sc) {
-                    log::warn!("Could not re-register the edit hotkey: {}", e);
-                }
+            if let Err(e) = manager.register(sc) {
+                log::warn!("Could not re-register the edit hotkey: {}", e);
             }
         }
     }
@@ -191,24 +207,40 @@ pub fn set_edit_hotkey(
     let dictation = state.settings.lock().unwrap().hotkey.clone();
     let dictation_sc = dictation.parse::<tauri_plugin_global_shortcut::Shortcut>().ok();
 
+    let trimmed = hotkey.trim().to_string();
+    if !trimmed.is_empty() && trimmed == dictation {
+        return Err("That is already the dictation hotkey.".to_string());
+    }
+
+    // Clear whichever kind of binding the old edit hotkey was.
     let old = state.settings.lock().unwrap().edit_hotkey.clone();
-    if let Ok(sc) = old.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+    if crate::modkey::ModKey::from_token(&old).is_some() {
+        let _ = crate::modkey::set_binding(&app, crate::modkey::SLOT_EDIT, None);
+    } else if let Ok(sc) = old.parse::<tauri_plugin_global_shortcut::Shortcut>() {
         if Some(&sc) != dictation_sc.as_ref() {
             let _ = manager.unregister(sc);
         }
     }
 
-    let trimmed = hotkey.trim().to_string();
     if !trimmed.is_empty() {
-        let sc: tauri_plugin_global_shortcut::Shortcut = trimmed
-            .parse()
-            .map_err(|e| format!("Invalid hotkey '{}': {}", trimmed, e))?;
-        if Some(&sc) == dictation_sc.as_ref() {
-            return Err("That is already the dictation hotkey.".to_string());
+        match crate::modkey::ModKey::from_token(&trimmed) {
+            Some(mk) => {
+                crate::modkey::set_binding(&app, crate::modkey::SLOT_EDIT, Some(mk))?;
+            }
+            None => {
+                let sc: tauri_plugin_global_shortcut::Shortcut = trimmed
+                    .parse()
+                    .map_err(|e| format!("Invalid hotkey '{}': {}", trimmed, e))?;
+                if Some(&sc) == dictation_sc.as_ref() {
+                    return Err("That is already the dictation hotkey.".to_string());
+                }
+                manager
+                    .register(sc)
+                    .map_err(|e| format!("Failed to register '{}': {}", trimmed, e))?;
+            }
         }
-        manager
-            .register(sc)
-            .map_err(|e| format!("Failed to register '{}': {}", trimmed, e))?;
+    } else {
+        let _ = crate::modkey::set_binding(&app, crate::modkey::SLOT_EDIT, None);
     }
 
     let mut settings = state.settings.lock().unwrap();

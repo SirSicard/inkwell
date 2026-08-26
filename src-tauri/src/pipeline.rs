@@ -10,180 +10,184 @@ pub fn build_shortcut_plugin(
         .with_handler(move |_app, shortcut, event| {
             let pressed =
                 event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed;
-            let released =
-                event.state == tauri_plugin_global_shortcut::ShortcutState::Released;
-
-            let app_state = handle.state::<AppState>();
-
-            let (mode, show_overlay, edit_hotkey) = {
-                let settings = app_state.settings.lock().unwrap();
-                (
-                    settings.recording_mode.clone(),
-                    settings.show_overlay,
-                    settings.edit_hotkey.clone(),
-                )
-            };
 
             // Which hotkey fired decides what the recording is for. Both share
             // one audio buffer: a second buffer would let a dictation and an
             // edit interleave and produce a transcript made of half of each.
+            let app_state = handle.state::<AppState>();
+            let edit_hotkey = app_state.settings.lock().unwrap().edit_hotkey.clone();
             let is_edit = !edit_hotkey.trim().is_empty()
                 && edit_hotkey
                     .parse::<tauri_plugin_global_shortcut::Shortcut>()
                     .map(|s| &s == shortcut)
                     .unwrap_or(false);
 
-            // Edits are always push to talk. Toggle would leave the user
-            // holding a captured selection with no visible indication that the
-            // app is waiting for an instruction.
-            let mode = if is_edit { "ptt".to_string() } else { mode };
-            let is_toggle = mode == "toggle";
-
-            let is_recording = app_state
-                .audio
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|a| a.is_recording.load(Ordering::Relaxed))
-                .unwrap_or(false);
-
-            let should_start;
-            let should_stop;
-
-            if is_toggle {
-                if pressed {
-                    should_start = !is_recording;
-                    should_stop = is_recording;
-                } else {
-                    should_start = false;
-                    should_stop = false;
-                }
-            } else {
-                // Guarded on state, not just the event. A Pressed while
-                // already recording used to clear the buffer and start over,
-                // so a repeated press (or the stuck-recording case, where the
-                // Released event was lost) silently discarded everything said
-                // so far. A Released with nothing in flight ran the whole stop
-                // path against an empty buffer.
-                should_start = pressed && !is_recording;
-                should_stop = released && is_recording;
-            }
-
-            if should_start && is_edit {
-                // Capture the selection before recording, while the user's
-                // focus is still where they left it. Failing here must stop the
-                // flow: recording an instruction with nothing to apply it to
-                // wastes the user's breath and then says so 5 seconds later.
-                match paste::copy_selection() {
-                    Ok((Some(sel), previous)) => {
-                        paste::restore_clipboard(previous);
-                        log::info!("Voice edit: captured {} chars", sel.chars().count());
-                        *app_state.edit_selection.lock().unwrap() = Some(sel);
-                    }
-                    Ok((None, previous)) => {
-                        paste::restore_clipboard(previous);
-                        log::info!("Voice edit: nothing selected");
-                        let _ = handle.emit(
-                            "voice-edit-error",
-                            "Select some text first, then hold the edit hotkey and say what to change.",
-                        );
-                        return;
-                    }
-                    Err(e) => {
-                        log::warn!("Voice edit: selection capture failed: {}", e);
-                        let _ = handle.emit("voice-edit-error", format!("Could not read the selection: {}", e));
-                        return;
-                    }
-                }
-            }
-
-            if should_start {
-                *app_state.mic_last_used.lock().unwrap() = std::time::Instant::now();
-
-                // The idle watchdog may have dropped the capture stream to
-                // release the microphone; reopen it before recording. A
-                // reopened stream starts with an empty pre-roll, so the first
-                // dictation after a long idle loses its 300ms lead. That is
-                // the price of the machine being able to sleep, paid once per
-                // idle period rather than per dictation.
-                let need_open = app_state.audio.lock().unwrap().is_none();
-                if need_open {
-                    let mic_device =
-                        app_state.settings.lock().unwrap().mic_device.clone();
-                    match crate::audio::start_audio_capture(handle.clone(), &mic_device) {
-                        Ok(s) => {
-                            *app_state.audio.lock().unwrap() = Some(s);
-                            log::info!("Mic reopened after idle release");
-                        }
-                        Err(e) => {
-                            log::error!("Mic reopen failed: {}", e);
-                            let _ = handle.emit(
-                                "mic-error",
-                                format!("Could not open the microphone: {}", e),
-                            );
-                            return;
-                        }
-                    }
-                }
-
-                *app_state.recording_intent.lock().unwrap() =
-                    if is_edit { Intent::Edit } else { Intent::Dictate };
-                let guard = app_state.audio.lock().unwrap();
-                if let Some(audio) = guard.as_ref() {
-                    {
-                        let mut buf = audio.recording_buffer.lock().unwrap();
-                        buf.clear();
-                        // People start speaking as they press, not after: seed
-                        // the take with the last 300ms the always-on pre-roll
-                        // already heard, so the first word keeps its first
-                        // phoneme. (The transcript history had "Cl." for
-                        // "Claude" on exactly this failure.) Clamped to what an
-                        // earlier take already claimed, so a rapid re-press
-                        // does not re-transcribe the previous take's tail.
-                        let w = audio.preroll.mark();
-                        let want = audio.sample_rate * 3 / 10;
-                        let from = w.saturating_sub(want).max(
-                            audio.preroll_claimed.load(Ordering::Relaxed),
-                        );
-                        let lead = audio.preroll.since(from, w.saturating_sub(from));
-                        audio.lead_len.store(lead.len(), Ordering::Relaxed);
-                        buf.extend_from_slice(&lead);
-                        // Reserve the first minute up front so the realtime
-                        // callback is not growing the Vec sample by sample.
-                        // Takes beyond 60s still grow by amortized doubling on
-                        // the audio thread; rare enough to accept, not fixed.
-                        let reserve = audio.sample_rate * 60;
-                        if buf.capacity() < reserve {
-                            let needed = reserve - buf.len();
-                            buf.reserve(needed);
-                        }
-                    }
-                    // Clear pause on start as well as stop. A flag surviving
-                    // into the next session would make that dictation capture
-                    // nothing, with no visible cause.
-                    audio.is_paused.store(false, Ordering::Relaxed);
-                    audio.is_recording.store(true, Ordering::Relaxed);
-                    *app_state.recording_started.lock().unwrap() =
-                        Some(std::time::Instant::now());
-                    log::info!(
-                        "Recording started ({}, shortcut: {:?})",
-                        mode,
-                        shortcut
-                    );
-                }
-                drop(guard);
-                sounds::play_dictation_start();
-                let _ = handle.emit("recording-state", true);
-                if show_overlay {
-                    overlay::show(&handle);
-                }
-            }
-
-            if should_stop {
-                stop_and_process(&handle, "hotkey");
-            }
+            on_hotkey(&handle, is_edit, pressed);
         })
         .build()
+}
+
+/// One hotkey transition: `pressed` true on the way down, false on the way up.
+///
+/// Extracted from the plugin handler so a second event source can drive the
+/// identical path: modifier-only hotkeys (Fn, right Command) never reach the
+/// OS hotkey API and arrive from the flagsChanged event tap instead
+/// (modkey.rs). Whatever fires the key, the recording semantics must be the
+/// same code, or the two kinds of hotkey drift apart bug by bug.
+pub fn on_hotkey(handle: &tauri::AppHandle, is_edit: bool, pressed: bool) {
+    let released = !pressed;
+    let app_state = handle.state::<AppState>();
+
+    let (mode, show_overlay) = {
+        let settings = app_state.settings.lock().unwrap();
+        (settings.recording_mode.clone(), settings.show_overlay)
+    };
+
+    // Edits are always push to talk. Toggle would leave the user
+    // holding a captured selection with no visible indication that the
+    // app is waiting for an instruction.
+    let mode = if is_edit { "ptt".to_string() } else { mode };
+    let is_toggle = mode == "toggle";
+
+    let is_recording = app_state
+        .audio
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|a| a.is_recording.load(Ordering::Relaxed))
+        .unwrap_or(false);
+
+    let should_start;
+    let should_stop;
+
+    if is_toggle {
+        if pressed {
+            should_start = !is_recording;
+            should_stop = is_recording;
+        } else {
+            should_start = false;
+            should_stop = false;
+        }
+    } else {
+        // Guarded on state, not just the event. A Pressed while
+        // already recording used to clear the buffer and start over,
+        // so a repeated press (or the stuck-recording case, where the
+        // Released event was lost) silently discarded everything said
+        // so far. A Released with nothing in flight ran the whole stop
+        // path against an empty buffer.
+        should_start = pressed && !is_recording;
+        should_stop = released && is_recording;
+    }
+
+    if should_start && is_edit {
+        // Capture the selection before recording, while the user's
+        // focus is still where they left it. Failing here must stop the
+        // flow: recording an instruction with nothing to apply it to
+        // wastes the user's breath and then says so 5 seconds later.
+        match paste::copy_selection() {
+            Ok((Some(sel), previous)) => {
+                paste::restore_clipboard(previous);
+                log::info!("Voice edit: captured {} chars", sel.chars().count());
+                *app_state.edit_selection.lock().unwrap() = Some(sel);
+            }
+            Ok((None, previous)) => {
+                paste::restore_clipboard(previous);
+                log::info!("Voice edit: nothing selected");
+                let _ = handle.emit(
+                    "voice-edit-error",
+                    "Select some text first, then hold the edit hotkey and say what to change.",
+                );
+                return;
+            }
+            Err(e) => {
+                log::warn!("Voice edit: selection capture failed: {}", e);
+                let _ = handle.emit("voice-edit-error", format!("Could not read the selection: {}", e));
+                return;
+            }
+        }
+    }
+
+    if should_start {
+        *app_state.mic_last_used.lock().unwrap() = std::time::Instant::now();
+
+        // The idle watchdog may have dropped the capture stream to
+        // release the microphone; reopen it before recording. A
+        // reopened stream starts with an empty pre-roll, so the first
+        // dictation after a long idle loses its 300ms lead. That is
+        // the price of the machine being able to sleep, paid once per
+        // idle period rather than per dictation.
+        let need_open = app_state.audio.lock().unwrap().is_none();
+        if need_open {
+            let mic_device =
+                app_state.settings.lock().unwrap().mic_device.clone();
+            match crate::audio::start_audio_capture(handle.clone(), &mic_device) {
+                Ok(s) => {
+                    *app_state.audio.lock().unwrap() = Some(s);
+                    log::info!("Mic reopened after idle release");
+                }
+                Err(e) => {
+                    log::error!("Mic reopen failed: {}", e);
+                    let _ = handle.emit(
+                        "mic-error",
+                        format!("Could not open the microphone: {}", e),
+                    );
+                    return;
+                }
+            }
+        }
+
+        *app_state.recording_intent.lock().unwrap() =
+            if is_edit { Intent::Edit } else { Intent::Dictate };
+        let guard = app_state.audio.lock().unwrap();
+        if let Some(audio) = guard.as_ref() {
+            {
+                let mut buf = audio.recording_buffer.lock().unwrap();
+                buf.clear();
+                // People start speaking as they press, not after: seed
+                // the take with the last 300ms the always-on pre-roll
+                // already heard, so the first word keeps its first
+                // phoneme. (The transcript history had "Cl." for
+                // "Claude" on exactly this failure.) Clamped to what an
+                // earlier take already claimed, so a rapid re-press
+                // does not re-transcribe the previous take's tail.
+                let w = audio.preroll.mark();
+                let want = audio.sample_rate * 3 / 10;
+                let from = w.saturating_sub(want).max(
+                    audio.preroll_claimed.load(Ordering::Relaxed),
+                );
+                let lead = audio.preroll.since(from, w.saturating_sub(from));
+                audio.lead_len.store(lead.len(), Ordering::Relaxed);
+                buf.extend_from_slice(&lead);
+                // Reserve the first minute up front so the realtime
+                // callback is not growing the Vec sample by sample.
+                // Takes beyond 60s still grow by amortized doubling on
+                // the audio thread; rare enough to accept, not fixed.
+                let reserve = audio.sample_rate * 60;
+                if buf.capacity() < reserve {
+                    let needed = reserve - buf.len();
+                    buf.reserve(needed);
+                }
+            }
+            // Clear pause on start as well as stop. A flag surviving
+            // into the next session would make that dictation capture
+            // nothing, with no visible cause.
+            audio.is_paused.store(false, Ordering::Relaxed);
+            audio.is_recording.store(true, Ordering::Relaxed);
+            *app_state.recording_started.lock().unwrap() =
+                Some(std::time::Instant::now());
+            log::info!("Recording started ({}, edit={})", mode, is_edit);
+        }
+        drop(guard);
+        sounds::play_dictation_start();
+        let _ = handle.emit("recording-state", true);
+        if show_overlay {
+            overlay::show(&handle);
+        }
+    }
+
+    if should_stop {
+        stop_and_process(&handle, "hotkey");
+    }
 }
 
 /// Stop the in-flight recording and hand it to the pipeline.

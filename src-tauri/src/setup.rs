@@ -274,11 +274,25 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let settings = app_state.settings.lock().unwrap();
         settings.hotkey.clone()
     };
-    let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey_str
-        .parse()
-        .unwrap_or_else(|_| "ctrl+space".parse().unwrap());
-    app.global_shortcut().register(shortcut)?;
-    log::info!("Global hotkey registered: {}", hotkey_str);
+    // A modifier-only token routes to the flagsChanged tap; anything else to
+    // the OS hotkey API, falling back to a default if the string is garbage.
+    // The tap path is non-fatal at startup: if the permission is gone, the
+    // app must still come up so the user can fix it in Settings.
+    let mut plugin_shortcut: Option<tauri_plugin_global_shortcut::Shortcut> = None;
+    match crate::modkey::ModKey::from_token(&hotkey_str) {
+        Some(mk) => match crate::modkey::set_binding(app.handle(), crate::modkey::SLOT_MAIN, Some(mk)) {
+            Ok(_) => log::info!("Global hotkey armed via event tap: {}", hotkey_str),
+            Err(e) => log::error!("Modifier hotkey '{}' failed: {}", hotkey_str, e),
+        },
+        None => {
+            let shortcut: tauri_plugin_global_shortcut::Shortcut = hotkey_str
+                .parse()
+                .unwrap_or_else(|_| "ctrl+space".parse().unwrap());
+            app.global_shortcut().register(shortcut)?;
+            plugin_shortcut = Some(shortcut);
+            log::info!("Global hotkey registered: {}", hotkey_str);
+        }
+    }
 
     // Voice editing's hotkey. Registered separately and non-fatally: a
     // collision with another app must not stop dictation from working, which
@@ -288,9 +302,23 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let settings = app_state.settings.lock().unwrap();
         settings.edit_hotkey.clone()
     };
-    if !edit_hotkey_str.trim().is_empty() {
+    if !edit_hotkey_str.trim().is_empty()
+        && crate::modkey::ModKey::from_token(&edit_hotkey_str).is_some()
+    {
+        match crate::modkey::ModKey::from_token(&edit_hotkey_str)
+            .filter(|_| edit_hotkey_str != hotkey_str)
+            .map(|mk| crate::modkey::set_binding(app.handle(), crate::modkey::SLOT_EDIT, Some(mk)))
+        {
+            Some(Ok(_)) => log::info!("Edit hotkey armed via event tap: {}", edit_hotkey_str),
+            Some(Err(e)) => log::warn!("Edit modifier hotkey '{}' failed: {}", edit_hotkey_str, e),
+            None => log::warn!(
+                "Edit hotkey '{}' is the same as the dictation hotkey; voice editing is off",
+                edit_hotkey_str
+            ),
+        }
+    } else if !edit_hotkey_str.trim().is_empty() {
         match edit_hotkey_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
-            Ok(sc) if sc != shortcut => match app.global_shortcut().register(sc) {
+            Ok(sc) if plugin_shortcut != Some(sc) => match app.global_shortcut().register(sc) {
                 Ok(_) => log::info!("Edit hotkey registered: {}", edit_hotkey_str),
                 Err(e) => log::warn!(
                     "Edit hotkey '{}' could not be registered ({}); voice editing is off",
