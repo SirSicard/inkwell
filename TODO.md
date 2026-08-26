@@ -72,7 +72,7 @@ Worked through in `df6184c`; what is left is left for a reason.
 
 ## 3. Tests where the breakage actually is
 
-177 tests, and they cluster in pure functions. The stateful code has almost none.
+195 tests, and they cluster in pure functions. The stateful code has almost none.
 
 - [x] `pipeline.rs`: the start/stop state machine. `decide_transition(pressed,
       is_recording, mode, is_edit)` is now a pure function with 7 tests, so the
@@ -86,16 +86,33 @@ Worked through in `df6184c`; what is left is left for a reason.
 - [ ] Me: a frontend test runner. There is none at all; roughly 4,000 lines of
       TypeScript have never been asserted on.
 
-## 4. Streaming partials (designed, not built)
+## 4. Live preview (built, unvalidated by a human)
 
-Spike verdict: viable at 40x real time with no dependency upgrade, but streaming
-output has no casing or punctuation and drops the last word, so it can never be
-the text the user keeps. Still the best-argued unbuilt feature here: it fills
-the silent gap between releasing the key and seeing the paste.
+Shipped as "Live Preview" in General, off by default. Everything up to the
+moment real microphone audio arrives is covered by
+`examples/streaming_check.rs`, which drives the shipped config rather than a
+copy of it: partials at 43x real time, and a resampler within 0.001% of real
+time at 16k, 22.05k, 44.1k and 48k with an identical transcript at all four.
 
-- [ ] Me: streaming model feeds the overlay while the key is held. Never pasted, never stored. Offline pass unchanged.
-- [ ] Me: render partials lowercase, or the switch to properly-cased final text reads as a glitch rather than as refinement.
-- [ ] Me: opt-in setting defaulting to off, described as "show words as you speak" rather than as a second model. Costs a 296 MB download.
+- [x] Streaming model feeds the overlay while the key is held. Never pasted,
+      never stored, offline pass untouched.
+- [x] Partials lowercase, so the switch to properly-cased final text reads as
+      refinement rather than correction.
+- [x] Opt-in, defaulting to off. **73 MB, not 296.** That figure was the whole
+      HuggingFace directory, which carries both precisions and two
+      left-context variants; the four files needed are a tenth of it. It was
+      most of the argument against building this.
+- [x] The overlay grows from 97px to 560px to hold the words, and is the same
+      box it always was when the feature is off. The spike said "feed the
+      overlay" without noticing the overlay is a 97px square.
+- [ ] **Owner: does it feel right?** The one thing no harness can answer. Turn
+      it on, dictate a long sentence, and watch whether the words landing
+      helps or distracts. Known and expected: the first word or two are weak
+      until the decoder warms up, and the last word never appears, which is
+      the spike's tail-loss finding and is what the offline pass fixes.
+- [ ] Me, if it survives that: partials for voice edits are currently on the
+      same path, which has had no thought put into it beyond "the overlay is
+      showing anyway".
 
 ## 5. Distribution and loose ends
 
@@ -143,7 +160,9 @@ recover a lost Accessibility grant. The microphone released when idle, so the
 machine sleeps and auto-locks again. A watchdog that unsticks a recording whose
 key-release event never arrived. A space between consecutive dictations. A Stats
 page. Single-key and modifier-only (Fn, right Command) hotkeys. Homepage
-auto-deploying from Git. Security alerts at zero.
+auto-deploying from Git. Security alerts at zero. A social preview image, so a
+shared link stops rendering as a generic card. Live preview: words on the
+overlay while you are still speaking.
 
 ## Not doing
 
