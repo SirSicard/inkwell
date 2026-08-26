@@ -192,10 +192,92 @@ pub fn on_hotkey(handle: &tauri::AppHandle, is_edit: bool, pressed: bool) {
         if show_overlay {
             overlay::show(&handle);
         }
+        spawn_partial_feeder(&handle);
     }
 
     if should_stop {
         stop_and_process(&handle, "hotkey");
+    }
+}
+
+/// How often the feeder hands new audio to the streaming recognizer. The
+/// model's own chunk size dominates the latency the user sees, so polling
+/// faster buys nothing and wakes a thread for it.
+const PARTIAL_FEED_INTERVAL_MS: u64 = 100;
+
+/// Pump the in-flight take into the streaming recognizer so the overlay can
+/// show words while the key is still held.
+///
+/// A no-op unless the setting is on *and* the model is loaded, which is the
+/// normal case: this costs nothing when nobody asked for it.
+///
+/// It reads `recording_buffer` rather than the pre-roll ring on purpose. That
+/// buffer is exactly what the offline pass will transcribe, lead included, so
+/// the partials describe the same audio rather than a near-miss of it.
+fn spawn_partial_feeder(handle: &tauri::AppHandle) {
+    {
+        let app_state = handle.state::<AppState>();
+        if !app_state.settings.lock().unwrap().show_partials {
+            return;
+        }
+        if !app_state.streaming.is_ready() {
+            return;
+        }
+    }
+
+    let handle = handle.clone();
+    let spawned = std::thread::Builder::new()
+        .name("partial-feeder".into())
+        .spawn(move || {
+            let app_state = handle.state::<AppState>();
+
+            let (buf, rate) = {
+                let guard = app_state.audio.lock().unwrap();
+                let Some(audio) = guard.as_ref() else { return };
+                (audio.recording_buffer.clone(), audio.sample_rate)
+            };
+
+            // The take this feeder belongs to. `recording_started` is set once
+            // per take and cleared on stop, so comparing against it is a
+            // generation check: a feeder still between polls when the next take
+            // begins sees a different value and exits instead of feeding the
+            // previous take's audio into the new utterance.
+            let take = *app_state.recording_started.lock().unwrap();
+            if take.is_none() {
+                return;
+            }
+
+            app_state.streaming.begin(rate);
+
+            let mut consumed = 0usize;
+            loop {
+                if *app_state.recording_started.lock().unwrap() != take {
+                    break;
+                }
+                let chunk = {
+                    let b = buf.lock().unwrap();
+                    if b.len() > consumed {
+                        b[consumed..].to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                if !chunk.is_empty() {
+                    consumed += chunk.len();
+                    app_state.streaming.feed(chunk);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(
+                    PARTIAL_FEED_INTERVAL_MS,
+                ));
+            }
+
+            app_state.streaming.end();
+        });
+
+    if let Err(e) = spawned {
+        // Partials are decoration; losing them must never take the dictation
+        // with it.
+        log::warn!("Could not start the partial feeder: {}", e);
     }
 }
 

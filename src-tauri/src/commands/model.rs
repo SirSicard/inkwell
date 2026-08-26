@@ -59,7 +59,7 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(
     use futures_util::StreamExt;
     use std::io::Write;
 
-    let spec = models::find(&model_id).ok_or_else(|| format!("Unknown model: {}", model_id))?;
+    let spec = models::find_any(&model_id).ok_or_else(|| format!("Unknown model: {}", model_id))?;
     let dir_name = spec.dir;
     let files = spec.files;
     let hf_base = spec.hf_base;
@@ -141,7 +141,7 @@ pub fn remove_model(state: tauri::State<AppState>, model_id: String) -> Result<(
     let models_dir = state.models_dir.lock().unwrap().clone();
     let models_path = std::path::Path::new(&models_dir);
 
-    let spec = models::find(&model_id).ok_or_else(|| format!("Unknown model: {}", model_id))?;
+    let spec = models::find_any(&model_id).ok_or_else(|| format!("Unknown model: {}", model_id))?;
     let dir_name = spec.dir;
 
     // Don't allow removing the currently active model. The engine reports the
@@ -154,6 +154,14 @@ pub fn remove_model(state: tauri::State<AppState>, model_id: String) -> Result<(
         );
     }
 
+    // The streaming model is never the *transcription* engine, so the check
+    // above can never catch it, and `find_any` is what made it reachable here
+    // at all. Deleting files a loaded recognizer still has open fails outright
+    // on Windows and is quietly undefined everywhere else.
+    if spec.id == models::STREAMING_MODEL.id && state.streaming.is_ready() {
+        return Err("Turn Live Preview off before removing its model.".to_string());
+    }
+
     let target = models_path.join(dir_name);
     if target.exists() {
         std::fs::remove_dir_all(&target)
@@ -162,4 +170,59 @@ pub fn remove_model(state: tauri::State<AppState>, model_id: String) -> Result<(
     }
 
     Ok(())
+}
+
+/// Load the streaming model, or unload it and say why if it cannot be loaded.
+///
+/// Shared by startup and by the settings toggle so the two cannot disagree
+/// about what "on" means. Blocking: callers on the main thread need a thread.
+///
+/// A failure here is reported and then dropped. Partials are feedback on a
+/// dictation, not part of it, so a missing or half-downloaded streaming model
+/// must leave a fully working app behind.
+pub fn load_streaming_model(app: &tauri::AppHandle, models_dir: &std::path::Path) {
+    let state = app.state::<AppState>();
+    if !models::STREAMING_MODEL.is_installed(models_dir) {
+        // Nothing downloaded yet. Not an error: the toggle is allowed to be on
+        // before the download finishes, and the UI is what asks for it.
+        log::info!("Live preview is on but its model is not downloaded yet");
+        return;
+    }
+    match state.streaming.load(models::STREAMING_MODEL.dir_in(models_dir)) {
+        Ok(()) => {
+            let _ = app.emit("partials-ready", true);
+        }
+        Err(e) => {
+            log::warn!("Live preview unavailable: {}", e);
+            state.streaming.unload();
+            let _ = app.emit("partials-error", e);
+        }
+    }
+}
+
+/// What the Live Preview setting can currently do.
+///
+/// The Models tab deliberately does not list the streaming model, so nothing
+/// else in the UI can answer "is it downloaded". Without this the toggle would
+/// have to be optimistic, and turning it on with nothing on disk would look
+/// like a feature that silently does not work.
+#[derive(serde::Serialize)]
+pub struct PartialsStatus {
+    /// Files are on disk.
+    pub installed: bool,
+    /// Loaded into memory and able to produce partials right now.
+    pub ready: bool,
+    pub model_id: &'static str,
+    pub size: &'static str,
+}
+
+#[tauri::command]
+pub fn get_partials_status(state: tauri::State<AppState>) -> PartialsStatus {
+    let models_dir = state.models_dir.lock().unwrap().clone();
+    PartialsStatus {
+        installed: models::STREAMING_MODEL.is_installed(std::path::Path::new(&models_dir)),
+        ready: state.streaming.is_ready(),
+        model_id: models::STREAMING_MODEL.id,
+        size: models::STREAMING_MODEL.size,
+    }
 }

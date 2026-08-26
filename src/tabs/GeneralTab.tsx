@@ -1,7 +1,9 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { SettingRow, InkToggle, InkSelect, InkButton } from "../components/ui"
 import { useSettings } from "../state/settings"
+import type { PartialsStatus } from "../types"
 import { formatHotkey } from "../hotkey"
 
 function HotkeyCapture({
@@ -163,6 +165,75 @@ function HotkeyCapture({
   )
 }
 
+/**
+ * Live Preview: words on the overlay while you are still speaking.
+ *
+ * It has its own row rather than being a plain toggle because it is the only
+ * setting in this tab that costs a download. Switching it on with nothing on
+ * disk would be a switch that appears to do nothing, so the row asks for the
+ * download first and only then offers the toggle.
+ */
+function LivePreviewRow() {
+  const settings = useSettings((s) => s.settings)
+  const setSetting = useSettings((s) => s.set)
+  const [status, setStatus] = useState<PartialsStatus | null>(null)
+  const [percent, setPercent] = useState<number | null>(null)
+  const [error, setError] = useState("")
+
+  const refresh = () =>
+    invoke<PartialsStatus>("get_partials_status").then(setStatus).catch(() => {})
+
+  useEffect(() => {
+    void refresh()
+  }, [])
+
+  const download = async () => {
+    if (!status) return
+    setError("")
+    setPercent(0)
+    const stop = await listen<{ percent: number; model: string }>(
+      "model-download-progress",
+      (e) => {
+        if (e.payload.model === status.model_id) setPercent(e.payload.percent)
+      },
+    )
+    try {
+      await invoke("download_model", { modelId: status.model_id })
+      await refresh()
+      // Turning it on is what actually loads the model, so the download is
+      // only half the job and doing it by hand afterwards is a step nobody
+      // would guess at.
+      await setSetting("show_partials", true)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      stop()
+      setPercent(null)
+    }
+  }
+
+  const description =
+    "Shows words on the overlay as you speak them, so the wait for the paste is not silent. " +
+    "They are lowercase and unpunctuated because they come from a second, faster model; " +
+    "what gets pasted is unchanged."
+
+  return (
+    <SettingRow label="Live Preview" description={description}>
+      {percent !== null ? (
+        <span className="text-body text-text-tertiary tabular-nums">{percent}%</span>
+      ) : status && !status.installed ? (
+        <InkButton onClick={download}>Download {status.size}</InkButton>
+      ) : (
+        <InkToggle
+          checked={settings?.show_partials ?? false}
+          onChange={(v) => setSetting("show_partials", v)}
+        />
+      )}
+      {error && <p className="text-xs text-red-400">{error}</p>}
+    </SettingRow>
+  )
+}
+
 export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?: (v: boolean) => void; onNavigate?: (tab: "Modes" | "Troubleshooting") => void }) {
   // Read straight from the store rather than mirroring it into local state:
   // the mirrors were the reason two panels could disagree about the same value.
@@ -259,6 +330,8 @@ export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?
           />
         </SettingRow>
       )}
+
+      {showOverlay && <LivePreviewRow />}
 
       <SettingRow label="Dictation Sound" description="Audio feedback when recording starts and stops">
         <InkToggle checked={soundDictation} onChange={(v) => setSetting("sound_dictation", v)} />

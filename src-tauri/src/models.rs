@@ -29,6 +29,10 @@ pub enum EngineKind {
     Whisper(&'static str),
     SenseVoice,
     Qwen3,
+    /// A streaming transducer, loaded by `streaming.rs` rather than by
+    /// `SpeechEngine`. It shares `ModelSpec` for its download metadata and
+    /// nothing else; `load` refuses it on purpose.
+    Streaming,
 }
 
 pub struct ModelSpec {
@@ -72,6 +76,10 @@ impl ModelSpec {
             EngineKind::Whisper(v) => SpeechEngine::whisper(models_dir, v),
             EngineKind::SenseVoice => SpeechEngine::sense_voice(models_dir),
             EngineKind::Qwen3 => SpeechEngine::qwen3(models_dir),
+            EngineKind::Streaming => Err(format!(
+                "{} is a streaming model and cannot transcribe a finished recording",
+                self.display
+            )),
         }
     }
 
@@ -225,11 +233,54 @@ pub const MODELS: &[ModelSpec] = &[
     },
 ];
 
+/// The model that draws words on the overlay while the key is held.
+///
+/// Deliberately not in `MODELS`. It is not a choice between transcription
+/// engines and must never appear next to them: nobody picking a *model* wants
+/// to reason about a second one running alongside their first. It is reached
+/// through one setting, "show words as you speak", and downloaded by the same
+/// command as everything else through `find_any`.
+///
+/// 73 MB, not the 296 MB the spike quoted. That number was the size of the
+/// whole HuggingFace directory, which carries both precisions and two
+/// left-context variants; the four files actually needed are a tenth of it.
+/// Worth knowing, because the download was most of the argument against
+/// building this at all.
+pub const STREAMING_MODEL: ModelSpec = ModelSpec {
+    id: "streaming-zipformer-en",
+    display: "Live preview",
+    dir: "streaming-zipformer-en",
+    company: "k2-fsa",
+    description: "Draws words on the overlay while you are still speaking. English only, no punctuation, and never what gets pasted.",
+    size: "73 MB",
+    languages: "English",
+    hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main",
+    files: &[
+        ("encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx", 71_083_163),
+        ("decoder-epoch-99-avg-1-chunk-16-left-128.onnx", 2_092_621),
+        ("joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx", 259_335),
+        ("tokens.txt", 5_048),
+    ],
+    encoder_files: &["encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx"],
+    kind: EngineKind::Streaming,
+};
+
 /// The model loaded when the user has expressed no preference.
 pub const DEFAULT_MODEL_ID: &str = "parakeet";
 
 pub fn find(id: &str) -> Option<&'static ModelSpec> {
     MODELS.iter().find(|m| m.id == id)
+}
+
+/// Like `find`, but also resolves models that are downloadable without being
+/// offered in the Models tab. Download and removal go through this; anything
+/// that picks a transcription engine must keep using `find`.
+pub fn find_any(id: &str) -> Option<&'static ModelSpec> {
+    find(id).or(if id == STREAMING_MODEL.id {
+        Some(&STREAMING_MODEL)
+    } else {
+        None
+    })
 }
 
 /// Catalogue plus per-model installed state, for the UI.
@@ -313,6 +364,79 @@ mod tests {
         for m in MODELS {
             assert!(m.total_bytes() > 1_000_000, "{} looks too small", m.id);
         }
+    }
+}
+
+#[cfg(test)]
+mod streaming_model_tests {
+    use super::*;
+
+    /// The whole design of this feature is one setting, not a sixth model. If
+    /// it ever reaches the catalogue, the Models tab starts offering a model
+    /// that cannot transcribe anything.
+    #[test]
+    fn the_streaming_model_is_not_a_transcription_choice() {
+        assert!(
+            find(STREAMING_MODEL.id).is_none(),
+            "the streaming model leaked into MODELS"
+        );
+        let dir = std::env::temp_dir().join("inkwell-streaming-catalog");
+        assert!(
+            !catalog(&dir).iter().any(|m| m.id == STREAMING_MODEL.id),
+            "the streaming model leaked into the UI catalogue"
+        );
+    }
+
+    /// ...but it still has to be downloadable, which is the trap `find` alone
+    /// would spring: `download_model` would answer "Unknown model" for it.
+    #[test]
+    fn but_it_is_still_downloadable() {
+        assert!(find_any(STREAMING_MODEL.id).is_some());
+        for m in MODELS {
+            assert!(find_any(m.id).is_some(), "{} unreachable via find_any", m.id);
+        }
+        assert!(find_any("nonsense").is_none());
+    }
+
+    #[test]
+    fn its_install_check_matches_a_file_it_downloads() {
+        let downloaded: Vec<&str> = STREAMING_MODEL.files.iter().map(|(n, _)| *n).collect();
+        assert!(
+            STREAMING_MODEL
+                .encoder_files
+                .iter()
+                .any(|e| downloaded.contains(e)),
+            "the streaming model would install and still report itself missing"
+        );
+    }
+
+    /// A streaming transducer has no offline decode path. Loading it as a
+    /// `SpeechEngine` must fail loudly rather than return something that
+    /// produces empty transcripts.
+    #[test]
+    fn loading_it_as_a_transcription_engine_is_refused() {
+        let dir = std::env::temp_dir().join("inkwell-streaming-load");
+        // `SpeechEngine` is not Debug, so unwrap_err is unavailable here.
+        let Err(err) = STREAMING_MODEL.load(&dir) else {
+            panic!("the streaming model loaded as a transcription engine");
+        };
+        assert!(err.contains("streaming"), "unhelpful refusal: {}", err);
+    }
+
+    /// The size string is what the user reads before agreeing to the download,
+    /// so it must not drift from the bytes actually fetched.
+    #[test]
+    fn the_advertised_size_matches_the_files() {
+        let mb = STREAMING_MODEL.total_bytes() / 1_000_000;
+        assert_eq!(STREAMING_MODEL.size, format!("{} MB", mb));
+    }
+
+    #[test]
+    fn it_does_not_collide_with_a_real_model_directory() {
+        assert!(
+            !MODELS.iter().any(|m| m.dir == STREAMING_MODEL.dir),
+            "sharing a directory would make removal delete the wrong model"
+        );
     }
 }
 

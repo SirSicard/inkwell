@@ -83,6 +83,14 @@ pub struct Settings {
     /// selection exactly and must not grow it by a character.
     #[serde(default = "default_true")]
     pub append_space: bool,
+    /// Show words on the overlay while you are still speaking.
+    ///
+    /// Off by default and it must stay that way: turning it on costs a 73 MB
+    /// download and a second model decoding alongside the first. The text it
+    /// draws is feedback only, never pasted and never stored, so nothing about
+    /// a dictation changes when this is on except that you can watch it happen.
+    #[serde(default)]
+    pub show_partials: bool,
     // Which providers have a key was briefly cached here, to spare the user a
     // keychain prompt per AI-tab open. It was the wrong fix: a lookup that failed
     // for any reason other than absence got written down as "no key" forever.
@@ -136,6 +144,7 @@ impl Default for Settings {
             edit_hotkey: default_edit_hotkey(),
             mic_idle_release_mins: default_mic_idle_release_mins(),
             append_space: true,
+            show_partials: false,
         }
     }
 }
