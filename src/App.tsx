@@ -571,6 +571,7 @@ function App() {
   const themeChoice = (useSettings((s) => s.settings?.theme) ?? "system") as ThemeChoice
   useEffect(() => watchTheme(themeChoice), [themeChoice])
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see below
     if (storedAdvanced !== undefined) setAdvancedMode(storedAdvanced)
   }, [storedAdvanced])
 
@@ -579,7 +580,15 @@ function App() {
   // Reset the tab when a mode change hides the one that is open. Written with
   // the functional setter so the effect can depend on `tabs` honestly instead
   // of listing only advancedMode and lying about what it reads.
+  // Both of these mirror an external store into local state, which
+  // react-hooks 7.1 now flags as cascading renders and is right to: the
+  // idiomatic shape derives the value instead of syncing it. Untangling that
+  // means reworking how this component owns advancedMode and activeTab, which
+  // is app navigation, and is not a rewrite worth doing on release evening.
+  // Suppressed at these two call sites only, so the rule still catches any new
+  // instance. Tracked in TODO.md.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setActiveTab((current) =>
       (tabs as readonly string[]).includes(current) ? current : "Dashboard",
     )
