@@ -213,23 +213,27 @@ function LivePreviewRow() {
   }
 
   const description =
-    "Shows words on the overlay as you speak them, so the wait for the paste is not silent. " +
-    "They are lowercase and unpunctuated because they come from a second, faster model; " +
-    "what gets pasted is unchanged."
+    "Shows the words on the overlay as you speak them, so the wait for the paste is not silent. " +
+    "They are lowercase and unpunctuated because a second, faster model draws them; what gets pasted is unchanged."
 
   return (
     <SettingRow label="Live Preview" description={description}>
-      {percent !== null ? (
-        <span className="text-body text-text-tertiary tabular-nums">{percent}%</span>
-      ) : status && !status.installed ? (
-        <InkButton onClick={download}>Download {status.size}</InkButton>
-      ) : (
-        <InkToggle
-          checked={settings?.show_partials ?? false}
-          onChange={(v) => setSetting("show_partials", v)}
-        />
-      )}
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {/* One child, not two: SettingRow drops children straight into a
+          justify-between row, so a control and an error message side by side
+          would push the control into the middle of the card. */}
+      <div className="flex flex-col items-end gap-1 shrink-0 pl-4">
+        {percent !== null ? (
+          <span className="text-body text-text-tertiary tabular-nums">{percent}%</span>
+        ) : status && !status.installed ? (
+          <InkButton onClick={download}>Download {status.size}</InkButton>
+        ) : (
+          <InkToggle
+            checked={settings?.show_partials ?? false}
+            onChange={(v) => setSetting("show_partials", v)}
+          />
+        )}
+        {error && <p className="text-xs text-red-400 text-right max-w-56">{error}</p>}
+      </div>
     </SettingRow>
   )
 }

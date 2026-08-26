@@ -50,6 +50,8 @@ Every dictation and every file transcription runs the same staged chain, differi
 
 Stages 5 through 8 are pure functions over strings and are the part currently covered by the 60 tests in `src-tauri/tests/pipeline_tests.rs`. Keep them pure. That is why they are testable and why they have not caused a bug.
 
+**Live preview is a branch off stage 1 that never rejoins.** `streaming.rs` taps the same capture buffer, decodes it with its own model on its own thread, and draws the result on the overlay. It stops there: it never reaches stage 4, so nothing it produces is styled, stored, or pasted, and the chain above is unchanged whether it is running or not. Read it as a second consumer of the audio, not as a second pipeline. The one rule it adds is that it must never be able to affect the output of the real one, which is why the two share no state beyond the buffer they both read.
+
 ## Testing expectations
 
 - Pipeline stages are tested independently, with no Tauri and no AppState in scope.
