@@ -56,9 +56,21 @@ function HotkeyCapture({
     setCapturing(false)
     setError("")
 
-    // Must have at least one modifier
-    if (!e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-      setError("Needs at least one modifier (Ctrl, Alt, Shift)")
+    // A global hotkey swallows its key in every app on the machine, so which
+    // single keys are allowed is a safety question, not a parsing one. Keys
+    // nobody types with can stand alone; a bare letter, digit or space would
+    // stop that key working system-wide the moment it saved, which reads as a
+    // broken keyboard, not a bad setting. Shift-only counts as bare for
+    // typing keys: claiming shift+a is claiming the capital A everywhere.
+    const BARE_SAFE = /^(f([1-9]|1[0-9]|2[0-4])|insert|pause|scrolllock)$/
+    const keyToken = combo.split("+").pop() ?? ""
+    const hasRealModifier = e.ctrlKey || e.altKey || e.metaKey
+    if (!hasRealModifier && !BARE_SAFE.test(keyToken)) {
+      setError(
+        e.shiftKey
+          ? "Shift plus a typing key would stop that character working everywhere. Add Ctrl, Alt or Cmd, or use an F-key."
+          : "A key you type with cannot stand alone: the hotkey would swallow it in every app. Use an F-key by itself (F1 to F24), or add a modifier.",
+      )
       return
     }
 
@@ -233,7 +245,13 @@ export function GeneralTab({ onAdvancedChange, onNavigate }: { onAdvancedChange?
       )}
 
 
-      <HotkeyCapture />
+      <HotkeyCapture
+        hint={
+          navigator.userAgent.includes("Mac")
+            ? "A single F-key works on its own, for example F5. On a Mac keyboard the F-keys may need the Fn key held, unless \u201cUse F1, F2, etc. as standard function keys\u201d is on in System Settings."
+            : "A single F-key works on its own, for example F5."
+        }
+      />
 
       <HotkeyCapture
         label="Voice Edit Hotkey"

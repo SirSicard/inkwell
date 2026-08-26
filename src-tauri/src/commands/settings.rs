@@ -221,3 +221,33 @@ pub fn set_edit_hotkey(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod hotkey_parse_tests {
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    /// Single-key hotkeys are a frontend policy, but they only work if the
+    /// plugin's parser accepts a bare key at all. Locked here so a plugin
+    /// upgrade that changes parsing fails loudly instead of turning the
+    /// feature into a save-time error.
+    #[test]
+    fn bare_function_keys_parse() {
+        for k in ["f1", "f5", "f13", "f19", "f24"] {
+            assert!(k.parse::<Shortcut>().is_ok(), "'{k}' failed to parse");
+        }
+    }
+
+    #[test]
+    fn bare_safe_extras_parse() {
+        for k in ["insert", "pause", "scrolllock"] {
+            assert!(k.parse::<Shortcut>().is_ok(), "'{k}' failed to parse");
+        }
+    }
+
+    #[test]
+    fn existing_combos_still_parse() {
+        for k in ["shift+super+space", "ctrl+space", "super+shift+e"] {
+            assert!(k.parse::<Shortcut>().is_ok(), "'{k}' failed to parse");
+        }
+    }
+}
