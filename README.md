@@ -35,6 +35,7 @@ Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no 
 - **History and export.** SQLite-backed transcript history, searchable and editable. Export TXT, SRT, JSON, CSV.
 - **Stats.** Words dictated, speaking time, streak, daily activity and model usage, computed from the history you can see and delete, not from a hidden counter.
 - **Tray and overlay.** Lives in the tray. A small always-on-top overlay shows recording state. The hotkey works with the window hidden.
+- **Live preview (optional, off by default).** Watch the words appear on the overlay while you are still speaking, instead of waiting in silence for the paste. They are lowercase and unpunctuated because they come from a second, faster model; what actually gets pasted is produced the same way it always was. Costs a 73 MB English download.
 - **Voice editing.** Select text anywhere, hold a second hotkey, say what to change, and the rewrite replaces the selection. Needs an API key.
 - **Speech cleanup.** "um", "uh" and immediate stutters removed before the text is pasted, without changing what the sentence says.
 - **AI polish (optional, off by default).** Bring your own API key to clean up grammar and false starts. See below.
@@ -144,7 +145,6 @@ Prefer a different provider? OpenAI, Anthropic and OpenRouter are on the same sc
 
 ## Not built (so you do not have to ask)
 
-- **Streaming / live partial text while you speak.** Not implemented. Transcription starts when you release the hotkey.
 - **Speaker diarization, meeting mode, calendar integration.** Not planned.
 - **GPU acceleration.** CPU inference only.
 - **Voice agent mode.** Removed in this rehaul. It targeted a gateway that no longer exists.

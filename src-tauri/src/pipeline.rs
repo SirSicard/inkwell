@@ -217,8 +217,20 @@ const PARTIAL_FEED_INTERVAL_MS: u64 = 100;
 fn spawn_partial_feeder(handle: &tauri::AppHandle) {
     {
         let app_state = handle.state::<AppState>();
-        if !app_state.settings.lock().unwrap().show_partials {
-            return;
+        {
+            let settings = app_state.settings.lock().unwrap();
+            if !settings.show_partials {
+                return;
+            }
+            // Partials are drawn on the overlay and nowhere else, so with the
+            // overlay off there is nothing to draw on. The settings UI only
+            // offers this toggle while the overlay is on, but the two are
+            // separate stored values: turning the overlay off afterwards left
+            // a second model decoding every dictation into a window that was
+            // never shown.
+            if !settings.show_overlay {
+                return;
+            }
         }
         if !app_state.streaming.is_ready() {
             return;

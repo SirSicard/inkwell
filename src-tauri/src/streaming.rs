@@ -16,6 +16,7 @@
 //! and no `unsafe impl` is needed if it is moved in once and spoken to by
 //! message.
 
+use crate::overlay::OVERLAY_LABEL;
 use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,8 +26,6 @@ use tauri::{AppHandle, Emitter};
 
 /// Event carrying partial text to the overlay window.
 pub const PARTIAL_EVENT: &str = "partial-text";
-/// Window label the partials are emitted to. Matches `overlay::OVERLAY_LABEL`.
-const OVERLAY_LABEL: &str = "overlay";
 
 /// Longest partial the overlay can show before it starts scrolling off. The
 /// tail is what survives a trim, because the words you just said are the ones
