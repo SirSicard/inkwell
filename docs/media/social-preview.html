@@ -1,0 +1,62 @@
+<!doctype html>
+<!--
+  Source for docs/media/social-preview.png, the image GitHub shows when the repo
+  is linked in Slack, Discord, or a tweet. GitHub has no API for it: it is set by
+  hand at Settings > General > Social preview, so the png is committed here and
+  the upload is a manual step whenever this file changes.
+
+  1280x640 is GitHub's recommended size. Regenerate with:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless --disable-gpu --hide-scrollbars --force-device-scale-factor=1 \
+      --window-size=1280,640 --virtual-time-budget=8000 \
+      --screenshot=docs/media/social-preview.png \
+      "file://$PWD/docs/media/social-preview.html"
+
+  --force-device-scale-factor=1 matters: without it a HiDPI machine renders at 2x
+  and the png comes out 2560x1280, which GitHub accepts and then downscales badly.
+  Fonts come from Google Fonts at render time, so an offline render silently falls
+  back to system faces and the wordmark's metrics shift.
+
+  Colours are the tokens from homepage/app/globals.css. The blob is a closed
+  Catmull-Rom through twelve perturbed polar radii, baked to a path so it stays
+  identical across rebuilds rather than being re-randomised into a new shape.
+-->
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@500&display=block">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1280px; height:640px; overflow:hidden; }
+  body {
+    background:#0e0e11; color:#f0ede8;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+    -webkit-font-smoothing:antialiased;
+    display:flex; align-items:center; position:relative;
+  }
+  .glow { position:absolute; right:-90px; top:50%; transform:translateY(-50%);
+          width:900px; height:900px; border-radius:50%;
+          background:radial-gradient(circle, rgba(200,149,108,0.22) 0%, rgba(200,149,108,0.05) 45%, rgba(200,149,108,0) 68%); }
+  .blob { position:absolute; right:104px; top:50%; transform:translateY(-50%); }
+  .left { padding-left:96px; max-width:700px; position:relative; z-index:2; }
+  h1 { font-size:108px; font-weight:700; letter-spacing:-0.038em; line-height:0.96; }
+  .tag { color:#c8956c; font-size:33px; font-weight:500; margin-top:24px; letter-spacing:-0.014em; }
+  .sub { color:rgba(240,237,232,0.72); font-size:25px; margin-top:14px; letter-spacing:-0.008em; }
+  .rule { width:72px; height:3px; background:#c8956c; margin:44px 0 24px; border-radius:2px; }
+  .meta { font-family:'JetBrains Mono',ui-monospace,'SF Mono',monospace; font-size:15.5px;
+          letter-spacing:0.155em; color:rgba(240,237,232,0.60); text-transform:uppercase; }
+  .plat { font-family:'JetBrains Mono',ui-monospace,'SF Mono',monospace; font-size:15.5px;
+          letter-spacing:0.155em; color:rgba(240,237,232,0.46); text-transform:uppercase; margin-top:15px; }
+</style></head><body>
+  <div class="glow"></div>
+  <svg class="blob" width="392" height="392" viewBox="0 0 400 400" aria-hidden="true">
+    <path d="M 254.23 11.41 C 283.01 19.24 307.57 51.13 329.88 74.77 C 352.19 98.41 381.49 124.26 388.09 153.25 C 394.69 182.25 378.69 218.00 369.46 248.73 C 360.23 279.46 353.62 316.22 332.72 337.64 C 311.82 359.06 275.15 368.98 244.06 377.26 C 212.96 385.54 174.90 396.22 146.13 387.34 C 117.37 378.45 93.23 347.52 71.46 323.94 C 49.69 300.36 22.88 274.78 15.52 245.85 C 8.16 216.92 18.91 181.15 27.32 150.35 C 35.73 119.54 44.34 81.44 65.99 61.02 C 87.63 40.59 125.83 36.06 157.20 27.79 C 188.57 19.53 225.45 3.58 254.23 11.41 Z" fill="#f0ede8"/>
+  </svg>
+  <div class="left">
+    <h1>Inkwell</h1>
+    <div class="tag">Hold a key, speak, let go.</div>
+    <div class="sub">Local-first dictation. Nothing leaves your machine.</div>
+    <div class="rule"></div>
+    <div class="meta">Free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; No account &nbsp;·&nbsp; No telemetry</div>
+    <div class="plat">macOS &nbsp;·&nbsp; Windows &nbsp;·&nbsp; Linux</div>
+  </div>
+</body></html>
