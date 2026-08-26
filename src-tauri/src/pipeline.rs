@@ -34,20 +34,48 @@ pub fn build_shortcut_plugin(
 /// OS hotkey API and arrive from the flagsChanged event tap instead
 /// (modkey.rs). Whatever fires the key, the recording semantics must be the
 /// same code, or the two kinds of hotkey drift apart bug by bug.
+/// What a hotkey transition means, given the mode and what is already running.
+///
+/// Pure, and separate from `on_hotkey`, because the rest of that function is
+/// I/O: it wants an AppHandle, a live audio stream and a settings lock, none
+/// of which a unit test can hand it. Every bug this logic has had was in the
+/// decision rather than the plumbing, so the decision is what gets tested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Transition {
+    pub start: bool,
+    pub stop: bool,
+}
+
+pub fn decide_transition(
+    pressed: bool,
+    is_recording: bool,
+    mode: &str,
+    is_edit: bool,
+) -> Transition {
+    // Edits are always push to talk. Toggle would leave the user holding a
+    // captured selection with no visible sign the app is waiting for an
+    // instruction, so the mode setting does not apply to them.
+    let toggle = !is_edit && mode == "toggle";
+
+    Transition {
+        // Identical in both modes, and guarded on state rather than on the
+        // event: a Pressed arriving while already recording used to clear the
+        // buffer and start over, silently discarding whatever had been said.
+        start: pressed && !is_recording,
+        // Toggle stops on the next press; push-to-talk stops on release. Both
+        // require something to actually be running, or a stray Released ran
+        // the whole stop path against an empty buffer.
+        stop: if toggle { pressed && is_recording } else { !pressed && is_recording },
+    }
+}
+
 pub fn on_hotkey(handle: &tauri::AppHandle, is_edit: bool, pressed: bool) {
-    let released = !pressed;
     let app_state = handle.state::<AppState>();
 
     let (mode, show_overlay) = {
         let settings = app_state.settings.lock().unwrap();
         (settings.recording_mode.clone(), settings.show_overlay)
     };
-
-    // Edits are always push to talk. Toggle would leave the user
-    // holding a captured selection with no visible indication that the
-    // app is waiting for an instruction.
-    let mode = if is_edit { "ptt".to_string() } else { mode };
-    let is_toggle = mode == "toggle";
 
     let is_recording = app_state
         .audio
@@ -57,27 +85,8 @@ pub fn on_hotkey(handle: &tauri::AppHandle, is_edit: bool, pressed: bool) {
         .map(|a| a.is_recording.load(Ordering::Relaxed))
         .unwrap_or(false);
 
-    let should_start;
-    let should_stop;
-
-    if is_toggle {
-        if pressed {
-            should_start = !is_recording;
-            should_stop = is_recording;
-        } else {
-            should_start = false;
-            should_stop = false;
-        }
-    } else {
-        // Guarded on state, not just the event. A Pressed while
-        // already recording used to clear the buffer and start over,
-        // so a repeated press (or the stuck-recording case, where the
-        // Released event was lost) silently discarded everything said
-        // so far. A Released with nothing in flight ran the whole stop
-        // path against an empty buffer.
-        should_start = pressed && !is_recording;
-        should_stop = released && is_recording;
-    }
+    let Transition { start: should_start, stop: should_stop } =
+        decide_transition(pressed, is_recording, &mode, is_edit);
 
     if should_start && is_edit {
         // Capture the selection before recording, while the user's
@@ -912,6 +921,86 @@ fn process_edit(handle: &tauri::AppHandle, samples: Vec<f32>, source_rate: usize
         Err(_) => {
             log::error!("Voice edit: worker thread panicked");
             let _ = handle.emit("voice-edit-error", "The edit failed unexpectedly.");
+        }
+    }
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::{decide_transition, Transition};
+
+    fn t(pressed: bool, recording: bool, mode: &str, edit: bool) -> (bool, bool) {
+        let Transition { start, stop } = decide_transition(pressed, recording, mode, edit);
+        (start, stop)
+    }
+
+    #[test]
+    fn ptt_press_starts_release_stops() {
+        assert_eq!(t(true, false, "ptt", false), (true, false));
+        assert_eq!(t(false, true, "ptt", false), (false, true));
+    }
+
+    /// The bug that silently discarded a whole dictation: a second Pressed
+    /// arriving mid-recording used to clear the buffer and begin again. It is
+    /// also what happens when the Released event is lost, so this is the case
+    /// the watchdog exists to clean up after.
+    #[test]
+    fn ptt_press_while_recording_does_nothing() {
+        assert_eq!(t(true, true, "ptt", false), (false, false));
+    }
+
+    /// A Released with nothing in flight used to run the entire stop path
+    /// against an empty buffer.
+    #[test]
+    fn ptt_release_while_idle_does_nothing() {
+        assert_eq!(t(false, false, "ptt", false), (false, false));
+    }
+
+    #[test]
+    fn toggle_stops_on_the_next_press_not_on_release() {
+        assert_eq!(t(true, false, "toggle", false), (true, false));
+        assert_eq!(t(true, true, "toggle", false), (false, true));
+        // Releasing a toggle hotkey is not an event at all.
+        assert_eq!(t(false, true, "toggle", false), (false, false));
+        assert_eq!(t(false, false, "toggle", false), (false, false));
+    }
+
+    /// Voice edits capture a selection first; leaving the user in a toggle
+    /// recording with no visible sign the app is waiting would strand them.
+    #[test]
+    fn edits_are_push_to_talk_even_when_the_setting_says_toggle() {
+        assert_eq!(t(true, false, "toggle", true), (true, false));
+        assert_eq!(t(false, true, "toggle", true), (false, true));
+        assert_eq!(t(true, true, "toggle", true), (false, false));
+    }
+
+    /// An unknown mode string must behave like push to talk rather than
+    /// falling into some third state, since the setting is free text on disk
+    /// and a hand-edited settings.json should not brick the hotkey.
+    #[test]
+    fn unknown_mode_falls_back_to_push_to_talk() {
+        assert_eq!(t(true, false, "", false), (true, false));
+        assert_eq!(t(false, true, "wibble", false), (false, true));
+    }
+
+    /// Starting and stopping in one transition would run the stop path against
+    /// a buffer the start path just cleared. Checked across the whole input
+    /// space rather than on the cases someone thought to write down.
+    #[test]
+    fn never_starts_and_stops_at_once() {
+        for pressed in [true, false] {
+            for recording in [true, false] {
+                for mode in ["ptt", "toggle", "", "nonsense"] {
+                    for edit in [true, false] {
+                        let (start, stop) = t(pressed, recording, mode, edit);
+                        assert!(!(start && stop), "both for {pressed} {recording} {mode} {edit}");
+                        // Nothing can start unless the mic is free, and nothing
+                        // can stop unless something is running.
+                        if start { assert!(!recording); }
+                        if stop { assert!(recording); }
+                    }
+                }
+            }
         }
     }
 }
