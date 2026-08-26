@@ -198,7 +198,11 @@ function extractBands(dataArray: Uint8Array, sampleRate: number, fftSize: number
 
 export function InkCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const startTimeRef = useRef(Date.now())
+  // Filled by the effect that starts the animation, not here. Reading the
+  // clock during render is impure, and the honest place to start an animation
+  // clock is where the animation starts: a component that renders and then
+  // never gets a GL context should not be told it has been running.
+  const startTimeRef = useRef<number | null>(null)
   const rafRef = useRef<number>(0)
 
   // Audio data refs
@@ -439,12 +443,16 @@ export function InkCanvas() {
     const stateLoc = gl.getUniformLocation(program, "u_state")
 
 
+    startTimeRef.current = Date.now()
+
     const lerpFactor = 0.05  // Smoothing speed (lower = smoother, less twitchy)
     const stateLerpFactor = 0.04 // Slower spring for state transitions
 
     const render = () => {
-      // Wrap time to prevent float precision issues at large values
-      const elapsed = ((Date.now() - startTimeRef.current) / 1000) % 600
+      // Wrap time to prevent float precision issues at large values.
+      // `?? Date.now()` is for the type only: the effect above sets this
+      // before it ever schedules a frame, so the fallback means "zero elapsed".
+      const elapsed = ((Date.now() - (startTimeRef.current ?? Date.now())) / 1000) % 600
 
       // Smooth all values with hard clamp
       smoothAmpRef.current += (amplitudeRef.current - smoothAmpRef.current) * lerpFactor
