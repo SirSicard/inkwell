@@ -6,6 +6,27 @@ writing (0.2.6, unnoticed for two days) and the canonical URL stayed pinned to
 the previous build (0.2.5 and 0.2.6). Both now either automate themselves or
 refuse to lie about having worked.
 
+## First, prove it builds
+
+**Nothing compiles this repository on push.** `build.yml` triggers on `v*` tags
+and on manual dispatch only, so between one release and the next, Windows and
+Linux are never built and `cargo test` never runs anywhere but a laptop. The
+first cross-platform compile of a month's work would otherwise be the release
+itself, with the tag already pushed.
+
+A manual run is the dry run for this. Every publishing step in the workflow is
+gated on `refs/tags/`, `tagName` resolves to an empty string off a tag, and
+there is a dedicated step that uploads the bundles as artifacts instead. So this
+builds all four platforms, notarises the macOS dmgs, and publishes nothing:
+
+```bash
+gh workflow run build.yml --ref main
+gh run watch "$(gh run list --workflow build.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+Do this before touching a version number. A failure here costs a re-push; the
+same failure after tagging costs a deleted tag and a burnt version.
+
 ## Cut it
 
 ```bash
