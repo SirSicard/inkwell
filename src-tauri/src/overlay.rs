@@ -24,15 +24,26 @@ fn overlay_position_setting(app: &AppHandle) -> String {
         .unwrap_or_else(|| "bottom-center".to_string())
 }
 
-/// How wide the overlay needs to be, which depends on whether it has words to
-/// show. Read at every `show`, not once at build, so toggling the setting takes
-/// effect on the next dictation instead of the next launch.
+/// How wide the overlay is, given whether it has words to show.
+///
+/// Pure, and separate from the reader below, for the same reason
+/// `pipeline::decide_transition` is: the rest is an AppHandle and a settings
+/// lock that no unit test can produce, and this one number decides whether the
+/// blob sits alone or with a sentence beside it.
+pub fn width_for(show_partials: bool) -> f64 {
+    if show_partials { OVERLAY_WIDTH_PARTIALS } else { OVERLAY_WIDTH }
+}
+
+/// Read at every `show`, not once at build, so toggling the setting takes
+/// effect on the next dictation instead of the next launch. Defaults to the
+/// narrow overlay if state is not wired up yet: the wrong width on a window
+/// that exists beats a startup-order change silently widening it for everyone.
 fn overlay_width(app: &AppHandle) -> f64 {
     let on = app
         .try_state::<crate::AppState>()
         .map(|s| s.settings.lock().map(|g| g.show_partials).unwrap_or(false))
         .unwrap_or(false);
-    if on { OVERLAY_WIDTH_PARTIALS } else { OVERLAY_WIDTH }
+    width_for(on)
 }
 
 fn placement_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
@@ -171,5 +182,37 @@ pub fn show(app: &AppHandle) {
 pub fn hide(app: &AppHandle) {
     if let Some(overlay) = app.get_webview_window(OVERLAY_LABEL) {
         let _ = overlay.hide();
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    /// The overlay was a 97px square for its whole life before live preview,
+    /// and it must still be exactly that for everyone who leaves the feature
+    /// off. This is the assertion that a default install is untouched.
+    #[test]
+    fn the_collapsed_overlay_is_the_square_it_always_was() {
+        assert_eq!(width_for(false), 97.0);
+    }
+
+    /// 560px is not a taste question: below roughly this, 96 characters of
+    /// partial text (streaming::MAX_PARTIAL_CHARS) stops fitting in the two
+    /// lines the panel clamps to, and words start disappearing off the bottom.
+    #[test]
+    fn the_expanded_overlay_leaves_room_for_the_words() {
+        let w = width_for(true);
+        assert!(w >= 480.0, "too narrow for two lines of partial text: {w}");
+        // The blob still needs its own square, whatever is beside it.
+        assert!(w > width_for(false) + 97.0);
+    }
+
+    /// The height never changes, so a partials overlay is a wider strip and
+    /// not a different shape. Placement maths in `placement_position` assumes
+    /// this when it puts the window in a corner.
+    #[test]
+    fn only_the_width_moves() {
+        assert_eq!(OVERLAY_HEIGHT, 97.0);
     }
 }
