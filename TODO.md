@@ -14,30 +14,43 @@ is further along than the distribution, and an hour spent on reach is currently
 worth more than an hour spent on the list below. Kept at the top on purpose,
 because everything under it is easier and none of it is more important.
 
-- [ ] Owner/me: a custom social preview image. `usesCustomOpenGraphImage` is
-      false, so every share of the repo on Slack, Discord or X renders as a
-      generic card. Half an hour, and it is the cheapest thing here.
-- [ ] Me: demo GIF. Hold, speak, release, text appears is a six-second loop that
-      sells itself, and the README currently describes it in prose. Record it
-      against a throwaway profile, never a real transcript history.
+- [x] A custom social preview image. Live: the repo's `og:image` now resolves to
+      `repository-images.githubusercontent.com`, not the generated fallback.
+      Source and png are in `docs/media/social-preview.*`; the png is committed
+      because GitHub has no API for this and the upload is a manual step under
+      Settings > General.
+- [ ] **Owner-blocked: demo GIF.** Hold, speak, release, text appears is a
+      six-second loop that sells itself, and the README describes it in prose.
+      This one needs a person: it is a real screen recording of a real voice
+      pasting into a real app, and the two things that would let it be made
+      unattended are both disqualifying. Compositing the overlay over a fake
+      editor produces a mockup presented as a recording, and driving the real
+      app needs the microphone, the Accessibility grant and the keyboard focus
+      of whoever is sitting there. Five minutes of owner time, on a throwaway
+      profile, never a real transcript history.
 - [ ] Owner: somewhere to post it. The product is genuinely ready for an
       audience in a way it was not two weeks ago.
 
 ## 1. Dependency debt (compounding)
 
-Thirteen open Dependabot PRs, all green, none merged. The config groups minor
-and patch, so **every open one is a major**. This only gets harder.
+The config groups minor and patch, so **every open Dependabot PR is a major**.
+Worked through in `df6184c`; what is left is left for a reason.
 
-- [ ] Me: merge the build-time ones together (typescript 5.9 to 7.0, eslint 9 to
-      10, `@types/node`, `@eslint/js`). No runtime risk.
-- [ ] Me: then one at a time, each with a real dictation afterwards, because CI
-      passing proves nothing about any of them:
-      **enigo 0.3 to 0.6** (owns the synthetic paste, three majors on the
-      library whose permission behaviour took two releases to get right),
-      **cpal 0.17 to 0.18** (owns capture, including the idle-release stream
-      lifecycle), **rubato 0.16 to 4.0** (resampling; a silent behaviour change
-      here degrades every transcript), **symphonia 0.5 to 0.6** (file
-      transcription only).
+- [x] **enigo 0.3 to 0.6.** Owns the synthetic paste. Taken because
+      `open_prompt_to_get_permissions` still exists in 0.6.1 and still means what
+      `paste.rs` relies on it meaning; that flag is the reason Inkwell does not
+      raise a system prompt mid-dictation, and a rename would have been silent.
+- [x] rusqlite 0.33 to 0.40, `@types/node` 24 to 26, homepage and updater minors.
+- [ ] **Blocked upstream, not deferred: typescript 7 and eslint 10.**
+      `typescript-eslint` pins `typescript >=4.8.4 <6.1.0`, and its latest
+      release still resolves `@eslint/js@9`. Nothing to do until it ships.
+      Re-check when `typescript-eslint` cuts a major.
+- [ ] **API breaks, not bumps: cpal 0.17 to 0.18, rubato 0.16 to 4.0,
+      symphonia 0.5 to 0.6.** Each was attempted and reverted (6, 1 and 1
+      compile errors respectively). These are migrations that need a real
+      dictation afterwards, not upgrades: cpal owns capture including the
+      idle-release stream lifecycle, and a silent resampling change in rubato
+      degrades every transcript without failing anything.
 
 ## 2. The parts nobody has run
 
@@ -59,11 +72,15 @@ and patch, so **every open one is a major**. This only gets harder.
 
 ## 3. Tests where the breakage actually is
 
-118 tests, and they cluster in pure functions. The stateful code has none.
+177 tests, and they cluster in pure functions. The stateful code has almost none.
 
-- [ ] Me: `pipeline.rs` (917 lines, 0 tests). `on_hotkey` now takes
-      `(handle, is_edit, pressed)`, so the start/stop state machine is finally
-      testable without a running app. Highest value test in the repo.
+- [x] `pipeline.rs`: the start/stop state machine. `decide_transition(pressed,
+      is_recording, mode, is_edit)` is now a pure function with 7 tests, so the
+      push-to-talk and toggle paths are asserted without a running app. It is
+      what both the OS hotkey plugin and the Fn event tap route through.
+- [ ] Me: the rest of `pipeline.rs`. `stop_and_process` and `watchdog_loop` still
+      need a handle, so they stay untested until the app state they touch is
+      behind something injectable.
 - [ ] Me: `paste.rs` (348 lines, 0 tests). Clipboard save and restore, and the
       no-prompt permission paths.
 - [ ] Me: a frontend test runner. There is none at all; roughly 4,000 lines of
