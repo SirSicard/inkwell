@@ -4,6 +4,10 @@ use tauri::webview::Color;
 const OVERLAY_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 97.0;
 const OVERLAY_HEIGHT: f64 = 97.0;
+/// Width when live partials are on. The blob keeps its 97px square and the
+/// words get the rest, so the overlay stays exactly as it was for everyone who
+/// has the feature off.
+const OVERLAY_WIDTH_PARTIALS: f64 = 560.0;
 /// Gap between the ink blob and the bottom of the usable screen area.
 const OVERLAY_BOTTOM_MARGIN: f64 = 80.0;
 
@@ -17,6 +21,17 @@ fn overlay_position_setting(app: &AppHandle) -> String {
         .unwrap_or_else(|| "bottom-center".to_string())
 }
 
+/// How wide the overlay needs to be, which depends on whether it has words to
+/// show. Read at every `show`, not once at build, so toggling the setting takes
+/// effect on the next dictation instead of the next launch.
+fn overlay_width(app: &AppHandle) -> f64 {
+    let on = app
+        .try_state::<crate::AppState>()
+        .map(|s| s.settings.lock().map(|g| g.show_partials).unwrap_or(false))
+        .unwrap_or(false);
+    if on { OVERLAY_WIDTH_PARTIALS } else { OVERLAY_WIDTH }
+}
+
 fn placement_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
     let monitor = app
         .cursor_position()
@@ -27,7 +42,7 @@ fn placement_position(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
     let scale = monitor.scale_factor();
     let area = monitor.work_area();
 
-    let w = (OVERLAY_WIDTH * scale).round() as i32;
+    let w = (overlay_width(app) * scale).round() as i32;
     let h = (OVERLAY_HEIGHT * scale).round() as i32;
     let margin = (OVERLAY_BOTTOM_MARGIN * scale).round() as i32;
 
@@ -64,6 +79,14 @@ pub fn show(app: &AppHandle) {
     }
 
     if let Some(overlay) = app.get_webview_window(OVERLAY_LABEL) {
+        // Resize before placing: the partials setting may have been toggled
+        // since this window was built, and the placement maths reads the width
+        // the window is supposed to have.
+        let width = overlay_width(app);
+        let size = tauri::LogicalSize::new(width, OVERLAY_HEIGHT);
+        let _ = overlay.set_min_size(Some(size));
+        let _ = overlay.set_max_size(Some(size));
+        let _ = overlay.set_size(tauri::Size::Logical(size));
         // Re-place it: the user may have moved to another display since.
         if let Some(pos) = placement_position(app) {
             let _ = overlay.set_position(tauri::Position::Physical(pos));
@@ -83,9 +106,9 @@ pub fn show(app: &AppHandle) {
         WebviewUrl::App("overlay.html".into()),
     )
     .title("Inkwell Recording")
-    .inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
-    .min_inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
-    .max_inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+    .inner_size(overlay_width(app), OVERLAY_HEIGHT)
+    .min_inner_size(overlay_width(app), OVERLAY_HEIGHT)
+    .max_inner_size(overlay_width(app), OVERLAY_HEIGHT)
     .resizable(false)
     .decorations(false)
     .always_on_top(true)

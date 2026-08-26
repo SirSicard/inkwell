@@ -19,6 +19,15 @@ export interface Settings {
   debug_save_audio: boolean
   mic_idle_release_mins: number
   append_space: boolean
+  show_partials: boolean
+}
+
+/** Mirrors commands::PartialsStatus in src-tauri/src/commands/model.rs. */
+export interface PartialsStatus {
+  installed: boolean
+  ready: boolean
+  model_id: string
+  size: string
 }
 
 /** Mirrors modes::Mode in src-tauri/src/modes.rs. */

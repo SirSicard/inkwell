@@ -264,6 +264,24 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let _ = app.emit("model-loaded", app_state.engine.name());
     }
 
+    // Live partials, if the user asked for them. Off by default, so for almost
+    // everyone this is one bool read and nothing else: no thread work, no
+    // second model in memory, no download.
+    {
+        let app_state = app.state::<AppState>();
+        app_state.streaming.attach(app.handle().clone());
+        if loaded_settings.show_partials {
+            // On its own thread, because loading it is seconds of ONNX work and
+            // the window should not wait for a feature that only matters once
+            // the user presses the hotkey.
+            let handle = app.handle().clone();
+            let dir = models_dir.clone();
+            std::thread::spawn(move || {
+                crate::commands::load_streaming_model(&handle, &dir);
+            });
+        }
+    }
+
     // Register global hotkey
     let handle = app.handle().clone();
     app.handle().plugin(pipeline::build_shortcut_plugin(handle))?;

@@ -66,6 +66,9 @@ pub fn update_settings(
     // The mic can only be swapped once the new choice is persisted and the
     // settings lock is released; the arm records it and the tail applies it.
     let mut new_mic: Option<String> = None;
+    // Same shape as the mic: loading a model takes seconds, so the arm records
+    // the decision and the tail acts on it once the settings lock is gone.
+    let mut new_partials: Option<bool> = None;
     let mut settings = state.settings.lock().unwrap();
     match key.as_str() {
         "style" => settings.style = value,
@@ -95,6 +98,10 @@ pub fn update_settings(
         }
         "debug_save_audio" => settings.debug_save_audio = value == "true",
         "remove_fillers" => settings.remove_fillers = value == "true",
+        "show_partials" => {
+            settings.show_partials = value == "true";
+            new_partials = Some(settings.show_partials);
+        }
         _ => return Err(format!("Unknown setting: {}", key)),
     }
     let path = state.settings_path.lock().unwrap().clone();
@@ -106,6 +113,22 @@ pub fn update_settings(
     // recording"), and the caller sees that refusal instead of a silent no-op.
     if let Some(device) = new_mic {
         crate::audio::restart_audio_capture(&app, &device)?;
+    }
+
+    match new_partials {
+        // Loading is seconds of ONNX work, so it cannot happen on this thread:
+        // the toggle would appear to hang. Turning it off is immediate, and
+        // frees the memory the recognizer was holding.
+        Some(true) => {
+            let handle = app.clone();
+            let models_dir =
+                std::path::PathBuf::from(state.models_dir.lock().unwrap().clone());
+            std::thread::spawn(move || {
+                crate::commands::load_streaming_model(&handle, &models_dir);
+            });
+        }
+        Some(false) => state.streaming.unload(),
+        None => {}
     }
     Ok(())
 }

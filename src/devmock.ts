@@ -26,7 +26,7 @@ const settings = {
   advanced_mode: true, mic_device: "auto", vad_threshold: 0.5,
   polish_enabled: false, polish_prompt: "", sound_dictation: false,
   remove_fillers: true, debug_save_audio: false,
-  mic_idle_release_mins: 3, append_space: true,
+  mic_idle_release_mins: 3, append_space: true, show_partials: false,
 }
 
 const stats = {
@@ -56,6 +56,7 @@ const fixtures: Record<string, unknown> = {
   get_model_name: "Parakeet V2",
   get_input_devices: [{ id: "MacBook Pro Microphone", name: "MacBook Pro Microphone" }],
   check_first_run: false,
+  get_partials_status: { installed: false, ready: false, model_id: "streaming-zipformer-en", size: "73 MB" },
   check_accessibility_permission: true,
   get_dictionary: [],
   get_pinned_mode: null,

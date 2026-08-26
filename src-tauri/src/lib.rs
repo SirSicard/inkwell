@@ -23,6 +23,7 @@ pub mod sounds;
 pub mod setup;
 pub mod snippets;
 pub mod store;
+pub mod streaming;
 pub mod style;
 mod tray;
 mod vad;
@@ -57,11 +58,17 @@ pub enum Intent {
 
 use audio::AudioState;
 use engine_service::EngineService;
+use streaming::StreamingService;
 use std::sync::Mutex;
 
 pub struct AppState {
     pub audio: Mutex<Option<AudioState>>,
     pub engine: EngineService,
+    /// Draws words on the overlay while the key is held. Separate from
+    /// `engine` because it answers a different question: `engine` produces the
+    /// text the user keeps, this one produces the evidence that the app is
+    /// listening. Idle and unloaded unless `show_partials` is on.
+    pub streaming: StreamingService,
     pub models_dir: Mutex<String>,
     pub vad_model_path: Mutex<String>,
     pub style: Mutex<style::Style>,
@@ -123,6 +130,7 @@ pub fn run() {
         .manage(AppState {
             audio: Mutex::new(None),
             engine: EngineService::start(),
+            streaming: StreamingService::start(),
             models_dir: Mutex::new(String::new()),
             vad_model_path: Mutex::new(String::new()),
             style: Mutex::new(style::Style::default()),
@@ -157,6 +165,7 @@ pub fn run() {
             commands::transcribe_file,
             commands::download_model,
             commands::remove_model,
+            commands::get_partials_status,
             commands::set_style,
             commands::get_style,
             commands::get_settings,
