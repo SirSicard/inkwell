@@ -5,6 +5,23 @@
 text must still come from the offline model. Recommend a two-pass design; do not
 ship streaming as the transcription path.
 
+> **Built 2026-08-26, as "Live Preview".** Kept as written, because it is the
+> record of the decision. Two corrections it earned on the way into the app:
+>
+> - **The download is 73 MB, not 296.** The sizes in the table below are
+>   HuggingFace *directory* sizes, and those repos carry both precisions plus
+>   two left-context variants. The four files a shipped int8 build actually
+>   fetches are a tenth of that. This mattered: the download was named here as
+>   "most of the objection".
+> - **Endpointing must be off, not on.** The harness set `enable_endpoint =
+>   true` because it was decoding a whole file. In the app one held hotkey is
+>   one utterance, and endpointing resets the stream when it fires, so leaving
+>   it on would blank the line whenever the user paused for breath.
+>
+> Also unaccounted for here: "feed the overlay" assumed the overlay could hold
+> a sentence, and it is a 97px square. It now widens to 560px when the feature
+> is on. See `src-tauri/src/streaming.rs` and `examples/streaming_check.rs`.
+
 Reproduce with `cargo run --release --example streaming_spike -- <model-dir> <wav>`.
 
 ## What was measured
