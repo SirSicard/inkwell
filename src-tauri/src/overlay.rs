@@ -1,7 +1,10 @@
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 use tauri::webview::Color;
 
-const OVERLAY_LABEL: &str = "overlay";
+/// The overlay window's label. Public because `streaming.rs` emits partials
+/// to this window by name: as a second string literal over there, renaming
+/// the window would compile fine and silently stop the words appearing.
+pub const OVERLAY_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 97.0;
 const OVERLAY_HEIGHT: f64 = 97.0;
 /// Width when live partials are on. The blob keeps its 97px square and the
