@@ -33,24 +33,36 @@ because everything under it is easier and none of it is more important.
 
 ## 1. Dependency debt (compounding)
 
-The config groups minor and patch, so **every open Dependabot PR is a major**.
-Worked through in `df6184c`; what is left is left for a reason.
+Cleared in `df6184c` and `7eb0e0c`. Three items remain, and they are the
+three that a merge button cannot answer for.
 
 - [x] **enigo 0.3 to 0.6.** Owns the synthetic paste. Taken because
       `open_prompt_to_get_permissions` still exists in 0.6.1 and still means what
       `paste.rs` relies on it meaning; that flag is the reason Inkwell does not
       raise a system prompt mid-dictation, and a rename would have been silent.
-- [x] rusqlite 0.33 to 0.40, `@types/node` 24 to 26, homepage and updater minors.
-- [ ] **Blocked upstream, not deferred: typescript 7 and eslint 10.**
-      `typescript-eslint` pins `typescript >=4.8.4 <6.1.0`, and its latest
-      release still resolves `@eslint/js@9`. Nothing to do until it ships.
-      Re-check when `typescript-eslint` cuts a major.
-- [ ] **API breaks, not bumps: cpal 0.17 to 0.18, rubato 0.16 to 4.0,
+- [x] rusqlite 0.33 to 0.40, and 114 root packages: react, vite, tailwind,
+      framer-motion, typescript-eslint, all minor or patch within their majors.
+- [x] **eslint 10**, and **TypeScript 7 in homepage and the worker.** Both were
+      written down here as blocked upstream and both were wrong.
+      `typescript-eslint` 8.68 widened its eslint peer to `^8 || ^9 || ^10`,
+      and its TypeScript cap only ever applied to the *root* tree: homepage and
+      `inkwell-updater` have their own `package.json` with no such dependency,
+      and build clean on 7.
+- [ ] **Still blocked, and only here: TypeScript 7 in the root tree.**
+      `typescript-eslint` peers `typescript >=4.8.4 <6.1.0` as of 8.68. Re-check
+      when it cuts a major. There is nothing to do until then.
+- [ ] **API breaks, not bumps: cpal 0.17 to 0.18, rubato 0.16 to 5.0,
       symphonia 0.5 to 0.6.** Each was attempted and reverted (6, 1 and 1
-      compile errors respectively). These are migrations that need a real
-      dictation afterwards, not upgrades: cpal owns capture including the
-      idle-release stream lifecycle, and a silent resampling change in rubato
-      degrades every transcript without failing anything.
+      compile errors). These are migrations that need a real dictation
+      afterwards, not upgrades: cpal owns capture including the idle-release
+      stream lifecycle, and a silent resampling change in rubato degrades every
+      transcript without failing anything.
+- [ ] **React 19's new hook rules, properly.** `react-hooks` 7.1 flags two
+      effects in `App.tsx` that mirror an external store into local state, and
+      it is right: they should derive rather than sync. Suppressed at the two
+      call sites with the reason, because untangling it means reworking how
+      `App.tsx` owns `advancedMode` and `activeTab`. Its third finding, a clock
+      read during render in `InkCanvas`, is fixed.
 
 ## 2. The parts nobody has run
 
