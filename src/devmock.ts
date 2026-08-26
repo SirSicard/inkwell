@@ -63,6 +63,8 @@ const fixtures: Record<string, unknown> = {
   get_snippets: [],
   get_modes: { modes: [], default_id: "default" },
   get_voice_commands: { commands: [], enabled: false },
+  set_hotkey: null,
+  set_edit_hotkey: null,
   "plugin:app|version": "0.2.8-dev",
   "plugin:event|listen": 1,
   "plugin:event|unlisten": null,
