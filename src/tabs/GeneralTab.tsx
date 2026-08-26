@@ -113,6 +113,43 @@ function HotkeyCapture({
         {displayHotkey}
       </div>
       {hint && <p className="text-body text-text-tertiary">{hint}</p>}
+      {navigator.userAgent.includes("Mac") && (
+        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+          <span className="text-meta text-text-tertiary">Or a key on its own:</span>
+          {(
+            [
+              ["fn", "Fn \u{1F310}"],
+              ["right_cmd", "Right \u2318"],
+              ["right_opt", "Right \u2325"],
+              ["right_ctrl", "Right \u2303"],
+            ] as const
+          ).map(([token, name]) => (
+            <button
+              key={token}
+              onClick={() => {
+                invoke(command, { hotkey: token })
+                  .then(() => { void useSettings.getState().load(); setError("") })
+                  .catch((err) => setError(String(err)))
+              }}
+              className={`px-2 py-0.5 text-xs rounded-md border transition-colors ${
+                hotkey === token
+                  ? "border-accent text-text-primary"
+                  : "border-border text-text-secondary hover:text-text-primary hover:border-border-default"
+              }`}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
+      {hotkey === "fn" && (
+        <p className="text-body text-text-tertiary">
+          macOS gives the globe key its own job by default. Set System Settings
+          {" \u2192 "}Keyboard{" \u2192 "}&ldquo;Press {"\u{1F310}"} key
+          to&rdquo; to <span className="text-text-secondary">Do Nothing</span>,
+          or each dictation will also open the emoji picker.
+        </p>
+      )}
       {clearable && hotkey && (
         <button
           onClick={clear}

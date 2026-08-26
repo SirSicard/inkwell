@@ -12,6 +12,7 @@ mod llm;
 pub mod merge;
 pub mod modes;
 pub mod models;
+pub mod modkey;
 mod overlay;
 mod paste;
 mod pipeline;
