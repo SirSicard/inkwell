@@ -1,82 +1,132 @@
 # Inkwell - Roadmap
 
 *Ordered by dependency, not by date. No dates are promised.*
-*State audited 2026-07-31. v0.2.1 is the current release, all four platforms green, updater serving it. The launch is done; what follows is trust (signing), reach (Windows, Homebrew) and accuracy.*
+*State audited 2026-08-26. v0.2.8 is the current release, all four platforms green, both dmgs notarised and verified, the updater serving it. Signing, notarisation and the release chain are finished problems. What is left is reach, dependency debt, and the parts of the app nobody has ever run.*
 
-Analysis behind the rehaul: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-analysis-2026-07-24.md). Feature research: [docs/competitive-extras-2026-07-27.md](docs/competitive-extras-2026-07-27.md). Streaming verdict: [docs/streaming-spike-2026-07-31.md](docs/streaming-spike-2026-07-31.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Analysis behind the rehaul: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-analysis-2026-07-24.md). Feature research: [docs/competitive-extras-2026-07-27.md](docs/competitive-extras-2026-07-27.md). Streaming verdict: [docs/streaming-spike-2026-07-31.md](docs/streaming-spike-2026-07-31.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Release steps: [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
-## 1. Apple signing (in progress, blocked on account activation)
+## 0. The uncomfortable number
 
-The whole point: an unsigned app makes Gatekeeper block the download, and makes
-macOS forget the keychain grant on every rebuild. Both stop the day this lands.
-`build.yml` already reads all six secrets and degrades to unsigned without them.
+44 downloads, 1 star, 0 forks, 0 issues, across five releases. The engineering
+is further along than the distribution, and an hour spent on reach is currently
+worth more than an hour spent on the list below. Kept at the top on purpose,
+because everything under it is easier and none of it is more important.
 
-- [x] Owner: Apple Developer account purchased 2026-07-31. Waiting on activation.
-- [x] Me: private key and CSR generated at `~/Documents/inkwell-signing/`.
-- [ ] Owner: create a **Developer ID Application** certificate from that CSR at developer.apple.com, download the `.cer` into the same folder. Needs the Account Holder role.
-- [ ] Owner: app-specific password at appleid.apple.com, set with `gh secret set APPLE_PASSWORD -R SirSicard/inkwell` so it is typed by the owner and never passes through anyone else.
-- [ ] Owner: paste the Team ID and the developer-account Apple ID (neither is secret; both are embedded in every signed build).
-- [ ] Me: convert `.cer` plus key to `.p12`, set `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`.
-- [ ] Me: cut 0.2.2 and verify with `spctl --assess` and `stapler validate` on the downloaded dmg, not by trusting a green CI run.
-- [ ] Me: once notarized, delete the quarantine workaround from the Homebrew cask and the `xattr -cr` instructions from the README. They exist only because the app is unsigned.
-- [ ] Owner: back up `~/Documents/inkwell-signing/developer-id.key`. Apple can reissue a certificate; that private key cannot be recovered.
+- [ ] Owner/me: a custom social preview image. `usesCustomOpenGraphImage` is
+      false, so every share of the repo on Slack, Discord or X renders as a
+      generic card. Half an hour, and it is the cheapest thing here.
+- [ ] Me: demo GIF. Hold, speak, release, text appears is a six-second loop that
+      sells itself, and the README currently describes it in prose. Record it
+      against a throwaway profile, never a real transcript history.
+- [ ] Owner: somewhere to post it. The product is genuinely ready for an
+      audience in a way it was not two weeks ago.
 
-## 2. Windows
+## 1. Dependency debt (compounding)
 
-Building is solved (sherpa-onnx compiles on MSVC, v0.2.1 ships msi and exe).
-Nothing about *using* it has ever been checked.
+Thirteen open Dependabot PRs, all green, none merged. The config groups minor
+and patch, so **every open one is a major**. This only gets harder.
 
-- [ ] Owner: a Win11 test environment. Free route (UTM plus CrystalFetch) written up in [docs/owner-tasks.md](docs/owner-tasks.md). Unactivated Windows is legal and sufficient; the VM emulates x64 on Apple Silicon, so it proves behaviour and says nothing about speed.
-- [ ] Me/owner: QA pass. Hotkey, paste target, overlay placement, keyring (windows-native backend), per-app detection (process-name path, never exercised), voice editing's copy keystroke.
-- [ ] Owner: Windows code signing, least urgent of the four. Routes and the eligibility check first in [docs/owner-tasks.md](docs/owner-tasks.md). With current download numbers this buys little; reasonable to defer until someone reports being blocked.
+- [ ] Me: merge the build-time ones together (typescript 5.9 to 7.0, eslint 9 to
+      10, `@types/node`, `@eslint/js`). No runtime risk.
+- [ ] Me: then one at a time, each with a real dictation afterwards, because CI
+      passing proves nothing about any of them:
+      **enigo 0.3 to 0.6** (owns the synthetic paste, three majors on the
+      library whose permission behaviour took two releases to get right),
+      **cpal 0.17 to 0.18** (owns capture, including the idle-release stream
+      lifecycle), **rubato 0.16 to 4.0** (resampling; a silent behaviour change
+      here degrades every transcript), **symphonia 0.5 to 0.6** (file
+      transcription only).
 
-## 3. Accuracy, round two
+## 2. The parts nobody has run
 
-Round one shipped in 0.2.1: hotword biasing from the dictionary, trim-only VAD,
-quiet-point chunking, pre-roll and release-tail capture, transient-proof
-normalisation. The tooling to judge round two exists and is unused.
+- [ ] Owner: a Win11 test environment. Free route (UTM plus CrystalFetch) in
+      [docs/owner-tasks.md](docs/owner-tasks.md). The VM emulates x64 on Apple
+      Silicon, so it proves behaviour and says nothing about speed.
+- [ ] Me/owner: Windows QA. Hotkey, paste target, overlay placement, keyring
+      (windows-native backend), per-app detection (process-name path, never
+      exercised), voice editing's copy keystroke. A Windows build ships every
+      release and nobody has ever launched one.
+- [ ] Windows SmartScreen. **Code signing no longer fixes this**: Microsoft's own
+      docs now say a valid OV or EV certificate still shows "unrecognized app"
+      until reputation accumulates, and EV lost its bypass in 2024. The only
+      path that removes the warning is the **Microsoft Store**, which is now free
+      for individuals, signs the app for Microsoft, and needs an MSIX. Gated on
+      Windows QA first, and on testing that MSIX packaging does not break the
+      global hotkey or the synthetic paste.
+- [ ] Linux: best effort, still unverified. Fine to leave.
 
-- [x] Owner recorded a corpus 2026-07-31: eight scripted takes in `~/Documents/Inkwell Debug Audio/corpus`, with references written from the scripts.
-- [x] Measured on the owner's voice, five models: **Qwen3 5.6%, Parakeet V2 8.0%, SenseVoice 9.3%, Whisper Turbo 9.3%, Parakeet V3 10.5%**. The win is English specialisation, not precision: the two V2 builds score identically, so the extra 600 MB for fp16 buys about 20% speed and no accuracy. Both V2 builds transcribed "to Vercel" and "changelog" correctly where V3 produced "the Versal" and "change log", which is the proper-noun failure that started this. Eight clips is directional, not a benchmark.
-- [x] Owner switched to Parakeet V2 2026-07-31. Qwen3 is now the more accurate option and covers Nordic languages too, so it is worth trying next.
-- [ ] Owner, superseded: whether to switch the default to V2. It is a free upgrade for English (same download size, 32% fewer errors) and a regression the day you dictate in Swedish, since V2 is English-only.
-- [x] Parakeet V3 full precision removed from the catalogue. It ships weights as ONNX external data, which this sherpa-onnx build cannot resolve; the failure arrives as a foreign exception that aborts the process instead of returning an error, so listing it meant a 2.5 GB download that kills the app on selection.
-- [x] Qwen3-ASR shipped in 0.2.3 as the accuracy tier: 5.6% against 8.0%, the sherpa-onnx 1.13 upgrade compiled clean, and the hotword lifecycle it needed (rebuild the engine when the dictionary changes) is built and verified. Write-up in [docs/qwen3-spike-2026-07-31.md](docs/qwen3-spike-2026-07-31.md).
-- [ ] Me: decide `advanced_mode`'s future. It gates which tabs appear, which is navigation, not dictation; it may belong in the sidebar rather than in General.
+## 3. Tests where the breakage actually is
+
+118 tests, and they cluster in pure functions. The stateful code has none.
+
+- [ ] Me: `pipeline.rs` (917 lines, 0 tests). `on_hotkey` now takes
+      `(handle, is_edit, pressed)`, so the start/stop state machine is finally
+      testable without a running app. Highest value test in the repo.
+- [ ] Me: `paste.rs` (348 lines, 0 tests). Clipboard save and restore, and the
+      no-prompt permission paths.
+- [ ] Me: a frontend test runner. There is none at all; roughly 4,000 lines of
+      TypeScript have never been asserted on.
 
 ## 4. Streaming partials (designed, not built)
 
 Spike verdict: viable at 40x real time with no dependency upgrade, but streaming
 output has no casing or punctuation and drops the last word, so it can never be
-the text the user keeps.
+the text the user keeps. Still the best-argued unbuilt feature here: it fills
+the silent gap between releasing the key and seeing the paste.
 
 - [ ] Me: streaming model feeds the overlay while the key is held. Never pasted, never stored. Offline pass unchanged.
 - [ ] Me: render partials lowercase, or the switch to properly-cased final text reads as a glitch rather than as refinement.
 - [ ] Me: opt-in setting defaulting to off, described as "show words as you speak" rather than as a second model. Costs a 296 MB download.
 
-## 5. Distribution
+## 5. Distribution and loose ends
 
-- [ ] Owner: buy a domain. Availability checked 2026-07-31 and candidates listed in [docs/owner-tasks.md](docs/owner-tasks.md); every short option is gone, `inkwell.tools` and two-word `.com`s are the realistic tier.
-- [ ] Owner, deferred on purpose: a `homebrew-tap` repo. The cask is written and passes `brew audit --strict`, so this is two minutes whenever it is wanted, but the value is currently thin and worth stating rather than assuming. The official homebrew-cask repo needs notability the project does not have (0 stars, 0 forks, 0 watchers as of 2026-07-31), so a personal tap is the only route, and `brew install --cask sirsicard/tap/inkwell` is a longer instruction than downloading the dmg. Homebrew's other draw, `brew upgrade`, is already covered by the app's own updater. Against that it adds a permanent chore: the sha256 must be bumped every release or installs fail on a checksum mismatch. Publish it when somebody asks for brew, or when traction allows submitting to homebrew-cask proper and earning the short name.
-- [ ] Me, after the domain: move the updater off `workers.dev` (route already stubbed in `inkwell-updater/wrangler.toml`), then re-verify a version hop.
-- [ ] Me: per-tab screenshots. The dashboard shot is in the README; the sidebar is a webview and synthetic clicks would not switch tabs, so the rest are worth doing by hand.
-- [ ] Me: demo GIF. Best recorded against a throwaway profile, like the screenshot, so no real transcript is ever published.
+- [ ] **Owner: back up `~/Documents/inkwell-signing/developer-id.key`.** Apple can
+      reissue a certificate; that private key cannot be recovered. Oldest open
+      item here and the only one that is unrecoverable if ignored.
+- [ ] Owner: buy a domain. Candidates in [docs/owner-tasks.md](docs/owner-tasks.md); `inkwell.tools` was free as of 2026-07-31.
+- [ ] Me, after the domain: move the updater off `workers.dev` (route stubbed in `inkwell-updater/wrangler.toml`), then re-verify a version hop.
+- [ ] Owner, deferred on purpose: a `homebrew-tap` repo. The cask is written and
+      audited, and `bin/update-cask.sh` now removes the per-release chore that
+      was the main argument against it. The remaining argument stands:
+      homebrew-cask proper needs notability the project does not have, a
+      personal tap means a longer install line than downloading the dmg, and
+      `brew upgrade` duplicates the app's own updater. Publish it when somebody
+      asks.
+- [ ] Me: per-tab screenshots. Three exist (dashboard, modes, AI). The rest are
+      cheap now that `src/devmock.ts` renders the real frontend in a browser
+      against fixtures.
+- [ ] Me: decide `advanced_mode`'s future. It gates which tabs appear, which is
+      navigation, not dictation; it may belong in the sidebar rather than in General.
 
 ## Standing rules learned the hard way
 
-- After every release run `inkwell-updater/publish-latest.sh`. The worker serves from KV, not from GitHub, so a release nobody pushes to KV updates nobody.
-- After every homepage deploy, `vercel alias set <deployment-url> getinkwell.vercel.app`. Vercel does not move the alias itself.
-- Never screenshot the owner's own profile. Use a throwaway HOME with symlinked models; the real dashboard shows real transcripts and publishing is permanent.
+- **Verify the artefact, not the build.** A green CI run said the app was
+  notarised while the dmg around it was not; that shipped as 0.2.5 and was
+  caught by asking Gatekeeper, not by reading a log.
+- **After every release run `inkwell-updater/publish-latest.sh`.** The worker
+  serves from KV, not from GitHub. It has failed twice; it now retries and reads
+  the value back, but check the version it prints.
+- **Never screenshot the owner's own profile.** Use a throwaway HOME with
+  symlinked models, or `src/devmock.ts` in a browser. The real dashboard shows
+  real transcripts and publishing is permanent.
+- The homepage alias rule is **gone**: `getinkwell.vercel.app` is a project
+  domain bound to Production and follows deployments by itself. Do not reinstate
+  `vercel alias set`.
 
 ## Done, for the record
 
-v0.2.0 and v0.2.1 released and public. Repo public as `SirSicard/inkwell`.
-Homepage live. Updater verified end to end. Voice editing shipped. Clean-machine
-first run verified with zero panics and every catalogue URL live. Homebrew cask
-written and audited. Debug audio, Troubleshooting tab, voice-command mode
-pinning, README screenshot.
+Signed with a Developer ID and notarised by Apple, dmg included, verified under
+quarantine on both architectures. Updater verified end to end across version
+hops. Five models measured on a real corpus and the catalogue cut from thirteen
+to five. Voice editing. Modes. Qwen3 as the accuracy tier. Release logging that
+does not write your dictations to disk. A Grant permission button that can
+recover a lost Accessibility grant. The microphone released when idle, so the
+machine sleeps and auto-locks again. A watchdog that unsticks a recording whose
+key-release event never arrived. A space between consecutive dictations. A Stats
+page. Single-key and modifier-only (Fn, right Command) hotkeys. Homepage
+auto-deploying from Git. Security alerts at zero.
 
 ## Not doing
 
