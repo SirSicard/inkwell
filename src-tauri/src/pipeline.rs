@@ -715,7 +715,17 @@ fn process_recording(
                 let text = if active_mode.remove_fillers {
                     let cleaned = crate::cleanup::remove_disfluencies(&text);
                     if cleaned != text {
-                        log::info!("Disfluencies removed: {:?} -> {:?}", text, cleaned);
+                        // Through redact(), like every other line that touches
+                        // transcript text. Written with {:?} on the raw strings
+                        // this was the one place a release build put a whole
+                        // dictation into a log file that outlives the delete
+                        // button in the Dashboard, in an app whose claim is
+                        // that your words stay where you can see them.
+                        log::info!(
+                            "Disfluencies removed: {} -> {}",
+                            crate::redact(&text),
+                            crate::redact(&cleaned)
+                        );
                     }
                     cleaned
                 } else {
@@ -782,28 +792,41 @@ fn process_recording(
                                             model: None,
                                         };
                                         let llm = llm::build_provider(cfg);
+                                        // The error is kept, not dropped. It
+                                        // used to end in .ok(), so a key that
+                                        // had expired or a model the provider
+                                        // had retired failed on every single
+                                        // dictation and the log said only
+                                        // "AI Polish failed", with the reason
+                                        // thrown away at the one point it was
+                                        // known.
                                         llm.complete(&prompt, &styled_clone)
                                             .await
                                             .map(|r| r.text)
-                                            .ok()
                                     })
                                 })
                                 .join()
-                                .ok()
-                                .flatten();
+                                .unwrap_or_else(|_| {
+                                    Err("the polish thread panicked".to_string())
+                                });
 
                                 match result {
-                                    Some(polished) => {
+                                    Ok(polished) => {
                                         log::info!(
                                             "AI Polish result: {}",
                                             crate::redact(&polished)
                                         );
                                         polished
                                     }
-                                    None => {
+                                    Err(e) => {
+                                        // The provider's own words. This is the
+                                        // difference between "polish is broken"
+                                        // and knowing which key or model to fix.
                                         log::warn!(
-                                            "AI Polish failed, using unpolished text"
+                                            "AI Polish failed ({}), using unpolished text",
+                                            e
                                         );
+                                        let _ = handle.emit("polish-error", e);
                                         styled
                                     }
                                 }
@@ -1096,5 +1119,59 @@ mod transition_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod log_privacy_tests {
+    /// A release build must never write a dictation to the log file.
+    ///
+    /// This is a source lint rather than a behaviour test because that is where
+    /// the bug lives: `redact()` existed, was tested, and was used on every
+    /// line but one. `"Disfluencies removed: {:?} -> {:?}"` put two full copies
+    /// of the user's sentence into a file that outlives the delete button in
+    /// the Dashboard, and it shipped. Reviewing for it clearly does not work.
+    ///
+    /// The names below are the bindings that hold transcript text as it moves
+    /// through this file. Formatting one into a log line without `redact()` is
+    /// the mistake; a new name for the same thing should be added here.
+    #[test]
+    fn no_log_line_formats_transcript_text_directly() {
+        const TEXT_BINDINGS: &[&str] = &[
+            "text", "cleaned", "styled", "polished", "transcript", "raw",
+            "instruction", "selection", "sel", "expanded", "final_text",
+        ];
+
+        let src = include_str!("pipeline.rs");
+        let mut offenders = Vec::new();
+
+        for (i, line) in src.lines().enumerate() {
+            let t = line.trim();
+            if !t.contains("log::") || t.starts_with("//") {
+                continue;
+            }
+            // The payload of a log call on one line: everything after the
+            // format string's closing quote.
+            let Some(after) = t.rfind('"').map(|q| &t[q + 1..]) else { continue };
+            if after.contains("redact(") || after.contains("chars()") || after.contains("len()") {
+                continue;
+            }
+            for name in TEXT_BINDINGS {
+                // Word-boundary-ish: `&text,` or ` text)` but not `context`.
+                let hits = after
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|w| w == *name);
+                if hits {
+                    offenders.push(format!("pipeline.rs:{}: {}", i + 1, t));
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "log line(s) format transcript text without redact():\n{}",
+            offenders.join("\n")
+        );
     }
 }

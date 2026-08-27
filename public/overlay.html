@@ -11,13 +11,22 @@
       -webkit-user-select: none;
       /* The window is sized by overlay.rs, which is the only thing that knows
          whether live partials are on. Filling it here means the two cannot
-         disagree about the width. */
+         disagree about the size. */
       width: 100%;
-      height: 97px;
+      height: 100%;
       margin: 0;
       padding: 0;
     }
-    #row { display: flex; align-items: center; height: 97px; }
+    /* A column, blob at the bottom, words above it. The blob is the anchor:
+       overlay.rs places *it* and hangs the window around it, so it has to sit
+       flush with the bottom edge and centred, whatever the window's size. */
+    #row {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      height: 100%;
+    }
     canvas {
       width: 97px;
       height: 97px;
@@ -27,9 +36,8 @@
     /* Collapsed until there are words, so a dictation with nothing said yet
        shows the same bare blob it always did. */
     #partial {
-      flex: 1 1 auto;
-      min-width: 0;
-      margin-left: 2px;
+      max-width: 100%;
+      margin-bottom: 8px;
       padding: 9px 14px;
       border-radius: 13px;
       background: rgba(12, 11, 10, 0.92);
@@ -50,18 +58,16 @@
       transition: opacity 120ms ease-out;
     }
     #partial.on { opacity: 1; }
-    /* With live preview off the window is 97px wide and there is only ever the
-       blob. Relying on overflow:hidden to clip an empty 0-opacity panel works,
-       but it leaves a flex item competing for width in the one layout that has
-       none to give. Taking it out of flow entirely means the collapsed overlay
-       is the same box it was before this feature existed. */
+    /* Out of flow entirely when there is nothing to say, so the blob sits at
+       the bottom of the window on its own and the collapsed overlay is the
+       same box it was before this feature existed. */
     #partial:empty { display: none; }
   </style>
 </head>
 <body>
   <div id="row">
-    <canvas id="c" width="194" height="194"></canvas>
     <div id="partial"></div>
+    <canvas id="c" width="194" height="194"></canvas>
   </div>
   <script>
     // ── Live partial text ────────────────────────────────────────────────
