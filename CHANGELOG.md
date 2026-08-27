@@ -4,6 +4,14 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The recording overlay no longer jumps sideways when Live Preview is on.** Turning it on moved the ink blob 231 points to the left, off the spot it had occupied in every previous version, because the wider window was positioned by its own edge. The words now appear in a strip above the blob and the blob itself does not move at all.
+- **Inkwell was writing your dictations into its log file.** One line recorded the sentence before and after filler-word removal as plain text, in a log that survives clearing your history. It records lengths now, like every other line. If you have used Inkwell since 0.2.7, the existing log on your machine still contains that text: Settings, Troubleshooting, Open Log Folder, and delete `Inkwell.log`.
+- **AI Polish now says why it failed.** When the provider rejected a request, the reason was discarded and every dictation silently fell back to unpolished text with no way to find out why. The error is now reported.
+
 ## [0.2.9] - 2026-08-27
 
 ### Added
