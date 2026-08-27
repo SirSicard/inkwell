@@ -2,16 +2,53 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 
-fn focus_main(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        // Back to a normal app while a window is on screen, or an Accessory app
-        // cannot properly take focus and the window opens behind whatever the
-        // user was in. Dropped back to Accessory when the window is closed.
-        #[cfg(target_os = "macos")]
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-        let _ = window.show();
-        let _ = window.set_focus();
+/// Bring the main window back, from the tray, the Dock, or a second launch.
+///
+/// Every step here is load-bearing and the order matters. Closing the window
+/// hides it and drops the app to Accessory, and coming back from that is not
+/// one call:
+///
+/// - **Regular first.** An Accessory app has no Dock tile and cannot be
+///   activated, so anything below this would order a window front under
+///   whatever the user was in.
+/// - **Unminimise before show.** `show()` un-hides; it does not un-minimise, so
+///   a window minimised to the Dock stays there and the click looks ignored.
+/// - **Activate explicitly.** This is the step that was missing. Changing the
+///   activation policy does not activate the application, and `set_focus` on an
+///   inactive app can order the window front without bringing the app forward,
+///   which is exactly "clicked it and nothing happened".
+pub fn focus_main(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        // Never expected: the close handler calls prevent_close, so the window
+        // is hidden rather than destroyed. Worth saying out loud rather than
+        // returning silently, because the symptom would be a dead tray icon.
+        log::warn!("Show requested but the main window does not exist");
+        return;
+    };
+
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+
+    let _ = window.unminimize();
+    let _ = window.show();
+
+    #[cfg(target_os = "macos")]
+    {
+        // The `cocoa` crate is deprecated in favour of objc2-app-kit, but it is
+        // already how overlay.rs talks to AppKit and the migration is its own
+        // pass.
+        #[allow(deprecated)]
+        unsafe {
+            use cocoa::appkit::NSApplication;
+            use cocoa::base::{nil, YES};
+            let ns_app = cocoa::appkit::NSApp();
+            if ns_app != nil {
+                ns_app.activateIgnoringOtherApps_(YES);
+            }
+        }
     }
+
+    let _ = window.set_focus();
 }
 
 /// Put the most recent transcript back on the clipboard. The pipeline restores

@@ -121,11 +121,11 @@ pub fn run() {
         // The duplicate's launch attempt fronts the settings window of the
         // surviving instance instead, which is what the user was after.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            use tauri::Manager;
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            // Through the same path as the tray and the Dock. This used to be
+            // its own show + set_focus, which is how it came to be missing the
+            // activation and unminimise steps that the tray had to learn: three
+            // ways in, three chances to be subtly different.
+            tray::focus_main(app);
         }))
         .manage(AppState {
             audio: Mutex::new(None),
@@ -206,8 +206,28 @@ pub fn run() {
             polish::set_polish_settings,
             polish::run_ai_polish,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Clicking the Dock tile. macOS delivers this as a "reopen" and an
+            // app that does not handle it does nothing at all, which is what
+            // made the Dock icon feel dead after closing the window with
+            // Cmd+W: the window was hidden, the click had nowhere to go, and
+            // the only way back in was the menu bar.
+            //
+            // `has_visible_windows` is deliberately ignored. The overlay is a
+            // window and it is visible during a dictation, so gating on it
+            // would make the Dock icon work only when the user was not
+            // speaking.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                tray::focus_main(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (app, event);
+            }
+        });
 }
 
 #[cfg(test)]
