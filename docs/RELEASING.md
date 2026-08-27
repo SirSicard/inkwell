@@ -30,10 +30,19 @@ same failure after tagging costs a deleted tag and a burnt version.
 ## Cut it
 
 ```bash
-# 1. Bump the version in all five places, plus Cargo.lock
+# 1. Bump the version in FOUR places, plus Cargo.lock
 #    src-tauri/Cargo.toml, src-tauri/tauri.conf.json, package.json,
-#    homepage/lib/constants.ts, and the CHANGELOG heading
+#    and the CHANGELOG heading (## [Unreleased] -> ## [X.Y.Z] - date)
 #    (cd src-tauri && cargo check)   regenerates Cargo.lock
+#
+#    NOT homepage/lib/constants.ts. That is the fifth place and it waits
+#    for step 7, because the homepage deploys on push and its own rule is
+#    that the site may only advertise a version a release exists for.
+#    Bumping it here puts the new number on a page whose Download button
+#    still hands out the old build for as long as CI takes.
+#
+#    macOS note: BSD sed has no `0,/re/` address form. It fails silently,
+#    leaving the version untouched, which is easy to miss and then tag.
 
 # 2. Parity check. This is the one that only fails under the Tauri CLI:
 #    a Rust/npm Tauri version mismatch compiles fine and dies in CI.
@@ -64,6 +73,10 @@ inkwell-updater/publish-latest.sh
 # 7. Point the cask at the release. Refuses on a draft, on a no-op rewrite,
 #    and on a URL that does not return 200.
 bin/update-cask.sh
+
+# 8. Now bump homepage/lib/constants.ts to the same version and push. The
+#    release exists, so the site can describe it honestly. Pushing this is
+#    what deploys the homepage.
 ```
 
 ## What no longer needs doing
