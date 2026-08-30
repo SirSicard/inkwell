@@ -190,13 +190,13 @@ pub fn on_hotkey(handle: &tauri::AppHandle, is_edit: bool, pressed: bool) {
         sounds::play_dictation_start();
         let _ = handle.emit("recording-state", true);
         if show_overlay {
-            overlay::show(&handle);
+            overlay::show(handle);
         }
-        spawn_partial_feeder(&handle);
+        spawn_partial_feeder(handle);
     }
 
     if should_stop {
-        stop_and_process(&handle, "hotkey");
+        stop_and_process(handle, "hotkey");
     }
 }
 
