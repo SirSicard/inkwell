@@ -544,6 +544,19 @@ function App() {
       // from the feature not existing.
       listen<string>("voice-edit-error", (e) => toast(e.payload, "warning")),
       listen<string>("voice-edit-done", () => toast("Selection rewritten.", "info")),
+      // AI Polish and Live Preview both degrade to something that still works
+      // (unpolished text, no words on the overlay), so without these the only
+      // symptom is a feature quietly not doing its job. Emitting these events
+      // without listening for them was exactly half a fix: the reason reached
+      // the log file and never reached the person.
+      listen<string>("polish-error", (e) =>
+        toast(`AI Polish failed: ${e.payload}`, "warning")),
+      listen<string>("partials-error", (e) =>
+        toast(`Live Preview unavailable: ${e.payload}`, "warning")),
+      // A dictation that pasted but did not save is the one failure the user
+      // cannot see at all: the text arrived, so nothing looks wrong until the
+      // history has a hole in it.
+      listen<string>("history-error", (e) => toast(e.payload, "warning")),
     ]
     return () => { listeners.forEach((p) => p.then((fn) => fn())) }
   }, [])

@@ -53,6 +53,46 @@ pub async fn switch_model(
     Ok(name_str)
 }
 
+/// Model ids with a download in flight.
+///
+/// Two concurrent `download_model` calls for the same id both `File::create`
+/// the same destination and stream into it independently, which is a write race
+/// producing a corrupt file that `is_installed()` then reports as present,
+/// because that check only looks for the filename. The UI could reach this
+/// without doing anything exotic: the Live Preview row unmounts when the user
+/// switches tabs or turns the overlay off, and on remount the Download button
+/// is live again while the first download is still running.
+///
+/// Guarded here rather than in the frontend because the invariant belongs to
+/// the file, not to a component's lifetime.
+static IN_FLIGHT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::OnceLock::new();
+
+/// Claims `id`, or returns false if a download for it is already running.
+/// The returned guard releases the claim however the caller exits.
+struct DownloadClaim(String);
+
+impl DownloadClaim {
+    fn try_take(id: &str) -> Option<Self> {
+        let set = IN_FLIGHT.get_or_init(Default::default);
+        let mut guard = set.lock().unwrap_or_else(|e| e.into_inner());
+        if !guard.insert(id.to_string()) {
+            return None;
+        }
+        Some(DownloadClaim(id.to_string()))
+    }
+}
+
+impl Drop for DownloadClaim {
+    fn drop(&mut self) {
+        if let Some(set) = IN_FLIGHT.get() {
+            // into_inner on a poisoned lock: a panic in another download must
+            // not permanently wedge every future one.
+            set.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+        }
+    }
+}
+
 /// Generic model downloader. Downloads files from HuggingFace to the models directory.
 #[tauri::command]
 pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(), String> {
@@ -60,6 +100,11 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(
     use std::io::Write;
 
     let spec = models::find_any(&model_id).ok_or_else(|| format!("Unknown model: {}", model_id))?;
+
+    let _claim = DownloadClaim::try_take(&model_id).ok_or_else(|| {
+        format!("{} is already downloading", spec.display)
+    })?;
+
     let dir_name = spec.dir;
     let files = spec.files;
     let hf_base = spec.hf_base;

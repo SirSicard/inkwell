@@ -128,6 +128,10 @@ function HotkeyCapture({
           ).map(([token, name]) => (
             <button
               key={token}
+              // An exclusive toggle group: without this a screen reader hears
+              // four identically named buttons and cannot tell which key is
+              // currently bound. WCAG 4.1.2.
+              aria-pressed={hotkey === token}
               onClick={() => {
                 invoke(command, { hotkey: token })
                   .then(() => { void useSettings.getState().load(); setError("") })
@@ -191,13 +195,19 @@ function LivePreviewRow() {
     if (!status) return
     setError("")
     setPercent(0)
-    const stop = await listen<{ percent: number; model: string }>(
-      "model-download-progress",
-      (e) => {
-        if (e.payload.model === status.model_id) setPercent(e.payload.percent)
-      },
-    )
+    // `listen` inside the try, not before it. Subscribing is itself fallible
+    // (Tauri gates event subscriptions by capability), and when it sat outside,
+    // a rejection skipped catch AND finally: percent stayed at 0 forever, so
+    // the row showed a permanent "0%" with no way back to the button, and the
+    // rejection went unhandled.
+    let stop: (() => void) | null = null
     try {
+      stop = await listen<{ percent: number; model: string }>(
+        "model-download-progress",
+        (e) => {
+          if (e.payload.model === status.model_id) setPercent(e.payload.percent)
+        },
+      )
       await invoke("download_model", { modelId: status.model_id })
       await refresh()
       // Turning it on is what actually loads the model, so the download is
@@ -207,7 +217,7 @@ function LivePreviewRow() {
     } catch (e) {
       setError(String(e))
     } finally {
-      stop()
+      stop?.()
       setPercent(null)
     }
   }
@@ -226,12 +236,24 @@ function LivePreviewRow() {
           <span className="text-body text-text-tertiary tabular-nums">{percent}%</span>
         ) : status && !status.installed ? (
           <InkButton onClick={download}>Download {status.size}</InkButton>
-        ) : (
+        ) : (<>
+          {/* `ready` was fetched and never read, so a model that is on disk
+              but fails to load left the toggle showing On with nothing behind
+              it. The backend already knew; the UI just never asked. */}
+          {settings?.show_partials && status && !status.ready && (
+            <span className="text-xs text-amber-400 mb-1">not loaded</span>
+          )}
           <InkToggle
             checked={settings?.show_partials ?? false}
-            onChange={(v) => setSetting("show_partials", v)}
+            onChange={async (v) => {
+              await setSetting("show_partials", v)
+              // The load runs on a background thread and the command returns
+              // before it finishes, so the status has to be re-read afterwards
+              // or the row keeps showing whatever was true before the toggle.
+              setTimeout(() => { void refresh() }, 1500)
+            }}
           />
-        )}
+        </>)}
         {error && <p className="text-xs text-red-400 text-right max-w-56">{error}</p>}
       </div>
     </SettingRow>

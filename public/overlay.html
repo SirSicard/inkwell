@@ -79,8 +79,12 @@
     const partialEl = document.getElementById('partial');
 
     function setPartial(text) {
-      partialEl.textContent = text || '';
-      partialEl.classList.toggle('on', !!text);
+      // Trimmed, because a whitespace-only partial is not empty to the DOM: it
+      // creates a real text node, so #partial:empty stops matching and the
+      // panel un-collapses into an empty bubble with a border and no words.
+      const t = (text || '').trim();
+      partialEl.textContent = t;
+      partialEl.classList.toggle('on', !!t);
     }
 
     if (window.__TAURI__ && window.__TAURI__.event) {
