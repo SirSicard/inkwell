@@ -128,6 +128,23 @@ const ENCODER_FILES: &[&str] = &[
     "encode.onnx",
 ];
 
+/// Model downloads are pinned to an exact commit, not to `resolve/main`.
+///
+/// `main` is a mutable ref: the repository owner (or anyone who takes their
+/// account) can change what sits behind these URLs, and every install's next
+/// download follows silently, with no version to compare and no hash to catch
+/// it. What arrives is an ONNX file handed straight to a runtime with a history
+/// of malicious-model parsing bugs, on the one machine whose entire claim is
+/// that nothing leaves it. A pinned commit cannot be moved without changing the
+/// SHA, which is most of that risk closed for the cost of a constant.
+///
+/// Each SHA below was resolved from the HuggingFace API and then verified to
+/// serve a real file before being written down here.
+///
+/// Not yet done: per-file SHA256. That closes the remaining gap (a compromised
+/// CDN serving different bytes for the same commit) and costs a few GB of
+/// downloads to compute honestly, so it is deliberately left as follow-up
+/// rather than guessed at.
 /// Order is the order the UI shows them in: recommended default first.
 pub const MODELS: &[ModelSpec] = &[
     // Curated, not comprehensive. This was thirteen models, which asked the user
@@ -153,7 +170,7 @@ pub const MODELS: &[ModelSpec] = &[
         description: "Detects which of 25 European languages you are speaking, with no setting to change. The safe default, and the only choice here if you switch languages mid-sentence. If you only ever dictate in English, Parakeet V2 is measurably better.",
         size: "670 MB",
         languages: "25 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78",
         files: &[
             ("encoder.int8.onnx", 683_000_000),
             ("decoder.int8.onnx", 12_000_000),
@@ -171,7 +188,7 @@ pub const MODELS: &[ModelSpec] = &[
         description: "The most accurate option for English: 8.0% word error rate against 10.5% for the multilingual default, on the same recordings, at the same download size. Gets names and product words right where the others do not. English only.",
         size: "670 MB",
         languages: "English",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/main",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2",
         files: &[
             ("encoder.int8.onnx", 683_000_000),
             ("decoder.int8.onnx", 12_000_000),
@@ -189,7 +206,7 @@ pub const MODELS: &[ModelSpec] = &[
         description: "A quarter of the size and twice the speed of the others, and still close to the best: 9.3% word error rate. The right pick on a small disk, a slow connection, or an older machine, and the only small model here that also handles Chinese, Japanese, Korean and Cantonese.",
         size: "240 MB",
         languages: "5 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07",
         files: &[
             ("model.int8.onnx", 160_000_000),
             ("tokens.txt", 50_000),
@@ -222,7 +239,7 @@ pub const MODELS: &[ModelSpec] = &[
         description: "For the roughly 70 languages the others do not cover. It scores 9.3%, the same as SenseVoice, at three times the size and five times slower than Parakeet on the same audio, because of how the model is built rather than how big it is. Choose it for reach, and only for reach.",
         size: "800 MB",
         languages: "99 languages",
-        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/main",
+        hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/resolve/2ca6ff69fc878651b770880507669577ac41c2ff",
         files: &[
             ("turbo-encoder.int8.onnx", 397_000_000),
             ("turbo-decoder.int8.onnx", 409_000_000),
@@ -254,7 +271,7 @@ pub const STREAMING_MODEL: ModelSpec = ModelSpec {
     description: "Draws words on the overlay while you are still speaking. English only, no punctuation, and never what gets pasted.",
     size: "73 MB",
     languages: "English",
-    hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main",
+    hf_base: "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/672fbf1b30579d6585301139bb363f42a0ad4a24",
     files: &[
         ("encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx", 71_083_163),
         ("decoder-epoch-99-avg-1-chunk-16-left-128.onnx", 2_092_621),

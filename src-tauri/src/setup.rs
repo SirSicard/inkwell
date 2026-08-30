@@ -28,7 +28,13 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // Set up models directory
     let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
     let models_dir = app_data_dir.join("models");
-    std::fs::create_dir_all(&models_dir).ok();
+    // Not .ok(). Everything downstream that needs this directory reports only
+    // its own symptom ("No usable models found", "not downloaded yet"), so
+    // discarding the one error that names the actual cause sends anyone reading
+    // the log chasing a download problem that is really a permissions problem.
+    if let Err(e) = std::fs::create_dir_all(&models_dir) {
+        log::error!("Could not create the models directory {}: {}", models_dir.display(), e);
+    }
 
     let vad_model_path = models_dir.join("silero_vad.onnx");
 

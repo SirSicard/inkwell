@@ -26,7 +26,7 @@
 use crate::overlay::OVERLAY_LABEL;
 use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -151,11 +151,24 @@ enum Request {
     },
     Unload,
     /// Start a new utterance. `source_rate` is the capture device's rate.
+    ///
+    /// `gen` identifies the take. Without it, a fast press-release-press can
+    /// spawn a second feeder before the first has noticed its take ended, and
+    /// the two feeders' messages interleave on one queue: a stale `End` landing
+    /// after a fresh `Begin` tore down the new take's stream, and every
+    /// subsequent `Feed` was dropped, so that recording showed no partials at
+    /// all. The feeder polices itself every 100ms; this polices the queue.
     Begin {
         source_rate: usize,
+        gen: u64,
     },
-    Feed(Vec<f32>),
-    End,
+    Feed {
+        gen: u64,
+        samples: Vec<f32>,
+    },
+    End {
+        gen: u64,
+    },
 }
 
 pub struct StreamingService {
@@ -170,6 +183,8 @@ pub struct StreamingService {
     /// so a consumer starved of CPU has nothing stopping the queue growing for
     /// as long as the recording runs.
     pending: Arc<AtomicUsize>,
+    /// Monotonic take counter; see `Request::Begin`.
+    generation: Arc<AtomicU64>,
 }
 
 /// Feed messages allowed outstanding before new audio is dropped. At the
@@ -255,6 +270,7 @@ impl StreamingService {
         let ready_worker = ready.clone();
         let pending = Arc::new(AtomicUsize::new(0));
         let pending_worker = pending.clone();
+        let generation = Arc::new(AtomicU64::new(0));
 
         std::thread::Builder::new()
             .name("streaming-asr".into())
@@ -264,8 +280,18 @@ impl StreamingService {
                 let mut stream: Option<OnlineStream> = None;
                 let mut resampler: Option<StreamResampler> = None;
                 let mut last = String::new();
+                let mut current_gen: u64 = 0;
 
                 while let Ok(req) = rx.recv() {
+                    // Contained per message. This is the one persistent thread
+                    // in the app decoding continuous, unvalidated live audio
+                    // through an FFI recognizer whose decode/get_result have no
+                    // Result at all, so their only way to report trouble is to
+                    // panic. `pipeline.rs` already wraps the offline pass and
+                    // `vad.rs` says outright that a panic mid-detection must not
+                    // disable VAD for the session; this thread had neither, and
+                    // losing it silently disables live preview for good.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     match req {
                         Request::Attach(handle) => app = Some(handle),
                         Request::Load { dir, reply } => {
@@ -286,7 +312,8 @@ impl StreamingService {
                             recognizer = None;
                             log::info!("Streaming model unloaded");
                         }
-                        Request::Begin { source_rate } => {
+                        Request::Begin { source_rate, gen } => {
+                            current_gen = gen;
                             if let Some(r) = recognizer.as_ref() {
                                 stream = Some(r.create_stream());
                                 resampler = Some(StreamResampler::new(source_rate));
@@ -294,16 +321,19 @@ impl StreamingService {
                                 emit(app.as_ref(), "");
                             }
                         }
-                        Request::Feed(samples) => {
+                        Request::Feed { gen, samples } => {
                             pending_worker.fetch_sub(1, Ordering::Relaxed);
+                            if gen != current_gen {
+                                return;
+                            }
                             let (Some(r), Some(s), Some(rs)) =
                                 (recognizer.as_ref(), stream.as_ref(), resampler.as_mut())
                             else {
-                                continue;
+                                return;
                             };
                             let pcm = rs.push(&samples);
                             if pcm.is_empty() {
-                                continue;
+                                return;
                             }
                             s.accept_waveform(16_000, &pcm);
                             while r.is_ready(s) {
@@ -317,7 +347,10 @@ impl StreamingService {
                                 }
                             }
                         }
-                        Request::End => {
+                        Request::End { gen } => {
+                            if gen != current_gen {
+                                return;
+                            }
                             if let (Some(r), Some(s)) = (recognizer.as_ref(), stream.as_ref()) {
                                 s.input_finished();
                                 while r.is_ready(s) {
@@ -338,6 +371,17 @@ impl StreamingService {
                             // recording starts.
                         }
                     }
+                    }));
+                    if outcome.is_err() {
+                        // The recognizer's state after a panic is unknowable,
+                        // so the utterance is abandoned rather than continued.
+                        // The model stays loaded: the next Begin builds a fresh
+                        // stream, so one bad take does not cost the feature.
+                        stream = None;
+                        resampler = None;
+                        last.clear();
+                        log::error!("Streaming worker panicked; this take's partials are abandoned");
+                    }
                 }
                 // If the worker is gone, nothing can produce partials, and
                 // `is_ready()` must stop claiming otherwise. Without this the
@@ -349,7 +393,7 @@ impl StreamingService {
             })
             .expect("failed to spawn streaming thread");
 
-        Self { tx, ready, pending }
+        Self { tx, ready, pending, generation }
     }
 
     /// Is a model loaded? False means every other method here is a no-op, which
@@ -379,18 +423,22 @@ impl StreamingService {
         let _ = self.tx.send(Request::Unload);
     }
 
-    pub fn begin(&self, source_rate: usize) {
-        if self.tx.send(Request::Begin { source_rate }).is_err() {
+    /// Open a new utterance. The returned generation must be handed back to
+    /// `feed` and `end` so the worker can ignore a previous take's messages.
+    pub fn begin(&self, source_rate: usize) -> u64 {
+        let gen = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.tx.send(Request::Begin { source_rate, gen }).is_err() {
             self.on_worker_gone();
         }
+        gen
     }
 
-    pub fn feed(&self, samples: Vec<f32>) {
+    pub fn feed(&self, gen: u64, samples: Vec<f32>) {
         if self.pending.load(Ordering::Relaxed) >= MAX_PENDING_FEEDS {
             return;
         }
         self.pending.fetch_add(1, Ordering::Relaxed);
-        if self.tx.send(Request::Feed(samples)).is_err() {
+        if self.tx.send(Request::Feed { gen, samples }).is_err() {
             self.pending.fetch_sub(1, Ordering::Relaxed);
             // A dead worker cannot produce partials, so it must stop claiming
             // it can. Without this the send fails silently for the rest of the
@@ -407,8 +455,8 @@ impl StreamingService {
         }
     }
 
-    pub fn end(&self) {
-        let _ = self.tx.send(Request::End);
+    pub fn end(&self, gen: u64) {
+        let _ = self.tx.send(Request::End { gen });
     }
 }
 

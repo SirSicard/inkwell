@@ -259,7 +259,7 @@ fn spawn_partial_feeder(handle: &tauri::AppHandle) {
                 return;
             }
 
-            app_state.streaming.begin(rate);
+            let gen = app_state.streaming.begin(rate);
 
             let mut consumed = 0usize;
             loop {
@@ -276,14 +276,14 @@ fn spawn_partial_feeder(handle: &tauri::AppHandle) {
                 };
                 if !chunk.is_empty() {
                     consumed += chunk.len();
-                    app_state.streaming.feed(chunk);
+                    app_state.streaming.feed(gen, chunk);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(
                     PARTIAL_FEED_INTERVAL_MS,
                 ));
             }
 
-            app_state.streaming.end();
+            app_state.streaming.end(gen);
         });
 
     if let Err(e) = spawned {
@@ -524,7 +524,29 @@ fn process_recording(
             r
         }
         Err(e) => {
+            // Every sibling failure in this function either tells the user or
+            // falls through to the cleanup at the bottom. This one did neither:
+            // it returned straight out, so nothing was reported AND the
+            // always-on-top overlay was never hidden. The visible symptom was a
+            // blob stuck on screen, which reads as a UI glitch rather than as a
+            // dictation that was silently dropped, and sends a bug report
+            // looking in the wrong place entirely.
             log::error!("Resampling failed: {}", e);
+            let _ = handle.emit(
+                "transcription-error",
+                format!("That dictation could not be processed: {}", e),
+            );
+            // Read here rather than reusing the binding below: that one is
+            // established after this point in the function.
+            let show_overlay = handle
+                .state::<AppState>()
+                .settings
+                .lock()
+                .map(|s| s.show_overlay)
+                .unwrap_or(true);
+            if show_overlay {
+                overlay::hide(handle);
+            }
             return;
         }
     };
