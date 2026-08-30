@@ -859,13 +859,26 @@ fn process_recording(
                     let model_name = app_state.engine.name();
                     let db_guard = app_state.db.lock().unwrap();
                     if let Some(db) = db_guard.as_ref() {
-                        let _ = db.insert(
+                        // Not discarded. A failed insert used to be the one
+                        // failure in this function that logged nothing at all,
+                        // and the dictation still pasted, so the only symptom
+                        // was history quietly missing entries. Worse, the tray's
+                        // "Copy Last Transcript" then hands back the previous
+                        // take with full confidence, which is wrong rather than
+                        // merely absent.
+                        if let Err(e) = db.insert(
                             &final_text,
                             &text,
                             &style_name,
                             &model_name,
                             duration_ms,
-                        );
+                        ) {
+                            log::error!("History save failed: {}", e);
+                            let _ = handle.emit(
+                                "history-error",
+                                format!("This dictation was pasted but not saved to history: {}", e),
+                            );
+                        }
                     }
                 }
 
@@ -1126,51 +1139,97 @@ mod transition_tests {
 mod log_privacy_tests {
     /// A release build must never write a dictation to the log file.
     ///
-    /// This is a source lint rather than a behaviour test because that is where
-    /// the bug lives: `redact()` existed, was tested, and was used on every
-    /// line but one. `"Disfluencies removed: {:?} -> {:?}"` put two full copies
-    /// of the user's sentence into a file that outlives the delete button in
-    /// the Dashboard, and it shipped. Reviewing for it clearly does not work.
+    /// A source lint rather than a behaviour test because that is where the bug
+    /// lives: `redact()` existed, was tested, and was used on every line but
+    /// one. `"Disfluencies removed: {:?} -> {:?}"` put two full copies of the
+    /// user's sentence into a file that outlives the delete button, and it
+    /// shipped.
     ///
-    /// The names below are the bindings that hold transcript text as it moves
-    /// through this file. Formatting one into a log line without `redact()` is
-    /// the mistake; a new name for the same thing should be added here.
+    /// The first version of this lint scanned single physical lines and was
+    /// close to useless: this codebase writes anything with two arguments
+    /// across several lines, so `log::warn!(` alone on a line has no string
+    /// literal on it and was skipped entirely. Verified by planting a
+    /// multi-line leak of a watched binding and watching the lint pass. It now
+    /// joins each `log::` invocation into one logical statement first, and
+    /// covers every file that handles transcript text rather than this one.
     #[test]
     fn no_log_line_formats_transcript_text_directly() {
         const TEXT_BINDINGS: &[&str] = &[
             "text", "cleaned", "styled", "polished", "transcript", "raw",
             "instruction", "selection", "sel", "expanded", "final_text",
+            "hypothesis", "partial", "content", "body",
+        ];
+        const SOURCES: &[(&str, &str)] = &[
+            ("pipeline.rs", include_str!("pipeline.rs")),
+            ("voiceedit.rs", include_str!("voiceedit.rs")),
+            ("voicecommand.rs", include_str!("voicecommand.rs")),
+            ("snippets.rs", include_str!("snippets.rs")),
+            ("history.rs", include_str!("history.rs")),
+            ("streaming.rs", include_str!("streaming.rs")),
+            ("llm.rs", include_str!("llm.rs")),
+            ("polish.rs", include_str!("polish.rs")),
         ];
 
-        let src = include_str!("pipeline.rs");
         let mut offenders = Vec::new();
 
-        for (i, line) in src.lines().enumerate() {
-            let t = line.trim();
-            if !t.contains("log::") || t.starts_with("//") {
-                continue;
-            }
-            // The payload of a log call on one line: everything after the
-            // format string's closing quote.
-            let Some(after) = t.rfind('"').map(|q| &t[q + 1..]) else { continue };
-            if after.contains("redact(") || after.contains("chars()") || after.contains("len()") {
-                continue;
-            }
-            for name in TEXT_BINDINGS {
-                // Word-boundary-ish: `&text,` or ` text)` but not `context`.
-                let hits = after
-                    .split(|c: char| !c.is_alphanumeric() && c != '_')
-                    .any(|w| w == *name);
-                if hits {
-                    offenders.push(format!("pipeline.rs:{}: {}", i + 1, t));
-                    break;
+        for (name, src) in SOURCES {
+            let lines: Vec<&str> = src.lines().collect();
+            let mut i = 0;
+            while i < lines.len() {
+                let t = lines[i].trim();
+                if !t.contains("log::") || t.starts_with("//") || t.starts_with("///") {
+                    i += 1;
+                    continue;
                 }
+                // Join the whole invocation: keep taking lines until the
+                // parentheses balance. This is what the first version missed.
+                let start_line = i;
+                let mut stmt = String::new();
+                let mut depth = 0i32;
+                loop {
+                    let l = lines[i];
+                    for c in l.chars() {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => depth -= 1,
+                            _ => {}
+                        }
+                    }
+                    stmt.push_str(l.trim());
+                    stmt.push(' ');
+                    if depth <= 0 || i + 1 >= lines.len() {
+                        break;
+                    }
+                    i += 1;
+                }
+
+                // The payload is everything after the format string.
+                if let Some(q) = stmt.rfind('"') {
+                    let after = &stmt[q + 1..];
+                    let safe = after.contains("redact(")
+                        || after.contains("chars()")
+                        || after.contains("len()");
+                    if !safe {
+                        let leaked = after
+                            .split(|c: char| !c.is_alphanumeric() && c != '_')
+                            .any(|w| TEXT_BINDINGS.contains(&w));
+                        if leaked {
+                            offenders.push(format!(
+                                "{}:{}: {}",
+                                name,
+                                start_line + 1,
+                                stmt.trim()
+                            ));
+                        }
+                    }
+                }
+                i += 1;
             }
         }
 
         assert!(
             offenders.is_empty(),
-            "log line(s) format transcript text without redact():\n{}",
+            "log call(s) format transcript-derived text without redact():\n{}",
             offenders.join("\n")
         );
     }

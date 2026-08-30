@@ -2,6 +2,45 @@ use async_trait::async_trait;
 use serde_json::json;
 
 /// Uniform result from LLM polish
+/// Turn a failed HTTP response into an error string that is safe to log, show
+/// and hand to a caller.
+///
+/// The body is deliberately **not** included. Providers echo the offending
+/// input back in validation errors, and the input here is the user's dictation
+/// or whatever they had selected in another application. Returning the raw body
+/// put that text into `Err(String)`, which `pipeline.rs` then wrote to the
+/// on-disk log and emitted to the frontend, where `App.tsx` renders
+/// `voice-edit-error` in a toast. Same class of bug as the one this session
+/// already fixed once in the disfluency logger, arrived at from the other end.
+///
+/// What survives is the part that actually diagnoses the failure and cannot
+/// contain user text: the HTTP status, and the provider's own machine-readable
+/// `code`/`type` enums when it sends them. "model_decommissioned" and
+/// "invalid_api_key" are what a user needs; the echoed sentence is not.
+fn safe_api_error(label: &str, status: reqwest::StatusCode, body: &str) -> String {
+    let tag = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            let e = v.get("error")?;
+            let code = e.get("code").and_then(|c| c.as_str());
+            let kind = e.get("type").and_then(|t| t.as_str());
+            match (code, kind) {
+                (Some(c), _) => Some(c.to_string()),
+                (None, Some(t)) => Some(t.to_string()),
+                _ => None,
+            }
+        });
+
+    // The full body is a debug-build-only diagnostic, through the same gate as
+    // every other piece of user-derived text in this app.
+    log::debug!("{} raw error body: {}", label, crate::redact(body));
+
+    match tag {
+        Some(t) => format!("{} {} ({})", label, status.as_u16(), t),
+        None => format!("{} {}", label, status.as_u16()),
+    }
+}
+
 pub struct PolishResult {
     pub text: String,
 }
@@ -44,7 +83,7 @@ impl LlmProvider for OpenAICompatible {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, body));
+            return Err(safe_api_error("API error", status, &body));
         }
 
         let body: serde_json::Value = resp.json().await
@@ -91,7 +130,7 @@ impl LlmProvider for AnthropicProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Anthropic API error {}: {}", status, body));
+            return Err(safe_api_error("Anthropic API error", status, &body));
         }
 
         let body: serde_json::Value = resp.json().await
@@ -263,3 +302,51 @@ mod keychain_tests {
     }
 }
 
+
+#[cfg(test)]
+mod error_leak_tests {
+    use super::safe_api_error;
+    use reqwest::StatusCode;
+
+    /// A provider that echoes the request back in its error body must not be
+    /// able to put the user's words into an error string. This is behavioural
+    /// rather than a source lint on purpose: the leak was not a bad log call,
+    /// it was a value that was unsafe to log anywhere, and only the value's
+    /// own construction site can fix that.
+    #[test]
+    fn the_response_body_never_reaches_the_caller() {
+        let echoed = r#"{"error":{"message":"Invalid value for 'input': my bank password is hunter2","type":"invalid_request_error","code":"invalid_value"}}"#;
+        let out = safe_api_error("API error", StatusCode::BAD_REQUEST, echoed);
+        assert!(!out.contains("hunter2"), "leaked the echoed input: {out}");
+        assert!(!out.contains("bank"), "leaked the echoed input: {out}");
+        assert!(!out.contains("Invalid value"), "leaked the message: {out}");
+    }
+
+    /// ...but the part that actually tells the user what to fix survives, or
+    /// the fix would undo this session's other one: an error nobody can act on
+    /// is the reason AI Polish failed silently for weeks.
+    #[test]
+    fn the_diagnosable_part_survives() {
+        let decommissioned = r#"{"error":{"message":"The model `llama-3.3-70b-versatile` has been decommissioned","type":"invalid_request_error","code":"model_decommissioned"}}"#;
+        let out = safe_api_error("API error", StatusCode::BAD_REQUEST, decommissioned);
+        assert!(out.contains("400"), "lost the status: {out}");
+        assert!(out.contains("model_decommissioned"), "lost the code: {out}");
+    }
+
+    /// `type` is the fallback when a provider sends no `code`.
+    #[test]
+    fn falls_back_to_the_error_type() {
+        let body = r#"{"error":{"message":"nope","type":"authentication_error"}}"#;
+        let out = safe_api_error("API error", StatusCode::UNAUTHORIZED, body);
+        assert!(out.contains("authentication_error"), "got {out}");
+        assert!(!out.contains("nope"));
+    }
+
+    /// A non-JSON body (an HTML error page from a proxy, say) must degrade to
+    /// the status alone rather than passing the page through.
+    #[test]
+    fn a_non_json_body_degrades_to_the_status() {
+        let out = safe_api_error("API error", StatusCode::BAD_GATEWAY, "<html>secret</html>");
+        assert_eq!(out, "API error 502");
+    }
+}

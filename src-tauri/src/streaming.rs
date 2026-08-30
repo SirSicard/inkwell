@@ -316,6 +316,12 @@ impl StreamingService {
                         }
                     }
                 }
+                // If the worker is gone, nothing can produce partials, and
+                // `is_ready()` must stop claiming otherwise. Without this the
+                // flag stays true for the rest of the session and the settings
+                // UI reports a working feature that has no worker behind it,
+                // which is worse than reporting it broken.
+                ready_worker.store(false, Ordering::Relaxed);
                 log::info!("Streaming thread shutting down");
             })
             .expect("failed to spawn streaming thread");
