@@ -152,7 +152,24 @@ mod tap {
         };
         if let Some((slot, key)) = hit {
             let pressed = flags & key.flag_mask() != 0;
-            crate::pipeline::on_hotkey(&ctx.handle, slot == super::SLOT_EDIT, pressed);
+            // Contained, because this is a real `extern "C"` boundary: this
+            // function is called straight from CoreGraphics, and since Rust
+            // 1.71 an unwind across such a boundary aborts the process rather
+            // than unwinding. `on_hotkey` locks a dozen mutexes, so a panic
+            // anywhere else in the app that poisons one of them would turn the
+            // next Fn keypress into a hard crash of the whole application,
+            // where the same panic on the OS-hotkey path only kills a thread.
+            // The offline transcription path already uses this pattern; here
+            // the alternative to catching is an abort, not a thread death.
+            let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::pipeline::on_hotkey(&ctx.handle, slot == super::SLOT_EDIT, pressed);
+            }));
+            if hit.is_err() {
+                log::error!(
+                    "Modifier hotkey handler panicked (slot {}); the tap stays armed",
+                    slot
+                );
+            }
         }
         event
     }

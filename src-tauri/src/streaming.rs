@@ -12,14 +12,21 @@
 //! enough to watch, not good enough to keep.
 //!
 //! The recognizer is confined to one thread and never shared, the same shape as
-//! `EngineService` and for the same reason: `OnlineRecognizer` is not `Sync`,
-//! and no `unsafe impl` is needed if it is moved in once and spoken to by
-//! message.
+//! `EngineService`.
+//!
+//! An earlier version of this comment justified that by claiming
+//! `OnlineRecognizer` is not `Sync`. That is false: sherpa-onnx 1.13.4 carries
+//! `unsafe impl Send`/`Sync` for both `OnlineRecognizer` and `OnlineStream`,
+//! on the strength of "the C library is thread-safe for single-object usage".
+//! The confinement is still the right design, for the better reason: that is a
+//! blanket claim from an FFI wrapper about a C library's concurrent-mutation
+//! guarantees, and moving the recognizer in once and talking to it by message
+//! means the app never has to find out whether it is true.
 
 use crate::overlay::OVERLAY_LABEL;
 use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -157,7 +164,20 @@ pub struct StreamingService {
     /// hotkey path, which must not block on the worker to decide whether to
     /// spawn a feeder.
     ready: Arc<AtomicBool>,
+    /// Feed messages sent but not yet consumed. The channel is unbounded, and
+    /// unbounded is wrong here: one held hotkey is one utterance with no
+    /// endpoint, and toggle mode is exempt from the stuck-recording watchdog,
+    /// so a consumer starved of CPU has nothing stopping the queue growing for
+    /// as long as the recording runs.
+    pending: Arc<AtomicUsize>,
 }
+
+/// Feed messages allowed outstanding before new audio is dropped. At the
+/// feeder's 100ms cadence this is ~1.6s of backlog, well past the point where
+/// a partial is still worth drawing. Dropping stale audio is the correct
+/// behaviour for a feature whose output is thrown away a second later, not a
+/// compromise.
+const MAX_PENDING_FEEDS: usize = 16;
 
 /// Locate one of the transducer's three .onnx files in a model directory,
 /// preferring int8 when both precisions are present. Filenames carry the epoch
@@ -233,6 +253,8 @@ impl StreamingService {
         let (tx, rx) = channel::<Request>();
         let ready = Arc::new(AtomicBool::new(false));
         let ready_worker = ready.clone();
+        let pending = Arc::new(AtomicUsize::new(0));
+        let pending_worker = pending.clone();
 
         std::thread::Builder::new()
             .name("streaming-asr".into())
@@ -273,6 +295,7 @@ impl StreamingService {
                             }
                         }
                         Request::Feed(samples) => {
+                            pending_worker.fetch_sub(1, Ordering::Relaxed);
                             let (Some(r), Some(s), Some(rs)) =
                                 (recognizer.as_ref(), stream.as_ref(), resampler.as_mut())
                             else {
@@ -326,7 +349,7 @@ impl StreamingService {
             })
             .expect("failed to spawn streaming thread");
 
-        Self { tx, ready }
+        Self { tx, ready, pending }
     }
 
     /// Is a model loaded? False means every other method here is a no-op, which
@@ -357,11 +380,31 @@ impl StreamingService {
     }
 
     pub fn begin(&self, source_rate: usize) {
-        let _ = self.tx.send(Request::Begin { source_rate });
+        if self.tx.send(Request::Begin { source_rate }).is_err() {
+            self.on_worker_gone();
+        }
     }
 
     pub fn feed(&self, samples: Vec<f32>) {
-        let _ = self.tx.send(Request::Feed(samples));
+        if self.pending.load(Ordering::Relaxed) >= MAX_PENDING_FEEDS {
+            return;
+        }
+        self.pending.fetch_add(1, Ordering::Relaxed);
+        if self.tx.send(Request::Feed(samples)).is_err() {
+            self.pending.fetch_sub(1, Ordering::Relaxed);
+            // A dead worker cannot produce partials, so it must stop claiming
+            // it can. Without this the send fails silently for the rest of the
+            // session while the settings UI reports the feature as working.
+            self.on_worker_gone();
+        }
+    }
+
+    /// The worker is gone. Clear `ready` so nothing keeps feeding a channel
+    /// with no reader and the UI stops reporting a live feature.
+    fn on_worker_gone(&self) {
+        if self.ready.swap(false, Ordering::Relaxed) {
+            log::warn!("Streaming worker is gone; live preview disabled");
+        }
     }
 
     pub fn end(&self) {
