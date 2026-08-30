@@ -148,7 +148,21 @@ pub async fn download_model(app: tauri::AppHandle, model_id: String) -> Result<(
             .map_err(|e| format!("Download failed {}: {}", filename, e))?;
 
         if !resp.status().is_success() {
-            return Err(format!("HTTP {} for {}", resp.status(), filename));
+            let code = resp.status().as_u16();
+            // 401/403/404 from HuggingFace means the repository is gone,
+            // renamed or gated, not that the network failed. "HTTP 401" sends
+            // the user to check their connection; this sends them somewhere
+            // useful. Qwen3 ASR is in exactly this state today: its repo
+            // answers 401 on the repo page itself, so the model is listed in
+            // the catalogue and cannot be fetched by anyone.
+            if matches!(code, 401 | 403 | 404) {
+                return Err(format!(
+                    "{} is no longer available to download. Its files were withdrawn \
+                     from the host, so this is nothing you can fix. Pick another model.",
+                    spec.display
+                ));
+            }
+            return Err(format!("HTTP {} while fetching {}", code, filename));
         }
 
         let mut file =
