@@ -35,7 +35,7 @@ pub async fn transcribe_file(
         "file-transcribe-progress",
         json!({ "phase": "decoding", "percent": 5, "filename": &filename }),
     );
-    let samples = filetranscribe::decode_to_pcm(file_path)?;
+    let samples = filetranscribe::load_for_transcription(file_path)?;
     let duration_s = samples.len() as f32 / 16000.0;
 
     let _ = app.emit(

@@ -108,6 +108,20 @@ pub fn decode_to_pcm(path: &Path) -> Result<Vec<f32>, String> {
     }
 }
 
+/// Decode a file for transcription, levelled the same way a dictation take is.
+///
+/// `decode_to_pcm` keeps the file's own level. A quiet recording then reaches VAD
+/// and the recogniser as a near-flat signal: VAD finds no speech, and Parakeet V2
+/// returns empty text once speech falls to about -70 dBFS RMS. Dictation has always been lifted by
+/// `normalize_peak` before VAD; imported files skipped it.
+///
+/// One gain covers the whole file, so this rescues a uniformly quiet file (a
+/// voice memo on a quiet mic). A file with any sustained loud stretch is left
+/// as it is, and on a long file the few frames above the robust peak can clip.
+pub fn load_for_transcription(path: &Path) -> Result<Vec<f32>, String> {
+    decode_to_pcm(path).map(crate::recording::normalize_peak)
+}
+
 /// Chunk audio by VAD speech segments, grouped into max ~30s chunks.
 /// Returns Vec of (start_ms, chunk_samples).
 pub fn vad_chunk(
@@ -172,4 +186,37 @@ pub fn is_supported(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|ext| SUPPORTED_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One second of tone peaking at -40 dBFS: quiet, but within reach of
+    /// normalize_peak's 60x cap. Written as a real WAV so the test goes through
+    /// the same decode an imported file does.
+    fn write_quiet_wav(path: &Path) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        for i in 0..16000 {
+            let s = (i as f32 * 0.07).sin() * 0.01;
+            w.write_sample((s * i16::MAX as f32) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    #[test]
+    fn imported_files_are_levelled_like_dictation() {
+        let path = std::env::temp_dir().join("inkwell-quiet-import.wav");
+        write_quiet_wav(&path);
+        let samples = load_for_transcription(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!((peak - 0.35).abs() < 0.02, "quiet import not levelled: peak {peak}");
+    }
 }

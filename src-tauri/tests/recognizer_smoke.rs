@@ -84,6 +84,51 @@ fn hotword_biasing_does_not_break_ordinary_speech() {
     }
 }
 
+/// A quiet imported file still transcribes. Parakeet V2 on sherpa-onnx 1.13.4
+/// returns empty text once speech falls to about -70 dBFS RMS (the `say` fixture
+/// transcribes at -65 and comes back empty at -70); the file path now levels it
+/// the way dictation always has. The fixture is the `say` wav above, attenuated
+/// to -75 dBFS RMS and written back out, so it goes through the same decode an
+/// imported file does.
+#[test]
+#[ignore = "needs Parakeet V2 installed and a generated wav"]
+fn a_quiet_import_still_transcribes() {
+    let wav = PathBuf::from("/tmp/inkwell_test.wav");
+    assert!(wav.exists(), "generate the fixture first (see module docs)");
+
+    let loud = filetranscribe::decode_to_pcm(&wav).expect("decode failed");
+    let rms = (loud.iter().map(|s| s * s).sum::<f32>() / loud.len() as f32).sqrt();
+    let scale = 10f32.powf(-75.0 / 20.0) / rms;
+    let quiet_path = std::env::temp_dir().join("inkwell_test_quiet.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16000,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut w = hound::WavWriter::create(&quiet_path, spec).expect("create quiet wav");
+    for s in &loud {
+        w.write_sample(s * scale).expect("write sample");
+    }
+    w.finalize().expect("finalize quiet wav");
+
+    let eng = engine::SpeechEngine::parakeet_variant(&models_dir(), "v2").expect("model load failed");
+    // The fixture must reproduce the failure, or this test proves nothing.
+    let raw = filetranscribe::decode_to_pcm(&quiet_path).expect("decode failed");
+    let unlevelled = eng.transcribe(&raw, None).expect("transcribe failed");
+    assert!(unlevelled.is_empty(), "fixture no longer reproduces the empty-text floor: {unlevelled:?}");
+
+    let samples = filetranscribe::load_for_transcription(&quiet_path).expect("decode failed");
+    std::fs::remove_file(&quiet_path).ok();
+    let text = eng.transcribe(&samples, None).expect("transcribe failed");
+    println!("levelled: {text:?}");
+
+    let got = text.to_lowercase();
+    for word in ["quick", "brown", "fox", "lazy", "dog"] {
+        assert!(got.contains(word), "expected {word:?} in transcript, got {text:?}");
+    }
+}
+
 /// Voice editing end to end, minus the LLM call and the keystrokes: speak an
 /// instruction, transcribe it, and build the message the model would receive.
 /// This covers the seam that unit tests cannot, namely that a spoken
