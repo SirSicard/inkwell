@@ -1,5 +1,5 @@
 # Inkwell - Product Definition
-*v1.0 | 2026-07-24 | Mattias Herzig*
+*v1.0 | 2026-07-24 | Mattias Hjemgaard*
 *Supersedes PRD v0.3 (2026-03-29), which described a closed-source product with a future premium tier. That is no longer the plan.*
 
 ---

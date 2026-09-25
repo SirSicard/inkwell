@@ -39,7 +39,7 @@ export const SITE_URL = "https://getinkwell.vercel.app";
 export const APP_VERSION = "0.2.9";
 
 /** Author. */
-export const AUTHOR_NAME = "Mattias Herzig";
+export const AUTHOR_NAME = "Mattias Hjemgaard";
 export const AUTHOR_URL = "https://mattiasherzig.com";
 
 /** Upstream projects we lean on, credited in the footer. */

@@ -33,7 +33,7 @@
     "targets": "all",
     "category": "Productivity",
     "license": "MIT",
-    "copyright": "Copyright (c) 2026 Mattias Herzig. MIT licensed.",
+    "copyright": "Copyright (c) 2026 Mattias Hjemgaard. MIT licensed.",
     "shortDescription": "Local-first dictation that types where you type.",
     "longDescription": "Inkwell is free and open source dictation. Speech recognition runs entirely on your own machine; optional AI polish uses an API key you bring yourself.",
     "icon": [

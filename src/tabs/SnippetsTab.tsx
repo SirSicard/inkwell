@@ -92,7 +92,7 @@ export function SnippetsTab() {
         <textarea
           value={expansion}
           onChange={(e) => setExpansion(e.target.value)}
-          placeholder='Expansion text... (e.g. "Best regards,\nMattias Herzig")'
+          placeholder='Expansion text... (e.g. "Best regards,\nMattias Hjemgaard")'
           rows={2}
           className="w-full px-3 py-1.5 text-xs bg-bg-base border border-border rounded-md text-text-secondary placeholder:text-text-tertiary focus:outline-none focus:border-border-default resize-none"
         />

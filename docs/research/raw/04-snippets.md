@@ -17,7 +17,7 @@ Audio → STT → Raw Text → [Dictionary] → [Snippets] → [Style] → Paste
 struct Snippet {
     id: String,
     trigger: String,           // "sig", "addr", "eml"
-    expansion: String,         // "Best regards,\nMattias Herzig"
+    expansion: String,         // "Best regards,\nMattias Hjemgaard"
     category_id: Option<String>,
     variables: Vec<Variable>,  // dynamic parts
     enabled: bool,
