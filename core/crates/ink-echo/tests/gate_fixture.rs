@@ -48,9 +48,10 @@ fn leaked_echo_words_are_dropped_and_the_users_words_kept() {
         gate.push_frame(&f);
     }
     // The oracle VAD over the full output's windows: speech where the near end talks.
-    for w in s.near.chunks(VAD_WINDOW) {
+    for (i, w) in s.near.chunks(VAD_WINDOW).enumerate() {
         let level = frame_db(w).into_iter().fold(f64::MIN, f64::max);
-        gate.push_speech(if level > -60.0 { 0.95 } else { 0.02 });
+        gate.push_speech(i as u64, if level > -60.0 { 0.95 } else { 0.02 })
+            .expect("a probability");
     }
 
     let near_db = frame_db(&s.near);

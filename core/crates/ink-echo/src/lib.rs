@@ -84,6 +84,8 @@ pub enum EchoError {
     BadAlignment,
     /// The canceller was already finished.
     Ended,
+    /// A speech probability outside 0–1 (NaN included) reached the gate. It was not recorded.
+    BadSpeechProbability,
 }
 
 impl fmt::Display for EchoError {
@@ -99,6 +101,7 @@ impl fmt::Display for EchoError {
             ),
             Self::BadAlignment => write!(f, "the echo path's alignment is out of range"),
             Self::Ended => write!(f, "the echo canceller has already finished"),
+            Self::BadSpeechProbability => write!(f, "a speech probability outside 0 to 1"),
         }
     }
 }
