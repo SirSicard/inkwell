@@ -730,6 +730,51 @@ fn insertion_is_blocked_under_secure_input() {
     );
 }
 
+/// A paste whose clipboard could not be put back is still a paste: the text is in, so it is an
+/// `Ok` outcome the pipeline never retries, never an error.
+#[test]
+fn a_paste_that_could_not_restore_the_clipboard_is_still_an_insertion() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    mock.set_insert_outcome(InsertOutcome::PastedClipboardNotRestored);
+    assert_eq!(
+        p.inserter.insert("hello"),
+        Ok(InsertOutcome::PastedClipboardNotRestored)
+    );
+    assert_eq!(mock.inserted(), vec!["hello".to_string()]);
+}
+
+/// `Lost` ends the binding: the OS removed the hotkey, nothing arrives until `start` again.
+#[test]
+fn a_lost_hotkey_stays_lost_until_started_again() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let on_event: EventSink<HotkeyEvent> = Arc::new(move |e| sink.lock().unwrap().push(e));
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), on_event.clone())
+        .unwrap();
+    assert!(mock.press());
+    assert!(mock.lose_hotkey());
+    assert!(!mock.release(), "nothing is bound after a loss");
+    assert!(!mock.lose_hotkey());
+    assert_eq!(mock.hotkey_binding(), None);
+
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), on_event)
+        .unwrap();
+    assert!(mock.press());
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![
+            HotkeyEvent::Pressed { at_ns: 0 },
+            HotkeyEvent::Lost,
+            HotkeyEvent::Pressed { at_ns: 0 },
+        ]
+    );
+}
+
 #[test]
 fn meeting_signals_reach_the_detector_until_it_stops() {
     let mock = Arc::new(MockPlatform::new());

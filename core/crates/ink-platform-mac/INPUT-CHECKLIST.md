@@ -60,7 +60,9 @@ six in one go.
 | Mail | the body of a new message (do not send) | |
 
 **Must see** in every row: the text once, `insert: Pasted`, `clipboard: same items as before`. Fill
-the table with the outcome and the time from the `insert:` line.
+the table with the outcome and the time from the `insert:` line. `PastedClipboardNotRestored`
+means the text went in but the clipboard did not fully come back: record which app and what was
+on the clipboard (its kind, not its content).
 
 ## C. Selection
 
@@ -97,10 +99,12 @@ copy (the restore puts back whatever was there, not the first sentinel).
 
 ## G. No permission, no prompt
 
-1. Quit the binary. In System Settings > Privacy & Security > Accessibility, switch the terminal
-   app off.
-2. Run it with no arguments. **Must see:** `FAIL hotkey "fn": permission not granted:
-   Accessibility`, and **no system dialog**.
+1. Run it with no arguments, hold and release once, then leave it running. In System Settings >
+   Privacy & Security > Accessibility, switch the terminal app off. Hold Fn again. **Record** what
+   it prints: `lost: the OS removed the hotkey` is the expected line; if nothing happens, or it
+   keeps reporting presses, that is a finding. There must be **no system dialog**.
+2. Quit the binary if it is still running, and run it again with Accessibility still off.
+   **Must see:** `FAIL hotkey "fn": permission not granted: Accessibility`, and no dialog.
 3. Run `--timed 3`. **Must see:** `insert: FAILED ... permission not granted: Accessibility`, no
    dialog, and `clipboard: same items as before`.
 4. Switch the terminal back on.
@@ -108,4 +112,5 @@ copy (the restore puts back whatever was there, not the first sentinel).
 ## Result
 
 Green when A, B (all six rows), E, F and G pass as described. Record the section A emoji-picker
-finding and any timings far outside the ranges above.
+finding, the section G step 1 finding, and any timings far outside the ranges above. A run that
+ends with `FAIL the tap caught N panics` is a bug to report, whatever else passed.

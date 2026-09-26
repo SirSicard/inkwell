@@ -129,8 +129,9 @@ pub(crate) fn selected_text() -> Result<Option<String>, PlatformError> {
 /// Some apps answer success and ignore the write. When the element reports its length, a write
 /// that should have changed it and did not is treated as refused, so the typing fallback runs.
 pub(crate) fn insert_text(text: &str) -> AxInsert {
-    let Ok(Some(element)) = focused_element() else {
-        return AxInsert::Refused;
+    let element = match focused_or(focused_element()) {
+        Ok(element) => element,
+        Err(outcome) => return outcome,
     };
     let before = character_count(&element);
     let selected = string_attribute(&element, SELECTED_TEXT)
@@ -153,6 +154,19 @@ pub(crate) fn insert_text(text: &str) -> AxInsert {
         }
         Class::TimedOut => AxInsert::Unknown,
         Class::Absent | Class::Denied | Class::Failed => AxInsert::Refused,
+    }
+}
+
+/// What a focus read means for the write that would follow: the element, or the outcome.
+fn focused_or<T>(read: Result<Option<T>, PlatformError>) -> Result<T, AxInsert> {
+    match read {
+        Ok(Some(element)) => Ok(element),
+        // Nothing focused, nothing that exposes a selection, or not trusted: nothing was
+        // written, and typing may still work.
+        Ok(None) => Err(AxInsert::Refused),
+        // The app did not answer, or AX failed: nothing was written, and an app in that state is
+        // not one to type into.
+        Err(error) => Err(AxInsert::Unreachable(error)),
     }
 }
 
@@ -256,6 +270,17 @@ mod tests {
         assert_eq!(classify(-25200), Class::Failed, "kAXErrorFailure");
         assert_eq!(classify(-25201), Class::Failed, "kAXErrorIllegalArgument");
         assert_eq!(classify(-1), Class::Failed);
+    }
+
+    #[test]
+    fn a_focus_read_that_failed_is_unreachable_not_refused() {
+        let timed_out = PlatformError::Failed("the focused app did not answer".into());
+        assert_eq!(
+            focused_or::<u8>(Err(timed_out.clone())),
+            Err(AxInsert::Unreachable(timed_out))
+        );
+        assert_eq!(focused_or::<u8>(Ok(None)), Err(AxInsert::Refused));
+        assert_eq!(focused_or(Ok(Some(7u8))), Ok(7));
     }
 
     #[test]

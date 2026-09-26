@@ -15,6 +15,14 @@
 //! reports `Cancelled` for any hold in progress. Events this crate posts itself (the paste
 //! keystroke, typed text) carry a marker and pass through untouched.
 //!
+//! **Lost.** If the OS will not take the tap back, or invalidates it (Accessibility revoked
+//! mid-session), the source reports `Lost` once and its thread ends; nothing more arrives until
+//! `start` is called again. Our own `stop` never reports `Lost`.
+//!
+//! **Panics.** A panic in the core's sink is caught on the tap thread (it must not unwind into
+//! CoreGraphics), counted in [`MacHotkeySource::callback_panics`], and recovered: the hold starts
+//! over and `Cancelled` is sent, so the tap never holds a key the core does not know about.
+//!
 //! **Timestamps** are host time on the [`MacClock`] timebase. `CGEventGetTimestamp` is documented
 //! as nanoseconds but carries mach ticks on Apple silicon, so the event's stamp is taken in
 //! whichever reading lands in the last second, and the tap's own `now_ns` otherwise.
@@ -24,7 +32,8 @@ pub(crate) mod binding;
 mod machine;
 mod tap;
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ink_core::{EventSink, HotkeyBinding, HotkeyEvent, HotkeySource, PlatformError};
 
@@ -40,6 +49,7 @@ pub(crate) const SYNTHETIC_EVENT_MARK: i64 = 0x696E_6B77;
 pub struct MacHotkeySource {
     clock: MacClock,
     tap: Mutex<Option<Tap>>,
+    panics: Arc<AtomicU64>,
 }
 
 impl MacHotkeySource {
@@ -49,7 +59,16 @@ impl MacHotkeySource {
         Self {
             clock,
             tap: Mutex::new(None),
+            panics: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// How many panics the tap thread has caught since this source was created: the core's sink
+    /// panicking, or this crate's callback. Each one was recovered, not ignored: the hold was
+    /// reset and `Cancelled` sent, so the tap and the core agree that no key is down. A non-zero
+    /// count is a bug to report, which is why it is readable here.
+    pub fn callback_panics(&self) -> u64 {
+        self.panics.load(Ordering::Relaxed)
     }
 }
 
@@ -68,7 +87,12 @@ impl HotkeySource for MacHotkeySource {
         if let Some(old) = slot.take() {
             old.shutdown();
         }
-        *slot = Some(Tap::spawn(parsed, on_event, self.clock)?);
+        *slot = Some(Tap::spawn(
+            parsed,
+            on_event,
+            self.clock,
+            Arc::clone(&self.panics),
+        )?);
         Ok(())
     }
 

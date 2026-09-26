@@ -257,6 +257,14 @@ impl MockPlatform {
         self.hotkey_event(HotkeyEvent::Cancelled)
     }
 
+    /// The OS removes the hotkey: sends [`HotkeyEvent::Lost`] and unbinds, as the real
+    /// platforms do, so nothing arrives until `start` again. Returns whether a binding was
+    /// listening.
+    pub fn lose_hotkey(&self) -> bool {
+        let bound = lock(&self.hotkey).take();
+        bound.map(|(_, sink)| sink(HotkeyEvent::Lost)).is_some()
+    }
+
     /// The current binding, if the hotkey is started.
     pub fn hotkey_binding(&self) -> Option<HotkeyBinding> {
         lock(&self.hotkey).as_ref().map(|(b, _)| b.clone())

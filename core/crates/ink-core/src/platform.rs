@@ -132,6 +132,11 @@ pub enum HotkeyEvent {
     /// The OS stopped delivering key events (a disabled event tap, lost focus of a low-level
     /// hook). The core ends any hold in progress rather than leaving it stuck down.
     Cancelled,
+    /// The OS removed the hotkey (for example, Accessibility was revoked mid-session). It also
+    /// ends any hold in progress, and nothing more arrives until [`HotkeySource::start`] is
+    /// called again. The core re-checks permissions and tells the user; it never retries in a
+    /// loop.
+    Lost,
 }
 
 /// A global hotkey.
@@ -159,6 +164,11 @@ pub enum InsertOutcome {
     /// Secure Input (macOS) or an elevated target (Windows) blocks synthetic input. Nothing was
     /// inserted, and the UI says so instead of failing silently.
     Blocked,
+    /// The text is in, but the previous clipboard could not be put back, fully or partly. It is a
+    /// success, never retried (a retry would insert the text twice); the UI says once that the
+    /// clipboard changed. Also reported when a paste was not taken, the clipboard restore failed,
+    /// and a fallback then inserted the text.
+    PastedClipboardNotRestored,
 }
 
 /// Puts text into the focused application.

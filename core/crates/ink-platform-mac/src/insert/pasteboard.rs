@@ -43,10 +43,42 @@ pub(crate) const TRANSIENT_TYPE: &str = "org.nspasteboard.TransientType";
 /// Marks an item as sensitive: clipboard managers must not show or store it (nspasteboard.org).
 pub(crate) const CONCEALED_TYPE: &str = "org.nspasteboard.ConcealedType";
 
-/// Every item on a pasteboard, as (type, bytes) pairs.
+/// Every item on a pasteboard, as (type, bytes) pairs, and how many types could not be saved.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Saved {
     items: Vec<Vec<(String, Vec<u8>)>>,
+    /// Types whose owner would not provide the data. A restore cannot bring them back, so it
+    /// reports itself partial rather than complete.
+    skipped: usize,
+}
+
+/// Builds a snapshot from what each type's owner provided, counting the types that gave nothing.
+fn snapshot(items: Vec<Vec<(String, Option<Vec<u8>>)>>) -> Saved {
+    let mut skipped = 0;
+    let items = items
+        .into_iter()
+        .map(|types| {
+            types
+                .into_iter()
+                .filter_map(|(ty, data)| {
+                    if data.is_none() {
+                        skipped += 1;
+                    }
+                    data.map(|bytes| (ty, bytes))
+                })
+                .collect()
+        })
+        .collect();
+    Saved { items, skipped }
+}
+
+/// A restore that lost `lost_types` types is partial.
+fn restored(lost_types: usize) -> Restore {
+    if lost_types == 0 {
+        Restore::Restored
+    } else {
+        Restore::RestoredPartly { lost_types }
+    }
 }
 
 /// The pasteboard the insertion uses: the general one, which Cmd+V reads.
@@ -60,25 +92,26 @@ pub(crate) fn change_count(pasteboard: &NSPasteboard) -> i64 {
 }
 
 /// Copies every item, and every type of every item. Types whose data the owner will not provide
-/// are skipped: there is nothing to put back for them.
+/// cannot be put back; they are counted, so the restore can say it was partial.
 pub(crate) fn save(pasteboard: &NSPasteboard) -> Result<Saved, PlatformError> {
     let Some(items) = pasteboard.pasteboardItems() else {
         return Err(PlatformError::Failed(
             "could not read the pasteboard's items".into(),
         ));
     };
-    let items = items
-        .to_vec()
-        .into_iter()
-        .map(|item| {
-            item.types()
-                .to_vec()
-                .into_iter()
-                .filter_map(|ty| item.dataForType(&ty).map(|d| (ty.to_string(), d.to_vec())))
-                .collect()
-        })
-        .collect();
-    Ok(Saved { items })
+    Ok(snapshot(
+        items
+            .to_vec()
+            .into_iter()
+            .map(|item| {
+                item.types()
+                    .to_vec()
+                    .into_iter()
+                    .map(|ty| (ty.to_string(), item.dataForType(&ty).map(|d| d.to_vec())))
+                    .collect()
+            })
+            .collect(),
+    ))
 }
 
 /// Clears `pasteboard` and writes `text` as a promise. Each read of the promise sends on `reads`.
@@ -125,6 +158,7 @@ pub(crate) fn restore_if_unchanged(
         return Ok(Restore::KeptNewerCopy);
     }
     pasteboard.clearContents();
+    let mut lost_types = saved.skipped;
     let items: Vec<_> = saved
         .items
         .iter()
@@ -132,13 +166,15 @@ pub(crate) fn restore_if_unchanged(
         .map(|types| {
             let item = NSPasteboardItem::new();
             for (ty, bytes) in types {
-                item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(ty));
+                if !item.setData_forType(&NSData::with_bytes(bytes), &NSString::from_str(ty)) {
+                    lost_types += 1;
+                }
             }
             ProtocolObject::from_retained(item)
         })
         .collect();
     if items.is_empty() || pasteboard.writeObjects(&NSArray::from_retained_slice(&items)) {
-        Ok(Restore::Restored)
+        Ok(restored(lost_types))
     } else {
         Err(PlatformError::Failed(
             "the pasteboard refused the saved items".into(),
@@ -257,6 +293,28 @@ mod tests {
     const CUSTOM: &str = "com.example.synthetic-flavour";
 
     #[test]
+    fn a_type_whose_data_cannot_be_read_is_counted_not_hidden() {
+        let saved = snapshot(vec![
+            vec![
+                (PLAIN.into(), Some(b"kept".to_vec())),
+                (CUSTOM.into(), None),
+            ],
+            vec![("com.example.other".into(), None)],
+        ]);
+        assert_eq!(saved.skipped, 2);
+        assert_eq!(
+            saved.items,
+            vec![vec![(PLAIN.to_string(), b"kept".to_vec())], vec![]]
+        );
+    }
+
+    #[test]
+    fn a_restore_that_lost_types_is_partial() {
+        assert_eq!(restored(0), Restore::Restored);
+        assert_eq!(restored(3), Restore::RestoredPartly { lost_types: 3 });
+    }
+
+    #[test]
     fn the_markers_are_the_nspasteboard_org_types() {
         assert_eq!(TRANSIENT_TYPE, "org.nspasteboard.TransientType");
         assert_eq!(CONCEALED_TYPE, "org.nspasteboard.ConcealedType");
@@ -332,7 +390,8 @@ mod tests {
         assert_eq!(
             now,
             Saved {
-                items: vec![vec![(PLAIN.into(), b"the user's newer copy".to_vec())]]
+                items: vec![vec![(PLAIN.into(), b"the user's newer copy".to_vec())]],
+                skipped: 0,
             }
         );
     }

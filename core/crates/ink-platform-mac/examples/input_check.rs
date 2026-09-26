@@ -37,7 +37,8 @@ mod mac {
 
     use dispatch2::DispatchQueue;
     use ink_core::{
-        Clock, EventSink, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, TextInserter,
+        Clock, EventSink, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, InsertOutcome,
+        TextInserter,
     };
     use ink_platform_mac::{MacClock, MacFocusReader, MacHotkeySource, MacTextInserter};
     use objc2_app_kit::NSPasteboard;
@@ -210,9 +211,20 @@ mod mac {
                     println!("cancelled (the OS disabled the tap mid-hold, or it was stopped)");
                     pressed_at = None;
                 }
+                HotkeyEvent::Lost => {
+                    println!(
+                        "lost: the OS removed the hotkey (Accessibility revoked?); \
+                         nothing more arrives until it is started again"
+                    );
+                    return 1;
+                }
             }
         }
         source.stop();
+        if source.callback_panics() > 0 {
+            println!("FAIL the tap caught {} panics", source.callback_panics());
+            return 1;
+        }
         i32::from(failures > 0)
     }
 
@@ -256,6 +268,13 @@ mod mac {
             after.0
         );
         match outcome {
+            Ok(InsertOutcome::PastedClipboardNotRestored) => {
+                println!(
+                    "insert: PastedClipboardNotRestored in {took_ms:.0} ms: the text is in, the \
+                     previous clipboard is not (fully) back"
+                );
+                1
+            }
             Ok(outcome) => {
                 println!("insert: {outcome:?} in {took_ms:.0} ms");
                 0

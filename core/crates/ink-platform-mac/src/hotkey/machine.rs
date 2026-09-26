@@ -89,6 +89,12 @@ impl HoldMachine {
         self.held
     }
 
+    /// Forgets any hold, so the next press starts a new one. For when the core may not have seen
+    /// an edge (its sink panicked) or the hotkey was lost.
+    pub(crate) fn reset(&mut self) {
+        self.held = false;
+    }
+
     /// Decides one event.
     pub(crate) fn on(&mut self, input: TapInput) -> Verdict {
         match (self.binding, input) {
@@ -340,6 +346,16 @@ mod tests {
         };
         assert_eq!(m.on(repeat), PASS);
         assert!(!m.is_held());
+    }
+
+    #[test]
+    fn a_reset_forgets_the_hold() {
+        let mut m = machine("fn");
+        m.on(fn_flags(true));
+        m.reset();
+        assert!(!m.is_held());
+        assert_eq!(m.on(fn_flags(false)), PASS, "the release is no longer ours");
+        assert_eq!(m.on(fn_flags(true)), pressed());
     }
 
     #[test]

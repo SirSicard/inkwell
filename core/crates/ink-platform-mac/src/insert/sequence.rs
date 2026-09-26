@@ -54,21 +54,32 @@ pub(crate) struct Promise {
 /// What a restore did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Restore {
-    /// The saved items are back.
+    /// The saved items are back, every type of every item.
     Restored,
+    /// The items are back, minus `lost_types` types: their owner would not provide the data when
+    /// it was saved, or the pasteboard would not take it back.
+    RestoredPartly {
+        /// How many types were lost.
+        lost_types: usize,
+    },
     /// Someone wrote the pasteboard after us (the user copied something): theirs stays.
     KeptNewerCopy,
 }
 
 /// What an Accessibility write did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum AxInsert {
     /// The focused element took the text.
     Took,
-    /// Refused, unsupported, nothing focused, or verifiably ignored: safe to try typing.
+    /// Nothing focused that takes a write, the write refused or unsupported, or verifiably
+    /// ignored: nothing was written, and typing may still work.
     Refused,
-    /// The app did not answer in time, so the text may or may not be there. Typing on top could
-    /// insert it twice, so the sequence stops.
+    /// Accessibility could not reach the focused element (the app did not answer, or AX failed)
+    /// before anything was written. Typing into an app in that state is not safe either, so the
+    /// sequence stops and reports this reason.
+    Unreachable(PlatformError),
+    /// The write went out and the app did not answer in time, so the text may or may not be
+    /// there. Typing on top could insert it twice, so the sequence stops.
     Unknown,
 }
 
@@ -156,65 +167,85 @@ pub(crate) fn insert<B: Backend>(
     if !can_post && !ax_trusted {
         return Err(PlatformError::PermissionDenied(Permission::Accessibility));
     }
-    let mut restore = Ok(());
+    let mut clipboard_back = true;
     if can_post {
         match paste(backend, text, timing) {
-            Paste::Taken(restored) => {
-                // The text is in. A failed restore is reported, never swallowed, and nothing
-                // falls back: typing it again would insert it twice.
-                return restored
-                    .map(|()| InsertOutcome::Pasted)
-                    .map_err(|e| clipboard_lost("pasted", &e));
+            Paste::Taken { clipboard_back } => {
+                // The text is in. A clipboard that did not come back is part of the outcome,
+                // never an error (an error invites a retry, which would insert the text twice),
+                // and nothing falls back.
+                return Ok(if clipboard_back {
+                    InsertOutcome::Pasted
+                } else {
+                    InsertOutcome::PastedClipboardNotRestored
+                });
             }
-            Paste::NotTaken(restored) => restore = restored,
+            Paste::NotTaken {
+                clipboard_back: back,
+            } => clipboard_back = back,
         }
     }
-    let outcome = fallback(backend, text, can_post, ax_trusted)?;
-    restore
-        .map(|()| outcome)
-        .map_err(|e| clipboard_lost("typed", &e))
+    match fallback(backend, text, can_post, ax_trusted) {
+        Ok(outcome) if clipboard_back => Ok(outcome),
+        Ok(_) => Ok(InsertOutcome::PastedClipboardNotRestored),
+        Err(error) if clipboard_back => Err(error),
+        Err(error) => Err(PlatformError::Failed(format!(
+            "{}; the previous clipboard could not be put back either",
+            reason(&error)
+        ))),
+    }
 }
 
-/// How the paste went, and how the restore after it went.
+/// How the paste went, and whether the clipboard came back afterwards.
 enum Paste {
     /// A target read the promise.
-    Taken(Result<(), PlatformError>),
+    Taken { clipboard_back: bool },
     /// Impossible, or nobody read it in time.
-    NotTaken(Result<(), PlatformError>),
+    NotTaken { clipboard_back: bool },
+}
+
+/// Whether a restore left the user's clipboard as it should be: back in full, or replaced by a
+/// newer copy of their own.
+fn clipboard_back(restore: &Result<Restore, PlatformError>) -> bool {
+    matches!(restore, Ok(Restore::Restored | Restore::KeptNewerCopy))
 }
 
 fn paste<B: Backend>(backend: &B, text: &str, timing: PasteTiming) -> Paste {
     let before = backend.change_count();
     // A pasteboard that cannot be saved is never overwritten: the user would lose it.
     let Ok(saved) = backend.save_pasteboard() else {
-        return Paste::NotTaken(Ok(()));
+        return Paste::NotTaken {
+            clipboard_back: true,
+        };
     };
     let promise = match backend.write_promise(text) {
         Ok(promise) => promise,
         Err(_) => {
             // A write that failed after clearing has changed the pasteboard all the same.
             let now = backend.change_count();
-            let restore = if now == before {
-                Ok(())
-            } else {
-                backend.restore_if_unchanged(saved, now).map(drop)
+            let back = now == before || clipboard_back(&backend.restore_if_unchanged(saved, now));
+            return Paste::NotTaken {
+                clipboard_back: back,
             };
-            return Paste::NotTaken(restore);
         }
     };
     thread::sleep(timing.settle);
     if backend.post_paste().is_err() {
         let restore = backend.restore_if_unchanged(saved, promise.change_count);
-        return Paste::NotTaken(restore.map(drop));
+        return Paste::NotTaken {
+            clipboard_back: clipboard_back(&restore),
+        };
     }
     let taken = wait_for_reads(&promise.reads, Instant::now(), timing);
-    let restore = backend
-        .restore_if_unchanged(saved, promise.change_count)
-        .map(drop);
+    let back = clipboard_back(&backend.restore_if_unchanged(saved, promise.change_count));
     if taken {
-        Paste::Taken(restore)
+        Paste::Taken {
+            clipboard_back: back,
+        }
     } else {
-        Paste::NotTaken(restore)
+        Paste::NotTaken {
+            clipboard_back: back,
+        }
     }
 }
 
@@ -227,13 +258,20 @@ fn fallback<B: Backend>(
     if ax_trusted {
         match backend.ax_insert(text) {
             AxInsert::Took => return Ok(InsertOutcome::Typed),
+            AxInsert::Refused => {}
+            AxInsert::Unreachable(error) => {
+                return Err(PlatformError::Failed(format!(
+                    "nothing was inserted: {}; typing into an app in that state is not safe",
+                    reason(&error)
+                )));
+            }
             AxInsert::Unknown => {
                 return Err(PlatformError::Failed(
-                    "the focused app did not confirm the accessibility write in time; not typing over it"
+                    "the focused app did not answer the accessibility write in time, so the text \
+                     may or may not be there; it was not typed again"
                         .into(),
                 ));
             }
-            AxInsert::Refused => {}
         }
     }
     if can_post {
@@ -241,15 +279,18 @@ fn fallback<B: Backend>(
         return Ok(InsertOutcome::Typed);
     }
     Err(PlatformError::Failed(
-        "the focused app refused the accessibility write, and synthetic keys are not permitted"
+        "nothing was inserted: no focused element took an accessibility write, and synthetic \
+         keys are not permitted"
             .into(),
     ))
 }
 
-fn clipboard_lost(done: &str, error: &PlatformError) -> PlatformError {
-    PlatformError::Failed(format!(
-        "{done}, but the previous clipboard could not be put back: {error}"
-    ))
+/// An error's own words, without the category prefix `Display` adds, for wrapping in another.
+fn reason(error: &PlatformError) -> String {
+    match error {
+        PlatformError::Failed(message) => message.clone(),
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -290,6 +331,8 @@ mod tests {
         fail_write: bool,
         fail_post: bool,
         fail_restore: bool,
+        lossy_restore: bool,
+        fail_type: bool,
         count: Cell<i64>,
         clipboard: RefCell<String>,
         reads: RefCell<Option<Sender<()>>>,
@@ -309,6 +352,8 @@ mod tests {
                 fail_write: false,
                 fail_post: false,
                 fail_restore: false,
+                lossy_restore: false,
+                fail_type: false,
                 count: Cell::new(40),
                 clipboard: RefCell::new(ORIGINAL.into()),
                 reads: RefCell::new(None),
@@ -395,6 +440,9 @@ mod tests {
                 return Err(failure());
             }
             self.bump(&saved);
+            if self.lossy_restore {
+                return Ok(Restore::RestoredPartly { lost_types: 1 });
+            }
             Ok(Restore::Restored)
         }
 
@@ -416,11 +464,14 @@ mod tests {
 
         fn ax_insert(&self, _text: &str) -> AxInsert {
             self.log.borrow_mut().push("ax");
-            self.ax_result
+            self.ax_result.clone()
         }
 
         fn type_text(&self, text: &str) -> Result<(), PlatformError> {
             self.log.borrow_mut().push("type");
+            if self.fail_type {
+                return Err(failure());
+            }
             self.typed.borrow_mut().push(text.into());
             Ok(())
         }
@@ -553,18 +604,83 @@ mod tests {
         assert_eq!(mock.clipboard(), ORIGINAL);
     }
 
+    /// The text is in, so it is a success the pipeline never retries; the lost clipboard is
+    /// reported in the outcome, not swallowed and not turned into an error.
     #[test]
-    fn a_restore_failure_after_a_paste_is_reported_not_swallowed() {
+    fn a_restore_failure_after_a_paste_is_reported_in_the_outcome() {
         let mock = Mock {
             fail_restore: true,
             ..Mock::default()
         };
-        let Err(PlatformError::Failed(message)) = insert(&mock, TEXT, FAST) else {
-            panic!("a lost clipboard must not read as a clean paste");
-        };
-        assert!(message.contains("pasted"), "{message}");
+        assert_eq!(
+            insert(&mock, TEXT, FAST),
+            Ok(InsertOutcome::PastedClipboardNotRestored)
+        );
         // No fallback: the text is in, typing it again would duplicate it.
         assert!(!mock.log().contains(&"ax"));
+    }
+
+    #[test]
+    fn a_lossy_restore_after_a_paste_is_reported_in_the_outcome() {
+        let mock = Mock {
+            lossy_restore: true,
+            ..Mock::default()
+        };
+        assert_eq!(
+            insert(&mock, TEXT, FAST),
+            Ok(InsertOutcome::PastedClipboardNotRestored)
+        );
+    }
+
+    #[test]
+    fn a_fallback_insertion_after_a_failed_restore_is_still_an_insertion() {
+        let mock = Mock {
+            target: Target::Ignores,
+            fail_restore: true,
+            ..Mock::default()
+        };
+        assert_eq!(
+            insert(&mock, TEXT, FAST),
+            Ok(InsertOutcome::PastedClipboardNotRestored)
+        );
+        assert_eq!(mock.log(), ["save", "write", "paste", "restore", "ax"]);
+    }
+
+    #[test]
+    fn a_failed_fallback_after_a_failed_restore_reports_both() {
+        let mock = Mock {
+            target: Target::Ignores,
+            fail_restore: true,
+            ax_result: AxInsert::Refused,
+            fail_type: true,
+            ..Mock::default()
+        };
+        let Err(PlatformError::Failed(message)) = insert(&mock, TEXT, FAST) else {
+            panic!("nothing was inserted, so this is an error");
+        };
+        assert!(message.contains("clipboard"), "{message}");
+    }
+
+    /// A focus read that timed out means the app is not answering: nothing was written, and
+    /// typing into it is not safe either, so the sequence stops and says why.
+    #[test]
+    fn an_unreachable_focused_element_is_not_typed_into() {
+        let mock = Mock {
+            target: Target::Ignores,
+            ax_result: AxInsert::Unreachable(PlatformError::Failed(
+                "the focused app did not answer accessibility in time".into(),
+            )),
+            ..Mock::default()
+        };
+        let Err(PlatformError::Failed(message)) = insert(&mock, TEXT, FAST) else {
+            panic!("an unreachable app must not be typed into");
+        };
+        assert!(!mock.log().contains(&"type"));
+        assert!(message.contains("did not answer"), "{message}");
+        assert!(
+            !message.contains("refused"),
+            "no write was refused: {message}"
+        );
     }
 
     #[test]
@@ -609,12 +725,20 @@ mod tests {
                 ..Mock::default()
             },
             Mock {
+                target: Target::Ignores,
                 fail_restore: true,
+                ax_result: AxInsert::Refused,
+                fail_type: true,
                 ..Mock::default()
             },
             Mock {
                 target: Target::Ignores,
                 ax_result: AxInsert::Unknown,
+                ..Mock::default()
+            },
+            Mock {
+                target: Target::Ignores,
+                ax_result: AxInsert::Unreachable(PlatformError::Failed("no answer".into())),
                 ..Mock::default()
             },
             Mock {
