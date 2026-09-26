@@ -10,7 +10,7 @@
 //!
 //! Words are compared after normalising: lower case, with punctuation stripped from both ends of
 //! each word (apostrophes inside a word stay). A "you" line is **echo**, and is removed, when all
-//! three hold:
+//! four hold:
 //!
 //! 1. It has at least **3** words. Shorter lines ("yes", "okay thanks") are too common to call
 //!    echo on words alone; the acoustic gate judges those.
@@ -21,11 +21,36 @@
 //! 3. It starts no more than 500 ms before the earliest far-end line that supplied a matched
 //!    word. Echo cannot come before the far end said it: a user who says a line first, which the
 //!    far end then repeats, keeps it.
+//! 4. **The acoustic evidence agrees:** the full output's voice activity heard no near-end speech
+//!    over the line, with every window there recorded ([`NearSpeech`], normally the
+//!    [`EchoGate`](crate::EchoGate)). Words alone cannot tell echo from a user reading a number
+//!    straight back inside the echo window; the full output can, because the suppressor removes
+//!    echo and keeps a voice. With no evidence (a gap in the VAD, no track at all), the line is
+//!    kept.
 //!
-//! A user who repeats the far end's words later (reading back a number) keeps them: the time
-//! window excludes it, or the line holds enough words of their own to fall under 80 %.
+//! A user who repeats the far end's words later keeps them too: the time window excludes it, or
+//! the line holds enough words of their own to fall under 80 %.
+//!
+//! Removed lines come back by index and span, with the far-end lines they matched, never their
+//! text, so the caller can store them and undo the removal.
 
 use ink_core::TimedText;
+
+/// Whether the near end spoke over a stretch of the record: the acoustic half of the rule.
+///
+/// [`EchoGate`](crate::EchoGate) implements it from the full output's voice activity.
+pub trait NearSpeech {
+    /// Over `start_ms..end_ms` on the mic's timeline: `Some(true)` when the near end was heard,
+    /// `Some(false)` when every window was recorded and none heard it, `None` when there is no
+    /// evidence either way.
+    fn near_speech(&self, start_ms: u64, end_ms: u64) -> Option<bool>;
+}
+
+impl NearSpeech for crate::EchoGate {
+    fn near_speech(&self, start_ms: u64, end_ms: u64) -> Option<bool> {
+        crate::EchoGate::near_speech(self, start_ms, end_ms)
+    }
+}
 
 /// The rule's thresholds. The defaults are the rule in the module docs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,15 +76,33 @@ impl Default for DedupConfig {
     }
 }
 
-/// A "you" line found to be echo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A "you" line removed as echo. It carries no text: the caller holds the line by its index.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Duplicate {
     /// Its index in the "you" lines.
     pub you: usize,
+    /// Its start, ms.
+    pub start_ms: u64,
+    /// Its end, ms.
+    pub end_ms: u64,
+    /// The indices, in the far-end lines, of those whose words it matched, in time order.
+    pub far: Vec<usize>,
     /// Its words after normalising.
     pub words: usize,
     /// How many of them matched the far end, in order.
     pub matched: usize,
+}
+
+/// What duplicate-line suppression did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DedupReport {
+    /// The lines removed as echo, in the order of the "you" lines.
+    pub removed: Vec<Duplicate>,
+    /// Lines whose words matched but which were kept: the full output heard the near end over
+    /// them (a read-back, the user repeating).
+    pub kept_near_speech: usize,
+    /// Lines whose words matched but which were kept for want of acoustic evidence.
+    pub kept_no_evidence: usize,
 }
 
 /// Lower case, punctuation stripped from both ends of each word, empty words dropped.
@@ -73,8 +116,18 @@ pub fn normalise(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Longest common subsequence of `a` and `b`, with, for each matched word of `b`, its index.
-fn lcs(a: &[String], b: &[String]) -> (usize, Vec<usize>) {
+/// A longest common subsequence with at least one word in it.
+struct Lcs {
+    /// Words matched.
+    len: usize,
+    /// The matched words' indices in the second sequence, ascending.
+    in_b: Vec<usize>,
+    /// The first of them.
+    first_b: usize,
+}
+
+/// The longest common subsequence of `a` and `b`, or `None` when they share no word.
+fn lcs(a: &[String], b: &[String]) -> Option<Lcs> {
     let (n, m) = (a.len(), b.len());
     let mut t = vec![0u32; (n + 1) * (m + 1)];
     let at = |i: usize, j: usize| i * (m + 1) + j;
@@ -87,11 +140,11 @@ fn lcs(a: &[String], b: &[String]) -> (usize, Vec<usize>) {
             };
         }
     }
-    let mut matched = Vec::new();
+    let mut in_b = Vec::new();
     let (mut i, mut j) = (n, m);
     while i > 0 && j > 0 {
         if a[i - 1] == b[j - 1] {
-            matched.push(j - 1);
+            in_b.push(j - 1);
             i -= 1;
             j -= 1;
         } else if t[at(i - 1, j)] >= t[at(i, j - 1)] {
@@ -100,68 +153,100 @@ fn lcs(a: &[String], b: &[String]) -> (usize, Vec<usize>) {
             j -= 1;
         }
     }
-    (t[at(n, m)] as usize, matched)
+    in_b.reverse();
+    // No word in common is the `None` case.
+    let &first_b = in_b.first()?;
+    Some(Lcs {
+        len: in_b.len(),
+        in_b,
+        first_b,
+    })
 }
 
-/// The "you" lines that are echo of the far end's, by the rule in the module docs. Both inputs
-/// are on one timeline (the record's), in any order.
+/// The far-end lines a "you" line's words match by rules 1–3, as indices into `them` in time
+/// order, with the match's size; `None` when the words do not make it a candidate.
+fn text_match(
+    line: &TimedText,
+    them: &[TimedText],
+    far_words: &[Vec<String>],
+    config: &DedupConfig,
+) -> Option<(Vec<usize>, usize, usize)> {
+    let words = normalise(&line.text);
+    if words.len() < config.min_words {
+        return None;
+    }
+    // The far-end lines around it, in time order.
+    let mut near: Vec<usize> = (0..them.len())
+        .filter(|&f| {
+            them[f].start_ms <= line.end_ms + config.lead_ms
+                && them[f].end_ms + config.lag_ms >= line.start_ms
+        })
+        .collect();
+    near.sort_by_key(|&f| them[f].start_ms);
+    let mut pool: Vec<String> = Vec::new();
+    let mut owner: Vec<usize> = Vec::new();
+    for &f in &near {
+        pool.extend(far_words[f].iter().cloned());
+        owner.extend(std::iter::repeat_n(f, far_words[f].len()));
+    }
+    // No word in common: not a duplicate whatever the thresholds say.
+    let m = lcs(&words, &pool)?;
+    let needed = (config.min_share * words.len() as f64).ceil() as usize;
+    if m.len < needed {
+        return None;
+    }
+    // The pool runs in start order, so the first matched word's line started first among those
+    // matched.
+    let earliest = them[owner[m.first_b]].start_ms;
+    if line.start_ms + config.lead_ms < earliest {
+        return None;
+    }
+    let mut far: Vec<usize> = m.in_b.iter().map(|&j| owner[j]).collect();
+    far.dedup();
+    Some((far, words.len(), m.len))
+}
+
+/// The "you" lines that are echo of the far end's, by the rule in the module docs, with
+/// `evidence` for rule 4. Both line lists are on one timeline (the record's), in any order.
 pub fn echo_duplicates(
     you: &[TimedText],
     them: &[TimedText],
+    evidence: &impl NearSpeech,
     config: &DedupConfig,
-) -> Vec<Duplicate> {
-    let far: Vec<(u64, u64, Vec<String>)> = them
-        .iter()
-        .map(|l| (l.start_ms, l.end_ms, normalise(&l.text)))
-        .collect();
-    let mut out = Vec::new();
+) -> DedupReport {
+    let far_words: Vec<Vec<String>> = them.iter().map(|l| normalise(&l.text)).collect();
+    let mut report = DedupReport::default();
     for (idx, line) in you.iter().enumerate() {
-        let words = normalise(&line.text);
-        if words.len() < config.min_words {
+        let Some((far, words, matched)) = text_match(line, them, &far_words, config) else {
             continue;
+        };
+        match evidence.near_speech(line.start_ms, line.end_ms) {
+            Some(false) => report.removed.push(Duplicate {
+                you: idx,
+                start_ms: line.start_ms,
+                end_ms: line.end_ms,
+                far,
+                words,
+                matched,
+            }),
+            Some(true) => report.kept_near_speech += 1,
+            None => report.kept_no_evidence += 1,
         }
-        // The far-end lines around it, in time order.
-        let mut near: Vec<&(u64, u64, Vec<String>)> = far
-            .iter()
-            .filter(|(s, e, _)| {
-                *s <= line.end_ms + config.lead_ms && e + config.lag_ms >= line.start_ms
-            })
-            .collect();
-        near.sort_by_key(|(s, _, _)| *s);
-        let mut pool: Vec<String> = Vec::new();
-        let mut owner: Vec<u64> = Vec::new();
-        for (s, _, w) in &near {
-            pool.extend(w.iter().cloned());
-            owner.extend(std::iter::repeat_n(*s, w.len()));
-        }
-        let (matched, at) = lcs(&words, &pool);
-        let needed = (config.min_share * words.len() as f64).ceil() as usize;
-        if matched < needed || matched == 0 {
-            continue;
-        }
-        let earliest = at.iter().map(|&j| owner[j]).min().unwrap_or(u64::MAX);
-        if line.start_ms + config.lead_ms < earliest {
-            continue;
-        }
-        out.push(Duplicate {
-            you: idx,
-            words: words.len(),
-            matched,
-        });
     }
-    out
+    report
 }
 
-/// `you` without the lines that are echo of `them`; returns the kept lines and how many went.
+/// `you` without the lines that are echo of `them`: the kept lines, and the report naming those
+/// removed (by index into the `you` given here) so the caller can store them.
 pub fn remove_echo_duplicates(
     you: Vec<TimedText>,
     them: &[TimedText],
+    evidence: &impl NearSpeech,
     config: &DedupConfig,
-) -> (Vec<TimedText>, usize) {
-    let dups = echo_duplicates(&you, them, config);
-    let removed = dups.len();
+) -> (Vec<TimedText>, DedupReport) {
+    let report = echo_duplicates(&you, them, evidence, config);
     let mut drop = vec![false; you.len()];
-    for d in &dups {
+    for d in &report.removed {
         drop[d.you] = true;
     }
     let kept = you
@@ -170,7 +255,7 @@ pub fn remove_echo_duplicates(
         .filter(|(_, d)| !*d)
         .map(|(l, _)| l)
         .collect();
-    (kept, removed)
+    (kept, report)
 }
 
 #[cfg(test)]
@@ -185,8 +270,29 @@ mod tests {
         }
     }
 
+    /// Evidence that gives the same answer over every span.
+    struct Everywhere(Option<bool>);
+
+    impl NearSpeech for Everywhere {
+        fn near_speech(&self, _: u64, _: u64) -> Option<bool> {
+            self.0
+        }
+    }
+
+    /// Evidence from a VAD that heard the near end between two times, and nothing else.
+    struct SpeechBetween(u64, u64);
+
+    impl NearSpeech for SpeechBetween {
+        fn near_speech(&self, start_ms: u64, end_ms: u64) -> Option<bool> {
+            Some(start_ms < self.1 && end_ms > self.0)
+        }
+    }
+
+    const SILENT: Everywhere = Everywhere(Some(false));
+
     fn echo(you: &[TimedText], them: &[TimedText]) -> Vec<usize> {
-        echo_duplicates(you, them, &DedupConfig::default())
+        echo_duplicates(you, them, &SILENT, &DedupConfig::default())
+            .removed
             .iter()
             .map(|d| d.you)
             .collect()
@@ -216,6 +322,91 @@ mod tests {
     }
 
     #[test]
+    fn a_true_echo_repeat_is_removed_and_reported_by_index_and_span() {
+        let them = [
+            line(1_000, 2_000, "good morning"),
+            line(10_000, 12_500, "the quarterly numbers go out on friday"),
+        ];
+        let you = [line(
+            10_080,
+            12_600,
+            "the quarterly numbers go out on friday",
+        )];
+        let report = echo_duplicates(&you, &them, &SILENT, &DedupConfig::default());
+        assert_eq!(
+            report.removed,
+            [Duplicate {
+                you: 0,
+                start_ms: 10_080,
+                end_ms: 12_600,
+                far: vec![1],
+                words: 7,
+                matched: 7,
+            }]
+        );
+        assert_eq!((report.kept_near_speech, report.kept_no_evidence), (0, 0));
+    }
+
+    #[test]
+    fn an_immediate_read_back_with_the_near_end_speaking_is_kept() {
+        // The far end reads a code; the user reads it straight back, inside the echo window.
+        // The words match in full, but the full output heard the user.
+        let them = [line(1_000, 3_000, "the code is four seven one nine")];
+        let you = [line(3_200, 4_400, "four seven one nine")];
+        let report = echo_duplicates(
+            &you,
+            &them,
+            &SpeechBetween(3_200, 4_400),
+            &DedupConfig::default(),
+        );
+        assert!(report.removed.is_empty(), "{report:?}");
+        assert_eq!(report.kept_near_speech, 1);
+    }
+
+    #[test]
+    fn a_line_with_no_evidence_is_kept() {
+        let them = [line(
+            10_000,
+            12_500,
+            "the quarterly numbers go out on friday",
+        )];
+        let you = [line(
+            10_080,
+            12_600,
+            "the quarterly numbers go out on friday",
+        )];
+        let report = echo_duplicates(&you, &them, &Everywhere(None), &DedupConfig::default());
+        assert!(report.removed.is_empty());
+        assert_eq!(report.kept_no_evidence, 1);
+    }
+
+    #[test]
+    fn the_echo_gate_is_the_evidence() {
+        use crate::{EchoGate, GateConfig};
+        // A full output whose VAD heard nothing for 5 s, then speech from 5 s.
+        let mut gate = EchoGate::new(GateConfig::default(), 512);
+        for w in 0..(10 * 16_000 / 512) as u64 {
+            let t = w as f64 * 512.0 / 16_000.0;
+            gate.push_speech(w, if t >= 5.0 { 0.9 } else { 0.0 })
+                .expect("a probability");
+        }
+        let them = [
+            line(1_000, 3_000, "the code is four seven one nine"),
+            line(5_000, 7_000, "shall we move on to the budget"),
+        ];
+        let you = [
+            line(1_050, 3_050, "the code is four seven one nine"),
+            line(5_050, 7_050, "shall we move on to the budget"),
+        ];
+        let report = echo_duplicates(&you, &them, &gate, &DedupConfig::default());
+        assert_eq!(
+            report.removed.iter().map(|d| d.you).collect::<Vec<_>>(),
+            [0]
+        );
+        assert_eq!(report.kept_near_speech, 1);
+    }
+
+    #[test]
     fn a_partly_heard_echo_still_counts() {
         // The ASR caught four of the far end's six words, one of them wrong: 3 of 4 is under
         // 80 %, all 4 of 4 is not.
@@ -235,7 +426,9 @@ mod tests {
             4_100,
             "shall we start yes the agenda is short today",
         )];
-        assert_eq!(echo(&you, &them), [0]);
+        let report = echo_duplicates(&you, &them, &SILENT, &DedupConfig::default());
+        assert_eq!(report.removed.len(), 1);
+        assert_eq!(report.removed[0].far, [0, 1]);
     }
 
     #[test]
@@ -272,6 +465,21 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_share_threshold_still_needs_a_matched_word() {
+        let config = DedupConfig {
+            min_share: 0.0,
+            ..DedupConfig::default()
+        };
+        let them = [line(1_000, 3_000, "completely different words here")];
+        let you = [line(1_000, 3_000, "nothing in common at all")];
+        assert!(
+            echo_duplicates(&you, &them, &SILENT, &config)
+                .removed
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn removal_keeps_the_other_lines_in_order() {
         let them = [line(
             10_000,
@@ -283,8 +491,9 @@ mod tests {
             line(10_080, 12_600, "the quarterly numbers go out on friday"),
             line(13_000, 14_000, "sounds good to me"),
         ];
-        let (kept, removed) = remove_echo_duplicates(you, &them, &DedupConfig::default());
-        assert_eq!(removed, 1);
+        let (kept, report) = remove_echo_duplicates(you, &them, &SILENT, &DedupConfig::default());
+        assert_eq!(report.removed.len(), 1);
+        assert_eq!(report.removed[0].you, 1);
         assert_eq!(
             kept.iter().map(|l| l.start_ms).collect::<Vec<_>>(),
             [1_000, 13_000]

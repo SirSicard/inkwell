@@ -22,7 +22,9 @@
 //!   WER points and the linear output 0.7.
 //! - [`gate`]: drops words of the linear transcript where the full output says echo only (the
 //!   linear output leaks far-end words when nobody on the near end talks).
-//! - [`dedup`]: removes a "you" line that repeats, at the same moment, what the far end said.
+//! - [`dedup`]: removes a "you" line that repeats, at the same moment, what the far end said, when
+//!   the full output also heard no near-end speech over it; removed lines come back by index and
+//!   span so they can be stored and restored.
 //! - [`measure`]: ERLE and the other numbers the stage is judged on.
 //!
 //! # Threads
@@ -62,7 +64,9 @@ use std::fmt;
 use ink_core::Channel;
 
 pub use canceller::{CancellerConfig, EchoCanceller, EchoFrame, FrameLevels, level_db};
-pub use dedup::{DedupConfig, Duplicate, echo_duplicates, remove_echo_duplicates};
+pub use dedup::{
+    DedupConfig, DedupReport, Duplicate, NearSpeech, echo_duplicates, remove_echo_duplicates,
+};
 pub use gate::{EchoGate, GateConfig, Verdict};
 pub use path::{Alignment, PathFinder, PathReport};
 
