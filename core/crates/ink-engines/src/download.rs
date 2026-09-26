@@ -2,8 +2,14 @@
 //!
 //! Each file downloads to `<name>.part` next to its final place. The part is appended to on a
 //! retry (an HTTP Range request from its length), its SHA-256 is checked against the registry once
-//! it has every byte, and only then is it renamed into place. A finished file is therefore always a
-//! verified one, which is what lets [`ModelDir::is_installed`] check sizes only.
+//! it has every byte, and only then is it renamed into place.
+//!
+//! The row's revision marker (see [`ModelDir`]) is removed before anything in the row's directory
+//! changes and written, with the full revision, only after every file is verified and in place.
+//! Files found without a matching marker (an interrupted install, or another revision sharing the
+//! directory) are hashed on disk against the registry: kept if they match, replaced if not. Reading
+//! them back is cheaper than fetching them again, and the registry's hash, not the directory they
+//! sit in, is what says a file is the right one.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -15,7 +21,7 @@ use ink_core::{CancelToken, EventSink};
 use sha2::{Digest, Sha256};
 
 use crate::lock;
-use crate::model_dir::ModelDir;
+use crate::model_dir::{ModelDir, REVISION_MARKER};
 use crate::registry::{EngineRow, ModelFile, RegistryError};
 
 /// The transport: a ranged GET. The real one is [`HttpFetch`](crate::HttpFetch) (feature `http`);
@@ -198,8 +204,9 @@ impl Downloader {
     }
 
     /// **Worker.** Downloads every file of `row` that is not installed yet, resuming part files,
-    /// and returns once all are verified and in place. Blocks for as long as the transfer takes;
-    /// `cancel` is checked between chunks. `progress` runs on this thread and must not block.
+    /// and returns once all are verified, in place, and marked with the row's revision. Blocks for
+    /// as long as the transfer takes; `cancel` is checked between chunks. `progress` runs on this
+    /// thread and must not block.
     pub fn download(
         &self,
         row: &EngineRow,
@@ -209,6 +216,25 @@ impl Downloader {
         row.validate().map_err(DownloadError::InvalidRow)?;
         let _claim = self.claim(&row.id)?;
         let total = row.total_size();
+        if self.dir.is_installed(row) {
+            progress(DownloadProgress {
+                id: row.id.clone(),
+                done: total,
+                total,
+            });
+            return Ok(());
+        }
+        let marker_io = |what: &str, e: io::Error| DownloadError::Io {
+            file: REVISION_MARKER.to_string(),
+            message: format!("{what}: {e}"),
+        };
+        // Files with the right size are vouched for only if this revision's marker was there. It
+        // is removed before anything changes, so no interruption from here on can leave a marker
+        // over files that do not all match it.
+        let marked = self.dir.marker_matches(row);
+        self.dir
+            .remove_marker(row)
+            .map_err(|e| marker_io("removing the revision marker", e))?;
         let mut base = 0;
         for file in &row.files {
             let file_base = base;
@@ -219,11 +245,14 @@ impl Downloader {
                     total,
                 })
             };
-            self.download_file(row, file, cancel, &report)?;
+            self.download_file(row, file, marked, cancel, &report)?;
             report(file.size);
             base += file.size;
         }
-        Ok(())
+        // Last: this is what makes the row installed.
+        self.dir
+            .write_marker(row)
+            .map_err(|e| marker_io("writing the revision marker", e))
     }
 
     /// Marks `id` as in flight until the returned claim drops.
@@ -237,21 +266,41 @@ impl Downloader {
         })
     }
 
+    /// `marked`: the row's marker held this revision when the download started, so a file already
+    /// at its final name with the right size was verified for this revision.
     fn download_file(
         &self,
         row: &EngineRow,
         file: &ModelFile,
+        marked: bool,
         cancel: &CancelToken,
         report: &dyn Fn(u64),
     ) -> Result<(), DownloadError> {
-        let final_path = self.dir.file_path(row, file);
-        if fs::metadata(&final_path).is_ok_and(|m| m.is_file() && m.len() == file.size) {
-            return Ok(());
-        }
         let io = |what: &str, e: io::Error| DownloadError::Io {
             file: file.name.clone(),
             message: format!("{what}: {e}"),
         };
+        let final_path = self.dir.file_path(row, file);
+        if fs::metadata(&final_path).is_ok_and(|m| m.is_file() && m.len() == file.size) {
+            if marked {
+                return Ok(());
+            }
+            // Not vouched for by this revision's marker: hash it against the registry.
+            let mut hasher = Sha256::new();
+            let mut existing =
+                File::open(&final_path).map_err(|e| io("opening the installed file", e))?;
+            hash_prefix(&mut existing, file.size, &mut hasher, cancel).map_err(|e| match e {
+                PrefixError::Cancelled => DownloadError::Cancelled,
+                PrefixError::Io(e) => io("reading the installed file", e),
+            })?;
+            drop(existing);
+            if hex(&hasher.finalize()) == file.sha256 {
+                return Ok(());
+            }
+            // Another revision's bytes: removed now (closed first, for Windows) so a failed fetch
+            // does not leave it to be hashed again on every retry.
+            fs::remove_file(&final_path).map_err(|e| io("removing a stale file", e))?;
+        }
         let part_path = self.dir.part_path(row, file);
         fs::create_dir_all(self.dir.row_dir(row))
             .map_err(|e| io("creating the model directory", e))?;

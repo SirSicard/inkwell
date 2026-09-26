@@ -6,7 +6,7 @@ use common::{REV, row, sha256_hex};
 use ink_core::Job;
 use ink_engines::{
     ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_RELATIVE_PATH_LEN, ModelDir, ModelFile, Os,
-    Registry, RegistryError, builtin_rows,
+    REVISION_MARKER, Registry, RegistryError, builtin_rows,
 };
 
 fn valid() -> EngineRow {
@@ -165,6 +165,7 @@ fn ids_and_file_names_cannot_leave_the_model_directory() {
         "../w.bin",
         "w.bin.",
         "nul.bin",
+        REVISION_MARKER,
         "sub/w.bin",
         "sub\\w.bin",
         "w.bin.part",
@@ -256,7 +257,14 @@ fn paths_at_the_name_limits_fit_the_windows_path_budget() {
         dir.row_dir(r).file_name().unwrap().to_str().unwrap(),
         &revision[..12]
     );
-    for path in [dir.file_path(r, &r.files[0]), dir.part_path(r, &r.files[0])] {
+    let marker = dir.marker_path(r);
+    let marker_tmp = marker.with_file_name(format!("{REVISION_MARKER}.tmp"));
+    for path in [
+        dir.file_path(r, &r.files[0]),
+        dir.part_path(r, &r.files[0]),
+        marker,
+        marker_tmp,
+    ] {
         let relative = path.strip_prefix(&root).unwrap().as_os_str().len();
         assert!(relative <= BUDGET, "{relative} characters below the root");
     }

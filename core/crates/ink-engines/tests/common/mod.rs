@@ -96,13 +96,14 @@ impl Drop for Scratch {
 }
 
 /// Writes `row`'s files into `dir` as if they had been downloaded, so the router sees it
-/// installed. `content` is written for every file, padded or cut to the registry size.
+/// installed: every file at its registry size (zeros), and the revision marker.
 pub fn install(dir: &ModelDir, row: &EngineRow) {
     for f in &row.files {
         let path = dir.file_path(row, f);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, vec![0u8; f.size as usize]).unwrap();
     }
+    std::fs::write(dir.marker_path(row), &row.revision).unwrap();
 }
 
 /// How the in-memory server behaves.

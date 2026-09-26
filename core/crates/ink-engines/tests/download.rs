@@ -7,10 +7,13 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::{Gate, MemFetch, RangeMode, Scratch, Served, file, row_with, sha256_hex, weights};
+use common::{
+    Gate, MemFetch, REV, RangeMode, Scratch, Served, file, row_with, sha256_hex, weights,
+};
 use ink_core::{CancelToken, EventSink, Job};
 use ink_engines::{
-    DownloadError, DownloadProgress, Downloader, EngineRow, ModelDir, Os, RegistryError,
+    DownloadError, DownloadProgress, Downloader, EngineRow, ModelDir, ModelFile, Os,
+    REVISION_DIR_LEN, REVISION_MARKER, RegistryError,
 };
 
 const LEN: usize = 10_000;
@@ -91,6 +94,11 @@ fn a_fresh_download_verifies_and_installs() {
     assert!(!s.part_path().exists());
     assert!(s.dir.is_installed(&s.row));
     assert_eq!(s.fetch.requests(), vec![(s.row.files[0].url.clone(), 0)]);
+    assert_eq!(
+        fs::read_to_string(s.dir.marker_path(&s.row)).unwrap(),
+        REV,
+        "the marker holds the full revision"
+    );
 
     let seen = seen.lock().unwrap();
     let last = seen.last().expect("progress was reported");
@@ -409,4 +417,187 @@ fn the_same_row_cannot_download_twice_at_once_but_others_can() {
 fn the_downloader_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Downloader>();
+}
+
+/// Another commit of the same repository whose first 12 hex digits match [`REV`], so both
+/// revisions of a row share one directory.
+const REV_SAME_PREFIX: &str = "0123456789abffffffffffffffffffffffffffff";
+
+/// `row` moved to `revision`, with one file (same name) whose content is now `bytes`.
+fn at_revision(row: &EngineRow, revision: &str, bytes: &[u8]) -> EngineRow {
+    let mut moved = row.clone();
+    moved.revision = revision.into();
+    let name = &row.files[0].name;
+    moved.files = vec![ModelFile {
+        name: name.clone(),
+        url: format!(
+            "https://models.example/synthetic/{}/resolve/{revision}/{name}",
+            row.id
+        ),
+        sha256: sha256_hex(bytes),
+        size: bytes.len() as u64,
+    }];
+    moved.validate().unwrap();
+    moved
+}
+
+#[test]
+fn a_new_revision_sharing_the_directory_prefix_is_fetched_and_verified() {
+    let s = setup("new-revision");
+    s.run().unwrap();
+    let new_bytes = weights(9, LEN); // same name and size, different content
+    let moved = at_revision(&s.row, REV_SAME_PREFIX, &new_bytes);
+    assert_eq!(REV[..REVISION_DIR_LEN], REV_SAME_PREFIX[..REVISION_DIR_LEN]);
+    assert_eq!(
+        s.dir.row_dir(&moved),
+        s.dir.row_dir(&s.row),
+        "one directory"
+    );
+
+    assert!(
+        !s.dir.is_installed(&moved),
+        "the old revision's files must not pass for the new one"
+    );
+    s.fetch.serve(&moved.files[0].url, &new_bytes);
+    s.dl.download(&moved, &CancelToken::new(), no_progress())
+        .unwrap();
+
+    assert_eq!(
+        s.fetch.requests().last().unwrap(),
+        &(moved.files[0].url.clone(), 0),
+        "the new revision's file was fetched from the start"
+    );
+    assert_eq!(fs::read(s.final_path()).unwrap(), new_bytes);
+    assert_eq!(
+        fs::read_to_string(s.dir.marker_path(&moved)).unwrap(),
+        REV_SAME_PREFIX
+    );
+    assert!(s.dir.is_installed(&moved));
+    assert!(!s.dir.is_installed(&s.row), "and the old revision is gone");
+}
+
+#[test]
+fn a_new_revision_with_identical_files_is_verified_locally_not_refetched() {
+    let s = setup("same-bytes");
+    s.run().unwrap();
+    // A new commit that did not change this file: same bytes, same hash.
+    let moved = at_revision(&s.row, REV_SAME_PREFIX, &s.bytes);
+    assert!(!s.dir.is_installed(&moved));
+
+    s.dl.download(&moved, &CancelToken::new(), no_progress())
+        .unwrap();
+    assert_eq!(
+        s.fetch.requests().len(),
+        1,
+        "hashed on disk, not fetched again"
+    );
+    assert_eq!(
+        fs::read_to_string(s.dir.marker_path(&moved)).unwrap(),
+        REV_SAME_PREFIX
+    );
+    assert!(s.dir.is_installed(&moved));
+}
+
+#[test]
+fn a_missing_or_foreign_marker_is_not_installed() {
+    let s = setup("marker");
+    s.run().unwrap();
+    let marker = s.dir.marker_path(&s.row);
+    assert!(s.dir.is_installed(&s.row));
+
+    let foreign = [
+        REV_SAME_PREFIX.to_string(),
+        format!("{REV}\n"),
+        REV.to_uppercase(),
+        REV[..REVISION_DIR_LEN].to_string(),
+        String::new(),
+    ];
+    for content in &foreign {
+        fs::write(&marker, content).unwrap();
+        assert!(
+            !s.dir.is_installed(&s.row),
+            "marker {content:?} was accepted"
+        );
+    }
+    fs::remove_file(&marker).unwrap();
+    assert!(!s.dir.is_installed(&s.row), "a missing marker was accepted");
+
+    fs::write(&marker, REV).unwrap();
+    assert!(s.dir.is_installed(&s.row));
+}
+
+#[test]
+fn a_crash_before_the_marker_is_written_leaves_the_row_uninstalled_and_the_retry_rehashes() {
+    let s = setup("crash");
+    // Make the marker write fail after every file is verified and renamed: a directory where
+    // the marker's temporary file goes. This is the state a crash between the last rename and
+    // the marker write leaves on disk.
+    let marker = s.dir.marker_path(&s.row);
+    let blocker = marker.with_file_name(format!("{REVISION_MARKER}.tmp"));
+    fs::create_dir_all(&blocker).unwrap();
+
+    let err = s.run().unwrap_err();
+    assert!(
+        matches!(&err, DownloadError::Io { file, .. } if file == REVISION_MARKER),
+        "expected the marker write to fail, got {err:?}"
+    );
+    assert_eq!(
+        fs::read(s.final_path()).unwrap(),
+        s.bytes,
+        "the file is in place"
+    );
+    assert!(!marker.exists());
+    assert!(!s.dir.is_installed(&s.row), "no marker, not installed");
+
+    fs::remove_dir(&blocker).unwrap();
+    s.run().unwrap();
+    assert_eq!(
+        s.fetch.requests().len(),
+        1,
+        "the verified file was hashed on disk, not fetched again"
+    );
+    assert_eq!(fs::read_to_string(&marker).unwrap(), REV);
+    assert!(s.dir.is_installed(&s.row));
+}
+
+#[test]
+fn an_unmarked_file_with_the_right_size_but_wrong_bytes_is_replaced() {
+    let s = setup("unmarked-wrong");
+    fs::create_dir_all(s.dir.row_dir(&s.row)).unwrap();
+    fs::write(s.final_path(), weights(99, LEN)).unwrap();
+    assert!(!s.dir.is_installed(&s.row));
+
+    s.run().unwrap();
+    assert_eq!(s.fetch.requests(), vec![(s.row.files[0].url.clone(), 0)]);
+    assert_eq!(fs::read(s.final_path()).unwrap(), s.bytes);
+    assert!(s.dir.is_installed(&s.row));
+}
+
+#[test]
+fn a_file_missing_from_an_installed_row_is_fetched_alone() {
+    let scratch = Scratch::new("missing-one");
+    let dir = scratch.model_dir();
+    let (a, b) = (weights(1, 2_500), weights(2, 3_700));
+    let mut row = one_file_row("synthetic-two-files", &a);
+    row.files = vec![
+        file("synthetic-two-files", "model.bin", &a),
+        file("synthetic-two-files", "projector.bin", &b),
+    ];
+    let fetch = Arc::new(MemFetch::new());
+    fetch.serve(&row.files[0].url, &a);
+    fetch.serve(&row.files[1].url, &b);
+    let dl = Downloader::new(fetch.clone(), dir.clone());
+    dl.download(&row, &CancelToken::new(), no_progress())
+        .unwrap();
+
+    fs::remove_file(dir.file_path(&row, &row.files[1])).unwrap();
+    assert!(!dir.is_installed(&row));
+    dl.download(&row, &CancelToken::new(), no_progress())
+        .unwrap();
+    assert_eq!(
+        fetch.requests()[2..],
+        [(row.files[1].url.clone(), 0)],
+        "only the missing file"
+    );
+    assert!(dir.is_installed(&row));
 }

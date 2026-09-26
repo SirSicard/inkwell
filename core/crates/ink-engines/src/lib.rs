@@ -29,7 +29,9 @@ mod router;
 pub use download::{DownloadError, DownloadProgress, Downloader, Fetch, FetchError, Fetched};
 #[cfg(feature = "http")]
 pub use http::HttpFetch;
-pub use model_dir::{MAX_RELATIVE_PATH_LEN, ModelDir, PART_SUFFIX, REVISION_DIR_LEN};
+pub use model_dir::{
+    MAX_RELATIVE_PATH_LEN, ModelDir, PART_SUFFIX, REVISION_DIR_LEN, REVISION_MARKER,
+};
 pub use registry::{
     ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_NAME_LEN, ModelFile, Os, Registry,
     RegistryError, Runtime, builtin_rows,
