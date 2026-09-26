@@ -610,7 +610,17 @@ dependencies = [
 name = "ink-ffi"
 version = "0.0.0"
 dependencies = [
+ "hound",
+ "ink-audio",
  "ink-core",
+ "ink-engines",
+ "ink-llm",
+ "ink-pipeline",
+ "ink-platform-mac",
+ "ink-store",
+ "log",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

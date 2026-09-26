@@ -1,0 +1,1373 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SirSicard/inkwell/blob/main/schema/events.schema.json",
+  "title": "InkEvent",
+  "description": "Every event the Inkwell core sends a shell through the C ABI (core/crates/ink-ffi/include/inkwell.h): one JSON object, its kind in \"type\". The Swift types in mac/ are generated from this file by `cargo run -p ink-ffi --bin ink-schema`; the generator reads a subset of JSON Schema (string enums, objects of scalars, arrays and references) and refuses anything else. Optional fields are omitted, never null.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CoreReady"
+    },
+    {
+      "$ref": "#/$defs/CoreStopped"
+    },
+    {
+      "$ref": "#/$defs/CommandFailed"
+    },
+    {
+      "$ref": "#/$defs/EngineRegistered"
+    },
+    {
+      "$ref": "#/$defs/EngineUnregistered"
+    },
+    {
+      "$ref": "#/$defs/ModelWarmed"
+    },
+    {
+      "$ref": "#/$defs/ModelWarmFailed"
+    },
+    {
+      "$ref": "#/$defs/ModelRefused"
+    },
+    {
+      "$ref": "#/$defs/ModelUpdateStarted"
+    },
+    {
+      "$ref": "#/$defs/ModelUpdateFinished"
+    },
+    {
+      "$ref": "#/$defs/AudioDropped"
+    },
+    {
+      "$ref": "#/$defs/DictationVoiceDetection"
+    },
+    {
+      "$ref": "#/$defs/DictationStarted"
+    },
+    {
+      "$ref": "#/$defs/DictationShortPressIgnored"
+    },
+    {
+      "$ref": "#/$defs/DictationStopped"
+    },
+    {
+      "$ref": "#/$defs/DictationDiscarded"
+    },
+    {
+      "$ref": "#/$defs/DictationCommand"
+    },
+    {
+      "$ref": "#/$defs/DictationInserted"
+    },
+    {
+      "$ref": "#/$defs/DictationFailed"
+    },
+    {
+      "$ref": "#/$defs/DictationWarningEvent"
+    },
+    {
+      "$ref": "#/$defs/DictationHotkeyLost"
+    },
+    {
+      "$ref": "#/$defs/DictationWorkerFailed"
+    },
+    {
+      "$ref": "#/$defs/MeetingStarted"
+    },
+    {
+      "$ref": "#/$defs/MeetingVoiceDetection"
+    },
+    {
+      "$ref": "#/$defs/MeetingSideState"
+    },
+    {
+      "$ref": "#/$defs/MeetingPartial"
+    },
+    {
+      "$ref": "#/$defs/MeetingFinal"
+    },
+    {
+      "$ref": "#/$defs/MeetingWarningEvent"
+    },
+    {
+      "$ref": "#/$defs/MeetingStopped"
+    },
+    {
+      "$ref": "#/$defs/MeetingTranscribed"
+    },
+    {
+      "$ref": "#/$defs/MeetingDiarized"
+    },
+    {
+      "$ref": "#/$defs/MeetingSuperseded"
+    },
+    {
+      "$ref": "#/$defs/MeetingKeptLive"
+    },
+    {
+      "$ref": "#/$defs/MeetingSummarized"
+    },
+    {
+      "$ref": "#/$defs/MeetingCommitments"
+    },
+    {
+      "$ref": "#/$defs/MeetingFinished"
+    },
+    {
+      "$ref": "#/$defs/MeetingFailed"
+    },
+    {
+      "$ref": "#/$defs/MeetingWorkerFailed"
+    }
+  ],
+  "$defs": {
+    "Channel": {
+      "type": "string",
+      "description": "A side of a meeting: the mic is you, the far end is them (stream identity, architecture rule 5).",
+      "enum": [
+        "mic",
+        "far"
+      ]
+    },
+    "Job": {
+      "type": "string",
+      "description": "A job the router fills with the best installed engine.",
+      "enum": [
+        "dictation_final",
+        "meeting_final",
+        "live_partials",
+        "diarization",
+        "voice_activity"
+      ]
+    },
+    "Chain": {
+      "type": "string",
+      "description": "Which chain a queue feeds.",
+      "enum": [
+        "dictation",
+        "meeting"
+      ]
+    },
+    "VadUnavailable": {
+      "type": "string",
+      "description": "Why no voice detection model is in use.",
+      "enum": [
+        "model_missing",
+        "downloading",
+        "load_failed",
+        "failed",
+        "other"
+      ]
+    },
+    "Refusal": {
+      "type": "string",
+      "description": "Why a job's model was refused.",
+      "enum": [
+        "updating"
+      ]
+    },
+    "Discard": {
+      "type": "string",
+      "description": "Why a dictation ended without an insertion. None of these is an error.",
+      "enum": [
+        "too_short",
+        "silence",
+        "no_speech",
+        "speech_too_short",
+        "nothing_heard",
+        "nothing_left",
+        "cancelled",
+        "other"
+      ]
+    },
+    "CommandAction": {
+      "type": "string",
+      "description": "A voice command. change_style and toggle_polish are already applied by the core; the rest are the shell's to carry out.",
+      "enum": [
+        "undo",
+        "change_style",
+        "switch_model",
+        "toggle_polish",
+        "toggle_dictation",
+        "open_url",
+        "open_app",
+        "insert_text",
+        "other"
+      ]
+    },
+    "Risk": {
+      "type": "string",
+      "description": "How much confirmation a voice command needs: safe runs at once, moderate gets a brief notice the user can cancel, dangerous asks first.",
+      "enum": [
+        "safe",
+        "moderate",
+        "dangerous",
+        "other"
+      ]
+    },
+    "InsertOutcome": {
+      "type": "string",
+      "description": "How a dictation went in. blocked: Secure Input or an elevated target refused synthetic input, and nothing was inserted. inserted_clipboard_not_restored: inserted, and the previous clipboard could not be put back.",
+      "enum": [
+        "pasted",
+        "typed",
+        "blocked",
+        "inserted_clipboard_not_restored",
+        "other"
+      ]
+    },
+    "FailedStage": {
+      "type": "string",
+      "description": "Which stage of a dictation failed.",
+      "enum": [
+        "transcription",
+        "insert",
+        "other"
+      ]
+    },
+    "DictationWarning": {
+      "type": "string",
+      "description": "Something went wrong during a dictation, and it went on without it.",
+      "enum": [
+        "vad_failed",
+        "audio_lost",
+        "tail_cut_short",
+        "focus_unreadable",
+        "polish_unavailable",
+        "polish_failed",
+        "no_mode_for_style",
+        "save_failed",
+        "other"
+      ]
+    },
+    "SideState": {
+      "type": "string",
+      "description": "What a meeting side is delivering, as the silent-channel watchdog judges it: ok, stopped (no audio where it must keep coming), zeros (only exact zeros: no data at all, most often a denied capture).",
+      "enum": [
+        "ok",
+        "stopped",
+        "zeros"
+      ]
+    },
+    "Phase": {
+      "type": "string",
+      "description": "Which part of a meeting a problem came from.",
+      "enum": [
+        "live",
+        "final"
+      ]
+    },
+    "MeetingWarning": {
+      "type": "string",
+      "description": "Something went wrong in a meeting, and it went on without it.",
+      "enum": [
+        "vad_failed",
+        "capture",
+        "audio_lost",
+        "live_engine_failed",
+        "live_finals_backlog",
+        "live_events_after_stop",
+        "far_end_quiet_while_you_speak",
+        "live_engine_stalled",
+        "final_without_speech",
+        "empty_speech_region",
+        "final_engine_failed",
+        "audio_unreadable",
+        "little_speech_heard",
+        "captured_only_zeros",
+        "bluetooth_mic_only_zeros",
+        "audio_unlisted",
+        "nothing_captured",
+        "diarization_failed",
+        "store_failed",
+        "clock_went_back",
+        "summary_unavailable",
+        "summary_failed",
+        "commitments_failed",
+        "other"
+      ]
+    },
+    "KeptLive": {
+      "type": "string",
+      "description": "Why the final pass did not replace the live transcript: refused (the supersede guard: an empty result, or a side under half its live words) or incomplete (some regions failed).",
+      "enum": [
+        "refused",
+        "incomplete",
+        "other"
+      ]
+    },
+    "JobScore": {
+      "type": "object",
+      "description": "An engine's measured word error rate on one job.",
+      "properties": {
+        "job": {
+          "$ref": "#/$defs/Job",
+          "description": "The job."
+        },
+        "wer": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Word error rate, percent."
+        }
+      },
+      "required": [
+        "job",
+        "wer"
+      ],
+      "additionalProperties": false
+    },
+    "ChannelPass": {
+      "type": "object",
+      "description": "What a meeting's final pass did on one side.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side."
+        },
+        "chunks_written": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Chunk files the pump wrote for this side; absent when the pump did not report."
+        },
+        "chunks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Chunk files the final pass found."
+        },
+        "captured_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Audio in the readable chunks, ms. Zero: nothing was captured."
+        },
+        "backlogged_finals": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Live finals saved without the speech check."
+        },
+        "audible_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time above the audible floor, ms, before any gain."
+        },
+        "regions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Speech regions the engine was given."
+        },
+        "empty_regions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Regions that came back without words."
+        },
+        "failed_regions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Regions that failed."
+        },
+        "word_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words in the result."
+        },
+        "speech_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time the VAD found as speech, ms."
+        }
+      },
+      "required": [
+        "channel",
+        "chunks",
+        "captured_ms",
+        "backlogged_finals",
+        "audible_ms",
+        "regions",
+        "empty_regions",
+        "failed_regions",
+        "word_count",
+        "speech_ms"
+      ],
+      "additionalProperties": false
+    },
+    "CoreReady": {
+      "type": "object",
+      "description": "The core started. The first event after ink_init.",
+      "properties": {
+        "type": {
+          "const": "core.ready"
+        },
+        "abi": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The core's ABI version; must equal INK_ABI_VERSION in inkwell.h."
+        },
+        "version": {
+          "type": "string",
+          "description": "The core's version."
+        }
+      },
+      "required": [
+        "type",
+        "abi",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "CoreStopped": {
+      "type": "object",
+      "description": "The last event before ink_shutdown returns.",
+      "properties": {
+        "type": {
+          "const": "core.stopped"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "CommandFailed": {
+      "type": "object",
+      "description": "A command was read and could not be carried out.",
+      "properties": {
+        "type": {
+          "const": "command.failed"
+        },
+        "command": {
+          "type": "string",
+          "description": "The command's \"cmd\"."
+        },
+        "id": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why. Names what failed, never what was said."
+        }
+      },
+      "required": [
+        "type",
+        "command",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "EngineRegistered": {
+      "type": "object",
+      "description": "An engine the shell registered is in the router.",
+      "properties": {
+        "type": {
+          "const": "engine.registered"
+        },
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "jobs": {
+          "type": "array",
+          "description": "The jobs it fills.",
+          "items": {
+            "$ref": "#/$defs/JobScore",
+            "description": "A job and its error rate."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "jobs"
+      ],
+      "additionalProperties": false
+    },
+    "EngineUnregistered": {
+      "type": "object",
+      "description": "An engine the shell registered was let go; its release function runs once no call is in flight.",
+      "properties": {
+        "type": {
+          "const": "engine.unregistered"
+        },
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "ModelWarmed": {
+      "type": "object",
+      "description": "A job's model is loaded and kept loaded.",
+      "properties": {
+        "type": {
+          "const": "model.warmed"
+        },
+        "id": {
+          "type": "string",
+          "description": "The model's registry id."
+        },
+        "job": {
+          "$ref": "#/$defs/Job",
+          "description": "The job."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "job"
+      ],
+      "additionalProperties": false
+    },
+    "ModelWarmFailed": {
+      "type": "object",
+      "description": "A job's model could not be warmed.",
+      "properties": {
+        "type": {
+          "const": "model.warm_failed"
+        },
+        "job": {
+          "$ref": "#/$defs/Job",
+          "description": "The job."
+        },
+        "id": {
+          "type": "string",
+          "description": "The model's id, when one was chosen."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "type",
+        "job",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "ModelRefused": {
+      "type": "object",
+      "description": "A job asked for a model that is held exclusively (being updated), and was refused. The job fails; nothing was loaded from files being replaced.",
+      "properties": {
+        "type": {
+          "const": "model.refused"
+        },
+        "id": {
+          "type": "string",
+          "description": "The model's registry id."
+        },
+        "job": {
+          "$ref": "#/$defs/Job",
+          "description": "The job that asked."
+        },
+        "reason": {
+          "$ref": "#/$defs/Refusal",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "job",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "ModelUpdateStarted": {
+      "type": "object",
+      "description": "A model update holds its model: jobs that need it are refused until model.update_finished.",
+      "properties": {
+        "type": {
+          "const": "model.update_started"
+        },
+        "id": {
+          "type": "string",
+          "description": "The model being replaced."
+        },
+        "next": {
+          "type": "string",
+          "description": "The model replacing it."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "next"
+      ],
+      "additionalProperties": false
+    },
+    "ModelUpdateFinished": {
+      "type": "object",
+      "description": "A model update ended, and its hold is released.",
+      "properties": {
+        "type": {
+          "const": "model.update_finished"
+        },
+        "id": {
+          "type": "string",
+          "description": "The model that was to be replaced."
+        },
+        "next": {
+          "type": "string",
+          "description": "The model replacing it."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "Whether the new model is installed (and warm, if the old one was)."
+        },
+        "no_model_warm": {
+          "type": "boolean",
+          "description": "The update left no model warm: dictation has no model until one is warmed."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why it failed, when it did."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "next",
+        "ok",
+        "no_model_warm"
+      ],
+      "additionalProperties": false
+    },
+    "AudioDropped": {
+      "type": "object",
+      "description": "The pump dropped capture blocks because a chain's queue was full (the chain fell behind). Sent once per stretch, when the queue takes audio again or closes.",
+      "properties": {
+        "type": {
+          "const": "audio.dropped"
+        },
+        "chain": {
+          "$ref": "#/$defs/Chain",
+          "description": "Which chain."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "The side, for dictation (the mic). Absent for a meeting, whose two sides share one queue."
+        },
+        "blocks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Blocks dropped."
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "16 kHz samples in them."
+        }
+      },
+      "required": [
+        "type",
+        "chain",
+        "blocks",
+        "samples"
+      ],
+      "additionalProperties": false
+    },
+    "DictationVoiceDetection": {
+      "type": "object",
+      "description": "Whether dictations are levelled with voice detection. Sent at the start and whenever it changes; while unavailable the shell shows it.",
+      "properties": {
+        "type": {
+          "const": "dictation.voice_detection"
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Whether a VAD is in use."
+        },
+        "reason": {
+          "$ref": "#/$defs/VadUnavailable",
+          "description": "Why not, when not."
+        }
+      },
+      "required": [
+        "type",
+        "available"
+      ],
+      "additionalProperties": false
+    },
+    "DictationStarted": {
+      "type": "object",
+      "description": "A hold passed the minimum and is now a take: show that it is listening.",
+      "properties": {
+        "type": {
+          "const": "dictation.started"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "DictationShortPressIgnored": {
+      "type": "object",
+      "description": "A press shorter than the minimum hold (a modifier used in a shortcut). Nothing was shown or transcribed.",
+      "properties": {
+        "type": {
+          "const": "dictation.short_press_ignored"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "DictationStopped": {
+      "type": "object",
+      "description": "The take is closed and being processed.",
+      "properties": {
+        "type": {
+          "const": "dictation.stopped"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "DictationDiscarded": {
+      "type": "object",
+      "description": "The take ended without an insertion.",
+      "properties": {
+        "type": {
+          "const": "dictation.discarded"
+        },
+        "reason": {
+          "$ref": "#/$defs/Discard",
+          "description": "Why. speech_too_short: tell the user it was too short and to try again."
+        },
+        "live_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How long the key was held, for too_short."
+        }
+      },
+      "required": [
+        "type",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "DictationCommand": {
+      "type": "object",
+      "description": "The take was a voice command.",
+      "properties": {
+        "type": {
+          "const": "dictation.command"
+        },
+        "action": {
+          "$ref": "#/$defs/CommandAction",
+          "description": "Which."
+        },
+        "risk": {
+          "$ref": "#/$defs/Risk",
+          "description": "How much confirmation it needs."
+        },
+        "value": {
+          "type": "string",
+          "description": "Its argument: a style, a model id, a URL, an app path, or fixed text."
+        }
+      },
+      "required": [
+        "type",
+        "action",
+        "risk"
+      ],
+      "additionalProperties": false
+    },
+    "DictationInserted": {
+      "type": "object",
+      "description": "A dictation went out. Carries the user's words: never log it.",
+      "properties": {
+        "type": {
+          "const": "dictation.inserted"
+        },
+        "text": {
+          "type": "string",
+          "description": "The text as inserted."
+        },
+        "outcome": {
+          "$ref": "#/$defs/InsertOutcome",
+          "description": "How it went in."
+        },
+        "record": {
+          "type": "string",
+          "description": "Its library record, unless saving failed."
+        }
+      },
+      "required": [
+        "type",
+        "text",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "DictationFailed": {
+      "type": "object",
+      "description": "A take failed. Nothing was inserted for a transcription failure.",
+      "properties": {
+        "type": {
+          "const": "dictation.failed"
+        },
+        "stage": {
+          "$ref": "#/$defs/FailedStage",
+          "description": "Which stage."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why. Never the user's words."
+        }
+      },
+      "required": [
+        "type",
+        "stage",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "DictationWarningEvent": {
+      "type": "object",
+      "description": "Something went wrong during a take, and it went on without it.",
+      "properties": {
+        "type": {
+          "const": "dictation.warning"
+        },
+        "kind": {
+          "$ref": "#/$defs/DictationWarning",
+          "description": "What."
+        },
+        "frames": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Frames lost, for audio_lost."
+        },
+        "message": {
+          "type": "string",
+          "description": "The error, where there was one."
+        }
+      },
+      "required": [
+        "type",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "DictationHotkeyLost": {
+      "type": "object",
+      "description": "The OS removed the hotkey. Nothing more arrives until it is started again.",
+      "properties": {
+        "type": {
+          "const": "dictation.hotkey_lost"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "DictationWorkerFailed": {
+      "type": "object",
+      "description": "A stage of the dictation chain panicked; the take in progress is lost. With recovered, the next take works. Without it the worker has stopped after repeated failures: the shell MUST unbind the dictation hotkey (unbind_hotkey is then true) and show that dictation is off, since key presses now reach nothing.",
+      "properties": {
+        "type": {
+          "const": "dictation.worker_failed"
+        },
+        "recovered": {
+          "type": "boolean",
+          "description": "Whether the worker is still serving."
+        },
+        "unbind_hotkey": {
+          "type": "boolean",
+          "description": "The shell must unbind the hotkey now: always the opposite of recovered."
+        }
+      },
+      "required": [
+        "type",
+        "recovered",
+        "unbind_hotkey"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingStarted": {
+      "type": "object",
+      "description": "A meeting's record exists and its capture is being transcribed live.",
+      "properties": {
+        "type": {
+          "const": "meeting.started"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        }
+      },
+      "required": [
+        "type",
+        "record"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingVoiceDetection": {
+      "type": "object",
+      "description": "Whether a side is levelled with voice detection. Sent per side at the start and when it changes.",
+      "properties": {
+        "type": {
+          "const": "meeting.voice_detection"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side."
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Whether a VAD is in use."
+        },
+        "reason": {
+          "$ref": "#/$defs/VadUnavailable",
+          "description": "Why not, when not."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "channel",
+        "available"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingSideState": {
+      "type": "object",
+      "description": "What a side is delivering, when that changes.",
+      "properties": {
+        "type": {
+          "const": "meeting.side_state"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side."
+        },
+        "state": {
+          "$ref": "#/$defs/SideState",
+          "description": "Its state."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "channel",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingPartial": {
+      "type": "object",
+      "description": "Provisional live text; each replaces the last and none is saved. Carries the meeting's words: never log it.",
+      "properties": {
+        "type": {
+          "const": "meeting.partial"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side."
+        },
+        "text": {
+          "type": "string",
+          "description": "The hypothesis."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "channel",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingFinal": {
+      "type": "object",
+      "description": "Settled live text, saved as revision 1. Carries the meeting's words: never log it.",
+      "properties": {
+        "type": {
+          "const": "meeting.final"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side."
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start, ms into the meeting."
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End, ms into the meeting."
+        },
+        "text": {
+          "type": "string",
+          "description": "The words."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "channel",
+        "start_ms",
+        "end_ms",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingWarningEvent": {
+      "type": "object",
+      "description": "Something went wrong in a meeting, and it went on without it. Which fields are present depends on kind.",
+      "properties": {
+        "type": {
+          "const": "meeting.warning"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "kind": {
+          "$ref": "#/$defs/MeetingWarning",
+          "description": "What."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side."
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase",
+          "description": "Live or the final pass."
+        },
+        "frames": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Frames lost."
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start of the stretch, ms into the meeting."
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End of the stretch."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Events counted."
+        },
+        "quiet_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How long the far end was without signal, ms."
+        },
+        "audible_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time above the audible floor, ms."
+        },
+        "speech_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time found as speech, ms."
+        },
+        "chunks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Chunk files skipped or cut short."
+        },
+        "message": {
+          "type": "string",
+          "description": "The error, where there was one. Never the meeting's words."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingStopped": {
+      "type": "object",
+      "description": "Capture ended and the record is marked ended; the final pass runs next.",
+      "properties": {
+        "type": {
+          "const": "meeting.stopped"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        }
+      },
+      "required": [
+        "type",
+        "record"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingTranscribed": {
+      "type": "object",
+      "description": "The final pass finished one side.",
+      "properties": {
+        "type": {
+          "const": "meeting.transcribed"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "pass": {
+          "$ref": "#/$defs/ChannelPass",
+          "description": "What it did."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "pass"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingDiarized": {
+      "type": "object",
+      "description": "Diarization of the far end finished.",
+      "properties": {
+        "type": {
+          "const": "meeting.diarized"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "clusters": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Clusters the diarizer returned."
+        },
+        "substantial": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Clusters holding at least 2 % of the far end's speech."
+        },
+        "labelled": {
+          "type": "boolean",
+          "description": "Whether the labels were kept: at least two substantial clusters."
+        },
+        "attributed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Far-end segments given a speaker."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "clusters",
+        "substantial",
+        "labelled",
+        "attributed"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingSuperseded": {
+      "type": "object",
+      "description": "The final pass replaced the live transcript.",
+      "properties": {
+        "type": {
+          "const": "meeting.superseded"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The new revision."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingKeptLive": {
+      "type": "object",
+      "description": "The final pass did not replace the live transcript, which stays as it was.",
+      "properties": {
+        "type": {
+          "const": "meeting.kept_live"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "reason": {
+          "$ref": "#/$defs/KeptLive",
+          "description": "Why."
+        },
+        "failed_regions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Regions that failed, for incomplete."
+        },
+        "message": {
+          "type": "string",
+          "description": "The guard's reason, for refused."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingSummarized": {
+      "type": "object",
+      "description": "The summary is saved.",
+      "properties": {
+        "type": {
+          "const": "meeting.summarized"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "unverified": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Items dropped because their citation did not check out."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "unverified"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingCommitments": {
+      "type": "object",
+      "description": "Commitments are saved.",
+      "properties": {
+        "type": {
+          "const": "meeting.commitments"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "filed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Filed, duplicates included."
+        },
+        "merged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of those, folded into another."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "filed",
+        "merged"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingFinished": {
+      "type": "object",
+      "description": "Everything is done: the record is complete.",
+      "properties": {
+        "type": {
+          "const": "meeting.finished"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The transcript's revision now; absent only when the live one was kept and the record could not be read."
+        }
+      },
+      "required": [
+        "type",
+        "record"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingFailed": {
+      "type": "object",
+      "description": "A meeting could not start, or its final pass stopped before replacing the live transcript (which then stands, and the pass can run again).",
+      "properties": {
+        "type": {
+          "const": "meeting.failed"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record, when it had one."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why. Never the meeting's words."
+        }
+      },
+      "required": [
+        "type",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingWorkerFailed": {
+      "type": "object",
+      "description": "The meeting's worker panicked and stopped. Its recorded audio is on disk; the live transcript so far is saved.",
+      "properties": {
+        "type": {
+          "const": "meeting.worker_failed"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        }
+      },
+      "required": [
+        "type",
+        "record"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
