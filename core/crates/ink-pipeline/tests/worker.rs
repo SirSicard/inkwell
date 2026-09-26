@@ -374,3 +374,81 @@ fn a_panic_while_stopping_still_stops() {
     assert_eq!(stopped, Ok(true), "stop returned");
     assert_eq!(failures(&events.lock().unwrap()), vec![false]);
 }
+
+/// Every log line of this test binary.
+fn logged() -> &'static Mutex<Vec<String>> {
+    static LINES: std::sync::OnceLock<Mutex<Vec<String>>> = std::sync::OnceLock::new();
+    static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    let lines = LINES.get_or_init(Mutex::default);
+    INSTALLED.get_or_init(|| {
+        struct Capture;
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                let line = format!("{} {}", record.level(), record.args());
+                // Never panics in a logger: a failed assertion elsewhere must not cascade.
+                logged()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(line);
+            }
+            fn flush(&self) {}
+        }
+        static CAPTURE: Capture = Capture;
+        log::set_logger(&CAPTURE).expect("no other logger in this binary");
+        log::set_max_level(log::LevelFilter::Trace);
+    });
+    lines
+}
+
+#[test]
+fn a_sink_that_panics_while_reporting_a_failure_is_logged_before_the_worker_stops() {
+    let lines = logged();
+    let engine: Arc<dyn OfflineEngine> = Arc::new(PanickyEngine {
+        panics: AtomicUsize::new(usize::MAX),
+        inner: answering("never"),
+    });
+    let platform = Arc::new(MockPlatform::new());
+    // The shell's sink panics on the failure report, as a broken UI bridge might.
+    let sink: EventSink<DictationEvent> = Arc::new(|e| {
+        if matches!(e, DictationEvent::WorkerFailed { .. }) {
+            panic!("scripted sink panic");
+        }
+    });
+    let chain = DictationChain::new(
+        Services {
+            engine,
+            store: Arc::new(MemStore::new()),
+            inserter: platform.clone(),
+            focus: platform.clone(),
+            clock: platform.clock(),
+            llm: None,
+        },
+        DictationSettings::default(),
+        Vad::Unavailable(VadUnavailable::ModelMissing),
+        sink,
+    );
+    let worker = DictationWorker::spawn(chain, platform.clock()).unwrap();
+    let health = worker.health();
+    run_takes(&worker, 1);
+    for _ in 0..500 {
+        if !health.is_running() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!health.is_running(), "the worker stopped");
+    let lines = lines
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("ERROR") && l.contains("could not be reported")),
+        "{lines:#?}"
+    );
+    worker.stop().unwrap();
+}

@@ -133,6 +133,10 @@ pub enum LlmError {
     Cancelled,
     /// The answer did not have the shape the task asked for.
     BadResponse(String),
+    /// A model running in this process (a local engine) failed: it could not decode, ran out of
+    /// context, or hit the answer's token budget before ending its turn. The string names the step
+    /// and never holds user or model text.
+    Engine(String),
 }
 
 impl fmt::Display for LlmError {
@@ -150,8 +154,23 @@ impl fmt::Display for LlmError {
             Self::Network(msg) => write!(f, "network: {msg}"),
             Self::Cancelled => f.write_str("cancelled"),
             Self::BadResponse(msg) => write!(f, "unexpected response: {msg}"),
+            Self::Engine(msg) => write!(f, "local model failed: {msg}"),
         }
     }
 }
 
 impl std::error::Error for LlmError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_local_engine_failure_reads_as_one() {
+        let e = LlmError::Engine("output hit the token budget".into());
+        assert_eq!(
+            e.to_string(),
+            "local model failed: output hit the token budget"
+        );
+    }
+}

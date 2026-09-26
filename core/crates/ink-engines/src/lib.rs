@@ -15,16 +15,27 @@
 //! Everything here runs on worker threads, is `Send + Sync`, and holds no lock across a load, a
 //! download or an engine call.
 
-#![forbid(unsafe_code)]
+// No unsafe code, except the NeMo-Speech.cpp FFI (`engine-nemo`), which allows it for its own
+// module; every block there carries a SAFETY comment (clippy enforces it).
+#![cfg_attr(not(feature = "engine-nemo"), forbid(unsafe_code))]
+#![cfg_attr(feature = "engine-nemo", deny(unsafe_code))]
 #![warn(missing_docs)]
 
 mod download;
 #[cfg(feature = "http")]
 mod http;
+#[cfg(feature = "engine-llama")]
+pub mod llama;
 mod model_dir;
+#[cfg(feature = "engine-nemo")]
+#[allow(unsafe_code)]
+mod nemo;
 mod registry;
 mod residency;
 mod router;
+mod rows;
+#[cfg(feature = "engine-silero")]
+mod silero;
 
 pub use download::{DownloadError, DownloadProgress, Downloader, Fetch, FetchError, Fetched};
 #[cfg(feature = "http")]
@@ -32,12 +43,17 @@ pub use http::HttpFetch;
 pub use model_dir::{
     MAX_RELATIVE_PATH_LEN, ModelDir, PART_SUFFIX, REVISION_DIR_LEN, REVISION_MARKER,
 };
+#[cfg(feature = "engine-nemo")]
+pub use nemo::{NemoDevice, NemoDiarizer, NemoLoader, OFFLINE_PRESET};
 pub use registry::{
     ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_NAME_LEN, ModelFile, Os, Registry,
     RegistryError, Runtime, builtin_rows,
 };
-pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency};
+pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 pub use router::{ExternalEngine, Route, RouteError, Router};
+pub use rows::{NEMOTRON_DIARIZATION_ID, SILERO_VAD_ID, nemotron_3_diarization, silero_vad};
+#[cfg(feature = "engine-silero")]
+pub use silero::{CONTEXT as SILERO_CONTEXT, SileroLoader, SileroModel, SileroVad};
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 

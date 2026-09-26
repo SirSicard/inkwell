@@ -1,11 +1,14 @@
 //! Carry-over 5: a model is unloaded through residency before its files are replaced (Windows
 //! refuses to replace a file that is open, and a loaded model holds its files open).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
 use ink_core::mock::{MockClock, MockEngine};
 use ink_core::{CancelToken, EngineError, Job};
-use ink_engines::{DownloadError, EngineRow, JobScore, Loader, ModelFile, Os, Residency, Runtime};
+use ink_engines::{
+    DownloadError, EngineRow, JobScore, Loader, ModelFile, Os, Residency, Runtime, Unloaded,
+};
 use ink_pipeline::update::{ModelInstaller, ModelResidency, UpdateError, update_model};
 
 fn row(id: &str, revision_digit: char) -> EngineRow {
@@ -52,6 +55,9 @@ struct FakeResidency {
     pinned: bool,
     /// Loading any model fails.
     broken_loader: bool,
+    /// Unloading reports "not loaded" whatever is loaded: residency and the caller disagree about
+    /// which model this is.
+    claims_not_loaded: bool,
 }
 
 impl FakeResidency {
@@ -65,6 +71,7 @@ impl FakeResidency {
                 warm: Mutex::new(Some(warm.id.clone())),
                 pinned,
                 broken_loader: false,
+                claims_not_loaded: false,
             },
             weak,
         )
@@ -96,13 +103,25 @@ impl ModelResidency for FakeResidency {
         self.loaded.lock().unwrap().iter().any(|(i, _)| i == id)
     }
 
-    fn unload(&self, id: &str) -> Result<(), EngineError> {
+    fn unload(&self, id: &str) -> Result<Unloaded, EngineError> {
         self.journal.push(format!("unload {id}"));
         if self.pinned {
             return Err(EngineError::Failed("a lease still holds the model".into()));
         }
-        self.loaded.lock().unwrap().retain(|(i, _)| i != id);
-        Ok(())
+        if self.claims_not_loaded {
+            return Ok(Unloaded::NotLoaded);
+        }
+        let mut loaded = self.loaded.lock().unwrap();
+        let before = loaded.len();
+        loaded.retain(|(i, _)| i != id);
+        if loaded.len() == before {
+            return Ok(Unloaded::NotLoaded);
+        }
+        let mut warm = self.warm.lock().unwrap();
+        if warm.as_deref() == Some(id) {
+            *warm = None;
+        }
+        Ok(Unloaded::WasLoaded)
     }
 }
 
@@ -139,7 +158,6 @@ fn a_model_is_unloaded_before_its_files_are_replaced() {
     assert_eq!(
         journal.entries(),
         vec![
-            "warm none",
             "unload asr",
             "install asr (old model gone: true)",
             "warm asr",
@@ -204,45 +222,204 @@ fn a_failed_install_brings_the_old_model_back() {
     assert_eq!(residency.warm().as_deref(), Some("asr"));
 }
 
-/// Loads a mock engine per row.
-struct MockLoader;
+#[test]
+fn a_model_reported_not_loaded_although_it_is_is_refused() {
+    // A wrong id must not let an update write under a live model.
+    let journal = Arc::new(Journal::default());
+    let (old, new) = (row("asr", 'a'), row("asr", 'b'));
+    let (mut residency, weak) = FakeResidency::new(&journal, &old, false);
+    residency.claims_not_loaded = true;
+    let installer = CheckingInstaller {
+        journal: journal.clone(),
+        must_be_gone: weak,
+        fail: false,
+    };
+    let result = update_model(&residency, &installer, &old, &new, &CancelToken::new());
+    match &result {
+        Err(e @ UpdateError::Mismatch { id, .. }) => {
+            assert_eq!(id, "asr");
+            assert!(e.to_string().contains("asr"), "{e}");
+        }
+        other => panic!("expected a mismatch, got {other:?}"),
+    }
+    assert!(
+        !journal.entries().iter().any(|e| e.starts_with("install")),
+        "{:?}",
+        journal.entries()
+    );
+}
 
-impl Loader<MockEngine> for MockLoader {
-    fn load(&self, row: &EngineRow) -> Result<MockEngine, EngineError> {
-        Ok(MockEngine::new(&row.id, &[Job::DictationFinal]))
+// ---------------------------------------------------------------------------------------------
+// With ink-engines' own residency
+// ---------------------------------------------------------------------------------------------
+
+/// Live copies of each model, counted by the loader and by each copy's drop.
+#[derive(Default)]
+struct Live(Mutex<HashMap<String, usize>>);
+
+impl Live {
+    fn of(&self, id: &str) -> usize {
+        self.0.lock().unwrap().get(id).copied().unwrap_or(0)
     }
 }
 
+/// A loaded model: a mock engine that counts itself alive.
+struct Model {
+    id: String,
+    live: Arc<Live>,
+}
+
+impl Drop for Model {
+    fn drop(&mut self) {
+        *self
+            .live
+            .0
+            .lock()
+            .unwrap()
+            .entry(self.id.clone())
+            .or_default() -= 1;
+    }
+}
+
+struct CountingLoader(Arc<Live>);
+
+impl Loader<Model> for CountingLoader {
+    fn load(&self, row: &EngineRow) -> Result<Model, EngineError> {
+        *self.0.0.lock().unwrap().entry(row.id.clone()).or_default() += 1;
+        Ok(Model {
+            id: row.id.clone(),
+            live: self.0.clone(),
+        })
+    }
+}
+
+/// An installer that records, when it runs, how many copies of each named model are alive.
+struct LiveCheckingInstaller {
+    live: Arc<Live>,
+    watch: Vec<&'static str>,
+    ran: Mutex<Vec<String>>,
+}
+
+impl ModelInstaller for LiveCheckingInstaller {
+    fn install(&self, row: &EngineRow, _: &CancelToken) -> Result<(), DownloadError> {
+        let alive: Vec<String> = self
+            .watch
+            .iter()
+            .map(|id| format!("{id}={}", self.live.of(id)))
+            .collect();
+        self.ran
+            .lock()
+            .unwrap()
+            .push(format!("install {} with {}", row.id, alive.join(" ")));
+        Ok(())
+    }
+}
+
+fn residency(live: &Arc<Live>) -> Residency<Model> {
+    Residency::new(
+        Arc::new(CountingLoader(live.clone())),
+        Arc::new(MockClock::new(0, 0)),
+    )
+}
+
 #[test]
-fn todays_residency_cannot_unload_on_demand_so_the_update_fails_closed() {
-    let clock = Arc::new(MockClock::new(0, 0));
-    let residency = Residency::new(Arc::new(MockLoader), clock);
+fn residency_unloads_confirms_installs_and_warms_in_that_order() {
+    let live = Arc::new(Live::default());
+    let residency = residency(&live);
     let (old, new) = (row("asr", 'a'), row("asr", 'b'));
     residency.set_warm(Some(&old)).unwrap();
-    let journal = Arc::new(Journal::default());
-    let installer = CheckingInstaller {
-        journal: journal.clone(),
-        must_be_gone: Weak::new(),
-        fail: false,
+    assert_eq!(live.of("asr"), 1);
+    let installer = LiveCheckingInstaller {
+        live: live.clone(),
+        watch: vec!["asr"],
+        ran: Mutex::default(),
+    };
+    update_model(&residency, &installer, &old, &new, &CancelToken::new()).unwrap();
+    assert_eq!(
+        *installer.ran.lock().unwrap(),
+        vec!["install asr with asr=0"],
+        "no copy of the model was alive while its files were written"
+    );
+    assert_eq!(ModelResidency::warm(&residency).as_deref(), Some("asr"));
+    assert_eq!(live.of("asr"), 1, "the new model is loaded and warm");
+}
+
+#[test]
+fn a_model_in_use_is_never_written_under() {
+    let live = Arc::new(Live::default());
+    let residency = residency(&live);
+    let (old, new) = (row("asr", 'a'), row("asr", 'b'));
+    residency.set_warm(Some(&old)).unwrap();
+    let lease = residency.acquire(&old).unwrap();
+    let installer = LiveCheckingInstaller {
+        live: live.clone(),
+        watch: vec!["asr"],
+        ran: Mutex::default(),
     };
     let result = update_model(&residency, &installer, &old, &new, &CancelToken::new());
     assert!(
         matches!(
             result,
             Err(UpdateError::StillLoaded {
-                error: EngineError::Unsupported(_),
-                rewarm_failed: None
+                rewarm_failed: None,
+                ..
             })
         ),
         "{result:?}"
     );
-    assert!(journal.entries().is_empty(), "the installer never ran");
+    assert!(
+        installer.ran.lock().unwrap().is_empty(),
+        "the installer never ran"
+    );
     assert_eq!(
         ModelResidency::warm(&residency).as_deref(),
         Some("asr"),
-        "warm again"
+        "still warm"
     );
-    assert!(residency.is_resident("asr"));
+    drop(lease);
+}
+
+#[test]
+fn a_model_loaded_under_the_new_id_is_unloaded_too() {
+    let live = Arc::new(Live::default());
+    let residency = residency(&live);
+    let (old, new) = (row("asr", 'a'), row("asr-next", 'b'));
+    residency.set_warm(Some(&old)).unwrap();
+    drop(residency.acquire(&new).unwrap()); // loaded, idle
+    assert_eq!(live.of("asr-next"), 1);
+    let installer = LiveCheckingInstaller {
+        live: live.clone(),
+        watch: vec!["asr", "asr-next"],
+        ran: Mutex::default(),
+    };
+    update_model(&residency, &installer, &old, &new, &CancelToken::new()).unwrap();
+    assert_eq!(
+        *installer.ran.lock().unwrap(),
+        vec!["install asr-next with asr=0 asr-next=0"]
+    );
+    assert_eq!(
+        ModelResidency::warm(&residency).as_deref(),
+        Some("asr-next")
+    );
+}
+
+#[test]
+fn a_model_that_is_not_loaded_is_updated_without_warming_anything() {
+    let live = Arc::new(Live::default());
+    let residency = residency(&live);
+    let (old, new) = (row("asr", 'a'), row("asr", 'b'));
+    let installer = LiveCheckingInstaller {
+        live: live.clone(),
+        watch: vec!["asr"],
+        ran: Mutex::default(),
+    };
+    update_model(&residency, &installer, &old, &new, &CancelToken::new()).unwrap();
+    assert_eq!(
+        *installer.ran.lock().unwrap(),
+        vec!["install asr with asr=0"]
+    );
+    assert_eq!(ModelResidency::warm(&residency), None);
+    assert_eq!(live.of("asr"), 0, "nothing was loaded");
 }
 
 #[test]

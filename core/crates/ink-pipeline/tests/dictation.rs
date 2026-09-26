@@ -135,6 +135,67 @@ fn a_noise_only_take_reaches_no_engine() {
     );
 }
 
+#[test]
+fn a_take_whose_only_speech_is_too_short_is_discarded_as_speech_too_short() {
+    // A quick "no": the VAD hears 160 ms (5 windows) of speech, one window short of the level
+    // minimum. The take reaches no engine and is reported as too short, which the app can say,
+    // not as no speech (the VAD did hear some) or as a hold that was too short (it was long enough).
+    let rig = Rig::builder().vad(VadKind::Scripted(&[(20, 5)])).build();
+    let mut take = common::upsample3(&synth::noise(1.2, -70.0, 21));
+    let word = speech_48k(0.16, -40.0, 22);
+    for (t, w) in take[20 * 512 * 3..].iter_mut().zip(&word) {
+        *t += w;
+    }
+    rig.dictate(&take);
+
+    assert!(rig.engine.calls().is_empty(), "no engine saw the take");
+    assert!(rig.inserted().is_empty());
+    let events = rig.events();
+    assert!(
+        has(&events, |e| *e
+            == DictationEvent::Discarded(Discard::SpeechTooShort)),
+        "{events:?}"
+    );
+    assert!(
+        !has(&events, |e| matches!(
+            e,
+            DictationEvent::Discarded(Discard::NoSpeech | Discard::TooShort { .. })
+        )),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn knock_and_rumble_false_positives_set_no_gain_and_reach_no_engine() {
+    // The real VAD's measured false positives, replayed on the audio they came from: steep 500 Hz
+    // rumble with one 96 ms segment, and knocks with segments of 128 and 160 ms.
+    /// VAD windows heard as speech: (first window, windows).
+    type Runs = &'static [(usize, usize)];
+    let cases: [(&str, Vec<f32>, Runs); 2] = [
+        (
+            "rumble",
+            synth::rumble(3.0, -70.0, 500.0, synth::Slope::Steep, 23),
+            &[(40, 3)],
+        ),
+        ("knocks", synth::knocks(3.0, -60.0, 24), &[(20, 4), (60, 5)]),
+    ];
+    for (what, audio, runs) in cases {
+        let rig = Rig::builder().vad(VadKind::Scripted(runs)).build();
+        rig.dictate(&common::upsample3(&audio));
+        assert!(
+            rig.engine.calls().is_empty(),
+            "{what}: an engine saw the take"
+        );
+        assert!(rig.inserted().is_empty(), "{what}");
+        let events = rig.events();
+        assert!(
+            has(&events, |e| *e
+                == DictationEvent::Discarded(Discard::SpeechTooShort)),
+            "{what}: {events:?}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Carry-over 2: no VAD installed → the fallback, and a visible state
 // ---------------------------------------------------------------------------------------------
@@ -492,6 +553,23 @@ fn a_blank_polish_answer_keeps_the_text_instead_of_emptying_it() {
         e,
         DictationEvent::Warning(Warning::PolishFailed(LlmError::BadResponse(_)))
     )));
+}
+
+#[test]
+fn a_panic_while_saving_leaves_no_half_written_record() {
+    for fault in [common::Fault::AppendPanics, common::Fault::FinishPanics] {
+        let store = Arc::new(common::FaultyStore::new(fault));
+        let rig = Rig::builder().store(store.clone()).build();
+        let speech = speech_48k(2.0, -30.0, 61);
+        rig.teach(&speech, "half saved");
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rig.dictate(&speech)));
+        assert!(outcome.is_err(), "{fault:?}: the store panicked");
+        assert!(
+            rig.dictation_records().is_empty(),
+            "{fault:?}: the record the panic interrupted was deleted"
+        );
+    }
 }
 
 #[test]

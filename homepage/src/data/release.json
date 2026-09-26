@@ -1,0 +1,51 @@
+{
+  "tag": "v0.2.9",
+  "publishedAt": "2026-08-27T08:07:55Z",
+  "assets": [
+    {
+      "name": "Inkwell_0.2.9_aarch64.app.tar.gz",
+      "size": 18775677,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_aarch64.app.tar.gz"
+    },
+    {
+      "name": "Inkwell_0.2.9_aarch64.dmg",
+      "size": 19757132,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_aarch64.dmg"
+    },
+    {
+      "name": "Inkwell_0.2.9_amd64.AppImage",
+      "size": 99138040,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_amd64.AppImage"
+    },
+    {
+      "name": "Inkwell_0.2.9_amd64.deb",
+      "size": 23781330,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_amd64.deb"
+    },
+    {
+      "name": "Inkwell_0.2.9_x64-setup.exe",
+      "size": 11282200,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_x64-setup.exe"
+    },
+    {
+      "name": "Inkwell_0.2.9_x64.app.tar.gz",
+      "size": 20637836,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_x64.app.tar.gz"
+    },
+    {
+      "name": "Inkwell_0.2.9_x64.dmg",
+      "size": 21811923,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_x64.dmg"
+    },
+    {
+      "name": "Inkwell_0.2.9_x64_en-US.msi",
+      "size": 15867904,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/Inkwell_0.2.9_x64_en-US.msi"
+    },
+    {
+      "name": "latest.json",
+      "size": 7100,
+      "url": "https://github.com/SirSicard/inkwell/releases/download/v0.2.9/latest.json"
+    }
+  ]
+}

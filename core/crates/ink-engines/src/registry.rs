@@ -53,8 +53,10 @@ pub enum Runtime {
     LlamaCpp,
     /// sherpa-onnx, for ONNX speech models.
     SherpaOnnx,
-    /// NeMo-Speech.cpp, for the diarizer.
+    /// NeMo-Speech.cpp, for the diarizer (`engine-nemo`).
     NemoSpeechCpp,
+    /// tract, a pure-Rust ONNX runtime, for Silero VAD (`engine-silero`).
+    Tract,
 }
 
 /// One job a row can fill, with its measured error rate on that job's benchmark.
@@ -63,9 +65,10 @@ pub struct JobScore {
     /// The job.
     pub job: Job,
     /// Measured error rate in percent, lower is better: word error rate for the speech jobs,
-    /// diarization error rate for [`Job::Diarization`]. Per job, because one model is measured on
-    /// a different set for each job (meetings versus dictation), and the router only compares
-    /// numbers measured for the same job.
+    /// diarization error rate for [`Job::Diarization`], and for [`Job::VoiceActivity`] the share
+    /// of clearly speech or clearly silent windows it misjudges. Per job, because one model is
+    /// measured on a different set for each job (meetings versus dictation), and the router only
+    /// compares numbers measured for the same job.
     pub wer: f32,
 }
 
@@ -382,8 +385,69 @@ impl Registry {
 
 /// The models the app ships knowing about.
 ///
-/// Empty for now: each model's revision, hashes and sizes are confirmed against its repository
-/// when its adapter lands, and a row is only added then.
+/// Each model's revision, hashes and sizes are confirmed when its adapter lands, and its row is
+/// only added then. Error rates are measured per job on the same sets for every row, so the router
+/// compares like with like: the meeting final on AMI IHM (three public meeting excerpts, 709
+/// reference words), the dictation final on FLEURS English dev as published (394 utterances).
+/// The diarizer and the VAD are listed only in builds that include their adapter, so such a build
+/// never offers a download it cannot run.
 pub fn builtin_rows() -> Vec<EngineRow> {
-    Vec::new()
+    [
+        qwen3_asr_1_7b_q8(),
+        #[cfg(feature = "engine-nemo")]
+        crate::rows::nemotron_3_diarization(),
+        #[cfg(feature = "engine-silero")]
+        crate::rows::silero_vad(),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// Qwen3-ASR 1.7B, Q8_0 GGUF plus its Q8_0 audio projector, for llama.cpp (`engine-llama`).
+///
+/// Licence: the base model, `Qwen/Qwen3-ASR-1.7B`, is Apache-2.0 on its model card (checked
+/// 2026-09-26). The `ggml-org/Qwen3-ASR-1.7B-GGUF` conversion's repository carries no licence tag
+/// (its files' own metadata say `apache-2.0`), so the row records the base model's licence.
+///
+/// Sizes and hashes are those of the files downloaded from this revision (checked locally by an
+/// ignored test). Mac only until its speed on Windows has been measured.
+fn qwen3_asr_1_7b_q8() -> EngineRow {
+    const REVISION: &str = "36a678687ba7d07a74ca70ccb0e36902e005fb80";
+    let file = |name: &str, sha256: &str, size: u64| ModelFile {
+        name: name.into(),
+        url: format!(
+            "https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF/resolve/{REVISION}/{name}"
+        ),
+        sha256: sha256.into(),
+        size,
+    };
+    EngineRow {
+        id: "qwen3-asr-1.7b-q8".into(),
+        scores: vec![
+            JobScore {
+                job: Job::MeetingFinal,
+                wer: 16.08,
+            },
+            JobScore {
+                job: Job::DictationFinal,
+                wer: 4.59,
+            },
+        ],
+        files: vec![
+            file(
+                "Qwen3-ASR-1.7B-Q8_0.gguf",
+                "58e22d0532d4eacaf034cfac17a6fed159f37c41390c710186783be439d1fc57",
+                2_165_034_944,
+            ),
+            file(
+                "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf",
+                "46c1d533af3f354ceb37ce855dbceff7da7fa7cf1e6a523df3b13440bd164c0d",
+                355_709_344,
+            ),
+        ],
+        revision: REVISION.into(),
+        licence: "Apache-2.0".into(),
+        oses: vec![Os::MacOs],
+        runtime: Runtime::LlamaCpp,
+    }
 }

@@ -1,0 +1,102 @@
+---
+// "The instrument card": the homepage as the operating card of a small writing
+// instrument. How to play it (the hero), what else it does, what it is made of (the models), what it
+// sends (privacy), how to get it, and what it costs. Every fact comes from the Inkwell README; see
+// ../lib/constants.ts.
+import Base from '../layouts/Base.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import Hero from '../components/Hero.astro';
+import Features from '../components/Features.astro';
+import Models from '../components/Models.astro';
+import Privacy from '../components/Privacy.astro';
+import Install from '../components/Install.astro';
+import Cost from '../components/Cost.astro';
+import CodeSigning from '../components/CodeSigning.astro';
+import Colophon from '../components/Colophon.astro';
+import {
+  APP_VERSION,
+  AUTHOR_NAME,
+  AUTHOR_URL,
+  LICENSE_URL,
+  RELEASES_LATEST_URL,
+  SITE_URL,
+} from '../lib/constants';
+
+const title = 'Inkwell: dictation that stays on your desk';
+const description =
+  'Hold a key, speak, let go: the text lands in whatever app you were typing in. Speech recognition runs on your own CPU, so your audio never leaves the machine. Free, MIT licensed, no account.';
+
+// Only fields that are true. No rating or review: SoftwareApplication rich results want ratings, and
+// there are none to give.
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Inkwell',
+  description,
+  url: `${SITE_URL}/`,
+  applicationCategory: 'UtilitiesApplication',
+  operatingSystem: 'macOS, Windows 10, Windows 11, Linux',
+  softwareVersion: APP_VERSION,
+  downloadUrl: RELEASES_LATEST_URL,
+  license: LICENSE_URL,
+  isAccessibleForFree: true,
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' },
+  author: { '@type': 'Person', name: AUTHOR_NAME, url: AUTHOR_URL },
+};
+---
+
+<Base title={title} description={description} canonicalPath="/" jsonLd={jsonLd}>
+  <a class="skip" href="#main">Skip to content</a>
+  <SiteHeader />
+  <main id="main">
+    <Hero />
+    <Features />
+    <Models />
+    <Privacy />
+    <Install />
+    <Cost />
+    <CodeSigning />
+  </main>
+  <Colophon />
+
+  <script>
+    import '../lib/ink-field';
+    import type { InkField } from '../lib/ink-field';
+    import { enhanceDownloads } from '../lib/platform';
+    import { hotkeyDemo } from '../lib/hotkey-demo';
+    import { DEMO_SENTENCES } from '../lib/constants';
+
+    // Each enhancement stands alone: one failing never takes the others, or the content, down.
+    try {
+      enhanceDownloads();
+      document.querySelectorAll<HTMLElement>('[data-detected] .detected-note').forEach((el) => (el.hidden = false));
+    } catch {
+      /* the release page link stays */
+    }
+
+    try {
+      const root = document.querySelector<HTMLElement>('[data-demo]');
+      const key = root?.querySelector<HTMLButtonElement>('[data-demo-key]');
+      const field = root?.querySelector<HTMLElement>('[data-demo-field]');
+      const caret = root?.querySelector<HTMLElement>('[data-demo-caret]');
+      const status = root?.querySelector<HTMLElement>('[data-demo-status]');
+      const ink = root?.querySelector<InkField>('[data-demo-ink]') ?? null;
+      if (root && key && field && caret && status) {
+        const demo = hotkeyDemo({ root, key, field, caret, status, ink }, DEMO_SENTENCES);
+        // The one orchestrated moment: once, when the key and the field are fully in view, the key goes
+        // down, the ink swells with a voice for about four seconds, and the sentence lands.
+        const io = new IntersectionObserver(
+          (entries) => {
+            if (!entries.some((e) => e.isIntersecting)) return;
+            io.disconnect();
+            window.setTimeout(() => demo.autoplay(), 900);
+          },
+          { threshold: 0.9 },
+        );
+        io.observe(root.querySelector('.controls') ?? root);
+      }
+    } catch {
+      /* the demo is decoration over working content */
+    }
+  </script>
+</Base>

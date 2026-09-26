@@ -1,0 +1,118 @@
+---
+// Download and first run, from the README's Install, Quick start and Requirements sections (the default
+// hotkeys were checked against the app's settings at the v0.2.9 tag). The file
+// links are the release's real assets (see ../lib/release.ts). The previous site's "Nothing is code
+// signed yet" was stale: macOS builds are signed and notarised; Windows is not signed yet.
+import { APP_VERSION, BUILD_FROM_SOURCE_URL, RELEASES_URL } from '../lib/constants';
+import { DOWNLOADS } from '../lib/release';
+---
+
+<section class="install wrap" id="download" aria-labelledby="download-title">
+  <div class="section-head">
+    <h2 id="download-title">Download Inkwell {APP_VERSION}.</h2>
+    <p class="section-intro">
+      Free, with no account and no email address asked for. Every build is also on the
+      <a href={RELEASES_URL}>GitHub releases page</a>, and you can <a href={BUILD_FROM_SOURCE_URL}>build it from
+      source</a>.
+    </p>
+  </div>
+
+  <div class="platforms">
+    <div class="platform" data-platform="macOS">
+      <div class="platform-head">
+        <h3>macOS</h3>
+        <p class="detected-note" hidden>This computer</p>
+        <p>Apple Silicon, the primary platform, and Intel.</p>
+        <ul class="files">
+          <li><a href={DOWNLOADS.macOS.url} translate="no">{DOWNLOADS.macOS.name}</a> <span>{DOWNLOADS.macOS.size}, Apple Silicon</span></li>
+          <li><a href={DOWNLOADS.macOSIntel.url} translate="no">{DOWNLOADS.macOSIntel.name}</a> <span>{DOWNLOADS.macOSIntel.size}, Intel</span></li>
+        </ul>
+      </div>
+      <div class="platform-body">
+        <ol class="steps">
+          <li>
+            Open the disk image, drag Inkwell to Applications and open it. It is signed with a Developer ID and
+            notarised by Apple, so there is no warning to click past.
+          </li>
+          <li>Allow Microphone access when asked.</li>
+          <li>
+            Allow Accessibility access in System Settings, under Privacy &amp; Security. Inkwell pastes with a
+            synthetic keystroke, which macOS blocks until you grant this. It is the one people miss: without it,
+            dictation transcribes and nothing appears.
+          </li>
+        </ol>
+        <p class="platform-note">
+          Secure Input blocks the paste, so dictating into password fields and some terminals does nothing.
+        </p>
+      </div>
+    </div>
+
+    <div class="platform" data-platform="Windows">
+      <div class="platform-head">
+        <h3>Windows</h3>
+        <p class="detected-note" hidden>This computer</p>
+        <p>Windows 10 and 11. The secondary platform, built by CI on every release.</p>
+        <ul class="files">
+          <li><a href={DOWNLOADS.windows.url} translate="no">{DOWNLOADS.windows.name}</a> <span>{DOWNLOADS.windows.size}, recommended</span></li>
+          <li><a href={DOWNLOADS.windowsMsi.url} translate="no">{DOWNLOADS.windowsMsi.name}</a> <span>{DOWNLOADS.windowsMsi.size}</span></li>
+        </ul>
+      </div>
+      <div class="platform-body">
+        <p class="step-single">
+          Run the installer. It is not code signed yet, so SmartScreen says “Windows protected your PC”: click
+          “More info”, then “Run anyway”. Your browser may also flag the download as uncommon.
+        </p>
+        <p class="platform-note">
+          Only macOS is signed today. The source and the workflow that built these files are public, so you
+          can check what you are running.
+        </p>
+      </div>
+    </div>
+
+    <div class="platform" data-platform="Linux">
+      <div class="platform-head">
+        <h3>Linux</h3>
+        <p class="detected-note" hidden>This computer</p>
+        <p>A recent desktop on x86-64. Best effort: built by CI, not regularly tested.</p>
+        <ul class="files">
+          <li><a href={DOWNLOADS.appImage.url} translate="no">{DOWNLOADS.appImage.name}</a> <span>{DOWNLOADS.appImage.size}</span></li>
+          <li><a href={DOWNLOADS.deb.url} translate="no">{DOWNLOADS.deb.name}</a> <span>{DOWNLOADS.deb.size}</span></li>
+        </ul>
+      </div>
+      <div class="platform-body">
+        <ul class="notes">
+          <li>Expect rough edges. Bug reports that name your distribution and desktop are welcome.</li>
+          <li>The global hotkey and the paste keystroke go through X11, so a Wayland session is untested.</li>
+          <li>Per-app modes stay off, because the foreground app can’t be read.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="install-after">
+    <div>
+      <h3>First run</h3>
+      <ol class="steps">
+        <li>
+          Finish the short onboarding: pick a microphone, download a model, test the hotkey. The installer holds
+          no speech models; Parakeet V3 (670&nbsp;MB) is the default.
+        </li>
+        <li>
+          The record hotkey starts as <kbd>Cmd+Shift+Space</kbd> on macOS and <kbd>Ctrl+Space</kbd> elsewhere.
+          Change it in Settings, under General; on macOS, pick one that doesn’t collide with Spotlight or
+          input-source switching.
+        </li>
+        <li>Hold the hotkey, speak, let go. The text is pasted where your cursor is.</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Requirements</h3>
+      <dl class="reqs">
+        <div><dt>System</dt><dd>macOS on Apple Silicon or Intel, Windows 10 or 11, or a recent Linux desktop</dd></div>
+        <div><dt>Memory</dt><dd>2&nbsp;GB free with Parakeet V3, less with the small models</dd></div>
+        <div><dt>Disk</dt><dd>About 50&nbsp;MB for the app, plus 240 to 940&nbsp;MB for the model you choose</dd></div>
+        <div><dt>Microphone</dt><dd>Any</dd></div>
+      </dl>
+    </div>
+  </div>
+</section>

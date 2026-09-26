@@ -50,6 +50,12 @@ pub enum Discard {
     Silence,
     /// The VAD found no speech. No engine saw the take.
     NoSpeech,
+    /// The VAD found speech, but too little of it to set a level (no stretch as long as
+    /// `ink_audio::gain::MIN_LEVEL_SEGMENT_WINDOWS`, 192 ms): a quick one-word answer, or a knock
+    /// the VAD took for speech. No engine saw the take. Tell the user it was too short and to try
+    /// again: something was heard, unlike [`NoSpeech`](Self::NoSpeech), and the key was held long
+    /// enough, unlike [`TooShort`](Self::TooShort).
+    SpeechTooShort,
     /// The engine returned no words.
     NothingHeard,
     /// The engine returned words, and the mode's cleanup and the dictionary removed them all (a

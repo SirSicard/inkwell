@@ -1,0 +1,6 @@
+# Every crawler is welcome, search and AI alike (the same as the previous site, which had no robots
+# rules). Whether AI training crawlers should be kept out is the maintainer's call.
+User-agent: *
+Allow: /
+
+Sitemap: https://getinkwell.vercel.app/sitemap-index.xml
