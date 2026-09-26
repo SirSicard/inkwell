@@ -19,6 +19,8 @@ const fragmentShader = `
   uniform float u_state;  // 0 = idle, 1 = recording (spring-interpolated)
   uniform sampler2D u_text; // wordmark alpha, composited as a true inversion
 
+  // permute() and snoise(): 2D simplex noise from webgl-noise by Ian McEwan, Ashima Arts.
+  // Copyright (C) 2011 Ashima Arts. MIT License. https://github.com/ashima/webgl-noise
   vec3 permute(vec3 x) { return mod(((x*34.0)+1.0)*x, 289.0); }
 
   float snoise(vec2 v) {
