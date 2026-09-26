@@ -104,7 +104,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       A meeting whose capture is WAV files instead of devices: the same pump, chunks on disk,
  *       live chain and final pass as a real meeting (architecture rule 7). "far" and "title" are
  *       optional. "pacing" is "realtime" (default) or "fast"; "fast" needs files of at most 55 s.
- *       Ends with "meeting.finished" (the record) or "meeting.failed".
+ *       Ends with "meeting.finished" (the record) or "meeting.failed". A file that cannot be
+ *       read, or a meeting already running, is "command.failed" and starts nothing.
  *   {"cmd":"model.warm","job":"dictation_final"}
  *       Loads the job's model and keeps it loaded. "model.warmed", "model.refused" or
  *       "model.warm_failed".
@@ -112,7 +113,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       Replaces a model's files. The model is held exclusively from before it is unloaded until
  *       the new one is installed and warm: meanwhile every job that needs it is refused with
  *       "model.refused", never served from files being replaced. "model.update_started", then
- *       "model.update_finished".
+ *       "model.update_finished". While a job is using the model, or another update holds it,
+ *       the update is "command.failed" and nothing changes: send it again later.
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
