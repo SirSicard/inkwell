@@ -222,7 +222,8 @@ fn is_commit_hash(revision: &str) -> bool {
 
 /// Ids and file names become path components, so only a conservative set is allowed: ASCII
 /// letters, digits, `-`, `_` and `.`, starting with a letter or digit (no `..`, no hidden files,
-/// no separators or drive letters), and not a name Windows reserves for a device.
+/// no separators or drive letters), not ending in `.`, and not a name Windows reserves for a
+/// device.
 fn check_name(name: &str) -> Result<(), &'static str> {
     const RESERVED: &[&str] = &["con", "prn", "aux", "nul"];
     let first_ok = name
@@ -240,6 +241,10 @@ fn check_name(name: &str) -> Result<(), &'static str> {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
     {
         return Err("may only use ASCII letters, digits, '-', '_' and '.'");
+    }
+    if name.ends_with('.') {
+        // Windows drops a trailing dot, so the file on disk would not have this name.
+        return Err("may not end in '.'");
     }
     let stem = name.split('.').next().unwrap_or(name).to_ascii_lowercase();
     let device = RESERVED.contains(&stem.as_str())
