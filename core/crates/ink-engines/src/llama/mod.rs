@@ -47,23 +47,33 @@ pub use llm::{JSON_OBJECT_GRAMMAR, LlamaLlm};
 ///
 /// - Target `llama-cpp-2`, where every llama.cpp, ggml and mtmd line arrives (the module is a
 ///   field): kept at WARN and ERROR only.
-/// - llama-cpp-2's own events (targets `llama_cpp_2` and `llama_cpp_2::*`): dropped at every level.
-///   Its log bridge re-emits a buffered line's raw text at WARN, whatever that line's level was, and
-///   its other modules log paths.
+/// - llama-cpp-2's log bridge and crate root (targets `llama_cpp_2::log` and `llama_cpp_2`): dropped
+///   at every level. The bridge re-emits a buffered line's raw text at WARN, whatever that line's
+///   level was.
+/// - llama-cpp-2's other modules (`llama_cpp_2::*`): kept at WARN and ERROR only. Below that they
+///   log paths. In 0.1.157 (pinned) the only WARN or ERROR outside the bridge is `model.rs`'s
+///   "Unexpected rope type", which carries a number: a wrong-model signal worth keeping. Re-read
+///   the binding's WARN and ERROR call sites whenever the pin moves.
 /// - Anything else: not this filter's business, kept.
 ///
 /// Every subscriber in the app applies it (see the module docs). S1.7 makes that structural: one
 /// core subscriber applying this and ink-llm's `log_record_allowed`, with a planted-secret test.
 pub fn log_allowed(metadata: &tracing::Metadata<'_>) -> bool {
     let target = metadata.target();
-    if target == "llama_cpp_2" || target.starts_with("llama_cpp_2::") {
+    let warn_or_error = matches!(
+        *metadata.level(),
+        tracing::Level::WARN | tracing::Level::ERROR
+    );
+    if target == "llama_cpp_2"
+        || target == "llama_cpp_2::log"
+        || target.starts_with("llama_cpp_2::log::")
+    {
         return false;
     }
-    target != "llama-cpp-2"
-        || matches!(
-            *metadata.level(),
-            tracing::Level::WARN | tracing::Level::ERROR
-        )
+    if target == "llama-cpp-2" || target.starts_with("llama_cpp_2::") {
+        return warn_or_error;
+    }
+    true
 }
 
 use std::path::Path;
@@ -259,9 +269,9 @@ mod tests {
     }
 
     #[test]
-    fn the_bindings_own_events_are_dropped_at_every_level() {
+    fn the_bindings_log_bridge_is_dropped_at_every_level() {
         // `llama_cpp_2::log` re-emits a buffered line's raw text at WARN whatever its level was
-        // (llama-cpp-2 0.1.157, src/log.rs); the other modules log paths.
+        // (llama-cpp-2 0.1.157, src/log.rs).
         let got = kept(|| {
             for level in ["trace", "debug", "info", "warn", "error"] {
                 tracing::trace!(target: "llama_cpp_2::log", level, "text");
@@ -270,11 +280,27 @@ mod tests {
                 tracing::warn!(target: "llama_cpp_2::log", level, text = "buffered", "re-emit");
                 tracing::error!(target: "llama_cpp_2::log", level, "text");
             }
-            tracing::debug!(target: "llama_cpp_2::model", "Loaded model");
-            tracing::error!(target: "llama_cpp_2::model", "Unexpected rope type");
             tracing::warn!(target: "llama_cpp_2", "crate root");
         });
         assert!(got.is_empty(), "kept {got:?}");
+    }
+
+    #[test]
+    fn the_bindings_other_modules_are_kept_at_warn_and_error_only() {
+        // Below WARN they log paths; model.rs's rope-type error (a number) is a wrong-model signal.
+        let got = kept(|| {
+            tracing::debug!(target: "llama_cpp_2::model", "Loaded model");
+            tracing::info!(target: "llama_cpp_2::context", "context");
+            tracing::warn!(target: "llama_cpp_2::context", "warn");
+            tracing::error!(target: "llama_cpp_2::model", rope_type = 7, "Unexpected rope type");
+        });
+        assert_eq!(
+            got,
+            vec![
+                (Level::WARN, "llama_cpp_2::context".to_owned()),
+                (Level::ERROR, "llama_cpp_2::model".to_owned()),
+            ]
+        );
     }
 
     #[test]
