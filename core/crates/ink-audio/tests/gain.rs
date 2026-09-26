@@ -351,6 +351,25 @@ fn gain_is_capped() {
 }
 
 #[test]
+fn a_take_at_the_noise_floor_is_lifted_by_the_full_cap_and_heard() {
+    // The cap-bound margin: the quietest take that reaches the VAD (a robust peak just above
+    // NOISE_FLOOR) is heard through a provisional gain of MAX_GAIN, which lifts it to at least
+    // NOISE_FLOOR × MAX_GAIN (−20 dBFS peak), far above the deaf VAD's −50 dBFS. Raising
+    // NOISE_FLOOR's partners (lowering MAX_GAIN, or a VAD that needs more level) must keep this
+    // true, or such a take is discarded as having no speech.
+    assert!(NOISE_FLOOR * MAX_GAIN > from_dbfs(DeafOracle::HEARING_DBFS));
+    let clean = speech_like(2.0, -86.0, 16);
+    let robust = robust_peak(&clean);
+    assert!(robust > NOISE_FLOOR && TARGET_PEAK / robust > MAX_GAIN);
+    let mut take = clean.clone();
+    let report = normalise_speech(&mut take, &mut DeafOracle::new(speech_mask(&clean)), &cfg());
+    assert_eq!(
+        report.unwrap().outcome,
+        GainOutcome::Applied { gain: MAX_GAIN }
+    );
+}
+
+#[test]
 fn never_clips() {
     // A full-scale click in a −75 dBFS take gets over 50 dB of gain; it is shaved to full scale,
     // never wrapped or pushed past it, and the speech still reaches the target.

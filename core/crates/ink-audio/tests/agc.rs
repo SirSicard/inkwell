@@ -9,8 +9,10 @@ mod common;
 
 use common::{Always, DeafOracle, Failing, Oracle, speech_mask};
 use ink_audio::Agc;
-use ink_audio::agc::{FALL_DB_PER_S, LIMITER_BLOCK, RISE_DB_PER_S};
-use ink_audio::gain::{LEVEL_FRAME, MAX_GAIN, TARGET_PEAK, robust_peak, to_dbfs};
+use ink_audio::agc::{FALL_DB_PER_S, LIMITER_BLOCK, RISE_DB_PER_S, SPEECH_WINDOW_FRAMES};
+use ink_audio::gain::{
+    LEVEL_FRAME, MAX_GAIN, NOISE_FLOOR, TARGET_PEAK, from_dbfs, robust_peak, to_dbfs,
+};
 use ink_audio::synth::{
     Slope, SpeechShape, breathy_speech, cycling_fan, knocks, mix, noise, rumble, speech_like,
     speech_with, swing, with_noise,
@@ -567,4 +569,92 @@ fn agc_without_vad_holds_its_gain_through_a_pause_of_room_tone() {
         .fold(f32::MIN, |m, &g| m.max(g));
     assert!(most - at_pause < 0.01, "rose {:.2} dB", most - at_pause);
     assert!(!Agc::without_vad().uses_vad());
+}
+
+/// How long after a pause a deaf VAD's AGC may take to reach the level of speech that resumes
+/// 6 dB quieter. Derived from the design, not measured: the old frames leave the level window
+/// only once all but the skipped few have been replaced (142 of 150 learned frames, 2.84 s at one
+/// per frame, ×1.5 for the frames speech gaps do not supply), then the gain climbs 6 dB at the
+/// rise rate.
+fn resume_bound_s() -> f64 {
+    let turnover = SPEECH_WINDOW_FRAMES as f64 / 50.0 * 1.5 * (142.0 / 150.0);
+    turnover + 6.0 / f64::from(RISE_DB_PER_S)
+}
+
+/// A deaf VAD's AGC through speech (−45 dBFS), `pause`, then speech 6 dB quieter: the gain holds
+/// through the pause, and learns from the speech after it. After a pause longer than the 1.5 s
+/// the provisional gain looks back over, that gain reads the pause (silence reads as MAX_GAIN), so
+/// the VAD's copy of the first resumed frames is lifted hard and clamped; the VAD must still hear
+/// them, and the output must still never clip.
+fn assert_deaf_holds_then_learns(pause: Vec<f32>) {
+    let mut input = speech_like(8.0, -45.0, 2);
+    let pause_start = input.len();
+    input.extend(pause);
+    let pause_end = input.len();
+    input.extend(speech_like(10.0, -51.0, 3));
+    let mut clean = input.clone();
+    clean[pause_start..pause_end].fill(0.0);
+    let (out, gains) = run(deaf(&clean), &input);
+
+    // (a) The gain holds through the pause.
+    let frame = |sample: usize| sample / LEVEL_FRAME;
+    let at_pause = gains[frame(pause_start) - 1];
+    let most = gains[frame(pause_start)..frame(pause_end)]
+        .iter()
+        .fold(f32::MIN, |m, &g| m.max(g));
+    assert!(
+        most - at_pause < 0.01,
+        "the gain rose {:.2} dB during the pause",
+        most - at_pause
+    );
+
+    // (b) The speech after the pause is heard and learned from: the gain climbs to meet it, and by
+    // the stated bound it sits at the target and stays there.
+    let bound = secs(resume_bound_s());
+    let settled = converged_speech_db(
+        &out[pause_end + bound..pause_end + bound + secs(2.0)],
+        &clean[pause_end + bound..pause_end + bound + secs(2.0)],
+    );
+    assert!(
+        settled.abs() < CONVERGED_TOLERANCE_DB,
+        "{settled:+.2} dB from the target {:.1} s after the pause",
+        resume_bound_s()
+    );
+    let climbed = gains[gains.len() - 1] - at_pause;
+    assert!(
+        climbed > 5.0,
+        "the gain climbed only {climbed:.2} dB after the pause"
+    );
+
+    // And the output, played at the AGC's gain, never clips.
+    let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(peak <= 1.0, "the output clipped at {peak}");
+}
+
+#[test]
+fn a_deaf_vad_holds_through_a_pause_of_room_tone_and_learns_after_it() {
+    assert_deaf_holds_then_learns(noise(10.0, -75.0, 4));
+}
+
+#[test]
+fn a_deaf_vad_holds_through_digital_silence_and_learns_after_it() {
+    assert_deaf_holds_then_learns(vec![0.0; secs(10.0)]);
+}
+
+#[test]
+fn agc_hears_a_talker_at_the_noise_floor_through_the_capped_copy() {
+    // The cap-bound margin: the quietest take that reaches the VAD (a robust peak just above
+    // NOISE_FLOOR) is lifted by MAX_GAIN to at least NOISE_FLOOR × MAX_GAIN (−20 dBFS peak),
+    // far above the deaf VAD's −50 dBFS. Raising NOISE_FLOOR's partners (lowering MAX_GAIN, or a
+    // VAD that needs more level) must keep this true, or such a talker is never heard.
+    assert!(NOISE_FLOOR * MAX_GAIN > from_dbfs(DeafOracle::HEARING_DBFS));
+    let input = speech_like(10.0, -86.0, 40);
+    let robust = robust_peak(&input);
+    assert!(robust > NOISE_FLOOR && TARGET_PEAK / robust > MAX_GAIN);
+    let (_, gains) = run(deaf(&input), &input);
+    assert_eq!(
+        gains[gains.len() - 1],
+        to_dbfs(MAX_GAIN),
+        "the AGC did not learn the talker at the floor"
+    );
 }
