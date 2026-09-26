@@ -182,6 +182,9 @@ fn streaming_output_keeps_up_with_its_input() {
             bound > 0 && bound <= 16_000 / 25,
             "{rate} Hz: held back up to {bound} frames (40 ms)"
         );
+        if rate == 48_000 {
+            assert!(bound <= 23 * 16, "48 kHz: {bound} frames, over 23 ms");
+        }
         let mut out = Vec::new();
         let mut fed = 0u64;
         let mut worst = 0;

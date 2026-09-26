@@ -5,20 +5,19 @@
 //!
 //! # What moves the gain
 //!
-//! Only **level frames**. The AGC applies the normaliser's own stationary guard to the last
-//! [`RECENT_FRAMES`] (1.5 s): if the robust peak there stands at least [`MIN_DYNAMICS_DB`] (4 dB)
-//! over the 10th-percentile frame, the audio is not stationary, and a frame that itself peaks at
-//! least 4 dB over that quiet level (and above [`NOISE_FLOOR`]) counts toward the level. The level
-//! is the normaliser's robust peak taken over the last [`SPEECH_WINDOW_FRAMES`] such frames: the
-//! same measure, the same [`TRANSIENT_FRAMES`] skipped, the same target.
+//! Only **level frames**. The AGC runs the stationary test of [`speech_band`](crate::speech_band)
+//! on the speech-band envelope of the last [`RECENT_FRAMES`] (1.5 s). When those are not
+//! stationary, a frame whose own band envelope stands [`MIN_DYNAMICS_DB`] over their quiet frame,
+//! and whose full-band peak is above [`NOISE_FLOOR`], counts toward the level. The level is the
+//! normaliser's full-band robust peak taken over the last [`SPEECH_WINDOW_FRAMES`] such frames:
+//! the same measure, the same [`TRANSIENT_FRAMES`] skipped, the same target.
 //!
-//! Like the normaliser, this decides level, not speech. Low-crest speech (continuous, breathy, in
-//! noise) is lifted: its loud frames stand only 5–9 dB over its quiet ones, which an earlier 10 dB
-//! frame test never let through, so it stayed at −75 dBFS. White room tone stays below the line,
-//! however long it runs, because the window is fixed: its 1.5 s contrast measured at most 3.2 dB
-//! over 30 minutes, and low-passed rumble at four cutoffs did not lift the gain in 2 minutes each.
-//! Bursty noise (knocks, a cycling fan) does cross it, as it crosses the normaliser's: the live
-//! engine then hears it lifted, and what is speech is the VAD's and the engine's call.
+//! Like the normaliser, this decides level, not speech. What the stationary test asks, and the
+//! committed tests that hold it (rumble and white room tone never lift the gain; speech and
+//! breathy speech 8 dB over white noise or rumble reach the target), are in
+//! [`speech_band`](crate::speech_band). Non-stationary noise that is not speech, such as a
+//! cycling fan, can be lifted: the live engine then hears it, and what is speech is the VAD's and
+//! the engine's call.
 //!
 //! - **Pauses hold the gain.** Silence, room tone and hum are not speech frames: nothing is learned
 //!   from them and the gain stays where the last speech left it. The first word after a pause
@@ -55,9 +54,9 @@
 //! [`flush`]: Agc::flush
 
 use crate::gain::{
-    LEVEL_FRAME, MAX_GAIN, MIN_DYNAMICS, NOISE_FLOOR, QUIET_PERCENTILE, TARGET_PEAK,
-    TRANSIENT_FRAMES, frame_peak,
+    LEVEL_FRAME, MAX_GAIN, MIN_DYNAMICS, NOISE_FLOOR, TARGET_PEAK, TRANSIENT_FRAMES, frame_peak,
 };
+use crate::speech_band::{SpeechBandFilter, Stationarity};
 
 #[cfg(doc)]
 use crate::gain::MIN_DYNAMICS_DB;
@@ -74,7 +73,7 @@ pub const RISE_DB_PER_S: f32 = 6.0;
 /// The fastest the gain falls, in dB per second (a louder talker must not wait).
 pub const FALL_DB_PER_S: f32 = 60.0;
 
-/// The stationary guard looks at this many recent frames (1.5 s).
+/// The stationary test looks at this many recent frames (1.5 s).
 pub const RECENT_FRAMES: usize = 75;
 
 /// The level is measured over this many recent speech frames (3 s of speech).
@@ -103,14 +102,19 @@ pub struct Agc {
     ramp_to: f32,
     ramp_log: f32,
     ramp_len: usize,
-    /// The first block's peak of a 20 ms level frame whose second block has not come yet.
-    half_frame: Option<f32>,
+    /// The first block of a 20 ms level frame whose second block has not come yet: its peak, its
+    /// speech-band energy and its length.
+    half_frame: Option<(f32, f64, usize)>,
+    /// The speech-band filter, run over the input as it arrives.
+    band: SpeechBandFilter,
+    /// The filling block's speech-band energy so far.
+    band_energy: f64,
     /// The gain the audio is heading for (the state `gain()` reports).
     gain: f32,
     locked: bool,
-    /// Recent frame peaks, for the stationary guard.
+    /// Recent frames' speech-band envelope (RMS), for the stationary test.
     recent: Ring,
-    /// Scratch for selecting levels out of `recent`.
+    /// Scratch for ranking `recent`.
     recent_scratch: Vec<f32>,
     /// Recent speech frame peaks, for the level.
     speech: Ring,
@@ -128,7 +132,7 @@ impl Agc {
     /// The output is the input delayed by this many samples (two limiter blocks, 20 ms).
     pub const LATENCY: usize = 2 * LIMITER_BLOCK;
 
-    /// An AGC at unity gain. **Allocates** (about 3 KB).
+    /// An AGC at unity gain. **Allocates** its blocks and windows.
     pub fn new() -> Self {
         Self {
             filling: vec![0.0; LIMITER_BLOCK],
@@ -141,6 +145,8 @@ impl Agc {
             ramp_log: 0.0,
             ramp_len: LIMITER_BLOCK,
             half_frame: None,
+            band: SpeechBandFilter::new(),
+            band_energy: 0.0,
             gain: 1.0,
             locked: false,
             recent: Ring::new(RECENT_FRAMES),
@@ -165,6 +171,8 @@ impl Agc {
             let input = *s;
             *s = self.playing[self.pos] * self.ramp_at(self.pos);
             self.filling[self.pos] = input;
+            let band = f64::from(self.band.process(input));
+            self.band_energy += band * band;
             self.pos += 1;
             if self.pos == LIMITER_BLOCK {
                 self.end_block();
@@ -187,7 +195,8 @@ impl Agc {
         let partial = self.pos;
         let partial_peak = frame_peak(&self.filling[..partial]);
         if partial > 0 {
-            self.measure_block(partial_peak);
+            let energy = std::mem::take(&mut self.band_energy);
+            self.measure_block(partial_peak, energy, partial);
         }
         let next_safe = if partial > 0 {
             self.safe(partial_peak)
@@ -198,21 +207,27 @@ impl Agc {
         for i in 0..LIMITER_BLOCK {
             out.push(self.waiting[i] * self.ramp_at(i));
         }
+        // The partial block holds the gain the waiting block ended on. That gain is at or below the
+        // partial block's own safe gain (the waiting block's ramp took it into account), and
+        // holding it keeps the step bound: a ramp squeezed into a block of a few samples would
+        // not.
         if partial > 0 {
-            self.set_ramp(next_safe, partial);
+            self.set_ramp(self.ramp_to, partial);
             for i in 0..partial {
                 out.push(self.filling[i] * self.ramp_at(i));
             }
         }
         // A level frame left half measured is measured as it is.
-        if let Some(first) = self.half_frame.take() {
-            self.end_frame(first);
+        if let Some((peak, energy, len)) = self.half_frame.take() {
+            self.end_frame(peak, band_rms(energy, len));
         }
         self.filling.fill(0.0);
         self.waiting.fill(0.0);
         self.playing.fill(0.0);
         self.waiting_peak = 0.0;
         self.pos = 0;
+        self.band.reset();
+        self.band_energy = 0.0;
     }
 
     /// The gain for sample `i` of the block being played: geometric from `ramp_from` to
@@ -251,7 +266,8 @@ impl Agc {
     /// ends at or below both its own safe gain and this block's, and rotate the three buffers.
     fn end_block(&mut self) {
         let peak = frame_peak(&self.filling);
-        self.measure_block(peak);
+        let energy = std::mem::take(&mut self.band_energy);
+        self.measure_block(peak, energy, LIMITER_BLOCK);
         let to = self.safe(self.waiting_peak).min(self.safe(peak));
         self.set_ramp(to, LIMITER_BLOCK);
         // playing <- waiting <- filling <- (the old playing, reused)
@@ -260,40 +276,27 @@ impl Agc {
         self.waiting_peak = peak;
     }
 
-    /// Two limiter blocks make one 20 ms level frame.
-    fn measure_block(&mut self, peak: f32) {
+    /// Two limiter blocks make one 20 ms level frame: its full-band peak and its speech-band RMS.
+    fn measure_block(&mut self, peak: f32, energy: f64, len: usize) {
         match self.half_frame.take() {
-            None => self.half_frame = Some(peak),
-            Some(first) => self.end_frame(first.max(peak)),
+            None => self.half_frame = Some((peak, energy, len)),
+            Some((first_peak, first_energy, first_len)) => self.end_frame(
+                first_peak.max(peak),
+                band_rms(first_energy + energy, first_len + len),
+            ),
         }
     }
 
-    /// A complete level frame peaking at `peak`: run the stationary guard over the recent frames
-    /// and, for a level frame, update the level and the gain.
-    fn end_frame(&mut self, peak: f32) {
-        self.recent.push(peak);
-        let (robust, quiet) = self.recent_levels();
-        let dynamic = robust >= NOISE_FLOOR && robust >= quiet * MIN_DYNAMICS;
-        if dynamic && peak >= NOISE_FLOOR && peak >= quiet * MIN_DYNAMICS {
+    /// A complete level frame: run the stationary test over the recent frames and, for a level
+    /// frame, update the level and the gain. Allocation-free.
+    fn end_frame(&mut self, peak: f32, band: f32) {
+        self.recent.push(band);
+        let (recent, quiet) =
+            Stationarity::measure(self.recent.ordered(), &mut self.recent_scratch);
+        if !recent.is_stationary() && peak >= NOISE_FLOOR && band >= quiet * MIN_DYNAMICS {
             self.speech.push(peak);
             self.adapt(peak);
         }
-    }
-
-    /// The robust peak and the quiet (10th-percentile) frame of the recent frames, measured as
-    /// [`levels`](crate::gain::levels) measures a buffer. Allocation-free.
-    fn recent_levels(&mut self) -> (f32, f32) {
-        let n = self.recent.len();
-        let window = &mut self.recent_scratch[..n];
-        window.copy_from_slice(self.recent.values());
-        let loudest_first = |a: &f32, b: &f32| b.total_cmp(a);
-        let robust = *window
-            .select_nth_unstable_by(TRANSIENT_FRAMES.min(n - 1), loudest_first)
-            .1;
-        let quiet = *window
-            .select_nth_unstable_by(n - 1 - n * QUIET_PERCENTILE / 100, loudest_first)
-            .1;
-        (robust, quiet)
     }
 
     /// Moves the gain toward the robust peak of recent speech, after a speech frame peaking at
@@ -333,6 +336,11 @@ impl Agc {
     }
 }
 
+/// RMS from a sum of squares over `len` samples.
+fn band_rms(energy: f64, len: usize) -> f32 {
+    (energy / len.max(1) as f64).sqrt() as f32
+}
+
 /// A fixed-capacity ring of recent values, allocated once.
 struct Ring {
     values: Vec<f32>,
@@ -363,6 +371,16 @@ impl Ring {
     fn values(&self) -> &[f32] {
         &self.values[..self.len]
     }
+
+    /// The stored values, oldest first.
+    fn ordered(&self) -> impl Iterator<Item = f32> + Clone + '_ {
+        let (older, newer) = if self.len == self.values.len() {
+            (&self.values[self.next..], &self.values[..self.next])
+        } else {
+            (&self.values[..self.len], &self.values[..0])
+        };
+        older.iter().chain(newer).copied()
+    }
 }
 
 #[cfg(test)]
@@ -387,12 +405,14 @@ mod tests {
     }
 
     #[test]
-    fn recent_levels_measure_as_the_normaliser_does() {
-        // Twenty frames peaking 1..=20 thousandths: the same numbers `gain::levels` gives.
-        let mut agc = Agc::new();
-        for k in 1..=20 {
-            agc.recent.push(k as f32 / 1000.0);
+    fn the_ring_reads_back_oldest_first() {
+        let mut r = Ring::new(3);
+        r.push(1.0);
+        r.push(2.0);
+        assert_eq!(r.ordered().collect::<Vec<_>>(), vec![1.0, 2.0]);
+        for v in [3.0, 4.0, 5.0] {
+            r.push(v);
         }
-        assert_eq!(agc.recent_levels(), (0.012, 0.003));
+        assert_eq!(r.ordered().collect::<Vec<_>>(), vec![3.0, 4.0, 5.0]);
     }
 }

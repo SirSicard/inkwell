@@ -17,7 +17,8 @@
 //! **end** of the stream and does not delay the start: its output sample *m* sits at input position
 //! *m·t + (t − 1)* (with *t* = input rate / 16 000), and its `output_delay()` counts output still
 //! held back, not a head delay. An earlier implementation trimmed that count from the head, which
-//! dropped the first ~2.7 ms of every take and moved every event early. Here the input is
+//! dropped half a kernel (128 input samples, 2.7 ms at 48 kHz) from the head of every take and
+//! moved every event early (`a_click_lands_at_the_same_time_after_resampling`). Here the input is
 //! pre-padded with *P* zeros and the first *S* outputs are skipped, with *P − S·t = t − 1* in whole
 //! samples, so output *m* sits at input *m·t* (to 1/256 of an input sample).
 //!
@@ -153,7 +154,8 @@ impl StreamResampler {
     }
 
     /// The most output frames that can be due (by the input's duration) and not yet handed out,
-    /// after any push: one input chunk (20 ms) plus the kernel's lookahead, about 23 ms at 48 kHz.
+    /// after any push: one input chunk (20 ms) plus the kernel's lookahead, under 23 ms at 48 kHz
+    /// and under 40 ms at any rate (`streaming_output_keeps_up_with_its_input`).
     /// Zero at 16 kHz.
     pub fn max_held_back_frames(&self) -> usize {
         self.sinc.as_ref().map_or(0, |s| s.held_back)

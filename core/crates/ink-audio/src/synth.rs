@@ -8,6 +8,8 @@ use std::f64::consts::TAU;
 
 use ink_core::CANONICAL_RATE;
 
+use crate::speech_band::Biquad;
+
 /// A seeded PCG-style generator: 64-bit LCG state, 31-bit output. Not for anything but test signals.
 #[derive(Clone, Debug)]
 pub struct Lcg(u64);
@@ -40,7 +42,7 @@ impl Lcg {
 /// 100–180 Hz fundamental, falling 6 dB per octave, under a smooth sin² envelope) separated by
 /// 40–100 ms of digital silence. Scaled so the whole buffer's RMS is `rms_dbfs`.
 ///
-/// Its loud frames are even, so its robust peak sits about 11.5 dB above its RMS.
+/// Its loud frames are even, so its robust peak sits 9–14 dB above its RMS (checked below).
 pub fn speech_like(seconds: f64, rms_dbfs: f32, seed: u64) -> Vec<f32> {
     let rate = f64::from(CANONICAL_RATE);
     let total = (seconds * rate).round() as usize;
@@ -74,8 +76,9 @@ pub fn speech_like(seconds: f64, rms_dbfs: f32, seed: u64) -> Vec<f32> {
 /// Breathy, continuous speech-like audio at 16 kHz: the same voiced syllables as [`speech_like`]
 /// but run together with no gaps, under an envelope that never falls below `floor` (0–1) of its
 /// peak, with aspiration noise riding on the voicing. This is low-crest speech: `floor` sets how
-/// far its quiet frames sit below its loud ones (0.35 gives about 8 dB between the robust peak and
-/// the 10th-percentile frame). Scaled to `rms_dbfs` RMS.
+/// far its quiet frames sit below its loud ones (0.35 gives 7–9.5 dB between the robust peak and
+/// the 10th-percentile frame, checked by `low_crest_breathy_speech_is_lifted_to_the_target`).
+/// Scaled to `rms_dbfs` RMS.
 pub fn breathy_speech(seconds: f64, rms_dbfs: f32, floor: f64, seed: u64) -> Vec<f32> {
     let rate = f64::from(CANONICAL_RATE);
     let total = (seconds * rate).round() as usize;
@@ -112,6 +115,22 @@ pub fn with_noise(signal: &[f32], snr_db: f32, rms_dbfs: f32, seed: u64) -> Vec<
     let mixed: Vec<f64> = signal
         .iter()
         .map(|&s| f64::from(s) + noise_rms * rng.next_gaussian())
+        .collect();
+    scale_to_rms(&mixed, rms_dbfs)
+}
+
+/// `signal` plus `noise` scaled to sit `snr_db` below it (RMS to RMS), the sum rescaled to
+/// `rms_dbfs`. `noise` must be at least as long as `signal`.
+pub fn mix(signal: &[f32], noise: &[f32], snr_db: f32, rms_dbfs: f32) -> Vec<f32> {
+    let power =
+        |x: &[f32]| x.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / x.len().max(1) as f64;
+    let noise = &noise[..signal.len()];
+    let scale = (power(signal) / power(noise).max(f64::MIN_POSITIVE)).sqrt()
+        * 10f64.powf(-f64::from(snr_db) / 20.0);
+    let mixed: Vec<f64> = signal
+        .iter()
+        .zip(noise)
+        .map(|(&s, &n)| f64::from(s) + scale * f64::from(n))
         .collect();
     scale_to_rms(&mixed, rms_dbfs)
 }
@@ -155,6 +174,55 @@ pub fn cycling_fan(seconds: f64, rms_dbfs: f32, seed: u64) -> Vec<f32> {
     }
     out.truncate(total);
     scale_to_rms(&out, rms_dbfs)
+}
+
+/// How steeply a [`rumble`] falls above its cutoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slope {
+    /// A one-pole low-pass: 6 dB per octave.
+    Gentle,
+    /// A 4th-order Butterworth run forwards and backwards (zero phase): 48 dB per octave, nothing
+    /// left above the cutoff but the filter's own skirt.
+    Steep,
+}
+
+/// Room rumble at 16 kHz: Gaussian noise low-passed at `cutoff_hz` (HVAC, a fridge, traffic),
+/// stationary, no speech. Scaled to `rms_dbfs` RMS.
+pub fn rumble(seconds: f64, rms_dbfs: f32, cutoff_hz: f64, slope: Slope, seed: u64) -> Vec<f32> {
+    let rate = f64::from(CANONICAL_RATE);
+    // A second of filter warm-up either side, trimmed off.
+    let margin = CANONICAL_RATE as usize;
+    let total = (seconds * rate).round() as usize;
+    let mut rng = Lcg::new(seed);
+    let mut x: Vec<f64> = (0..total + 2 * margin)
+        .map(|_| rng.next_gaussian())
+        .collect();
+    match slope {
+        Slope::Gentle => {
+            let a = (-TAU * cutoff_hz / rate).exp();
+            let mut y = 0.0;
+            for v in &mut x {
+                y += (1.0 - a) * (*v - y);
+                *v = y;
+            }
+        }
+        Slope::Steep => {
+            // The two sections of a 4th-order Butterworth low-pass.
+            let sections = [
+                Biquad::low_pass(cutoff_hz, 0.541_196_1),
+                Biquad::low_pass(cutoff_hz, 1.306_563_0),
+            ];
+            // Backwards, then forwards: the phase cancels and the order is restored.
+            for _ in 0..2 {
+                let mut s = sections;
+                x.reverse();
+                for v in &mut x {
+                    *v = s.iter_mut().fold(*v, |acc, b| b.process(acc));
+                }
+            }
+        }
+    }
+    scale_to_rms(&x[margin..margin + total], rms_dbfs)
 }
 
 /// Gaussian noise at 16 kHz with the given RMS (room tone, hiss).

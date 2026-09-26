@@ -30,8 +30,9 @@
 //!                                                     └─► None ─► discarded: no engine sees it
 //! ```
 //!
-//! **The gain stages decide level, not speech.** [`normalise`] and [`Agc`] lift anything with
-//! loud frames standing out from quiet ones, speech or not: knocks, a cycling fan, a cough. So
+//! **The gain stages decide level, not speech.** [`normalise`] and [`Agc`] leave a stationary
+//! room alone (room tone, hum, rumble; see [`speech_band`]) and lift anything else quiet, speech
+//! or not: a cycling fan, a cough, sometimes knocks. So
 //! the VAD's verdict is binding: a take or window in which [`trim_ends`] finds no speech is
 //! discarded before any engine sees it, never passed on whole (a recogniser handed lifted noise
 //! may invent words).
@@ -44,6 +45,7 @@
 //! - [`gain`]: the per-utterance robust-peak normaliser ahead of every engine (architecture rule
 //!   11), and the level measures everything else uses.
 //! - [`agc`]: the slow meeting AGC toward the same target, which holds through pauses.
+//! - [`speech_band`]: the stationary test both gain stages share, measured on the speech band.
 //! - [`vad`]: trims the dead air at the ends of a take, never the pauses inside; the model sits
 //!   behind [`SpeechProbability`].
 //! - [`window`]: long audio in windows of at most 60 s, cut at the quietest point, overlapping by
@@ -67,6 +69,7 @@ pub mod realtime;
 pub mod replay;
 pub mod resample;
 pub mod ring;
+pub mod speech_band;
 pub mod synth;
 pub mod take;
 pub mod vad;

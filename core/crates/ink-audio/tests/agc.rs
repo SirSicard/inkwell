@@ -6,7 +6,7 @@
 use ink_audio::Agc;
 use ink_audio::agc::{FALL_DB_PER_S, LIMITER_BLOCK, RISE_DB_PER_S};
 use ink_audio::gain::{LEVEL_FRAME, MAX_GAIN, TARGET_PEAK, robust_peak, to_dbfs};
-use ink_audio::synth::{breathy_speech, noise, speech_like, with_noise};
+use ink_audio::synth::{Slope, breathy_speech, mix, noise, rumble, speech_like, with_noise};
 
 const SR: usize = 16_000;
 
@@ -310,4 +310,98 @@ fn agc_never_lifts_a_long_stretch_of_room_tone() {
         highest, 0.0,
         "the gain rose to {highest:.2} dB on room tone"
     );
+}
+
+#[test]
+fn agc_never_lifts_rumble() {
+    // Two minutes each of room rumble low-passed at 100, 250, 500 and 1000 Hz, gentle and steep:
+    // a meeting's quiet stretch in a real room. The gain never moves off unity.
+    for (i, slope) in [Slope::Gentle, Slope::Steep].into_iter().enumerate() {
+        for (j, hz) in [100.0, 250.0, 500.0, 1_000.0].into_iter().enumerate() {
+            let input = rumble(120.0, -70.0, hz, slope, 60 + (i * 4 + j) as u64);
+            let (_, gains) = run(&input);
+            let highest = gains.iter().fold(f32::MIN, |m, &g| m.max(g));
+            assert_eq!(
+                highest, 0.0,
+                "{slope:?} {hz} Hz rumble lifted to {highest:.2} dB"
+            );
+        }
+    }
+}
+
+#[test]
+fn agc_lifts_speech_in_noise_and_over_rumble_to_the_target() {
+    // Speech 8 dB over white room tone, and speech and breathy speech 8 dB over 100 Hz rumble,
+    // at −75 dBFS RMS overall.
+    let speech = speech_like(20.0, -75.0, 70);
+    let breathy = breathy_speech(20.0, -75.0, 0.35, 71);
+    let steep = rumble(20.0, -75.0, 100.0, Slope::Steep, 72);
+    let gentle = rumble(20.0, -75.0, 100.0, Slope::Gentle, 73);
+    for (what, input) in [
+        ("speech over white", with_noise(&speech, 8.0, -75.0, 74)),
+        ("speech over steep rumble", mix(&speech, &steep, 8.0, -75.0)),
+        (
+            "breathy over gentle rumble",
+            mix(&breathy, &gentle, 8.0, -75.0),
+        ),
+        (
+            "breathy over steep rumble",
+            mix(&breathy, &steep, 8.0, -75.0),
+        ),
+    ] {
+        let (out, _) = run(&input);
+        let converged = db_from_target(&out[secs(10.0)..]);
+        assert!(
+            converged.abs() < CONVERGED_TOLERANCE_DB,
+            "{what}: held {converged:+.2} dB from the target"
+        );
+    }
+}
+
+#[test]
+fn flush_keeps_the_step_bound_when_a_take_ends_on_a_transient() {
+    // A take can end anywhere, on anything. Its last samples sit in a partial limiter block, as
+    // short as one sample; however the level jumps into or out of that block, the flush neither
+    // clips nor steps by more than the stated bound. The gain is locked high (about +39 dB) on
+    // continuous speech, so every sample's gain can be read off.
+    let bed = breathy_speech(7.0, -60.0, 0.35, 80);
+    let whole = 600 * LIMITER_BLOCK; // 6 s of whole blocks
+    let bound_db = to_dbfs(MAX_GAIN) / LIMITER_BLOCK as f32 + 0.01;
+    let click = |s: &mut [f32]| {
+        for (i, v) in s.iter_mut().enumerate() {
+            *v = if i.is_multiple_of(2) { 0.9 } else { -0.9 };
+        }
+    };
+    for partial in [1usize, 5, 80] {
+        let mut loud_partial = bed[..whole + partial].to_vec();
+        click(&mut loud_partial[whole..]);
+        let mut loud_last_block = bed[..whole + partial].to_vec();
+        click(&mut loud_last_block[whole - 100..whole - 20]);
+        for (what, input) in [
+            ("a click in the partial block", loud_partial),
+            ("a click just before a quiet partial block", loud_last_block),
+        ] {
+            let (out, _) = run(&input);
+            assert_eq!(out.len(), input.len());
+            let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(
+                peak <= 1.0,
+                "{what}, {partial}-sample partial: clipped at {peak}"
+            );
+            let gain_at =
+                |n: usize| (input[n].abs() >= 1e-6).then(|| to_dbfs((out[n] / input[n]).abs()));
+            let mut steepest = 0.0f32;
+            for n in input.len() - 2 * LIMITER_BLOCK - partial..input.len() - 1 {
+                if let (Some(a), Some(b)) = (gain_at(n), gain_at(n + 1)) {
+                    steepest = steepest.max((b - a).abs());
+                }
+            }
+            assert!(
+                steepest <= bound_db,
+                "{what}, {partial}-sample partial: stepped {steepest:.2} dB (bound {bound_db:.3})"
+            );
+            let before = gain_at(whole - 3 * LIMITER_BLOCK).expect("voiced");
+            assert!(before > 35.0, "{what}: locked at {before:.1} dB");
+        }
+    }
 }

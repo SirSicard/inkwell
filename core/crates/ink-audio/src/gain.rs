@@ -1,8 +1,9 @@
 //! The per-utterance gain stage ahead of every engine (architecture rule 11).
 //!
 //! A built-in microphone array read through the raw HAL skips the voice processing that normally
-//! lifts it, so ordinary speech arrives around −65 dBFS, and a recogniser handed that level returns
-//! empty text (one did from about −70 dBFS RMS). [`normalise`] lifts a whole utterance (a
+//! lifts it, so ordinary speech can arrive tens of dB below full scale, where a recogniser returns
+//! empty text; the −75 dBFS RMS fixture is the case this crate is held to
+//! (`minus_75_dbfs_rms_speech_reaches_the_target`). [`normalise`] lifts a whole utterance (a
 //! dictation take, an imported file's window) with one gain, so its dynamics survive. The meeting
 //! path uses the slow [`Agc`](crate::Agc) toward the same [`TARGET_PEAK`].
 //!
@@ -22,9 +23,9 @@
 //! - **Silence:** a robust peak under [`NOISE_FLOOR`]. There is nothing to rescue, and the VAD
 //!   after this stage should still see silence.
 //! - **Healthy audio:** a robust peak at or above the target. Never attenuated.
-//! - **Stationary audio:** a robust peak less than [`MIN_DYNAMICS_DB`] (4 dB) above the take's
-//!   quiet frames (its [`QUIET_PERCENTILE`]th-percentile frame). See the next section.
 //! - **Anything shorter than [`MIN_FRAMES`]:** too short to judge.
+//! - **Stationary audio:** room tone, hum, rumble. Judged on the speech band, not on the level:
+//!   see the next section.
 //!
 //! The gain is capped at [`MAX_GAIN`]. Samples are clamped to ±1.0 afterwards, so the rare
 //! transient above the robust peak is shaved rather than wrapped: a shaved click is harmless where
@@ -34,25 +35,17 @@
 //!
 //! This stage decides **level only**. Whether a take holds speech is the VAD's question, asked
 //! after it: a take with no speech must be discarded there ([`trim_ends`](crate::trim_ends)
-//! returns `None`) before any engine sees it, never passed on whole. Knocks, a cycling fan or a
-//! cough have loud frames standing out from quiet ones, just as speech does, and are lifted to the
-//! target like speech.
+//! returns `None`) before any engine sees it, never passed on whole. A cycling fan, a cough or
+//! knocks can be lifted to the target like speech (`bursty_noise_can_be_lifted_because_the_gain_stage_is_not_a_speech_detector`).
 //!
-//! The one guard that looks past level is the stationary one. It is new in 1.0: the cap had to rise
-//! from 60× to [`MAX_GAIN`] for a −75 dBFS talker to reach the target, and without a guard, steady
-//! room tone just above the floor would be lifted into full-level hiss. It asks only whether
-//! anything stands out from the take's quiet frames, and the line is drawn where the measurements
-//! put it (contrast is the robust peak over the 10th-percentile frame, over 20 seeds):
-//!
-//! - **White room tone** measures 0.9–3.8 dB, rising with length (0.5 s to 30 s buffers), so it
-//!   stays under the line.
-//! - **Low-crest speech** (continuous and breathy, about 8 dB of contrast clean) at 8 dB SNR falls
-//!   to 4.9 dB on a 1 s take. An earlier 6 dB line refused such takes; 4 dB lifts them.
-//!
-//! What the 4 dB line costs: band-limited room tone (a rumble low-passed near 250 Hz measures up
-//! to 4.3 dB) and white room tone in buffers much longer than 30 s (an imported file's 60 s
-//! window of silence) can cross it and be lifted. The VAD then has to discard them, as it must any
-//! take without speech.
+//! The one guard that looks past level keeps a stationary room from being lifted. It is new in
+//! 1.0: the cap had to rise from 60× to [`MAX_GAIN`] for a −75 dBFS talker to reach the target
+//! (`minus_75_dbfs_rms_speech_reaches_the_target`), and without a guard a quiet room just above
+//! the floor would be lifted into full-level hiss or rumble. It is measured on the speech band's
+//! envelope, not the full-band level, because real room tone is rarely white; what it asks and
+//! which tests hold it are in [`speech_band`].
+
+use crate::speech_band::{self, Stationarity};
 
 /// The length of a level frame: 20 ms at 16 kHz. Every level in this crate is measured on these.
 pub const LEVEL_FRAME: usize = 320;
@@ -60,11 +53,12 @@ pub const LEVEL_FRAME: usize = 320;
 /// The robust peak everything is lifted to (about −9 dBFS). Engines see speech at this level.
 pub const TARGET_PEAK: f32 = 0.35;
 
-/// A robust peak below this (−80 dBFS) is silence, not quiet speech, and is left alone. A −75 dBFS
-/// RMS talker's robust peak sits around −63 dBFS, well above it.
+/// A robust peak below this (−80 dBFS) is silence, not quiet speech, and is left alone. The
+/// −75 dBFS RMS speech fixture's robust peak sits 9–14 dB above its RMS, well above it.
 pub const NOISE_FLOOR: f32 = 1.0e-4;
 
-/// The largest gain applied (60 dB). A −75 dBFS RMS talker needs about 54 dB to reach the target.
+/// The largest gain applied (60 dB), enough to bring the −75 dBFS RMS speech fixture to the target
+/// (`minus_75_dbfs_rms_speech_reaches_the_target`).
 pub const MAX_GAIN: f32 = 1000.0;
 
 /// How many of the loudest frames the robust peak skips as possible transients. A keyboard click
@@ -74,9 +68,9 @@ pub const TRANSIENT_FRAMES: usize = 8;
 /// The percentile of frame peaks that stands for the take's quiet frames (its noise).
 pub const QUIET_PERCENTILE: usize = 10;
 
-/// How far the robust peak must stand above the quiet frames (as a ratio: [`MIN_DYNAMICS_DB`])
-/// for the take to be lifted at all. Below it the take is stationary (room tone, hum) and left
-/// alone. Why 4 dB, and what it costs: see the module docs.
+/// How far the speech band's envelope must stand above its quiet frames (as a ratio:
+/// [`MIN_DYNAMICS_DB`]) for audio to count as more than stationary. One of the two conditions in
+/// [`speech_band`]; the AGC also uses it per frame.
 pub const MIN_DYNAMICS: f32 = 1.584_893_2;
 
 /// [`MIN_DYNAMICS`] in dB: 4 dB.
@@ -90,7 +84,8 @@ pub const MIN_FRAMES: usize = 10;
 pub struct Levels {
     /// The robust peak: the loudest frame peak after skipping [`TRANSIENT_FRAMES`].
     pub robust_peak: f32,
-    /// The [`QUIET_PERCENTILE`]th-percentile frame peak.
+    /// The [`QUIET_PERCENTILE`]th-percentile frame peak (for reference: the stationary guard
+    /// measures the speech band's envelope instead).
     pub quiet: f32,
     /// Level frames measured (the last may be partial).
     pub frames: usize,
@@ -161,7 +156,8 @@ pub enum GainOutcome {
     Healthy,
     /// Robust peak below [`NOISE_FLOOR`]: untouched.
     Silence,
-    /// Nothing stands [`MIN_DYNAMICS_DB`] above the quiet frames (room tone, hum): untouched.
+    /// The speech band is stationary (room tone, hum, rumble): untouched. See
+    /// [`speech_band`].
     Stationary,
     /// Fewer than [`MIN_FRAMES`] level frames: untouched.
     TooShort,
@@ -172,6 +168,8 @@ pub enum GainOutcome {
 pub struct GainReport {
     /// The buffer's levels before any gain.
     pub before: Levels,
+    /// How the buffer's speech band moves: the stationary guard's evidence.
+    pub band: Stationarity,
     /// What was done.
     pub outcome: GainOutcome,
 }
@@ -189,19 +187,25 @@ impl GainReport {
 /// Lifts one utterance (16 kHz mono) so its robust peak reaches [`TARGET_PEAK`], in place.
 ///
 /// **Worker.** One gain for the whole buffer, so relative dynamics are preserved exactly, except
-/// for samples the clamp to ±1.0 shaves. Allocates one `f32` per 20 ms frame to measure.
+/// for samples the clamp to ±1.0 shaves. Allocates three `f32`s per 20 ms frame to measure (the
+/// frame peaks, the speech-band envelope and a ranked copy of it).
 pub fn normalise(samples: &mut [f32]) -> GainReport {
     let before = levels(samples);
-    let outcome = decide(&before);
+    let band = Stationarity::of_envelope(&speech_band::envelope(samples));
+    let outcome = decide(&before, &band);
     if let GainOutcome::Applied { gain } = outcome {
         for s in samples.iter_mut() {
             *s = (*s * gain).clamp(-1.0, 1.0);
         }
     }
-    GainReport { before, outcome }
+    GainReport {
+        before,
+        band,
+        outcome,
+    }
 }
 
-fn decide(levels: &Levels) -> GainOutcome {
+fn decide(levels: &Levels, band: &Stationarity) -> GainOutcome {
     let peak = levels.robust_peak;
     if peak < NOISE_FLOOR {
         GainOutcome::Silence
@@ -209,7 +213,7 @@ fn decide(levels: &Levels) -> GainOutcome {
         GainOutcome::Healthy
     } else if levels.frames < MIN_FRAMES {
         GainOutcome::TooShort
-    } else if peak < levels.quiet * MIN_DYNAMICS {
+    } else if band.is_stationary() {
         GainOutcome::Stationary
     } else {
         GainOutcome::Applied {

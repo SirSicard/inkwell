@@ -6,7 +6,10 @@ use ink_audio::gain::{
     GainOutcome, LEVEL_FRAME, MAX_GAIN, MIN_DYNAMICS_DB, NOISE_FLOOR, TARGET_PEAK, from_dbfs,
     levels, normalise, rms, robust_peak, to_dbfs,
 };
-use ink_audio::synth::{breathy_speech, cycling_fan, knocks, noise, speech_like, with_noise};
+use ink_audio::speech_band::{MIN_CORRELATION, Stationarity, envelope};
+use ink_audio::synth::{
+    Slope, breathy_speech, cycling_fan, knocks, mix, noise, rumble, speech_like, tone, with_noise,
+};
 
 /// How close to the target a lifted buffer must land. The gain is computed from the robust peak,
 /// so only float rounding separates them.
@@ -214,45 +217,143 @@ fn low_crest_speech_at_8_db_snr_is_lifted_to_the_target() {
     );
 }
 
-/// 100 level frames alternating between a loud level and one `contrast_db` below it.
-fn two_level_frames(contrast_db: f32) -> Vec<f32> {
-    let loud = 1.0e-3;
-    let quiet = loud / from_dbfs(contrast_db);
-    (0..100)
-        .flat_map(|k| {
-            let v = if k % 2 == 0 { loud } else { quiet };
-            std::iter::repeat_n(v, LEVEL_FRAME)
-        })
-        .collect()
-}
-
 #[test]
 fn the_dynamics_guard_stops_lifting_below_4_db_of_contrast() {
-    // Exactly where the guard sits. Above it, anything is lifted; below it, the take is treated as
-    // stationary (room tone, hum) and left alone.
+    // Exactly where the guard sits, on speech-band content that moves in runs. Above it, the take
+    // is lifted; below it, it is treated as stationary and left alone.
     assert_eq!(MIN_DYNAMICS_DB, 4.0);
-    let mut above = two_level_frames(4.2);
+    let mut above = tone_runs(4.2, 5);
     assert!(matches!(
         normalise(&mut above).outcome,
         GainOutcome::Applied { .. }
     ));
-    let below = two_level_frames(3.8);
+    let below = tone_runs(3.8, 5);
     let mut take = below.clone();
     assert_eq!(normalise(&mut take).outcome, GainOutcome::Stationary);
     assert_eq!(take, below);
 }
 
 #[test]
-fn bursty_noise_is_lifted_because_the_gain_stage_is_not_a_speech_detector() {
-    // Knocks and a cycling fan have loud frames standing well clear of quiet ones, as speech does.
-    // The gain stage decides level only, so it lifts them to the target like speech. A take with
-    // no speech is the VAD's to discard (`trim_ends` returns `None`) before any engine sees it.
-    for (what, audio) in [
-        ("knocks", knocks(4.0, -60.0, 1)),
-        ("cycling fan", cycling_fan(6.0, -60.0, 2)),
-    ] {
-        let mut take = audio;
-        assert!(contrast_db(&take) > 10.0, "{what}");
-        assert_lifted_to_target(&mut take, what);
+fn bursty_noise_can_be_lifted_because_the_gain_stage_is_not_a_speech_detector() {
+    // The gain stage keeps stationary rooms down; it does not ask whether audio is speech. A
+    // cycling fan, loud and quiet for a second at a time, stands out and moves in runs, and is
+    // lifted to the target like speech. Knocks stand out but barely move in runs, so they may go
+    // either way; lifted, they reach the target. A take with no speech is the VAD's to discard (`trim_ends` returns `None`) before
+    // any engine sees it.
+    let mut fan = cycling_fan(6.0, -60.0, 2);
+    assert!(contrast_db(&fan) > 10.0);
+    assert_lifted_to_target(&mut fan, "cycling fan");
+
+    let mut take = knocks(4.0, -60.0, 1);
+    assert!(contrast_db(&take) > 10.0);
+    match normalise(&mut take).outcome {
+        GainOutcome::Applied { .. } => {
+            let off = db_from_target(&take);
+            assert!(off.abs() < TARGET_TOLERANCE_DB, "knocks: {off:+.3} dB");
+        }
+        GainOutcome::Stationary => {}
+        other => panic!("knocks: {other:?}"),
     }
+}
+
+/// The rumble fixtures' cutoffs: real room tone (HVAC, a fridge, traffic) is rarely white.
+const RUMBLE_CUTOFFS: [f64; 4] = [100.0, 250.0, 500.0, 1_000.0];
+
+#[test]
+fn rumble_takes_are_not_lifted() {
+    // Two minutes of each rumble, gentle and steep, cut into 1 s and 4 s takes: a stationary room
+    // is left alone however its noise is shaped.
+    for (i, slope) in [Slope::Gentle, Slope::Steep].into_iter().enumerate() {
+        for (j, hz) in RUMBLE_CUTOFFS.into_iter().enumerate() {
+            let audio = rumble(120.0, -70.0, hz, slope, 40 + (i * 4 + j) as u64);
+            for take_len in [16_000, 64_000] {
+                for (k, take) in audio.chunks_exact(take_len).enumerate() {
+                    let mut take = take.to_vec();
+                    let outcome = normalise(&mut take).outcome;
+                    assert!(
+                        !matches!(outcome, GainOutcome::Applied { .. }),
+                        "{slope:?} {hz} Hz rumble, {} s take {k}: {outcome:?}",
+                        take_len / 16_000
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn speech_in_noise_and_over_rumble_at_8_db_snr_is_lifted_to_the_target() {
+    // Speech 8 dB over white room tone, and speech and breathy speech 8 dB over 100 Hz rumble,
+    // gentle and steep, all at −75 dBFS RMS: every take is lifted to the target.
+    for seconds in [1.0, 4.0] {
+        let speech = speech_like(seconds, -75.0, 50);
+        let breathy = breathy_speech(seconds, -75.0, 0.35, 51);
+        let mut takes = vec![(
+            "speech over white".to_string(),
+            with_noise(&speech, 8.0, -75.0, 52),
+        )];
+        for slope in [Slope::Gentle, Slope::Steep] {
+            let room = rumble(seconds, -75.0, 100.0, slope, 53);
+            takes.push((
+                format!("speech over {slope:?} rumble"),
+                mix(&speech, &room, 8.0, -75.0),
+            ));
+            takes.push((
+                format!("breathy over {slope:?} rumble"),
+                mix(&breathy, &room, 8.0, -75.0),
+            ));
+        }
+        for (what, mut take) in takes {
+            assert_lifted_to_target(&mut take, &format!("{what}, {seconds} s"));
+        }
+    }
+}
+
+/// 1 kHz tone in runs of `run` level frames, alternating between a loud level and one
+/// `contrast_db` below it, 100 frames in all. In the speech band, so its band envelope has exactly
+/// this contrast.
+fn tone_runs(contrast_db: f32, run: usize) -> Vec<f32> {
+    let carrier = tone(2.0, 1_000.0, 1.0, 16_000);
+    let loud = 1.0e-3;
+    let quiet = loud / from_dbfs(contrast_db);
+    carrier
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let frame = i / LEVEL_FRAME;
+            c * if (frame / run).is_multiple_of(2) {
+                loud
+            } else {
+                quiet
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn the_guard_needs_the_envelope_to_move_in_runs() {
+    // Speech's loud frames come in syllables; a stationary noise's loud frames are scattered at
+    // random. Same 10 dB of contrast both times: in runs of five frames it is lifted, alternating
+    // frame by frame (no runs: the envelope is uncorrelated) it is left alone.
+    let mut runs = tone_runs(10.0, 5);
+    assert!(matches!(
+        normalise(&mut runs).outcome,
+        GainOutcome::Applied { .. }
+    ));
+    let flicker = tone_runs(10.0, 1);
+    let mut take = flicker.clone();
+    assert_eq!(normalise(&mut take).outcome, GainOutcome::Stationary);
+    assert_eq!(take, flicker);
+}
+
+#[test]
+fn steep_rumble_stands_out_but_does_not_move_in_runs() {
+    // Why the guard needs its second condition. After the band-pass, a steeply low-passed rumble
+    // leaves only a narrow skirt in the speech band, whose frames swing by more than the 4 dB
+    // contrast line; contrast alone would lift it. Its frames swing at random, though, and its
+    // envelope does not move in runs.
+    let band = Stationarity::of_envelope(&envelope(&rumble(4.0, -70.0, 100.0, Slope::Steep, 90)));
+    assert!(band.contrast_db >= MIN_DYNAMICS_DB, "{band:?}");
+    assert!(band.correlation < MIN_CORRELATION, "{band:?}");
+    assert!(band.is_stationary());
 }
