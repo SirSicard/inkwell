@@ -2,9 +2,18 @@
 //! nothing.
 //!
 //! The library is built outside cargo (`native/build-nemo-speech.sh`) and found through
-//! `NEMO_SPEECH_DIR`, its install prefix. Before linking, the installed C headers are compared
-//! with the pinned commit's by SHA-256: `src/nemo.rs` declares the C ABI by hand, so a library
-//! from any other commit is refused at build time rather than misread at run time.
+//! `NEMO_SPEECH_DIR`, its install prefix. Before linking, this checks:
+//!
+//! - the installed C headers against the pinned commit's, by SHA-256: `src/nemo.rs` declares the
+//!   C ABI by hand, so a library from any other commit is refused at build time rather than
+//!   misread at run time;
+//! - the manifest the build script wrote: the pinned commit, and the SHA-256 of every library it
+//!   installed, which each file must still match. The library linked must be one of them.
+//!
+//! `INK_NEMO_CHECK_ONLY=1` is for type-checking (CI's clippy) where the library is not built: it
+//! skips the library, the manifest and the link, so a binary or test built that way does not link.
+//! It still compiles and lints every line of the adapter, and if `NEMO_SPEECH_DIR` is set as well,
+//! the headers are still checked. With the feature on and neither variable set, the build fails.
 
 use std::env;
 use std::fs;
@@ -12,7 +21,10 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-/// SHA-256 of the headers `src/nemo.rs` is written against, at NeMo-Speech.cpp `97a15af`.
+/// The NeMo-Speech.cpp commit `src/nemo.rs` is written against.
+const NEMO_COMMIT: &str = "97a15afa5caa9bce5baaa86c1184103877af4101";
+
+/// SHA-256 of the headers `src/nemo.rs` is written against, at [`NEMO_COMMIT`].
 const PINNED_HEADERS: [(&str, &str); 2] = [
     (
         "include/nemo_speech/diar.h",
@@ -24,28 +36,60 @@ const PINNED_HEADERS: [(&str, &str); 2] = [
     ),
 ];
 
+/// Where `native/build-nemo-speech.sh` writes its manifest, below the prefix.
+const MANIFEST: &str = "share/inkwell/nemo-speech.manifest";
+
+/// The library linked, by the names each OS gives it (the first that exists is used).
+const LIBRARY: [&str; 3] = [
+    "lib/libnemo_speech_asr_c.dylib",
+    "lib/libnemo_speech_asr_c.so",
+    "lib/nemo_speech_asr_c.lib",
+];
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     if env::var_os("CARGO_FEATURE_ENGINE_NEMO").is_none() {
         return;
     }
     println!("cargo:rerun-if-env-changed=NEMO_SPEECH_DIR");
-    let Some(dir) = env::var_os("NEMO_SPEECH_DIR").map(PathBuf::from) else {
-        fail(
-            "engine-nemo needs NEMO_SPEECH_DIR: the install prefix of NeMo-Speech.cpp 97a15af \
-             (build it with crates/ink-engines/native/build-nemo-speech.sh)",
-        );
+    println!("cargo:rerun-if-env-changed=INK_NEMO_CHECK_ONLY");
+    let check_only = match env::var("INK_NEMO_CHECK_ONLY") {
+        Err(env::VarError::NotPresent) => false,
+        Ok(value) if value == "1" => true,
+        _ => fail("INK_NEMO_CHECK_ONLY must be 1 or unset"),
     };
+    let dir = env::var_os("NEMO_SPEECH_DIR").map(PathBuf::from);
+    match (dir, check_only) {
+        (None, false) => fail(
+            "engine-nemo needs NEMO_SPEECH_DIR: the install prefix of NeMo-Speech.cpp 97a15af \
+             (build it with crates/ink-engines/native/build-nemo-speech.sh). To type-check without \
+             it, set INK_NEMO_CHECK_ONLY=1.",
+        ),
+        (None, true) => warn_check_only(),
+        (Some(dir), true) => {
+            check_headers(&dir);
+            warn_check_only();
+        }
+        (Some(dir), false) => {
+            check_headers(&dir);
+            let library = check_manifest(&dir);
+            link(&dir, &library);
+        }
+    }
+}
+
+fn warn_check_only() {
+    println!(
+        "cargo:warning=engine-nemo in check-only mode (INK_NEMO_CHECK_ONLY=1): NeMo-Speech.cpp is \
+         not linked, so binaries and tests will not link"
+    );
+}
+
+fn check_headers(dir: &Path) {
     for (header, pinned) in PINNED_HEADERS {
         let path = dir.join(header);
         println!("cargo:rerun-if-changed={}", path.display());
-        let bytes = fs::read(&path).unwrap_or_else(|e| {
-            fail(&format!(
-                "NEMO_SPEECH_DIR has no {header} ({}: {e})",
-                path.display()
-            ))
-        });
-        let found = hex(&Sha256::digest(&bytes));
+        let found = sha256_of(&path, &format!("NEMO_SPEECH_DIR has no {header}"));
         if found != pinned {
             fail(&format!(
                 "{} is not the pinned NeMo-Speech.cpp 97a15af header (sha256 {found}); \
@@ -54,35 +98,99 @@ fn main() {
             ));
         }
     }
-    let lib = dir.join("lib");
-    if !has_library(&lib) {
+}
+
+/// Checks the manifest and every library it lists, and returns the library to link.
+fn check_manifest(dir: &Path) -> PathBuf {
+    let path = dir.join(MANIFEST);
+    println!("cargo:rerun-if-changed={}", path.display());
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| {
         fail(&format!(
-            "no nemo_speech_asr_c library in {}",
-            lib.display()
+            "NEMO_SPEECH_DIR has no {MANIFEST} ({}: {e}); install with \
+             crates/ink-engines/native/build-nemo-speech.sh",
+            path.display()
+        ))
+    });
+    let mut commit = None;
+    let mut listed = Vec::new();
+    for line in text.lines().map(str::trim) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        match fields.as_slice() {
+            [] => {}
+            [first, ..] if first.starts_with('#') => {}
+            ["commit", hash] => commit = Some(hash.to_string()),
+            ["sha256", hash, file] => {
+                let file_path = dir.join(file);
+                println!("cargo:rerun-if-changed={}", file_path.display());
+                let found = sha256_of(&file_path, &format!("{MANIFEST} lists {file}"));
+                if found != *hash {
+                    fail(&format!(
+                        "{} changed since it was installed (sha256 {found}, manifest {hash})",
+                        file_path.display()
+                    ));
+                }
+                listed.push(canonical(&file_path));
+            }
+            _ => fail(&format!("{}: unreadable line {line:?}", path.display())),
+        }
+    }
+    if commit.as_deref() != Some(NEMO_COMMIT) {
+        fail(&format!(
+            "{} records commit {commit:?}, not the pinned {NEMO_COMMIT}",
+            path.display()
         ));
     }
+    let library = LIBRARY
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| {
+            fail(&format!(
+                "no nemo_speech_asr_c library in {}",
+                dir.join("lib").display()
+            ))
+        });
+    if !listed.contains(&canonical(&library)) {
+        fail(&format!(
+            "{} is not among the libraries {MANIFEST} pins",
+            library.display()
+        ));
+    }
+    library
+}
+
+fn link(dir: &Path, library: &Path) {
+    let lib = dir.join("lib");
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=dylib=nemo_speech_asr_c");
     // This package's own tests and examples find the library where it was installed. A shipped
     // app bundles it next to the binary and sets its own rpath.
-    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if os == "macos" || os == "linux" {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
+    match env::var("CARGO_CFG_TARGET_OS") {
+        Ok(os) if os == "macos" || os == "linux" => {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
+        }
+        Ok(_) => {}
+        Err(_) => println!(
+            "cargo:warning=CARGO_CFG_TARGET_OS is not set; no rpath added for {}, so this \
+             package's tests may not find it",
+            library.display()
+        ),
     }
 }
 
-fn has_library(lib: &Path) -> bool {
-    [
-        "libnemo_speech_asr_c.dylib",
-        "libnemo_speech_asr_c.so",
-        "nemo_speech_asr_c.lib",
-    ]
-    .iter()
-    .any(|name| lib.join(name).is_file())
+/// The file's SHA-256 as lowercase hex, or a build failure that says `what`.
+fn sha256_of(path: &Path, what: &str) -> String {
+    let bytes =
+        fs::read(path).unwrap_or_else(|e| fail(&format!("{what} ({}: {e})", path.display())));
+    Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+/// `path` with symbolic links resolved (the library is a link to its versioned file).
+fn canonical(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|e| fail(&format!("resolving {}: {e}", path.display())))
 }
 
 fn fail(message: &str) -> ! {

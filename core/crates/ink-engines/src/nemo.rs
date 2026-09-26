@@ -17,12 +17,22 @@
 //! to how the llama.cpp adapter builds its ggml, as long as the two sets of shared libraries are
 //! not installed under the same names in one directory.
 //!
-//! # Threads
+//! # Threads, and what the header promises
 //!
-//! Every call here is a **worker** call. The C API promises that streams are single-threaded and
-//! that independent streams may run on different threads (compute serialises internally); the
-//! types below keep to that. Opening a stream is serialised as well, since the header promises
-//! nothing about concurrent opens.
+//! Every call here is a **worker** call. The pinned `nemo_speech/diar.h` says, at lines 84-86:
+//!
+//! > The model handle must outlive every stream opened from it. Streams are single-threaded by
+//! > contract; independent streams may run on different threads (compute serializes internally).
+//!
+//! That is all it says about threads, so the types below claim no more:
+//!
+//! - A stream is `Send` but not `Sync`: one thread at a time uses it, and it may move between
+//!   threads. Its error message is read on the thread that made the failing call
+//!   (`asr.h:290-291`: "Thread-local last error message for the most recent failed call on this
+//!   thread").
+//! - The model handle is used only under a mutex (open a stream, destroy), so it is never used
+//!   from two threads at once. The header gives it no thread affinity, so it may be used and
+//!   destroyed from any thread. Streams opened from it run concurrently, as lines 85-86 allow.
 
 #![warn(clippy::undocumented_unsafe_blocks)]
 
@@ -106,7 +116,7 @@ mod ffi {
     pub const ERROR_CANCELLED: Status = 4;
 
     /// `nemo_speech_diar_model_config`. Append-only in the C ABI; `size` says how much of it the
-    /// caller filled.
+    /// caller filled (`asr.h:13-14`).
     #[repr(C)]
     pub struct DiarModelConfig {
         pub size: usize,
@@ -207,22 +217,23 @@ fn check(what: &str, status: ffi::Status) -> Result<(), EngineError> {
     }
 }
 
-/// One loaded model with one geometry preset.
+/// A model handle. Only [`Model`] holds one, behind its mutex.
+struct ModelHandle(NonNull<ffi::DiarModel>);
+
+// SAFETY: `diar.h:84-86` (quoted in the module docs) binds threads only for streams and gives the
+// model handle no thread affinity. The handle is only ever used through `Model::handle`'s mutex,
+// so no two threads use it at once, and it may be used and destroyed from whichever thread holds
+// the lock. It is not `Sync`; the mutex provides that.
+unsafe impl Send for ModelHandle {}
+
+/// One loaded model with one geometry preset. `Send + Sync` through its mutex.
 struct Model {
-    ptr: NonNull<ffi::DiarModel>,
+    /// Every call on the handle (opening a stream, destroying it) holds this lock. The header does
+    /// not promise that concurrent opens are safe.
+    handle: Mutex<ModelHandle>,
     speakers: i32,
     seconds_per_frame: f64,
-    /// Opening streams is serialised (see the module docs).
-    open: Mutex<()>,
 }
-
-// SAFETY: the model handle is created once and destroyed once (in `Drop`, when the last `Arc`
-// goes, which is after every `Stream` that holds one). In between it is only read: its two
-// accessors are const, and `stream_open` is serialised by `open`. The C API allows streams from
-// one model on different threads.
-unsafe impl Send for Model {}
-// SAFETY: as above; shared references only reach the const accessors and the serialised open.
-unsafe impl Sync for Model {}
 
 impl Model {
     fn load(path: &CStr, preset: Option<&CStr>, device: NemoDevice) -> Result<Self, EngineError> {
@@ -231,7 +242,10 @@ impl Model {
             model_path: path.as_ptr(),
             gpu: device.index(),
             preset: preset.map_or(std::ptr::null(), CStr::as_ptr),
-            // Zero keeps the preset's geometry; left context keeps it below zero.
+            // `diar.h:39-41`: "Individual geometry overrides in coarse 80 ms encoder frames,
+            // applied on top of the preset (<= 0 = keep preset value; left context: < 0 keeps it,
+            // 0 is a valid explicit value)". So zero, and -1 for the left context, keep the
+            // preset's geometry.
             chunk_frames: 0,
             right_context_frames: 0,
             left_context_frames: -1,
@@ -243,22 +257,25 @@ impl Model {
         // SAFETY: `cfg` and the strings it points to outlive the call, and its `size` covers the
         // whole struct as declared in the pinned header; `out` is a valid place for the handle.
         let status = unsafe { ffi::nemo_speech_diar_create(&cfg, &mut out) };
+        // On a failure `out` is not read: the header defines no handle then, so there is nothing
+        // this side may free. (At the pinned commit, `c_api.cpp:489` clears `*out` first and the
+        // handle is only released to it on success, lines 515-517, so nothing is left behind.)
         check("loading the model", status)?;
         let ptr = NonNull::new(out).ok_or_else(|| {
             EngineError::Failed("NeMo-Speech.cpp returned no model handle".into())
         })?;
-        // SAFETY: `ptr` is a live handle from a successful create.
+        // SAFETY: `ptr` is a live handle from a successful create, not yet shared.
         let (speakers, seconds_per_frame) = unsafe {
             (
                 ffi::nemo_speech_diar_num_speakers(ptr.as_ptr()),
                 ffi::nemo_speech_diar_seconds_per_frame(ptr.as_ptr()),
             )
         };
+        // Built before the check below, so a rejected model is still destroyed.
         let model = Self {
-            ptr,
+            handle: Mutex::new(ModelHandle(ptr)),
             speakers,
             seconds_per_frame,
-            open: Mutex::new(()),
         };
         if speakers < 1 || !(seconds_per_frame > 0.0 && seconds_per_frame.is_finite()) {
             return Err(EngineError::Failed(format!(
@@ -271,31 +288,43 @@ impl Model {
 
 impl Drop for Model {
     fn drop(&mut self) {
-        // SAFETY: the handle is live, and no stream outlives it: each holds an `Arc<Model>`.
-        unsafe { ffi::nemo_speech_diar_destroy(self.ptr.as_ptr()) }
+        let handle = self
+            .handle
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // SAFETY: the handle is live and destroyed once, here. No stream outlives it
+        // (`diar.h:84`): each holds an `Arc<Model>`, so this runs after the last one closed.
+        unsafe { ffi::nemo_speech_diar_destroy(handle.0.as_ptr()) }
     }
 }
 
 /// One diarization stream, closed on drop.
 struct Stream {
-    // Declared first so it is closed before `model` can be released (fields drop in order, after
-    // `Drop::drop`, which closes it anyway).
     ptr: NonNull<ffi::DiarStream>,
+    /// Keeps the model alive for as long as the stream (`diar.h:84`). The stream is closed in
+    /// `Drop::drop`, which runs before any field is dropped, so this `Arc` is released only
+    /// after the close.
     model: Arc<Model>,
     finished: bool,
 }
 
-// SAFETY: a stream is single-threaded by the C API's contract, not bound to one thread; every
-// call takes `&mut self` or `&self` of an owned value, so no two threads use it at once. It keeps
-// its model alive through the `Arc`.
+// SAFETY: `diar.h:85`: "Streams are single-threaded by contract". A `Stream` is owned and every
+// call takes `&self` or `&mut self` of it, so one thread at a time uses it; it is `Send` (it may
+// move between calls) and not `Sync`. Streams run alongside each other, as `diar.h:85-86`
+// allows, and never touch the model handle after opening.
 unsafe impl Send for Stream {}
 
 impl Stream {
     fn open(model: &Arc<Model>) -> Result<Self, EngineError> {
-        let _serial = lock(&model.open);
+        let handle = lock(&model.handle);
         let mut out = std::ptr::null_mut();
-        // SAFETY: the model handle is live (the `Arc` holds it); `out` is a valid place.
-        let status = unsafe { ffi::nemo_speech_diar_stream_open(model.ptr.as_ptr(), &mut out) };
+        // SAFETY: the model handle is live (the `Arc` holds it) and used under its lock; `out` is
+        // a valid place for the handle.
+        let status = unsafe { ffi::nemo_speech_diar_stream_open(handle.0.as_ptr(), &mut out) };
+        drop(handle);
+        // On a failure `out` is not read, as for the model: the header defines no handle then.
+        // (At the pinned commit, `c_api.cpp:544` clears `*out` first and releases the stream to
+        // it only on success, lines 545-547.)
         check("opening a stream", status)?;
         let ptr = NonNull::new(out).ok_or_else(|| {
             EngineError::Failed("NeMo-Speech.cpp returned no stream handle".into())
@@ -340,8 +369,11 @@ impl Stream {
         unsafe { ffi::nemo_speech_diar_frame_count(self.ptr.as_ptr()) }
     }
 
-    /// Every segment so far, under the library's default segmentation, sorted by start.
-    fn segments(&self) -> Result<Vec<ffi::DiarSegment>, EngineError> {
+    /// Every segment so far, under the library's default segmentation, into `out` (its
+    /// allocation is reused). `diar.h:131-134`: segments come "sorted by start time", by a
+    /// "two-call pattern" (the count, then the copy); the header offers no way to read only the
+    /// new ones.
+    fn segments_into(&self, out: &mut Vec<ffi::DiarSegment>) -> Result<(), EngineError> {
         let mut count = 0usize;
         // SAFETY: the stream is live; a NULL buffer with capacity 0 asks only for the count,
         // written to a valid place. A NULL config selects the library's defaults.
@@ -355,7 +387,8 @@ impl Stream {
             )
         };
         check("counting segments", status)?;
-        let mut out = vec![ffi::DiarSegment::default(); count];
+        out.clear();
+        out.resize(count, ffi::DiarSegment::default());
         let mut written = 0usize;
         // SAFETY: as above, with a buffer of `count` segments; nothing touched the stream since
         // the count was taken (it is used by this thread alone).
@@ -370,6 +403,13 @@ impl Stream {
         };
         check("reading segments", status)?;
         out.truncate(written);
+        Ok(())
+    }
+
+    /// Every segment so far, as [`segments_into`](Self::segments_into) gives them.
+    fn segments(&self) -> Result<Vec<ffi::DiarSegment>, EngineError> {
+        let mut out = Vec::new();
+        self.segments_into(&mut out)?;
         Ok(out)
     }
 }
@@ -399,12 +439,16 @@ fn turn(segment: &ffi::DiarSegment, speakers: i32) -> Result<SpeakerTurn, Engine
             "NeMo-Speech.cpp returned a malformed segment: {start_time}..{end_time} s, speaker {speaker} of {speakers}"
         )));
     }
-    let ms = |s: f64| (s * 1_000.0).round() as u64;
     Ok(SpeakerTurn {
         speaker: SpeakerId(format!("spk{}", speaker - 1)),
         start_ms: ms(start_time),
         end_ms: ms(end_time),
     })
+}
+
+/// Seconds as whole milliseconds (non-negative and finite, checked by the caller).
+fn ms(seconds: f64) -> u64 {
+    (seconds * 1_000.0).round() as u64
 }
 
 fn check_samples(audio: &[f32]) -> Result<(), EngineError> {
@@ -536,9 +580,61 @@ impl Diarizer for NemoDiarizer {
         Ok(Box::new(LiveLabels {
             stream: Stream::open(&model)?,
             turns,
-            reported: HashSet::new(),
+            settler: Settler::default(),
+            segments: Vec::new(),
             labelled_frames: 0,
         }))
+    }
+}
+
+/// Which live turns to report: each once, once it can no longer change, in start order.
+///
+/// The library hands back every segment so far, sorted by start. Every segment that starts
+/// before the first one not yet reported has been reported, and cannot change: it ended before an
+/// earlier horizon, and a new segment only ever starts near the newest label (the 0.229 s onset
+/// pad at most before it), which is after anything settled. So only the segments from the first
+/// unreported one on are considered, and only their keys are remembered.
+#[derive(Debug, Default)]
+struct Settler {
+    /// The start (seconds) of the earliest segment not yet reported.
+    watermark: f64,
+    /// Reported turns starting at or after the watermark, by (start, end, speaker).
+    reported: HashSet<(u64, u64, String)>,
+}
+
+impl Settler {
+    /// The turns among `segments` (sorted by start) that end at or before `horizon` seconds
+    /// (all of them when `None`) and were not reported before, in start order.
+    fn settle(
+        &mut self,
+        segments: &[ffi::DiarSegment],
+        horizon: Option<f64>,
+        speakers: i32,
+    ) -> Result<Vec<SpeakerTurn>, EngineError> {
+        let tail = &segments[segments.partition_point(|s| s.start_time < self.watermark)..];
+        let mut new = Vec::new();
+        let mut first_unreported: Option<f64> = None;
+        for segment in tail {
+            let turn = turn(segment, speakers)?;
+            let key = (turn.start_ms, turn.end_ms, turn.speaker.0.clone());
+            if self.reported.contains(&key) {
+                continue;
+            }
+            if horizon.is_some_and(|h| segment.end_time > h) {
+                first_unreported.get_or_insert(segment.start_time);
+                continue;
+            }
+            self.reported.insert(key);
+            new.push(turn);
+        }
+        // Everything before the first unreported segment is reported; with none left, the last
+        // start stays the watermark, so its turn is not reported again.
+        self.watermark = first_unreported
+            .or_else(|| tail.last().map(|s| s.start_time))
+            .unwrap_or(self.watermark);
+        let watermark_ms = ms(self.watermark);
+        self.reported.retain(|(start, _, _)| *start >= watermark_ms);
+        Ok(new)
     }
 }
 
@@ -546,26 +642,20 @@ impl Diarizer for NemoDiarizer {
 struct LiveLabels {
     stream: Stream,
     turns: EventSink<SpeakerTurn>,
-    /// Turns already reported, by (start, end, speaker).
-    reported: HashSet<(u64, u64, String)>,
+    settler: Settler,
+    /// The segment buffer, reused from read to read.
+    segments: Vec<ffi::DiarSegment>,
     /// Frames labelled when the segments were last read.
     labelled_frames: i64,
 }
 
 impl LiveLabels {
-    /// Reports every turn ending at or before `horizon` seconds (all of them when `None`) that
-    /// has not been reported yet, in start order.
+    /// Reads the segments and reports the newly settled turns.
     fn report(&mut self, horizon: Option<f64>) -> Result<(), EngineError> {
+        self.stream.segments_into(&mut self.segments)?;
         let speakers = self.stream.model.speakers;
-        for segment in self.stream.segments()? {
-            if horizon.is_some_and(|h| segment.end_time > h) {
-                continue;
-            }
-            let turn = turn(&segment, speakers)?;
-            let key = (turn.start_ms, turn.end_ms, turn.speaker.0.clone());
-            if self.reported.insert(key) {
-                (self.turns)(turn);
-            }
+        for turn in self.settler.settle(&self.segments, horizon, speakers)? {
+            (self.turns)(turn);
         }
         Ok(())
     }
@@ -656,6 +746,84 @@ mod tests {
         ] {
             assert!(matches!(turn(&s, 8), Err(EngineError::Failed(_))), "{s:?}");
         }
+    }
+
+    fn spk(n: usize) -> SpeakerId {
+        SpeakerId(format!("spk{n}"))
+    }
+
+    /// The (start ms, speaker) of each reported turn.
+    fn starts(turns: &[SpeakerTurn]) -> Vec<(u64, SpeakerId)> {
+        turns
+            .iter()
+            .map(|t| (t.start_ms, t.speaker.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn live_turns_are_reported_once_each_when_settled_in_start_order() {
+        let mut settler = Settler::default();
+        // A ends by 3 s; B (another speaker) is still open.
+        let segments = vec![segment(0.0, 1.0, 1), segment(0.5, 5.0, 2)];
+        let turns = settler.settle(&segments, Some(3.0), 8).unwrap();
+        assert_eq!(starts(&turns), [(0, spk(0))]);
+        // B grows; C starts and ends inside it and settles first.
+        let segments = vec![
+            segment(0.0, 1.0, 1),
+            segment(0.5, 5.2, 2),
+            segment(3.0, 4.0, 1),
+        ];
+        let turns = settler.settle(&segments, Some(5.0), 8).unwrap();
+        assert_eq!(starts(&turns), [(3_000, spk(0))]);
+        // B settles, and D after it.
+        let segments = vec![
+            segment(0.0, 1.0, 1),
+            segment(0.5, 5.3, 2),
+            segment(3.0, 4.0, 1),
+            segment(6.0, 7.0, 1),
+        ];
+        let turns = settler.settle(&segments, Some(8.0), 8).unwrap();
+        assert_eq!(starts(&turns), [(500, spk(1)), (6_000, spk(0))]);
+        assert_eq!(turns[0].end_ms, 5_300);
+        // At the end nothing is left, and nothing comes twice.
+        assert!(settler.settle(&segments, None, 8).unwrap().is_empty());
+    }
+
+    #[test]
+    fn at_the_end_every_unreported_turn_is_reported() {
+        let mut settler = Settler::default();
+        let segments = vec![segment(0.0, 1.0, 1), segment(0.5, 5.0, 2)];
+        settler.settle(&segments, Some(3.0), 8).unwrap();
+        let turns = settler.settle(&segments, None, 8).unwrap();
+        assert_eq!(starts(&turns), [(500, spk(1))]);
+    }
+
+    #[test]
+    fn turns_before_the_first_unreported_one_are_not_looked_at_again() {
+        // After the first two are reported, only the tail is considered: a turn before the
+        // watermark is not even validated (this one is malformed and would be an error).
+        let mut settler = Settler::default();
+        let segments = vec![segment(0.0, 1.0, 1), segment(1.5, 2.0, 2)];
+        assert_eq!(settler.settle(&segments, Some(4.0), 8).unwrap().len(), 2);
+        let segments = vec![
+            segment(0.0, f64::NAN, 1),
+            segment(1.5, 2.0, 2),
+            segment(5.0, 6.0, 1),
+        ];
+        let turns = settler.settle(&segments, Some(8.0), 8).unwrap();
+        assert_eq!(starts(&turns), [(5_000, spk(0))]);
+        // And what it remembers stays bounded by the unsettled tail.
+        assert!(settler.reported.len() <= 1, "{:?}", settler.reported);
+    }
+
+    #[test]
+    fn a_malformed_turn_in_the_tail_is_an_error() {
+        let mut settler = Settler::default();
+        let segments = vec![segment(0.0, 1.0, 9)];
+        assert!(matches!(
+            settler.settle(&segments, Some(4.0), 8),
+            Err(EngineError::Failed(_))
+        ));
     }
 
     #[test]

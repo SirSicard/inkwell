@@ -7,13 +7,17 @@
 #           pinned commit below, with its ggml submodule initialised
 #           (`git submodule update --init ggml`). Nothing is downloaded here.
 # <prefix>  where to install: <prefix>/lib holds libnemo_speech_asr_c and NeMo's own ggml
-#           libraries, <prefix>/include/nemo_speech the C headers. Point NEMO_SPEECH_DIR at it
-#           when building ink-engines with `--features engine-nemo`.
+#           libraries, <prefix>/include/nemo_speech the C headers, and
+#           <prefix>/share/inkwell/nemo-speech.manifest the commit and each library's SHA-256.
+#           Point NEMO_SPEECH_DIR at it when building ink-engines with `--features engine-nemo`.
 #
 # Why a script and an environment variable, not a vendored copy or a submodule: the repository
 # stays free of C++ sources and of anyone's local paths, cargo never runs CMake or reaches the
-# network, and the Rust side checks what it links against (build.rs compares the installed
-# headers with the pinned commit's). NeMo is built as its own shared libraries with its own ggml,
+# network, and the Rust side checks what it links against: build.rs compares the installed
+# headers with the pinned commit's, and every library with the manifest written below, so a
+# prefix whose libraries were rebuilt or swapped after this script ran is refused. (The hashes pin
+# this build, not the source: another machine's build of the same commit hashes differently.)
+# NeMo is built as its own shared libraries with its own ggml,
 # so it neither links nor exports symbols into the Rust binary, whatever the llama.cpp adapter
 # does with its ggml.
 #
@@ -55,6 +59,30 @@ cmake -S "${src}" -B "${build}" --preset metal-diar \
     -DCMAKE_INSTALL_PREFIX="${prefix}"
 cmake --build "${build}"
 cmake --install "${build}"
+
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum <"$1" | cut -d' ' -f1
+    else
+        shasum -a 256 <"$1" | cut -d' ' -f1
+    fi
+}
+manifest="${prefix}/share/inkwell/nemo-speech.manifest"
+mkdir -p "$(dirname "${manifest}")"
+{
+    echo "# NeMo-Speech.cpp as installed by build-nemo-speech.sh; ink-engines' build.rs checks it."
+    echo "commit ${NEMO_COMMIT}"
+    (
+        cd "${prefix}"
+        for f in lib/*; do
+            if [ -f "${f}" ] && [ ! -L "${f}" ]; then
+                case "${f}" in
+                    *.dylib | *.so | *.so.*) echo "sha256 $(sha256 "${f}") ${f}" ;;
+                esac
+            fi
+        done
+    )
+} >"${manifest}"
 
 echo
 echo "Installed to ${prefix}. Build the adapter with:"
