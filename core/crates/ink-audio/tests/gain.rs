@@ -413,6 +413,199 @@ fn the_report_says_what_was_measured_and_applied() {
     assert!((to_dbfs(from_dbfs(-60.0)) + 60.0).abs() < 1e-4);
 }
 
+// --- Short false positives (Silero, measured in ink-engines). ---------------------------------
+
+/// A scripted VAD mask: speech on the windows in `runs` (start window, length in windows) of a
+/// take `windows` long, silence elsewhere.
+fn mask_with_runs(windows: usize, runs: &[(usize, usize)]) -> Vec<bool> {
+    let mut mask = vec![false; windows];
+    for &(start, len) in runs {
+        mask[start..start + len].fill(true);
+    }
+    mask
+}
+
+/// Runs `take` through `normalise_speech` with an oracle that hears speech on `runs`.
+fn with_runs(take: &[f32], runs: &[(usize, usize)]) -> (Vec<f32>, ink_audio::gain::GainReport) {
+    let windows = take.len().div_ceil(VAD_WINDOW);
+    let mut out = take.to_vec();
+    let report = normalise_speech(
+        &mut out,
+        &mut Oracle::new(mask_with_runs(windows, runs)),
+        &cfg(),
+    )
+    .unwrap();
+    (out, report)
+}
+
+#[test]
+fn the_real_vads_short_false_positives_set_no_gain() {
+    // What Silero did with ink-audio's non-speech fixtures, lifted by the provisional gain: one
+    // 96 ms segment (3 windows) in steep 500 Hz rumble; knocks in segments of 128-160 ms (4-5
+    // windows), up to three in one take (23 learned frames). Each of those takes had its gain set
+    // before; none may now. The trim still sees them (its minimum is 64 ms), but no level is
+    // learned from segments shorter than MIN_LEVEL_SEGMENT_WINDOWS: the take is SpeechTooShort,
+    // untouched, and discarded like a take with no speech (no engine sees it).
+    let rumble = rumble(4.0, -70.0, 500.0, Slope::Steep, 600);
+    let knocks = knocks(4.0, -60.0, 601);
+    for (what, take, runs) in [
+        (
+            "steep 500 Hz rumble, one 96 ms segment",
+            &rumble,
+            vec![(40, 3)],
+        ),
+        ("knocks, 128 and 160 ms", &knocks, vec![(20, 4), (60, 5)]),
+        (
+            "knocks, three of 160 ms",
+            &knocks,
+            vec![(10, 5), (50, 5), (90, 5)],
+        ),
+    ] {
+        let (out, report) = with_runs(take, &runs);
+        assert_eq!(report.outcome, GainOutcome::SpeechTooShort, "{what}");
+        let GainEvidence::Vad {
+            speech_frames,
+            speech,
+            ..
+        } = report.evidence
+        else {
+            panic!("{what}: {:?}", report.evidence)
+        };
+        assert_eq!(speech_frames, 0, "{what}");
+        assert!(
+            speech.is_some(),
+            "{what}: the trim no longer saw the segments"
+        );
+        assert_eq!(&out, take, "{what}: touched");
+    }
+}
+
+#[test]
+fn a_160_ms_word_is_speech_too_short_never_no_speech() {
+    // A quick "no": 160 ms (5 windows) of speech over room tone in a 1 s take, which the VAD
+    // hears. It is one window short of the level minimum, so no gain is learned, and the outcome
+    // says that speech was found but was too short, never that there was none.
+    let word = speech_like(0.16, -60.0, 630);
+    let mut take = noise(1.0, -70.0, 631);
+    for (t, w) in take[8 * VAD_WINDOW..].iter_mut().zip(&word) {
+        *t += w;
+    }
+    let (out, report) = with_runs(&take, &[(8, 5)]);
+    assert_eq!(report.outcome, GainOutcome::SpeechTooShort);
+    assert_ne!(report.outcome, GainOutcome::NoSpeech);
+    let GainEvidence::Vad {
+        speech_frames,
+        speech,
+        ..
+    } = report.evidence
+    else {
+        panic!("{:?}", report.evidence)
+    };
+    assert_eq!(speech_frames, 0);
+    let speech = speech.expect("the VAD's speech is in the report");
+    assert!(
+        speech.start <= 8 * VAD_WINDOW && speech.end >= 13 * VAD_WINDOW,
+        "{speech:?}"
+    );
+    assert_eq!(out, take, "touched");
+}
+
+#[test]
+fn silence_and_noise_still_have_no_speech() {
+    // Where the VAD finds no speech at all, the outcome is still NoSpeech: room tone, rumble and a
+    // fan with a VAD that hears nothing, and a quiet room with one that scores just under the
+    // threshold throughout.
+    for (what, take, vad) in [
+        ("room tone", noise(4.0, -70.0, 640), 0.05),
+        (
+            "rumble",
+            rumble(4.0, -70.0, 250.0, Slope::Gentle, 641),
+            0.05,
+        ),
+        ("fan", cycling_fan(4.0, -60.0, 642), 0.05),
+        ("quiet room", noise(4.0, -80.0, 643), 0.49),
+    ] {
+        let mut out = take.clone();
+        let report = normalise_speech(&mut out, &mut Always(vad), &cfg()).unwrap();
+        assert_eq!(report.outcome, GainOutcome::NoSpeech, "{what}");
+        assert!(
+            matches!(
+                report.evidence,
+                GainEvidence::Vad {
+                    speech: None,
+                    speech_frames: 0,
+                    ..
+                }
+            ),
+            "{what}: {:?}",
+            report.evidence
+        );
+        assert_eq!(out, take, "{what}: touched");
+    }
+}
+
+#[test]
+fn short_real_speech_still_sets_the_gain() {
+    // A single short word in a 1 s take: 192 ms (6 windows, the minimum) and 256 ms of speech.
+    // Each is lifted, by the gain learned from the word's own frames (so few frames that the
+    // robust peak sits low in the word; that is the stage's rule for short takes, not this one's).
+    for (windows, seed) in [(6usize, 610u64), (8, 611)] {
+        let word = speech_like(windows as f64 * 0.032, -60.0, seed);
+        let mut take = vec![0.0f32; 8 * VAD_WINDOW];
+        take.extend(&word);
+        take.resize(16_000, 0.0);
+        let (_, report) = with_runs(&take, &[(8, windows)]);
+        let GainEvidence::Vad { speech_frames, .. } = report.evidence else {
+            panic!("{:?}", report.evidence)
+        };
+        let frames = windows * VAD_WINDOW / LEVEL_FRAME;
+        assert!(
+            speech_frames >= frames,
+            "{windows} windows: {speech_frames} frames"
+        );
+        let segment = [ink_audio::vad::Segment {
+            start: 8,
+            end: 8 + windows,
+        }];
+        let learned = ink_audio::gain::speech_levels(&take, &segment).unwrap();
+        assert_eq!(
+            report.outcome,
+            GainOutcome::Applied {
+                gain: ink_audio::gain::gain_for(learned.robust_peak)
+            },
+            "{windows} windows"
+        );
+    }
+}
+
+#[test]
+fn the_level_segment_minimum_is_192_ms_and_only_applies_to_the_gain() {
+    use ink_audio::gain::MIN_LEVEL_SEGMENT_WINDOWS;
+    assert_eq!(MIN_LEVEL_SEGMENT_WINDOWS, 6);
+    assert_eq!(
+        MIN_LEVEL_SEGMENT_WINDOWS * VAD_WINDOW,
+        3_072,
+        "192 ms at 16 kHz"
+    );
+    // The trim's own minimum is untouched.
+    assert_eq!(cfg().min_speech_windows, 2);
+    // One window short of the minimum learns nothing; the minimum learns.
+    let take = speech_like(1.0, -60.0, 620);
+    let (_, below) = with_runs(&take, &[(10, MIN_LEVEL_SEGMENT_WINDOWS - 1)]);
+    let (_, at) = with_runs(&take, &[(10, MIN_LEVEL_SEGMENT_WINDOWS)]);
+    assert_eq!(below.outcome, GainOutcome::SpeechTooShort);
+    assert!(matches!(at.outcome, GainOutcome::Applied { .. }), "{at:?}");
+    // A short segment before a long one (with more than the hangover between them, so the two
+    // stay apart) adds nothing to the level: the long one's alone sets it.
+    let (_, both) = with_runs(&take, &[(2, 3), (14, 8)]);
+    let (_, long) = with_runs(&take, &[(14, 8)]);
+    assert!(
+        matches!(long.outcome, GainOutcome::Applied { .. }),
+        "{long:?}"
+    );
+    assert_eq!(both.outcome, long.outcome);
+}
+
 // --- The fallback, without a VAD. --------------------------------------------------------------
 
 fn assert_fallback_lifts_to_target(take: &mut [f32], what: &str) {

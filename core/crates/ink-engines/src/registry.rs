@@ -53,8 +53,10 @@ pub enum Runtime {
     LlamaCpp,
     /// sherpa-onnx, for ONNX speech models.
     SherpaOnnx,
-    /// NeMo-Speech.cpp, for the diarizer.
+    /// NeMo-Speech.cpp, for the diarizer (`engine-nemo`).
     NemoSpeechCpp,
+    /// tract, a pure-Rust ONNX runtime, for Silero VAD (`engine-silero`).
+    Tract,
 }
 
 /// One job a row can fill, with its measured error rate on that job's benchmark.
@@ -63,9 +65,10 @@ pub struct JobScore {
     /// The job.
     pub job: Job,
     /// Measured error rate in percent, lower is better: word error rate for the speech jobs,
-    /// diarization error rate for [`Job::Diarization`]. Per job, because one model is measured on
-    /// a different set for each job (meetings versus dictation), and the router only compares
-    /// numbers measured for the same job.
+    /// diarization error rate for [`Job::Diarization`], and for [`Job::VoiceActivity`] the share
+    /// of clearly speech or clearly silent windows it misjudges. Per job, because one model is
+    /// measured on a different set for each job (meetings versus dictation), and the router only
+    /// compares numbers measured for the same job.
     pub wer: f32,
 }
 
@@ -386,8 +389,18 @@ impl Registry {
 /// only added then. Error rates are measured per job on the same sets for every row, so the router
 /// compares like with like: the meeting final on AMI IHM (three public meeting excerpts, 709
 /// reference words), the dictation final on FLEURS English dev as published (394 utterances).
+/// The diarizer and the VAD are listed only in builds that include their adapter, so such a build
+/// never offers a download it cannot run.
 pub fn builtin_rows() -> Vec<EngineRow> {
-    vec![qwen3_asr_1_7b_q8()]
+    [
+        qwen3_asr_1_7b_q8(),
+        #[cfg(feature = "engine-nemo")]
+        crate::rows::nemotron_3_diarization(),
+        #[cfg(feature = "engine-silero")]
+        crate::rows::silero_vad(),
+    ]
+    .into_iter()
+    .collect()
 }
 
 /// Qwen3-ASR 1.7B, Q8_0 GGUF plus its Q8_0 audio projector, for llama.cpp (`engine-llama`).

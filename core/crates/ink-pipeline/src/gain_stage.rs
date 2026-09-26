@@ -5,7 +5,7 @@
 //!
 //! | VAD | Call | A take with no speech | Trim |
 //! |---|---|---|---|
-//! | installed | [`normalise_speech`]: the gain is learned from speech alone | discarded, no engine sees it | to the speech, pauses kept |
+//! | installed | [`normalise_speech`]: the gain is learned from speech alone | discarded, no engine sees it (as `NoSpeech`, or `SpeechTooShort` when the only speech is too short to level) | to the speech, pauses kept |
 //! | not installed (missing, downloading) | [`normalise_without_vad`], while the shell shows voice detection as unavailable | passed on | none |
 //! | installed, but it fails on this take | the same fallback, and the failure is reported | passed on | none |
 //!
@@ -69,6 +69,8 @@ impl Levelled {
     pub fn discard(&self) -> Option<Discard> {
         match self.report.outcome {
             GainOutcome::NoSpeech => Some(Discard::NoSpeech),
+            // Speech was heard, but too short to level: its own reason, not "no speech".
+            GainOutcome::SpeechTooShort => Some(Discard::SpeechTooShort),
             GainOutcome::Silence => Some(Discard::Silence),
             _ => None,
         }

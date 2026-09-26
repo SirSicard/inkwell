@@ -102,6 +102,28 @@ ggml it was measured with, and a llama.cpp update never drags the diarizer along
 
 The cost is a second copy of ggml's code and a second Metal device setup.
 
+## The diarizer's native library
+
+The diarizer (Nemotron-3-Diarization) runs on NeMo-Speech.cpp, a C++ library with a C API. The
+VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
+
+- **Built outside cargo, not vendored.** `core/crates/ink-engines/native/build-nemo-speech.sh`
+  builds NeMo-Speech.cpp at its pinned commit from a checkout (the upstream `metal-diar` preset and
+  upstream's own ggml patch step) and installs it into a prefix; `NEMO_SPEECH_DIR` names that
+  prefix when building with `--features engine-nemo`. There is no submodule and no copy of the
+  sources: the repository carries no C++ and no machine paths, and cargo never runs CMake or
+  touches the network.
+- **Checked before it is linked.** `build.rs` compares the installed headers with the pinned
+  commit's (the adapter declares the C ABI by hand) and checks every installed library against
+  the manifest the build script wrote (the commit and each library's SHA-256).
+- **In CI** the adapter is compiled and linted without the library (`INK_NEMO_CHECK_ONLY=1`); the
+  tests that run it, and reproduce the diarizer's DER on AMI, run locally.
+- **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
+  apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
+  symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
+- **Its dependencies**, SentencePiece and Abseil, are listed in [THIRD_PARTY.md](../THIRD_PARTY.md)
+  with NeMo-Speech.cpp and its ggml; `cargo deny` cannot see them.
+
 ## Threads
 
 Every trait method in `ink-core` names the thread it may run on

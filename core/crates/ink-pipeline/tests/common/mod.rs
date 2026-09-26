@@ -77,6 +77,9 @@ pub enum VadKind {
     Never,
     /// Every call fails.
     Failing,
+    /// Speech on exactly these windows of each take, as (first window, windows), counted from the
+    /// take's first window: a real VAD's measured verdicts, replayed (a short word, a knock).
+    Scripted(&'static [(usize, usize)]),
     /// None installed.
     Unavailable(VadUnavailable),
 }
@@ -99,6 +102,27 @@ impl SpeechProbability for NeverVad {
     }
 }
 
+/// Speech on the scripted windows, silence elsewhere; the window count restarts at each reset.
+pub struct ScriptedVad {
+    runs: &'static [(usize, usize)],
+    next: usize,
+}
+
+impl SpeechProbability for ScriptedVad {
+    fn reset(&mut self) {
+        self.next = 0;
+    }
+    fn probability(&mut self, _: &[f32; 512]) -> Result<f32, EngineError> {
+        let k = self.next;
+        self.next += 1;
+        let speech = self
+            .runs
+            .iter()
+            .any(|&(start, len)| (start..start + len).contains(&k));
+        Ok(if speech { 0.9 } else { 0.05 })
+    }
+}
+
 pub struct FailingVad;
 
 impl SpeechProbability for FailingVad {
@@ -114,6 +138,7 @@ impl VadKind {
             Self::Energy => Vad::Installed(Box::new(EnergyVad)),
             Self::Never => Vad::Installed(Box::new(NeverVad)),
             Self::Failing => Vad::Installed(Box::new(FailingVad)),
+            Self::Scripted(runs) => Vad::Installed(Box::new(ScriptedVad { runs, next: 0 })),
             Self::Unavailable(why) => Vad::Unavailable(why),
         }
     }

@@ -13,9 +13,12 @@
 //!   the take and nothing else (the WebRTC AGC2 pattern: level estimation gated by a VAD). A VAD
 //!   cannot hear −75 dBFS speech either, so the flow is: a provisional gain from the whole take's
 //!   robust peak ([`provisional_gain`]); the VAD over the take lifted by it; the final gain from
-//!   the robust peak of the original's speech frames only ([`speech_levels`]). A take in which the
-//!   VAD finds no speech gets no gain and is reported as [`GainOutcome::NoSpeech`]: the caller
-//!   discards it. Rumble, a fan or knocks never set the level, whatever their shape.
+//!   the robust peak of the original's speech frames only ([`speech_levels`]), counting only
+//!   segments of at least [`MIN_LEVEL_SEGMENT_WINDOWS`] (192 ms), because a real VAD's false
+//!   positives are shorter. A take gets no gain, and the caller discards it, when the VAD finds
+//!   no speech ([`GainOutcome::NoSpeech`]) or only speech shorter than that
+//!   ([`GainOutcome::SpeechTooShort`]: a quick "no", or a knock the VAD mistook for speech; the app
+//!   says it was too short). Rumble, a fan or knocks never set the level, whatever their shape.
 //! - **[`normalise_without_vad`], only while no VAD is available** (the model missing, or still
 //!   downloading), and only while the app says that voice detection is unavailable. It guesses on
 //!   the speech band's contrast ([`speech_band`]) and errs toward lifting: losing a quiet
@@ -90,6 +93,16 @@ pub const MIN_DYNAMICS_DB: f32 = 4.0;
 
 /// The fewest level frames (200 ms) a buffer needs before it is judged at all.
 pub const MIN_FRAMES: usize = 10;
+
+/// The shortest VAD segment the gain learns a level from: 6 windows (192 ms).
+///
+/// The real VAD (Silero), hearing non-speech lifted by the provisional gain, called one 96 ms
+/// stretch of steep 500 Hz rumble speech, and knocks in segments of 128-160 ms; each of those set
+/// a take's gain. Real words run longer: on AMI headset speech no 2 s or 4 s take lost its gain to
+/// this minimum. Trimming keeps its own, shorter minimum
+/// ([`VadConfig::min_speech_windows`](crate::vad::VadConfig::min_speech_windows), 64 ms): a
+/// short sound at the edge of real speech is still kept, it just never sets the level.
+pub const MIN_LEVEL_SEGMENT_WINDOWS: usize = 6;
 
 /// Level statistics of a buffer, in linear full-scale units (1.0 = 0 dBFS).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -170,9 +183,15 @@ pub enum GainOutcome {
     Silence,
     /// Fewer than [`MIN_FRAMES`] level frames: untouched.
     TooShort,
-    /// [`normalise_speech`]: the VAD found no speech. Untouched, and the caller discards the take:
-    /// no engine should see it.
+    /// [`normalise_speech`]: the VAD found no speech at all. Untouched, and the caller discards
+    /// the take: no engine should see it.
     NoSpeech,
+    /// [`normalise_speech`]: the VAD found speech, but no segment of it reaches
+    /// [`MIN_LEVEL_SEGMENT_WINDOWS`] (192 ms), so no level is learned. Untouched, and the caller
+    /// discards the take: no engine should see it. Not the same as [`NoSpeech`](Self::NoSpeech):
+    /// the user said something (or the VAD took a knock for speech), and is told it was too short
+    /// rather than that nothing was heard.
+    SpeechTooShort,
     /// [`normalise_without_vad`]: the speech band is stationary (room tone, hum): untouched.
     Stationary,
 }
@@ -187,10 +206,13 @@ pub enum GainEvidence {
     Vad {
         /// The provisional gain the VAD heard the take through.
         provisional_gain: f32,
-        /// Level frames of the take that lie in speech.
+        /// Level frames of the take the gain learned from: those in speech segments of at least
+        /// [`MIN_LEVEL_SEGMENT_WINDOWS`]. Zero exactly when the outcome is
+        /// [`GainOutcome::NoSpeech`] or [`GainOutcome::SpeechTooShort`].
         speech_frames: usize,
         /// The range to keep, as [`trim_ends`](crate::trim_ends) would give it for the lifted
-        /// copy. `None` exactly when no speech was found.
+        /// copy (its minimum segment is shorter). `None` exactly when the outcome is
+        /// [`GainOutcome::NoSpeech`]; a [`GainOutcome::SpeechTooShort`] take has one.
         speech: Option<Range<usize>>,
     },
     /// [`normalise_without_vad`]: the speech band's contrast, in dB.
@@ -245,14 +267,17 @@ pub fn apply_gain(samples: &mut [f32], gain: f32) {
     }
 }
 
-/// The levels of the level frames of `samples` that lie in `segments` (a frame belongs to a
-/// segment when its middle sample does), measured as [`levels`] measures a whole buffer. `None`
-/// when no frame does. **Allocates** one `f32` per speech frame.
+/// The levels of the level frames of `samples` that lie in `segments` of at least
+/// [`MIN_LEVEL_SEGMENT_WINDOWS`] (a frame belongs to a segment when its middle sample does),
+/// measured as [`levels`] measures a whole buffer. Shorter segments are ignored: a real VAD's
+/// false positives are that short. `None` when no frame qualifies. **Allocates** one `f32` per
+/// speech frame.
 pub fn speech_levels(samples: &[f32], segments: &[Segment]) -> Option<Levels> {
     let in_speech = |frame: usize| {
         let middle = frame * LEVEL_FRAME + LEVEL_FRAME / 2;
         segments
             .iter()
+            .filter(|s| s.end - s.start >= MIN_LEVEL_SEGMENT_WINDOWS)
             .any(|s| (s.start * VAD_WINDOW..s.end * VAD_WINDOW).contains(&middle))
     };
     let mut peaks: Vec<f32> = samples
@@ -278,8 +303,9 @@ pub fn speech_levels(samples: &[f32], segments: &[Segment]) -> Option<Levels> {
 ///
 /// The flow (module docs): [`provisional_gain`] from the whole take; `vad` over the take lifted
 /// by it; the final gain from [`speech_levels`] of the original. No speech means no gain and
-/// [`GainOutcome::NoSpeech`]: discard the take. The report's evidence carries the range to keep
-/// from the same VAD pass, so the caller need not run the VAD again to trim.
+/// [`GainOutcome::NoSpeech`]; speech only in segments too short to learn from means no gain and
+/// [`GainOutcome::SpeechTooShort`]. Either way, discard the take. The report's evidence carries
+/// the range to keep from the same VAD pass, so the caller need not run the VAD again to trim.
 ///
 /// **Worker.** One gain for the whole buffer, so relative dynamics are preserved exactly, except
 /// for samples the clamp to ±1.0 shaves. Allocates a lifted copy of the take and a few `f32`s per
@@ -308,7 +334,8 @@ pub fn normalise_speech(
         speech: vad::keep_range(&segments, samples.len(), cfg),
     };
     let outcome = match speech {
-        None => GainOutcome::NoSpeech,
+        None if segments.is_empty() => GainOutcome::NoSpeech,
+        None => GainOutcome::SpeechTooShort,
         Some(l) if l.robust_peak >= TARGET_PEAK => GainOutcome::Healthy,
         Some(l) => {
             let gain = gain_for(l.robust_peak);

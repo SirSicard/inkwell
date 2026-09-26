@@ -21,6 +21,9 @@ pub enum Job {
     LivePartials,
     /// Who spoke when, on the far end only.
     Diarization,
+    /// Whether each window holds speech: what the gain stages learn level from and what trimming
+    /// keeps (architecture rule 11). The pipeline calls it itself; it produces no text.
+    VoiceActivity,
 }
 
 /// What an engine is, for the router and the About screen.

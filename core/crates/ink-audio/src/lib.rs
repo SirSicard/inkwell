@@ -28,7 +28,7 @@
 //!                   far: average)                               ├─► BandAnalyzer ─► BandsWriter ═► BandsReader (shell)
 //!                                                               └─► Windower (import, final pass)
 //!
-//! a take or a window ─► normalise_speech ─┬─► NoSpeech ─► discarded: no engine sees it
+//! a take or a window ─► normalise_speech ─┬─► NoSpeech, SpeechTooShort ─► discarded: no engine sees it
 //!                        (VAD-gated)       └─► lifted, with the range to keep ─► engine
 //! ```
 //!
