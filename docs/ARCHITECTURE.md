@@ -30,8 +30,9 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
 3. **Disk is the seam.** Capture writes raw PCM chunks, and everything downstream reads chunks. RAM
    holds seconds, never a session.
 4. **Partials are ephemeral; finals persist.** The live pass writes revision 1. The offline pass
-   replaces it with revision 2 in one transaction, and refuses an empty result or one with fewer than
-   half the previous words.
+   replaces it with revision 2 in one transaction, and refuses an empty result or one in which any
+   channel falls below half its previous words (per channel, so a healthy far end cannot hide a mic
+   pass that came back empty).
 5. **Me versus them is stream identity.** Mic is you, the far end is them. Only the far end is
    diarized, and speaker labels are kept only when there are at least two substantial clusters,
    each holding at least 2 % of the speech.

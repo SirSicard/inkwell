@@ -5,8 +5,8 @@ use super::lock;
 use crate::engine::SpeakerId;
 use crate::error::StoreError;
 use crate::store::{
-    Commitment, CommitmentId, NewCommitment, NewRecord, Record, RecordId, SearchHit, Segment,
-    Store, Summary, check_supersede, word_count,
+    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
+    RecordQuery, SearchHit, Segment, Store, Summary, check_supersede,
 };
 
 struct RecordData {
@@ -20,6 +20,7 @@ struct RecordData {
 struct Inner {
     next_id: u64,
     records: HashMap<RecordId, RecordData>,
+    notes: Vec<Note>,
     commitments: Vec<Commitment>,
     settings: HashMap<String, String>,
 }
@@ -34,6 +35,13 @@ impl Inner {
         self.records.get_mut(id).ok_or(StoreError::NotFound)
     }
 
+    fn note(&mut self, id: &NoteId) -> Result<&mut Note, StoreError> {
+        self.notes
+            .iter_mut()
+            .find(|n| &n.id == id)
+            .ok_or(StoreError::NotFound)
+    }
+
     fn commitment(&mut self, id: &CommitmentId) -> Result<&mut Commitment, StoreError> {
         self.commitments
             .iter_mut()
@@ -43,7 +51,8 @@ impl Inner {
 }
 
 /// An in-memory [`Store`]. One lock around everything makes every call atomic, so supersede is
-/// trivially all-or-nothing; the SQLite store earns that with a transaction.
+/// trivially all-or-nothing; the SQLite store earns that with a transaction. Notes and
+/// commitments live in insertion order, which is the tie-break the trait promises.
 #[derive(Default)]
 pub struct MemStore {
     inner: Mutex<Inner>,
@@ -54,11 +63,6 @@ impl MemStore {
     pub fn new() -> Self {
         Self::default()
     }
-}
-
-fn sorted(mut segments: Vec<Segment>) -> Vec<Segment> {
-    segments.sort_by_key(|s| (s.start_ms, s.channel));
-    segments
 }
 
 impl Store for MemStore {
@@ -72,6 +76,7 @@ impl Store for MemStore {
             started_at_unix_ms: new.started_at_unix_ms,
             ended_at_unix_ms: None,
             source_app: new.source_app,
+            audio_dir: new.audio_dir,
             revision: 1,
         };
         inner.records.insert(
@@ -90,13 +95,29 @@ impl Store for MemStore {
         Ok(lock(&self.inner).records.get(id).map(|d| d.record.clone()))
     }
 
-    fn recent_records(&self, limit: usize) -> Result<Vec<Record>, StoreError> {
+    fn records(&self, query: &RecordQuery) -> Result<Vec<Record>, StoreError> {
         let inner = lock(&self.inner);
-        let mut records: Vec<Record> = inner.records.values().map(|d| d.record.clone()).collect();
+        let mut records: Vec<Record> = inner
+            .records
+            .values()
+            .map(|d| &d.record)
+            .filter(|r| query.kind.is_none_or(|k| r.kind == k))
+            .filter(|r| {
+                query
+                    .started_before_unix_ms
+                    .is_none_or(|t| r.started_at_unix_ms < t)
+            })
+            .cloned()
+            .collect();
         records
             .sort_by(|a, b| (b.started_at_unix_ms, &b.id.0).cmp(&(a.started_at_unix_ms, &a.id.0)));
-        records.truncate(limit);
+        records.truncate(query.limit);
         Ok(records)
+    }
+
+    fn set_title(&self, id: &RecordId, title: &str) -> Result<(), StoreError> {
+        lock(&self.inner).data(id)?.record.title = Some(title.into());
+        Ok(())
     }
 
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError> {
@@ -107,6 +128,7 @@ impl Store for MemStore {
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
         let mut inner = lock(&self.inner);
         inner.records.remove(id).ok_or(StoreError::NotFound)?;
+        inner.notes.retain(|n| &n.record != id);
         inner.commitments.retain(|c| &c.record != id);
         Ok(())
     }
@@ -121,13 +143,15 @@ impl Store for MemStore {
 
     fn segments(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
         let mut inner = lock(&self.inner);
-        Ok(sorted(inner.data(id)?.segments.clone()))
+        let mut segments = inner.data(id)?.segments.clone();
+        segments.sort_by_key(|s| (s.start_ms, s.channel));
+        Ok(segments)
     }
 
     fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
         let mut inner = lock(&self.inner);
         let data = inner.data(id)?;
-        check_supersede(word_count(&data.segments), word_count(segments))?;
+        check_supersede(&data.segments, segments)?;
         data.segments = segments.to_vec();
         data.record.revision += 1;
         Ok(data.record.revision)
@@ -148,6 +172,8 @@ impl Store for MemStore {
                     .filter(|s| s.text.to_lowercase().contains(&needle))
                     .map(|s| SearchHit {
                         record: d.record.id.clone(),
+                        title: d.record.title.clone(),
+                        started_at_unix_ms: d.record.started_at_unix_ms,
                         start_ms: s.start_ms,
                         snippet: s.text.clone(),
                     })
@@ -156,6 +182,48 @@ impl Store for MemStore {
         hits.sort_by(|a, b| (&a.record.0, a.start_ms).cmp(&(&b.record.0, b.start_ms)));
         hits.truncate(limit);
         Ok(hits)
+    }
+
+    fn add_note(&self, id: &RecordId, at_ms: u64, text: &str) -> Result<NoteId, StoreError> {
+        let mut inner = lock(&self.inner);
+        inner.data(id)?;
+        let note_id = NoteId(inner.next("note"));
+        inner.notes.push(Note {
+            id: note_id.clone(),
+            record: id.clone(),
+            at_ms,
+            text: text.into(),
+        });
+        Ok(note_id)
+    }
+
+    fn update_note(&self, id: &NoteId, text: &str) -> Result<(), StoreError> {
+        lock(&self.inner).note(id)?.text = text.into();
+        Ok(())
+    }
+
+    fn delete_note(&self, id: &NoteId) -> Result<(), StoreError> {
+        let mut inner = lock(&self.inner);
+        let before = inner.notes.len();
+        inner.notes.retain(|n| &n.id != id);
+        if inner.notes.len() == before {
+            return Err(StoreError::NotFound);
+        }
+        Ok(())
+    }
+
+    fn notes(&self, id: &RecordId) -> Result<Vec<Note>, StoreError> {
+        let mut inner = lock(&self.inner);
+        inner.data(id)?;
+        let mut notes: Vec<Note> = inner
+            .notes
+            .iter()
+            .filter(|n| &n.record == id)
+            .cloned()
+            .collect();
+        // A stable sort keeps insertion order among notes with the same stamp.
+        notes.sort_by_key(|n| n.at_ms);
+        Ok(notes)
     }
 
     fn save_summary(&self, id: &RecordId, summary: &Summary) -> Result<(), StoreError> {
@@ -206,6 +274,7 @@ impl Store for MemStore {
                 text: item.text.clone(),
                 owner: item.owner.clone(),
                 due: item.due.clone(),
+                due_at_unix_ms: item.due_at_unix_ms,
                 provenance: item.provenance.clone(),
                 merged_into: None,
                 done: false,
@@ -224,6 +293,21 @@ impl Store for MemStore {
             .filter(|c| &c.record == id)
             .cloned()
             .collect())
+    }
+
+    fn open_commitments(&self, limit: usize) -> Result<Vec<Commitment>, StoreError> {
+        let inner = lock(&self.inner);
+        let mut open: Vec<Commitment> = inner
+            .commitments
+            .iter()
+            .filter(|c| !c.done && c.merged_into.is_none())
+            .cloned()
+            .collect();
+        // Dated before undated, then soonest first; the sort is stable, so ties stay in the order
+        // they were added.
+        open.sort_by_key(|c| (c.due_at_unix_ms.is_none(), c.due_at_unix_ms));
+        open.truncate(limit);
+        Ok(open)
     }
 
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {

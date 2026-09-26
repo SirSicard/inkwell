@@ -1,11 +1,13 @@
-//! Persistence: records, their transcripts, summaries, commitments and settings.
+//! Persistence: records, their transcripts, notes, summaries, commitments and settings.
 //!
 //! `ink-store` implements [`Store`] on SQLite (S1.3). Two rules shape the trait:
 //! - **Partials are never stored.** Live finals are appended as the current revision; the offline
 //!   pass replaces them with [`Store::supersede`] in one transaction (architecture rule 4).
-//! - **Supersede refuses** an empty result and one with fewer than half the previous words, both
-//!   far more likely an engine failure than a correction. [`check_supersede`] is the one
-//!   definition every implementation calls.
+//! - **Supersede refuses** an empty result, and any channel that falls below half its previous
+//!   words: both are far more likely an engine failure than a correction. [`check_supersede`] is
+//!   the one definition every implementation calls.
+
+use std::collections::BTreeMap;
 
 use crate::audio::Channel;
 use crate::engine::SpeakerId;
@@ -18,6 +20,10 @@ pub struct RecordId(pub String);
 /// A commitment's id.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CommitmentId(pub String);
+
+/// A note's id.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NoteId(pub String);
 
 /// What produced a record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,12 +41,16 @@ pub enum RecordKind {
 pub struct NewRecord {
     /// What produced it.
     pub kind: RecordKind,
-    /// A title, when one is known up front (a calendar event, a file name).
+    /// A title, when one is known up front (a calendar event, a file name). Otherwise it is set
+    /// later from the summary's headline with [`Store::set_title`].
     pub title: Option<String>,
     /// When it started, Unix ms.
     pub started_at_unix_ms: i64,
     /// The application involved (the meeting app, the dictation target).
     pub source_app: Option<String>,
+    /// Where the record's audio chunks live, relative to the data directory. `None` when the
+    /// record kept no audio. Imported records point at the chunks they brought with them.
+    pub audio_dir: Option<String>,
 }
 
 /// A stored record.
@@ -58,8 +68,22 @@ pub struct Record {
     pub ended_at_unix_ms: Option<i64>,
     /// The application involved.
     pub source_app: Option<String>,
+    /// Where its audio chunks live, relative to the data directory.
+    pub audio_dir: Option<String>,
     /// The transcript revision: 1 while live, raised by each supersede.
     pub revision: u32,
+}
+
+/// Which records to list: newest first, optionally one kind, optionally before a cursor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordQuery {
+    /// Only this kind, or every kind.
+    pub kind: Option<RecordKind>,
+    /// Only records that started strictly before this time, Unix ms. Pass the last page's oldest
+    /// start to page on without repeats.
+    pub started_before_unix_ms: Option<i64>,
+    /// At most this many.
+    pub limit: usize,
 }
 
 /// Settled transcript text on the record's timeline.
@@ -75,6 +99,19 @@ pub struct Segment {
     pub text: String,
     /// The diarized speaker, far end only, when labels were kept.
     pub speaker: Option<SpeakerId>,
+}
+
+/// A note the user typed, stamped with where in the record it was written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    /// Its id.
+    pub id: NoteId,
+    /// The record it belongs to.
+    pub record: RecordId,
+    /// Where in the record it was written, ms from the start: the timestamp chip.
+    pub at_ms: u64,
+    /// The text.
+    pub text: String,
 }
 
 /// A record's summary.
@@ -107,8 +144,11 @@ pub struct NewCommitment {
     pub text: String,
     /// Who owes it, as said.
     pub owner: Option<String>,
-    /// When, as said.
+    /// When, as said ("by Friday"), kept for display.
     pub due: Option<String>,
+    /// When, resolved to a time, so "overdue" can be computed. `None` when it could not be
+    /// resolved.
+    pub due_at_unix_ms: Option<i64>,
     /// Where in the record it was said: its provenance.
     pub provenance: Vec<Span>,
 }
@@ -124,8 +164,10 @@ pub struct Commitment {
     pub text: String,
     /// Who owes it.
     pub owner: Option<String>,
-    /// When.
+    /// When, as said.
     pub due: Option<String>,
+    /// When, resolved, Unix ms.
+    pub due_at_unix_ms: Option<i64>,
     /// Where in the record it was said.
     pub provenance: Vec<Span>,
     /// Set when deduplication folded it into another commitment ("said twice"). Merged
@@ -135,11 +177,15 @@ pub struct Commitment {
     pub done: bool,
 }
 
-/// A search result.
+/// A search result, with enough of its record to list it without another lookup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchHit {
     /// The record.
     pub record: RecordId,
+    /// The record's title.
+    pub title: Option<String>,
+    /// When the record started, Unix ms.
+    pub started_at_unix_ms: i64,
     /// Where in the record, ms.
     pub start_ms: u64,
     /// The matching text.
@@ -157,13 +203,16 @@ pub trait Store: Send + Sync {
     /// One record, or `None`.
     fn record(&self, id: &RecordId) -> Result<Option<Record>, StoreError>;
 
-    /// The most recent records, newest first.
-    fn recent_records(&self, limit: usize) -> Result<Vec<Record>, StoreError>;
+    /// Records matching `query`, newest first (by start time, then id).
+    fn records(&self, query: &RecordQuery) -> Result<Vec<Record>, StoreError>;
+
+    /// Sets a record's title.
+    fn set_title(&self, id: &RecordId, title: &str) -> Result<(), StoreError>;
 
     /// Marks a record as ended.
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError>;
 
-    /// Deletes a record with its transcript, summary, speakers and commitments.
+    /// Deletes a record with its transcript, notes, summary, speakers and commitments.
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError>;
 
     /// Appends live finals to the current revision.
@@ -178,6 +227,18 @@ pub trait Store: Send + Sync {
 
     /// Full-text search across every record's current revision.
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError>;
+
+    /// Adds a note at `at_ms` in the record.
+    fn add_note(&self, id: &RecordId, at_ms: u64, text: &str) -> Result<NoteId, StoreError>;
+
+    /// Replaces a note's text; its stamp stays.
+    fn update_note(&self, id: &NoteId, text: &str) -> Result<(), StoreError>;
+
+    /// Deletes a note.
+    fn delete_note(&self, id: &NoteId) -> Result<(), StoreError>;
+
+    /// A record's notes by stamp, then in the order they were added.
+    fn notes(&self, id: &RecordId) -> Result<Vec<Note>, StoreError>;
 
     /// Saves (or replaces) a record's summary.
     fn save_summary(&self, id: &RecordId, summary: &Summary) -> Result<(), StoreError>;
@@ -206,6 +267,10 @@ pub trait Store: Send + Sync {
     /// A record's commitments in the order they were added, merged ones included.
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError>;
 
+    /// Open commitments across every record: not done and not merged into another. The soonest
+    /// resolved due time first, undated ones last, ties in the order they were added.
+    fn open_commitments(&self, limit: usize) -> Result<Vec<Commitment>, StoreError>;
+
     /// Marks a commitment done or not done.
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError>;
 
@@ -228,21 +293,39 @@ pub fn word_count(segments: &[Segment]) -> usize {
         .sum()
 }
 
+fn words_per_channel(segments: &[Segment]) -> BTreeMap<Channel, usize> {
+    let mut words = BTreeMap::new();
+    for s in segments {
+        *words.entry(s.channel).or_default() += s.text.split_whitespace().count();
+    }
+    words
+}
+
 /// The supersede guard (architecture rule 4), shared by every [`Store`].
 ///
-/// Refuses a revision with no words, and one with fewer than half the words of the current one.
-/// An earlier implementation only applied the ratio above 200 previous words, so a short record's offline pass could
-/// legitimately drop filler; whether that floor comes back is S1.3's call, made here so every
-/// store agrees.
-pub fn check_supersede(previous_words: usize, new_words: usize) -> Result<(), StoreError> {
-    if new_words == 0 {
+/// Refuses a revision with no words at all, and one where **any channel** falls below half the
+/// words it had. The check is per channel because the meeting chain runs one offline pass per
+/// channel and supersedes their merge: a mic pass that crashes to nothing would otherwise hide
+/// behind a healthy far end in the total. A channel the previous revision did not have is
+/// always allowed.
+///
+/// An earlier implementation only applied the ratio above 200 previous words, so a short record's
+/// offline pass could legitimately drop filler; whether that floor comes back is S1.3's call, made
+/// here so every store agrees.
+pub fn check_supersede(previous: &[Segment], new: &[Segment]) -> Result<(), StoreError> {
+    if word_count(new) == 0 {
         return Err(StoreError::EmptySupersede);
     }
-    if new_words.saturating_mul(2) < previous_words {
-        return Err(StoreError::SuspiciousSupersede {
-            previous_words,
-            new_words,
-        });
+    let now = words_per_channel(new);
+    for (channel, previous_words) in words_per_channel(previous) {
+        let new_words = now.get(&channel).copied().unwrap_or(0);
+        if new_words.saturating_mul(2) < previous_words {
+            return Err(StoreError::SuspiciousSupersede {
+                channel,
+                previous_words,
+                new_words,
+            });
+        }
     }
     Ok(())
 }
@@ -251,9 +334,9 @@ pub fn check_supersede(previous_words: usize, new_words: usize) -> Result<(), St
 mod tests {
     use super::*;
 
-    fn seg(text: &str) -> Segment {
+    fn seg(channel: Channel, text: &str) -> Segment {
         Segment {
-            channel: Channel::Mic,
+            channel,
             start_ms: 0,
             end_ms: 0,
             text: text.into(),
@@ -263,29 +346,60 @@ mod tests {
 
     #[test]
     fn words_are_counted_across_segments() {
-        assert_eq!(word_count(&[seg("one two"), seg("  three  "), seg("")]), 3);
+        assert_eq!(
+            word_count(&[
+                seg(Channel::Mic, "one two"),
+                seg(Channel::Far, "  three  "),
+                seg(Channel::Mic, "")
+            ]),
+            3
+        );
     }
 
     #[test]
-    fn supersede_guard_refuses_empty_and_less_than_half() {
-        assert_eq!(check_supersede(10, 0), Err(StoreError::EmptySupersede));
-        assert_eq!(check_supersede(0, 0), Err(StoreError::EmptySupersede));
+    fn supersede_guard_refuses_empty_and_any_channel_under_half() {
+        let mic = |t: &str| seg(Channel::Mic, t);
+        let far = |t: &str| seg(Channel::Far, t);
+        let ten = "a b c d e f g h i j";
+
         assert_eq!(
-            check_supersede(10, 4),
+            check_supersede(&[mic(ten)], &[]),
+            Err(StoreError::EmptySupersede)
+        );
+        assert_eq!(
+            check_supersede(&[], &[mic(" ")]),
+            Err(StoreError::EmptySupersede)
+        );
+        assert_eq!(
+            check_supersede(&[mic(ten)], &[mic("a b c d")]),
             Err(StoreError::SuspiciousSupersede {
+                channel: Channel::Mic,
                 previous_words: 10,
                 new_words: 4
             })
         );
-        assert_eq!(check_supersede(10, 5), Ok(()));
+        assert_eq!(check_supersede(&[mic(ten)], &[mic("a b c d e")]), Ok(()));
         assert_eq!(
-            check_supersede(11, 5),
+            check_supersede(&[mic("a b c d e f g h i j k")], &[mic("a b c d e")]),
             Err(StoreError::SuspiciousSupersede {
+                channel: Channel::Mic,
                 previous_words: 11,
                 new_words: 5
             })
         );
-        assert_eq!(check_supersede(0, 3), Ok(()));
-        assert_eq!(check_supersede(3, 30), Ok(()));
+        // The total (11 of 20) would pass; the mic channel (0 of 10) does not.
+        assert_eq!(
+            check_supersede(&[mic(ten), far(ten)], &[far("a b c d e f g h i j k")]),
+            Err(StoreError::SuspiciousSupersede {
+                channel: Channel::Mic,
+                previous_words: 10,
+                new_words: 0
+            })
+        );
+        assert_eq!(check_supersede(&[], &[mic("a b c")]), Ok(()));
+        assert_eq!(
+            check_supersede(&[mic(ten)], &[mic(ten), far("new side")]),
+            Ok(())
+        );
     }
 }

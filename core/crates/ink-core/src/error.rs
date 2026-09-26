@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use crate::audio::Channel;
 use crate::platform::Permission;
 
 /// Why a platform call failed.
@@ -71,12 +72,14 @@ pub enum StoreError {
     /// A supersede with no words. Refused: an engine that returns nothing on audio with speech
     /// would otherwise erase a working transcript.
     EmptySupersede,
-    /// A supersede with fewer than half the words of the current revision. Refused as far more
+    /// A supersede in which one channel falls below half the words it had. Refused as far more
     /// likely an engine failure than a correction.
     SuspiciousSupersede {
-        /// Words in the current revision.
+        /// The channel that collapsed.
+        channel: Channel,
+        /// Its words in the current revision.
         previous_words: usize,
-        /// Words in the refused revision.
+        /// Its words in the refused revision.
         new_words: usize,
     },
     /// The request contradicts the store's rules (for example, merging a commitment into itself).
@@ -91,11 +94,12 @@ impl fmt::Display for StoreError {
             Self::NotFound => f.write_str("not found"),
             Self::EmptySupersede => f.write_str("refused to supersede with an empty transcript"),
             Self::SuspiciousSupersede {
+                channel,
                 previous_words,
                 new_words,
             } => write!(
                 f,
-                "refused to supersede {previous_words} words with {new_words}: more likely an engine failure than a correction"
+                "refused to supersede: the {channel:?} channel would go from {previous_words} words to {new_words}, more likely an engine failure than a correction"
             ),
             Self::Invalid(msg) => write!(f, "invalid request: {msg}"),
             Self::Backend(msg) => write!(f, "store backend: {msg}"),

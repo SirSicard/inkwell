@@ -49,7 +49,7 @@ pub use platform::{
     Permission, PermissionProbe, PermissionState, Platform, TextInserter, Transport,
 };
 pub use store::{
-    Commitment, CommitmentId, NewCommitment, NewRecord, Record, RecordId, RecordKind, SearchHit,
-    Segment, Span, Store, Summary,
+    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId, RecordKind,
+    RecordQuery, SearchHit, Segment, Span, Store, Summary,
 };
 pub use threading::{CancelToken, EventSink};

@@ -48,6 +48,7 @@ fn meeting(store: &MemStore, started: i64) -> RecordId {
             title: None,
             started_at_unix_ms: started,
             source_app: Some("com.example.meet".into()),
+            audio_dir: None,
         })
         .unwrap()
 }
@@ -70,8 +71,9 @@ fn supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one() {
     assert_eq!(
         store.supersede(&id, &[seg(Channel::Mic, 0, "one two three")]),
         Err(StoreError::SuspiciousSupersede {
-            previous_words: 8,
-            new_words: 3
+            channel: Channel::Far,
+            previous_words: 4,
+            new_words: 0
         })
     );
     assert_eq!(store.segments(&id).unwrap(), live.to_vec());
@@ -86,6 +88,44 @@ fn supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one() {
     assert_eq!(store.record(&id).unwrap().unwrap().revision, 2);
 }
 
+/// The guard is per channel: a healthy far end must not pad a mic transcript that came back empty.
+#[test]
+fn one_channel_collapsing_is_refused_even_when_the_total_passes() {
+    let store = MemStore::new();
+    let id = meeting(&store, 1);
+    let ten = "w w w w w w w w w w";
+    store
+        .append_segments(
+            &id,
+            &[seg(Channel::Mic, 0, ten), seg(Channel::Far, 1_000, ten)],
+        )
+        .unwrap();
+
+    let far_only = [seg(Channel::Far, 1_000, "w w w w w w w w w w w")];
+    assert_eq!(
+        store.supersede(&id, &far_only),
+        Err(StoreError::SuspiciousSupersede {
+            channel: Channel::Mic,
+            previous_words: 10,
+            new_words: 0
+        })
+    );
+    assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
+
+    // A channel the live pass never heard may appear in the offline pass.
+    let other = meeting(&store, 2);
+    store
+        .append_segments(&other, &[seg(Channel::Mic, 0, ten)])
+        .unwrap();
+    assert_eq!(
+        store.supersede(
+            &other,
+            &[seg(Channel::Mic, 0, ten), seg(Channel::Far, 9, "hi")]
+        ),
+        Ok(2)
+    );
+}
+
 #[test]
 fn unknown_records_are_not_found() {
     let store = MemStore::new();
@@ -97,6 +137,8 @@ fn unknown_records_are_not_found() {
         Err(StoreError::NotFound)
     );
     assert_eq!(store.delete_record(&ghost), Err(StoreError::NotFound));
+    assert_eq!(store.set_title(&ghost, "x"), Err(StoreError::NotFound));
+    assert_eq!(store.add_note(&ghost, 0, "x"), Err(StoreError::NotFound));
 }
 
 #[test]
@@ -104,14 +146,70 @@ fn records_segments_search_speakers_and_settings() {
     let store = MemStore::new();
     let older = meeting(&store, 100);
     let newer = meeting(&store, 200);
-    let ids: Vec<RecordId> = store
-        .recent_records(10)
-        .unwrap()
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    assert_eq!(ids, vec![newer.clone(), older.clone()]);
-    assert_eq!(store.recent_records(1).unwrap().len(), 1);
+    let dictation = store
+        .create_record(NewRecord {
+            kind: RecordKind::Dictation,
+            title: None,
+            started_at_unix_ms: 300,
+            source_app: None,
+            audio_dir: Some("audio/imported-1".into()),
+        })
+        .unwrap();
+    let ids = |q: &RecordQuery| -> Vec<RecordId> {
+        store
+            .records(q)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect()
+    };
+    let all = RecordQuery {
+        kind: None,
+        started_before_unix_ms: None,
+        limit: 10,
+    };
+    assert_eq!(
+        ids(&all),
+        vec![dictation.clone(), newer.clone(), older.clone()]
+    );
+    assert_eq!(
+        ids(&RecordQuery {
+            limit: 1,
+            ..all.clone()
+        }),
+        vec![dictation.clone()]
+    );
+    assert_eq!(
+        ids(&RecordQuery {
+            kind: Some(RecordKind::Meeting),
+            ..all.clone()
+        }),
+        vec![newer.clone(), older.clone()]
+    );
+    assert_eq!(
+        ids(&RecordQuery {
+            started_before_unix_ms: Some(200),
+            ..all.clone()
+        }),
+        vec![older.clone()],
+        "the cursor is exclusive, so paging never repeats a record"
+    );
+    assert_eq!(
+        store
+            .record(&dictation)
+            .unwrap()
+            .unwrap()
+            .audio_dir
+            .as_deref(),
+        Some("audio/imported-1")
+    );
+
+    assert_eq!(store.record(&older).unwrap().unwrap().title, None);
+    store.set_title(&older, "Draft review").unwrap();
+    assert_eq!(
+        store.record(&older).unwrap().unwrap().title.as_deref(),
+        Some("Draft review")
+    );
 
     store
         .append_segments(
@@ -130,12 +228,14 @@ fn records_segments_search_speakers_and_settings() {
         .collect();
     assert_eq!(starts, vec![1_000, 5_000]);
 
-    let hits = store.search("draft", 10).unwrap();
+    let hits = store.search("ship", 10).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(
         (hits[0].record.clone(), hits[0].start_ms),
         (older.clone(), 5_000)
     );
+    assert_eq!(hits[0].title.as_deref(), Some("Draft review"));
+    assert_eq!(hits[0].started_at_unix_ms, 100);
     assert!(store.search("  ", 10).unwrap().is_empty());
 
     store.finish_record(&older, 900).unwrap();
@@ -173,6 +273,7 @@ fn commitments_merge_complete_and_go_with_their_record() {
         text: text.into(),
         owner: Some("Guest".into()),
         due: None,
+        due_at_unix_ms: None,
         provenance: vec![Span {
             channel: Channel::Far,
             start_ms: at,
@@ -212,6 +313,77 @@ fn commitments_merge_complete_and_go_with_their_record() {
         store.set_commitment_done(&ids[0], false),
         Err(StoreError::NotFound)
     );
+}
+
+/// The Owed and Today screens read open commitments across every record, soonest due first.
+#[test]
+fn open_commitments_span_records_and_skip_done_and_merged() {
+    let store = MemStore::new();
+    let a = meeting(&store, 1);
+    let b = meeting(&store, 2);
+    let owe = |text: &str, due_at: Option<i64>| NewCommitment {
+        text: text.into(),
+        owner: Some("Guest".into()),
+        due: due_at.map(|_| "as said".into()),
+        due_at_unix_ms: due_at,
+        provenance: vec![],
+    };
+    let in_a = store
+        .add_commitments(
+            &a,
+            &[
+                owe("undated", None),
+                owe("later", Some(900)),
+                owe("done", Some(1)),
+            ],
+        )
+        .unwrap();
+    let in_b = store
+        .add_commitments(
+            &b,
+            &[owe("soonest", Some(100)), owe("repeat of later", Some(900))],
+        )
+        .unwrap();
+    store.set_commitment_done(&in_a[2], true).unwrap();
+    store.merge_commitment(&in_b[1], &in_a[1]).unwrap();
+
+    let open: Vec<String> = store
+        .open_commitments(10)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.text)
+        .collect();
+    assert_eq!(open, vec!["soonest", "later", "undated"]);
+    assert_eq!(store.open_commitments(1).unwrap().len(), 1);
+}
+
+/// Notes carry their own time on the record, for the timestamp chips.
+#[test]
+fn notes_are_kept_in_time_order_and_go_with_their_record() {
+    let store = MemStore::new();
+    let id = meeting(&store, 1);
+    let late = store.add_note(&id, 9_000, "follow up on pricing").unwrap();
+    let early = store.add_note(&id, 1_000, "agenda").unwrap();
+    store
+        .update_note(&late, "follow up on pricing, Friday")
+        .unwrap();
+
+    let notes = store.notes(&id).unwrap();
+    assert_eq!(
+        notes
+            .iter()
+            .map(|n| (n.id.clone(), n.at_ms))
+            .collect::<Vec<_>>(),
+        vec![(early.clone(), 1_000), (late.clone(), 9_000)]
+    );
+    assert_eq!(notes[1].text, "follow up on pricing, Friday");
+    assert_eq!(notes[0].record, id);
+
+    store.delete_note(&early).unwrap();
+    assert_eq!(store.delete_note(&early), Err(StoreError::NotFound));
+    assert_eq!(store.update_note(&early, "x"), Err(StoreError::NotFound));
+    store.delete_record(&id).unwrap();
+    assert_eq!(store.update_note(&late, "x"), Err(StoreError::NotFound));
 }
 
 // --- Engines -------------------------------------------------------------------------------
@@ -514,6 +686,17 @@ fn hotkey_events_carry_host_time_and_stop_when_stopped() {
         ]
     );
     assert_eq!(p.clock.unix_ms(), 255);
+}
+
+/// Wall time is derived from host time, so sub-millisecond steps add up instead of rounding away.
+#[test]
+fn mock_clock_wall_time_follows_host_time_without_drift() {
+    let clock = ink_core::mock::MockClock::new(0, 1_000);
+    for _ in 0..1_000 {
+        clock.advance_ns(999_999);
+    }
+    assert_eq!(clock.now_ns(), 999_999_000);
+    assert_eq!(clock.unix_ms(), 1_000 + 999);
 }
 
 #[test]

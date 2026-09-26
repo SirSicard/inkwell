@@ -13,7 +13,8 @@ structural change.
    engines over the C ABI. The core never wraps CoreML.
 3. Disk is the seam: raw PCM chunks on disk, seconds in RAM, never a session.
 4. Partials are ephemeral and never stored; finals persist. The offline pass supersedes the live one
-   in one transaction and refuses an empty result or one under half the previous words.
+   in one transaction and refuses an empty result, or one where any channel falls under half its
+   previous words.
 5. Me versus them is stream identity. Only the far end is diarized; labels need at least two
    clusters holding at least 2 % of the speech each.
 6. Local-only mode refuses any non-loopback model endpoint, in code.

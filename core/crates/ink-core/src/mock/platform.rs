@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::lock;
@@ -14,10 +14,14 @@ use crate::platform::{
 use crate::threading::EventSink;
 
 /// A clock the test sets. Lock-free, so it is the one mock that is realtime-safe.
+///
+/// Wall time is derived from host time against a fixed anchor, never accumulated separately, so
+/// sub-millisecond steps add up instead of rounding away.
 #[derive(Debug, Default)]
 pub struct MockClock {
     now_ns: AtomicU64,
-    unix_ms: AtomicI64,
+    anchor_ns: u64,
+    anchor_unix_ms: i64,
 }
 
 impl MockClock {
@@ -25,17 +29,14 @@ impl MockClock {
     pub fn new(now_ns: u64, unix_ms: i64) -> Self {
         Self {
             now_ns: AtomicU64::new(now_ns),
-            unix_ms: AtomicI64::new(unix_ms),
+            anchor_ns: now_ns,
+            anchor_unix_ms: unix_ms,
         }
     }
 
-    /// Moves host time forward, and wall time with it to the millisecond.
+    /// Moves host time forward; wall time follows.
     pub fn advance_ns(&self, ns: u64) {
         self.now_ns.fetch_add(ns, Ordering::AcqRel);
-        self.unix_ms.fetch_add(
-            i64::try_from(ns / 1_000_000).unwrap_or(i64::MAX),
-            Ordering::AcqRel,
-        );
     }
 }
 
@@ -45,7 +46,9 @@ impl Clock for MockClock {
     }
 
     fn unix_ms(&self) -> i64 {
-        self.unix_ms.load(Ordering::Acquire)
+        let elapsed_ms = (self.now_ns() - self.anchor_ns) / 1_000_000;
+        self.anchor_unix_ms
+            .saturating_add(i64::try_from(elapsed_ms).unwrap_or(i64::MAX))
     }
 }
 
@@ -202,6 +205,8 @@ impl MockPlatform {
         let Some(slot) = lock(&self.slots).get(&channel).cloned() else {
             return false;
         };
+        // The slot stays locked across `push` on purpose: `stop` takes the same lock, so it cannot
+        // return while a push is running, which is what `AudioSource::stop` promises.
         let mut slot = lock(&slot);
         let format = slot.format;
         let Some(sink) = slot.sink.as_mut() else {
