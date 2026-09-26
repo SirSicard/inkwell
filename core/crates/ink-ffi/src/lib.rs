@@ -25,5 +25,11 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 #![warn(missing_docs)]
 
+pub mod dictation;
 pub mod events;
+#[allow(unsafe_code)]
+pub mod external;
+pub mod hub;
+pub mod logging;
+pub mod mailbox;
 pub mod schema;
