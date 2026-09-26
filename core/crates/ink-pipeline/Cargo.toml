@@ -26,5 +26,9 @@ serde_json = "1"
 
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }
+# The meeting tests run the supersede against the real SQLite store too.
+ink-store = { path = "../ink-store" }
+# The AMI fixture is checked against its manifest (MIT OR Apache-2.0; already in the tree).
+sha2 = "0.10.9"
 # The real-engine test reads a bench clip (Apache-2.0; already in the tree through ink-audio).
 hound = "3.5.1"

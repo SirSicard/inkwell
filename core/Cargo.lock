@@ -333,8 +333,10 @@ dependencies = [
  "ink-core",
  "ink-engines",
  "ink-llm",
+ "ink-store",
  "log",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

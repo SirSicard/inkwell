@@ -1,0 +1,640 @@
+//! The meeting rig: the whole chain on mocks, driven the way capture drives it.
+//!
+//! ```text
+//! test audio ─► capture ring (per side) ─► SideCapture ─┬─► chunks (temp dir) ─► final pass
+//!                                                        └─► MeetingChain ─► live engine (scripted)
+//! final pass ─► Final (MockEngine, fixtures made on first sight) ─► MemStore
+//! ```
+//!
+//! Blocks are 10 ms, stamped on the mock clock's timebase from the meeting's start. Everything is
+//! synthetic or the committed AMI excerpt, and deterministic.
+
+#![allow(dead_code)] // each test binary uses a different subset
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use ink_audio::synth::speech_like;
+use ink_audio::{
+    CaptureProducer, ChunkStore, SpeechProbability, capture_ring, gain::rms, gain::to_dbfs,
+};
+use ink_core::mock::{MemStore, MockClock, MockDiarizer, MockEngine};
+use ink_core::{
+    AsrEvent, AudioBlock, AudioSink, CancelToken, Channel, Clock, Diarizer, EngineError,
+    EngineInfo, EngineStream, EventSink, Job, Llm, OfflineEngine, Store, StreamFormat,
+    StreamingEngine, TimedText, TranscribeOptions, Transcript,
+};
+use ink_pipeline::capture::{CaptureIssue, SideCapture};
+use ink_pipeline::events::VadUnavailable;
+use ink_pipeline::meeting::events::{MeetingEvent, MeetingWarning};
+use ink_pipeline::meeting::{
+    EndedMeeting, FinalizeError, MeetingChain, MeetingOutcome, MeetingServices, MeetingSettings,
+    MeetingStart,
+};
+use ink_pipeline::speech::VadSource;
+
+pub const RATE: usize = 16_000;
+/// Samples per 10 ms block at 16 kHz.
+pub const BLOCK: usize = 160;
+/// The host time the meeting starts at.
+pub const T0_NS: u64 = 5_000_000_000;
+/// The wall time it starts at: Wednesday 2026-09-23 09:00 at UTC+2.
+pub const T0_UNIX_MS: i64 = 1_790_146_800_000;
+
+/// A temp directory removed on drop.
+pub struct TempDir(PathBuf);
+
+impl TempDir {
+    pub fn new(label: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ink-pipeline-test-{}-{label}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// RMS in dBFS.
+pub fn rms_dbfs(x: &[f32]) -> f32 {
+    to_dbfs(rms(x))
+}
+
+/// `seconds` of digital silence.
+pub fn silence(seconds: f64) -> Vec<f32> {
+    vec![0.0; (seconds * RATE as f64).round() as usize]
+}
+
+/// Speech-like audio at 16 kHz and `rms` dBFS.
+pub fn speech(seconds: f64, rms: f32, seed: u64) -> Vec<f32> {
+    speech_like(seconds, rms, seed)
+}
+
+/// Joins pieces end to end.
+pub fn join(pieces: &[Vec<f32>]) -> Vec<f32> {
+    pieces.concat()
+}
+
+// ---------------------------------------------------------------------------------------------
+// VADs
+
+/// Speech wherever the window it hears is above `threshold` dBFS RMS: deaf below it, as a real VAD
+/// is, so it only hears the gain stages' provisional copies.
+#[derive(Clone, Copy, Debug)]
+pub struct EnergyVad(pub f32);
+
+impl SpeechProbability for EnergyVad {
+    fn reset(&mut self) {}
+    fn probability(&mut self, window: &[f32; 512]) -> Result<f32, EngineError> {
+        Ok(if rms_dbfs(window) > self.0 { 1.0 } else { 0.0 })
+    }
+}
+
+/// Never speech.
+pub struct NeverVad;
+
+impl SpeechProbability for NeverVad {
+    fn reset(&mut self) {}
+    fn probability(&mut self, _: &[f32; 512]) -> Result<f32, EngineError> {
+        Ok(0.0)
+    }
+}
+
+/// Works like `inner` for `windows` windows, then fails on every call.
+pub struct FailAfter {
+    pub inner: EnergyVad,
+    pub windows: usize,
+}
+
+impl SpeechProbability for FailAfter {
+    fn reset(&mut self) {}
+    fn probability(&mut self, window: &[f32; 512]) -> Result<f32, EngineError> {
+        if self.windows == 0 {
+            return Err(EngineError::Failed("scripted VAD failure".into()));
+        }
+        self.windows -= 1;
+        self.inner.probability(window)
+    }
+}
+
+/// A factory handing out a VAD per use. `make(n)` builds the `n`th instance (0 and 1 are the live
+/// mic and far end, then one per final-pass side, in that order).
+pub fn vad_source(
+    make: impl Fn(usize) -> Box<dyn SpeechProbability> + Send + Sync + 'static,
+) -> VadSource {
+    let made = Arc::new(AtomicUsize::new(0));
+    VadSource::Installed(Arc::new(move || {
+        Ok(make(made.fetch_add(1, Ordering::SeqCst)))
+    }))
+}
+
+/// The energy VAD at −50 dBFS for every use.
+pub fn energy_vad() -> VadSource {
+    vad_source(|_| Box::new(EnergyVad(-50.0)))
+}
+
+pub fn no_vad() -> VadSource {
+    VadSource::Unavailable(VadUnavailable::ModelMissing)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Engines
+
+/// What the final-pass engine answers for one call.
+pub type Answer =
+    Arc<dyn Fn(Channel, usize, &[f32]) -> Result<Transcript, EngineError> + Send + Sync>;
+
+/// A transcript with one segment over the whole call.
+pub fn words(text: &str, len_samples: usize) -> Transcript {
+    Transcript {
+        segments: vec![TimedText {
+            start_ms: 0,
+            end_ms: (len_samples / 16) as u64,
+            text: text.into(),
+        }],
+    }
+}
+
+/// The default answer: "mic words N" or "far words N", numbering each side's calls.
+pub fn numbered() -> Answer {
+    Arc::new(|channel, n, audio| {
+        let side = match channel {
+            Channel::Mic => "mic",
+            Channel::Far => "far",
+        };
+        Ok(words(&format!("{side} words {n} alpha beta"), audio.len()))
+    })
+}
+
+/// The final-pass engine: answers through a [`MockEngine`], registering each input as a fixture
+/// the first time it is seen, so the mock records every call's level and channel.
+pub struct Final {
+    pub mock: MockEngine,
+    answer: Answer,
+    counts: Mutex<[usize; 2]>,
+    pub inputs: Mutex<Vec<(Channel, Vec<f32>)>>,
+}
+
+impl Final {
+    pub fn new(answer: Answer) -> Arc<Self> {
+        Arc::new(Self {
+            mock: MockEngine::new("mock-final", &[Job::MeetingFinal]),
+            answer,
+            counts: Mutex::default(),
+            inputs: Mutex::default(),
+        })
+    }
+}
+
+impl OfflineEngine for Final {
+    fn info(&self) -> EngineInfo {
+        OfflineEngine::info(&self.mock)
+    }
+
+    fn transcribe(
+        &self,
+        audio: &[f32],
+        options: &TranscribeOptions,
+    ) -> Result<Transcript, EngineError> {
+        let side = usize::from(options.channel == Channel::Far);
+        let n = {
+            let mut counts = self.counts.lock().unwrap();
+            counts[side] += 1;
+            counts[side]
+        };
+        self.inputs
+            .lock()
+            .unwrap()
+            .push((options.channel, audio.to_vec()));
+        let transcript = (self.answer)(options.channel, n, audio)?;
+        self.mock.add_fixture(audio, transcript);
+        self.mock.transcribe(audio, options)
+    }
+}
+
+/// What a live engine received, per side.
+pub type Received = Arc<Mutex<Vec<(Channel, Vec<f32>)>>>;
+/// Finals to add per side: (start_ms, end_ms, text) of the stream.
+pub type Extra = Arc<Mutex<Vec<(Channel, u64, u64, String)>>>;
+
+/// A live engine: a final for each burst of sound in its stream (from the first sample above
+/// −60 dBFS to the last before 300 ms under it), a partial on every push, and a record of the
+/// level of what it received. Its finals are stamped in its own stream's time, as a real engine's
+/// are.
+pub struct Onsets {
+    pub received: Received,
+    /// Extra finals to report when a side's stream finishes, at (start_ms, end_ms) of the stream.
+    pub extra: Extra,
+    /// The words its partials and finals end with.
+    pub words: Arc<Mutex<String>>,
+}
+
+impl Onsets {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            received: Arc::default(),
+            extra: Arc::default(),
+            words: Arc::new(Mutex::new("one two".into())),
+        })
+    }
+
+    pub fn received(&self, channel: Channel) -> Vec<f32> {
+        self.received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(c, _)| *c == channel)
+            .flat_map(|(_, a)| a.iter().copied())
+            .collect()
+    }
+}
+
+impl StreamingEngine for Onsets {
+    fn info(&self) -> EngineInfo {
+        EngineInfo {
+            id: "onsets".into(),
+            jobs: vec![Job::LivePartials],
+            licence: "MIT".into(),
+        }
+    }
+
+    fn open_stream(
+        &self,
+        channel: Channel,
+        events: EventSink<AsrEvent>,
+    ) -> Result<Box<dyn EngineStream>, EngineError> {
+        Ok(Box::new(OnsetStream {
+            received: self.received.clone(),
+            extra: self.extra.clone(),
+            words: self.words.clone(),
+            channel,
+            events,
+            at: 0,
+            burst: None,
+            quiet: 0,
+            count: 0,
+        }))
+    }
+}
+
+struct OnsetStream {
+    received: Received,
+    extra: Extra,
+    words: Arc<Mutex<String>>,
+    channel: Channel,
+    events: EventSink<AsrEvent>,
+    at: u64,
+    /// Start of the burst in progress, and its last loud sample.
+    burst: Option<(u64, u64)>,
+    quiet: u64,
+    count: usize,
+}
+
+const LOUD: f32 = 0.001; // −60 dBFS
+
+impl OnsetStream {
+    fn close(&mut self) {
+        if let Some((start, last)) = self.burst.take() {
+            self.count += 1;
+            let side = match self.channel {
+                Channel::Mic => "you",
+                Channel::Far => "them",
+            };
+            (self.events)(AsrEvent::Final(TimedText {
+                start_ms: start / 16,
+                end_ms: (last + 1) / 16,
+                text: format!("live {side} {} {}", self.count, self.words.lock().unwrap()),
+            }));
+        }
+    }
+}
+
+impl EngineStream for OnsetStream {
+    fn push(&mut self, audio: &[f32]) -> Result<(), EngineError> {
+        self.received
+            .lock()
+            .unwrap()
+            .push((self.channel, audio.to_vec()));
+        for &s in audio {
+            if s.abs() > LOUD {
+                self.burst = Some(match self.burst {
+                    Some((start, _)) => (start, self.at),
+                    None => (self.at, self.at),
+                });
+                self.quiet = 0;
+            } else if self.burst.is_some() {
+                self.quiet += 1;
+                if self.quiet >= 4_800 {
+                    self.close();
+                }
+            }
+            self.at += 1;
+        }
+        (self.events)(AsrEvent::Partial {
+            text: format!("partial {} {}", self.at, self.words.lock().unwrap()),
+        });
+        Ok(())
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<(), EngineError> {
+        self.close();
+        let extra: Vec<_> = self
+            .extra
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(c, ..)| *c == self.channel)
+            .cloned()
+            .collect();
+        for (_, start_ms, end_ms, text) in extra {
+            (self.events)(AsrEvent::Final(TimedText {
+                start_ms,
+                end_ms,
+                text,
+            }));
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The rig
+
+/// Everything a meeting test sets up.
+pub struct RigBuilder {
+    pub vad: VadSource,
+    pub answer: Answer,
+    pub diarizer: Option<Arc<dyn Diarizer>>,
+    pub llm: Option<Arc<dyn Llm>>,
+    pub store: Option<Arc<dyn Store>>,
+    pub clock: Option<Arc<dyn Clock>>,
+    pub settings: MeetingSettings,
+    pub mic_format: StreamFormat,
+    pub far_format: StreamFormat,
+    pub title: Option<String>,
+}
+
+impl Default for RigBuilder {
+    fn default() -> Self {
+        Self {
+            vad: energy_vad(),
+            answer: numbered(),
+            diarizer: None,
+            llm: None,
+            store: None,
+            clock: None,
+            settings: MeetingSettings::default(),
+            mic_format: StreamFormat::CANONICAL,
+            far_format: StreamFormat::CANONICAL,
+            title: Some("Weekly sync".into()),
+        }
+    }
+}
+
+pub struct Rig {
+    pub chain: Option<MeetingChain>,
+    pub mic: Option<SideCapture>,
+    pub far: Option<SideCapture>,
+    mic_in: CaptureProducer,
+    far_in: CaptureProducer,
+    pub mic_format: StreamFormat,
+    pub far_format: StreamFormat,
+    pub dir: TempDir,
+    pub chunks: ChunkStore,
+    pub store: Arc<dyn Store>,
+    pub mem: Arc<MemStore>,
+    pub engine: Arc<Final>,
+    pub live: Arc<Onsets>,
+    pub events: Arc<Mutex<Vec<MeetingEvent>>>,
+    pub issues: Vec<(Channel, CaptureIssue)>,
+    /// Frames fed per side, in the side's own format.
+    frames: [u64; 2],
+}
+
+impl RigBuilder {
+    pub fn build(self) -> Rig {
+        let dir = TempDir::new("meeting");
+        let chunks = ChunkStore::open(dir.path().join("record")).unwrap();
+        let mem = Arc::new(MemStore::new());
+        let store: Arc<dyn Store> = self.store.clone().unwrap_or_else(|| mem.clone());
+        let clock: Arc<dyn Clock> = self
+            .clock
+            .clone()
+            .unwrap_or_else(|| Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)));
+        let engine = Final::new(self.answer.clone());
+        let live = Onsets::new();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = events.clone();
+        let sink: EventSink<MeetingEvent> = Arc::new(move |e| sink_events.lock().unwrap().push(e));
+        let services = MeetingServices {
+            live: Some(live.clone()),
+            offline: engine.clone(),
+            diarizer: self.diarizer.clone(),
+            store: store.clone(),
+            clock,
+            llm: self.llm.clone(),
+        };
+        let chain = MeetingChain::start(
+            services,
+            self.settings.clone(),
+            self.vad.clone(),
+            sink,
+            MeetingStart {
+                title: self.title.clone(),
+                source_app: Some("com.example.meet".into()),
+                audio_dir: Some("record".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            chain.start_ns(),
+            T0_NS,
+            "the rig's clock starts the meeting"
+        );
+        let ring = Duration::from_secs(2);
+        let (mic_in, mic_out) = capture_ring(self.mic_format, ring).unwrap();
+        let (far_in, far_out) = capture_ring(self.far_format, ring).unwrap();
+        Rig {
+            chain: Some(chain),
+            mic: Some(SideCapture::new(Channel::Mic, mic_out, chunks.clone())),
+            far: Some(SideCapture::new(Channel::Far, far_out, chunks.clone())),
+            mic_in,
+            far_in,
+            mic_format: self.mic_format,
+            far_format: self.far_format,
+            dir,
+            chunks,
+            store,
+            mem,
+            engine,
+            live,
+            events,
+            issues: Vec::new(),
+            frames: [0, 0],
+        }
+    }
+}
+
+impl Rig {
+    pub fn chain(&mut self) -> &mut MeetingChain {
+        self.chain.as_mut().expect("the meeting is live")
+    }
+
+    /// Pushes one device block of `channel` (interleaved in the side's format) into its ring,
+    /// stamped where its first frame falls in the meeting, then drains both sides into the chain.
+    pub fn push_block(&mut self, channel: Channel, interleaved: &[f32]) {
+        self.push_block_unpumped(channel, interleaved);
+        self.pump();
+    }
+
+    /// Pushes a block into its ring without draining: the pump is stalled.
+    pub fn push_block_unpumped(&mut self, channel: Channel, interleaved: &[f32]) {
+        let (format, side) = match channel {
+            Channel::Mic => (self.mic_format, 0),
+            Channel::Far => (self.far_format, 1),
+        };
+        let host_time_ns =
+            T0_NS + self.frames[side] * 1_000_000_000 / u64::from(format.sample_rate);
+        self.frames[side] += (interleaved.len() / usize::from(format.channels)) as u64;
+        let block = AudioBlock {
+            samples: interleaved,
+            format,
+            host_time_ns,
+        };
+        match channel {
+            Channel::Mic => self.mic_in.push(&block),
+            Channel::Far => self.far_in.push(&block),
+        }
+    }
+
+    /// Skips `frames` of `channel`'s device time: audio lost upstream of the ring.
+    pub fn lose(&mut self, channel: Channel, frames: u64) {
+        self.frames[usize::from(channel == Channel::Far)] += frames;
+    }
+
+    /// Drains both rings into the chain, as the pump does.
+    pub fn pump(&mut self) {
+        let chain = self.chain.as_mut().expect("live");
+        for (channel, side) in [
+            (Channel::Mic, self.mic.as_mut()),
+            (Channel::Far, self.far.as_mut()),
+        ] {
+            let Some(side) = side else { continue };
+            let mut issues = Vec::new();
+            side.drain(
+                &mut |b| chain.push_audio(b.channel, &b.samples, b.host_time_ns, b.dropped_frames),
+                &mut |i| issues.push(i),
+            );
+            for issue in issues {
+                chain.capture_issue(channel, issue.clone());
+                self.issues.push((channel, issue));
+            }
+        }
+    }
+
+    /// Feeds two 16 kHz mono signals side by side in 10 ms blocks, converted to each side's format
+    /// (48 kHz by repeating samples, stereo by duplicating them).
+    pub fn feed(&mut self, mic: &[f32], far: &[f32]) {
+        let n = mic.len().max(far.len());
+        let mut at = 0;
+        while at < n {
+            let end = (at + BLOCK).min(n);
+            for (channel, signal) in [(Channel::Mic, mic), (Channel::Far, far)] {
+                let piece: Vec<f32> = (at..end)
+                    .map(|i| signal.get(i).copied().unwrap_or(0.0))
+                    .collect();
+                let format = match channel {
+                    Channel::Mic => self.mic_format,
+                    Channel::Far => self.far_format,
+                };
+                let device = to_device(&piece, format);
+                self.push_block(channel, &device);
+            }
+            at = end;
+        }
+    }
+
+    /// Ends capture: drains and closes both sides, then stops the chain.
+    pub fn stop(&mut self) -> EndedMeeting {
+        let mut chain = self.chain.take().expect("live");
+        for (channel, side) in [
+            (Channel::Mic, self.mic.take()),
+            (Channel::Far, self.far.take()),
+        ] {
+            let Some(side) = side else { continue };
+            let mut issues = Vec::new();
+            side.finish(
+                &mut |b| chain.push_audio(b.channel, &b.samples, b.host_time_ns, b.dropped_frames),
+                &mut |i| issues.push(i),
+            );
+            for issue in issues {
+                chain.capture_issue(channel, issue.clone());
+                self.issues.push((channel, issue));
+            }
+        }
+        chain.stop()
+    }
+
+    /// Stops and runs the final pass.
+    pub fn finish(&mut self) -> Result<MeetingOutcome, FinalizeError> {
+        let ended = self.stop();
+        ended.finalize(&self.chunks, &CancelToken::new())
+    }
+
+    pub fn events(&self) -> Vec<MeetingEvent> {
+        self.events.lock().unwrap().clone()
+    }
+
+    pub fn warnings(&self) -> Vec<MeetingWarning> {
+        self.events()
+            .into_iter()
+            .filter_map(|e| match e {
+                MeetingEvent::Warning(w) => Some(w),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// 16 kHz mono to a device format: each sample repeated for a higher rate that is a multiple of
+/// 16 kHz, and copied to every channel.
+pub fn to_device(mono16k: &[f32], format: StreamFormat) -> Vec<f32> {
+    let repeat = (format.sample_rate / 16_000).max(1) as usize;
+    let channels = usize::from(format.channels);
+    let mut out = Vec::with_capacity(mono16k.len() * repeat * channels);
+    for &s in mono16k {
+        for _ in 0..repeat * channels {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// A diarizer with fixed turns, as the mock.
+pub fn diarizer(turns: &[(&str, u64, u64)]) -> Arc<MockDiarizer> {
+    Arc::new(MockDiarizer::new(
+        turns
+            .iter()
+            .map(|&(s, a, b)| ink_core::SpeakerTurn {
+                speaker: ink_core::SpeakerId(s.into()),
+                start_ms: a,
+                end_ms: b,
+            })
+            .collect(),
+    ))
+}
