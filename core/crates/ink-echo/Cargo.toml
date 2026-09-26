@@ -10,3 +10,20 @@ publish.workspace = true
 
 [dependencies]
 ink-core.workspace = true
+# The echo canceller: a Rust port of WebRTC's AEC3. MIT OR BSD-3-Clause: MIT for the port,
+# BSD-3-Clause for the WebRTC-derived parts, plus Google's WebRTC patent grant (its PATENT file).
+# Pinned exactly: S0.3 measured this version, and its latencies are constants here.
+aec3 = "=0.4.0"
+# GCC-PHAT's FFTs. Both already arrive with aec3 (MIT OR Apache-2.0), so they add no crate.
+rustfft = "6.4.1"
+num-complex = "0.4.6"
+
+[dev-dependencies]
+# Synthetic speech for the echo fixture, and the product's own 16 kHz resampler for the local
+# replay of real takes.
+ink-audio = { path = "../ink-audio" }
+# The local replay reads the takes' capture metadata (MIT OR Apache-2.0; already in the tree).
+serde_json = "1"
+# The per-frame work allocates nothing after construction (BSD-1-Clause, test-only; deny.toml's
+# exception for it is scoped to that crate).
+assert_no_alloc = { version = "1.1.2", default-features = false, features = ["warn_debug", "warn_release"] }
