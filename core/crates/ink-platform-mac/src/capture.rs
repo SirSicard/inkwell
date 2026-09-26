@@ -33,7 +33,7 @@ use ink_audio::{RealtimeGuard, unguarded};
 use ink_core::{AudioSource, CaptureControl, DeviceId, DeviceInfo, FarEndTarget, PlatformError};
 use objc2_core_audio::CATapMuteBehavior;
 
-pub use io::IoStats;
+pub use io::{IoStats, leaked_contexts};
 pub use mic::MacMicSource;
 pub use routing::{MicRoute, MicRouteReason, route_mic, transport};
 pub use tap::MacFarEndSource;

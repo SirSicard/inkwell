@@ -24,7 +24,8 @@
 //! **Lifetime.** A context is boxed and handed to the HAL as the IOProc's (or listener's) client
 //! data. It is freed only after the IOProc is stopped and destroyed (the listener removed) *and*
 //! its [`Gate`] shows no callback in flight; if a callback never leaves, the context is leaked
-//! rather than freed under it.
+//! rather than freed under it. It is also leaked when the HAL refuses to unregister the IOProc or
+//! remove the listener, since the HAL may then still call it; [`leaked_contexts`] counts both.
 //!
 //! `unsafe impl Sync` appears only in this file, each with its reason.
 #![cfg(target_os = "macos")]
@@ -42,7 +43,7 @@ use ink_core::{AudioBlock, AudioSink, Clock, PlatformError, SourceStats, StreamF
 use objc2_core_audio::{
     AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProc, AudioDeviceIOProcID,
     AudioDeviceStart, AudioDeviceStop, AudioObjectAddPropertyListener, AudioObjectID,
-    AudioObjectPropertyAddress, AudioObjectRemovePropertyListener,
+    AudioObjectPropertyAddress, AudioObjectPropertyListenerProc, AudioObjectRemovePropertyListener,
     kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyElementMain,
     kAudioObjectPropertyScopeGlobal,
 };
@@ -54,6 +55,139 @@ use crate::clock::MacClock;
 /// How long [`RunningIo::stop`] waits for a callback in flight to leave, after the HAL has been
 /// told to stop. A callback is a few hundred microseconds; this only matters if one hangs.
 const LEAVE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Contexts leaked in this process (see [`leaked_contexts`]).
+static LEAKED_CONTEXTS: AtomicU64 = AtomicU64::new(0);
+
+/// How many IOProc or listener contexts this process has leaked because teardown could not prove
+/// the HAL would never call them again: an IOProc it refused to unregister, a listener it refused
+/// to remove, or a callback that never returned. Each is small, but holds its stream's sink (the
+/// ring producer) for good. **Any thread.** A non-zero count is worth reporting.
+pub fn leaked_contexts() -> u64 {
+    LEAKED_CONTEXTS.load(Ordering::Relaxed)
+}
+
+fn leak() {
+    LEAKED_CONTEXTS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The HAL calls that register and unregister IOProcs and property listeners, behind a seam so
+/// tests can make teardown fail. Each method is the HAL function of the same name.
+pub(crate) trait IoHal: Sync {
+    /// `AudioDeviceCreateIOProcID`.
+    ///
+    /// # Safety
+    ///
+    /// `proc` must be an IOProc whose client data is what `client` points to, alive until the
+    /// IOProc is destroyed.
+    unsafe fn create_ioproc(
+        &self,
+        device: ObjectId,
+        proc: AudioDeviceIOProc,
+        client: *mut c_void,
+        id: &mut AudioDeviceIOProcID,
+    ) -> i32;
+    /// `AudioDeviceStart`.
+    ///
+    /// # Safety
+    ///
+    /// `id` must be registered on `device`.
+    unsafe fn start(&self, device: ObjectId, id: AudioDeviceIOProcID) -> i32;
+    /// `AudioDeviceStop`.
+    ///
+    /// # Safety
+    ///
+    /// `id` must be registered on `device`.
+    unsafe fn stop(&self, device: ObjectId, id: AudioDeviceIOProcID) -> i32;
+    /// `AudioDeviceDestroyIOProcID`.
+    ///
+    /// # Safety
+    ///
+    /// `id` must be registered on `device`, and destroyed once.
+    unsafe fn destroy_ioproc(&self, device: ObjectId, id: AudioDeviceIOProcID) -> i32;
+    /// `AudioObjectAddPropertyListener`.
+    ///
+    /// # Safety
+    ///
+    /// `listener` must take what `client` points to, alive until the listener is removed.
+    unsafe fn add_listener(
+        &self,
+        device: ObjectId,
+        address: &AudioObjectPropertyAddress,
+        listener: AudioObjectPropertyListenerProc,
+        client: *mut c_void,
+    ) -> i32;
+    /// `AudioObjectRemovePropertyListener`.
+    ///
+    /// # Safety
+    ///
+    /// The arguments must be those the listener was added with.
+    unsafe fn remove_listener(
+        &self,
+        device: ObjectId,
+        address: &AudioObjectPropertyAddress,
+        listener: AudioObjectPropertyListenerProc,
+        client: *mut c_void,
+    ) -> i32;
+}
+
+/// [`IoHal`] on the real audio server.
+pub(crate) struct SystemIo;
+
+/// The one real [`IoHal`].
+pub(crate) static SYSTEM_IO: SystemIo = SystemIo;
+
+impl IoHal for SystemIo {
+    unsafe fn create_ioproc(
+        &self,
+        device: ObjectId,
+        proc: AudioDeviceIOProc,
+        client: *mut c_void,
+        id: &mut AudioDeviceIOProcID,
+    ) -> i32 {
+        // SAFETY: the caller upholds the trait's contract; `id` is a live out-parameter.
+        unsafe { AudioDeviceCreateIOProcID(device, proc, client, NonNull::from(id)) }
+    }
+
+    unsafe fn start(&self, device: ObjectId, id: AudioDeviceIOProcID) -> i32 {
+        // SAFETY: the caller upholds the trait's contract.
+        unsafe { AudioDeviceStart(device, id) }
+    }
+
+    unsafe fn stop(&self, device: ObjectId, id: AudioDeviceIOProcID) -> i32 {
+        // SAFETY: the caller upholds the trait's contract.
+        unsafe { AudioDeviceStop(device, id) }
+    }
+
+    unsafe fn destroy_ioproc(&self, device: ObjectId, id: AudioDeviceIOProcID) -> i32 {
+        // SAFETY: the caller upholds the trait's contract.
+        unsafe { AudioDeviceDestroyIOProcID(device, id) }
+    }
+
+    unsafe fn add_listener(
+        &self,
+        device: ObjectId,
+        address: &AudioObjectPropertyAddress,
+        listener: AudioObjectPropertyListenerProc,
+        client: *mut c_void,
+    ) -> i32 {
+        // SAFETY: the caller upholds the trait's contract; `address` is live for the call.
+        unsafe { AudioObjectAddPropertyListener(device, NonNull::from(address), listener, client) }
+    }
+
+    unsafe fn remove_listener(
+        &self,
+        device: ObjectId,
+        address: &AudioObjectPropertyAddress,
+        listener: AudioObjectPropertyListenerProc,
+        client: *mut c_void,
+    ) -> i32 {
+        // SAFETY: the caller upholds the trait's contract; `address` is live for the call.
+        unsafe {
+            AudioObjectRemovePropertyListener(device, NonNull::from(address), listener, client)
+        }
+    }
+}
 
 /// Tracks callbacks in flight, so a context is never freed under one.
 ///
@@ -256,6 +390,7 @@ pub(crate) unsafe extern "C-unwind" fn format_listener(
 
 /// A registered nominal-rate listener, owning its context; removed on drop.
 pub(crate) struct FormatListener {
+    hal: &'static dyn IoHal,
     device: ObjectId,
     context: NonNull<FormatListenerContext>,
 }
@@ -274,17 +409,20 @@ impl FormatListener {
         watch: FormatWatch,
         read: FormatReader,
     ) -> Result<Self, HalError> {
+        Self::register_on(&SYSTEM_IO, device, watch, read)
+    }
+
+    pub(crate) fn register_on(
+        hal: &'static dyn IoHal,
+        device: ObjectId,
+        watch: FormatWatch,
+        read: FormatReader,
+    ) -> Result<Self, HalError> {
         let raw = Box::into_raw(FormatListenerContext::new(watch, read));
-        let address = FORMAT_PROPERTY;
         // SAFETY: `format_listener` takes a `FormatListenerContext`, and `raw` stays allocated
-        // until `Drop` has removed the listener and seen its gate empty.
+        // until `Drop` has removed the listener and seen its gate empty (or is leaked).
         let status = unsafe {
-            AudioObjectAddPropertyListener(
-                device,
-                NonNull::from(&address),
-                Some(format_listener),
-                raw.cast(),
-            )
+            hal.add_listener(device, &FORMAT_PROPERTY, Some(format_listener), raw.cast())
         };
         if let Err(e) = check(status, "listening for the device's sample rate") {
             // SAFETY: registration failed, so the HAL holds no copy of `raw`.
@@ -292,6 +430,7 @@ impl FormatListener {
             return Err(e);
         }
         Ok(Self {
+            hal,
             device,
             // SAFETY: `Box::into_raw` never returns null.
             context: unsafe { NonNull::new_unchecked(raw) },
@@ -311,23 +450,25 @@ impl Drop for FormatListener {
         // SAFETY: the context is alive until freed below.
         let context = unsafe { self.context.as_ref() };
         context.gate.close();
-        let address = FORMAT_PROPERTY;
-        // SAFETY: the same device, address, listener and client data it was registered with. A
-        // failure leaves nothing to do: the gate is closed, so a late notification does nothing.
-        unsafe {
-            AudioObjectRemovePropertyListener(
+        // SAFETY: the same device, address, listener and client data it was registered with.
+        let status = unsafe {
+            self.hal.remove_listener(
                 self.device,
-                NonNull::from(&address),
+                &FORMAT_PROPERTY,
                 Some(format_listener),
                 self.context.as_ptr().cast(),
             )
         };
-        if context.gate.wait_idle(LEAVE_TIMEOUT) {
+        // Freed only when the HAL confirms the listener is gone and no notification is inside.
+        // Otherwise a later notification could still read the context (its gate lives inside
+        // it), so it is leaked and counted, never freed.
+        if status == 0 && context.gate.wait_idle(LEAVE_TIMEOUT) {
             // SAFETY: removed, and no notification is inside the gate; the context came from
-            // `Box::into_raw` in `register`.
+            // `Box::into_raw` in `register_on`.
             drop(unsafe { Box::from_raw(self.context.as_ptr()) });
+        } else {
+            leak();
         }
-        // Otherwise a notification never returned: the context is leaked, never freed under it.
     }
 }
 
@@ -636,6 +777,7 @@ pub(crate) unsafe extern "C-unwind" fn tone_proc(
 
 /// An IOProc registered and started on a device, owning its context.
 pub(crate) struct RunningIo<C: IoContext> {
+    hal: &'static dyn IoHal,
     device: ObjectId,
     proc_id: AudioDeviceIOProcID,
     context: NonNull<C>,
@@ -648,33 +790,45 @@ unsafe impl<C: IoContext> Send for RunningIo<C> {}
 
 impl<C: IoContext> RunningIo<C> {
     /// Registers `proc` on `device` with `context` and starts IO. On failure the context comes
-    /// back, so a sink inside it is dropped by the caller, never leaked.
+    /// back, so a sink inside it is dropped by the caller; `None` only if the HAL also refused to
+    /// unregister the IOProc, in which case it is leaked and counted, never freed.
     pub(crate) fn start(
         device: ObjectId,
         proc: AudioDeviceIOProc,
         context: Box<C>,
-    ) -> Result<Self, (Box<C>, HalError)> {
+    ) -> Result<Self, (Option<Box<C>>, HalError)> {
+        Self::start_on(&SYSTEM_IO, device, proc, context)
+    }
+
+    pub(crate) fn start_on(
+        hal: &'static dyn IoHal,
+        device: ObjectId,
+        proc: AudioDeviceIOProc,
+        context: Box<C>,
+    ) -> Result<Self, (Option<Box<C>>, HalError)> {
         let raw = Box::into_raw(context);
         let mut proc_id: AudioDeviceIOProcID = None;
         // SAFETY: `proc` is one of this module's IOProcs, whose client data is a `C`; `raw` is a
-        // live boxed `C` that stays allocated until `stop` or `Drop` has destroyed the IOProc;
-        // `proc_id` is a live local the HAL writes.
-        let status = unsafe {
-            AudioDeviceCreateIOProcID(device, proc, raw.cast(), NonNull::from(&mut proc_id))
-        };
+        // live boxed `C` that stays allocated until `stop` or `Drop` has destroyed the IOProc.
+        let status = unsafe { hal.create_ioproc(device, proc, raw.cast(), &mut proc_id) };
         if let Err(e) = check(status, "registering the IOProc") {
             // SAFETY: registration failed, so the HAL holds no copy of `raw`.
-            return Err((unsafe { Box::from_raw(raw) }, e));
+            return Err((Some(unsafe { Box::from_raw(raw) }), e));
         }
         // SAFETY: `proc_id` was just registered on `device`.
-        let status = unsafe { AudioDeviceStart(device, proc_id) };
+        let status = unsafe { hal.start(device, proc_id) };
         if let Err(e) = check(status, "starting the audio device") {
             // SAFETY: as above; destroying the never-started IOProc releases the HAL's copy.
-            unsafe { AudioDeviceDestroyIOProcID(device, proc_id) };
+            if unsafe { hal.destroy_ioproc(device, proc_id) } != 0 {
+                // Still registered: the HAL may call it, so the context is never freed.
+                leak();
+                return Err((None, e));
+            }
             // SAFETY: the IOProc is destroyed, so nothing else refers to `raw`.
-            return Err((unsafe { Box::from_raw(raw) }, e));
+            return Err((Some(unsafe { Box::from_raw(raw) }), e));
         }
         Ok(Self {
+            hal,
             device,
             proc_id,
             // SAFETY: `Box::into_raw` never returns null.
@@ -689,8 +843,8 @@ impl<C: IoContext> RunningIo<C> {
     }
 
     /// Stops IO and unregisters the IOProc. The context comes back once no callback can touch it;
-    /// `None` if a callback never left, in which case it is leaked (never freed under a running
-    /// callback) and the error says so.
+    /// `None` if the HAL refused to unregister the IOProc or a callback never left, in which case
+    /// it is leaked and counted (never freed under a callback) and the error says so.
     pub(crate) fn stop(self) -> (Option<Box<C>>, Result<(), String>) {
         let this = std::mem::ManuallyDrop::new(self);
         this.shutdown()
@@ -701,15 +855,26 @@ impl<C: IoContext> RunningIo<C> {
         // SAFETY: `proc_id` is registered on `device` (only `shutdown` destroys it, and it runs
         // once: from `stop`, which disarms `Drop`, or from `Drop`).
         let stopped = check(
-            unsafe { AudioDeviceStop(self.device, self.proc_id) },
+            unsafe { self.hal.stop(self.device, self.proc_id) },
             "stopping the audio device",
         );
         // SAFETY: as above.
         let destroyed = check(
-            unsafe { AudioDeviceDestroyIOProcID(self.device, self.proc_id) },
+            unsafe { self.hal.destroy_ioproc(self.device, self.proc_id) },
             "unregistering the IOProc",
         );
+        if let Err(e) = destroyed {
+            // Still registered: the HAL may call it again, so the context is never freed.
+            leak();
+            return (
+                None,
+                Err(format!(
+                    "{e}; the IOProc's context was leaked rather than freed while registered"
+                )),
+            );
+        }
         if !self.context().gate().wait_idle(LEAVE_TIMEOUT) {
+            leak();
             return (
                 None,
                 Err(
@@ -722,10 +887,7 @@ impl<C: IoContext> RunningIo<C> {
         // SAFETY: the IOProc is stopped and destroyed and no callback is inside the gate, so
         // nothing else refers to the context; it came from `Box::into_raw` in `start`.
         let context = unsafe { Box::from_raw(self.context.as_ptr()) };
-        let result = match stopped.and(destroyed) {
-            Ok(()) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        };
+        let result = stopped.map_err(|e| e.to_string());
         (Some(context), result)
     }
 }
@@ -1194,6 +1356,140 @@ pub(crate) mod tests {
                 discontinuities: 3
             })
         );
+    }
+
+    /// A fake of the registration calls: everything succeeds except the teardown call a test
+    /// fails. Nothing is really registered, so no callback ever runs.
+    struct FakeIo {
+        destroy: i32,
+        remove: i32,
+    }
+
+    const REFUSED: i32 = i32::from_be_bytes(*b"nope");
+
+    impl IoHal for FakeIo {
+        unsafe fn create_ioproc(
+            &self,
+            _device: ObjectId,
+            proc: AudioDeviceIOProc,
+            _client: *mut c_void,
+            id: &mut AudioDeviceIOProcID,
+        ) -> i32 {
+            *id = proc;
+            0
+        }
+        unsafe fn start(&self, _device: ObjectId, _id: AudioDeviceIOProcID) -> i32 {
+            0
+        }
+        unsafe fn stop(&self, _device: ObjectId, _id: AudioDeviceIOProcID) -> i32 {
+            0
+        }
+        unsafe fn destroy_ioproc(&self, _device: ObjectId, _id: AudioDeviceIOProcID) -> i32 {
+            self.destroy
+        }
+        unsafe fn add_listener(
+            &self,
+            _device: ObjectId,
+            _address: &AudioObjectPropertyAddress,
+            _listener: AudioObjectPropertyListenerProc,
+            _client: *mut c_void,
+        ) -> i32 {
+            0
+        }
+        unsafe fn remove_listener(
+            &self,
+            _device: ObjectId,
+            _address: &AudioObjectPropertyAddress,
+            _listener: AudioObjectPropertyListenerProc,
+            _client: *mut c_void,
+        ) -> i32 {
+            self.remove
+        }
+    }
+
+    static TEARDOWN_WORKS: FakeIo = FakeIo {
+        destroy: 0,
+        remove: 0,
+    };
+    static DESTROY_FAILS: FakeIo = FakeIo {
+        destroy: REFUSED,
+        remove: 0,
+    };
+    static REMOVE_FAILS: FakeIo = FakeIo {
+        destroy: 0,
+        remove: REFUSED,
+    };
+
+    /// If the IOProc cannot be unregistered the HAL may still call it, so its context is leaked,
+    /// never freed, and the leak is counted and reported.
+    #[test]
+    fn a_failed_ioproc_destroy_leaks_the_context_and_counts_it() {
+        let open = |counters: &Arc<IoCounters>| {
+            InputContext::new(
+                Box::new(
+                    capture_ring(MONO_48K, Duration::from_millis(100))
+                        .unwrap()
+                        .0,
+                ),
+                ink_audio::unguarded(),
+                MONO_48K,
+                MacClock::new().unwrap(),
+                counters.clone(),
+            )
+        };
+        let counters = Arc::new(IoCounters::default());
+        let before = leaked_contexts();
+        let Ok(running) = RunningIo::start_on(&DESTROY_FAILS, 1, Some(input_proc), open(&counters))
+        else {
+            panic!("the fake starts");
+        };
+        let (context, result) = running.stop();
+        assert!(context.is_none(), "not handed back to be freed");
+        let error = result.expect_err("the failure is reported");
+        assert!(error.contains("leaked"), "{error}");
+        assert!(leaked_contexts() > before, "and counted");
+        assert_eq!(
+            Arc::strong_count(&counters),
+            2,
+            "the context is still alive"
+        );
+
+        // Control: when unregistering works, the context comes back and is freed.
+        let counters = Arc::new(IoCounters::default());
+        let Ok(running) =
+            RunningIo::start_on(&TEARDOWN_WORKS, 1, Some(input_proc), open(&counters))
+        else {
+            panic!("the fake starts");
+        };
+        let (context, result) = running.stop();
+        assert!(result.is_ok());
+        drop(context);
+        assert_eq!(Arc::strong_count(&counters), 1, "freed");
+    }
+
+    /// If the rate listener cannot be removed a later notification may still arrive, so its
+    /// context is leaked, never freed, and the leak is counted.
+    #[test]
+    fn a_failed_listener_removal_leaks_the_context_and_counts_it() {
+        let register = |hal: &'static FakeIo, marker: &Arc<()>| {
+            let m = marker.clone();
+            let read: FormatReader = Arc::new(move || {
+                let _held = &m;
+                Ok(MONO_48K)
+            });
+            let watch = FormatWatch::new(MONO_48K, Arc::default());
+            FormatListener::register_on(hal, 1, watch, read).expect("the fake registers")
+        };
+        let marker = Arc::new(());
+        let before = leaked_contexts();
+        drop(register(&REMOVE_FAILS, &marker));
+        assert!(leaked_contexts() > before, "counted");
+        assert_eq!(Arc::strong_count(&marker), 2, "the context is still alive");
+
+        // Control: a removal that works frees the context.
+        let marker = Arc::new(());
+        drop(register(&TEARDOWN_WORKS, &marker));
+        assert_eq!(Arc::strong_count(&marker), 1, "freed");
     }
 
     /// After a panic the tone generator short-circuits: it writes nothing more.
