@@ -606,10 +606,19 @@ fn denied_permissions_fail_the_calls_that_need_them() {
         PermissionState::NotDetermined
     );
 
+    // The hotkey is an active (blocking) event tap, which needs Accessibility; Input Monitoring
+    // is only for a listen-only tap, so denying it alone blocks nothing.
+    mock.set_permission(Permission::InputMonitoring, PermissionState::Denied);
+    assert_eq!(
+        p.hotkeys
+            .start(&HotkeyBinding("fn".into()), Arc::new(|_| {})),
+        Ok(())
+    );
+    p.hotkeys.stop();
+
     mock.set_permission(Permission::Microphone, PermissionState::Denied);
     mock.set_permission(Permission::SystemAudio, PermissionState::Denied);
     mock.set_permission(Permission::Accessibility, PermissionState::Denied);
-    mock.set_permission(Permission::InputMonitoring, PermissionState::Denied);
     assert_eq!(
         p.capture.open_mic(None).err(),
         Some(PlatformError::PermissionDenied(Permission::Microphone))
@@ -625,7 +634,7 @@ fn denied_permissions_fail_the_calls_that_need_them() {
     assert_eq!(
         p.hotkeys
             .start(&HotkeyBinding("fn".into()), Arc::new(|_| {})),
-        Err(PlatformError::PermissionDenied(Permission::InputMonitoring))
+        Err(PlatformError::PermissionDenied(Permission::Accessibility))
     );
     assert!(mock.inserted().is_empty());
 
@@ -730,16 +739,16 @@ fn insertion_is_blocked_under_secure_input() {
     );
 }
 
-/// A paste whose clipboard could not be put back is still a paste: the text is in, so it is an
-/// `Ok` outcome the pipeline never retries, never an error.
+/// An insertion whose clipboard could not be put back is still an insertion: the text is in, so it
+/// is an `Ok` outcome the pipeline never retries, never an error.
 #[test]
-fn a_paste_that_could_not_restore_the_clipboard_is_still_an_insertion() {
+fn an_insertion_that_could_not_restore_the_clipboard_is_still_an_insertion() {
     let mock = Arc::new(MockPlatform::new());
     let p = mock.platform();
-    mock.set_insert_outcome(InsertOutcome::PastedClipboardNotRestored);
+    mock.set_insert_outcome(InsertOutcome::InsertedClipboardNotRestored);
     assert_eq!(
         p.inserter.insert("hello"),
-        Ok(InsertOutcome::PastedClipboardNotRestored)
+        Ok(InsertOutcome::InsertedClipboardNotRestored)
     );
     assert_eq!(mock.inserted(), vec!["hello".to_string()]);
 }

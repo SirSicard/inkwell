@@ -268,9 +268,9 @@ mod mac {
             after.0
         );
         match outcome {
-            Ok(InsertOutcome::PastedClipboardNotRestored) => {
+            Ok(InsertOutcome::InsertedClipboardNotRestored) => {
                 println!(
-                    "insert: PastedClipboardNotRestored in {took_ms:.0} ms: the text is in, the \
+                    "insert: InsertedClipboardNotRestored in {took_ms:.0} ms: the text is in, the \
                      previous clipboard is not (fully) back"
                 );
                 1

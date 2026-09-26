@@ -177,7 +177,7 @@ pub(crate) fn insert<B: Backend>(
                 return Ok(if clipboard_back {
                     InsertOutcome::Pasted
                 } else {
-                    InsertOutcome::PastedClipboardNotRestored
+                    InsertOutcome::InsertedClipboardNotRestored
                 });
             }
             Paste::NotTaken {
@@ -187,7 +187,7 @@ pub(crate) fn insert<B: Backend>(
     }
     match fallback(backend, text, can_post, ax_trusted) {
         Ok(outcome) if clipboard_back => Ok(outcome),
-        Ok(_) => Ok(InsertOutcome::PastedClipboardNotRestored),
+        Ok(_) => Ok(InsertOutcome::InsertedClipboardNotRestored),
         Err(error) if clipboard_back => Err(error),
         Err(error) => Err(PlatformError::Failed(format!(
             "{}; the previous clipboard could not be put back either",
@@ -614,7 +614,7 @@ mod tests {
         };
         assert_eq!(
             insert(&mock, TEXT, FAST),
-            Ok(InsertOutcome::PastedClipboardNotRestored)
+            Ok(InsertOutcome::InsertedClipboardNotRestored)
         );
         // No fallback: the text is in, typing it again would duplicate it.
         assert!(!mock.log().contains(&"ax"));
@@ -628,7 +628,7 @@ mod tests {
         };
         assert_eq!(
             insert(&mock, TEXT, FAST),
-            Ok(InsertOutcome::PastedClipboardNotRestored)
+            Ok(InsertOutcome::InsertedClipboardNotRestored)
         );
     }
 
@@ -641,7 +641,7 @@ mod tests {
         };
         assert_eq!(
             insert(&mock, TEXT, FAST),
-            Ok(InsertOutcome::PastedClipboardNotRestored)
+            Ok(InsertOutcome::InsertedClipboardNotRestored)
         );
         assert_eq!(mock.log(), ["save", "write", "paste", "restore", "ax"]);
     }

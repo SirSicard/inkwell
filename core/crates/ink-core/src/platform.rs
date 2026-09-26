@@ -164,11 +164,10 @@ pub enum InsertOutcome {
     /// Secure Input (macOS) or an elevated target (Windows) blocks synthetic input. Nothing was
     /// inserted, and the UI says so instead of failing silently.
     Blocked,
-    /// The text is in, but the previous clipboard could not be put back, fully or partly. It is a
-    /// success, never retried (a retry would insert the text twice); the UI says once that the
-    /// clipboard changed. Also reported when a paste was not taken, the clipboard restore failed,
-    /// and a fallback then inserted the text.
-    PastedClipboardNotRestored,
+    /// The text is in, by paste or by a fallback, but the previous clipboard could not be put
+    /// back fully. It is a success, never retried (a retry would insert the text twice); the UI
+    /// says once that the clipboard changed.
+    InsertedClipboardNotRestored,
 }
 
 /// Puts text into the focused application.
@@ -205,9 +204,11 @@ pub enum Permission {
     Microphone,
     /// System-audio capture (a process tap on macOS).
     SystemAudio,
-    /// Accessibility: synthetic input and reading focus.
+    /// Accessibility: synthetic input, reading focus and the selection, and an active (blocking)
+    /// event tap, which is what the macOS hotkey is.
     Accessibility,
-    /// Input Monitoring: the event tap for the hotkey.
+    /// Input Monitoring: only for a listen-only event tap. None is planned on macOS (the hotkey tap
+    /// is active, under Accessibility), and the Windows low-level keyboard hook needs neither.
     InputMonitoring,
 }
 

@@ -362,7 +362,8 @@ impl HotkeySource for MockPlatform {
         binding: &HotkeyBinding,
         on_event: EventSink<HotkeyEvent>,
     ) -> Result<(), PlatformError> {
-        self.require(Permission::InputMonitoring)?;
+        // The macOS hotkey is an active event tap, which needs Accessibility.
+        self.require(Permission::Accessibility)?;
         if binding.0.trim().is_empty() {
             return Err(PlatformError::Unsupported("an empty hotkey binding"));
         }

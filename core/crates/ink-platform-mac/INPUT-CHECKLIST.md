@@ -60,7 +60,7 @@ six in one go.
 | Mail | the body of a new message (do not send) | |
 
 **Must see** in every row: the text once, `insert: Pasted`, `clipboard: same items as before`. Fill
-the table with the outcome and the time from the `insert:` line. `PastedClipboardNotRestored`
+the table with the outcome and the time from the `insert:` line. `InsertedClipboardNotRestored`
 means the text went in but the clipboard did not fully come back: record which app and what was
 on the clipboard (its kind, not its content).
 
