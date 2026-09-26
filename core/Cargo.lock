@@ -403,6 +403,7 @@ dependencies = [
  "llama-cpp-2",
  "serde_json",
  "sha2",
+ "tracing",
  "ureq",
 ]
 

@@ -405,3 +405,25 @@ fn child_loads_the_model_and_exits() {
         std::mem::forget(loaded);
     }
 }
+
+#[test]
+#[ignore = "needs the Qwen3-ASR model under $INK_BENCH_DIR; run locally"]
+fn silence_is_reported_as_its_window_and_is_no_proof_of_speech() {
+    let _serial = serial();
+    let loaded = Loaded::new();
+    let engine = loaded.engine();
+    // Digital silence. The window comes back as a segment whatever the model writes, so the caller
+    // can hold every window against its voice activity detector. It needs to: on silence this
+    // model does not answer with nothing, it writes a plausible made-up sentence.
+    let silence = vec![0.0f32; 5 * RATE];
+    let transcript = engine.transcribe(&silence, &options()).unwrap();
+    println!("silence: {:?}", transcript.segments);
+    assert_eq!(transcript.segments.len(), 1);
+    assert_eq!(
+        (
+            transcript.segments[0].start_ms,
+            transcript.segments[0].end_ms
+        ),
+        (0, 5000)
+    );
+}

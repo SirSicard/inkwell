@@ -16,7 +16,7 @@ http = ["dep:ureq"]
 # llama.cpp: Qwen3-ASR (the dictation and meeting finals, through mtmd) and local GGUF chat models.
 # Off by default: it compiles llama.cpp and its ggml with cmake, and CI has no models. llama.cpp is
 # linked statically, so its ggml stays inside the core (docs/ARCHITECTURE.md, "ggml").
-engine-llama = ["dep:llama-cpp-2"]
+engine-llama = ["dep:llama-cpp-2", "dep:tracing"]
 
 [dependencies]
 ink-core.workspace = true
@@ -30,6 +30,9 @@ ureq = { version = "2.12.1", default-features = false, features = ["native-tls"]
 # JSON-schema and Jinja helpers are not needed). `metal` is what the Mac runs on; it is a no-op
 # elsewhere.
 llama-cpp-2 = { version = "=0.1.157", default-features = false, features = ["metal", "mtmd"], optional = true }
+# llama.cpp's logs arrive as `tracing` events (through llama-cpp-2); `llama::log_allowed` reads
+# their metadata. Already in llama-cpp-2's tree.
+tracing = { version = "0.1.44", optional = true }
 
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }

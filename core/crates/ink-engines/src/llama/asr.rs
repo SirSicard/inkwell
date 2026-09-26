@@ -13,6 +13,12 @@
 //!   ran whole, up to 88 s. Longer audio is cut about every 60 s at the quietest 50 ms within ±5 s,
 //!   the segmentation long recordings were measured with, and each window becomes one segment of
 //!   the transcript. Qwen3-ASR gives no word timings, so a segment spans its whole window.
+//! - **Segments are not evidence of speech.** Every window is returned as a segment, with empty
+//!   text if the model wrote nothing, so the caller sees each window's outcome. Neither case tells
+//!   speech from silence: an empty segment may be silence or speech the model dropped, and on
+//!   silence this model often does not write nothing but a plausible made-up sentence. The engine
+//!   cannot tell these apart, so the meeting chain must hold the segments against its voice
+//!   activity detector's speech, and the dictation chain must only send audio that holds speech.
 //!
 //! The model and the projector stay loaded between calls; each window gets a fresh llama.cpp
 //! context (its KV cache) sized for that window, so nothing from one call can leak into the next.
@@ -57,7 +63,8 @@ const CUT_FRAME_SAMPLES: usize = CANONICAL_RATE as usize / 20;
 /// which the transcript follows.
 const PREFILL: &str = "language English<asr_text>";
 
-/// Qwen3-ASR, loaded. Implements [`OfflineEngine`]; see the module docs for what a call does.
+/// Qwen3-ASR, loaded. Implements [`OfflineEngine`]; see the module docs for what a call does,
+/// and for why a segment, empty or not, says nothing about whether its window held speech.
 ///
 /// Calls may run on several worker threads at once (a dictation during a meeting's final pass).
 /// The audio encoder is shared and not reentrant, so encoding a window and reading its prompt are
@@ -240,15 +247,7 @@ impl OfflineEngine for QwenAsr {
                     }
                     other => other,
                 })?;
-            let text = text.trim();
-            // A window with no speech has no segment; its time stays uncovered.
-            if !text.is_empty() {
-                segments.push(TimedText {
-                    start_ms: ms(window.start),
-                    end_ms: ms(window.end),
-                    text: text.to_owned(),
-                });
-            }
+            segments.push(segment(window, &text));
         }
         Ok(Transcript { segments })
     }
@@ -359,6 +358,16 @@ fn windows(audio: &[f32]) -> Vec<Range<usize>> {
     out
 }
 
+/// One window's segment: its span and its text, trimmed. A window the model wrote nothing for is
+/// still a segment, with empty text, so the caller sees which windows came back empty.
+fn segment(window: Range<usize>, text: &str) -> TimedText {
+    TimedText {
+        start_ms: ms(window.start),
+        end_ms: ms(window.end),
+        text: text.trim().to_owned(),
+    }
+}
+
 /// A sample index at 16 kHz, in milliseconds.
 fn ms(sample: usize) -> u64 {
     sample as u64 * 1000 / u64::from(CANONICAL_RATE)
@@ -451,6 +460,19 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn a_window_with_no_text_is_still_a_segment() {
+        assert_eq!(
+            segment(16_000..96_000, "  \n "),
+            TimedText {
+                start_ms: 1000,
+                end_ms: 6000,
+                text: String::new(),
+            }
+        );
+        assert_eq!(segment(0..16_000, " hello ").text, "hello");
     }
 
     #[test]

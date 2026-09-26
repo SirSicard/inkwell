@@ -10,11 +10,17 @@
 //! collide with the diarizer's own ggml libraries (docs/ARCHITECTURE.md, "ggml";
 //! `tests/ggml_link.rs` checks it).
 //!
-//! **Logs.** llama.cpp, ggml and mtmd share one log callback, and it is switched off when the
-//! backend starts. Their lines are mostly about models and devices, but some quote the text being
-//! processed (a lazy grammar's debug lines quote generated tokens), and nothing a model hears or
-//! says may reach a log (I5). Failures come back as the returned errors instead, which name the
-//! step and the file, never the text.
+//! **Logs.** llama.cpp, ggml and mtmd log through llama-cpp-2 into `tracing` (target
+//! `llama-cpp-2`, and llama-cpp-2's own module targets). Only warnings and errors may be kept:
+//! **every tracing subscriber in the app must apply [`log_allowed`]**, which drops the engines'
+//! DEBUG and INFO. Those levels can quote the text being processed (a lazy grammar's debug lines
+//! quote generated tokens), and nothing a model hears or says may reach a log (I5). The warnings
+//! and errors quote model files, vocabulary tokens and error codes, not user text;
+//! `tests/llama_logs.rs` checks that on real runs. With no subscriber, everything is dropped at the
+//! source. The filter lives with the app's subscriber because llama-cpp-2 asks that subscriber
+//! whether a level is wanted; capping it inside the core would need a log callback of our own, in
+//! `unsafe` code. Failures also come back as the returned errors, which name the step and the file,
+//! never the text.
 //!
 //! **Before exit, drop every model.** ggml's Metal backend aborts the process at exit if a model is
 //! still loaded (its device teardown asserts that every buffer was freed). So the app's shutdown
@@ -36,6 +42,19 @@ mod llm;
 pub use asr::{MAX_NEW_TOKENS, MAX_WINDOW_SECONDS, QwenAsr, QwenAsrLoader};
 pub use llm::{JSON_OBJECT_GRAMMAR, LlamaLlm};
 
+/// Whether a `tracing` event or span may be kept: llama.cpp's, ggml's, mtmd's and llama-cpp-2's
+/// only at WARN or ERROR; everything else is not this filter's business and passes. Every
+/// subscriber in the app applies it (see the module docs).
+pub fn log_allowed(metadata: &tracing::Metadata<'_>) -> bool {
+    let target = metadata.target();
+    let engine = target == "llama-cpp-2" || target.starts_with("llama_cpp_2");
+    !engine
+        || matches!(
+            *metadata.level(),
+            tracing::Level::WARN | tracing::Level::ERROR
+        )
+}
+
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -55,9 +74,9 @@ fn backend() -> Result<&'static LlamaBackend, EngineError> {
     static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
     BACKEND
         .get_or_init(|| {
-            // Before `init`, so not even the backend's start-up lines are printed. See the module
-            // docs for why the logs stay off.
-            send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
+            // Before `init`, so the start-up lines take the same route. Which of them are kept is
+            // the subscriber's call, through `log_allowed` (see the module docs).
+            send_logs_to_tracing(LogOptions::default());
             LlamaBackend::init().map_err(|e| e.to_string())
         })
         .as_ref()
@@ -157,5 +176,66 @@ fn piece(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, String> {
                 .map_err(|e| format!("token {}: {e}", token.0))
         }
         Err(e) => Err(format!("token {}: {e}", token.0)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Level, Metadata, Subscriber};
+
+    use super::log_allowed;
+
+    /// A subscriber that applies `log_allowed`, as the app's must, and records what gets through.
+    #[derive(Clone, Default)]
+    struct Filtered(Arc<Mutex<Vec<(Level, String)>>>);
+
+    impl Subscriber for Filtered {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            log_allowed(metadata)
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            let m = event.metadata();
+            self.0
+                .lock()
+                .unwrap()
+                .push((*m.level(), m.target().to_owned()));
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+    }
+
+    #[test]
+    fn engine_logs_below_warn_are_dropped_and_others_pass() {
+        let seen = Filtered::default();
+        tracing::subscriber::with_default(seen.clone(), || {
+            // Where llama.cpp, ggml and mtmd lines arrive, and llama-cpp-2's own events.
+            tracing::debug!(target: "llama-cpp-2", "debug line");
+            tracing::info!(target: "llama-cpp-2", "info line");
+            tracing::warn!(target: "llama-cpp-2", "warn line");
+            tracing::error!(target: "llama-cpp-2", "error line");
+            tracing::debug!(target: "llama_cpp_2::model", "loaded");
+            tracing::info!(target: "llama_cpp_2::log", "no level");
+            tracing::warn!(target: "llama_cpp_2::log", "buffered");
+            // Anything else is none of this filter's business.
+            tracing::debug!(target: "ink_pipeline", "other");
+        });
+        let seen = seen.0.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![
+                (Level::WARN, "llama-cpp-2".to_owned()),
+                (Level::ERROR, "llama-cpp-2".to_owned()),
+                (Level::WARN, "llama_cpp_2::log".to_owned()),
+                (Level::DEBUG, "ink_pipeline".to_owned()),
+            ]
+        );
     }
 }

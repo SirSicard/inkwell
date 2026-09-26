@@ -23,6 +23,15 @@ use crate::registry::EngineRow;
 /// How long a model may sit unused before [`Residency::tick`] unloads it.
 pub const IDLE_UNLOAD: Duration = Duration::from_secs(5 * 60);
 
+/// What [`Residency::unload`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unloaded {
+    /// The model was loaded, and has been dropped.
+    WasLoaded,
+    /// Nothing with that id was loaded: a wrong id, or a model already unloaded. Nothing changed.
+    NotLoaded,
+}
+
 /// Loads a row's model. The adapters implement it; tests use a counting mock.
 pub trait Loader<M>: Send + Sync {
     /// **Worker.** Loads `row`'s files. May take seconds. Unloading is dropping the returned
@@ -219,20 +228,21 @@ impl<M: Send + Sync + 'static> Residency<M> {
     /// into residency). Waits out a load or unload of the same model already under way.
     ///
     /// Refused while any lease holds the model, and then nothing changes (it stays loaded, and
-    /// warm if it was): the update waits for the job to end and tries again. An id that is not
-    /// loaded is already unloaded, so that is `Ok`.
+    /// warm if it was): the update waits for the job to end and tries again. Says which it was,
+    /// so an update can tell a real unload ([`Unloaded::WasLoaded`]) from an id that was not
+    /// loaded ([`Unloaded::NotLoaded`], which may be the wrong id).
     ///
     /// Unloading does not keep a model out: a later [`acquire`](Self::acquire) or
     /// [`set_warm`](Self::set_warm) loads it again, so the caller keeps it out of use until the
     /// new files are in place.
-    pub fn unload(&self, id: &str) -> Result<(), EngineError> {
+    pub fn unload(&self, id: &str) -> Result<Unloaded, EngineError> {
         let mut state = self.shared.lock();
         while matches!(state.slots.get(id), Some(Slot::Loading | Slot::Unloading)) {
             state = self.shared.wait(state);
         }
         let State { slots, warm } = &mut *state;
         let Some(slot) = slots.get_mut(id) else {
-            return Ok(());
+            return Ok(Unloaded::NotLoaded);
         };
         if matches!(slot, Slot::Resident { model, .. } if Arc::strong_count(model) > 1) {
             return Err(EngineError::Failed(format!(
@@ -245,7 +255,7 @@ impl<M: Send + Sync + 'static> Residency<M> {
             // back rather than leave a slot that nothing will ever clear.
             other @ (Slot::Loading | Slot::Unloading) => {
                 *slot = other;
-                return Ok(());
+                return Ok(Unloaded::NotLoaded);
             }
         };
         if warm.as_deref() == Some(id) {
@@ -261,7 +271,7 @@ impl<M: Send + Sync + 'static> Residency<M> {
             };
             drop(model);
         }
-        Ok(())
+        Ok(Unloaded::WasLoaded)
     }
 
     /// The ids of the loaded models, sorted.

@@ -132,11 +132,11 @@ fn bad_requests_fail_without_quoting_the_text() {
 
     // A NUL cannot cross into C; the error names the message, not its text.
     match llm.complete(&request("private words\0here", false), &cancel) {
-        Err(LlmError::Network(msg)) => {
-            assert!(msg.starts_with("local model:"), "{msg}");
+        Err(LlmError::Engine(msg)) => {
+            assert!(msg.contains("user message"), "{msg}");
             assert!(!msg.contains("private"), "the error quotes the request");
         }
-        other => panic!("expected a local failure, got {other:?}"),
+        other => panic!("expected an engine failure, got {other:?}"),
     }
 
     // More than the model's context is refused before anything runs.
@@ -145,12 +145,28 @@ fn bad_requests_fail_without_quoting_the_text() {
         ..request("private words", false)
     };
     match llm.complete(&huge, &cancel) {
-        Err(LlmError::Network(msg)) => {
+        Err(LlmError::Engine(msg)) => {
             assert!(msg.contains("context"), "{msg}");
             assert!(!msg.contains("private"), "the error quotes the request");
         }
-        other => panic!("expected a local failure, got {other:?}"),
+        other => panic!("expected an engine failure, got {other:?}"),
     }
+}
+
+#[test]
+#[ignore = "needs the Qwen3-ASR model under $INK_BENCH_DIR; run locally"]
+fn hitting_the_token_budget_is_an_error_not_an_answer() {
+    let _serial = serial();
+    let llm = LlamaLlm::load(&asr_decoder(), "qwen3-asr-decoder").unwrap();
+    // This model's answer is several tokens long, so one token cannot end it.
+    let one_token = LlmRequest {
+        max_tokens: 1,
+        ..request("Say hello.", false)
+    };
+    assert_eq!(
+        llm.complete(&one_token, &CancelToken::new()),
+        Err(LlmError::Engine("output hit the token budget".into()))
+    );
 }
 
 #[test]

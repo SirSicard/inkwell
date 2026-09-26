@@ -14,7 +14,7 @@ use ink_core::{
     CancelToken, Channel, Clock, EngineError, Job, OfflineEngine, TimedText, TranscribeOptions,
     Transcript,
 };
-use ink_engines::{EngineRow, IDLE_UNLOAD, Lease, Loader, Residency};
+use ink_engines::{EngineRow, IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 
 const MINUTE_NS: u64 = 60_000_000_000;
 const IDLE_NS: u64 = IDLE_UNLOAD.as_secs() * 1_000_000_000;
@@ -464,9 +464,9 @@ fn unload_drops_an_idle_model_at_once_and_clears_its_warm_state() {
     drop(s.res.acquire(&meeting()).unwrap());
 
     // No five-minute wait, warm or not.
-    s.res.unload("synthetic-dictation").unwrap();
+    assert_eq!(s.res.unload("synthetic-dictation"), Ok(Unloaded::WasLoaded));
     assert_eq!(s.res.warm(), None, "no longer kept warm");
-    s.res.unload("synthetic-meeting").unwrap();
+    assert_eq!(s.res.unload("synthetic-meeting"), Ok(Unloaded::WasLoaded));
     assert!(s.res.resident().is_empty());
     assert_eq!(s.counts().unloads(), 2);
 
@@ -497,18 +497,23 @@ fn unload_is_refused_while_a_lease_holds_the_model() {
     assert_eq!(s.counts().unloads(), 0);
 
     drop(lease);
-    s.res.unload("synthetic-dictation").unwrap();
+    assert_eq!(s.res.unload("synthetic-dictation"), Ok(Unloaded::WasLoaded));
     assert!(s.res.resident().is_empty());
 }
 
 #[test]
-fn unloading_an_unknown_id_is_ok_and_changes_nothing() {
+fn unloading_an_id_that_is_not_loaded_says_so_and_changes_nothing() {
     let s = setup();
     s.res.set_warm(Some(&dictation())).unwrap();
-    s.res.unload("never-loaded").unwrap();
+    // A wrong id and a model already unloaded both answer NotLoaded, never a silent Ok.
+    assert_eq!(s.res.unload("never-loaded"), Ok(Unloaded::NotLoaded));
+    drop(s.res.acquire(&meeting()).unwrap());
+    assert_eq!(s.res.unload("synthetic-meeting"), Ok(Unloaded::WasLoaded));
+    assert_eq!(s.res.unload("synthetic-meeting"), Ok(Unloaded::NotLoaded));
+    // Only the one real unload dropped anything; the warm model was never touched.
     assert_eq!(s.res.resident(), vec!["synthetic-dictation".to_string()]);
     assert_eq!(s.res.warm().as_deref(), Some("synthetic-dictation"));
-    assert_eq!(s.counts().unloads(), 0);
+    assert_eq!(s.counts().unloads(), 1);
 }
 
 /// A model whose drop calls back into the residency that holds it.
@@ -559,7 +564,7 @@ fn unload_drops_the_model_outside_the_lock() {
         let _ = done_tx.send(worker.unload("synthetic-dictation"));
     });
     // A drop run under the lock would deadlock here on its own call into residency.
-    recv(&done_rx).unwrap();
+    assert_eq!(recv(&done_rx), Ok(Unloaded::WasLoaded));
     let (resident, warm) = recv(&seen_rx);
     assert!(
         resident.is_empty(),
