@@ -1,4 +1,4 @@
-//! The models S1.4c's adapters load: the diarizer's registry row, and the VAD's pinned file.
+//! The registry rows of the diarizer and the VAD.
 //!
 //! Plain data, compiled whatever the features, so CI validates it. A row reaches
 //! [`builtin_rows`](crate::builtin_rows) only when its adapter is built: a build without the
@@ -46,36 +46,42 @@ pub fn nemotron_3_diarization() -> EngineRow {
     }
 }
 
-/// A model file pinned by content, whose registry row is not written yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PinnedFile {
-    /// The file name, also its name on disk.
-    pub name: &'static str,
-    /// SHA-256 of the whole file, lowercase hex.
-    pub sha256: &'static str,
-    /// Size in bytes.
-    pub size: u64,
-    /// The weights' licence (SPDX).
-    pub licence: &'static str,
-    /// What the licence asks of us.
-    pub attribution: &'static str,
-}
+/// The VAD's registry id.
+pub const SILERO_VAD_ID: &str = "silero-vad-v6-16k";
 
-/// Silero VAD v6.2.3, the 16 kHz opset-15 ONNX export (`engine-silero`). Downloaded at runtime,
-/// never bundled.
+/// Silero VAD v6.2.3, the 16 kHz opset-15 ONNX export, on tract (`engine-silero`): voice
+/// activity for the gain stages and trimming.
 ///
-/// **No registry row yet**, for two reasons a row cannot paper over:
-/// - Registry rows are pinned to a full commit hash, never a tag, and the file is published under
-///   the `v6.2.3` tag of `snakers4/silero-vad` (`src/silero_vad/data/`). The tag's commit has to
-///   be looked up before a URL can be pinned.
-/// - A row must fill a [`Job`], and voice activity is not one of ink-core's jobs.
-pub const SILERO_VAD_FILE: PinnedFile = PinnedFile {
-    name: "silero_vad_16k_op15.onnx",
-    sha256: "7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49",
-    size: 1_289_603,
-    licence: "MIT",
-    attribution: "Silero VAD (MIT): ship its copyright and licence notice, and credit it in About",
-};
+/// - **Pinned:** the commit tag `v6.2.3` of `snakers4/silero-vad` points at, and the file's size
+///   and SHA-256 (the file in `src/silero_vad/data/`).
+/// - **Measured:** against an energy oracle on AMI headset speech (windows at or above −40 dBFS
+///   are speech; windows deep in pauses below −60 dBFS are not), the share of those windows it
+///   misjudges. `tests/silero.rs` reproduces it.
+/// - **Licence:** MIT. Ship Silero's copyright and licence notice, and credit it in About.
+/// - **Both OSes:** tract is pure Rust.
+pub fn silero_vad() -> EngineRow {
+    const REVISION: &str = "5cd7945676eb32225748052e2e6a0580e4686a08";
+    const FILE: &str = "silero_vad_16k_op15.onnx";
+    EngineRow {
+        id: SILERO_VAD_ID.into(),
+        scores: vec![JobScore {
+            job: Job::VoiceActivity,
+            wer: 1.5,
+        }],
+        files: vec![ModelFile {
+            name: FILE.into(),
+            url: format!(
+                "https://raw.githubusercontent.com/snakers4/silero-vad/{REVISION}/src/silero_vad/data/{FILE}"
+            ),
+            sha256: "7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49".into(),
+            size: 1_289_603,
+        }],
+        revision: REVISION.into(),
+        licence: "MIT".into(),
+        oses: vec![Os::MacOs, Os::Windows],
+        runtime: Runtime::Tract,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -104,15 +110,29 @@ mod tests {
     }
 
     #[test]
-    fn the_vad_file_is_pinned_and_allowed() {
-        let f = SILERO_VAD_FILE;
-        assert_eq!(f.sha256.len(), 64);
-        assert!(
-            f.sha256
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    fn the_vad_row_is_valid_pinned_and_does_voice_activity_only() {
+        let row = silero_vad();
+        row.validate().unwrap();
+        Registry::new(vec![row.clone(), nemotron_3_diarization()]).unwrap();
+        assert_eq!(row.info().jobs, [Job::VoiceActivity]);
+        assert_eq!(row.revision, "5cd7945676eb32225748052e2e6a0580e4686a08");
+        let [file] = row.files.as_slice() else {
+            panic!("{:?}", row.files)
+        };
+        assert_eq!(file.name, "silero_vad_16k_op15.onnx");
+        assert_eq!(
+            file.url,
+            "https://raw.githubusercontent.com/snakers4/silero-vad/5cd7945676eb32225748052e2e6a0580e4686a08/src/silero_vad/data/silero_vad_16k_op15.onnx"
         );
-        assert!(f.size > 0);
-        assert!(ALLOWED_WEIGHT_LICENCES.contains(&f.licence));
+        assert_eq!(
+            file.sha256,
+            "7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49"
+        );
+        assert_eq!(file.size, 1_289_603);
+        assert_eq!(row.licence, "MIT");
+        assert!(ALLOWED_WEIGHT_LICENCES.contains(&row.licence.as_str()));
+        // Pure Rust: it runs wherever the core does.
+        assert!(row.runs_on(Os::MacOs) && row.runs_on(Os::Windows));
+        assert_eq!(row.runtime, Runtime::Tract);
     }
 }

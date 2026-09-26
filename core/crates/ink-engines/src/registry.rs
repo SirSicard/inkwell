@@ -65,7 +65,8 @@ pub struct JobScore {
     /// The job.
     pub job: Job,
     /// Measured error rate in percent, lower is better: word error rate for the speech jobs,
-    /// diarization error rate for [`Job::Diarization`]. Per job, because one model is measured on
+    /// diarization error rate for [`Job::Diarization`], and for [`Job::VoiceActivity`] the share
+    /// of clearly speech or clearly silent windows it misjudges. Per job, because one model is measured on
     /// a different set for each job (meetings versus dictation), and the router only compares
     /// numbers measured for the same job.
     pub wer: f32,
@@ -391,6 +392,8 @@ pub fn builtin_rows() -> Vec<EngineRow> {
     [
         #[cfg(feature = "engine-nemo")]
         crate::rows::nemotron_3_diarization(),
+        #[cfg(feature = "engine-silero")]
+        crate::rows::silero_vad(),
     ]
     .into_iter()
     .collect()

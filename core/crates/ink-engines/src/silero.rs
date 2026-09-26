@@ -4,8 +4,8 @@
 //!
 //! [tract](https://github.com/sonos/tract) runs the ONNX graph in pure Rust: no native runtime,
 //! no build-time download, and every crate visible to `cargo deny`. The model is the published
-//! 16 kHz, opset-15 export of Silero VAD v6 (MIT; see [`SILERO_VAD_FILE`]), fetched at runtime,
-//! never bundled.
+//! 16 kHz, opset-15 export of Silero VAD v6 (MIT; its registry row is
+//! [`silero_vad`](crate::silero_vad)), fetched at runtime, never bundled.
 //!
 //! # The graph, and why it is rewritten before tract sees it
 //!
@@ -24,11 +24,12 @@
 //! # Correctness without a reference runtime
 //!
 //! No ONNX reference runtime is part of this build, so the adapter is held to behaviour
-//! (`tests/silero.rs`, `#[ignore]`, model required): high probability over AMI speech and low
-//! over its pauses and over noise, state carried from window to window, a reset that restores
-//! the initial state exactly, and bit-identical output across runs.
+//! (`tests/silero.rs`, on the real model, which CI downloads by its pinned hash): golden
+//! probabilities on fixed synthetic inputs, state carried from window to window, a reset that
+//! restores the initial state exactly, and bit-identical output across runs; and, locally, high
+//! probability over AMI speech and low over its pauses and over noise.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
@@ -43,7 +44,6 @@ use tract_onnx::tract_hir::infer::Factoid;
 use crate::model_dir::ModelDir;
 use crate::registry::EngineRow;
 use crate::residency::Loader;
-use crate::rows::SILERO_VAD_FILE;
 
 /// Samples of the previous window the model sees in front of each new one (Silero's 16 kHz
 /// context).
@@ -133,6 +133,8 @@ pub struct SileroVad {
     state: [f32; STATE_LEN],
     /// The last [`CONTEXT`] samples of the previous window (zeros after a reset).
     context: [f32; CONTEXT],
+    /// The `sr` input, built once: cloning it per window is a reference count.
+    sr: TValue,
 }
 
 impl fmt::Debug for SileroVad {
@@ -150,6 +152,7 @@ impl SileroVad {
             session,
             state: [0.0; STATE_LEN],
             context: [0.0; CONTEXT],
+            sr: tensor0(i64::from(CANONICAL_RATE)).into(),
         })
     }
 }
@@ -170,11 +173,7 @@ impl SpeechProbability for SileroVad {
             .map_err(|e| window_failed("building the state", &e))?;
         let outputs = self
             .session
-            .run(tvec!(
-                input.into(),
-                state.into(),
-                tensor0(i64::from(CANONICAL_RATE)).into()
-            ))
+            .run(tvec!(input.into(), state.into(), self.sr.clone()))
             .map_err(|e| window_failed("inference", &e))?;
         let [probability, state] = outputs.as_slice() else {
             return Err(EngineError::Failed(format!(
@@ -185,14 +184,15 @@ impl SpeechProbability for SileroVad {
         let p = scalar(probability)?;
         let next = state
             .try_as_plain_ram()
-            .and_then(|v| v.as_slice::<f32>().map(<[f32]>::to_vec))
+            .and_then(|v| v.as_slice::<f32>())
             .map_err(|e| window_failed("reading the state", &e))?;
-        self.state = <[f32; STATE_LEN]>::try_from(next.as_slice()).map_err(|_| {
-            EngineError::Failed(format!(
+        if next.len() != STATE_LEN {
+            return Err(EngineError::Failed(format!(
                 "Silero VAD returned a state of shape {:?}, expected {STATE_SHAPE:?}",
                 state.shape()
-            ))
-        })?;
+            )));
+        }
+        self.state.copy_from_slice(next);
         // The window's tail is the next window's context.
         self.context
             .copy_from_slice(&window[VAD_WINDOW - CONTEXT..]);
@@ -200,8 +200,8 @@ impl SpeechProbability for SileroVad {
     }
 }
 
-/// Loads the Silero row's model for [`Residency`](crate::Residency): the row's file named
-/// [`SILERO_VAD_FILE`]`.name`, installed under `dir`.
+/// Loads the VAD row's model for [`Residency`](crate::Residency): its single ONNX file, installed
+/// under `dir`.
 #[derive(Clone, Debug)]
 pub struct SileroLoader {
     dir: ModelDir,
@@ -216,16 +216,13 @@ impl SileroLoader {
 
 impl Loader<SileroModel> for SileroLoader {
     fn load(&self, row: &EngineRow) -> Result<SileroModel, EngineError> {
-        let file = row
-            .files
-            .iter()
-            .find(|f| f.name == SILERO_VAD_FILE.name)
-            .ok_or_else(|| {
-                EngineError::Failed(format!(
-                    "row {} has no file named {}",
-                    row.id, SILERO_VAD_FILE.name
-                ))
-            })?;
+        let [file] = row.files.as_slice() else {
+            return Err(EngineError::Failed(format!(
+                "row {} has {} files; Silero VAD takes one ONNX file",
+                row.id,
+                row.files.len()
+            )));
+        };
         SileroModel::load(&self.dir.file_path(row, file))
     }
 }
@@ -381,11 +378,20 @@ fn collect_conditions(
 /// Inlines the taken branch of each `If` in `graph`: the branch's nodes (its own `If`s resolved
 /// first), its initializers and value hints move into `graph`, and an `Identity` per output
 /// renames the branch's outputs to the `If`'s. ONNX branches read outer values by name, so the
-/// moved nodes need no rewiring.
+/// moved nodes need no rewiring, which is also why a value or node name the branch brings in
+/// must be new to `graph`: a clash would silently rewire whatever reads that name. A clash is an
+/// error.
 fn inline_ifs(
     graph: &mut pb::GraphProto,
     conditions: &HashMap<String, bool>,
 ) -> Result<(), EngineError> {
+    let mut values = defined_values(graph);
+    let mut nodes: HashSet<String> = graph
+        .node
+        .iter()
+        .map(|n| n.name.clone())
+        .filter(|n| !n.is_empty())
+        .collect();
     for node in std::mem::take(&mut graph.node) {
         if node.op_type != "If" {
             graph.node.push(node);
@@ -415,20 +421,55 @@ fn inline_ifs(
                 node.output.len()
             )));
         }
-        graph.initializer.append(&mut branch.initializer);
-        graph.value_info.append(&mut branch.value_info);
-        graph.node.append(&mut branch.node);
-        for (from, to) in branch.output.iter().zip(&node.output) {
-            graph.node.push(pb::NodeProto {
+        let renames: Vec<pb::NodeProto> = branch
+            .output
+            .iter()
+            .zip(&node.output)
+            .map(|(from, to)| pb::NodeProto {
                 op_type: "Identity".into(),
                 name: format!("{}/inlined/{to}", node.name),
                 input: vec![from.name.clone()],
                 output: vec![to.clone()],
                 ..Default::default()
-            });
+            })
+            .collect();
+        // The If's own outputs stay defined (by the renames), so only the branch's values count.
+        for value in defined_values(&branch) {
+            if !values.insert(value.clone()) {
+                return Err(EngineError::Failed(format!(
+                    "Silero VAD: inlining If {:?} would define {value:?}, which the graph already \
+                     defines",
+                    node.name
+                )));
+            }
         }
+        for name in branch.node.iter().chain(&renames).map(|n| &n.name) {
+            if !name.is_empty() && !nodes.insert(name.clone()) {
+                return Err(EngineError::Failed(format!(
+                    "Silero VAD: inlining If {:?} would add a second node named {name:?}",
+                    node.name
+                )));
+            }
+        }
+        graph.initializer.append(&mut branch.initializer);
+        graph.value_info.append(&mut branch.value_info);
+        graph.node.append(&mut branch.node);
+        graph.node.extend(renames);
     }
     Ok(())
+}
+
+/// Every value `graph` defines at its own level: inputs, initializers and node outputs.
+fn defined_values(graph: &pb::GraphProto) -> HashSet<String> {
+    graph
+        .input
+        .iter()
+        .map(|v| &v.name)
+        .chain(graph.initializer.iter().map(|t| &t.name))
+        .chain(graph.node.iter().flat_map(|n| &n.output))
+        .filter(|name| !name.is_empty())
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -638,6 +679,40 @@ mod tests {
         let err = resolve_ifs(model(true), &facts).unwrap_err();
         assert!(
             matches!(&err, EngineError::Failed(m) if m.contains("not fixed by the input shapes")),
+            "{err:?}"
+        );
+    }
+
+    /// `model(false)` with the innermost then-branch writing its sum to `name` instead of
+    /// `doubled`.
+    fn model_with_inner_output(name: &str) -> pb::ModelProto {
+        let mut proto = model(false);
+        let graph = proto.graph.as_mut().unwrap();
+        let outer = graph.node.iter_mut().find(|n| n.name == "outer").unwrap();
+        let then = outer.attribute[0].g.as_mut().unwrap();
+        let inner = then.node.iter_mut().find(|n| n.name == "inner").unwrap();
+        let inner_then = inner.attribute[0].g.as_mut().unwrap();
+        inner_then.node[0].output = vec![name.to_string()];
+        inner_then.output[0].name = name.to_string();
+        proto
+    }
+
+    #[test]
+    fn an_inlined_name_that_collides_with_the_parent_graph_is_refused() {
+        // The control: a fresh name inlines.
+        let facts = [f32::fact([1, 4]).into()];
+        resolve_ifs(model_with_inner_output("fresh"), &facts).unwrap();
+        // The branch defines `dim`, which the parent graph already defines (and reads): inlining
+        // it would rewire the parent's reader to the branch's value.
+        let err = resolve_ifs(model_with_inner_output("dim"), &facts).unwrap_err();
+        assert!(
+            matches!(&err, EngineError::Failed(m) if m.contains("\"dim\"") && m.contains("already defines")),
+            "{err:?}"
+        );
+        // So does an initializer's name.
+        let err = resolve_ifs(model_with_inner_output("four"), &facts).unwrap_err();
+        assert!(
+            matches!(&err, EngineError::Failed(m) if m.contains("\"four\"")),
             "{err:?}"
         );
     }

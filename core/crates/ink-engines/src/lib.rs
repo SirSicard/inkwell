@@ -49,7 +49,7 @@ pub use registry::{
 };
 pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency};
 pub use router::{ExternalEngine, Route, RouteError, Router};
-pub use rows::{NEMOTRON_DIARIZATION_ID, PinnedFile, SILERO_VAD_FILE, nemotron_3_diarization};
+pub use rows::{NEMOTRON_DIARIZATION_ID, SILERO_VAD_ID, nemotron_3_diarization, silero_vad};
 #[cfg(feature = "engine-silero")]
 pub use silero::{CONTEXT as SILERO_CONTEXT, SileroLoader, SileroModel, SileroVad};
 
