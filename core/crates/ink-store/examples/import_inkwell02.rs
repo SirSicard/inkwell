@@ -27,8 +27,8 @@ use ink_llm::provider::configured_providers;
 use ink_llm::{KeyStore, OsKeyStore};
 use ink_store::SqliteStore;
 use ink_store::import::{
-    Counts, DICTIONARY_KEY, Inkwell02, KeyProbe, KeyProbeError, MARKER_KEY, MODES_KEY, NoKeychain,
-    SETTINGS_PREFIX, SNIPPETS_KEY,
+    APP_STYLES_KEY, Counts, DICTIONARY_KEY, Inkwell02, KeyProbe, KeyProbeError, MARKER_KEY,
+    MODES_KEY, NoKeychain, SETTINGS_PREFIX, SNIPPETS_KEY, VOICE_COMMANDS_KEY,
 };
 use sha2::{Digest, Sha256};
 
@@ -164,12 +164,6 @@ fn run() -> Result<bool, String> {
         "  providers not checked in the keychain: {}",
         report.keys_unchecked
     );
-    if !report.not_imported.is_empty() {
-        println!(
-            "  files this importer does not read: {}",
-            report.not_imported.join(", ")
-        );
-    }
 
     let mut pass = true;
     if !args.dry_run {
@@ -272,6 +266,8 @@ fn recount(store: &SqliteStore, path: &Path, keys: Option<&LlmKeys>) -> Result<C
         snippets: items(SNIPPETS_KEY, "")?,
         modes: items(MODES_KEY, "/modes")?,
         settings: usize::try_from(settings).map_err(|e| e.to_string())?,
+        voice_commands: items(VOICE_COMMANDS_KEY, "/commands")?,
+        app_style_rules: items(APP_STYLES_KEY, "/rules")?,
         linked_keys,
     })
 }

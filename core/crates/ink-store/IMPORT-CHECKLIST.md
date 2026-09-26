@@ -15,7 +15,8 @@ attributes-only check; it never reads a key.
        pgrep -lf Inkwell.app || echo "not running"
 
    A copy taken while it runs can catch a write halfway; the importer refuses such a copy
-   ("an unfinished write sits beside it").
+   ("an unfinished write sits beside it"). It also refuses any source that is not a plain file
+   (a symbolic link, a folder), which a normal copy never produces.
 2. Copy the data folder, without the models (they are large and not imported). Keep the copy
    **outside any git repository and any cloud-synced folder**: it holds your dictations.
 
@@ -32,7 +33,8 @@ attributes-only check; it never reads a key.
        sqlite3 'file:'"$HOME"'/inkwell-import-check/source/transcripts.db?mode=ro' \
          'SELECT count(*) FROM transcripts'
        cd ~/inkwell-import-check/source && python3 -c 'import json
-       for f, k in [("dictionary.json", "entries"), ("snippets.json", "snippets"), ("modes.json", "modes")]:
+       for f, k in [("dictionary.json", "entries"), ("snippets.json", "snippets"), ("modes.json", "modes"),
+                    ("voice-commands.json", "commands"), ("app-styles.json", "rules")]:
            try: print(f, len(json.load(open(f))[k]))
            except FileNotFoundError: print(f, "absent")'
 
@@ -48,8 +50,8 @@ attributes-only check; it never reads a key.
 - `Keychain: asked which providers have a key (attributes only).` and **no system dialog**. If
   macOS asks to allow access to the "inkwell" keychain item, click **Deny** and record it: the
   existence check is supposed to be promptless, so that is a finding for ink-llm.
-- Under `Dry run`: `dictations`, `dictionary entries`, `snippets` and `modes` equal your counts
-  from Setup step 4; `linked keys` equals the number of providers with a key in 0.2;
+- Under `Dry run`: `dictations`, `dictionary entries`, `snippets`, `modes`, `voice commands` and
+  `app style rules` equal your counts from Setup step 4; `linked keys` equals the number of providers with a key in 0.2;
   `settings` is the number of fields in `settings.json` that 0.2 itself uses (up to 20).
 - `Sources byte-identical: yes`, `RESULT: PASS`, and no `new.sqlite` created.
 
@@ -98,12 +100,11 @@ Both the copy and the new store hold your dictations:
 
 - Each dictation's raw (pre-cleanup) text, its style and its model name: the 1.0 store has no
   place for them yet. They stay in 0.2's `transcripts.db`.
-- `voice-commands.json` and `app-styles.json` (0.2 folded the second into its modes).
-- Settings land under `import.inkwell-0.2.*` in the 1.0 store, in 0.2's format, for the 1.0
-  settings screens to adopt.
+- Settings, voice commands and app style rules land under `import.inkwell-0.2.*` in the 1.0
+  store, in 0.2's format, for the 1.0 settings screens to adopt.
 
 ## Record
 
-| Date | Dictations | Dictionary | Snippets | Modes | Settings | Keys | Identical | Dialog? | Result |
-|---|---|---|---|---|---|---|---|---|---|
-| | | | | | | | | | |
+| Date | Dictations | Dictionary | Snippets | Modes | Settings | Voice commands | App styles | Keys | Identical | Dialog? | Result |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| | | | | | | | | | | | |

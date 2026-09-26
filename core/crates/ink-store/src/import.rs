@@ -15,6 +15,8 @@
 //! | `snippets.json` | setting [`SNIPPETS_KEY`]: a JSON array of `{id, trigger, expansion, category, enabled}` |
 //! | `modes.json` | setting [`MODES_KEY`]: `{default_id, modes: [{id, name, style, model, polish_prompt, polish_enabled, apps, remove_fillers}]}` |
 //! | `settings.json` | one setting per field under [`SETTINGS_PREFIX`], holding the field's JSON value |
+//! | `voice-commands.json` | setting [`VOICE_COMMANDS_KEY`]: `{enabled, wake_prefix, commands: [{id, triggers, action: {type, ...}, enabled}]}` |
+//! | `app-styles.json` | setting [`APP_STYLES_KEY`]: `{enabled, rules: [{process_name, style}]}` |
 //! | API keys in the keychain | nothing copied: see below |
 //!
 //! Documents keep 0.2's shapes, with 0.2's serde defaults filled in, so code ported from 0.2 can
@@ -25,8 +27,7 @@
 //!
 //! **Not carried over**, and left untouched in the source: a transcript's raw (pre-cleanup) text,
 //! its style and its model name, which the 1.0 schema has no place for;
-//! [`SourceReport::raw_text_differs`] counts the rows whose raw text differed. Also not read:
-//! `voice-commands.json` and `app-styles.json` (0.2 folded the latter into its modes).
+//! [`SourceReport::raw_text_differs`] counts the rows whose raw text differed.
 //!
 //! # Decisions
 //!
@@ -39,8 +40,13 @@
 //!   `-wal` and `-shm` files beside it and leaves them there, and with a live writer it reads
 //!   the log and writes into the `-shm`. `immutable=1` would avoid both, but it reads the main
 //!   file alone and silently skips every committed transaction still in a live log, so it is
-//!   not used. JSON files are read with `std::fs::read`. Nothing in the source directory is
-//!   ever opened for writing (invariant I6).
+//!   not used. Nothing in the source directory is ever opened for writing (invariant I6).
+//! - **Regular files only, and only so much of them.** Every source must be a regular file, not a
+//!   symbolic link, directory, FIFO or device: it is inspected without following links before
+//!   anything opens it, and on Unix the file opened must be the one inspected. SQLite opens the
+//!   database with `SQLITE_OPEN_NOFOLLOW`. A JSON file is read through a cap of
+//!   [`MAX_JSON_BYTES`], so a file that grows while it is read cannot exceed it either. A copy of
+//!   the folder made with `cp -R` or `rsync -a` keeps regular files regular.
 //! - **All or nothing.** A source that 0.2 itself could not have written (a file that does not
 //!   parse, a field of the wrong type, an unreadable date) fails the whole import with an error
 //!   naming the file and the problem. 0.2 fell back to defaults for a file it could not parse,
@@ -71,7 +77,7 @@
 //! anything the user said or typed (I5).
 
 use std::fmt;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read};
 use std::path::Path;
 
 use ink_core::store::{NewRecord, RecordId, Segment};
@@ -110,14 +116,40 @@ pub const MODES_KEY: &str = "import.inkwell-0.2.modes";
 /// `import.inkwell-0.2.settings.hotkey`), holding the field's value as JSON text.
 pub const SETTINGS_PREFIX: &str = "import.inkwell-0.2.settings.";
 
+/// The imported voice commands: `{enabled, wake_prefix, commands: [...]}`.
+pub const VOICE_COMMANDS_KEY: &str = "import.inkwell-0.2.voice-commands";
+
+/// The imported per-app style rules (0.2 folded them into modes on first launch of a build with
+/// modes, but kept the file): `{enabled, rules: [{process_name, style}]}`.
+pub const APP_STYLES_KEY: &str = "import.inkwell-0.2.app-styles";
+
+/// The largest JSON file the import reads: 8 MiB. 0.2's files are small documents: a settings
+/// file of about 1 KB, modes with a few polish prompts, and a dictionary or snippet list that
+/// stays in the hundreds of KB even with thousands of entries. The cap is more than ten times
+/// any of that, and it bounds the memory a parse can take (a parsed document holds a few times
+/// its bytes).
+pub const MAX_JSON_BYTES: u64 = 8 * 1024 * 1024;
+
 const TRANSCRIPTS: &str = "transcripts.db";
+const JOURNAL: &str = "transcripts.db-journal";
+const WAL: &str = "transcripts.db-wal";
 const DICTIONARY: &str = "dictionary.json";
 const SNIPPETS: &str = "snippets.json";
 const MODES: &str = "modes.json";
 const SETTINGS: &str = "settings.json";
+const VOICE_COMMANDS: &str = "voice-commands.json";
+const APP_STYLES: &str = "app-styles.json";
 
-/// Files 0.2 kept that this importer does not read, reported when present.
-const NOT_IMPORTED: [&str; 2] = ["voice-commands.json", "app-styles.json"];
+/// Every file the import reads.
+const SOURCES: [&str; 7] = [
+    TRANSCRIPTS,
+    DICTIONARY,
+    SNIPPETS,
+    MODES,
+    SETTINGS,
+    VOICE_COMMANDS,
+    APP_STYLES,
+];
 
 /// Fields 0.2 stripped from `settings.json` as plaintext secrets (`settings.rs`), sorted.
 const SECRET_FIELDS: [&str; 6] = [
@@ -203,19 +235,25 @@ pub struct Counts {
     pub modes: usize,
     /// `settings.json` fields.
     pub settings: usize,
+    /// Voice commands.
+    pub voice_commands: usize,
+    /// Per-app style rules.
+    pub app_style_rules: usize,
     /// Providers with a key in the keychain, linked by reference.
     pub linked_keys: usize,
 }
 
 impl Counts {
     /// Every kind with its label, in a fixed order, for printing and comparing.
-    pub fn by_kind(&self) -> [(&'static str, usize); 6] {
+    pub fn by_kind(&self) -> [(&'static str, usize); 8] {
         [
             ("dictations", self.dictations),
             ("dictionary entries", self.dictionary_entries),
             ("snippets", self.snippets),
             ("modes", self.modes),
             ("settings", self.settings),
+            ("voice commands", self.voice_commands),
+            ("app style rules", self.app_style_rules),
             ("linked keys", self.linked_keys),
         ]
     }
@@ -245,8 +283,6 @@ pub struct SourceReport {
     pub unknown_fields_skipped: usize,
     /// Providers the keychain could not answer for.
     pub keys_unchecked: usize,
-    /// 0.2 files present in the directory that this importer does not read.
-    pub not_imported: Vec<&'static str>,
 }
 
 /// Why an import did not happen. Messages name the file and the problem, never a path or content.
@@ -254,6 +290,11 @@ pub struct SourceReport {
 pub enum ImportError {
     /// The directory does not exist, or holds none of the files 0.2 wrote.
     NoSource,
+    /// A source is not a regular file: a symbolic link, directory, FIFO or device.
+    NotAFile {
+        /// The file.
+        file: &'static str,
+    },
     /// A source file exists but could not be read.
     Unreadable {
         /// The file.
@@ -284,8 +325,13 @@ impl fmt::Display for ImportError {
         match self {
             Self::NoSource => write!(
                 f,
-                "no Inkwell 0.2 data: the directory has none of {TRANSCRIPTS}, {DICTIONARY}, \
-                 {MODES}, {SETTINGS} or {SNIPPETS}"
+                "no Inkwell 0.2 data: the directory has none of {}",
+                SOURCES.join(", ")
+            ),
+            Self::NotAFile { file } => write!(
+                f,
+                "{file}: is not a regular file (a symbolic link, directory or device); import a \
+                 plain copy of the folder"
             ),
             Self::Unreadable { file, kind } => write!(f, "{file}: could not be read ({kind:?})"),
             Self::Malformed { file, problem } => write!(f, "{file}: {problem}"),
@@ -308,6 +354,13 @@ impl std::error::Error for ImportError {}
 impl From<StoreError> for ImportError {
     fn from(e: StoreError) -> Self {
         Self::Store(e)
+    }
+}
+
+fn unreadable(file: &'static str, e: &std::io::Error) -> ImportError {
+    ImportError::Unreadable {
+        file,
+        kind: e.kind(),
     }
 }
 
@@ -340,6 +393,8 @@ pub struct Inkwell02 {
     dictionary: Option<Document>,
     snippets: Option<Document>,
     modes: Option<Document>,
+    voice_commands: Option<Document>,
+    app_styles: Option<Document>,
     /// `(field, JSON value)`, in 0.2's field order.
     settings: Vec<(&'static str, String)>,
     linked_keys: Vec<&'static str>,
@@ -364,9 +419,11 @@ impl Inkwell02 {
         if !dir.is_dir() {
             return Err(ImportError::NoSource);
         }
-        let any = [TRANSCRIPTS, DICTIONARY, SNIPPETS, MODES, SETTINGS]
+        let dir = &resolve(dir).map_err(|e| unreadable("the source directory", &e))?;
+        // Without following links: a dangling link is present, and refused below.
+        let any = SOURCES
             .iter()
-            .any(|file| dir.join(file).exists());
+            .any(|file| std::fs::symlink_metadata(dir.join(file)).is_ok());
         if !any {
             return Err(ImportError::NoSource);
         }
@@ -388,11 +445,13 @@ impl Inkwell02 {
         let modes = read_json(dir, MODES)?
             .map(|v| modes_document(&v))
             .transpose()?;
+        let voice_commands = read_json(dir, VOICE_COMMANDS)?
+            .map(|v| voice_commands_document(&v))
+            .transpose()?;
+        let app_styles = read_json(dir, APP_STYLES)?
+            .map(|v| app_styles_document(&v))
+            .transpose()?;
         let settings = read_settings(dir, &mut report)?;
-        report.not_imported = NOT_IMPORTED
-            .into_iter()
-            .filter(|file| dir.join(file).exists())
-            .collect();
 
         // Asked last, so a source that fails validation never reaches the keychain.
         let mut linked_keys = Vec::new();
@@ -409,6 +468,8 @@ impl Inkwell02 {
             dictionary,
             snippets,
             modes,
+            voice_commands,
+            app_styles,
             settings,
             linked_keys,
             report,
@@ -424,6 +485,8 @@ impl Inkwell02 {
             snippets: items(&self.snippets),
             modes: items(&self.modes),
             settings: self.settings.len(),
+            voice_commands: items(&self.voice_commands),
+            app_style_rules: items(&self.app_styles),
             linked_keys: self.linked_keys.len(),
         }
     }
@@ -467,6 +530,8 @@ impl SqliteStore {
             (DICTIONARY_KEY, &source.dictionary),
             (SNIPPETS_KEY, &source.snippets),
             (MODES_KEY, &source.modes),
+            (VOICE_COMMANDS_KEY, &source.voice_commands),
+            (APP_STYLES_KEY, &source.app_styles),
         ] {
             if let Some(doc) = doc {
                 documents.push((key.to_string(), &doc.json));
@@ -537,31 +602,29 @@ const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 /// Reads every transcript, oldest first, and counts the rows whose raw text differs. `None`
 /// when there is no database.
 fn read_transcripts(dir: &Path) -> Result<Option<(Vec<Dictation>, usize)>, ImportError> {
+    read_transcripts_with(dir, &mut || {})
+}
+
+/// [`read_transcripts`], with `before_open` run between the checks and SQLite's open: the seam a
+/// test uses to start a write in that window.
+fn read_transcripts_with(
+    dir: &Path,
+    before_open: &mut dyn FnMut(),
+) -> Result<Option<(Vec<Dictation>, usize)>, ImportError> {
     let file = TRANSCRIPTS;
-    let path = dir.join(file);
-    let header = match read_header(&path) {
-        Ok(header) => header,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(ImportError::Unreadable {
-                file,
-                kind: e.kind(),
-            });
-        }
+    let Some(opened) = open_regular(dir, file)? else {
+        return Ok(None);
     };
-    for suffix in ["-journal", "-wal"] {
-        let mut side = path.as_os_str().to_owned();
-        side.push(suffix);
-        match std::fs::metadata(&side) {
+    let header = read_header(opened).map_err(|e| unreadable(file, &e))?;
+    for side in [JOURNAL, WAL] {
+        match std::fs::symlink_metadata(dir.join(side)) {
+            Ok(meta) if !meta.file_type().is_file() => {
+                return Err(ImportError::NotAFile { file: side });
+            }
             Ok(meta) if meta.len() > 0 => return Err(ImportError::InUse { file }),
             Ok(_) => {}
             Err(e) if e.kind() == ErrorKind::NotFound => {}
-            Err(e) => {
-                return Err(ImportError::Unreadable {
-                    file,
-                    kind: e.kind(),
-                });
-            }
+            Err(e) => return Err(unreadable(side, &e)),
         }
     }
     if header.len() < 100 || header[..16] != SQLITE_MAGIC[..] {
@@ -587,24 +650,85 @@ fn read_transcripts(dir: &Path) -> Result<Option<(Vec<Dictation>, usize)>, Impor
         }
     }
 
-    let mut conn = Connection::open_with_flags(
-        &path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    before_open();
+    let read = Connection::open_with_flags(
+        dir.join(file),
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
-    .map_err(|e| sql_problem(&e))?;
-    read_rows(&mut conn).map(Some).map_err(|e| match e {
-        RowsError::Sql(e) => sql_problem(&e),
-        RowsError::Import(e) => e,
-    })
+    .map_err(RowsError::Sql)
+    .and_then(|mut conn| read_rows(&mut conn));
+    match read {
+        Ok(rows) => Ok(Some(rows)),
+        // A write that began after the check above leaves its journal or log beside the file,
+        // and is the likelier cause of the failure than damage.
+        Err(_)
+            if [JOURNAL, WAL]
+                .iter()
+                .any(|side| std::fs::symlink_metadata(dir.join(side)).is_ok()) =>
+        {
+            Err(ImportError::InUse { file })
+        }
+        Err(RowsError::Sql(e)) => Err(sql_problem(&e)),
+        Err(RowsError::Import(e)) => Err(e),
+    }
+}
+
+/// The source directory with every link in its path resolved, on Unix: SQLite's
+/// `SQLITE_OPEN_NOFOLLOW` refuses a link anywhere in the path (macOS's `/var` and `/tmp` are
+/// links), and the directory is the user's choice. The flag is then left guarding the one name
+/// the import checked itself. Windows keeps the path as given: SQLite's Windows VFS never
+/// reports a link, so the flag does nothing there.
+#[cfg(unix)]
+fn resolve(dir: &Path) -> std::io::Result<std::path::PathBuf> {
+    std::fs::canonicalize(dir)
+}
+
+#[cfg(not(unix))]
+fn resolve(dir: &Path) -> std::io::Result<std::path::PathBuf> {
+    Ok(dir.to_path_buf())
+}
+
+/// Opens a source for reading if it is a regular file; `None` when there is nothing there.
+///
+/// The entry is inspected without following links before anything opens it (opening a FIFO
+/// would block), and on Unix the file opened must be the one inspected (same device and inode),
+/// so a swap in between is refused too.
+fn open_regular(dir: &Path, file: &'static str) -> Result<Option<std::fs::File>, ImportError> {
+    let path = dir.join(file);
+    let seen = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(unreadable(file, &e)),
+    };
+    if !seen.file_type().is_file() {
+        return Err(ImportError::NotAFile { file });
+    }
+    let opened = std::fs::File::open(&path).map_err(|e| unreadable(file, &e))?;
+    let meta = opened.metadata().map_err(|e| unreadable(file, &e))?;
+    if !meta.is_file() || !same_file(&seen, &meta) {
+        return Err(ImportError::NotAFile { file });
+    }
+    Ok(Some(opened))
+}
+
+#[cfg(unix)]
+fn same_file(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Windows has no stable file id in `std`; the link check before opening stands alone there.
+#[cfg(not(unix))]
+fn same_file(_: &std::fs::Metadata, _: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// The first 100 bytes of the file, or fewer if it is shorter.
-fn read_header(path: &Path) -> std::io::Result<Vec<u8>> {
-    use std::io::Read;
+fn read_header(file: std::fs::File) -> std::io::Result<Vec<u8>> {
     let mut header = Vec::with_capacity(100);
-    std::fs::File::open(path)?
-        .take(100)
-        .read_to_end(&mut header)?;
+    file.take(100).read_to_end(&mut header)?;
     Ok(header)
 }
 
@@ -686,10 +810,9 @@ fn read_rows(conn: &mut Connection) -> Result<(Vec<Dictation>, usize), RowsError
                 .to_string(),
             _ => return Err(bad("`text` is not text").into()),
         };
-        let duration_ms = match row.get_ref(2)? {
-            ValueRef::Integer(ms) => {
-                u64::try_from(ms).map_err(|_| bad("`audio_duration_ms` is negative"))?
-            }
+        let duration = match row.get_ref(2)? {
+            ValueRef::Integer(ms) if ms >= 0 => ms,
+            ValueRef::Integer(_) => return Err(bad("`audio_duration_ms` is negative").into()),
             _ => return Err(bad("`audio_duration_ms` is not a whole number").into()),
         };
         let stamped = match row.get_ref(3)? {
@@ -702,17 +825,17 @@ fn read_rows(conn: &mut Connection) -> Result<(Vec<Dictation>, usize), RowsError
         let ended_at_unix_ms = saved_s
             .checked_mul(1_000)
             .ok_or_else(|| bad("`created_at` is out of range"))?;
-        let started_at_unix_ms = i64::try_from(duration_ms)
-            .ok()
-            .and_then(|d| ended_at_unix_ms.checked_sub(d))
-            .ok_or_else(|| bad("`audio_duration_ms` is out of range"))?;
+        // The start is the save time less the recording's length: either can put it out of range.
+        let started_at_unix_ms = ended_at_unix_ms
+            .checked_sub(duration)
+            .ok_or_else(|| bad("`created_at` minus `audio_duration_ms` is out of range"))?;
         if row.get::<_, bool>(5)? {
             raw_differs += 1;
         }
         dictations.push(Dictation {
             started_at_unix_ms,
             ended_at_unix_ms,
-            duration_ms,
+            duration_ms: duration.unsigned_abs(),
             text,
         });
     }
@@ -736,6 +859,11 @@ fn is_local_datetime(bytes: &[u8]) -> bool {
 fn sql_problem(e: &rusqlite::Error) -> ImportError {
     use rusqlite::ErrorCode as C;
     let file = TRANSCRIPTS;
+    if let rusqlite::Error::SqliteFailure(err, _) = e
+        && err.extended_code == rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK
+    {
+        return ImportError::NotAFile { file };
+    }
     match e.sqlite_error_code() {
         Some(C::DatabaseBusy | C::DatabaseLocked) => ImportError::InUse { file },
         Some(C::NotADatabase) => malformed(file, "is not an SQLite database"),
@@ -757,15 +885,27 @@ fn read_json(dir: &Path, file: &'static str) -> Result<Option<Value>, ImportErro
     parse_json(file, &bytes).map(Some)
 }
 
+/// A JSON source's bytes, through the [`MAX_JSON_BYTES`] cap; `None` when it does not exist.
 fn read_file(dir: &Path, file: &'static str) -> Result<Option<Vec<u8>>, ImportError> {
-    match std::fs::read(dir.join(file)) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(ImportError::Unreadable {
+    let Some(opened) = open_regular(dir, file)? else {
+        return Ok(None);
+    };
+    // Sized from the file up front, so `settings.json`'s bytes stay in one allocation that the
+    // caller can wipe; one byte over the cap is enough to know it is too big.
+    let size = opened.metadata().map_or(0, |m| m.len()).min(MAX_JSON_BYTES);
+    let mut bytes = Vec::with_capacity(usize::try_from(size + 1).unwrap_or(0));
+    opened
+        .take(MAX_JSON_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| unreadable(file, &e))?;
+    if bytes.len() as u64 > MAX_JSON_BYTES {
+        bytes.zeroize();
+        return Err(malformed(
             file,
-            kind: e.kind(),
-        }),
+            "is larger than 8 MiB, far beyond any file Inkwell 0.2 wrote",
+        ));
     }
+    Ok(Some(bytes))
 }
 
 /// Parses JSON. serde_json's messages can quote a value, so only the error's category and
@@ -823,20 +963,39 @@ fn string_field(
     }
 }
 
-/// A boolean field with a serde default.
+/// A boolean field: missing takes `default` (required when `None`).
 fn bool_field(
     file: &'static str,
     obj: &Map<String, Value>,
     field: &str,
     what: &str,
-    default: bool,
+    default: Option<bool>,
 ) -> Result<Value, ImportError> {
-    match obj.get(field) {
-        Some(Value::Bool(b)) => Ok(Value::Bool(*b)),
-        None => Ok(Value::Bool(default)),
-        Some(_) => Err(malformed(
+    match (obj.get(field), default) {
+        (Some(Value::Bool(b)), _) => Ok(Value::Bool(*b)),
+        (None, Some(default)) => Ok(Value::Bool(default)),
+        (None, None) => Err(malformed(file, format!("{what}: `{field}` is missing"))),
+        (Some(_), _) => Err(malformed(
             file,
             format!("{what}: `{field}` is not true or false"),
+        )),
+    }
+}
+
+/// A required list of text.
+fn text_list(
+    file: &'static str,
+    obj: &Map<String, Value>,
+    field: &str,
+    what: &str,
+) -> Result<Value, ImportError> {
+    match obj.get(field) {
+        Some(Value::Array(items)) if items.iter().all(Value::is_string) => {
+            Ok(Value::Array(items.clone()))
+        }
+        _ => Err(malformed(
+            file,
+            format!("{what}: `{field}` is missing or not a list of text"),
         )),
     }
 }
@@ -873,7 +1032,7 @@ fn snippets_document(value: &Value) -> Result<Document, ImportError> {
             "trigger": string_field(file, s, "trigger", &what, None)?,
             "expansion": string_field(file, s, "expansion", &what, None)?,
             "category": string_field(file, s, "category", &what, Some(""))?,
-            "enabled": bool_field(file, s, "enabled", &what, true)?,
+            "enabled": bool_field(file, s, "enabled", &what, Some(true))?,
         }));
     }
     Ok(Document {
@@ -908,14 +1067,93 @@ fn modes_document(value: &Value) -> Result<Document, ImportError> {
             "style": string_field(file, m, "style", &what, None)?,
             "model": string_field(file, m, "model", &what, Some(""))?,
             "polish_prompt": string_field(file, m, "polish_prompt", &what, Some(""))?,
-            "polish_enabled": bool_field(file, m, "polish_enabled", &what, false)?,
+            "polish_enabled": bool_field(file, m, "polish_enabled", &what, Some(false))?,
             "apps": apps,
-            "remove_fillers": bool_field(file, m, "remove_fillers", &what, true)?,
+            "remove_fillers": bool_field(file, m, "remove_fillers", &what, Some(true))?,
         }));
     }
     Ok(Document {
         items: out.len(),
         json: json!({ "default_id": default_id, "modes": out }).to_string(),
+    })
+}
+
+/// `voice-commands.json` (`VoiceCommandStore`): `{"enabled", "wake_prefix", "commands": [{"id",
+/// "triggers", "action", "enabled"}]}`. 0.2 gave none of these a default.
+fn voice_commands_document(value: &Value) -> Result<Document, ImportError> {
+    let file = VOICE_COMMANDS;
+    let top = object(file, value, "the file")?;
+    let enabled = bool_field(file, top, "enabled", "the file", None)?;
+    let wake_prefix = string_field(file, top, "wake_prefix", "the file", None)?;
+    let commands = array(file, top, "commands")?;
+    let mut out = Vec::with_capacity(commands.len());
+    for (i, command) in commands.iter().enumerate() {
+        let what = format!("command {}", i + 1);
+        let c = object(file, command, &what)?;
+        out.push(json!({
+            "id": string_field(file, c, "id", &what, None)?,
+            "triggers": text_list(file, c, "triggers", &what)?,
+            "action": action(c.get("action"), &what)?,
+            "enabled": bool_field(file, c, "enabled", &what, None)?,
+        }));
+    }
+    Ok(Document {
+        items: out.len(),
+        json: json!({ "enabled": enabled, "wake_prefix": wake_prefix, "commands": out })
+            .to_string(),
+    })
+}
+
+/// A voice command's `action`: 0.2's `CommandAction`, tagged by `type` in snake case, with the
+/// one text field its variant carries. The tag is never quoted back: it is the file's content.
+fn action(value: Option<&Value>, what: &str) -> Result<Value, ImportError> {
+    let file = VOICE_COMMANDS;
+    let what = format!("{what}: `action`");
+    let a = object(file, value.unwrap_or(&Value::Null), &what)?;
+    let Some(Value::String(kind)) = a.get("type") else {
+        return Err(malformed(file, format!("{what} has no `type`")));
+    };
+    let payload = match kind.as_str() {
+        "undo" | "toggle_polish" | "toggle_dictation" => None,
+        "change_style" => Some("style"),
+        "switch_model" => Some("model"),
+        "open_url" => Some("url"),
+        "open_app" => Some("path"),
+        "insert_text" => Some("text"),
+        _ => {
+            return Err(malformed(
+                file,
+                format!("{what} has a `type` Inkwell 0.2 does not know"),
+            ));
+        }
+    };
+    let mut out = Map::new();
+    out.insert("type".into(), Value::String(kind.clone()));
+    if let Some(field) = payload {
+        out.insert(field.into(), string_field(file, a, field, &what, None)?);
+    }
+    Ok(Value::Object(out))
+}
+
+/// `app-styles.json` (`AppStyleRules`): `{"enabled", "rules": [{"process_name", "style"}]}`, every
+/// field required.
+fn app_styles_document(value: &Value) -> Result<Document, ImportError> {
+    let file = APP_STYLES;
+    let top = object(file, value, "the file")?;
+    let enabled = bool_field(file, top, "enabled", "the file", None)?;
+    let rules = array(file, top, "rules")?;
+    let mut out = Vec::with_capacity(rules.len());
+    for (i, rule) in rules.iter().enumerate() {
+        let what = format!("rule {}", i + 1);
+        let r = object(file, rule, &what)?;
+        out.push(json!({
+            "process_name": string_field(file, r, "process_name", &what, None)?,
+            "style": string_field(file, r, "style", &what, None)?,
+        }));
+    }
+    Ok(Document {
+        items: out.len(),
+        json: json!({ "enabled": enabled, "rules": out }).to_string(),
     })
 }
 
@@ -1009,6 +1247,76 @@ mod tests {
         assert!(!err.to_string().contains('5'), "{err}");
     }
 
+    /// A directory holding a minimal 0.2 `transcripts.db` with one row, links resolved.
+    fn legacy_db(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ink-store-import-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = resolve(&dir).unwrap();
+        let conn = Connection::open(dir.join(TRANSCRIPTS)).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE transcripts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL,
+                 raw_text TEXT NOT NULL, audio_duration_ms INTEGER NOT NULL DEFAULT 0,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')));
+             INSERT INTO transcripts (text, raw_text) VALUES ('synthetic', 'synthetic');",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_journal_that_appears_during_the_read_is_reported_as_in_use() {
+        let dir = legacy_db("late-journal");
+        let journal = dir.join("transcripts.db-journal");
+
+        // 0.2 starts a write after the side files were checked and before SQLite opens the file.
+        let late = read_transcripts_with(&dir, &mut || std::fs::write(&journal, b"late").unwrap());
+        let err = late.map(|_| ()).unwrap_err();
+        assert!(
+            matches!(err, ImportError::InUse { file: TRANSCRIPTS }),
+            "{err:?}"
+        );
+
+        std::fs::remove_file(&journal).unwrap();
+        let rows = read_transcripts_with(&dir, &mut || {}).map(|r| r.map(|(d, _)| d.len()));
+        assert!(matches!(rows, Ok(Some(1))), "{rows:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The link check runs before SQLite opens the file; `SQLITE_OPEN_NOFOLLOW` covers a swap in
+    /// between.
+    #[cfg(unix)]
+    #[test]
+    fn a_database_swapped_for_a_link_before_sqlite_opens_it_is_refused() {
+        let dir = legacy_db("late-link");
+        let elsewhere = dir.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let swap = &mut || {
+            std::fs::rename(dir.join(TRANSCRIPTS), elsewhere.join(TRANSCRIPTS)).unwrap();
+            std::os::unix::fs::symlink(elsewhere.join(TRANSCRIPTS), dir.join(TRANSCRIPTS)).unwrap();
+        };
+        let err = read_transcripts_with(&dir, swap).map(|_| ()).unwrap_err();
+        assert!(
+            matches!(err, ImportError::NotAFile { file: TRANSCRIPTS }),
+            "{err:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn same_file_tells_two_files_apart() {
+        let dir = legacy_db("same-file");
+        std::fs::write(dir.join(DICTIONARY), b"{}").unwrap();
+        let db = std::fs::metadata(dir.join(TRANSCRIPTS)).unwrap();
+        let json = std::fs::metadata(dir.join(DICTIONARY)).unwrap();
+        let opened = std::fs::File::open(dir.join(TRANSCRIPTS)).unwrap();
+        assert!(same_file(&db, &opened.metadata().unwrap()));
+        if cfg!(unix) {
+            assert!(!same_file(&db, &json));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn counts_print_every_kind_in_order() {
         let counts = Counts {
@@ -1017,11 +1325,14 @@ mod tests {
             snippets: 3,
             modes: 4,
             settings: 5,
-            linked_keys: 6,
+            voice_commands: 6,
+            app_style_rules: 7,
+            linked_keys: 8,
         };
         assert_eq!(
             counts.to_string(),
-            "dictations 1, dictionary entries 2, snippets 3, modes 4, settings 5, linked keys 6"
+            "dictations 1, dictionary entries 2, snippets 3, modes 4, settings 5, \
+             voice commands 6, app style rules 7, linked keys 8"
         );
     }
 }

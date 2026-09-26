@@ -12,8 +12,9 @@ use common::TempDb;
 use ink_core::*;
 use ink_store::SqliteStore;
 use ink_store::import::{
-    Counts, DICTIONARY_KEY, ImportError, Inkwell02, KeyProbe, KeyProbeError, MARKER_KEY, MODES_KEY,
-    NoKeychain, SETTINGS_PREFIX, SNIPPETS_KEY,
+    APP_STYLES_KEY, Counts, DICTIONARY_KEY, ImportError, Inkwell02, KeyProbe, KeyProbeError,
+    MARKER_KEY, MAX_JSON_BYTES, MODES_KEY, NoKeychain, SETTINGS_PREFIX, SNIPPETS_KEY,
+    VOICE_COMMANDS_KEY,
 };
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -91,7 +92,7 @@ impl Legacy {
 
     /// Every kind present: the five transcripts (one more written and deleted, as the history's
     /// delete button does, so ids have a gap), three dictionary entries, three snippets, two
-    /// modes and a full settings file.
+    /// modes, a full settings file, four voice commands and two app style rules.
     fn full(name: &str) -> Self {
         let legacy = Self::empty(name);
         legacy.transcripts(&rows(), true);
@@ -99,6 +100,8 @@ impl Legacy {
         legacy.write_json("snippets.json", &snippets());
         legacy.write_json("modes.json", &modes());
         legacy.write_json("settings.json", &settings());
+        legacy.write_json("voice-commands.json", &voice_commands());
+        legacy.write_json("app-styles.json", &app_styles());
         legacy
     }
 
@@ -141,18 +144,28 @@ impl Legacy {
         std::fs::write(self.path(file), bytes).unwrap();
     }
 
-    /// Every file in the directory by name, with its sha256.
+    /// Every entry in the directory by name: a regular file's sha256, a link's target, or its
+    /// kind. Never opens anything but a regular file (a FIFO would block).
     fn snapshot(&self) -> BTreeMap<String, String> {
         std::fs::read_dir(&self.dir)
             .unwrap()
             .map(|entry| {
                 let entry = entry.unwrap();
-                let bytes = std::fs::read(entry.path()).unwrap();
-                let digest: String = Sha256::digest(&bytes)
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
-                (entry.file_name().to_string_lossy().into_owned(), digest)
+                let kind = std::fs::symlink_metadata(entry.path()).unwrap().file_type();
+                let seen = if kind.is_file() {
+                    let bytes = std::fs::read(entry.path()).unwrap();
+                    Sha256::digest(&bytes)
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect()
+                } else if kind.is_symlink() {
+                    format!("link to {:?}", std::fs::read_link(entry.path()).unwrap())
+                } else if kind.is_dir() {
+                    "directory".to_string()
+                } else {
+                    "other".to_string()
+                };
+                (entry.file_name().to_string_lossy().into_owned(), seen)
             })
             .collect()
     }
@@ -203,6 +216,29 @@ fn modes() -> Value {
             { "id": "chat", "name": "Chat", "style": "casual", "apps": ["com.example.chat"] },
         ]
     })
+}
+
+/// `voice-commands.json` (voicecommand.rs): every field is required, and `action` is tagged by
+/// `type`.
+fn voice_commands() -> Value {
+    json!({
+        "enabled": true,
+        "wake_prefix": "inkwell",
+        "commands": [
+            { "id": "undo", "triggers": ["scratch that", "undo"], "action": { "type": "undo" }, "enabled": true },
+            { "id": "casual", "triggers": ["casual mode"], "action": { "type": "change_style", "style": "casual" }, "enabled": true },
+            { "id": "site", "triggers": ["open the example site"], "action": { "type": "open_url", "url": "https://example.com/" }, "enabled": false },
+            { "id": "sign", "triggers": ["sign off"], "action": { "type": "insert_text", "text": "Best, A. Tester" }, "enabled": true },
+        ]
+    })
+}
+
+/// `app-styles.json` (appdetect.rs): every field is required.
+fn app_styles() -> Value {
+    json!({ "enabled": true, "rules": [
+        { "process_name": "com.example.mail", "style": "formal" },
+        { "process_name": "chat.exe", "style": "casual" },
+    ]})
 }
 
 /// A settings file as 0.2's `Settings::save` wrote it: every field.
@@ -337,6 +373,8 @@ fn output_counts_equal_source_counts_per_kind() {
         snippets: 3,
         modes: 2,
         settings: 20,
+        voice_commands: 4,
+        app_style_rules: 2,
         linked_keys: 2,
     };
     assert_eq!(source.counts(), expected, "the dry run's counts");
@@ -361,6 +399,10 @@ fn output_counts_equal_source_counts_per_kind() {
         .filter(|k| k.starts_with(SETTINGS_PREFIX))
         .count();
     assert_eq!(settings, 20);
+    let commands = document(&store, VOICE_COMMANDS_KEY).unwrap();
+    assert_eq!(commands["commands"].as_array().unwrap().len(), 4);
+    let rules = document(&store, APP_STYLES_KEY).unwrap();
+    assert_eq!(rules["rules"].as_array().unwrap().len(), 2);
     let marker = document(&store, MARKER_KEY).unwrap();
     assert_eq!(marker["linked_keys"], json!(["openai", "groq"]));
 }
@@ -476,6 +518,12 @@ fn settings_documents_carry_0_2_values_with_its_defaults_filled_in() {
             "polish_enabled": false, "apps": ["com.example.chat"], "remove_fillers": true
         })
     );
+    // Every field of these two is required in 0.2, so the documents are the files as written.
+    assert_eq!(
+        document(&store, VOICE_COMMANDS_KEY).unwrap(),
+        voice_commands()
+    );
+    assert_eq!(document(&store, APP_STYLES_KEY).unwrap(), app_styles());
     // Each settings field is its own row holding the JSON value.
     let rows = setting_rows(&db);
     assert_eq!(rows[&format!("{SETTINGS_PREFIX}theme")], "\"dark\"");
@@ -651,6 +699,139 @@ fn malformed_file(err: &ImportError) -> &'static str {
     }
 }
 
+fn not_a_file(err: &ImportError) -> &'static str {
+    match err {
+        ImportError::NotAFile { file } => file,
+        other => panic!("expected NotAFile, got {other:?}"),
+    }
+}
+
+#[test]
+fn voice_commands_and_app_styles_are_validated_like_the_others() {
+    for (name, action) in [
+        ("unknown-action", json!({ "type": "canary_action" })),
+        ("missing-payload", json!({ "type": "change_style" })),
+        ("untagged-action", json!("undo")),
+    ] {
+        let err = refused_after(name, |l| {
+            let mut v = voice_commands();
+            v["commands"][1]["action"] = action;
+            l.write_json("voice-commands.json", &v);
+        });
+        assert_eq!(malformed_file(&err), "voice-commands.json", "{name}");
+    }
+    // 0.2 has no serde defaults here: a missing field meant the whole file was ignored.
+    let err = refused_after("command-without-enabled", |l| {
+        let mut v = voice_commands();
+        v["commands"][0].as_object_mut().unwrap().remove("enabled");
+        l.write_json("voice-commands.json", &v);
+    });
+    assert_eq!(malformed_file(&err), "voice-commands.json");
+    let err = refused_after("rule-without-style", |l| {
+        l.write_json(
+            "app-styles.json",
+            &json!({ "enabled": true, "rules": [ { "process_name": "canary.exe" } ] }),
+        );
+    });
+    assert_eq!(malformed_file(&err), "app-styles.json");
+    let err = refused_after("styles-without-enabled", |l| {
+        l.write_json("app-styles.json", &json!({ "rules": [] }));
+    });
+    assert_eq!(malformed_file(&err), "app-styles.json");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Only regular files, and only so much of them
+// ---------------------------------------------------------------------------------------------
+
+/// Moves `file` into a subdirectory and leaves a symbolic link to it in its place: a valid
+/// source, one hop away.
+#[cfg(unix)]
+fn link_in_place(l: &Legacy, file: &str) {
+    let elsewhere = l.path("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::rename(l.path(file), elsewhere.join(file)).unwrap();
+    std::os::unix::fs::symlink(elsewhere.join(file), l.path(file)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_transcripts_db_is_refused() {
+    let err = refused_after("linked-db", |l| link_in_place(l, "transcripts.db"));
+    assert_eq!(not_a_file(&err), "transcripts.db");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_json_file_is_refused() {
+    for file in [
+        "dictionary.json",
+        "snippets.json",
+        "modes.json",
+        "settings.json",
+        "voice-commands.json",
+        "app-styles.json",
+    ] {
+        let err = refused_after(&format!("linked-{file}"), |l| link_in_place(l, file));
+        assert_eq!(not_a_file(&err), file);
+    }
+}
+
+#[test]
+fn an_oversize_json_file_is_refused() {
+    // Valid JSON padded with whitespace: only the cap can refuse it.
+    let padded = |total: u64| {
+        let mut bytes = b"{ \"entries\": [] }".to_vec();
+        bytes.resize(usize::try_from(total).unwrap(), b' ');
+        bytes
+    };
+    let err = refused_after("oversize", |l| {
+        l.write("dictionary.json", &padded(MAX_JSON_BYTES + 1));
+    });
+    assert_eq!(malformed_file(&err), "dictionary.json");
+    assert!(err.to_string().contains("MiB"), "{err}");
+
+    let at_cap = Legacy::full("at-cap");
+    at_cap.write("dictionary.json", &padded(MAX_JSON_BYTES));
+    assert_eq!(at_cap.read().unwrap().counts().dictionary_entries, 0);
+}
+
+#[test]
+fn a_directory_or_fifo_in_place_of_a_file_is_refused() {
+    let err = refused_after("dir-for-json", |l| {
+        std::fs::remove_file(l.path("snippets.json")).unwrap();
+        std::fs::create_dir(l.path("snippets.json")).unwrap();
+    });
+    assert_eq!(not_a_file(&err), "snippets.json");
+    let err = refused_after("dir-for-db", |l| {
+        std::fs::remove_file(l.path("transcripts.db")).unwrap();
+        std::fs::create_dir(l.path("transcripts.db")).unwrap();
+    });
+    assert_eq!(not_a_file(&err), "transcripts.db");
+
+    #[cfg(unix)]
+    {
+        // Opening a FIFO blocks until something writes to it, so the read runs on its own
+        // thread: a hang is a failure, not a stuck test run.
+        let legacy = Legacy::full("fifo");
+        std::fs::remove_file(legacy.path("modes.json")).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(legacy.path("modes.json"))
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let dir = legacy.dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(Inkwell02::read(&dir, &NoKeychain).map(|_| ()));
+        });
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the read blocked on the FIFO");
+        assert_eq!(not_a_file(&result.unwrap_err()), "modes.json");
+    }
+}
+
 #[test]
 fn a_json_file_that_does_not_parse_is_refused() {
     let err = refused_after("bad-json", |l| {
@@ -784,6 +965,24 @@ fn a_row_that_0_2_could_not_have_written_is_refused() {
         assert_eq!(malformed_file(&err), "transcripts.db", "{name}");
         assert!(err.to_string().contains("row 4"), "{name}: {err}");
     }
+}
+
+#[test]
+fn an_out_of_range_start_names_the_fields_involved() {
+    // The start is `created_at` minus the recording's length: either can put it out of range.
+    let err = refused_after("start-underflow", |l| {
+        let conn = rusqlite::Connection::open(l.path("transcripts.db")).unwrap();
+        conn.execute(
+            "UPDATE transcripts SET created_at = '0000-01-01 00:00:00',
+                 audio_duration_ms = 9223372036854775807 WHERE id = 4",
+            [],
+        )
+        .unwrap();
+    });
+    let message = err.to_string();
+    assert!(message.contains("row 4"), "{message}");
+    assert!(message.contains("`created_at`"), "{message}");
+    assert!(message.contains("`audio_duration_ms`"), "{message}");
 }
 
 #[test]
