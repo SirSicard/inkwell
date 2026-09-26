@@ -13,14 +13,18 @@ ignore = []
 [licenses]
 allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib"]
 confidence-threshold = 0.93
-# The first proc-macro dependency brings unicode-ident, whose Unicode tables are Unicode-3.0 (a
-# permissive data licence). Add it then as a crate-scoped exception, not to `allow`:
-#   exceptions = [{ allow = ["Unicode-3.0"], crate = "unicode-ident" }]
 exceptions = [
+  # unicode-ident's Unicode tables are Unicode-3.0, a permissive data licence. It arrives with every
+  # proc-macro dependency. Crate-scoped, not added to `allow`.
+  { allow = ["Unicode-3.0"], crate = "unicode-ident" },
   # Test-only (a dev-dependency of ink-audio): proves the realtime capture path never allocates (I4).
   # BSD-1-Clause is more permissive than BSD-2; approved by the maintainer on 2026-09-26. Never ships.
   { allow = ["BSD-1-Clause"], crate = "assert_no_alloc" },
 ]
+# idna_adapter is pinned to 1.0.0 in Cargo.lock: ASCII-only domain names, no Unicode back end
+# (maintainer's decision, 2026-09-26). The default 1.2.x pulls in ICU4X under Unicode-3.0, so if a
+# `cargo update` moves it, this check fails on the icu_* crates. Restore the pin with:
+#   cargo update -p idna_adapter --precise 1.0.0
 
 [licenses.private]
 # The workspace's own crates are MIT and unpublished.
