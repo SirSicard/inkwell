@@ -786,22 +786,32 @@ mod tests {
 
     #[test]
     fn each_read_extends_the_quiet_period() {
+        // Measured against the moment the second read is sent, not against a fixed total: a
+        // loaded CI runner can overrun the 20 ms sleep, and the old 10 ms of slack made this flaky.
+        // The 200 ms quiet period leaves 180 ms of slack for the second read to land inside it.
+        let quiet = Duration::from_millis(200);
         let timing = PasteTiming {
             min_hold: Duration::ZERO,
-            quiet: Duration::from_millis(30),
-            read_timeout: Duration::from_millis(500),
+            quiet,
+            read_timeout: Duration::from_secs(2),
             ..FAST
         };
         let (tx, rx) = mpsc::channel();
+        let (sent_tx, sent_rx) = mpsc::channel();
         let start = Instant::now();
         let reader = thread::spawn(move || {
             tx.send(()).expect("receiver alive");
             thread::sleep(Duration::from_millis(20));
+            sent_tx.send(Instant::now()).expect("test alive");
             tx.send(()).expect("receiver alive");
         });
         assert!(wait_for_reads(&rx, start, timing));
-        // The second read came at about 20 ms, so the restore waits until about 50 ms.
-        assert!(start.elapsed() >= Duration::from_millis(50));
+        let returned = Instant::now();
         reader.join().expect("reader thread");
+        let second = sent_rx.recv().expect("the second read was sent");
+        assert!(
+            returned >= second + quiet,
+            "the restore waits the full quiet period after the last read"
+        );
     }
 }
