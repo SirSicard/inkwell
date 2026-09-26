@@ -4,9 +4,9 @@ name: Core
 on:
   push:
     branches: [main]
-    paths: ['core/**', '.github/workflows/core.yml']
+    paths: ['core/**', 'mac/**', 'schema/**', '.github/workflows/core.yml']
   pull_request:
-    paths: ['core/**', '.github/workflows/core.yml']
+    paths: ['core/**', 'mac/**', 'schema/**', '.github/workflows/core.yml']
   workflow_dispatch:
 
 permissions:
@@ -39,6 +39,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The C ABI's libraries with the engine features off, as the shells link them: the
+      # staticlib (the Mac XCFramework) and the cdylib (the Windows shell). No engine runtime DLLs.
+      - run: cargo build -p ink-ffi --lib --locked
       # The engine adapters sit behind features the workspace build leaves off.
       # Silero VAD: the model its tests run on, from the commit tag v6.2.3 points at, checked
       # against the hash the registry row pins. A mismatch fails the job.
@@ -76,6 +79,20 @@ jobs:
         run: cargo clippy -p ink-engines --all-targets --locked --features engine-llama -- -D warnings
       - if: runner.os == 'macOS'
         run: cargo test -p ink-engines --locked --features engine-llama
+      # The core's one logger with llama.cpp's own log filter in it: a planted transcript word at
+      # debug must not reach the sink (reuses the engine-llama build above).
+      - if: runner.os == 'macOS'
+        run: cargo test -p ink-ffi --locked --features engine-llama --test logging
+      # The C ABI from Swift: the core as an XCFramework (engine features off), the mac/ package
+      # with every target, and the XCTest smoke test. Thread Sanitizer runs locally
+      # (swift test --package-path mac --sanitize=thread).
+      - if: runner.os == 'macOS'
+        name: Swift smoke test (mac/)
+        working-directory: .
+        run: |
+          mac/scripts/build-core.sh
+          swift build --package-path mac
+          swift test --package-path mac
 
   deny:
     name: licences, advisories, sources
