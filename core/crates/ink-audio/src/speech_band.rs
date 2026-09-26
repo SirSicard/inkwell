@@ -1,49 +1,41 @@
-//! The speech band, and whether the audio in it is stationary.
+//! The speech band, and the no-VAD fallback's test for a stationary room.
 //!
-//! Both gain stages lift quiet audio to a target, and neither may lift a stationary room: room
-//! tone, hum, HVAC rumble, a fridge. They decide that here, on the **speech band** (300 Hz–3.4 kHz,
-//! [`SpeechBandFilter`]), where rumble below it contributes almost nothing and speech keeps its
-//! syllables, and on the band's **envelope**: the RMS of each 20 ms level frame.
+//! With a VAD installed, the gain stages learn level from speech alone and this module is not
+//! consulted (see [`gain`](crate::gain)). Without one (the model missing, or still downloading),
+//! the fallback has to guess, and it errs toward lifting: losing a quiet dictation is worse than
+//! transcribing noise, and the app says that voice detection is unavailable.
 //!
-//! Audio is **stationary** unless its envelope does both of these ([`Stationarity`]):
+//! The guess is made on the **speech band** (300 Hz–3.4 kHz, [`SpeechBandFilter`]) and its
+//! **envelope**, the RMS of each 20 ms level frame. Audio is treated as a stationary room, and
+//! left alone, when the envelope's robust peak stands less than
+//! [`MIN_DYNAMICS_DB`](crate::gain::MIN_DYNAMICS_DB) (4 dB) above
+//! its 10th-percentile frame (the same robust peak and quiet frame the gain stage uses). Anything
+//! else is lifted.
 //!
-//! - **stands out**: the robust peak of the envelope is at least [`MIN_DYNAMICS_DB`] (4 dB) above
-//!   its 10th-percentile frame (the same robust peak and quiet frame the gain stage uses), and
-//! - **moves in runs**: consecutive frames are correlated, lag-1 autocorrelation of the log
-//!   envelope at least [`MIN_CORRELATION`] (0.6). Speech's loud frames come in syllables, many
-//!   frames long. A stationary noise's frames are loud or quiet at random, one frame to the next,
-//!   however large its swings: rumble low-passed steeply has little left in the band but a narrow
-//!   skirt, whose frames swing by several dB, uncorrelated. Contrast alone lifted it.
+//! What that does, as the committed tests hold it:
 //!
-//! Neither condition asks whether the audio is speech. A cycling fan (loud and quiet for a second
-//! at a time) moves in runs and stands out, and is lifted; knocks can be. What is speech is the
-//! VAD's call, downstream.
-//!
-//! The committed tests hold this to account: rumble at 100, 250, 500 and 1000 Hz, gentle and steep,
-//! and white room tone are never lifted (`rumble_takes_are_not_lifted`, `agc_never_lifts_rumble`,
-//! `agc_never_lifts_a_long_stretch_of_room_tone`); breathy and ordinary speech 8 dB over white
-//! noise or 100 Hz rumble always are (`speech_in_noise_and_over_rumble_at_8_db_snr_is_lifted_to_the_target`,
-//! `agc_lifts_speech_in_noise_and_over_rumble_to_the_target`); and each condition's edge has its
-//! own test (`the_dynamics_guard_stops_lifting_below_4_db_of_contrast`,
-//! `the_guard_needs_the_envelope_to_move_in_runs`).
-//!
-//! Only the decision is made on the band. The level the gain is keyed to stays the full-band
-//! robust peak.
+//! - White room tone and gently low-passed rumble are left alone
+//!   (`fallback_leaves_white_room_tone_and_gentle_rumble_alone`,
+//!   `agc_without_vad_never_lifts_white_room_tone_or_gentle_rumble`).
+//! - Speech and breathy speech, syllables of 0.12 s to 0.26 s, clean or 8 dB over white noise or
+//!   rumble, are lifted (`fallback_lifts_fast_and_slow_speech`,
+//!   `agc_without_vad_lifts_fast_and_slow_speech`).
+//! - Steeply low-passed rumble, rumble swinging slowly in level, a cycling fan and knocks can be
+//!   lifted too (`fallback_can_lift_steep_and_swinging_rumble`,
+//!   `agc_without_vad_can_lift_steep_and_swinging_rumble`). That is the price of the fallback,
+//!   and why the pipeline uses the VAD-gated calls whenever a VAD is installed.
 
 use std::f64::consts::TAU;
 use std::ops::Range;
 
 use ink_core::CANONICAL_RATE;
 
-use crate::gain::{LEVEL_FRAME, MIN_DYNAMICS_DB, QUIET_PERCENTILE, TRANSIENT_FRAMES};
+use crate::gain::{LEVEL_FRAME, QUIET_PERCENTILE, TRANSIENT_FRAMES};
 
 /// The speech band's edges in Hz.
 pub const SPEECH_BAND_HZ: Range<f32> = 300.0..3_400.0;
 
-/// The lag-1 autocorrelation of the log band envelope that non-stationary audio reaches.
-pub const MIN_CORRELATION: f32 = 0.6;
-
-/// Envelope values are floored here (−180 dBFS) so digital silence has a finite logarithm.
+/// Envelope values are floored here (−180 dBFS) so digital silence has a finite ratio.
 const ENVELOPE_FLOOR: f32 = 1.0e-9;
 
 /// The speech-band filter: two 2nd-order Butterworth high-passes at 300 Hz (24 dB per octave below
@@ -105,78 +97,33 @@ pub fn envelope(samples: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// How an envelope moves. See the module docs.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Stationarity {
-    /// The envelope's robust peak over its 10th-percentile frame, in dB.
-    pub contrast_db: f32,
-    /// Lag-1 autocorrelation of the log envelope (−1 to 1; 0 when it does not move at all).
-    pub correlation: f32,
+/// An envelope's contrast: its robust peak over its 10th-percentile frame, in dB. **Allocates** a
+/// copy to rank it.
+pub fn contrast_db(envelope: &[f32]) -> f32 {
+    let mut scratch = envelope.to_vec();
+    contrast_in(envelope.iter().copied(), &mut scratch).0
 }
 
-impl Stationarity {
-    /// Measures an envelope (frames in time order). **Allocates** a copy to rank it.
-    pub fn of_envelope(envelope: &[f32]) -> Self {
-        let mut scratch = envelope.to_vec();
-        Self::measure(envelope.iter().copied(), &mut scratch).0
+/// The contrast of the envelope `frames` yields, ranking a copy in `scratch` (which must hold them
+/// all), and the envelope's quiet (10th-percentile) frame. Allocation-free.
+pub(crate) fn contrast_in(frames: impl Iterator<Item = f32>, scratch: &mut [f32]) -> (f32, f32) {
+    let mut n = 0;
+    for (slot, v) in scratch.iter_mut().zip(frames) {
+        *slot = v.max(ENVELOPE_FLOOR);
+        n += 1;
     }
-
-    /// Whether the audio is stationary: its envelope does not both stand out and move in runs.
-    pub fn is_stationary(&self) -> bool {
-        self.contrast_db < MIN_DYNAMICS_DB || self.correlation < MIN_CORRELATION
+    if n == 0 {
+        return (0.0, 0.0);
     }
-
-    /// Measures the envelope `frames` yields in time order, ranking a copy in `scratch` (which must
-    /// hold them all). Returns the measure and the envelope's quiet (10th-percentile) frame.
-    /// Allocation-free.
-    pub(crate) fn measure(
-        frames: impl Iterator<Item = f32> + Clone,
-        scratch: &mut [f32],
-    ) -> (Self, f32) {
-        let mut n = 0;
-        for (slot, v) in scratch.iter_mut().zip(frames.clone()) {
-            *slot = v.max(ENVELOPE_FLOOR);
-            n += 1;
-        }
-        if n == 0 {
-            let flat = Self {
-                contrast_db: 0.0,
-                correlation: 0.0,
-            };
-            return (flat, 0.0);
-        }
-        let ranked = &mut scratch[..n];
-        let loudest_first = |a: &f32, b: &f32| b.total_cmp(a);
-        let robust = *ranked
-            .select_nth_unstable_by(TRANSIENT_FRAMES.min(n - 1), loudest_first)
-            .1;
-        let quiet = *ranked
-            .select_nth_unstable_by(n - 1 - n * QUIET_PERCENTILE / 100, loudest_first)
-            .1;
-        let contrast_db = 20.0 * (robust / quiet).log10();
-
-        let log = |v: f32| f64::from(v.max(ENVELOPE_FLOOR)).ln();
-        let mean = frames.clone().map(log).sum::<f64>() / n as f64;
-        let variance: f64 = frames.clone().map(|v| (log(v) - mean).powi(2)).sum();
-        let lagged: f64 = frames
-            .clone()
-            .zip(frames.skip(1))
-            .map(|(a, b)| (log(a) - mean) * (log(b) - mean))
-            .sum();
-        // A flat envelope (a steady tone, digital silence) does not move: correlation 0.
-        let correlation = if variance > 1e-12 {
-            (lagged / variance) as f32
-        } else {
-            0.0
-        };
-        (
-            Self {
-                contrast_db,
-                correlation,
-            },
-            quiet,
-        )
-    }
+    let ranked = &mut scratch[..n];
+    let loudest_first = |a: &f32, b: &f32| b.total_cmp(a);
+    let robust = *ranked
+        .select_nth_unstable_by(TRANSIENT_FRAMES.min(n - 1), loudest_first)
+        .1;
+    let quiet = *ranked
+        .select_nth_unstable_by(n - 1 - n * QUIET_PERCENTILE / 100, loudest_first)
+        .1;
+    (20.0 * (robust / quiet).log10(), quiet)
 }
 
 /// One second-order section (RBJ cookbook, transposed direct form II), in `f64` so the 300 Hz
@@ -254,7 +201,7 @@ impl Biquad {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gain::{from_dbfs, to_dbfs};
+    use crate::gain::{from_dbfs, rms, to_dbfs};
     use crate::synth::tone;
 
     /// The filter's gain at `hz`, from a steady tone's RMS in and out (the first 0.1 s skipped).
@@ -262,7 +209,7 @@ mod tests {
         let x = tone(0.5, hz, 0.5, CANONICAL_RATE);
         let mut f = SpeechBandFilter::new();
         let y: Vec<f32> = x.iter().map(|&s| f.process(s)).collect();
-        to_dbfs(crate::gain::rms(&y[1_600..])) - to_dbfs(crate::gain::rms(&x[1_600..]))
+        to_dbfs(rms(&y[1_600..])) - to_dbfs(rms(&x[1_600..]))
     }
 
     #[test]
@@ -276,30 +223,12 @@ mod tests {
     }
 
     #[test]
-    fn a_flat_envelope_is_stationary_and_uncorrelated() {
-        let s = Stationarity::of_envelope(&[0.01; 50]);
-        assert_eq!((s.contrast_db, s.correlation), (0.0, 0.0));
-        assert!(s.is_stationary());
-        assert!(Stationarity::of_envelope(&[]).is_stationary());
-    }
-
-    #[test]
-    fn runs_correlate_and_flicker_anticorrelates() {
-        let level = |loud: bool| {
-            if loud {
-                from_dbfs(-40.0)
-            } else {
-                from_dbfs(-50.0)
-            }
-        };
-        let runs: Vec<f32> = (0..100u32)
-            .map(|k| level((k / 5).is_multiple_of(2)))
+    fn contrast_is_the_robust_peak_over_the_quiet_frame() {
+        assert_eq!(contrast_db(&[0.01; 50]), 0.0);
+        assert_eq!(contrast_db(&[]), 0.0);
+        let two: Vec<f32> = (0..100u32)
+            .map(|k| from_dbfs(if k.is_multiple_of(2) { -40.0 } else { -50.0 }))
             .collect();
-        let flicker: Vec<f32> = (0..100u32).map(|k| level(k.is_multiple_of(2))).collect();
-        let r = Stationarity::of_envelope(&runs);
-        let f = Stationarity::of_envelope(&flicker);
-        assert!((r.contrast_db - 10.0).abs() < 1e-3 && (f.contrast_db - 10.0).abs() < 1e-3);
-        assert!(r.correlation > 0.5 && !r.is_stationary(), "{r:?}");
-        assert!(f.correlation < -0.9 && f.is_stationary(), "{f:?}");
+        assert!((contrast_db(&two) - 10.0).abs() < 1e-3);
     }
 }

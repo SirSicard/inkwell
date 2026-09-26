@@ -3,9 +3,23 @@
 //! A built-in microphone array read through the raw HAL skips the voice processing that normally
 //! lifts it, so ordinary speech can arrive tens of dB below full scale, where a recogniser returns
 //! empty text; the −75 dBFS RMS fixture is the case this crate is held to
-//! (`minus_75_dbfs_rms_speech_reaches_the_target`). [`normalise`] lifts a whole utterance (a
+//! (`minus_75_dbfs_rms_speech_reaches_the_target`). This stage lifts a whole utterance (a
 //! dictation take, an imported file's window) with one gain, so its dynamics survive. The meeting
 //! path uses the slow [`Agc`](crate::Agc) toward the same [`TARGET_PEAK`].
+//!
+//! # Two calls, one per situation
+//!
+//! - **[`normalise_speech`], whenever a VAD is installed.** The gain is learned from the speech in
+//!   the take and nothing else (the WebRTC AGC2 pattern: level estimation gated by a VAD). A VAD
+//!   cannot hear −75 dBFS speech either, so the flow is: a provisional gain from the whole take's
+//!   robust peak ([`provisional_gain`]); the VAD over the take lifted by it; the final gain from
+//!   the robust peak of the original's speech frames only ([`speech_levels`]). A take in which the
+//!   VAD finds no speech gets no gain and is reported as [`GainOutcome::NoSpeech`]: the caller
+//!   discards it. Rumble, a fan or knocks never set the level, whatever their shape.
+//! - **[`normalise_without_vad`], only while no VAD is available** (the model missing, or still
+//!   downloading), and only while the app says that voice detection is unavailable. It guesses on
+//!   the speech band's contrast ([`speech_band`]) and errs toward lifting: losing a quiet
+//!   dictation is worse than transcribing noise. It can lift rumble and other non-speech.
 //!
 //! # The level it keys on
 //!
@@ -31,21 +45,20 @@
 //! transient above the robust peak is shaved rather than wrapped: a shaved click is harmless where
 //! an unamplified dictation is not.
 //!
-//! # Level, not speech
+//! # Why the VAD, not a level heuristic
 //!
-//! This stage decides **level only**. Whether a take holds speech is the VAD's question, asked
-//! after it: a take with no speech must be discarded there ([`trim_ends`](crate::trim_ends)
-//! returns `None`) before any engine sees it, never passed on whole. A cycling fan, a cough or
-//! knocks can be lifted to the target like speech (`bursty_noise_can_be_lifted_because_the_gain_stage_is_not_a_speech_detector`).
-//!
-//! The one guard that looks past level keeps a stationary room from being lifted. It is new in
-//! 1.0: the cap had to rise from 60× to [`MAX_GAIN`] for a −75 dBFS talker to reach the target
-//! (`minus_75_dbfs_rms_speech_reaches_the_target`), and without a guard a quiet room just above
-//! the floor would be lifted into full-level hiss or rumble. It is measured on the speech band's
-//! envelope, not the full-band level, because real room tone is rarely white; what it asks and
-//! which tests hold it are in [`speech_band`].
+//! The cap had to rise from 60× to [`MAX_GAIN`] for a −75 dBFS talker to reach the target, and at
+//! that gain anything a quiet room holds becomes loud. Three heuristics that judged "a room" from
+//! level statistics each met a counterexample in review (steeply filtered rumble, rumble swinging
+//! slowly in level, fast breathy speech). A VAD's job is exactly that judgement, so the level is
+//! learned only where it says speech.
 
-use crate::speech_band::{self, Stationarity};
+use std::ops::Range;
+
+use ink_core::EngineError;
+
+use crate::speech_band;
+use crate::vad::{self, Segment, SpeechProbability, VAD_WINDOW, VadConfig};
 
 /// The length of a level frame: 20 ms at 16 kHz. Every level in this crate is measured on these.
 pub const LEVEL_FRAME: usize = 320;
@@ -69,8 +82,7 @@ pub const TRANSIENT_FRAMES: usize = 8;
 pub const QUIET_PERCENTILE: usize = 10;
 
 /// How far the speech band's envelope must stand above its quiet frames (as a ratio:
-/// [`MIN_DYNAMICS_DB`]) for audio to count as more than stationary. One of the two conditions in
-/// [`speech_band`]; the AGC also uses it per frame.
+/// [`MIN_DYNAMICS_DB`]) for the no-VAD fallback to lift audio at all (see [`speech_band`]).
 pub const MIN_DYNAMICS: f32 = 1.584_893_2;
 
 /// [`MIN_DYNAMICS`] in dB: 4 dB.
@@ -143,7 +155,7 @@ pub fn from_dbfs(dbfs: f32) -> f32 {
     10f32.powf(dbfs / 20.0)
 }
 
-/// What [`normalise`] did.
+/// What a normalise call did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum GainOutcome {
@@ -152,24 +164,49 @@ pub enum GainOutcome {
         /// The linear gain.
         gain: f32,
     },
-    /// Robust peak at or above the target: untouched.
+    /// The level it keys on is at or above the target: untouched.
     Healthy,
     /// Robust peak below [`NOISE_FLOOR`]: untouched.
     Silence,
-    /// The speech band is stationary (room tone, hum, rumble): untouched. See
-    /// [`speech_band`].
-    Stationary,
     /// Fewer than [`MIN_FRAMES`] level frames: untouched.
     TooShort,
+    /// [`normalise_speech`]: the VAD found no speech. Untouched, and the caller discards the take:
+    /// no engine should see it.
+    NoSpeech,
+    /// [`normalise_without_vad`]: the speech band is stationary (room tone, hum): untouched.
+    Stationary,
 }
 
-/// The result of [`normalise`], for logs: levels only, never audio content.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// What a normalise call measured, beyond the take's levels.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum GainEvidence {
+    /// Nothing: the take was silent or too short to judge.
+    NotJudged,
+    /// [`normalise_speech`]: what the VAD found.
+    Vad {
+        /// The provisional gain the VAD heard the take through.
+        provisional_gain: f32,
+        /// Level frames of the take that lie in speech.
+        speech_frames: usize,
+        /// The range to keep, as [`trim_ends`](crate::trim_ends) would give it for the lifted
+        /// copy. `None` exactly when no speech was found.
+        speech: Option<Range<usize>>,
+    },
+    /// [`normalise_without_vad`]: the speech band's contrast, in dB.
+    NoVad {
+        /// Robust peak over the 10th-percentile frame of the band envelope.
+        band_contrast_db: f32,
+    },
+}
+
+/// The result of a normalise call, for logs: levels and counts only, never audio content.
+#[derive(Clone, Debug, PartialEq)]
 pub struct GainReport {
-    /// The buffer's levels before any gain.
+    /// The whole take's levels before any gain.
     pub before: Levels,
-    /// How the buffer's speech band moves: the stationary guard's evidence.
-    pub band: Stationarity,
+    /// What was measured to decide.
+    pub evidence: GainEvidence,
     /// What was done.
     pub outcome: GainOutcome,
 }
@@ -184,41 +221,148 @@ impl GainReport {
     }
 }
 
-/// Lifts one utterance (16 kHz mono) so its robust peak reaches [`TARGET_PEAK`], in place.
+/// The gain that takes `robust_peak` to [`TARGET_PEAK`]: capped at [`MAX_GAIN`], never below 1.
+pub fn gain_for(robust_peak: f32) -> f32 {
+    if robust_peak >= TARGET_PEAK {
+        1.0
+    } else if robust_peak > 0.0 {
+        (TARGET_PEAK / robust_peak).min(MAX_GAIN)
+    } else {
+        MAX_GAIN
+    }
+}
+
+/// The provisional gain a VAD hears a take through: [`gain_for`] the whole take's robust peak,
+/// with no judgement of what the take holds.
+pub fn provisional_gain(levels: &Levels) -> f32 {
+    gain_for(levels.robust_peak)
+}
+
+/// Multiplies `samples` by `gain`, clamping to ±1.0. Allocation-free.
+pub fn apply_gain(samples: &mut [f32], gain: f32) {
+    for s in samples.iter_mut() {
+        *s = (*s * gain).clamp(-1.0, 1.0);
+    }
+}
+
+/// The levels of the level frames of `samples` that lie in `segments` (a frame belongs to a
+/// segment when its middle sample does), measured as [`levels`] measures a whole buffer. `None`
+/// when no frame does. **Allocates** one `f32` per speech frame.
+pub fn speech_levels(samples: &[f32], segments: &[Segment]) -> Option<Levels> {
+    let in_speech = |frame: usize| {
+        let middle = frame * LEVEL_FRAME + LEVEL_FRAME / 2;
+        segments
+            .iter()
+            .any(|s| (s.start * VAD_WINDOW..s.end * VAD_WINDOW).contains(&middle))
+    };
+    let mut peaks: Vec<f32> = samples
+        .chunks(LEVEL_FRAME)
+        .enumerate()
+        .filter(|&(k, _)| in_speech(k))
+        .map(|(_, f)| frame_peak(f))
+        .collect();
+    let frames = peaks.len();
+    if frames == 0 {
+        return None;
+    }
+    peaks.sort_unstable_by(|a, b| b.total_cmp(a));
+    Some(Levels {
+        robust_peak: peaks[TRANSIENT_FRAMES.min(frames - 1)],
+        quiet: peaks[frames - 1 - frames * QUIET_PERCENTILE / 100],
+        frames,
+    })
+}
+
+/// **The call to use whenever a VAD is installed.** Lifts one utterance (16 kHz mono) in place so
+/// the robust peak of its speech reaches [`TARGET_PEAK`], learning the level from speech alone.
+///
+/// The flow (module docs): [`provisional_gain`] from the whole take; `vad` over the take lifted
+/// by it; the final gain from [`speech_levels`] of the original. No speech means no gain and
+/// [`GainOutcome::NoSpeech`]: discard the take. The report's evidence carries the range to keep
+/// from the same VAD pass, so the caller need not run the VAD again to trim.
 ///
 /// **Worker.** One gain for the whole buffer, so relative dynamics are preserved exactly, except
-/// for samples the clamp to ±1.0 shaves. Allocates three `f32`s per 20 ms frame to measure (the
-/// frame peaks, the speech-band envelope and a ranked copy of it).
-pub fn normalise(samples: &mut [f32]) -> GainReport {
+/// for samples the clamp to ±1.0 shaves. Allocates a lifted copy of the take and a few `f32`s per
+/// frame. A VAD error is returned, never guessed around.
+pub fn normalise_speech(
+    samples: &mut [f32],
+    vad: &mut dyn SpeechProbability,
+    cfg: &VadConfig,
+) -> Result<GainReport, EngineError> {
     let before = levels(samples);
-    let band = Stationarity::of_envelope(&speech_band::envelope(samples));
-    let outcome = decide(&before, &band);
-    if let GainOutcome::Applied { gain } = outcome {
-        for s in samples.iter_mut() {
-            *s = (*s * gain).clamp(-1.0, 1.0);
-        }
+    if let Some(outcome) = unjudgeable(&before) {
+        return Ok(GainReport {
+            before,
+            evidence: GainEvidence::NotJudged,
+            outcome,
+        });
     }
+    let provisional = provisional_gain(&before);
+    let mut heard = samples.to_vec();
+    apply_gain(&mut heard, provisional);
+    let segments = vad::speech_segments(&heard, vad, cfg)?;
+    let speech = speech_levels(samples, &segments);
+    let evidence = GainEvidence::Vad {
+        provisional_gain: provisional,
+        speech_frames: speech.map_or(0, |l| l.frames),
+        speech: vad::keep_range(&segments, samples.len(), cfg),
+    };
+    let outcome = match speech {
+        None => GainOutcome::NoSpeech,
+        Some(l) if l.robust_peak >= TARGET_PEAK => GainOutcome::Healthy,
+        Some(l) => {
+            let gain = gain_for(l.robust_peak);
+            apply_gain(samples, gain);
+            GainOutcome::Applied { gain }
+        }
+    };
+    Ok(GainReport {
+        before,
+        evidence,
+        outcome,
+    })
+}
+
+/// **The fallback, only while no VAD is available** (the model missing, or still downloading),
+/// with the app saying that voice detection is unavailable. Lifts one utterance (16 kHz mono) in
+/// place so its robust peak reaches [`TARGET_PEAK`], unless its speech band is stationary
+/// ([`speech_band`]). It errs toward lifting, and can lift rumble and other non-speech.
+///
+/// **Worker.** One gain for the whole buffer. Allocates a few `f32`s per 20 ms frame.
+pub fn normalise_without_vad(samples: &mut [f32]) -> GainReport {
+    let before = levels(samples);
+    if let Some(outcome) = unjudgeable(&before) {
+        return GainReport {
+            before,
+            evidence: GainEvidence::NotJudged,
+            outcome,
+        };
+    }
+    let band_contrast_db = speech_band::contrast_db(&speech_band::envelope(samples));
+    let outcome = if before.robust_peak >= TARGET_PEAK {
+        GainOutcome::Healthy
+    } else if band_contrast_db < MIN_DYNAMICS_DB {
+        GainOutcome::Stationary
+    } else {
+        let gain = gain_for(before.robust_peak);
+        apply_gain(samples, gain);
+        GainOutcome::Applied { gain }
+    };
     GainReport {
         before,
-        band,
+        evidence: GainEvidence::NoVad { band_contrast_db },
         outcome,
     }
 }
 
-fn decide(levels: &Levels, band: &Stationarity) -> GainOutcome {
-    let peak = levels.robust_peak;
-    if peak < NOISE_FLOOR {
-        GainOutcome::Silence
-    } else if peak >= TARGET_PEAK {
-        GainOutcome::Healthy
+/// Takes neither call judges: silent, or too short.
+fn unjudgeable(levels: &Levels) -> Option<GainOutcome> {
+    if levels.robust_peak < NOISE_FLOOR {
+        Some(GainOutcome::Silence)
     } else if levels.frames < MIN_FRAMES {
-        GainOutcome::TooShort
-    } else if band.is_stationary() {
-        GainOutcome::Stationary
+        Some(GainOutcome::TooShort)
     } else {
-        GainOutcome::Applied {
-            gain: (TARGET_PEAK / peak).min(MAX_GAIN),
-        }
+        None
     }
 }
 

@@ -10,17 +10,33 @@
 //! end of the last, pauses included, plus [`VadConfig::edge_pad`] on both sides (Silero's onset
 //! lags a soft attack, and the last word's decay matters).
 //!
+//! # One notion of speech
+//!
+//! The VAD is also what the gain stages learn level from (see [`gain`](crate::gain) and
+//! [`agc`](crate::agc)): only audio it calls speech moves a gain. They use the same thresholds,
+//! hysteresis and hangover as the trim, through [`speech_segments`] and
+//! [`SpeechSegmenter::counts_as_speech`]; there is no second definition.
+//!
 //! # The split
 //!
 //! The logic here (thresholds, hysteresis, hangover, the minimum segment, the trim) is pure Rust
 //! and runs against any [`SpeechProbability`]. The model behind it, Silero VAD, is bound where
-//! the other ONNX engines are, in `ink-engines`; tests use a scripted source.
+//! the other ONNX engines are, in `ink-engines`; tests use scripted sources.
 //!
-//! **For that binding:** sherpa-onnx's C API (1.13) exposes finished segments and a
-//! speech-detected flag, not the per-window probability this trait asks for. Either run the Silero
-//! model so its probability is available, or return the flag as 1.0 or 0.0 per window with
-//! sherpa's own minimum durations set to zero (so they are not applied twice). The second loses
-//! the hysteresis between the two thresholds; the first keeps it.
+//! **For that binding:**
+//!
+//! - sherpa-onnx's C API (1.13) exposes finished segments and a speech-detected flag, not the
+//!   per-window probability this trait asks for. Either run the Silero model so its probability
+//!   is available, or return the flag as 1.0 or 0.0 per window with sherpa's own minimum
+//!   durations set to zero (so they are not applied twice). The second loses the hysteresis
+//!   between the two thresholds; the first keeps it.
+//! - **The VAD hears the provisional copy, never the raw take.** A VAD cannot hear −75 dBFS speech
+//!   either, so the gain stages hand it audio already lifted by a provisional gain
+//!   ([`normalise_speech`](crate::gain::normalise_speech) and the AGC do this). Feed Silero what
+//!   they feed it; do not run it on the raw capture and pass the verdict in.
+//! - Check Silero's verdicts on clicks and keyboard noise, lifted as the provisional copy lifts
+//!   them, with the 64 ms minimum segment ([`VadConfig::min_speech_windows`]). The tests here use
+//!   scripted probabilities and cannot tell whether the real model scores a click as speech.
 
 use std::ops::Range;
 
@@ -183,32 +199,52 @@ impl SpeechSegmenter {
     fn close(&self, start: usize, end: usize) -> Option<Segment> {
         (end - start >= self.cfg.min_speech_windows).then_some(Segment { start, end })
     }
+
+    /// Whether the window whose probability `p` was just pushed counts as speech, live: speech has
+    /// started and `p` is at or above the lower threshold. A window in the hangover (below the
+    /// lower threshold, speech not yet ended) does not count; nor does anything before speech
+    /// starts. The minimum segment length, which only a closed segment can show, is not applied:
+    /// this is for decisions that cannot wait for the segment to close (the AGC's).
+    pub fn counts_as_speech(&self, p: f32) -> bool {
+        matches!(self.state, State::Speech { .. }) && p >= self.cfg.neg_threshold
+    }
 }
 
-/// The range of `audio` (16 kHz mono) to keep: from the first speech to the last, pauses
-/// included, padded by [`VadConfig::edge_pad`] and clamped to the buffer. `None` when there is no
-/// speech at all.
+/// The speech segments in `audio` (16 kHz mono), in order, as [`SpeechSegmenter`] closes them.
 ///
-/// `None` is a verdict, not a failure: discard the buffer. The gain stage ahead of the VAD lifts
-/// knocks and fans as readily as speech, so passing an untrimmed buffer on instead would hand an
-/// engine lifted noise.
-///
-/// **Worker.** Resets `source` first. No allocation (the last window is padded on the stack). An
-/// error from the source, or a probability outside `0.0..=1.0`, is returned as an
-/// [`EngineError`], never replaced by a guess.
-pub fn trim_ends(
+/// **Worker.** Resets `source` first. Allocates the list. An error from the source, or a
+/// probability outside `0.0..=1.0`, is returned as an [`EngineError`], never replaced by a guess.
+pub fn speech_segments(
     audio: &[f32],
     source: &mut dyn SpeechProbability,
     cfg: &VadConfig,
-) -> Result<Option<Range<usize>>, EngineError> {
+) -> Result<Vec<Segment>, EngineError> {
+    let mut segments = Vec::new();
+    scan(audio, source, cfg, |s| segments.push(s))?;
+    Ok(segments)
+}
+
+/// The range [`trim_ends`] keeps for `segments` of a buffer `len` samples long: from the first
+/// segment's start to the last one's end, padded and clamped. `None` for no segments.
+pub fn keep_range(segments: &[Segment], len: usize, cfg: &VadConfig) -> Option<Range<usize>> {
+    let (first, last) = (segments.first()?, segments.last()?);
+    let lo = (first.start * VAD_WINDOW).saturating_sub(cfg.edge_pad);
+    let hi = (last.end * VAD_WINDOW)
+        .saturating_add(cfg.edge_pad)
+        .min(len);
+    Some(lo..hi)
+}
+
+/// Runs `source` over `audio` window by window and hands each closed segment to `on_segment`.
+/// Allocation-free (the last window is padded on the stack).
+fn scan(
+    audio: &[f32],
+    source: &mut dyn SpeechProbability,
+    cfg: &VadConfig,
+    mut on_segment: impl FnMut(Segment),
+) -> Result<(), EngineError> {
     source.reset();
     let mut segmenter = SpeechSegmenter::new(*cfg);
-    let mut first: Option<usize> = None;
-    let mut last_end = 0;
-    let mut note = |s: Segment| {
-        first.get_or_insert(s.start);
-        last_end = s.end;
-    };
     let mut padded = [0.0f32; VAD_WINDOW];
     for chunk in audio.chunks(VAD_WINDOW) {
         let window: &[f32; VAD_WINDOW] = match <&[f32; VAD_WINDOW]>::try_from(chunk) {
@@ -219,24 +255,50 @@ pub fn trim_ends(
                 &padded
             }
         };
-        let p = source.probability(window)?;
-        if !(0.0..=1.0).contains(&p) {
-            return Err(EngineError::Failed(format!(
-                "VAD returned a speech probability of {p}, outside 0..=1"
-            )));
-        }
+        let p = checked(source.probability(window)?)?;
         if let Some(s) = segmenter.push(p) {
-            note(s);
+            on_segment(s);
         }
     }
     if let Some(s) = segmenter.finish() {
-        note(s);
+        on_segment(s);
     }
-    Ok(first.map(|start| {
-        let lo = (start * VAD_WINDOW).saturating_sub(cfg.edge_pad);
-        let hi = (last_end * VAD_WINDOW)
-            .saturating_add(cfg.edge_pad)
-            .min(audio.len());
-        lo..hi
-    }))
+    Ok(())
+}
+
+/// A probability, or the engine failure that one outside `0.0..=1.0` (NaN included) is.
+pub(crate) fn checked(p: f32) -> Result<f32, EngineError> {
+    if (0.0..=1.0).contains(&p) {
+        Ok(p)
+    } else {
+        Err(EngineError::Failed(format!(
+            "VAD returned a speech probability of {p}, outside 0..=1"
+        )))
+    }
+}
+
+/// The range of `audio` (16 kHz mono) to keep: from the first speech to the last, pauses
+/// included, padded by [`VadConfig::edge_pad`] and clamped to the buffer. `None` when there is no
+/// speech at all.
+///
+/// `None` is a verdict, not a failure: discard the buffer, never pass it on untrimmed.
+///
+/// **Worker.** Resets `source` first. No allocation (the last window is padded on the stack). An
+/// error from the source, or a probability outside `0.0..=1.0`, is returned as an
+/// [`EngineError`], never replaced by a guess.
+pub fn trim_ends(
+    audio: &[f32],
+    source: &mut dyn SpeechProbability,
+    cfg: &VadConfig,
+) -> Result<Option<Range<usize>>, EngineError> {
+    let mut first: Option<Segment> = None;
+    let mut last: Option<Segment> = None;
+    scan(audio, source, cfg, |s| {
+        first.get_or_insert(s);
+        last = Some(s);
+    })?;
+    Ok(match (first, last) {
+        (Some(a), Some(b)) => keep_range(&[a, b], audio.len(), cfg),
+        _ => None,
+    })
 }

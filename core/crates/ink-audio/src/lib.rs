@@ -26,16 +26,17 @@
 //!                   far: average)                               ├─► BandAnalyzer ─► BandsWriter ═► BandsReader (shell)
 //!                                                               └─► Windower (import, final pass)
 //!
-//! a take or a window ─► normalise ─► vad::trim_ends ─┬─► Some(range) ─► engine
-//!                                                     └─► None ─► discarded: no engine sees it
+//! a take or a window ─► normalise_speech ─┬─► NoSpeech ─► discarded: no engine sees it
+//!                        (VAD-gated)       └─► lifted, with the range to keep ─► engine
 //! ```
 //!
-//! **The gain stages decide level, not speech.** [`normalise`] and [`Agc`] leave a stationary
-//! room alone (room tone, hum, rumble; see [`speech_band`]) and lift anything else quiet, speech
-//! or not: a cycling fan, a cough, sometimes knocks. So
-//! the VAD's verdict is binding: a take or window in which [`trim_ends`] finds no speech is
-//! discarded before any engine sees it, never passed on whole (a recogniser handed lifted noise
-//! may invent words).
+//! **The gain stages learn level from speech.** With a VAD installed the pipeline uses
+//! [`normalise_speech`] for takes and windows and [`Agc::with_vad`] for a live meeting: only what
+//! the VAD calls speech sets a gain, so rumble, fans and knocks never do, and a take in which it
+//! finds no speech is discarded before any engine sees it, never passed on whole. The fallbacks,
+//! [`normalise_without_vad`] and [`Agc::without_vad`], are for when no VAD is available (the
+//! model missing, or still downloading), and only while the app says that voice detection is
+//! unavailable: they err toward lifting and can lift non-speech.
 //!
 //! - [`downmix`]: one channel from many, chosen per stream: the mic's primary channel, the far
 //!   end's average.
@@ -45,7 +46,7 @@
 //! - [`gain`]: the per-utterance robust-peak normaliser ahead of every engine (architecture rule
 //!   11), and the level measures everything else uses.
 //! - [`agc`]: the slow meeting AGC toward the same target, which holds through pauses.
-//! - [`speech_band`]: the stationary test both gain stages share, measured on the speech band.
+//! - [`speech_band`]: the speech band, and the no-VAD fallback's test for a stationary room.
 //! - [`vad`]: trims the dead air at the ends of a take, never the pauses inside; the model sits
 //!   behind [`SpeechProbability`].
 //! - [`window`]: long audio in windows of at most 60 s, cut at the quietest point, overlapping by
@@ -82,7 +83,10 @@ pub use chunk::{
     Repair, UnreadableChunk, WriterSummary,
 };
 pub use downmix::Downmix;
-pub use gain::{GainOutcome, GainReport, TARGET_PEAK, normalise, robust_peak};
+pub use gain::{
+    GainEvidence, GainOutcome, GainReport, TARGET_PEAK, normalise_speech, normalise_without_vad,
+    robust_peak,
+};
 pub use rate::{Continuity, RateCheck, RateVerdict};
 pub use realtime::{RealtimeGuard, unguarded};
 pub use replay::{FileReplaySource, Pacing};
@@ -92,5 +96,7 @@ pub use ring::{
     capture_ring,
 };
 pub use take::{Take, TakeRecorder};
-pub use vad::{SpeechProbability, SpeechSegmenter, VadConfig, trim_ends};
+pub use vad::{
+    SpeechProbability, SpeechSegmenter, VadConfig, keep_range, speech_segments, trim_ends,
+};
 pub use window::{Window, WindowConfig, WindowError, Windower, plan_windows};

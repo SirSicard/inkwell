@@ -3,35 +3,36 @@
 //! A meeting has no utterance to measure first, so the gain follows the audio: 16 kHz mono, in
 //! place, one 20 ms [`LEVEL_FRAME`] at a time.
 //!
-//! # What moves the gain
+//! # Two modes, one per situation
 //!
-//! Only **level frames**. The AGC runs the stationary test of [`speech_band`](crate::speech_band)
-//! on the speech-band envelope of the last [`RECENT_FRAMES`] (1.5 s). When those are not
-//! stationary, a frame whose own band envelope stands [`MIN_DYNAMICS_DB`] over their quiet frame,
-//! and whose full-band peak is above [`NOISE_FLOOR`], counts toward the level. The level is the
-//! normaliser's full-band robust peak taken over the last [`SPEECH_WINDOW_FRAMES`] such frames:
-//! the same measure, the same [`TRANSIENT_FRAMES`] skipped, the same target.
+//! - **[`Agc::with_vad`], whenever a VAD is installed.** The gain learns only from frames the VAD
+//!   marks as speech (the WebRTC AGC2 pattern): its probability at or over the threshold, or over
+//!   the lower threshold while speech goes on ([`SpeechSegmenter::counts_as_speech`]). Everything
+//!   else, rumble, a fan, knocks, a pause, never moves the gain, whatever its shape. The VAD
+//!   cannot hear −75 dBFS speech either, so it listens to a copy of the input lifted by a
+//!   provisional gain: [`gain_for`] the robust peak of the last [`RECENT_FRAMES`] (1.5 s), with no
+//!   judgement of what they hold. That copy is only for the VAD; the output uses the AGC's own
+//!   gain. (Listening to the AGC's output instead would never start: it begins at unity gain, where
+//!   a quiet talker is inaudible to the VAD.) A frame's verdict comes from the VAD window holding
+//!   its middle sample, a window or so after the frame is measured; frames wait for it.
+//! - **[`Agc::without_vad`], only while no VAD is available**, with the app saying that voice
+//!   detection is unavailable. It learns from frames that stand [`MIN_DYNAMICS_DB`] over the quiet
+//!   frame of the last 1.5 s of the speech band, when that 1.5 s has that much contrast at all
+//!   ([`speech_band`](crate::speech_band)). It errs toward lifting, and can lift rumble and other
+//!   non-speech.
 //!
-//! Like the normaliser, this decides level, not speech. What the stationary test asks, and the
-//! committed tests that hold it (rumble and white room tone never lift the gain; speech and
-//! breathy speech 8 dB over white noise or rumble reach the target), are in
-//! [`speech_band`](crate::speech_band). Non-stationary noise that is not speech, such as a
-//! cycling fan, can be lifted: the live engine then hears it, and what is speech is the VAD's and
-//! the engine's call.
+//! Either way the level is the normaliser's full-band robust peak taken over the last
+//! [`SPEECH_WINDOW_FRAMES`] learned frames: the same measure, the same [`TRANSIENT_FRAMES`]
+//! skipped, the same target.
 //!
-//! - **Pauses hold the gain.** Silence, room tone and hum are not speech frames: nothing is learned
-//!   from them and the gain stays where the last speech left it. The first word after a pause
-//!   comes out at the level the last word did, not pumped up. For up to one noise window after
-//!   speech whose gaps were digital silence (a far end that gates its output), room tone can pass
-//!   the speech test; it still never moves the gain, because a frame more than [`ADAPT_RANGE_DB`]
-//!   below the current speech level only joins the level window (so a much quieter talker takes
-//!   over once the window has turned over) and never steps the gain itself.
-//! - **It stops rising at the noise floor.** Audio that does not stand out from its own noise
-//!   floor never raises the gain, so a quiet room is never lifted toward the target.
+//! - **Pauses hold the gain.** Nothing is learned from them, so the first word after a pause comes
+//!   out at the level the last word did, not pumped up. A frame more than [`ADAPT_RANGE_DB`] below
+//!   the current speech level joins the level window (so a much quieter talker takes over once the
+//!   window has turned over) but never steps the gain itself.
 //! - **Slow up, fast down.** The gain rises at most [`RISE_DB_PER_S`] and falls at most
-//!   [`FALL_DB_PER_S`]. The first lock is the exception: once [`MIN_SPEECH_FRAMES`] of speech have
-//!   been measured the gain jumps straight to its target, so a quiet talker is lifted from their
-//!   first half second rather than over ten.
+//!   [`FALL_DB_PER_S`]. The first lock is the exception: once [`MIN_SPEECH_FRAMES`] have been
+//!   learned the gain jumps straight to its target, so a quiet talker is lifted from their first
+//!   half second rather than over ten.
 //! - **It never clips and never steps.** The gain is applied by a limiter working in 10 ms
 //!   [`LIMITER_BLOCK`]s with two blocks of look-ahead ([`Agc::LATENCY`], 20 ms). Each block's
 //!   safe gain is the AGC's gain capped so the block's own peak stays at or below full scale. A
@@ -47,19 +48,24 @@
 //!
 //! # Threading and allocation
 //!
-//! **Pump or worker.** [`Agc::new`] allocates its frame buffers and windows; [`process`] never
-//! allocates, and [`flush`] only grows its `out` (reserve [`Agc::LATENCY`] samples first).
+//! **Worker** with a VAD (a model runs every 32 ms of audio); **pump or worker** without. The
+//! constructors allocate the blocks and windows; [`process`] allocates nothing itself (a VAD
+//! implementation may), and [`flush`] only grows its `out` (reserve [`Agc::LATENCY`] samples
+//! first).
 //!
 //! [`process`]: Agc::process
 //! [`flush`]: Agc::flush
 
-use crate::gain::{
-    LEVEL_FRAME, MAX_GAIN, MIN_DYNAMICS, NOISE_FLOOR, TARGET_PEAK, TRANSIENT_FRAMES, frame_peak,
-};
-use crate::speech_band::{SpeechBandFilter, Stationarity};
+use std::collections::VecDeque;
 
-#[cfg(doc)]
-use crate::gain::MIN_DYNAMICS_DB;
+use ink_core::EngineError;
+
+use crate::gain::{
+    LEVEL_FRAME, MAX_GAIN, MIN_DYNAMICS, MIN_DYNAMICS_DB, NOISE_FLOOR, TARGET_PEAK,
+    TRANSIENT_FRAMES, frame_peak, gain_for,
+};
+use crate::speech_band::{SpeechBandFilter, contrast_in};
+use crate::vad::{self, SpeechProbability, SpeechSegmenter, VAD_WINDOW, VadConfig};
 
 /// The limiter's block (10 ms).
 pub const LIMITER_BLOCK: usize = LEVEL_FRAME / 2;
@@ -73,17 +79,24 @@ pub const RISE_DB_PER_S: f32 = 6.0;
 /// The fastest the gain falls, in dB per second (a louder talker must not wait).
 pub const FALL_DB_PER_S: f32 = 60.0;
 
-/// The stationary test looks at this many recent frames (1.5 s).
+/// The provisional gain (with a VAD) and the contrast test (without one) look at this many recent
+/// frames (1.5 s).
 pub const RECENT_FRAMES: usize = 75;
 
-/// The level is measured over this many recent speech frames (3 s of speech).
+/// The level is measured over this many recent learned frames (3 s of speech).
 pub const SPEECH_WINDOW_FRAMES: usize = 150;
 
-/// Speech frames measured before the first lock (0.5 s).
+/// Frames learned before the first lock (0.5 s).
 pub const MIN_SPEECH_FRAMES: usize = 25;
 
-/// A speech frame steps the gain only if it peaks within this many dB of the current speech level.
+/// A learned frame steps the gain only if it peaks within this many dB of the current level.
 pub const ADAPT_RANGE_DB: f32 = 30.0;
+
+/// Recent VAD verdicts kept for frames still waiting on theirs.
+const VERDICTS: usize = 8;
+
+/// Frames that can be waiting for a verdict at once (a frame waits at most about one window).
+const PENDING: usize = 16;
 
 /// The slow AGC for meetings. See the module docs.
 pub struct Agc {
@@ -105,35 +118,51 @@ pub struct Agc {
     /// The first block of a 20 ms level frame whose second block has not come yet: its peak, its
     /// speech-band energy and its length.
     half_frame: Option<(f32, f64, usize)>,
-    /// The speech-band filter, run over the input as it arrives.
-    band: SpeechBandFilter,
-    /// The filling block's speech-band energy so far.
-    band_energy: f64,
-    /// The gain the audio is heading for (the state `gain()` reports).
-    gain: f32,
-    locked: bool,
-    /// Recent frames' speech-band envelope (RMS), for the stationary test.
-    recent: Ring,
-    /// Scratch for ranking `recent`.
-    recent_scratch: Vec<f32>,
-    /// Recent speech frame peaks, for the level.
-    speech: Ring,
-    /// Scratch for selecting the robust peak out of `speech`.
-    scratch: Vec<f32>,
-}
-
-impl Default for Agc {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Level frames completed in this stream (since the last flush).
+    frames: u64,
+    /// What decides which frames the level learns from.
+    gate: Gate,
+    /// The gain and the level it follows.
+    level: Level,
 }
 
 impl Agc {
     /// The output is the input delayed by this many samples (two limiter blocks, 20 ms).
     pub const LATENCY: usize = 2 * LIMITER_BLOCK;
 
-    /// An AGC at unity gain. **Allocates** its blocks and windows.
-    pub fn new() -> Self {
+    /// **The mode to use whenever a VAD is installed.** An AGC at unity gain that learns level only
+    /// from what `vad` marks as speech, with `cfg`'s thresholds and hangover. **Allocates.**
+    pub fn with_vad(mut vad: Box<dyn SpeechProbability>, cfg: VadConfig) -> Self {
+        vad.reset();
+        Self::with_gate(Gate::Vad(Box::new(VadGate {
+            source: vad,
+            cfg,
+            segmenter: SpeechSegmenter::new(cfg),
+            window: [0.0; VAD_WINDOW],
+            pos: 0,
+            windows: 0,
+            verdicts: [false; VERDICTS],
+            pending: VecDeque::with_capacity(PENDING),
+            provisional: 1.0,
+            recent: Ring::new(RECENT_FRAMES),
+            scratch: vec![0.0; RECENT_FRAMES],
+            error: None,
+        })))
+    }
+
+    /// **The fallback, only while no VAD is available**, with the app saying that voice detection
+    /// is unavailable. An AGC at unity gain that learns from speech-band contrast; it can lift
+    /// non-speech. **Allocates.**
+    pub fn without_vad() -> Self {
+        Self::with_gate(Gate::Contrast(Box::new(ContrastGate {
+            band: SpeechBandFilter::new(),
+            band_energy: 0.0,
+            recent: Ring::new(RECENT_FRAMES),
+            scratch: vec![0.0; RECENT_FRAMES],
+        })))
+    }
+
+    fn with_gate(gate: Gate) -> Self {
         Self {
             filling: vec![0.0; LIMITER_BLOCK],
             waiting: vec![0.0; LIMITER_BLOCK],
@@ -145,34 +174,48 @@ impl Agc {
             ramp_log: 0.0,
             ramp_len: LIMITER_BLOCK,
             half_frame: None,
-            band: SpeechBandFilter::new(),
-            band_energy: 0.0,
-            gain: 1.0,
-            locked: false,
-            recent: Ring::new(RECENT_FRAMES),
-            recent_scratch: vec![0.0; RECENT_FRAMES],
-            speech: Ring::new(SPEECH_WINDOW_FRAMES),
-            scratch: vec![0.0; SPEECH_WINDOW_FRAMES],
+            frames: 0,
+            gate,
+            level: Level {
+                gain: 1.0,
+                locked: false,
+                speech: Ring::new(SPEECH_WINDOW_FRAMES),
+                scratch: vec![0.0; SPEECH_WINDOW_FRAMES],
+            },
+        }
+    }
+
+    /// Whether this AGC learns from a VAD ([`with_vad`](Self::with_vad)).
+    pub fn uses_vad(&self) -> bool {
+        matches!(self.gate, Gate::Vad(_))
+    }
+
+    /// The first error the VAD returned, if any (a probability outside `0.0..=1.0` included). From
+    /// then on the AGC learns nothing and holds its gain: it never guesses. The pipeline should
+    /// say so and choose what to do (a new VAD, or [`without_vad`](Self::without_vad)).
+    pub fn vad_error(&self) -> Option<&EngineError> {
+        match &self.gate {
+            Gate::Vad(g) => g.error.as_ref(),
+            Gate::Contrast(_) => None,
         }
     }
 
     /// The gain the AGC is holding or heading for (linear, 1.0 to [`MAX_GAIN`]). A loud block
     /// is played with less, to stay under full scale, without changing this.
     pub fn gain(&self) -> f32 {
-        self.gain
+        self.level.gain
     }
 
     /// Replaces `samples` (16 kHz mono) with the gained audio [`LATENCY`](Self::LATENCY) samples
     /// earlier. The first `LATENCY` samples a new AGC puts out are silence.
     ///
-    /// **Pump or worker.** Never allocates.
+    /// **Worker** (with a VAD) or **pump**. Allocates nothing itself.
     pub fn process(&mut self, samples: &mut [f32]) {
         for s in samples {
             let input = *s;
             *s = self.playing[self.pos] * self.ramp_at(self.pos);
             self.filling[self.pos] = input;
-            let band = f64::from(self.band.process(input));
-            self.band_energy += band * band;
+            self.gate.hear(input, &mut self.level);
             self.pos += 1;
             if self.pos == LIMITER_BLOCK {
                 self.end_block();
@@ -182,10 +225,12 @@ impl Agc {
     }
 
     /// Appends the last [`LATENCY`](Self::LATENCY) samples still held by the look-ahead, gained,
-    /// so everything pushed has come out. The gain and the level history are kept: the AGC can go
-    /// on after a flush (its next output starts after another `LATENCY` of silence).
+    /// so everything pushed has come out, and ends the stream: the VAD scores its last, partial
+    /// window and is reset. The gain and the level history are kept: the AGC can go on after a
+    /// flush, as a new stream (its next output starts after another `LATENCY` of silence).
     ///
-    /// **Pump or worker.** Allocation-free when `out` has room for `LATENCY` more samples.
+    /// **Worker** (with a VAD) or **pump**. Allocation-free when `out` has room for `LATENCY`
+    /// more samples.
     pub fn flush(&mut self, out: &mut Vec<f32>) {
         for i in self.pos..LIMITER_BLOCK {
             out.push(self.playing[i] * self.ramp_at(i));
@@ -195,7 +240,7 @@ impl Agc {
         let partial = self.pos;
         let partial_peak = frame_peak(&self.filling[..partial]);
         if partial > 0 {
-            let energy = std::mem::take(&mut self.band_energy);
+            let energy = self.gate.take_band_energy();
             self.measure_block(partial_peak, energy, partial);
         }
         let next_safe = if partial > 0 {
@@ -221,13 +266,13 @@ impl Agc {
         if let Some((peak, energy, len)) = self.half_frame.take() {
             self.end_frame(peak, band_rms(energy, len));
         }
+        self.gate.end_stream(&mut self.level);
         self.filling.fill(0.0);
         self.waiting.fill(0.0);
         self.playing.fill(0.0);
         self.waiting_peak = 0.0;
         self.pos = 0;
-        self.band.reset();
-        self.band_energy = 0.0;
+        self.frames = 0;
     }
 
     /// The gain for sample `i` of the block being played: geometric from `ramp_from` to
@@ -256,9 +301,9 @@ impl Agc {
     fn safe(&self, peak: f32) -> f32 {
         if peak > 0.0 {
             // Never zero, so a ramp's logarithm stays finite even for an absurd input.
-            self.gain.min(1.0 / peak).max(f32::MIN_POSITIVE)
+            self.level.gain.min(1.0 / peak).max(f32::MIN_POSITIVE)
         } else {
-            self.gain
+            self.level.gain
         }
     }
 
@@ -266,7 +311,7 @@ impl Agc {
     /// ends at or below both its own safe gain and this block's, and rotate the three buffers.
     fn end_block(&mut self) {
         let peak = frame_peak(&self.filling);
-        let energy = std::mem::take(&mut self.band_energy);
+        let energy = self.gate.take_band_energy();
         self.measure_block(peak, energy, LIMITER_BLOCK);
         let to = self.safe(self.waiting_peak).min(self.safe(peak));
         self.set_ramp(to, LIMITER_BLOCK);
@@ -287,20 +332,36 @@ impl Agc {
         }
     }
 
-    /// A complete level frame: run the stationary test over the recent frames and, for a level
-    /// frame, update the level and the gain. Allocation-free.
+    /// A complete level frame: the gate decides whether the level learns from it.
     fn end_frame(&mut self, peak: f32, band: f32) {
-        self.recent.push(band);
-        let (recent, quiet) =
-            Stationarity::measure(self.recent.ordered(), &mut self.recent_scratch);
-        if !recent.is_stationary() && peak >= NOISE_FLOOR && band >= quiet * MIN_DYNAMICS {
-            self.speech.push(peak);
-            self.adapt(peak);
+        let index = self.frames;
+        self.frames += 1;
+        self.gate.frame(peak, band, index, &mut self.level);
+    }
+}
+
+/// The gain and the level it follows.
+struct Level {
+    gain: f32,
+    locked: bool,
+    /// Recent learned frames' peaks.
+    speech: Ring,
+    /// Scratch for selecting the robust peak out of `speech`.
+    scratch: Vec<f32>,
+}
+
+impl Level {
+    /// Learns from a frame peaking at `peak` (above the silence floor).
+    fn learn(&mut self, peak: f32) {
+        if peak < NOISE_FLOOR {
+            return;
         }
+        self.speech.push(peak);
+        self.adapt(peak);
     }
 
-    /// Moves the gain toward the robust peak of recent speech, after a speech frame peaking at
-    /// `peak` joined the window.
+    /// Moves the gain toward the robust peak of the learned frames, after one peaking at `peak`
+    /// joined them.
     fn adapt(&mut self, peak: f32) {
         let count = self.speech.len();
         if count < MIN_SPEECH_FRAMES {
@@ -333,6 +394,173 @@ impl Agc {
         } else {
             desired.max(self.gain * fall)
         };
+    }
+}
+
+/// What decides which frames the level learns from.
+enum Gate {
+    Vad(Box<VadGate>),
+    Contrast(Box<ContrastGate>),
+}
+
+impl Gate {
+    fn hear(&mut self, x: f32, level: &mut Level) {
+        match self {
+            Self::Vad(g) => g.hear(x, level),
+            Self::Contrast(g) => g.hear(x),
+        }
+    }
+
+    /// The speech-band energy of the block just filled (only the fallback measures it).
+    fn take_band_energy(&mut self) -> f64 {
+        match self {
+            Self::Vad(_) => 0.0,
+            Self::Contrast(g) => std::mem::take(&mut g.band_energy),
+        }
+    }
+
+    fn frame(&mut self, peak: f32, band: f32, index: u64, level: &mut Level) {
+        match self {
+            Self::Vad(g) => g.frame(peak, index, level),
+            Self::Contrast(g) => g.frame(peak, band, level),
+        }
+    }
+
+    fn end_stream(&mut self, level: &mut Level) {
+        match self {
+            Self::Vad(g) => g.end_stream(level),
+            Self::Contrast(g) => {
+                g.band.reset();
+                g.band_energy = 0.0;
+            }
+        }
+    }
+}
+
+/// With a VAD: the level learns from the frames it marks as speech.
+struct VadGate {
+    source: Box<dyn SpeechProbability>,
+    cfg: VadConfig,
+    segmenter: SpeechSegmenter,
+    /// The window being filled with the lifted copy of the input.
+    window: [f32; VAD_WINDOW],
+    pos: usize,
+    /// Windows scored in this stream.
+    windows: u64,
+    /// The last [`VERDICTS`] windows' verdicts, by window index modulo the length.
+    verdicts: [bool; VERDICTS],
+    /// Frames waiting for their window's verdict: (peak, window index).
+    pending: VecDeque<(f32, u64)>,
+    /// The gain the VAD hears the input through.
+    provisional: f32,
+    /// Recent frames' full-band peaks, for the provisional gain.
+    recent: Ring,
+    scratch: Vec<f32>,
+    error: Option<EngineError>,
+}
+
+impl VadGate {
+    fn hear(&mut self, x: f32, level: &mut Level) {
+        self.window[self.pos] = (x * self.provisional).clamp(-1.0, 1.0);
+        self.pos += 1;
+        if self.pos == VAD_WINDOW {
+            self.score();
+            self.resolve(level);
+        }
+    }
+
+    /// Scores the filled window and records its verdict. After an error the VAD is not asked
+    /// again; every later window is not speech.
+    fn score(&mut self) {
+        let speech = self.error.is_none()
+            && match self.source.probability(&self.window).and_then(vad::checked) {
+                Ok(p) => {
+                    self.segmenter.push(p);
+                    self.segmenter.counts_as_speech(p)
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                    false
+                }
+            };
+        self.verdicts[(self.windows % VERDICTS as u64) as usize] = speech;
+        self.windows += 1;
+        self.pos = 0;
+    }
+
+    /// Frame `index` peaking at `peak` is complete: update the provisional gain, and queue the
+    /// frame for the verdict of the window holding its middle sample.
+    fn frame(&mut self, peak: f32, index: u64, level: &mut Level) {
+        self.recent.push(peak);
+        let n = self.recent.len();
+        let recent = &mut self.scratch[..n];
+        recent.copy_from_slice(self.recent.values());
+        let robust = *recent
+            .select_nth_unstable_by(TRANSIENT_FRAMES.min(n - 1), |a, b| b.total_cmp(a))
+            .1;
+        self.provisional = gain_for(robust);
+        let middle = index * LEVEL_FRAME as u64 + LEVEL_FRAME as u64 / 2;
+        if self.pending.len() == PENDING {
+            // Cannot happen: a frame waits at most about one window. Were it to, the oldest
+            // frame is not learned from, which only ever holds the gain.
+            self.pending.pop_front();
+        }
+        self.pending.push_back((peak, middle / VAD_WINDOW as u64));
+        self.resolve(level);
+    }
+
+    /// Learns from every waiting frame whose window has been scored and called speech.
+    fn resolve(&mut self, level: &mut Level) {
+        while let Some(&(peak, window)) = self.pending.front() {
+            if window >= self.windows {
+                break;
+            }
+            self.pending.pop_front();
+            let kept = self.windows - window <= VERDICTS as u64;
+            if kept && self.verdicts[(window % VERDICTS as u64) as usize] {
+                level.learn(peak);
+            }
+        }
+    }
+
+    /// The stream ends: score the last, partial window (zero-padded), resolve what waits, and
+    /// start the VAD afresh for the next stream.
+    fn end_stream(&mut self, level: &mut Level) {
+        if self.pos > 0 {
+            self.window[self.pos..].fill(0.0);
+            self.score();
+        }
+        self.resolve(level);
+        self.pending.clear();
+        self.segmenter = SpeechSegmenter::new(self.cfg);
+        self.source.reset();
+        self.windows = 0;
+        self.pos = 0;
+    }
+}
+
+/// Without a VAD: the level learns from frames with speech-band contrast.
+struct ContrastGate {
+    band: SpeechBandFilter,
+    /// The filling block's speech-band energy so far.
+    band_energy: f64,
+    /// Recent frames' speech-band envelope (RMS).
+    recent: Ring,
+    scratch: Vec<f32>,
+}
+
+impl ContrastGate {
+    fn hear(&mut self, x: f32) {
+        let band = f64::from(self.band.process(x));
+        self.band_energy += band * band;
+    }
+
+    fn frame(&mut self, peak: f32, band: f32, level: &mut Level) {
+        self.recent.push(band);
+        let (contrast_db, quiet) = contrast_in(self.recent.ordered(), &mut self.scratch);
+        if contrast_db >= MIN_DYNAMICS_DB && band >= quiet * MIN_DYNAMICS {
+            level.learn(peak);
+        }
     }
 }
 

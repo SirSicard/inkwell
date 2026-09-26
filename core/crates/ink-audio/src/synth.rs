@@ -77,7 +77,7 @@ pub fn speech_like(seconds: f64, rms_dbfs: f32, seed: u64) -> Vec<f32> {
 /// but run together with no gaps, under an envelope that never falls below `floor` (0–1) of its
 /// peak, with aspiration noise riding on the voicing. This is low-crest speech: `floor` sets how
 /// far its quiet frames sit below its loud ones (0.35 gives 7–9.5 dB between the robust peak and
-/// the 10th-percentile frame, checked by `low_crest_breathy_speech_is_lifted_to_the_target`).
+/// the 10th-percentile frame, checked below).
 /// Scaled to `rms_dbfs` RMS.
 pub fn breathy_speech(seconds: f64, rms_dbfs: f32, floor: f64, seed: u64) -> Vec<f32> {
     let rate = f64::from(CANONICAL_RATE);
@@ -105,6 +105,91 @@ pub fn breathy_speech(seconds: f64, rms_dbfs: f32, floor: f64, seed: u64) -> Vec
     }
     out.truncate(total);
     scale_to_rms(&out, rms_dbfs)
+}
+
+/// The shape of [`speech_with`]'s syllables.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpeechShape {
+    /// Syllable (segment) length in seconds; each syllable varies by ±10 % around it.
+    pub syllable: f64,
+    /// Gap after each syllable, as a fraction of its length (0 for continuous speech).
+    pub gap: f64,
+    /// The envelope's floor (0–1): 0 for syllables that fade out fully, 0.35 for breathy speech
+    /// whose troughs never go quiet.
+    pub floor: f64,
+    /// Aspiration noise riding on the voicing, relative to it (0.3 for breathy speech).
+    pub breath: f64,
+}
+
+impl SpeechShape {
+    /// Ordinary speech: syllables of `syllable` seconds, each followed by a gap a quarter as long.
+    pub fn plain(syllable: f64) -> Self {
+        Self {
+            syllable,
+            gap: 0.25,
+            floor: 0.0,
+            breath: 0.0,
+        }
+    }
+
+    /// Breathy, continuous speech: syllables of `syllable` seconds run together, the envelope
+    /// never below 0.35 of its peak, aspiration noise on the voicing.
+    pub fn breathy(syllable: f64) -> Self {
+        Self {
+            syllable,
+            gap: 0.0,
+            floor: 0.35,
+            breath: 0.3,
+        }
+    }
+}
+
+/// Speech-like audio at 16 kHz with syllables of a chosen shape: the same voicing as
+/// [`speech_like`] (a gliding 100–180 Hz harmonic series under a sin² envelope). Scaled to
+/// `rms_dbfs` RMS.
+pub fn speech_with(seconds: f64, rms_dbfs: f32, shape: SpeechShape, seed: u64) -> Vec<f32> {
+    let rate = f64::from(CANONICAL_RATE);
+    let total = (seconds * rate).round() as usize;
+    let mut rng = Lcg::new(seed);
+    let mut out: Vec<f64> = Vec::with_capacity(total + CANONICAL_RATE as usize);
+    while out.len() < total {
+        let dur = shape.syllable * (0.9 + 0.2 * rng.next_f64());
+        let f0 = 100.0 + 80.0 * rng.next_f64();
+        let n = ((dur * rate) as usize).max(1);
+        let mut phase = 0.0f64;
+        for i in 0..n {
+            let t = i as f64 / rate;
+            phase += TAU * f0 * (1.0 + 0.1 * t / dur) / rate;
+            let mut v = 0.0;
+            let mut k = 1.0;
+            while k * f0 * 1.1 < 3_800.0 {
+                v += (k * phase).sin() / k;
+                k += 1.0;
+            }
+            let breath = shape.breath * rng.next_gaussian();
+            let env =
+                shape.floor + (1.0 - shape.floor) * (std::f64::consts::PI * t / dur).sin().powi(2);
+            out.push((v + breath) * env);
+        }
+        out.extend(std::iter::repeat_n(0.0, (dur * shape.gap * rate) as usize));
+    }
+    out.truncate(total);
+    scale_to_rms(&out, rms_dbfs)
+}
+
+/// `signal` under a slow swing in level: a raised cosine of `period` seconds that takes it from
+/// its own level down by `depth_db` and back (a fan wandering, traffic swelling).
+pub fn swing(signal: &[f32], period: f64, depth_db: f64) -> Vec<f32> {
+    let rate = f64::from(CANONICAL_RATE);
+    signal
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| {
+            let phase = TAU * i as f64 / (period * rate);
+            let down_db = depth_db * 0.5 * (1.0 - phase.cos());
+            (f64::from(s) * 10f64.powf(-down_db / 20.0)) as f32
+        })
+        .collect()
 }
 
 /// `signal` plus Gaussian noise `snr_db` below it (RMS to RMS), the sum rescaled to `rms_dbfs`.
@@ -284,6 +369,13 @@ mod tests {
         }
         assert_eq!(speech, breathy_speech(2.0, -75.0, 0.35, 1));
         assert_eq!(knocks(2.0, -75.0, 3), knocks(2.0, -75.0, 3));
+    }
+
+    #[test]
+    fn breathy_speech_has_the_documented_contrast() {
+        let l = crate::gain::levels(&breathy_speech(4.0, -75.0, 0.35, 1));
+        let contrast = to_dbfs(l.robust_peak) - to_dbfs(l.quiet);
+        assert!((7.0..9.5).contains(&contrast), "{contrast:.2} dB");
     }
 
     #[test]

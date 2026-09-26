@@ -61,12 +61,33 @@ fn streaming_resampler_pushes_and_finish_allocate_nothing() {
 #[test]
 fn agc_process_and_flush_allocate_nothing() {
     let mut audio = speech_like(3.0, -60.0, 2);
-    let mut agc = Agc::new();
+    let mut agc = Agc::without_vad();
     for block in audio.chunks_mut(160) {
         assert_eq!(allocations_in(|| agc.process(block)), 0);
     }
     let mut tail = Vec::with_capacity(Agc::LATENCY);
     assert_eq!(allocations_in(|| agc.flush(&mut tail)), 0);
+}
+
+#[test]
+fn agc_with_a_vad_allocates_nothing_but_what_its_vad_does() {
+    // The VAD-gated AGC with a VAD that allocates nothing itself: the gate, its verdicts and the
+    // frames waiting for them are all allocated up front.
+    struct Speech;
+    impl SpeechProbability for Speech {
+        fn reset(&mut self) {}
+        fn probability(&mut self, _: &[f32; VAD_WINDOW]) -> Result<f32, EngineError> {
+            Ok(0.9)
+        }
+    }
+    let mut audio = speech_like(3.0, -60.0, 7);
+    let mut agc = Agc::with_vad(Box::new(Speech), VadConfig::default());
+    for block in audio.chunks_mut(160) {
+        assert_eq!(allocations_in(|| agc.process(block)), 0);
+    }
+    let mut tail = Vec::with_capacity(Agc::LATENCY);
+    assert_eq!(allocations_in(|| agc.flush(&mut tail)), 0);
+    assert!(agc.gain() > 1.0, "it learned");
 }
 
 #[test]
