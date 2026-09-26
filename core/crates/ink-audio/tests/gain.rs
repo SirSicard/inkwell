@@ -444,7 +444,8 @@ fn the_real_vads_short_false_positives_set_no_gain() {
     // 96 ms segment (3 windows) in steep 500 Hz rumble; knocks in segments of 128-160 ms (4-5
     // windows), up to three in one take (23 learned frames). Each of those takes had its gain set
     // before; none may now. The trim still sees them (its minimum is 64 ms), but no level is
-    // learned from segments shorter than MIN_LEVEL_SEGMENT_WINDOWS, so the take has no speech.
+    // learned from segments shorter than MIN_LEVEL_SEGMENT_WINDOWS: the take is SpeechTooShort,
+    // untouched, and discarded like a take with no speech (no engine sees it).
     let rumble = rumble(4.0, -70.0, 500.0, Slope::Steep, 600);
     let knocks = knocks(4.0, -60.0, 601);
     for (what, take, runs) in [
@@ -461,7 +462,7 @@ fn the_real_vads_short_false_positives_set_no_gain() {
         ),
     ] {
         let (out, report) = with_runs(take, &runs);
-        assert_eq!(report.outcome, GainOutcome::NoSpeech, "{what}");
+        assert_eq!(report.outcome, GainOutcome::SpeechTooShort, "{what}");
         let GainEvidence::Vad {
             speech_frames,
             speech,
@@ -476,6 +477,70 @@ fn the_real_vads_short_false_positives_set_no_gain() {
             "{what}: the trim no longer saw the segments"
         );
         assert_eq!(&out, take, "{what}: touched");
+    }
+}
+
+#[test]
+fn a_160_ms_word_is_speech_too_short_never_no_speech() {
+    // A quick "no": 160 ms (5 windows) of speech over room tone in a 1 s take, which the VAD
+    // hears. It is one window short of the level minimum, so no gain is learned, and the outcome
+    // says that speech was found but was too short, never that there was none.
+    let word = speech_like(0.16, -60.0, 630);
+    let mut take = noise(1.0, -70.0, 631);
+    for (t, w) in take[8 * VAD_WINDOW..].iter_mut().zip(&word) {
+        *t += w;
+    }
+    let (out, report) = with_runs(&take, &[(8, 5)]);
+    assert_eq!(report.outcome, GainOutcome::SpeechTooShort);
+    assert_ne!(report.outcome, GainOutcome::NoSpeech);
+    let GainEvidence::Vad {
+        speech_frames,
+        speech,
+        ..
+    } = report.evidence
+    else {
+        panic!("{:?}", report.evidence)
+    };
+    assert_eq!(speech_frames, 0);
+    let speech = speech.expect("the VAD's speech is in the report");
+    assert!(
+        speech.start <= 8 * VAD_WINDOW && speech.end >= 13 * VAD_WINDOW,
+        "{speech:?}"
+    );
+    assert_eq!(out, take, "touched");
+}
+
+#[test]
+fn silence_and_noise_still_have_no_speech() {
+    // Where the VAD finds no speech at all, the outcome is still NoSpeech: room tone, rumble and a
+    // fan with a VAD that hears nothing, and a quiet room with one that scores just under the
+    // threshold throughout.
+    for (what, take, vad) in [
+        ("room tone", noise(4.0, -70.0, 640), 0.05),
+        (
+            "rumble",
+            rumble(4.0, -70.0, 250.0, Slope::Gentle, 641),
+            0.05,
+        ),
+        ("fan", cycling_fan(4.0, -60.0, 642), 0.05),
+        ("quiet room", noise(4.0, -80.0, 643), 0.49),
+    ] {
+        let mut out = take.clone();
+        let report = normalise_speech(&mut out, &mut Always(vad), &cfg()).unwrap();
+        assert_eq!(report.outcome, GainOutcome::NoSpeech, "{what}");
+        assert!(
+            matches!(
+                report.evidence,
+                GainEvidence::Vad {
+                    speech: None,
+                    speech_frames: 0,
+                    ..
+                }
+            ),
+            "{what}: {:?}",
+            report.evidence
+        );
+        assert_eq!(out, take, "{what}: touched");
     }
 }
 
@@ -528,7 +593,7 @@ fn the_level_segment_minimum_is_192_ms_and_only_applies_to_the_gain() {
     let take = speech_like(1.0, -60.0, 620);
     let (_, below) = with_runs(&take, &[(10, MIN_LEVEL_SEGMENT_WINDOWS - 1)]);
     let (_, at) = with_runs(&take, &[(10, MIN_LEVEL_SEGMENT_WINDOWS)]);
-    assert_eq!(below.outcome, GainOutcome::NoSpeech);
+    assert_eq!(below.outcome, GainOutcome::SpeechTooShort);
     assert!(matches!(at.outcome, GainOutcome::Applied { .. }), "{at:?}");
     // A short segment before a long one (with more than the hangover between them, so the two
     // stay apart) adds nothing to the level: the long one's alone sets it.

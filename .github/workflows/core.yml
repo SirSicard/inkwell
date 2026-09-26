@@ -67,6 +67,15 @@ jobs:
       - run: cargo clippy -p ink-engines --all-targets --locked --features engine-nemo -- -D warnings
         env:
           INK_NEMO_CHECK_ONLY: "1"
+      # llama.cpp (engine-llama) compiles llama.cpp and its ggml with cmake, so it runs on macOS
+      # only, where the app uses it. Its non-ignored tests need no model: they include ggml_link.rs,
+      # which checks the two ggml copies stay apart in the linked binary. Adds roughly 1-2 minutes
+      # on a warm cache and several on a cold one (measured locally with 3 jobs: 58 s for clippy,
+      # 62 s for the tests, from cold).
+      - if: runner.os == 'macOS'
+        run: cargo clippy -p ink-engines --all-targets --locked --features engine-llama -- -D warnings
+      - if: runner.os == 'macOS'
+        run: cargo test -p ink-engines --locked --features engine-llama
 
   deny:
     name: licences, advisories, sources

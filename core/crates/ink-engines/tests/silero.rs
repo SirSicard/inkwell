@@ -5,8 +5,8 @@
 //! `silero_vad_16k_op15.onnx` (checked here against the registry row's size and SHA-256; CI
 //! downloads it from the pinned commit and sets the variable).
 //!
-//! - **Model only** (run whenever `INK_SILERO_MODEL` is set; skipped, with a note, when it is
-//!   not): golden probabilities on fixed synthetic inputs, determinism, state carried from window
+//! - **Model only** (run whenever `INK_SILERO_MODEL` is set; when it is not, skipped with a
+//!   note locally and failed under CI, where `CI` is set): golden probabilities on fixed synthetic inputs, determinism, state carried from window
 //!   to window, a reset that restores the initial state exactly, clicks and typing, and
 //!   ink-audio's synthetic speech.
 //! - **`#[ignore]`, local:** the AMI tests need `INK_BENCH_DIR` holding `ami-ihm.tsv` and the
@@ -60,16 +60,45 @@ fn load(path: &Path) -> SileroModel {
     SileroModel::load(path).unwrap()
 }
 
-/// The model, for the model-only tests: `None`, after saying so, when `INK_SILERO_MODEL` is not
-/// set. CI always sets it.
-fn model_if_configured(test: &str) -> Option<SileroModel> {
-    match model_path() {
-        Some(path) => Some(load(&path)),
+/// Whether `test` runs on the model at `path`: yes when it is set. When it is not, the test is
+/// skipped (with a note) locally, and fails under CI (`in_ci`), so a workflow that stops fetching
+/// the model cannot turn these tests into green no-ops.
+fn configured_path(path: Option<PathBuf>, in_ci: bool, test: &str) -> Option<PathBuf> {
+    match path {
+        Some(path) => Some(path),
+        None if in_ci => panic!(
+            "{test}: INK_SILERO_MODEL is not set, and CI is: the workflow must fetch the model \
+             (core.yml), not skip these tests"
+        ),
         None => {
             eprintln!("{test}: skipped, INK_SILERO_MODEL is not set");
             None
         }
     }
+}
+
+/// The model file for a model-only test, as [`configured_path`] decides with this process's
+/// environment (`CI` is set on every CI runner).
+fn model_path_if_configured(test: &str) -> Option<PathBuf> {
+    configured_path(model_path(), std::env::var_os("CI").is_some(), test)
+}
+
+/// The model, for the model-only tests (see [`configured_path`]).
+fn model_if_configured(test: &str) -> Option<SileroModel> {
+    model_path_if_configured(test).map(|path| load(&path))
+}
+
+#[test]
+#[should_panic(expected = "INK_SILERO_MODEL is not set, and CI is")]
+fn in_ci_a_missing_model_fails_instead_of_skipping() {
+    configured_path(None, true, "a model-only test");
+}
+
+#[test]
+fn outside_ci_a_missing_model_skips() {
+    assert_eq!(configured_path(None, false, "a model-only test"), None);
+    let path = PathBuf::from("model.onnx");
+    assert_eq!(configured_path(Some(path.clone()), true, "t"), Some(path));
 }
 
 /// The model, for the `#[ignore]` tests, which are run on purpose.
@@ -640,7 +669,10 @@ fn the_level_segment_minimum_costs_real_speech_little() {
                 with_speech += 1;
                 let mut out = take.to_vec();
                 let report = gain::normalise_speech(&mut out, &mut vad, &cfg).unwrap();
-                if report.outcome == GainOutcome::NoSpeech {
+                // Silero found speech, so a take that learns no level is SpeechTooShort, never
+                // NoSpeech.
+                assert_ne!(report.outcome, GainOutcome::NoSpeech);
+                if report.outcome == GainOutcome::SpeechTooShort {
                     lost += 1;
                 }
             }
@@ -722,10 +754,9 @@ fn the_loader_reports_a_missing_model_file() {
 
 #[test]
 fn the_loader_loads_the_installed_row_through_residency() {
-    let Some(source) = model_path() else {
-        eprintln!(
-            "the_loader_loads_the_installed_row_through_residency: skipped, INK_SILERO_MODEL is not set"
-        );
+    let Some(source) =
+        model_path_if_configured("the_loader_loads_the_installed_row_through_residency")
+    else {
         return;
     };
     let root = temp_dir("installed");
