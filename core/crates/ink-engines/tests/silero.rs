@@ -573,8 +573,8 @@ fn false_positives(model: &SileroModel, audio: &[f32]) -> FalsePositives {
 #[test]
 #[ignore = "a measurement: needs INK_SILERO_MODEL, and about a minute in a debug build"]
 fn non_speech_false_positives_are_short_and_set_no_gain() {
-    // Whether a false positive can set a take's gain: 40 s of each of ink-audio's non-speech fixtures in 4 s takes,
-    // each lifted by its provisional gain as normalise_speech lifts it.
+    // Whether a false positive can set a take's gain: 40 s of each of ink-audio's non-speech
+    // fixtures in 4 s takes, each lifted by its provisional gain as normalise_speech lifts it.
     //
     // Measured on 2026-09-26: no speech in room tone, gentle rumble, any swinging rumble, the fan,
     // typing or the hotkey click. Two fixtures fool it briefly: steep 500 Hz rumble (one 96 ms
