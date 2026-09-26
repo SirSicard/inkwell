@@ -638,3 +638,142 @@ pub fn diarizer(turns: &[(&str, u64, u64)]) -> Arc<MockDiarizer> {
             .collect(),
     ))
 }
+
+// ---------------------------------------------------------------------------------------------
+// A store that fails on demand
+
+/// A [`MemStore`] whose named methods fail with a backend error once switched on.
+#[derive(Default)]
+pub struct FlakyStore {
+    pub inner: MemStore,
+    failing: Mutex<Vec<&'static str>>,
+}
+
+impl FlakyStore {
+    /// From now on, the methods named fail.
+    pub fn fail(&self, methods: &[&'static str]) {
+        self.failing.lock().unwrap().extend_from_slice(methods);
+    }
+
+    fn check(&self, method: &'static str) -> Result<(), ink_core::StoreError> {
+        if self.failing.lock().unwrap().contains(&method) {
+            Err(ink_core::StoreError::Backend(format!(
+                "scripted {method} failure"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+use ink_core::{
+    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
+    RecordQuery, SearchHit, Segment, SpeakerId, StoreError, Summary,
+};
+
+impl Store for FlakyStore {
+    fn create_record(&self, record: NewRecord) -> Result<RecordId, StoreError> {
+        self.check("create_record")?;
+        self.inner.create_record(record)
+    }
+    fn record(&self, id: &RecordId) -> Result<Option<Record>, StoreError> {
+        self.check("record")?;
+        self.inner.record(id)
+    }
+    fn records(&self, query: &RecordQuery) -> Result<Vec<Record>, StoreError> {
+        self.check("records")?;
+        self.inner.records(query)
+    }
+    fn set_title(&self, id: &RecordId, title: &str) -> Result<(), StoreError> {
+        self.check("set_title")?;
+        self.inner.set_title(id, title)
+    }
+    fn finish_record(&self, id: &RecordId, at: i64) -> Result<(), StoreError> {
+        self.check("finish_record")?;
+        self.inner.finish_record(id, at)
+    }
+    fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.check("delete_record")?;
+        self.inner.delete_record(id)
+    }
+    fn append_segments(&self, id: &RecordId, segments: &[Segment]) -> Result<(), StoreError> {
+        self.check("append_segments")?;
+        self.inner.append_segments(id, segments)
+    }
+    fn segments(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.check("segments")?;
+        self.inner.segments(id)
+    }
+    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+        self.check("supersede")?;
+        self.inner.supersede(id, segments)
+    }
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
+        self.check("search")?;
+        self.inner.search(query, limit)
+    }
+    fn add_note(&self, id: &RecordId, at_ms: u64, text: &str) -> Result<NoteId, StoreError> {
+        self.check("add_note")?;
+        self.inner.add_note(id, at_ms, text)
+    }
+    fn update_note(&self, id: &NoteId, text: &str) -> Result<(), StoreError> {
+        self.check("update_note")?;
+        self.inner.update_note(id, text)
+    }
+    fn delete_note(&self, id: &NoteId) -> Result<(), StoreError> {
+        self.check("delete_note")?;
+        self.inner.delete_note(id)
+    }
+    fn notes(&self, id: &RecordId) -> Result<Vec<Note>, StoreError> {
+        self.check("notes")?;
+        self.inner.notes(id)
+    }
+    fn save_summary(&self, id: &RecordId, summary: &Summary) -> Result<(), StoreError> {
+        self.check("save_summary")?;
+        self.inner.save_summary(id, summary)
+    }
+    fn summary(&self, id: &RecordId) -> Result<Option<Summary>, StoreError> {
+        self.check("summary")?;
+        self.inner.summary(id)
+    }
+    fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, name: &str) -> Result<(), StoreError> {
+        self.check("set_speaker_name")?;
+        self.inner.set_speaker_name(id, s, name)
+    }
+    fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
+        self.check("speaker_names")?;
+        self.inner.speaker_names(id)
+    }
+    fn add_commitments(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        self.check("add_commitments")?;
+        self.inner.add_commitments(id, items)
+    }
+    fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
+        self.check("commitments")?;
+        self.inner.commitments(id)
+    }
+    fn open_commitments(&self, limit: usize) -> Result<Vec<Commitment>, StoreError> {
+        self.check("open_commitments")?;
+        self.inner.open_commitments(limit)
+    }
+    fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {
+        self.check("set_commitment_done")?;
+        self.inner.set_commitment_done(id, done)
+    }
+    fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError> {
+        self.check("merge_commitment")?;
+        self.inner.merge_commitment(id, into)
+    }
+    fn setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        self.check("setting")?;
+        self.inner.setting(key)
+    }
+    fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        self.check("set_setting")?;
+        self.inner.set_setting(key, value)
+    }
+}

@@ -100,7 +100,7 @@ fn two_sides_give_revision_2_with_you_and_them_and_monotonic_times() {
     // Final: revision 2, the same sides, times in order.
     let outcome = ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
     assert!(outcome.superseded);
-    assert_eq!(outcome.revision, 2);
+    assert_eq!(outcome.revision, Some(2));
     assert_eq!(rig.store.record(&record).unwrap().unwrap().revision, 2);
     let finals = rig.store.segments(&record).unwrap();
     assert_eq!(finals.len(), 3, "{finals:#?}");
@@ -128,7 +128,10 @@ fn two_sides_give_revision_2_with_you_and_them_and_monotonic_times() {
     );
     let events = rig.events();
     assert!(events.contains(&MeetingEvent::Superseded { revision: 2 }));
-    assert_eq!(events.last(), Some(&MeetingEvent::Finished { revision: 2 }));
+    assert_eq!(
+        events.last(),
+        Some(&MeetingEvent::Finished { revision: Some(2) })
+    );
     assert_eq!(
         rig.warnings(),
         [MeetingWarning::SummaryUnavailable],
@@ -148,7 +151,7 @@ fn the_supersede_bumps_the_revision_in_sqlite_too() {
     let (mic, far) = conversation();
     rig.feed(&mic, &far);
     let outcome = rig.finish().unwrap();
-    assert_eq!(outcome.revision, 2);
+    assert_eq!(outcome.revision, Some(2));
     let stored = sqlite.record(&record).unwrap().unwrap();
     assert_eq!(stored.revision, 2);
     assert!(stored.ended_at_unix_ms.is_some());
@@ -171,7 +174,7 @@ fn meeting_finals_reach_the_engine_at_the_gain_target() {
     assert!((rms_dbfs(&speech(3.0, -75.0, 11)) + 75.0).abs() < 0.01);
     rig.feed(&mic, &far);
     let outcome = rig.finish().unwrap();
-    assert_eq!(outcome.revision, 2);
+    assert_eq!(outcome.revision, Some(2));
 
     let calls = rig.engine.mock.calls();
     assert_eq!(calls.len(), 2, "{calls:?}");
@@ -668,7 +671,7 @@ fn a_final_pass_the_guard_refuses_keeps_revision_1() {
     rig.feed(&mic, &far);
     let outcome = rig.finish().unwrap();
     assert!(!outcome.superseded);
-    assert_eq!(outcome.revision, 1);
+    assert_eq!(outcome.revision, Some(1));
     assert!(
         rig.events()
             .contains(&MeetingEvent::KeptLive(KeptLive::Refused(
@@ -705,7 +708,7 @@ fn a_failed_region_keeps_revision_1() {
     rig.feed(&mic, &far);
     let outcome = rig.finish().unwrap();
     assert!(!outcome.superseded);
-    assert_eq!(outcome.revision, 1);
+    assert_eq!(outcome.revision, Some(1));
     assert_eq!(outcome.mic.failed_regions, 1);
     assert!(
         rig.events()
@@ -942,6 +945,101 @@ fn the_summary_and_commitments_follow_the_supersede() {
     assert!(llm.calls.load(Ordering::SeqCst) >= 3);
 }
 
+/// MUST from review: once revision 2 is committed, no read of the record can turn the pass into a
+/// bare error. The record, its speaker names and its live transcript are read before anything is
+/// written; each read that fails is reported, the pass goes on without it, and it finishes.
+#[test]
+fn record_reads_that_fail_are_reported_and_the_pass_still_finishes() {
+    let flaky = Arc::new(FlakyStore::default());
+    let llm = Arc::new(Scripted {
+        calls: AtomicUsize::new(0),
+    });
+    let mut rig = RigBuilder {
+        answer: promise(),
+        llm: Some(llm),
+        store: Some(flaky.clone()),
+        title: None,
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(0.5), speech(2.0, -30.0, 71), silence(4.0)]);
+    let far = join(&[silence(3.0), speech(2.0, -30.0, 72), silence(1.5)]);
+    rig.feed(&mic, &far);
+    let ended = rig.stop();
+    flaky.fail(&["record", "speaker_names", "segments"]);
+
+    let outcome = ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
+    assert!(outcome.superseded);
+    assert_eq!(outcome.revision, Some(2));
+    let events = rig.events();
+    assert_eq!(
+        events.last(),
+        Some(&MeetingEvent::Finished { revision: Some(2) })
+    );
+    let failed = rig
+        .warnings()
+        .into_iter()
+        .filter(|w| matches!(w, MeetingWarning::StoreFailed(StoreError::Backend(_))))
+        .count();
+    assert_eq!(failed, 3, "one per failed read: {:?}", rig.warnings());
+    // The summary is written from the transcript in hand; the title is left alone, since whether
+    // the record had one could not be read.
+    assert!(events.contains(&MeetingEvent::Summarized { unverified: 0 }));
+    let stored = flaky.inner.record(&record).unwrap().unwrap();
+    assert_eq!(stored.revision, 2);
+    assert_eq!(stored.title, None);
+    assert!(flaky.inner.summary(&record).unwrap().is_some());
+}
+
+/// Cancelling once the final pass is saved stops the summary, is reported, and the pass still
+/// finishes: revision 2 is not taken back, and the caller is not told nothing was saved.
+#[test]
+fn a_cancellation_after_the_supersede_still_finishes() {
+    struct Cancels(CancelToken);
+    impl ink_core::Llm for Cancels {
+        fn info(&self) -> ink_core::LlmInfo {
+            ink_core::LlmInfo {
+                provider: "cancels".into(),
+                model: "test".into(),
+                endpoint: ink_core::Endpoint::InProcess,
+            }
+        }
+        fn complete(
+            &self,
+            _: &LlmRequest,
+            _: &CancelToken,
+        ) -> Result<ink_core::LlmResponse, LlmError> {
+            self.0.cancel();
+            Err(LlmError::Cancelled)
+        }
+    }
+    let cancel = CancelToken::new();
+    let mut rig = RigBuilder {
+        llm: Some(Arc::new(Cancels(cancel.clone()))),
+        ..RigBuilder::default()
+    }
+    .build();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    let outcome = rig.stop().finalize(&rig.chunks, &cancel).unwrap();
+    assert_eq!(outcome.revision, Some(2));
+    assert!(
+        rig.warnings()
+            .contains(&MeetingWarning::SummaryFailed(LlmError::Cancelled))
+    );
+    assert!(
+        !rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::CommitmentsFailed(_))),
+        "nothing more is asked of the model"
+    );
+    assert_eq!(
+        rig.events().last(),
+        Some(&MeetingEvent::Finished { revision: Some(2) })
+    );
+}
+
 #[test]
 fn no_model_means_no_summary_and_says_so() {
     let mut rig = RigBuilder::default().build();
@@ -999,7 +1097,7 @@ fn a_cancelled_final_pass_can_run_again() {
     cancel.cancel();
     assert!(ended.finalize(&rig.chunks, &cancel).is_err());
     let outcome = ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
-    assert_eq!(outcome.revision, 2);
+    assert_eq!(outcome.revision, Some(2));
 }
 
 /// Without a live engine, the meeting still records and the final pass makes the transcript.
@@ -1048,6 +1146,6 @@ fn no_live_engine_still_gives_a_final_transcript() {
     writer.finish().unwrap();
     assert!(store.segments(&record).unwrap().is_empty(), "nothing live");
     let outcome = chain.stop().finalize(&chunks, &CancelToken::new()).unwrap();
-    assert_eq!(outcome.revision, 2);
+    assert_eq!(outcome.revision, Some(2));
     assert_eq!(store.segments(&record).unwrap().len(), 2);
 }

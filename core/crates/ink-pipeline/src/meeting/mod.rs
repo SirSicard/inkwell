@@ -42,7 +42,8 @@ use ink_audio::{ChunkError, ChunkStore, VadConfig, WindowError};
 use ink_core::store::check_supersede;
 use ink_core::{
     AsrEvent, CancelToken, Channel, Clock, Diarizer, EventSink, Llm, LlmError, NewCommitment,
-    NewRecord, OfflineEngine, RecordId, RecordKind, Segment, Store, StoreError, StreamingEngine,
+    NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment, Store, StoreError,
+    StreamingEngine,
 };
 use ink_llm::tasks::commitments::{RecordContext, harvest};
 use ink_llm::tasks::dedup::{apply_merges, dedup};
@@ -124,6 +125,19 @@ impl Core {
 
     fn warn(&self, warning: MeetingWarning) {
         self.emit(MeetingEvent::Warning(warning));
+    }
+
+    /// A read of the record for the final pass: a failure is reported, and the pass goes on
+    /// without the value.
+    fn read<T>(&self, what: Result<T, StoreError>) -> Option<T> {
+        match what {
+            Ok(value) => Some(value),
+            Err(error) => {
+                log::warn!("meeting final pass: a read of the record failed: {error}");
+                self.warn(MeetingWarning::StoreFailed(error));
+                None
+            }
+        }
     }
 }
 
@@ -275,7 +289,7 @@ impl MeetingChain {
                     store.append_segments(&self.core.record, std::slice::from_ref(&segment))
                 {
                     log::warn!("meeting: a live final could not be saved: {error}");
-                    self.core.warn(MeetingWarning::SaveFailed(error));
+                    self.core.warn(MeetingWarning::StoreFailed(error));
                 }
                 self.core.emit(MeetingEvent::Final {
                     channel: segment.channel,
@@ -324,7 +338,7 @@ impl MeetingChain {
             .finish_record(&core.record, now.max(core.started_unix_ms))
         {
             log::warn!("meeting: the record could not be marked ended: {error}");
-            core.warn(MeetingWarning::SaveFailed(error));
+            core.warn(MeetingWarning::StoreFailed(error));
         }
         core.emit(MeetingEvent::Stopped);
         EndedMeeting { core }
@@ -340,7 +354,9 @@ pub struct EndedMeeting {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeetingOutcome {
     /// The transcript's revision now: 2 after a first supersede, 1 when the live one was kept.
-    pub revision: u32,
+    /// `None` only when the live one was kept and the record could not be read
+    /// ([`MeetingWarning::StoreFailed`] says so).
+    pub revision: Option<u32>,
     /// Whether the final pass replaced the live transcript.
     pub superseded: bool,
     /// The mic side's pass.
@@ -351,8 +367,9 @@ pub struct MeetingOutcome {
     pub diarization: Option<events::Diarization>,
 }
 
-/// Why a final pass stopped. Nothing it had not finished was saved, and the live transcript
-/// stands.
+/// Why a final pass stopped before replacing the live transcript. Every one of these happens
+/// before anything is written: the live transcript stands, and the pass can run again. Once the
+/// final pass is saved, nothing stops it from finishing (see [`EndedMeeting::finalize`]).
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FinalizeError {
@@ -362,8 +379,6 @@ pub enum FinalizeError {
     Chunks(ChunkError),
     /// The region sizes in the settings cannot work.
     Regions(WindowError),
-    /// The record could not be read.
-    Store(StoreError),
 }
 
 impl fmt::Display for FinalizeError {
@@ -372,7 +387,6 @@ impl fmt::Display for FinalizeError {
             Self::Cancelled => f.write_str("meeting final pass cancelled"),
             Self::Chunks(e) => write!(f, "meeting final pass: {e}"),
             Self::Regions(e) => write!(f, "meeting final pass: {e}"),
-            Self::Store(e) => write!(f, "meeting final pass: {e}"),
         }
     }
 }
@@ -398,8 +412,12 @@ impl EndedMeeting {
     /// **Worker.** The final pass over the meeting's recorded chunks in `audio`, then the
     /// supersede, the summary and the commitments. See the module docs.
     ///
-    /// After an error (a cancellation included) nothing the pass had not finished is saved, and it
-    /// can be run again.
+    /// Until the supersede, an error (a cancellation included) leaves the live transcript as it was,
+    /// and the pass can run again. From the supersede on, nothing turns the pass into an error: a
+    /// store that fails, a model that fails, even a cancellation, is reported as a warning, the
+    /// rest is skipped where it must be, and [`MeetingEvent::Finished`] still comes. What the pass
+    /// needs from the record (its title and revision, the speakers' names, the live transcript) is
+    /// read before anything is written, for the same reason.
     pub fn finalize(
         &self,
         audio: &ChunkStore,
@@ -461,19 +479,35 @@ impl EndedMeeting {
 
         let mut new: Vec<Segment> = mic.into_iter().chain(far).collect();
         new.sort_by_key(|s| (s.start_ms, s.channel));
-        let superseded =
-            self.supersede(&new, mic_report.failed_regions + far_report.failed_regions)?;
+
+        // Read before anything is written: a failure here is reported and the pass goes on
+        // without what it could not read.
         let store = &core.services.store;
-        let current = store.segments(&core.record).map_err(FinalizeError::Store)?;
-        self.wrap_up(&current, cancel)?;
-        let revision = store
-            .record(&core.record)
-            .map_err(FinalizeError::Store)?
-            .map_or(1, |r| r.revision);
+        let record = core.read(store.record(&core.record)).flatten();
+        let names = core
+            .read(store.speaker_names(&core.record))
+            .unwrap_or_default();
+        let previous = core.read(store.segments(&core.record));
+
+        let failed = mic_report.failed_regions + far_report.failed_regions;
+        let saved = self.supersede(&new, failed, previous.as_deref());
+        let revision = saved.or(record.as_ref().map(|r| r.revision));
+        // The transcript now, from memory: the pass just saved, or the live one as read.
+        let current = if saved.is_some() {
+            Some(new.as_slice())
+        } else {
+            previous.as_deref()
+        };
+        match current {
+            Some(segments) => self.wrap_up(segments, record.as_ref(), &names, cancel),
+            None => {
+                log::warn!("meeting final pass: no summary; the live transcript could not be read")
+            }
+        }
         core.emit(MeetingEvent::Finished { revision });
         Ok(MeetingOutcome {
             revision,
-            superseded,
+            superseded: saved.is_some(),
             mic: mic_report,
             far: far_report,
             diarization,
@@ -518,9 +552,16 @@ impl EndedMeeting {
     }
 
     /// Replaces the live transcript with `new`, unless a region failed or the guard refuses.
-    fn supersede(&self, new: &[Segment], failed_regions: usize) -> Result<bool, FinalizeError> {
+    /// Returns the new revision when it did. `previous` is the live transcript, when it could be
+    /// read: the guard is checked against it first, so a refusal is an outcome of the pass; without
+    /// it, the store's own check (inside its transaction) decides.
+    fn supersede(
+        &self,
+        new: &[Segment],
+        failed_regions: usize,
+        previous: Option<&[Segment]>,
+    ) -> Option<u32> {
         let core = &self.core;
-        let store = &core.services.store;
         if failed_regions > 0 {
             log::warn!(
                 "meeting final pass: {failed_regions} regions failed; the live transcript stands"
@@ -528,54 +569,51 @@ impl EndedMeeting {
             core.emit(MeetingEvent::KeptLive(KeptLive::Incomplete {
                 failed_regions,
             }));
-            return Ok(false);
+            return None;
         }
-        let previous = store.segments(&core.record).map_err(FinalizeError::Store)?;
-        // The store checks again inside its transaction; checking here first keeps a refusal an
-        // outcome of the pass rather than a store failure.
-        let refused = match check_supersede(&previous, new) {
-            Ok(()) => match store.supersede(&core.record, new) {
-                Ok(revision) => {
-                    core.emit(MeetingEvent::Superseded { revision });
-                    return Ok(true);
-                }
-                Err(error) => error,
-            },
+        let checked = previous.map_or(Ok(()), |previous| check_supersede(previous, new));
+        let refused = match checked.and_then(|()| core.services.store.supersede(&core.record, new))
+        {
+            Ok(revision) => {
+                core.emit(MeetingEvent::Superseded { revision });
+                return Some(revision);
+            }
             Err(error) => error,
         };
         log::warn!("meeting final pass not saved over the live transcript: {refused}");
         core.emit(MeetingEvent::KeptLive(KeptLive::Refused(refused)));
-        Ok(false)
+        None
     }
 
-    /// The summary, then commitments, on the current transcript.
-    fn wrap_up(&self, segments: &[Segment], cancel: &CancelToken) -> Result<(), FinalizeError> {
+    /// The summary, then commitments, on the current transcript. It runs after the supersede, so
+    /// it never fails the pass: each failure (a cancellation included) is a warning, and what
+    /// depends on it is skipped. `record` is the record as read before the supersede; when that
+    /// read failed, the title is left alone, since whether it had one is unknown.
+    fn wrap_up(
+        &self,
+        segments: &[Segment],
+        record: Option<&Record>,
+        names: &[(ink_core::SpeakerId, String)],
+        cancel: &CancelToken,
+    ) {
         let core = &self.core;
         if ink_core::store::word_count(segments) == 0 {
             // Nothing was said: there is nothing to summarise, and no call is made.
-            return Ok(());
+            return;
         }
         let Some(llm) = &core.services.llm else {
             core.warn(MeetingWarning::SummaryUnavailable);
-            return Ok(());
+            return;
         };
         let store = &core.services.store;
-        let record = store
-            .record(&core.record)
-            .map_err(FinalizeError::Store)?
-            .ok_or(FinalizeError::Store(StoreError::NotFound))?;
-        let names = store
-            .speaker_names(&core.record)
-            .map_err(FinalizeError::Store)?;
         let ctx = RecordContext {
-            title: record.title.as_deref(),
+            title: record.and_then(|r| r.title.as_deref()),
             time: RecordTime {
                 started_at_unix_ms: core.started_unix_ms,
                 utc_offset_minutes: core.settings.utc_offset_minutes,
             },
-            speaker_names: &names,
+            speaker_names: names,
         };
-        let cancelled = |e: &LlmError| matches!(e, LlmError::Cancelled);
 
         let mut filed: Vec<NewCommitment> = Vec::new();
         let now = core.services.clock.unix_ms();
@@ -588,33 +626,40 @@ impl EndedMeeting {
             cancel,
         ) {
             Ok(outcome) => {
+                let untitled = record.is_some_and(|r| r.title.is_none());
                 let saved = store
                     .save_summary(&core.record, &outcome.summary)
-                    .and_then(|()| match record.title {
-                        Some(_) => Ok(()),
-                        None => store.set_title(&core.record, &outcome.draft.headline),
+                    .and_then(|()| match untitled {
+                        true => store.set_title(&core.record, &outcome.draft.headline),
+                        false => Ok(()),
                     });
                 match saved {
                     Ok(()) => core.emit(MeetingEvent::Summarized {
                         unverified: outcome.unverified,
                     }),
-                    Err(error) => core.warn(MeetingWarning::SaveFailed(error)),
+                    Err(error) => core.warn(MeetingWarning::StoreFailed(error)),
                 }
                 filed = outcome.actions;
             }
-            Err(e) if cancelled(&e) => return Err(FinalizeError::Cancelled),
             Err(error) => {
                 log::warn!("meeting summary failed: {error}");
+                let cancelled = error == LlmError::Cancelled;
                 core.warn(MeetingWarning::SummaryFailed(error));
+                if cancelled {
+                    return;
+                }
             }
         }
 
         match harvest(segments, &ctx, llm.as_ref(), cancel) {
             Ok(h) => filed.extend(h.commitments),
-            Err(e) if cancelled(&e) => return Err(FinalizeError::Cancelled),
             Err(error) => {
                 log::warn!("meeting commitments failed: {error}");
+                let cancelled = error == LlmError::Cancelled;
                 core.warn(MeetingWarning::CommitmentsFailed(error));
+                if cancelled {
+                    return;
+                }
             }
         }
         if filed.is_empty() {
@@ -622,13 +667,13 @@ impl EndedMeeting {
                 filed: 0,
                 merged: 0,
             });
-            return Ok(());
+            return;
         }
         let merges = match dedup(&filed, llm.as_ref(), cancel) {
             Ok(d) => d.merges,
-            Err(e) if cancelled(&e) => return Err(FinalizeError::Cancelled),
             Err(error) => {
-                // Filed apart: a promise listed twice beats one lost.
+                // Filed apart: a promise listed twice beats one lost. A cancellation files them
+                // apart too: they were found, and the pass is past the point of undoing.
                 log::warn!("meeting commitment dedup failed: {error}");
                 core.warn(MeetingWarning::CommitmentsFailed(error));
                 Vec::new()
@@ -642,8 +687,7 @@ impl EndedMeeting {
                 filed: filed.len(),
                 merged: merges.len(),
             }),
-            Err(error) => core.warn(MeetingWarning::SaveFailed(error)),
+            Err(error) => core.warn(MeetingWarning::StoreFailed(error)),
         }
-        Ok(())
     }
 }

@@ -104,8 +104,10 @@ pub enum MeetingWarning {
     },
     /// The diarizer failed: the far end keeps no speaker labels.
     DiarizationFailed(EngineError),
-    /// A live final or the final pass could not be saved.
-    SaveFailed(StoreError),
+    /// The store failed: a live final, the final pass, the summary or commitments could not be
+    /// saved, or the record could not be read back for the final pass. The meeting went on
+    /// without it; the events around it say what was skipped.
+    StoreFailed(StoreError),
     /// The wall clock reads earlier than the meeting's start (it was set back during the meeting),
     /// so the end was recorded as the start.
     ClockWentBack,
@@ -223,9 +225,10 @@ pub enum MeetingEvent {
         /// Of those, folded into another ("said twice").
         merged: usize,
     },
-    /// Everything is done.
+    /// Everything is done. Sent by every final pass that got as far as the supersede.
     Finished {
-        /// The transcript's revision now.
-        revision: u32,
+        /// The transcript's revision now; `None` only when the live one was kept and the record
+        /// could not be read.
+        revision: Option<u32>,
     },
 }

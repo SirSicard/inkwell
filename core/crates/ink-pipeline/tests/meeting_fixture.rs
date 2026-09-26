@@ -194,7 +194,7 @@ fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
 
     let outcome = ended.finalize(&chunks, &CancelToken::new()).unwrap();
     assert!(outcome.superseded, "{:?}", events.lock().unwrap());
-    assert_eq!(outcome.revision, 2);
+    assert_eq!(outcome.revision, Some(2));
     assert_eq!(store.record(&record).unwrap().unwrap().revision, 2);
     let finals = store.segments(&record).unwrap();
     for s in &finals {

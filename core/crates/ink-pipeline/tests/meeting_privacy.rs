@@ -60,7 +60,7 @@ fn printed(events: &[MeetingEvent]) -> Vec<String> {
                     | MeetingWarning::LiveEngineFailed { error, .. }
                     | MeetingWarning::FinalEngineFailed { error, .. }
                     | MeetingWarning::DiarizationFailed(error) => out.push(error.to_string()),
-                    MeetingWarning::SaveFailed(error) => out.push(error.to_string()),
+                    MeetingWarning::StoreFailed(error) => out.push(error.to_string()),
                     MeetingWarning::SummaryFailed(error)
                     | MeetingWarning::CommitmentsFailed(error) => out.push(error.to_string()),
                     MeetingWarning::Capture { issue, .. } => out.push(issue.to_string()),
