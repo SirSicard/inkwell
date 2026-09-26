@@ -16,6 +16,8 @@ ink-audio = { path = "../ink-audio" }
 ink-engines = { path = "../ink-engines" }
 # AI polish (stage 9) is ink-llm's task, not a second copy of it here.
 ink-llm = { path = "../ink-llm" }
+# File import reads WAV (Apache-2.0; already in the tree through ink-audio).
+hound = "3.5.1"
 # Snippet and voice-command triggers (MIT OR Unlicense). Already in the tree through regex.
 aho-corasick = "1.1.5"
 # Diagnostics: counts, levels and timings only, never text (I5, `tests/privacy_lint.rs`).
@@ -24,7 +26,19 @@ log = "0.4"
 # macros, as ink-llm does.
 serde_json = "1"
 
+[features]
+# The real engines, for the ignored tests that run them (tests/real_engines.rs and the dictation
+# bench test). Off in every default and CI build: engine-nemo links NeMo's library (it needs
+# NEMO_SPEECH_DIR) and engine-llama builds llama.cpp. They are features passed through to
+# ink-engines rather than dev-dependency features, because a dev-dependency's features are on in
+# every test build.
+engine-silero = ["ink-engines/engine-silero"]
+engine-nemo = ["ink-engines/engine-nemo"]
+engine-llama = ["ink-engines/engine-llama"]
+
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }
-# The real-engine test reads a bench clip (Apache-2.0; already in the tree through ink-audio).
-hound = "3.5.1"
+# The meeting tests run the supersede against the real SQLite store too.
+ink-store = { path = "../ink-store" }
+# The AMI fixture is checked against its manifest (MIT OR Apache-2.0; already in the tree).
+sha2 = "0.10.9"

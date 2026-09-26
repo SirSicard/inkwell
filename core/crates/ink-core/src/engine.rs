@@ -1,11 +1,11 @@
 //! Speech engines and the diarizer.
 //!
-//! Every engine takes 16 kHz mono f32 ([`CANONICAL_RATE`](crate::audio::CANONICAL_RATE)) that has
+//! Every engine takes 16 kHz mono f32 ([`CANONICAL_RATE`]) that has
 //! already been through the gain stage (architecture rule 11): an engine never sees the raw level.
 //! Engines the Mac shell registers over the C ABI implement these same traits behind a vtable
 //! (S1.7), so the threading contracts below hold for them too.
 
-use crate::audio::Channel;
+use crate::audio::{CANONICAL_RATE, Channel};
 use crate::error::EngineError;
 use crate::threading::{CancelToken, EventSink};
 
@@ -151,16 +151,72 @@ pub struct SpeakerTurn {
     pub end_ms: u64,
 }
 
+/// The longest window a [`DiarizeInput`] hands over: 60 s at 16 kHz.
+pub const MAX_DIARIZE_WINDOW: usize = 60 * CANONICAL_RATE as usize;
+
+/// The audio of an offline diarization, pulled a window at a time, so that a long far end is
+/// never held as one buffer (disk is the seam, architecture rule 3).
+///
+/// **Worker**, on the thread running [`Diarizer::diarize`]. The windows are consecutive pieces of
+/// one stream: 16 kHz mono, gain applied, in order, nothing left out between them. Each holds at
+/// most [`MAX_DIARIZE_WINDOW`] samples and is valid until the next call. The stream's timeline is
+/// the one the turns come back on; a caller whose audio has gaps (a far end's speech, without its
+/// silences) joins the pieces and maps the turns back itself. The position of a window is
+/// implied by the samples before it, so no separate start time can disagree with it.
+pub trait DiarizeInput {
+    /// The next window, or `None` at the end of the stream. An empty window holds nothing and
+    /// does not end the stream.
+    fn next_window(&mut self) -> Option<&[f32]>;
+}
+
+/// A buffer already in memory as [`DiarizeInput`]: consecutive windows of a fixed size, the last
+/// one shorter.
+#[derive(Clone, Debug)]
+pub struct SliceWindows<'a> {
+    rest: &'a [f32],
+    window: usize,
+}
+
+impl<'a> SliceWindows<'a> {
+    /// `audio` in windows of [`MAX_DIARIZE_WINDOW`].
+    pub fn new(audio: &'a [f32]) -> Self {
+        Self::with_window(audio, MAX_DIARIZE_WINDOW)
+    }
+
+    /// `audio` in windows of `window` samples, kept between 1 and [`MAX_DIARIZE_WINDOW`].
+    pub fn with_window(audio: &'a [f32], window: usize) -> Self {
+        Self {
+            rest: audio,
+            window: window.clamp(1, MAX_DIARIZE_WINDOW),
+        }
+    }
+}
+
+impl DiarizeInput for SliceWindows<'_> {
+    fn next_window(&mut self) -> Option<&[f32]> {
+        if self.rest.is_empty() {
+            return None;
+        }
+        let (window, rest) = self.rest.split_at(self.window.min(self.rest.len()));
+        self.rest = rest;
+        Some(window)
+    }
+}
+
 /// Labels who spoke when, on the far end only (architecture rule 5). Whether the labels are kept
 /// (at least two substantial clusters) is the pipeline's decision, not the diarizer's.
 pub trait Diarizer: Send + Sync {
     /// **Any thread except realtime.** What this diarizer is.
     fn info(&self) -> EngineInfo;
 
-    /// **Worker.** Offline diarization for the final pass. Returns [`EngineError::Cancelled`] once
-    /// `cancel` is set.
-    fn diarize(&self, audio: &[f32], cancel: &CancelToken)
-    -> Result<Vec<SpeakerTurn>, EngineError>;
+    /// **Worker.** Offline diarization for the final pass, over every window `audio` hands out
+    /// until it ends. Turns are in ms from the start of that stream, in start order. Returns
+    /// [`EngineError::Cancelled`] once `cancel` is set.
+    fn diarize(
+        &self,
+        audio: &mut dyn DiarizeInput,
+        cancel: &CancelToken,
+    ) -> Result<Vec<SpeakerTurn>, EngineError>;
 
     /// **Worker.** Live labels. Turns arrive on `turns` (a callback thread) and are provisional,
     /// like partials. An offline-only diarizer returns [`EngineError::Unsupported`].
