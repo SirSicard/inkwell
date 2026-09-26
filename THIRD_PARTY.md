@@ -7,6 +7,7 @@ checks in CI cover them. Model weights are listed in [docs/MODEL-WEIGHTS.md](doc
 | Project | Licence | Where | Notes |
 |---|---|---|---|
 | [Handy](https://github.com/cjpais/Handy) by CJ Pais | MIT | `src-tauri/` (legacy 0.2 app) | Inkwell 0.2 was originally based on it. |
+| [AudioCap](https://github.com/insidegui/AudioCap) by Guilherme Rambo | BSD-2-Clause | `core/crates/ink-platform-mac/src/capture/tap.rs` | The process-tap and tap-only aggregate sequence, by way of an earlier implementation; rewritten in Rust. The notice is in the file header. |
 | [SQLite](https://sqlite.org) | Public domain | `core/crates/ink-store`, compiled in by `libsqlite3-sys` (`bundled` feature) | The C source ships inside `libsqlite3-sys` (MIT), so `cargo deny` sees only that crate's licence. The version is whichever one the locked `libsqlite3-sys` bundles. |
 
 ## Rules
