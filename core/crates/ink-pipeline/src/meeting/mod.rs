@@ -34,8 +34,11 @@ mod live;
 pub(crate) mod offline;
 pub mod timeline;
 
+pub use live::MAX_PENDING_FINALS;
+
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 
 use ink_audio::{ChunkError, ChunkStore, VadConfig, WindowError};
@@ -119,6 +122,15 @@ struct Core {
     t0_ns: u64,
     /// What the pump reported writing for each side (mic, far).
     written: [Option<SideSummary>; 2],
+    /// Live events that arrived after the meeting stopped.
+    late: Arc<Late>,
+}
+
+/// Live events after stop: the engine's sinks count them once the queue is closed.
+#[derive(Debug, Default)]
+struct Late {
+    closed: AtomicBool,
+    count: AtomicU64,
 }
 
 impl Core {
@@ -176,6 +188,7 @@ impl MeetingChain {
             started_unix_ms,
             t0_ns,
             written: [None, None],
+            late: Arc::default(),
         };
         let (tx, asr) = mpsc::channel();
         let open = |channel: Channel| {
@@ -189,10 +202,14 @@ impl MeetingChain {
             }
             let stream = core.services.live.as_ref().and_then(|engine| {
                 let tx = tx.clone();
-                // Callback thread: it only enqueues. The queue is read until the chain stops, and the
-                // stream is finished by then, with every event delivered (its contract).
+                let late = core.late.clone();
+                // Callback thread: it only enqueues (or counts). The queue is read until the chain
+                // stops; an event after that breaks the stream's contract, and is counted, since
+                // nothing can act on it (MeetingWarning::LiveEventsAfterStop).
                 let sink: EventSink<AsrEvent> = Arc::new(move |event| {
-                    let _ = tx.send((channel, event));
+                    if late.closed.load(Ordering::Acquire) || tx.send((channel, event)).is_err() {
+                        late.count.fetch_add(1, Ordering::Relaxed);
+                    }
                 });
                 match engine.open_stream(channel, sink) {
                     Ok(stream) => Some(stream),
@@ -272,13 +289,18 @@ impl MeetingChain {
 
     /// Takes the live engine's queued events, and saves the finals the VAD has judged.
     fn collect(&mut self, finishing: bool) {
+        let events = self.core.events.clone();
         while let Ok((channel, event)) = self.asr.try_recv() {
             match event {
                 AsrEvent::Partial { text } => self.core.emit(MeetingEvent::Partial {
                     channel,
                     text: Spoken::new(text),
                 }),
-                AsrEvent::Final(text) => self.side(channel).final_heard(text),
+                AsrEvent::Final(text) => {
+                    if let Some(overflow) = self.side(channel).final_heard(text, &*events) {
+                        self.save(overflow);
+                    }
+                }
                 AsrEvent::Stalled { .. } => self
                     .core
                     .warn(MeetingWarning::LiveEngineStalled { channel }),
@@ -336,6 +358,12 @@ impl MeetingChain {
         self.mic.finish(&*events);
         self.far.finish(&*events);
         self.collect(true);
+        // From here, a live event is late: every stream has finished. What raced in before the
+        // close is counted too.
+        self.core.late.closed.store(true, Ordering::Release);
+        while self.asr.try_recv().is_ok() {
+            self.core.late.count.fetch_add(1, Ordering::Relaxed);
+        }
         let core = self.core;
         let now = core.services.clock.unix_ms();
         if now < core.started_unix_ms {
@@ -516,6 +544,11 @@ impl EndedMeeting {
             None => {
                 log::warn!("meeting final pass: no summary; the live transcript could not be read")
             }
+        }
+        let late = core.late.count.load(Ordering::Relaxed);
+        if late > 0 {
+            log::warn!("meeting: the live engine sent {late} events after the meeting stopped");
+            core.warn(MeetingWarning::LiveEventsAfterStop { count: late });
         }
         core.emit(MeetingEvent::Finished { revision });
         Ok(MeetingOutcome {

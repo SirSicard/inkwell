@@ -387,6 +387,8 @@ pub struct RigBuilder {
     pub mic_format: StreamFormat,
     pub far_format: StreamFormat,
     pub title: Option<String>,
+    /// A live engine in place of the rig's `Onsets`.
+    pub live_engine: Option<Arc<dyn StreamingEngine>>,
 }
 
 impl Default for RigBuilder {
@@ -402,6 +404,7 @@ impl Default for RigBuilder {
             mic_format: StreamFormat::CANONICAL,
             far_format: StreamFormat::CANONICAL,
             title: Some("Weekly sync".into()),
+            live_engine: None,
         }
     }
 }
@@ -442,7 +445,11 @@ impl RigBuilder {
         let sink_events = events.clone();
         let sink: EventSink<MeetingEvent> = Arc::new(move |e| sink_events.lock().unwrap().push(e));
         let services = MeetingServices {
-            live: Some(live.clone()),
+            live: Some(
+                self.live_engine
+                    .clone()
+                    .unwrap_or_else(|| live.clone() as Arc<dyn StreamingEngine>),
+            ),
             offline: engine.clone(),
             diarizer: self.diarizer.clone(),
             store: store.clone(),

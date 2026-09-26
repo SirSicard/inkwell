@@ -56,6 +56,21 @@ pub enum MeetingWarning {
         /// What failed.
         error: EngineError,
     },
+    /// The live engine reported times the VAD has not judged, [`MAX_PENDING_FINALS`] of them at
+    /// once. The oldest are saved without the speech check from here on. Sent once per side.
+    ///
+    /// [`MAX_PENDING_FINALS`]: crate::meeting::MAX_PENDING_FINALS
+    LiveFinalsBacklog {
+        /// Which side.
+        channel: Channel,
+    },
+    /// The live engine sent events after the meeting stopped, breaking its contract (every event
+    /// before its stream's `finish` returns). They could not be used. The count is as of the end
+    /// of the final pass.
+    LiveEventsAfterStop {
+        /// Events counted.
+        count: u64,
+    },
     /// The live engine has fallen behind real time.
     LiveEngineStalled {
         /// Which side.

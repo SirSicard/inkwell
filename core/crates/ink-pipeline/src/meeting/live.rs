@@ -53,6 +53,11 @@ const SAMPLES_PER_MS: u64 = 16;
 /// Audio a final may still refer to with none waiting: a minute. Anchors and verdicts for it are
 /// kept; a final about older audio is placed by extrapolation and saved unchecked.
 const KEEP_SAMPLES: u64 = 60 * 16_000;
+
+/// Live finals that may wait for the VAD at once, per side. A final waits a window or so; only an
+/// engine reporting times the audio has not reached could fill this. Past it, the oldest is saved
+/// unchecked (never lost) and [`MeetingWarning::LiveFinalsBacklog`] says so, once per side.
+pub const MAX_PENDING_FINALS: usize = 256;
 const KEEP_WINDOWS: usize = KEEP_SAMPLES as usize / VAD_WINDOW;
 
 /// A VAD whose every probability is also recorded, for the chain to read after each block.
@@ -179,6 +184,8 @@ pub(crate) struct LiveChannel {
     /// Leading output samples of a replacement AGC still to drop.
     skip: usize,
     pending: VecDeque<Pending>,
+    /// Whether the pending queue has overflowed (reported once).
+    backlogged: bool,
     scratch: Vec<f32>,
 }
 
@@ -227,6 +234,7 @@ impl LiveChannel {
             input: 0,
             skip: 0,
             pending: VecDeque::new(),
+            backlogged: false,
             scratch: Vec::new(),
         }
     }
@@ -297,11 +305,31 @@ impl LiveChannel {
         }
     }
 
-    /// A final from the live engine, positioned in its stream.
-    pub(crate) fn final_heard(&mut self, text: TimedText) {
+    /// A final from the live engine, positioned in its stream. With [`MAX_PENDING_FINALS`] already
+    /// waiting, the oldest is returned to be saved unchecked.
+    pub(crate) fn final_heard(
+        &mut self,
+        text: TimedText,
+        emit: &dyn Fn(MeetingEvent),
+    ) -> Option<Settled> {
         if text.text.trim().is_empty() {
-            return;
+            return None;
         }
+        let overflow = if self.pending.len() >= MAX_PENDING_FINALS {
+            if !self.backlogged {
+                self.backlogged = true;
+                log::warn!(
+                    "meeting: {MAX_PENDING_FINALS} {:?} live finals wait on the VAD; the oldest are saved unchecked",
+                    self.channel
+                );
+                emit(MeetingEvent::Warning(MeetingWarning::LiveFinalsBacklog {
+                    channel: self.channel,
+                }));
+            }
+            self.pending.pop_front().map(|p| self.keep(p))
+        } else {
+            None
+        };
         // Stream time is AGC output; the audio it came from is `LATENCY` earlier.
         let from = (text.start_ms * SAMPLES_PER_MS).saturating_sub(LATENCY);
         let to = (text.end_ms.max(text.start_ms) * SAMPLES_PER_MS).saturating_sub(LATENCY);
@@ -317,6 +345,17 @@ impl LiveChannel {
             end_ms,
             text: text.text,
         });
+        overflow
+    }
+
+    fn keep(&self, p: Pending) -> Settled {
+        Settled::Keep(Segment {
+            channel: self.channel,
+            start_ms: p.start_ms,
+            end_ms: p.end_ms,
+            text: p.text,
+            speaker: None,
+        })
     }
 
     /// Finals whose span the VAD has judged, in order. `finishing` settles every one.
@@ -338,13 +377,7 @@ impl LiveChannel {
                 break;
             };
             out.push(if speech {
-                Settled::Keep(Segment {
-                    channel: self.channel,
-                    start_ms: p.start_ms,
-                    end_ms: p.end_ms,
-                    text: p.text,
-                    speaker: None,
-                })
+                self.keep(p)
             } else {
                 Settled::NoSpeech {
                     channel: self.channel,

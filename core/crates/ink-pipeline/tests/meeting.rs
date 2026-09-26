@@ -25,6 +25,9 @@ use ink_core::{
 };
 use ink_pipeline::events::{VadUnavailable, VoiceDetection};
 use ink_pipeline::meeting::events::{Diarization, KeptLive, MeetingEvent, MeetingWarning, Phase};
+use std::sync::Mutex;
+
+use ink_pipeline::meeting::MAX_PENDING_FINALS;
 use ink_pipeline::speech::VadSource;
 use meeting_rig::*;
 
@@ -898,6 +901,127 @@ fn a_deaf_vad_on_clearly_audible_audio_is_reported_not_acted_on() {
         !warnings
             .iter()
             .any(|w| matches!(w, MeetingWarning::LittleSpeechHeard { .. }))
+    );
+}
+
+/// A live engine that keeps each stream's sink, and on its first push reports `finals` finals
+/// about audio far past the end of the meeting (which the VAD can never have judged).
+struct Rogue {
+    sinks: Mutex<Vec<(Channel, ink_core::EventSink<ink_core::AsrEvent>)>>,
+    finals: usize,
+}
+
+impl ink_core::StreamingEngine for Rogue {
+    fn info(&self) -> ink_core::EngineInfo {
+        ink_core::EngineInfo {
+            id: "rogue".into(),
+            jobs: vec![],
+            licence: "MIT".into(),
+        }
+    }
+    fn open_stream(
+        &self,
+        channel: Channel,
+        events: ink_core::EventSink<ink_core::AsrEvent>,
+    ) -> Result<Box<dyn ink_core::EngineStream>, EngineError> {
+        self.sinks.lock().unwrap().push((channel, events.clone()));
+        Ok(Box::new(RogueStream {
+            events,
+            finals: self.finals,
+        }))
+    }
+}
+
+struct RogueStream {
+    events: ink_core::EventSink<ink_core::AsrEvent>,
+    finals: usize,
+}
+
+impl ink_core::EngineStream for RogueStream {
+    fn push(&mut self, _: &[f32]) -> Result<(), EngineError> {
+        for k in 0..std::mem::take(&mut self.finals) {
+            (self.events)(ink_core::AsrEvent::Final(ink_core::TimedText {
+                start_ms: 3_600_000 + k as u64,
+                end_ms: 3_600_000 + k as u64 + 1,
+                text: format!("from the future {k}"),
+            }));
+        }
+        Ok(())
+    }
+    fn finish(self: Box<Self>) -> Result<(), EngineError> {
+        Ok(())
+    }
+}
+
+/// LOW from review: an engine that breaks its contract (every event delivered before `finish`
+/// returns) and reports after the meeting stopped. The events cannot be used; they are counted
+/// and reported, never dropped silently.
+#[test]
+fn live_events_after_stop_are_counted_and_reported() {
+    let rogue = Arc::new(Rogue {
+        sinks: Mutex::default(),
+        finals: 0,
+    });
+    let mut rig = RigBuilder {
+        live_engine: Some(rogue.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    let ended = rig.stop();
+    for (_, sink) in rogue.sinks.lock().unwrap().iter() {
+        sink(ink_core::AsrEvent::Partial {
+            text: "too late".into(),
+        });
+    }
+    ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
+    assert!(
+        rig.warnings()
+            .contains(&MeetingWarning::LiveEventsAfterStop { count: 2 })
+    );
+}
+
+/// LOW from review: finals wait for the VAD to judge their span, so a live engine that reports
+/// times the audio has not reached would queue them without end. The queue is capped: past the
+/// cap, the oldest is saved unchecked (never lost), and the shell hears it once per side.
+#[test]
+fn the_queue_of_unchecked_live_finals_is_capped() {
+    let rogue = Arc::new(Rogue {
+        sinks: Mutex::default(),
+        finals: MAX_PENDING_FINALS + 44,
+    });
+    let mut rig = RigBuilder {
+        live_engine: Some(rogue),
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    let backlog = rig
+        .warnings()
+        .into_iter()
+        .filter(|w| matches!(w, MeetingWarning::LiveFinalsBacklog { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        backlog,
+        [
+            MeetingWarning::LiveFinalsBacklog {
+                channel: Channel::Mic
+            },
+            MeetingWarning::LiveFinalsBacklog {
+                channel: Channel::Far
+            }
+        ]
+    );
+    // While live, the 44 pushed out were saved unchecked, per side.
+    assert_eq!(rig.store.segments(&record).unwrap().len(), 88);
+    let _ = rig.stop();
+    assert_eq!(
+        rig.store.segments(&record).unwrap().len(),
+        2 * (MAX_PENDING_FINALS + 44),
+        "none lost"
     );
 }
 
