@@ -6,8 +6,13 @@
 //!     --test llama_logs -- --ignored --nocapture
 //! ```
 //!
-//! The capture sees every line at every level (so it can show the pipe is live), and marks which
-//! ones the filter keeps. Only the kept lines must never hold a word of what the model wrote.
+//! The capture sees every line at every level from before the model loads, and marks which ones
+//! the filter keeps. Each test checks that:
+//! - the filter keeps real lines (the model's load warnings), so the check below is not vacuous,
+//!   and those lines carry the target the filter expects;
+//! - no kept line quotes the request or the model's output, while it reports how many dropped lines
+//!   do. A line "quotes" when it holds a word of five letters or more from the request or output
+//!   that no line before the call held (so the model file's own vocabulary does not count).
 
 #![cfg(feature = "engine-llama")]
 
@@ -22,11 +27,15 @@ use ink_engines::Registry;
 use ink_engines::llama::{LlamaLlm, QwenAsr, log_allowed};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
-use tracing::{Event, Metadata, Subscriber};
+use tracing::{Event, Level, Metadata, Subscriber};
 
 /// One captured line, and whether `log_allowed` keeps it.
 struct Line {
     kept: bool,
+    level: Level,
+    target: String,
+    /// The `module` field llama-cpp-2 puts llama.cpp's, ggml's and mtmd's module in.
+    module: String,
     text: String,
 }
 
@@ -39,14 +48,20 @@ impl Capture {
     }
 }
 
-struct Fields<'a>(&'a mut String);
+struct Fields<'a> {
+    text: &'a mut String,
+    module: &'a mut String,
+}
 
 impl Visit for Fields<'_> {
     fn record_str(&mut self, field: &Field, value: &str) {
-        let _ = write!(self.0, " {}={value}", field.name());
+        if field.name() == "module" {
+            value.clone_into(self.module);
+        }
+        let _ = write!(self.text, " {}={value}", field.name());
     }
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        let _ = write!(self.0, " {}={value:?}", field.name());
+        let _ = write!(self.text, " {}={value:?}", field.name());
     }
 }
 
@@ -61,10 +76,16 @@ impl Subscriber for Capture {
     fn record_follows_from(&self, _: &Id, _: &Id) {}
     fn event(&self, event: &Event<'_>) {
         let meta = event.metadata();
-        let mut text = format!("{} {}", meta.level(), meta.target());
-        event.record(&mut Fields(&mut text));
+        let (mut text, mut module) = (String::new(), String::new());
+        event.record(&mut Fields {
+            text: &mut text,
+            module: &mut module,
+        });
         self.lines().push(Line {
             kept: log_allowed(meta),
+            level: *meta.level(),
+            target: meta.target().to_owned(),
+            module,
             text,
         });
     }
@@ -89,47 +110,59 @@ fn capture() -> (&'static Capture, MutexGuard<'static, ()>) {
     )
 }
 
-/// Checks the lines captured since `from` against `output`, and says what it saw.
-fn assert_no_output_words(capture: &Capture, from: usize, output: &str, what: &str) {
-    let words: HashSet<String> = bench::normalise(output).into_iter().collect();
-    assert!(
-        !words.is_empty(),
-        "{what}: the model wrote nothing to look for"
-    );
+/// The checks in the module docs. `loaded` is where this test's model load began, `from` where the
+/// call began; `text` is the request and output together.
+fn check(capture: &Capture, loaded: usize, from: usize, text: &str, what: &str) {
     let lines = capture.lines();
-    let during = &lines[from..];
+    let this_test = &lines[loaded..];
+    let kept_here = this_test.iter().filter(|l| l.kept).count();
+    assert!(kept_here > 0, "{what}: the filter kept no line at all");
     assert!(
-        !during.is_empty(),
-        "{what}: nothing was logged during the call, so the capture proves nothing"
-    );
-    let kept: Vec<&Line> = during.iter().filter(|l| l.kept).collect();
-    for line in &kept {
-        let leaked: Vec<String> = bench::normalise(&line.text)
-            .into_iter()
-            .filter(|w| words.contains(w))
-            .collect();
-        assert!(
-            leaked.is_empty(),
-            "{what}: a kept log line holds {leaked:?}"
-        );
-    }
-    // Diagnostic only: how much of the dropped DEBUG/INFO stream overlaps the output at all.
-    let dropped_with_words = during
-        .iter()
-        .filter(|l| !l.kept)
-        .filter(|l| {
-            bench::normalise(&l.text)
+        this_test.iter().any(|l| l.target == "llama-cpp-2"
+            && ["llama.cpp", "ggml", "mtmd"]
                 .iter()
-                .any(|w| w.len() >= 6 && words.contains(w))
-        })
+                .any(|m| l.module.starts_with(m))),
+        "{what}: no llama.cpp line arrived under the target the filter expects"
+    );
+    assert!(
+        this_test
+            .iter()
+            .filter(|l| l.kept)
+            .all(|l| l.target == "llama-cpp-2" && matches!(l.level, Level::WARN | Level::ERROR)),
+        "{what}: the filter kept something other than an engine warning or error"
+    );
+
+    let known: HashSet<String> = lines[..from]
+        .iter()
+        .flat_map(|l| bench::normalise(&l.text))
+        .collect();
+    let words: HashSet<String> = bench::normalise(text)
+        .into_iter()
+        .filter(|w| w.chars().count() >= 5 && !known.contains(w))
+        .collect();
+    assert!(!words.is_empty(), "{what}: nothing distinctive to look for");
+    let quotes = |l: &&Line| bench::normalise(&l.text).iter().any(|w| words.contains(w));
+    let after = &lines[from..];
+    let kept_quoting = after.iter().filter(|l| l.kept).filter(quotes).count();
+    let dropped_quoting = after.iter().filter(|l| !l.kept).filter(quotes).count();
+    let binding_own = this_test
+        .iter()
+        .filter(|l| l.target.starts_with("llama_cpp_2"))
         .count();
     println!(
-        "{what}: {} lines logged during the call, {} kept, {} dropped lines share a long word with \
-         the output",
-        during.len(),
-        kept.len(),
-        dropped_with_words
+        "{what}: {} lines from load on ({kept_here} kept); during and after the call {} lines, \
+         kept lines quoting the output {kept_quoting}, dropped lines quoting it \
+         {dropped_quoting}; binding's own events {binding_own}",
+        this_test.len(),
+        after.len(),
     );
+    if dropped_quoting == 0 {
+        println!(
+            "{what}: no dropped line quoted the output in this run; the unit tests on \
+             `log_allowed` carry the proof that the filter is needed"
+        );
+    }
+    assert_eq!(kept_quoting, 0, "{what}: a kept log line quotes the output");
 }
 
 fn models() -> std::path::PathBuf {
@@ -140,6 +173,7 @@ fn models() -> std::path::PathBuf {
 #[ignore = "needs the Qwen3-ASR model and AMI IHM under $INK_BENCH_DIR; run locally"]
 fn a_transcription_logs_no_word_of_its_transcript() {
     let (capture, _serial) = capture();
+    let loaded = capture.lines().len();
     let row = Registry::builtin()
         .unwrap()
         .get("qwen3-asr-1.7b-q8")
@@ -162,13 +196,14 @@ fn a_transcription_logs_no_word_of_its_transcript() {
         cancel: CancelToken::new(),
     };
     let text = engine.transcribe(&audio, &options).unwrap().text();
-    assert_no_output_words(capture, from, &text, "transcription");
+    check(capture, loaded, from, &text, "transcription");
 }
 
 #[test]
 #[ignore = "needs the Qwen3-ASR model under $INK_BENCH_DIR; run locally"]
 fn a_completion_logs_no_word_of_its_answer() {
     let (capture, _serial) = capture();
+    let loaded = capture.lines().len();
     let llm = LlamaLlm::load(
         &models().join("Qwen3-ASR-1.7B-Q8_0.gguf"),
         "qwen3-asr-decoder",
@@ -177,7 +212,8 @@ fn a_completion_logs_no_word_of_its_answer() {
     let from = capture.lines().len();
     let request = LlmRequest {
         system: "Answer with one JSON object with a string field \"answer\".".into(),
-        user: "Say hello to the team.".into(),
+        // A planted word, so there is something distinctive to find.
+        user: "Say hello to the team from Quokkazephyr.".into(),
         max_tokens: 64,
         temperature: 0.0,
         json_schema: Some(r#"{"type":"object"}"#.into()),
@@ -185,5 +221,5 @@ fn a_completion_logs_no_word_of_its_answer() {
     let answer = llm.complete(&request, &CancelToken::new()).unwrap().text;
     // The answer's words, and the request's own words, which the prompt carried in.
     let words = format!("{answer} {} {}", request.system, request.user);
-    assert_no_output_words(capture, from, &words, "completion");
+    check(capture, loaded, from, &words, "completion");
 }

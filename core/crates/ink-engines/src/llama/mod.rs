@@ -11,10 +11,11 @@
 //! `tests/ggml_link.rs` checks it).
 //!
 //! **Logs.** llama.cpp, ggml and mtmd log through llama-cpp-2 into `tracing` (target
-//! `llama-cpp-2`, and llama-cpp-2's own module targets). Only warnings and errors may be kept:
-//! **every tracing subscriber in the app must apply [`log_allowed`]**, which drops the engines'
-//! DEBUG and INFO. Those levels can quote the text being processed (a lazy grammar's debug lines
-//! quote generated tokens), and nothing a model hears or says may reach a log (I5). The warnings
+//! `llama-cpp-2`). Only their warnings and errors may be kept: **every tracing subscriber in the
+//! app must apply [`log_allowed`]**, which drops the engines' DEBUG and INFO and every event of
+//! llama-cpp-2's own. Those can quote the text being processed (a lazy grammar's debug lines quote
+//! generated tokens, and the binding re-emits buffered lines as warnings), and nothing a model
+//! hears or says may reach a log (I5). The warnings
 //! and errors quote model files, vocabulary tokens and error codes, not user text;
 //! `tests/llama_logs.rs` checks that on real runs. With no subscriber, everything is dropped at the
 //! source. The filter lives with the app's subscriber because llama-cpp-2 asks that subscriber
@@ -42,13 +43,23 @@ mod llm;
 pub use asr::{MAX_NEW_TOKENS, MAX_WINDOW_SECONDS, QwenAsr, QwenAsrLoader};
 pub use llm::{JSON_OBJECT_GRAMMAR, LlamaLlm};
 
-/// Whether a `tracing` event or span may be kept: llama.cpp's, ggml's, mtmd's and llama-cpp-2's
-/// only at WARN or ERROR; everything else is not this filter's business and passes. Every
-/// subscriber in the app applies it (see the module docs).
+/// Whether a `tracing` event or span may be kept.
+///
+/// - Target `llama-cpp-2`, where every llama.cpp, ggml and mtmd line arrives (the module is a
+///   field): kept at WARN and ERROR only.
+/// - llama-cpp-2's own events (targets `llama_cpp_2` and `llama_cpp_2::*`): dropped at every level.
+///   Its log bridge re-emits a buffered line's raw text at WARN, whatever that line's level was, and
+///   its other modules log paths.
+/// - Anything else: not this filter's business, kept.
+///
+/// Every subscriber in the app applies it (see the module docs). S1.7 makes that structural: one
+/// core subscriber applying this and ink-llm's `log_record_allowed`, with a planted-secret test.
 pub fn log_allowed(metadata: &tracing::Metadata<'_>) -> bool {
     let target = metadata.target();
-    let engine = target == "llama-cpp-2" || target.starts_with("llama_cpp_2");
-    !engine
+    if target == "llama_cpp_2" || target.starts_with("llama_cpp_2::") {
+        return false;
+    }
+    target != "llama-cpp-2"
         || matches!(
             *metadata.level(),
             tracing::Level::WARN | tracing::Level::ERROR
@@ -212,29 +223,71 @@ mod tests {
         fn exit(&self, _: &Id) {}
     }
 
-    #[test]
-    fn engine_logs_below_warn_are_dropped_and_others_pass() {
+    /// Runs `emit` under the filtering subscriber and returns what got through.
+    fn kept(emit: impl FnOnce()) -> Vec<(Level, String)> {
         let seen = Filtered::default();
-        tracing::subscriber::with_default(seen.clone(), || {
-            // Where llama.cpp, ggml and mtmd lines arrive, and llama-cpp-2's own events.
-            tracing::debug!(target: "llama-cpp-2", "debug line");
-            tracing::info!(target: "llama-cpp-2", "info line");
-            tracing::warn!(target: "llama-cpp-2", "warn line");
-            tracing::error!(target: "llama-cpp-2", "error line");
-            tracing::debug!(target: "llama_cpp_2::model", "loaded");
-            tracing::info!(target: "llama_cpp_2::log", "no level");
-            tracing::warn!(target: "llama_cpp_2::log", "buffered");
-            // Anything else is none of this filter's business.
-            tracing::debug!(target: "ink_pipeline", "other");
+        tracing::subscriber::with_default(seen.clone(), emit);
+        seen.0.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn engine_lines_are_kept_at_warn_and_error_only() {
+        // llama-cpp-2 sends every llama.cpp, ggml and mtmd line to target `llama-cpp-2`, with the
+        // module in a field.
+        let got = kept(|| {
+            for module in [
+                "llama.cpp::llama_model_loader",
+                "ggml::ggml_metal_init",
+                "mtmd::clip",
+            ] {
+                tracing::trace!(target: "llama-cpp-2", module, "trace line");
+                tracing::debug!(target: "llama-cpp-2", module, "debug line");
+                tracing::info!(target: "llama-cpp-2", module, "info line");
+                tracing::warn!(target: "llama-cpp-2", module, "warn line");
+                tracing::error!(target: "llama-cpp-2", module, "error line");
+            }
         });
-        let seen = seen.0.lock().unwrap().clone();
+        let engine = |level| (level, "llama-cpp-2".to_owned());
         assert_eq!(
-            seen,
+            got,
+            [Level::WARN, Level::ERROR]
+                .repeat(3)
+                .into_iter()
+                .map(engine)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_bindings_own_events_are_dropped_at_every_level() {
+        // `llama_cpp_2::log` re-emits a buffered line's raw text at WARN whatever its level was
+        // (llama-cpp-2 0.1.157, src/log.rs); the other modules log paths.
+        let got = kept(|| {
+            for level in ["trace", "debug", "info", "warn", "error"] {
+                tracing::trace!(target: "llama_cpp_2::log", level, "text");
+                tracing::debug!(target: "llama_cpp_2::log", level, "text");
+                tracing::info!(target: "llama_cpp_2::log", level, "text");
+                tracing::warn!(target: "llama_cpp_2::log", level, text = "buffered", "re-emit");
+                tracing::error!(target: "llama_cpp_2::log", level, "text");
+            }
+            tracing::debug!(target: "llama_cpp_2::model", "Loaded model");
+            tracing::error!(target: "llama_cpp_2::model", "Unexpected rope type");
+            tracing::warn!(target: "llama_cpp_2", "crate root");
+        });
+        assert!(got.is_empty(), "kept {got:?}");
+    }
+
+    #[test]
+    fn other_targets_are_not_this_filters_business() {
+        let got = kept(|| {
+            tracing::debug!(target: "ink_pipeline", "other");
+            tracing::info!(target: "llama_cpp_2x", "a different crate");
+        });
+        assert_eq!(
+            got,
             vec![
-                (Level::WARN, "llama-cpp-2".to_owned()),
-                (Level::ERROR, "llama-cpp-2".to_owned()),
-                (Level::WARN, "llama_cpp_2::log".to_owned()),
                 (Level::DEBUG, "ink_pipeline".to_owned()),
+                (Level::INFO, "llama_cpp_2x".to_owned()),
             ]
         );
     }
