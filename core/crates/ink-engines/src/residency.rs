@@ -5,6 +5,7 @@
 //!   therefore loaded at meeting end, when the final pass asks for it.
 //! - A model nobody holds for [`IDLE_UNLOAD`] is unloaded by the next [`Residency::tick`].
 //! - There is never more than one copy of a model, however many worker threads ask at once.
+//! - [`Residency::unload`] drops a model now, when an update is about to replace its files.
 //!
 //! No timers: the pipeline calls `tick` when it wakes anyway, and the clock is injected, so tests
 //! move time with a mock clock instead of sleeping.
@@ -211,6 +212,56 @@ impl<M: Send + Sync + 'static> Residency<M> {
             drop(models);
         }
         due
+    }
+
+    /// **Worker.** Unloads the model `id` now, for an update that replaces its files: it stops
+    /// being kept warm and is dropped, with no lock held (its drop may take seconds, or call back
+    /// into residency). Waits out a load or unload of the same model already under way.
+    ///
+    /// Refused while any lease holds the model, and then nothing changes (it stays loaded, and
+    /// warm if it was): the update waits for the job to end and tries again. An id that is not
+    /// loaded is already unloaded, so that is `Ok`.
+    ///
+    /// Unloading does not keep a model out: a later [`acquire`](Self::acquire) or
+    /// [`set_warm`](Self::set_warm) loads it again, so the caller keeps it out of use until the
+    /// new files are in place.
+    pub fn unload(&self, id: &str) -> Result<(), EngineError> {
+        let mut state = self.shared.lock();
+        while matches!(state.slots.get(id), Some(Slot::Loading | Slot::Unloading)) {
+            state = self.shared.wait(state);
+        }
+        let State { slots, warm } = &mut *state;
+        let Some(slot) = slots.get_mut(id) else {
+            return Ok(());
+        };
+        if matches!(slot, Slot::Resident { model, .. } if Arc::strong_count(model) > 1) {
+            return Err(EngineError::Failed(format!(
+                "model {id} is in use; unload it once its current job has finished"
+            )));
+        }
+        let model = match std::mem::replace(slot, Slot::Unloading) {
+            Slot::Resident { model, .. } => model,
+            // Not reachable: the lock has been held since the loop saw neither of these. Put it
+            // back rather than leave a slot that nothing will ever clear.
+            other @ (Slot::Loading | Slot::Unloading) => {
+                *slot = other;
+                return Ok(());
+            }
+        };
+        if warm.as_deref() == Some(id) {
+            *warm = None;
+        }
+        drop(state);
+        let ids = [id.to_string()];
+        {
+            // As in `tick`: clears the `Unloading` slot and wakes waiters even if the drop panics.
+            let _unloading = Unloading {
+                shared: &self.shared,
+                ids: &ids,
+            };
+            drop(model);
+        }
+        Ok(())
     }
 
     /// The ids of the loaded models, sorted.

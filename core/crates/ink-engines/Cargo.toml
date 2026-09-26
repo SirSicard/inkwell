@@ -13,6 +13,10 @@ default = ["http"]
 # The real HTTP transport for the downloader. Off, the crate still builds and every test runs:
 # tests use an in-memory fetcher.
 http = ["dep:ureq"]
+# llama.cpp: Qwen3-ASR (the dictation and meeting finals, through mtmd) and local GGUF chat models.
+# Off by default: it compiles llama.cpp and its ggml with cmake, and CI has no models. llama.cpp is
+# linked statically, so its ggml stays inside the core (docs/ARCHITECTURE.md, "ggml").
+engine-llama = ["dep:llama-cpp-2"]
 
 [dependencies]
 ink-core.workspace = true
@@ -21,6 +25,13 @@ sha2 = "0.10.9"
 # One HTTP stack for the whole core: ureq 2 with the OS's TLS (native-tls), no rustls, so no
 # webpki-roots.
 ureq = { version = "2.12.1", default-features = false, features = ["native-tls"], optional = true }
+# Pinned exactly: each release vendors a different llama.cpp and ggml, and the ggml link test and
+# the Qwen3-ASR WER check hold for this one. No default features: no OpenMP, no `common` (its
+# JSON-schema and Jinja helpers are not needed). `metal` is what the Mac runs on; it is a no-op
+# elsewhere.
+llama-cpp-2 = { version = "=0.1.157", default-features = false, features = ["metal", "mtmd"], optional = true }
 
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }
+# Checks that the local model's JSON answers parse (the same parser ink-llm reads them with).
+serde_json = "1"
