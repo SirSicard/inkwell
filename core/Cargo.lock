@@ -318,7 +318,14 @@ dependencies = [
 name = "ink-pipeline"
 version = "0.0.0"
 dependencies = [
+ "aho-corasick",
+ "hound",
+ "ink-audio",
  "ink-core",
+ "ink-engines",
+ "ink-llm",
+ "log",
+ "serde_json",
 ]
 
 [[package]]
