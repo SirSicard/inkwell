@@ -454,3 +454,117 @@ fn residency_and_leases_cross_threads() {
     assert_send_sync::<Residency<Model>>();
     assert_send::<Lease<Model>>();
 }
+
+// On-demand unload, for an update that replaces a model's files.
+
+#[test]
+fn unload_drops_an_idle_model_at_once_and_clears_its_warm_state() {
+    let s = setup();
+    s.res.set_warm(Some(&dictation())).unwrap();
+    drop(s.res.acquire(&meeting()).unwrap());
+
+    // No five-minute wait, warm or not.
+    s.res.unload("synthetic-dictation").unwrap();
+    assert_eq!(s.res.warm(), None, "no longer kept warm");
+    s.res.unload("synthetic-meeting").unwrap();
+    assert!(s.res.resident().is_empty());
+    assert_eq!(s.counts().unloads(), 2);
+
+    // The next use loads it again (from the new files, after an update).
+    drop(s.res.acquire(&dictation()).unwrap());
+    assert_eq!(s.counts().loads(), 3);
+    assert_eq!(s.counts().max_live("synthetic-dictation"), 1);
+}
+
+#[test]
+fn unload_is_refused_while_a_lease_holds_the_model() {
+    let s = setup();
+    s.res.set_warm(Some(&dictation())).unwrap();
+    let lease = s.res.acquire(&dictation()).unwrap();
+
+    match s.res.unload("synthetic-dictation") {
+        Err(EngineError::Failed(msg)) => {
+            assert!(
+                msg.contains("synthetic-dictation") && msg.contains("in use"),
+                "{msg}"
+            );
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    // A refusal changes nothing.
+    assert_eq!(s.res.resident(), vec!["synthetic-dictation".to_string()]);
+    assert_eq!(s.res.warm().as_deref(), Some("synthetic-dictation"));
+    assert_eq!(s.counts().unloads(), 0);
+
+    drop(lease);
+    s.res.unload("synthetic-dictation").unwrap();
+    assert!(s.res.resident().is_empty());
+}
+
+#[test]
+fn unloading_an_unknown_id_is_ok_and_changes_nothing() {
+    let s = setup();
+    s.res.set_warm(Some(&dictation())).unwrap();
+    s.res.unload("never-loaded").unwrap();
+    assert_eq!(s.res.resident(), vec!["synthetic-dictation".to_string()]);
+    assert_eq!(s.res.warm().as_deref(), Some("synthetic-dictation"));
+    assert_eq!(s.counts().unloads(), 0);
+}
+
+/// A model whose drop calls back into the residency that holds it.
+struct Reentrant {
+    residency: Arc<std::sync::OnceLock<std::sync::Weak<Residency<Reentrant>>>>,
+    seen: mpsc::Sender<(Vec<String>, Option<String>)>,
+}
+
+impl Drop for Reentrant {
+    fn drop(&mut self) {
+        if let Some(res) = self.residency.get().and_then(std::sync::Weak::upgrade) {
+            let _ = self.seen.send((res.resident(), res.warm()));
+        }
+    }
+}
+
+struct ReentrantLoader {
+    residency: Arc<std::sync::OnceLock<std::sync::Weak<Residency<Reentrant>>>>,
+    seen: mpsc::Sender<(Vec<String>, Option<String>)>,
+}
+
+impl Loader<Reentrant> for ReentrantLoader {
+    fn load(&self, _row: &EngineRow) -> Result<Reentrant, EngineError> {
+        Ok(Reentrant {
+            residency: Arc::clone(&self.residency),
+            seen: self.seen.clone(),
+        })
+    }
+}
+
+#[test]
+fn unload_drops_the_model_outside_the_lock() {
+    let handle = Arc::new(std::sync::OnceLock::new());
+    let (seen_tx, seen_rx) = mpsc::channel();
+    let res = Arc::new(Residency::new(
+        Arc::new(ReentrantLoader {
+            residency: Arc::clone(&handle),
+            seen: seen_tx,
+        }) as Arc<dyn Loader<Reentrant>>,
+        Arc::new(MockClock::new(1_000, 1_700_000_000_000)) as Arc<dyn Clock>,
+    ));
+    let _ = handle.set(Arc::downgrade(&res));
+    res.set_warm(Some(&dictation())).unwrap();
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&res);
+    std::thread::spawn(move || {
+        let _ = done_tx.send(worker.unload("synthetic-dictation"));
+    });
+    // A drop run under the lock would deadlock here on its own call into residency.
+    recv(&done_rx).unwrap();
+    let (resident, warm) = recv(&seen_rx);
+    assert!(
+        resident.is_empty(),
+        "mid-unload it is no longer listed as resident"
+    );
+    assert_eq!(warm, None, "warm was cleared before the drop");
+    assert!(res.resident().is_empty());
+}
