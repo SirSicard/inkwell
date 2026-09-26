@@ -47,7 +47,7 @@ All of them are in **`lib/constants.ts`**. Nothing is hardcoded a second time an
 | Constant | Status | What to do |
 | --- | --- | --- |
 | `DONATION_URL` | live (`buymeacoffee.com/mattiasherzig`) | Keep in step with `DONATION_URL` in the app's `src/constants.ts`. |
-| `SITE_URL` | **placeholder** (`https://inkwell.example`) | Set the real domain; it drives the canonical URL and the absolute OG image URL. |
+| `SITE_URL` | live (`https://getinkwell.vercel.app`) | Change it if the domain moves; it drives the canonical URL and the absolute OG image URL. |
 | `APP_VERSION` | `0.1.1` | Keep in step with `version` in `../src-tauri/tauri.conf.json`. |
 | `GITHUB_URL` | live | Repo, and the base for the releases/issues/licence links. |
 | `DONATION_SUGGESTED` | `€10` | Suggested tip shown in the support section. |

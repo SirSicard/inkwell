@@ -57,3 +57,6 @@ inkwell_debug*.wav
 *.njsproj
 *.sln
 *.sw?
+
+# Cloudflare wrangler local state (inkwell-updater dev and deploy runs)
+.wrangler/

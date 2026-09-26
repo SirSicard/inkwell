@@ -23,7 +23,7 @@ Open an issue describing the problem, not just the solution. Check [PRD.md](PRD.
 
 Two things that will get a PR sent back regardless of how good the code is:
 
-- **Weakening a test to make it pass.** The 60 tests in `src-tauri/tests/pipeline_tests.rs` are the regression floor. If your change makes one genuinely obsolete, delete that test and say so in the PR.
+- **Weakening a test to make it pass.** The 57 tests in `src-tauri/tests/pipeline_tests.rs` are the regression floor. If your change makes one genuinely obsolete, delete that test and say so in the PR.
 - **Anything that sends user data anywhere new.** Audio stays local, period. Any new outbound call needs to be off by default, explained to the user, and argued for in the PR.
 
 ## Dev setup

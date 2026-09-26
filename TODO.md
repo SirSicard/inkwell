@@ -1,7 +1,7 @@
 # Inkwell - Roadmap
 
 *Ordered by dependency, not by date. No dates are promised.*
-*State audited 2026-08-26. v0.2.8 is the current release, all four platforms green, both dmgs notarised and verified, the updater serving it. Signing, notarisation and the release chain are finished problems. What is left is reach, dependency debt, and the parts of the app nobody has ever run.*
+*State audited 2026-08-26. v0.2.9 (shipped 2026-08-27) is the current release, all four platforms green, both dmgs notarised and verified, the updater serving it. Signing, notarisation and the release chain are finished problems. What is left is reach, dependency debt, and the parts of the app nobody has ever run.*
 
 Analysis behind the rehaul: [docs/rehaul-analysis-2026-07-24.md](docs/rehaul-analysis-2026-07-24.md). Feature research: [docs/competitive-extras-2026-07-27.md](docs/competitive-extras-2026-07-27.md). Streaming verdict: [docs/streaming-spike-2026-07-31.md](docs/streaming-spike-2026-07-31.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Release steps: [docs/RELEASING.md](docs/RELEASING.md).
 
@@ -84,7 +84,7 @@ three that a merge button cannot answer for.
 
 ## 3. Tests where the breakage actually is
 
-195 tests, and they cluster in pure functions. The stateful code has almost none.
+212 tests, and they cluster in pure functions. The stateful code has almost none.
 
 - [x] `pipeline.rs`: the start/stop state machine. `decide_transition(pressed,
       is_recording, mode, is_edit)` is now a pure function with 7 tests, so the
