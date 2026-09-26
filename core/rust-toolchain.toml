@@ -1,0 +1,4 @@
+# Pinned so a new clippy lint never turns CI red on its own. Bump it in its own PR.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

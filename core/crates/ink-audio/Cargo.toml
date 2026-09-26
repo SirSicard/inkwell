@@ -1,0 +1,12 @@
+[package]
+name = "ink-audio"
+description = "Ring, chunk store, replay, resampler, downmix, gain stage, VAD and bands."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ink-core.workspace = true

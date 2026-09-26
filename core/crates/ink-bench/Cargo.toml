@@ -1,0 +1,12 @@
+[package]
+name = "ink-bench"
+description = "Replay plus WER, DER, ERLE and latency CLI. Reads $INK_BENCH_DIR; no private paths."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ink-core.workspace = true

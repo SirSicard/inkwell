@@ -1,0 +1,21 @@
+[package]
+name = "ink-core"
+description = "Types and every trait of the Inkwell core, with their threading contracts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No dependencies, on purpose: every other crate and both shells build on this one.
+[dependencies]
+
+[features]
+# In-memory store, mock engines and a scriptable platform, for tests in every crate.
+mock = []
+
+[dev-dependencies]
+# The integration tests need the mocks; a self dev-dependency turns the feature on for them
+# without making `cargo test` depend on remembering a flag.
+ink-core = { path = ".", features = ["mock"] }
