@@ -53,7 +53,7 @@ A mode bundles a writing style, speech cleanup and AI polish, and switches itsel
 - Audio is captured, resampled and transcribed locally. It is never uploaded.
 - Transcripts live in a local SQLite file in your app data directory. Nothing syncs.
 - There is no telemetry, no analytics, no crash reporting, no account, no server owned by this project that your text passes through.
-- **AI polish is the only feature that talks to the internet, and only if you turn it on.** You supply your own API key for OpenAI, Groq, Anthropic, OpenRouter or a custom OpenAI-compatible endpoint. The key is stored in the OS keyring. When polish is on, the transcribed **text** (never the audio) is sent directly from your machine to the provider you chose. Turn it off and Inkwell makes no network calls except model downloads and update checks.
+- **AI polish and voice editing can send text to your selected provider when you use those features.** You supply your own API key for OpenAI, Groq, Anthropic, OpenRouter or a custom OpenAI-compatible endpoint. The key is stored in the OS keyring. When polish is on, the transcribed **text** (never the audio) is sent directly from your machine to the provider you chose. Turn it off and Inkwell makes no network calls except model downloads and update checks.
 - Earlier builds shipped a free proxy tier that routed polish requests through a server the maintainer paid for. That is gone. BYOK is the only path.
 
 ## Install
@@ -69,7 +69,7 @@ Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases)
 > [!NOTE]
 > Accessibility is the one people miss. Without it dictation transcribes fine and nothing appears, which reads like the app is broken.
 
-Known macOS limitations: synthetic paste is blocked by Secure Input, so dictation into password fields and some terminals will silently do nothing. Per-app style overrides do not work yet.
+Known macOS limitations: synthetic paste is blocked by Secure Input, so dictation into password fields and some terminals will silently do nothing. Per-app mode detection is implemented on macOS and Windows; actual behavior still depends on the target app and permissions.
 
 ### Windows (secondary, built in CI)
 
@@ -196,4 +196,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Credits
 
-Built by [Mattias Herzig](https://mattiasherzig.com). Originally based on [Handy](https://github.com/cjpais/Handy) by CJ Pais. Powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [Tauri](https://tauri.app) and [Silero VAD](https://github.com/snakers4/silero-vad).
+Built by [Mattias Hjemgaard](https://mattiasherzig.com). Originally based on [Handy](https://github.com/cjpais/Handy) by CJ Pais. Powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [Tauri](https://tauri.app) and [Silero VAD](https://github.com/snakers4/silero-vad).
