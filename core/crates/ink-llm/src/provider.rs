@@ -88,7 +88,8 @@ impl Provider {
         match self {
             Self::OpenAi => "gpt-4o-mini",
             Self::Groq => "llama-3.3-70b-versatile",
-            Self::Anthropic => "claude-haiku-4-5",
+            // A dated id, not the alias: the default must not change under a shipped build.
+            Self::Anthropic => "claude-haiku-4-5-20251001",
             Self::OpenRouter => "openai/gpt-4o-mini",
             Self::Custom => "llama3",
         }

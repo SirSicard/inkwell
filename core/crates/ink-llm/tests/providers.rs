@@ -142,7 +142,7 @@ fn anthropic_request_shape() {
     assert_eq!(
         seen.body,
         json!({
-            "model": "claude-haiku-4-5",
+            "model": "claude-haiku-4-5-20251001",
             "system": "Clean up the dictation.",
             "messages": [{"role": "user", "content": "um the synthetic sentence"}],
             "max_tokens": 256,
