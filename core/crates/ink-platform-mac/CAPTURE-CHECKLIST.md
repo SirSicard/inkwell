@@ -21,23 +21,24 @@ reopen the terminal after changing either.
 | # | Step | Must see |
 |---|---|---|
 | 1 | Devices, speakers as output | `route: record <built-in mic> ... because DefaultInput` |
-| 2 | Permissions and the tone probe | `Microphone: Granted`; `system audio probe: Heard -> Granted` |
+| 2 | Permissions and the tone probe (`--expect granted`) | `Microphone: Granted`; `system audio probe: Heard -> Granted`; `PASS system audio: Granted` |
 | 3 | 10 s with nothing playing | `Far: Idle` then `PASS Far: Idle`: no callbacks while nothing plays is idle, not broken |
-| 4 | 60 s Zoom test call (zoom.us/test): speak when it asks, leave before the 60 s end | `PASS Mic: Signal` and `PASS Far: Signal`; measured rates within 1 % of declared; `detect: + us.zoom.xos` during the call, `detect: - us.zoom.xos` after you leave, no `com.apple.` lines |
-| 5 | System audio revoked (the terminal switched off under System Audio Recording Only; if it still reads Granted, reopen the terminal and run `capture_check --permissions --probe`) | `system audio probe: Silence -> Denied`. You may hear a faint 0.4 s tone. Switch it back on after. |
+| 4 | 60 s Zoom test call (zoom.us/test): speak when it asks, leave before the 60 s end | `PASS Mic: Signal` and `PASS Far: Signal`; measured rates within 1 % of declared; `detect: + us.zoom.xos` during the call, `detect: - us.zoom.xos` after you leave, no `com.apple.` lines, no `FAIL detect: lost` |
+| 5 | System audio revoked (the terminal switched off under System Audio Recording Only; if it still reads Granted, reopen the terminal and run `capture_check --permissions --probe --expect denied`) | `PASS system audio: Denied` (`Silence -> Denied`). You may hear a faint 0.4 s tone. Switch it back on after. |
 
-With Bluetooth earbuds (optional, run by hand):
+Optional, run by hand (6 and 7 need Bluetooth earbuds):
 
 | # | Command | Must see |
 |---|---|---|
 | 6 | `capture_check --devices` with the earbuds as output | `because BuiltInForBluetoothOutput`: the built-in mic, not the earbuds |
 | 7 | `capture_check --capture 20 --headset-mic`, speak, then stay silent | `Mic: Signal` at 16000 Hz, a high `zeros` share in the silent windows (the headset gates to zeros): the headset mic works outside an aggregate |
 | 8 | `capture_check --capture 20 --app us.zoom.xos` during a Zoom call | `tapping us.zoom.xos (N processes)` with N ≥ 1, and `PASS Far: Signal`: an app tap by process object, not pid |
+| 9 | `capture_check --capture 30`; halfway, change the mic's format in Audio MIDI Setup (48 kHz to 44.1 kHz) | `FAIL Mic stop: ... changed from 48000 Hz to 44100 Hz mid-session ...` and `rate changes 1`: delivery stopped rather than mislabel the audio |
 
 ## Record
 
-Green when lines 1 to 5 pass. Record anything else it printed that looks wrong: a non-zero
-`discontinuities`, `skipped`, `untimed` or `overruns` count; a measured rate far from the declared
-one; `detector: N read errors` with N above 0; and the probe's time (it should take about a
-second). If line 2 shows `NoAudio` or `NotTheTone`, record the `tap callbacks` and `output
+Green when lines 1 to 5 pass (the script exits 0). Record anything else it printed that looks
+wrong: a non-zero `discontinuities`, `skipped`, `untimed`, `overruns` or `refused` count; a
+measured rate far from the declared one; `detector: N read errors` with N above 0; and the probe's
+time (it should take about a second). If line 2 shows `NoAudio` or `NotTheTone`, record the `tap callbacks` and `output
 callbacks` line under it.

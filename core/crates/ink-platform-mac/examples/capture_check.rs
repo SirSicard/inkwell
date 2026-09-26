@@ -13,6 +13,7 @@
 //!   --devices            inputs, the default output, and which mic would be recorded
 //!   --permissions        the four permission states (never prompts)
 //!     --probe            also run the System Audio tone probe (prompts if macOS never asked)
+//!     --expect STATE     with --probe: exit 1 unless it reads `granted` or `denied`
 //!   --capture SECONDS    record the mic and the far end, with meeting detection
 //!     --expect-idle-far  pass only if nothing played (the far end must stay idle)
 //!
@@ -39,12 +40,14 @@ mod mac {
     use std::time::{Duration, Instant};
 
     use assert_no_alloc::{AllocDisabler, assert_no_alloc, violation_count};
-    use ink_audio::{CaptureConsumer, RealtimeGuard, capture_ring};
+    use ink_audio::{
+        CaptureConsumer, CaptureHealth, LevelMeter, RealtimeGuard, assess, capture_ring,
+    };
     use ink_core::{
         AppRef, AudioSource, CaptureControl, Channel, DeviceId, EventSink, FarEndTarget,
-        MeetingDetector, MeetingSignal, Permission, PermissionProbe, StreamFormat,
+        MeetingDetector, MeetingSignal, Permission, PermissionProbe, PermissionState, StreamFormat,
     };
-    use ink_platform_mac::capture::{CaptureHealth, IoStats, LevelMeter, assess};
+    use ink_platform_mac::capture::IoStats;
     use ink_platform_mac::permissions::tone;
     use ink_platform_mac::{MacCapture, MacClock, MacMeetingDetector, MacPermissionProbe};
 
@@ -52,13 +55,20 @@ mod mac {
     #[global_allocator]
     static ALLOCATOR: AllocDisabler = AllocDisabler;
 
-    const USAGE: &str = "usage: capture_check (--devices | --permissions [--probe] | --capture \
-                         SECONDS [--expect-idle-far]) [--headset-mic] [--device UID] [--app ID]";
+    const USAGE: &str = "usage: capture_check (--devices | --permissions [--probe [--expect \
+                         granted|denied]] | --capture SECONDS [--expect-idle-far]) \
+                         [--headset-mic] [--device UID] [--app ID]";
 
     enum Mode {
         Devices,
-        Permissions { probe: bool },
-        Capture { seconds: u64, expect_idle_far: bool },
+        Permissions {
+            probe: bool,
+            expect: Option<PermissionState>,
+        },
+        Capture {
+            seconds: u64,
+            expect_idle_far: bool,
+        },
     }
 
     struct Options {
@@ -71,13 +81,25 @@ mod mac {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         let mut mode = None;
         let (mut probe, mut expect_idle_far, mut headset_mic) = (false, false, false);
-        let (mut device, mut app) = (None, None);
+        let (mut device, mut app, mut expect) = (None, None, None);
         while let Some(arg) = args.next() {
             let mut value = |name: &str| args.next().ok_or(format!("{name} needs a value"));
             match arg.as_str() {
                 "--devices" => mode = Some(Mode::Devices),
-                "--permissions" => mode = Some(Mode::Permissions { probe: false }),
+                "--permissions" => {
+                    mode = Some(Mode::Permissions {
+                        probe: false,
+                        expect: None,
+                    })
+                }
                 "--probe" => probe = true,
+                "--expect" => {
+                    expect = Some(match value("--expect")?.as_str() {
+                        "granted" => PermissionState::Granted,
+                        "denied" => PermissionState::Denied,
+                        _ => return Err("--expect takes granted or denied".into()),
+                    })
+                }
                 "--capture" => {
                     let seconds = value("--capture")?
                         .parse()
@@ -96,7 +118,11 @@ mod mac {
             }
         }
         let mode = match mode.ok_or("choose a mode")? {
-            Mode::Permissions { .. } => Mode::Permissions { probe },
+            Mode::Permissions { .. } if expect.is_some() && !probe => {
+                return Err("--expect needs --probe".into());
+            }
+            Mode::Permissions { .. } => Mode::Permissions { probe, expect },
+            _ if expect.is_some() => return Err("--expect goes with --permissions --probe".into()),
             Mode::Capture { seconds, .. } => Mode::Capture {
                 seconds,
                 expect_idle_far,
@@ -125,7 +151,7 @@ mod mac {
         };
         match options.mode {
             Mode::Devices => devices(clock, &options),
-            Mode::Permissions { probe } => permissions(clock, probe),
+            Mode::Permissions { probe, expect } => permissions(clock, probe, expect),
             Mode::Capture {
                 seconds,
                 expect_idle_far,
@@ -176,7 +202,7 @@ mod mac {
         }
     }
 
-    fn permissions(clock: MacClock, probe: bool) -> i32 {
+    fn permissions(clock: MacClock, probe: bool, expect: Option<PermissionState>) -> i32 {
         let probe_api = MacPermissionProbe::new(clock);
         for permission in [
             Permission::Microphone,
@@ -209,7 +235,20 @@ mod mac {
                     report.tone_fraction,
                     report.peak
                 );
-                0
+                match expect {
+                    Some(wanted) if wanted != report.verdict.permission() => {
+                        println!(
+                            "FAIL system audio: {:?}, expected {wanted:?}",
+                            report.verdict.permission()
+                        );
+                        1
+                    }
+                    Some(wanted) => {
+                        println!("PASS system audio: {wanted:?}");
+                        0
+                    }
+                    None => 0,
+                }
             }
             Err(e) => {
                 println!("FAIL system audio probe: {e}");
@@ -370,6 +409,7 @@ mod mac {
 
         let start = Instant::now();
         let mut next_report = Duration::from_secs(10);
+        let mut detection_lost = false;
         while start.elapsed() < Duration::from_secs(seconds) {
             thread::sleep(Duration::from_millis(50));
             for pump in &mut pumps {
@@ -382,6 +422,10 @@ mod mac {
                     }
                     MeetingSignal::MicReleased { app } => {
                         println!("detect: - {} ({})", app.id, app.name)
+                    }
+                    MeetingSignal::Lost { reason } => {
+                        println!("FAIL detect: lost: {reason}");
+                        detection_lost = true;
                     }
                 }
             }
@@ -401,7 +445,7 @@ mod mac {
             pump.drain();
         }
 
-        let mut ok = true;
+        let mut ok = !detection_lost;
         for (pump, stats, stopped) in [
             (&pumps[0], mic_stats, mic_stop),
             (&pumps[1], far_stats, far_stop),
@@ -413,7 +457,8 @@ mod mac {
                 .map_or("n/a".into(), |r| format!("{r:.0} Hz"));
             println!(
                 "{:?}: {health:?}; {:.1} dBFS, zeros {:.1}%, {} frames, declared {} Hz, measured \
-                 {rate}, discontinuities {}, skipped {}, untimed {}, overruns {} blocks",
+                 {rate}, discontinuities {}, skipped {}, untimed {}, overruns {} blocks, rate \
+                 changes {}, refused {}",
                 pump.channel,
                 pump.total.rms_dbfs(),
                 100.0 * pump.total.zero_fraction(),
@@ -422,7 +467,9 @@ mod mac {
                 stats.discontinuities,
                 stats.skipped,
                 stats.untimed,
-                overruns.blocks
+                overruns.blocks,
+                stats.rate_changes,
+                stats.refused
             );
             if let Err(e) = stopped {
                 println!("FAIL {:?} stop: {e}", pump.channel);

@@ -15,8 +15,10 @@ use ink_core::{
 };
 use objc2_core_audio::kAudioObjectPropertyScopeInput;
 
-use super::hal::{self, HalDevice, capture_format};
-use super::io::{InputContext, IoCounters, IoStats, RunningIo, finish, input_proc};
+use super::hal::{self, HalDevice, ObjectId, capture_format};
+use super::io::{
+    FormatListener, InputContext, IoCounters, IoStats, RunningIo, finish, start_input,
+};
 use super::routing;
 use crate::clock::MacClock;
 use crate::permissions;
@@ -25,9 +27,11 @@ use crate::permissions;
 ///
 /// A Bluetooth headset mic delivers 16 kHz call audio and **digital zeros while the user is
 /// silent**, so a high share of exact zeros is normal on it (see
-/// [`CaptureHealth`](super::CaptureHealth)); on any other mic, zeros throughout mean no data.
+/// [`CaptureHealth`](ink_audio::CaptureHealth)); on any other mic, zeros throughout mean no data.
 pub struct MacMicSource {
+    // Field order is drop order: IO stops before the format listener goes.
     running: Option<RunningIo<InputContext>>,
+    listener: Option<FormatListener>,
     device: HalDevice,
     format: StreamFormat,
     clock: MacClock,
@@ -45,6 +49,7 @@ impl MacMicSource {
         let format = input_format(&device)?;
         Ok(Self {
             running: None,
+            listener: None,
             device,
             format,
             clock,
@@ -63,7 +68,7 @@ impl MacMicSource {
         routing::transport(self.device.transport)
     }
 
-    /// The counters so far. **Any thread** that holds the source.
+    /// The current (or last) session's counters. **Any thread** that holds the source.
     pub fn stats(&self) -> IoStats {
         self.counters.snapshot()
     }
@@ -71,10 +76,15 @@ impl MacMicSource {
 
 /// The format buffer 0 of an IOProc on `device` carries.
 fn input_format(device: &HalDevice) -> Result<StreamFormat, PlatformError> {
-    let asbd = hal::first_stream_format(device.id, kAudioObjectPropertyScopeInput)?
-        .ok_or_else(|| PlatformError::Device(format!("{} has no input stream", device.name)))?;
-    capture_format(&asbd)
+    read_input_format(device.id)
         .map_err(|problem| PlatformError::Device(format!("microphone {}: {problem}", device.name)))
+}
+
+fn read_input_format(device: ObjectId) -> Result<StreamFormat, String> {
+    let asbd = hal::first_stream_format(device, kAudioObjectPropertyScopeInput)
+        .map_err(|e| e.to_string())?
+        .ok_or("the device has no input stream")?;
+    capture_format(&asbd).map_err(|problem| problem.to_string())
 }
 
 impl AudioSource for MacMicSource {
@@ -88,7 +98,8 @@ impl AudioSource for MacMicSource {
 
     /// Refuses with `PermissionDenied(Microphone)` when the permission is denied, rather than
     /// starting a capture that macOS would fill with zeros. When it was never asked, starting is
-    /// what makes macOS ask.
+    /// what makes macOS ask. A device whose format changed since `open` is an error; one that
+    /// changes during the session stops delivering, and `stop` says so.
     fn start(&mut self, sink: Box<dyn AudioSink>) -> Result<(), PlatformError> {
         if self.running.is_some() {
             return Err(PlatformError::Failed(
@@ -98,34 +109,34 @@ impl AudioSource for MacMicSource {
         if permissions::microphone() == PermissionState::Denied {
             return Err(PlatformError::PermissionDenied(Permission::Microphone));
         }
-        // A device can change format between open and start (another app set its rate). Blocks
-        // labelled with the old format would be resampled wrongly, so that is an error here.
-        if input_format(&self.device)? != self.format {
-            return Err(PlatformError::Device(format!(
-                "microphone {} changed format since it was opened; open it again",
-                self.device.name
-            )));
-        }
-        let context = InputContext::new(
+        let id = self.device.id;
+        self.counters = Arc::default(); // each session is judged on its own
+        let (running, listener) = start_input(
+            id,
+            self.format,
             sink,
             self.guard.clone(),
-            self.format,
             self.clock,
-            Arc::clone(&self.counters),
-        );
-        match RunningIo::start(self.device.id, Some(input_proc), context) {
-            Ok(running) => {
-                self.running = Some(running);
-                Ok(())
-            }
-            Err((_context, error)) => Err(error.into()),
-        }
+            &self.counters,
+            Arc::new(move || read_input_format(id)),
+            "the microphone",
+        )?;
+        self.running = Some(running);
+        self.listener = Some(listener);
+        Ok(())
     }
 
     fn stop(&mut self) -> Result<SourceStats, PlatformError> {
         let Some(running) = self.running.take() else {
             return Ok(SourceStats::default());
         };
-        finish(running, &self.counters, "microphone")
+        let result = finish(
+            running,
+            &self.counters,
+            "microphone",
+            self.format.sample_rate,
+        );
+        self.listener = None;
+        result
     }
 }

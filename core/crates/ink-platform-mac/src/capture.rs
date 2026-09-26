@@ -16,13 +16,12 @@
 //! **Threads.** Every method here is **worker**; the IOProcs are the realtime part (`io`, I4).
 //! The sink passed to `start` is `ink-audio`'s ring producer.
 //!
-//! **Silence is never taken for quiet.** [`LevelMeter`] and [`assess`] tell digital zeros from a
-//! quiet room, and far-end idle (no callbacks: nothing is playing) from a stalled mic.
+//! **Silence is never taken for quiet.** `ink_audio::levels` tells digital zeros from a quiet room,
+//! and far-end idle (no callbacks: nothing is playing) from a stalled mic.
 #![cfg(target_os = "macos")]
 
 pub(crate) mod hal;
 mod io;
-mod levels;
 mod mic;
 mod routing;
 mod tap;
@@ -35,7 +34,6 @@ use ink_core::{AudioSource, CaptureControl, DeviceId, DeviceInfo, FarEndTarget, 
 use objc2_core_audio::CATapMuteBehavior;
 
 pub use io::IoStats;
-pub use levels::{CaptureHealth, LevelMeter, assess};
 pub use mic::MacMicSource;
 pub use routing::{MicRoute, MicRouteReason, route_mic, transport};
 pub use tap::MacFarEndSource;
@@ -154,6 +152,7 @@ impl MacCapture {
         MacFarEndSource::open(
             scope,
             CATapMuteBehavior::Unmuted,
+            true,
             self.clock,
             self.guard.clone(),
         )

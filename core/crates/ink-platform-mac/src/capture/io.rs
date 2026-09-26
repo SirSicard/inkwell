@@ -7,9 +7,24 @@
 //! in `assert_no_alloc` (I4): the unit tests here with synthetic buffer lists, and the capture
 //! checklist binary on real devices.
 //!
-//! **Lifetime.** A context is boxed and handed to the HAL as the IOProc's client data. It is freed
-//! only after the IOProc is stopped and destroyed *and* its [`Gate`] shows no callback in flight;
-//! if a callback never leaves, the context is leaked rather than freed under it.
+//! **Panics (decided).** A panic on the IO thread is a bug. `catch_unwind` stops it at the IOProc
+//! boundary, so it never unwinds into the HAL. Before that, Rust's panic hook runs once and prints
+//! the message, which allocates and writes to stderr on the realtime thread: that one callback
+//! breaks the realtime rules and may glitch. The alternative, a process-wide silent hook, would
+//! hide every panic in the app, so none is installed. The cost is bounded: a panic happens at most
+//! once per stream, because the stream short-circuits after it (every later callback returns at
+//! once without touching the sink or the output), and `stop` reports it as an error.
+//!
+//! **Format changes.** A stream's blocks carry the format it was opened with. A [`FormatListener`]
+//! on the device (on the HAL's notification thread, not the IO thread) re-reads the format when
+//! the device's nominal rate changes; if it differs, the IOProc delivers nothing more (one atomic
+//! load per callback), counts the refusals and the gap, and `stop` reports the change as an error.
+//! Recovery, reopening at the new rate mid-session, is left to the device-change work (S2.8).
+//!
+//! **Lifetime.** A context is boxed and handed to the HAL as the IOProc's (or listener's) client
+//! data. It is freed only after the IOProc is stopped and destroyed (the listener removed) *and*
+//! its [`Gate`] shows no callback in flight; if a callback never leaves, the context is leaked
+//! rather than freed under it.
 //!
 //! `unsafe impl Sync` appears only in this file, each with its reason.
 #![cfg(target_os = "macos")]
@@ -26,7 +41,10 @@ use ink_audio::RealtimeGuard;
 use ink_core::{AudioBlock, AudioSink, Clock, PlatformError, SourceStats, StreamFormat};
 use objc2_core_audio::{
     AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProc, AudioDeviceIOProcID,
-    AudioDeviceStart, AudioDeviceStop, AudioObjectID,
+    AudioDeviceStart, AudioDeviceStop, AudioObjectAddPropertyListener, AudioObjectID,
+    AudioObjectPropertyAddress, AudioObjectRemovePropertyListener,
+    kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyElementMain,
+    kAudioObjectPropertyScopeGlobal,
 };
 use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp, AudioTimeStampFlags};
 
@@ -96,6 +114,11 @@ pub(crate) struct IoCounters {
     skipped: AtomicU64,
     untimed: AtomicU64,
     panics: AtomicU64,
+    /// Set by the [`FormatWatch`] (notification thread), read by the IOProc.
+    format_changed: AtomicBool,
+    rate_changes: AtomicU64,
+    new_rate: AtomicU32,
+    refused: AtomicU64,
 }
 
 impl IoCounters {
@@ -108,7 +131,15 @@ impl IoCounters {
             skipped: load(&self.skipped),
             untimed: load(&self.untimed),
             panics: load(&self.panics),
+            rate_changes: load(&self.rate_changes),
+            new_rate: self.new_rate.load(Ordering::Relaxed),
+            refused: load(&self.refused),
         }
+    }
+
+    /// Whether the device's format changed since the stream was opened. **Any thread.**
+    pub(crate) fn format_changed(&self) -> bool {
+        self.format_changed.load(Ordering::Acquire)
     }
 }
 
@@ -131,6 +162,173 @@ pub struct IoStats {
     /// Panics caught on the IO thread (the sink's or this crate's). After the first, the stream
     /// stops delivering; `stop` reports it as an error.
     pub panics: u64,
+    /// Times the device's format was found changed mid-session (normally 0 or 1). After the first,
+    /// the stream delivers nothing more, and `stop` reports it as an error.
+    pub rate_changes: u64,
+    /// The sample rate the device changed to; 0 when it could not be read.
+    pub new_rate: u32,
+    /// Callbacks not delivered because the format had changed. The gap counts once among the
+    /// discontinuities.
+    pub refused: u64,
+}
+
+/// Watches a stream's format for a change from the one it was opened with.
+pub(crate) struct FormatWatch {
+    opened: StreamFormat,
+    counters: Arc<IoCounters>,
+}
+
+impl FormatWatch {
+    pub(crate) fn new(opened: StreamFormat, counters: Arc<IoCounters>) -> Self {
+        Self { opened, counters }
+    }
+
+    /// Records what a re-read of the device's format found. **Not realtime** (the HAL's
+    /// notification thread). A format that cannot be read counts as changed: delivery stops rather
+    /// than risk mislabelled audio.
+    pub(crate) fn observe(&self, current: Result<StreamFormat, String>) {
+        let rate = match current {
+            Ok(format) if format == self.opened => return,
+            Ok(format) => format.sample_rate,
+            Err(_) => 0,
+        };
+        let c = &self.counters;
+        c.new_rate.store(rate, Ordering::Relaxed);
+        c.rate_changes.fetch_add(1, Ordering::Relaxed);
+        c.format_changed.store(true, Ordering::Release);
+    }
+}
+
+/// Reads a device's current capture format (the HAL in production, a fake in tests).
+pub(crate) type FormatReader = Arc<dyn Fn() -> Result<StreamFormat, String> + Send + Sync>;
+
+/// The property whose change makes the listener re-read the format.
+pub(crate) const FORMAT_PROPERTY: AudioObjectPropertyAddress = AudioObjectPropertyAddress {
+    mSelector: kAudioDevicePropertyNominalSampleRate,
+    mScope: kAudioObjectPropertyScopeGlobal,
+    mElement: kAudioObjectPropertyElementMain,
+};
+
+/// The listener's client data.
+pub(crate) struct FormatListenerContext {
+    gate: Gate,
+    watch: FormatWatch,
+    read: FormatReader,
+}
+
+impl FormatListenerContext {
+    pub(crate) fn new(watch: FormatWatch, read: FormatReader) -> Box<Self> {
+        Box::new(Self {
+            gate: Gate::default(),
+            watch,
+            read,
+        })
+    }
+}
+
+/// The nominal-rate listener. Runs on a HAL notification thread (not realtime), so it may read
+/// the device's format, which is IPC.
+///
+/// # Safety
+///
+/// `client` must be the [`FormatListenerContext`] registered with the listener, alive for the
+/// call ([`FormatListener`] guarantees this).
+pub(crate) unsafe extern "C-unwind" fn format_listener(
+    _object: AudioObjectID,
+    _count: u32,
+    _addresses: NonNull<AudioObjectPropertyAddress>,
+    client: *mut c_void,
+) -> i32 {
+    // SAFETY: per the contract above.
+    let Some(context) = (unsafe { client.cast::<FormatListenerContext>().as_ref() }) else {
+        return 0;
+    };
+    if !context.gate.enter() {
+        return 0;
+    }
+    // An unwind must never cross into the HAL; a failed read of any kind stops delivery.
+    let read = catch_unwind(AssertUnwindSafe(|| (context.read)()))
+        .unwrap_or_else(|_| Err("the format read panicked".into()));
+    context.watch.observe(read);
+    context.gate.leave();
+    0
+}
+
+/// A registered nominal-rate listener, owning its context; removed on drop.
+pub(crate) struct FormatListener {
+    device: ObjectId,
+    context: NonNull<FormatListenerContext>,
+}
+
+// SAFETY: the handle holds a device id and a pointer to a context that is `Send + Sync` (a gate,
+// atomics behind an `Arc`, and a `Send + Sync` reader); removing the listener is allowed from any
+// thread.
+unsafe impl Send for FormatListener {}
+
+impl FormatListener {
+    /// Listens for `device`'s nominal rate changing. It then re-reads the format with `read` and
+    /// tells `watch`. Call [`check_now`](Self::check_now) after registering, to catch a change
+    /// before the listener existed.
+    pub(crate) fn register(
+        device: ObjectId,
+        watch: FormatWatch,
+        read: FormatReader,
+    ) -> Result<Self, HalError> {
+        let raw = Box::into_raw(FormatListenerContext::new(watch, read));
+        let address = FORMAT_PROPERTY;
+        // SAFETY: `format_listener` takes a `FormatListenerContext`, and `raw` stays allocated
+        // until `Drop` has removed the listener and seen its gate empty.
+        let status = unsafe {
+            AudioObjectAddPropertyListener(
+                device,
+                NonNull::from(&address),
+                Some(format_listener),
+                raw.cast(),
+            )
+        };
+        if let Err(e) = check(status, "listening for the device's sample rate") {
+            // SAFETY: registration failed, so the HAL holds no copy of `raw`.
+            drop(unsafe { Box::from_raw(raw) });
+            return Err(e);
+        }
+        Ok(Self {
+            device,
+            // SAFETY: `Box::into_raw` never returns null.
+            context: unsafe { NonNull::new_unchecked(raw) },
+        })
+    }
+
+    /// Reads the format once now, as a notification would.
+    pub(crate) fn check_now(&self) {
+        // SAFETY: the context is alive until `Drop`.
+        let context = unsafe { self.context.as_ref() };
+        context.watch.observe((context.read)());
+    }
+}
+
+impl Drop for FormatListener {
+    fn drop(&mut self) {
+        // SAFETY: the context is alive until freed below.
+        let context = unsafe { self.context.as_ref() };
+        context.gate.close();
+        let address = FORMAT_PROPERTY;
+        // SAFETY: the same device, address, listener and client data it was registered with. A
+        // failure leaves nothing to do: the gate is closed, so a late notification does nothing.
+        unsafe {
+            AudioObjectRemovePropertyListener(
+                self.device,
+                NonNull::from(&address),
+                Some(format_listener),
+                self.context.as_ptr().cast(),
+            )
+        };
+        if context.gate.wait_idle(LEAVE_TIMEOUT) {
+            // SAFETY: removed, and no notification is inside the gate; the context came from
+            // `Box::into_raw` in `register`.
+            drop(unsafe { Box::from_raw(self.context.as_ptr()) });
+        }
+        // Otherwise a notification never returned: the context is leaked, never freed under it.
+    }
 }
 
 /// An input IOProc's context: the sink, the guard and the stream's opened format.
@@ -205,6 +403,16 @@ impl InputContext {
         c.callbacks.fetch_add(1, Ordering::Relaxed);
         if c.panics.load(Ordering::Relaxed) != 0 {
             // The sink may be half-way through a push that unwound: never call it again.
+            return;
+        }
+        if c.format_changed.load(Ordering::Acquire) {
+            // The blocks would carry the old format: deliver nothing. The whole run of refusals
+            // is one gap.
+            if c.refused.fetch_add(1, Ordering::Relaxed) == 0 {
+                c.discontinuities.fetch_add(1, Ordering::Relaxed);
+            }
+            self.next_sample_time
+                .store(f64::NAN.to_bits(), Ordering::Relaxed);
             return;
         }
         let Some(samples) = self.samples(list) else {
@@ -356,7 +564,8 @@ impl ToneContext {
     /// format before starting).
     unsafe fn on_output(&self, list: NonNull<AudioBufferList>) {
         self.callbacks.fetch_add(1, Ordering::Relaxed);
-        if !self.playing.load(Ordering::Acquire) {
+        // After a panic, write nothing more: silence (the HAL zeroed the buffers).
+        if self.panics.load(Ordering::Relaxed) != 0 || !self.playing.load(Ordering::Acquire) {
             return;
         }
         let start = f32::from_bits(self.phase.load(Ordering::Relaxed));
@@ -527,17 +736,60 @@ impl<C: IoContext> Drop for RunningIo<C> {
     }
 }
 
-/// Stops an input IOProc, drops its sink, and turns the counters into [`SourceStats`], or an error
-/// when the sink panicked or teardown failed. Skipped callbacks are audio that never reached the
-/// sink, so they count as discontinuities.
+/// Starts an input stream on `device` in `format` under a format watch: registers the listener,
+/// checks the format once (a change since opening is an error, never mislabelled audio), then
+/// starts IO. On failure the sink is dropped, so the ring's consumer sees it abandoned.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site per source; a struct adds nothing"
+)]
+pub(crate) fn start_input(
+    device: ObjectId,
+    format: StreamFormat,
+    sink: Box<dyn AudioSink>,
+    guard: RealtimeGuard,
+    clock: MacClock,
+    counters: &Arc<IoCounters>,
+    read: FormatReader,
+    what: &str,
+) -> Result<(RunningIo<InputContext>, FormatListener), PlatformError> {
+    let watch = FormatWatch::new(format, Arc::clone(counters));
+    let listener = FormatListener::register(device, watch, read)?;
+    listener.check_now();
+    if counters.format_changed() {
+        return Err(PlatformError::Device(format!(
+            "{what} changed format since it was opened; open it again"
+        )));
+    }
+    let context = InputContext::new(sink, guard, format, clock, Arc::clone(counters));
+    let running = RunningIo::start(device, Some(input_proc), context)
+        .map_err(|(_context, error)| PlatformError::from(error))?;
+    Ok((running, listener))
+}
+
+/// Stops an input IOProc, drops its sink, and reports the session: [`session_result`], or the
+/// teardown's error.
 pub(crate) fn finish(
     running: RunningIo<InputContext>,
     counters: &IoCounters,
     what: &str,
+    opened_rate: u32,
 ) -> Result<SourceStats, PlatformError> {
     let (context, teardown) = running.stop();
     drop(context.map(|c| c.into_sink()));
-    let stats = counters.snapshot();
+    let stats = session_result(counters.snapshot(), what, opened_rate)?;
+    teardown.map_err(|e| PlatformError::Device(format!("{what}: {e}")))?;
+    Ok(stats)
+}
+
+/// A finished session's [`SourceStats`], or an error when it was cut short: the sink panicked, or
+/// the device's format changed. Skipped callbacks are audio that never reached the sink, so they
+/// count as discontinuities.
+pub(crate) fn session_result(
+    stats: IoStats,
+    what: &str,
+    opened_rate: u32,
+) -> Result<SourceStats, PlatformError> {
     if stats.panics > 0 {
         return Err(PlatformError::Failed(format!(
             "{what}: the capture sink panicked on the audio thread; delivery stopped after {} \
@@ -545,7 +797,17 @@ pub(crate) fn finish(
             stats.frames
         )));
     }
-    teardown.map_err(|e| PlatformError::Device(format!("{what}: {e}")))?;
+    if stats.rate_changes > 0 {
+        let now = match stats.new_rate {
+            0 => "an unreadable format".to_owned(),
+            rate => format!("{rate} Hz"),
+        };
+        return Err(PlatformError::Device(format!(
+            "{what}: the device changed from {opened_rate} Hz to {now} mid-session; delivery \
+             stopped after {} frames and {} callbacks were not delivered; open the stream again",
+            stats.frames, stats.refused
+        )));
+    }
     Ok(SourceStats {
         frames: stats.frames,
         discontinuities: stats.discontinuities + stats.skipped,
@@ -798,6 +1060,179 @@ pub(crate) mod tests {
         let stats = counters.snapshot();
         assert_eq!((stats.skipped, stats.discontinuities), (1, 0));
         assert_eq!(stats.frames, 200);
+    }
+
+    const MONO_44K: StreamFormat = StreamFormat {
+        sample_rate: 44_100,
+        channels: 1,
+    };
+
+    /// The device's rate changes mid-session: from the next callback nothing is delivered (never
+    /// audio labelled with the old rate). The gap is one discontinuity; the refusals and the change
+    /// are counted separately.
+    #[test]
+    fn a_mid_session_rate_change_stops_delivery_and_is_counted() {
+        let (guard, violations, _) = counting_guard();
+        let counters = Arc::new(IoCounters::default());
+        let watch = FormatWatch::new(MONO_48K, counters.clone());
+        let (producer, mut consumer) = capture_ring(MONO_48K, Duration::from_secs(1)).unwrap();
+        let context = InputContext::new(
+            Box::new(producer),
+            guard,
+            MONO_48K,
+            MacClock::new().unwrap(),
+            counters.clone(),
+        );
+        let mut samples = vec![0.1f32; 480];
+        let mut input = list(&mut samples, 1);
+        for i in 0..2 {
+            call_input(&context, &mut input, &mut stamp(i as f64 * 480.0, 1 + i));
+        }
+        watch.observe(Ok(MONO_44K)); // on the HAL's notification thread
+        for i in 2..5 {
+            call_input(&context, &mut input, &mut stamp(i as f64 * 480.0, 1 + i));
+        }
+        let mut delivered = 0;
+        while consumer.pop().is_some() {
+            delivered += 1;
+        }
+        assert_eq!(delivered, 2, "nothing after the change");
+        let stats = counters.snapshot();
+        assert_eq!(
+            (stats.rate_changes, stats.refused, stats.discontinuities),
+            (1, 3, 1)
+        );
+        assert_eq!(stats.new_rate, 44_100);
+        assert_eq!(stats.frames, 960);
+        assert_eq!(
+            violations.load(Ordering::Relaxed),
+            0,
+            "the refusal path allocates nothing"
+        );
+    }
+
+    /// The listener re-reads the format through its seam (here a fake HAL read) and marks a change.
+    #[test]
+    fn the_format_listener_reads_through_its_seam_and_marks_a_change() {
+        let counters = Arc::new(IoCounters::default());
+        let reads = Arc::new(AtomicU64::new(0));
+        let r = reads.clone();
+        let context = FormatListenerContext::new(
+            FormatWatch::new(MONO_48K, counters.clone()),
+            Arc::new(move || {
+                r.fetch_add(1, Ordering::Relaxed);
+                Ok(MONO_44K)
+            }),
+        );
+        let mut address = FORMAT_PROPERTY;
+        // SAFETY: a live context and address, as the HAL passes them.
+        unsafe {
+            format_listener(
+                7,
+                1,
+                NonNull::from(&mut address),
+                ptr::from_ref(&*context).cast_mut().cast(),
+            );
+        }
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+        let stats = counters.snapshot();
+        assert_eq!((stats.rate_changes, stats.new_rate), (1, 44_100));
+    }
+
+    #[test]
+    fn a_notification_with_the_same_format_changes_nothing() {
+        let counters = Arc::new(IoCounters::default());
+        let watch = FormatWatch::new(MONO_48K, counters.clone());
+        watch.observe(Ok(MONO_48K));
+        assert_eq!(counters.snapshot().rate_changes, 0);
+        assert!(!counters.format_changed());
+    }
+
+    /// A format that cannot be read is treated as changed: delivery stops rather than risk
+    /// mislabelled audio.
+    #[test]
+    fn an_unreadable_format_is_treated_as_a_change() {
+        let counters = Arc::new(IoCounters::default());
+        let watch = FormatWatch::new(MONO_48K, counters.clone());
+        watch.observe(Err("reading a stream's format failed".into()));
+        assert!(counters.format_changed());
+        assert_eq!(counters.snapshot().new_rate, 0);
+    }
+
+    /// Stopping a stream whose format changed is an error that names the change, so the session
+    /// is reported as cut short; skipped buffers count as discontinuities.
+    #[test]
+    fn a_rate_change_ends_the_session_with_an_error_naming_it() {
+        let changed = IoStats {
+            callbacks: 10,
+            frames: 960,
+            rate_changes: 1,
+            new_rate: 44_100,
+            refused: 8,
+            discontinuities: 1,
+            ..IoStats::default()
+        };
+        match session_result(changed, "microphone", 48_000) {
+            Err(PlatformError::Device(message)) => {
+                assert!(
+                    message.contains("48000") && message.contains("44100"),
+                    "{message}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        let skipped = IoStats {
+            frames: 100,
+            skipped: 2,
+            discontinuities: 1,
+            ..IoStats::default()
+        };
+        assert_eq!(
+            session_result(skipped, "far end", 48_000),
+            Ok(SourceStats {
+                frames: 100,
+                discontinuities: 3
+            })
+        );
+    }
+
+    /// After a panic the tone generator short-circuits: it writes nothing more.
+    #[test]
+    fn a_panicked_tone_generator_writes_nothing_more() {
+        let first = Arc::new(AtomicBool::new(true));
+        let f = first.clone();
+        let guard: RealtimeGuard = Arc::new(move |work: &mut dyn FnMut()| {
+            assert!(
+                !f.swap(false, Ordering::SeqCst),
+                "a bug on the first callback"
+            );
+            work();
+        });
+        let context = ToneContext::new(guard, 1_000.0, 0.1, 48_000);
+        context.set_playing(true);
+        let mut samples = vec![0.0f32; 96];
+        let mut output = list(&mut samples, 1);
+        let mut input = empty_list();
+        let mut zero = stamp(0.0, 0);
+        for _ in 0..2 {
+            // SAFETY: live context and lists, as the HAL passes them.
+            unsafe {
+                tone_proc(
+                    0,
+                    NonNull::from(&mut zero),
+                    NonNull::from(&mut input),
+                    NonNull::from(&mut zero.clone()),
+                    NonNull::from(&mut output),
+                    NonNull::from(&mut zero.clone()),
+                    ptr::from_ref(&*context).cast_mut().cast(),
+                );
+            }
+        }
+        assert_eq!(context.panics(), 1);
+        assert!(
+            samples.iter().all(|&s| s == 0.0),
+            "nothing written after the panic"
+        );
     }
 
     #[test]

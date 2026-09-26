@@ -69,7 +69,7 @@ mod tests {
     ];
 
     /// Every source file in the crate, read at compile time.
-    const SOURCES: [(&str, &str); 24] = [
+    const SOURCES: [(&str, &str); 23] = [
         ("lib.rs", include_str!("lib.rs")),
         ("ax.rs", include_str!("ax.rs")),
         ("clock.rs", include_str!("clock.rs")),
@@ -86,7 +86,6 @@ mod tests {
         ("capture.rs", include_str!("capture.rs")),
         ("capture/hal.rs", include_str!("capture/hal.rs")),
         ("capture/io.rs", include_str!("capture/io.rs")),
-        ("capture/levels.rs", include_str!("capture/levels.rs")),
         ("capture/mic.rs", include_str!("capture/mic.rs")),
         ("capture/routing.rs", include_str!("capture/routing.rs")),
         ("capture/tap.rs", include_str!("capture/tap.rs")),

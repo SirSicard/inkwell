@@ -16,6 +16,8 @@
 //! - [`replay`]: [`FileReplaySource`], the replay harness that drives the same path from WAV
 //!   fixtures, deterministically, on every OS.
 //! - [`realtime`]: the guard seam that lets tests prove every realtime push allocation-free (I4).
+//! - [`levels`]: tells digital zeros from a quiet room and an idle far end from a stalled mic, so a
+//!   watchdog can judge the audio the pump actually receives.
 //!
 //! After the ring, everything runs on the pump or a worker, never the realtime thread. The DSP
 //! between the device's format and an engine:
@@ -65,6 +67,7 @@ pub mod bands;
 pub mod chunk;
 pub mod downmix;
 pub mod gain;
+pub mod levels;
 pub mod rate;
 pub mod realtime;
 pub mod replay;
@@ -87,6 +90,7 @@ pub use gain::{
     GainEvidence, GainOutcome, GainReport, TARGET_PEAK, normalise_speech, normalise_without_vad,
     robust_peak,
 };
+pub use levels::{CaptureHealth, LevelMeter, assess};
 pub use rate::{Continuity, RateCheck, RateVerdict};
 pub use realtime::{RealtimeGuard, unguarded};
 pub use replay::{FileReplaySource, Pacing};

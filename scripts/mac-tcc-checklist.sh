@@ -29,7 +29,7 @@ pause() {
 }
 
 step "1 devices and routing" --devices
-step "2 permissions and the tone probe" --permissions --probe
+step "2 permissions and the tone probe" --permissions --probe --expect granted
 pause "3: stop everything that plays sound (music, videos, calls)."
 step "3 idle far end" --capture 10 --expect-idle-far
 pause "4: open https://zoom.us/test and join the test meeting. Speak when it asks you to, and
@@ -37,15 +37,14 @@ leave the meeting before the 60 s are up."
 step "4 zoom test call" --capture 60
 pause "5: in System Settings > Privacy & Security > Screen & System Audio Recording, switch this
 terminal OFF under System Audio Recording Only. (If step 5 still says Granted, quit and reopen the
-terminal and run: $check --permissions --probe)"
-step "5 system audio revoked" --permissions --probe
+terminal and run: $check --permissions --probe --expect denied)"
+step "5 system audio revoked" --permissions --probe --expect denied
 pause "Switch this terminal back ON under System Audio Recording Only."
 
 printf '\n'
 if ((${#failed[@]} == 0)); then
-  echo "All steps exited ok. Step 5 must show 'Silence -> Denied': check it above."
+  echo "All steps passed."
 else
   echo "Failed: ${failed[*]}"
-  echo "(Step 5 exits ok even when it shows Denied; that is the expected result there.)"
   exit 1
 fi

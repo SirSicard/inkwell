@@ -21,8 +21,8 @@
 
 pub mod tone;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use block2::RcBlock;
 use ink_core::{Permission, PermissionProbe, PermissionState, PlatformError};
@@ -123,21 +123,81 @@ fn settings_anchor(permission: Permission) -> &'static str {
     }
 }
 
+/// The last definite System Audio verdict a probe reached in this process: what the far end's
+/// start gate reads. A probe that could not answer leaves it as it was.
+#[derive(Debug, Default)]
+pub(crate) struct SystemAudioVerdict(AtomicU8);
+
+impl SystemAudioVerdict {
+    const NONE: u8 = 0;
+    const GRANTED: u8 = 1;
+    const DENIED: u8 = 2;
+
+    /// Records `state` if it is definite (Granted or Denied).
+    fn record(&self, state: PermissionState) {
+        let value = match state {
+            PermissionState::Granted => Self::GRANTED,
+            PermissionState::Denied => Self::DENIED,
+            _ => return,
+        };
+        self.0.store(value, Ordering::SeqCst);
+    }
+
+    /// The last definite verdict, if any.
+    pub(crate) fn get(&self) -> Option<PermissionState> {
+        match self.0.load(Ordering::SeqCst) {
+            Self::GRANTED => Some(PermissionState::Granted),
+            Self::DENIED => Some(PermissionState::Denied),
+            _ => None,
+        }
+    }
+}
+
+/// The process-wide verdict: [`MacPermissionProbe`] writes it, the far end's start gate reads it.
+static SYSTEM_AUDIO_VERDICT: SystemAudioVerdict =
+    SystemAudioVerdict(AtomicU8::new(SystemAudioVerdict::NONE));
+
+/// The last definite System Audio verdict of any probe in this process.
+pub(crate) fn system_audio_verdict() -> Option<PermissionState> {
+    SYSTEM_AUDIO_VERDICT.get()
+}
+
+type ProbeFn = Arc<dyn Fn() -> Result<ProbeReport, PlatformError> + Send + Sync>;
+type OpenSettingsFn = Arc<dyn Fn(&str) -> Result<(), PlatformError> + Send + Sync>;
+
 /// [`PermissionProbe`] for macOS.
 pub struct MacPermissionProbe {
-    clock: MacClock,
     system_audio_asked: AtomicBool,
     /// One probe at a time; also keeps the last result for diagnostics.
     last_probe: Mutex<Option<Result<ProbeReport, PlatformError>>>,
+    probe: ProbeFn,
+    open_settings: OpenSettingsFn,
+    verdict: &'static SystemAudioVerdict,
 }
 
 impl MacPermissionProbe {
     /// A probe that treats System Audio as never asked (see the module docs).
     pub fn new(clock: MacClock) -> Self {
+        Self::with_seams(
+            Arc::new(move || tone::run(clock)),
+            Arc::new(open_settings),
+            &SYSTEM_AUDIO_VERDICT,
+        )
+    }
+
+    /// The seams tests replace: the tone probe, opening System Settings, and where the verdict is
+    /// recorded.
+    fn with_seams(
+        probe: ProbeFn,
+        open_settings: OpenSettingsFn,
+        verdict: &'static SystemAudioVerdict,
+    ) -> Self {
         Self {
-            clock,
             system_audio_asked: AtomicBool::new(false),
             last_probe: Mutex::new(None),
+            probe,
+            open_settings,
+            verdict,
         }
     }
 
@@ -156,13 +216,21 @@ impl MacPermissionProbe {
     }
 
     /// **Worker.** Runs the tone probe now, whatever has been asked, and returns what it measured.
-    /// It prompts if macOS has never asked. For the checklist binary and diagnostics.
+    /// It prompts if macOS has never asked. A Granted or Denied verdict is recorded for the far
+    /// end's start gate (a far end refuses to start after Denied); no answer changes nothing.
     pub fn probe_system_audio(&self) -> Result<ProbeReport, PlatformError> {
+        self.run_probe(true)
+    }
+
+    fn run_probe(&self, record: bool) -> Result<ProbeReport, PlatformError> {
         let mut last = self
             .last_probe
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let result = tone::run(self.clock);
+        let result = (self.probe)();
+        if let (true, Ok(report)) = (record, &result) {
+            self.verdict.record(report.verdict.permission());
+        }
         *last = Some(result.clone());
         result
     }
@@ -206,21 +274,21 @@ impl PermissionProbe for MacPermissionProbe {
             Permission::Microphone => match microphone() {
                 PermissionState::NotDetermined => prompt_for_microphone(),
                 PermissionState::Granted => Ok(()),
-                _ => open_settings(settings_anchor(permission)),
+                _ => (self.open_settings)(settings_anchor(permission)),
             },
             Permission::SystemAudio => {
                 if !self.system_audio_asked.swap(true, Ordering::Relaxed) {
                     // Starting a tap is what makes macOS ask. The probe's verdict here is not the
-                    // answer (the prompt may still be up); the shell checks again afterwards.
-                    let _ = self.probe_system_audio();
-                    return Ok(());
+                    // answer (the prompt may still be up), so it is not recorded; the shell checks
+                    // again afterwards. A probe that could not run is an error, returned.
+                    return self.run_probe(false).map(|_| ());
                 }
-                if probed_state(&self.probe_system_audio()) == PermissionState::Granted {
-                    return Ok(());
+                match self.probe_system_audio()?.verdict.permission() {
+                    PermissionState::Granted => Ok(()),
+                    _ => (self.open_settings)(settings_anchor(permission)),
                 }
-                open_settings(settings_anchor(permission))
             }
-            _ => open_settings(settings_anchor(permission)),
+            _ => (self.open_settings)(settings_anchor(permission)),
         }
     }
 }
@@ -235,7 +303,124 @@ fn granted_or_denied(granted: bool) -> PermissionState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU8;
+
     use super::*;
+    use tone::ToneVerdict;
+
+    /// What the fake probe hears next.
+    const HEARD: u8 = 0;
+    const SILENCE: u8 = 1;
+    const NO_AUDIO: u8 = 2;
+    const FAILS: u8 = 3;
+
+    fn report(verdict: ToneVerdict) -> ProbeReport {
+        ProbeReport {
+            verdict,
+            tap_callbacks: 10,
+            output_callbacks: 10,
+            samples: 100,
+            tone_fraction: 0.0,
+            peak: 0.0,
+        }
+    }
+
+    /// A probe with a scripted tone probe, a recorded settings pane, and its own verdict cell (so
+    /// tests never touch the process-wide one).
+    fn fake(asked: bool) -> (MacPermissionProbe, Arc<AtomicU8>, Arc<Mutex<Vec<String>>>) {
+        let hears = Arc::new(AtomicU8::new(HEARD));
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let (h, o) = (hears.clone(), opened.clone());
+        let probe = MacPermissionProbe::with_seams(
+            Arc::new(move || match h.load(Ordering::SeqCst) {
+                HEARD => Ok(report(ToneVerdict::Heard)),
+                SILENCE => Ok(report(ToneVerdict::Silence)),
+                NO_AUDIO => Ok(report(ToneVerdict::NoAudio)),
+                _ => Err(PlatformError::Device("no default output device".into())),
+            }),
+            Arc::new(move |anchor: &str| {
+                o.lock().unwrap().push(anchor.to_owned());
+                Ok(())
+            }),
+            Box::leak(Box::new(SystemAudioVerdict::default())),
+        )
+        .with_system_audio_asked(asked);
+        (probe, hears, opened)
+    }
+
+    /// The user revokes System Audio after granting it: with the asked flag set, `check` runs the
+    /// probe again and reads Denied. A stale "asked" never means Granted.
+    #[test]
+    fn revoking_after_a_grant_reads_denied_not_a_stale_granted() {
+        let (probe, hears, _) = fake(true);
+        assert_eq!(
+            probe.check(Permission::SystemAudio),
+            PermissionState::Granted
+        );
+        assert_eq!(probe.verdict.get(), Some(PermissionState::Granted));
+        hears.store(SILENCE, Ordering::SeqCst); // revoked in System Settings
+        assert_eq!(
+            probe.check(Permission::SystemAudio),
+            PermissionState::Denied
+        );
+        assert_eq!(probe.verdict.get(), Some(PermissionState::Denied));
+    }
+
+    /// A probe that cannot answer is Unknown, never the last Granted.
+    #[test]
+    fn a_probe_that_cannot_answer_is_never_granted() {
+        let (probe, hears, _) = fake(true);
+        assert_eq!(
+            probe.check(Permission::SystemAudio),
+            PermissionState::Granted
+        );
+        for no_answer in [NO_AUDIO, FAILS] {
+            hears.store(no_answer, Ordering::SeqCst);
+            assert_eq!(
+                probe.check(Permission::SystemAudio),
+                PermissionState::Unknown
+            );
+        }
+        // The last definite verdict stands for the far end's gate; it is not upgraded.
+        hears.store(SILENCE, Ordering::SeqCst);
+        probe.check(Permission::SystemAudio);
+        hears.store(FAILS, Ordering::SeqCst);
+        probe.check(Permission::SystemAudio);
+        assert_eq!(probe.verdict.get(), Some(PermissionState::Denied));
+    }
+
+    #[test]
+    fn request_returns_the_probe_error() {
+        let (probe, hears, opened) = fake(false);
+        hears.store(FAILS, Ordering::SeqCst);
+        assert!(matches!(
+            probe.request(Permission::SystemAudio),
+            Err(PlatformError::Device(_))
+        ));
+        assert!(
+            probe.system_audio_asked(),
+            "asked, even though the probe failed"
+        );
+        assert!(
+            probe.request(Permission::SystemAudio).is_err(),
+            "and again once asked"
+        );
+        assert!(opened.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn request_opens_settings_only_when_the_probe_says_not_granted() {
+        let (probe, hears, opened) = fake(true);
+        assert!(probe.request(Permission::SystemAudio).is_ok());
+        assert!(
+            opened.lock().unwrap().is_empty(),
+            "granted: nothing to open"
+        );
+        hears.store(SILENCE, Ordering::SeqCst);
+        assert!(probe.request(Permission::SystemAudio).is_ok());
+        assert_eq!(*opened.lock().unwrap(), ["Privacy_ScreenCapture"]);
+    }
 
     #[test]
     fn system_audio_is_never_asked_until_the_app_has_asked() {

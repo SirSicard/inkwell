@@ -589,6 +589,10 @@ pub(crate) mod fake {
         pub processes: Mutex<BTreeMap<ObjectId, FakeProcess>>,
         /// When set, listing the processes fails with this status.
         pub list_fails: Mutex<Option<i32>>,
+        /// This many further listings fail, then listing works again.
+        pub fail_next_lists: std::sync::atomic::AtomicU32,
+        /// When set, listing the processes panics (a bug in the scan, as far as a caller can tell).
+        pub list_panics: std::sync::atomic::AtomicBool,
     }
 
     const BROKEN: i32 = i32::from_be_bytes(*b"what");
@@ -632,6 +636,21 @@ pub(crate) mod fake {
 
     impl ProcessHal for FakeHal {
         fn process_objects(&self) -> Result<Vec<ObjectId>, HalError> {
+            use std::sync::atomic::Ordering;
+            assert!(
+                !self.list_panics.load(Ordering::SeqCst),
+                "fake audio server bug"
+            );
+            let transient = self
+                .fail_next_lists
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok();
+            if transient {
+                return Err(HalError {
+                    what: "fake list",
+                    status: BROKEN,
+                });
+            }
             if let Some(status) = *self.list_fails.lock().unwrap() {
                 return Err(HalError {
                     what: "fake list",

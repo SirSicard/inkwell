@@ -37,7 +37,7 @@
 //!   device, which is what the tap follows.
 //! - **No callbacks while nothing plays.** A tap-only aggregate is driven by the tap, so it calls
 //!   back only while some tapped process makes a sound. Zero callbacks on the far end is idle, not
-//!   broken ([`CaptureHealth::Idle`](super::CaptureHealth::Idle)).
+//!   broken ([`CaptureHealth::Idle`](ink_audio::CaptureHealth::Idle)).
 //! - **Process object ids, never pids.** A tap names processes by their HAL *process object* id.
 //!   A pid is the same width, so passing one compiles, runs, and taps (or excludes) some unrelated
 //!   object. [`process_objects_for_apps`] maps apps (bundle ids, and pids when known) to process
@@ -53,7 +53,8 @@ use std::sync::Arc;
 
 use ink_audio::RealtimeGuard;
 use ink_core::{
-    AppRef, AudioSink, AudioSource, Channel, FarEndTarget, PlatformError, SourceStats, StreamFormat,
+    AppRef, AudioSink, AudioSource, Channel, FarEndTarget, Permission, PermissionState,
+    PlatformError, SourceStats, StreamFormat,
 };
 use objc2::AnyThread;
 use objc2::rc::Retained;
@@ -76,8 +77,11 @@ use objc2_foundation::{NSArray, NSNumber, NSString, NSUUID};
 use super::hal::{
     self, Direction, HalError, ObjectId, ProcessHal, UNKNOWN, belongs_to_app, capture_format, check,
 };
-use super::io::{InputContext, IoCounters, IoStats, RunningIo, finish, input_proc};
+use super::io::{
+    FormatListener, InputContext, IoCounters, IoStats, RunningIo, finish, start_input,
+};
 use crate::clock::MacClock;
+use crate::permissions;
 
 /// The prefix of every aggregate device this crate creates. Private aggregates are visible to the
 /// process that made them, so device listings filter this prefix out.
@@ -275,19 +279,19 @@ impl Drop for Aggregate {
 /// is idle, and host times jump across the silence. **A denied tap delivers zeros**: check
 /// `PermissionProbe::check(SystemAudio)` before a meeting.
 pub struct MacFarEndSource {
-    // Field order is drop order: IO stops, then the aggregate goes, then the tap.
+    // Field order is drop order: IO stops, the format listener goes, then the aggregate, then the
+    // tap.
     running: Option<RunningIo<InputContext>>,
+    listener: Option<FormatListener>,
     aggregate: Aggregate,
-    #[expect(
-        dead_code,
-        reason = "held for its Drop, which destroys the tap after the aggregate"
-    )]
     tap: ProcessTap,
     format: StreamFormat,
     clock: MacClock,
     guard: RealtimeGuard,
     counters: Arc<IoCounters>,
     tapped: usize,
+    /// Whether `start` refuses after a Denied probe (false only for the probe's own tap).
+    gated: bool,
 }
 
 impl MacFarEndSource {
@@ -295,6 +299,7 @@ impl MacFarEndSource {
     pub(crate) fn open(
         scope: TapScope,
         mute: CATapMuteBehavior,
+        gated: bool,
         clock: MacClock,
         guard: RealtimeGuard,
     ) -> Result<Self, PlatformError> {
@@ -336,23 +341,11 @@ impl MacFarEndSource {
         };
         check(status, "creating the far end's aggregate device")?;
         let aggregate = Aggregate(aggregate_id);
-        // The aggregate's own input stream is what the IOProc receives, so its format is the one
-        // the blocks are labelled with. If the aggregate does not list the stream (yet), the tap's
-        // format stands in; the IOProc still refuses any buffer whose channel count differs
-        // (counted as skipped), and the pump's rate check catches a wrong rate.
-        let asbd = match hal::first_stream_format(aggregate.0, kAudioObjectPropertyScopeInput)? {
-            Some(asbd) => asbd,
-            None => hal::get(
-                tap.0,
-                kAudioTapPropertyFormat,
-                kAudioObjectPropertyScopeGlobal,
-                "reading the tap's format",
-            )?,
-        };
-        let format = capture_format(&asbd)
+        let format = far_format(aggregate.0, tap.0)
             .map_err(|problem| PlatformError::Device(format!("system audio tap: {problem}")))?;
         Ok(Self {
             running: None,
+            listener: None,
             aggregate,
             tap,
             format,
@@ -360,10 +353,11 @@ impl MacFarEndSource {
             guard,
             counters: Arc::default(),
             tapped,
+            gated,
         })
     }
 
-    /// The counters so far. **Any thread** that holds the source.
+    /// The current (or last) session's counters. **Any thread** that holds the source.
     pub fn stats(&self) -> IoStats {
         self.counters.snapshot()
     }
@@ -371,6 +365,39 @@ impl MacFarEndSource {
     /// How many process objects an app tap covers; 0 for the global tap.
     pub fn tapped_processes(&self) -> usize {
         self.tapped
+    }
+}
+
+/// The format the far end's IOProc receives: the aggregate's own input stream. If the aggregate
+/// does not list the stream (yet), the tap's format stands in; the IOProc still refuses any buffer
+/// whose channel count differs (counted as skipped), and the format watch catches a rate change.
+fn far_format(aggregate: ObjectId, tap: ObjectId) -> Result<StreamFormat, String> {
+    let asbd = match hal::first_stream_format(aggregate, kAudioObjectPropertyScopeInput)
+        .map_err(|e| e.to_string())?
+    {
+        Some(asbd) => asbd,
+        None => hal::get(
+            tap,
+            kAudioTapPropertyFormat,
+            kAudioObjectPropertyScopeGlobal,
+            "reading the tap's format",
+        )
+        .map_err(|e| e.to_string())?,
+    };
+    capture_format(&asbd).map_err(|problem| problem.to_string())
+}
+
+/// Whether a far end may start: not after a probe in this process said System Audio is denied,
+/// because a denied tap records silence that looks like a quiet meeting. `gated` is false only for
+/// the probe's own tap, which must be able to see a denial lifted.
+pub(crate) fn start_gate(
+    gated: bool,
+    verdict: Option<PermissionState>,
+) -> Result<(), PlatformError> {
+    if gated && verdict == Some(PermissionState::Denied) {
+        Err(PlatformError::PermissionDenied(Permission::SystemAudio))
+    } else {
+        Ok(())
     }
 }
 
@@ -389,28 +416,31 @@ impl AudioSource for MacFarEndSource {
                 "the far end is already started".into(),
             ));
         }
-        let context = InputContext::new(
+        start_gate(self.gated, permissions::system_audio_verdict())?;
+        let (aggregate, tap) = (self.aggregate.0, self.tap.0);
+        self.counters = Arc::default(); // each session is judged on its own
+        let (running, listener) = start_input(
+            aggregate,
+            self.format,
             sink,
             self.guard.clone(),
-            self.format,
             self.clock,
-            Arc::clone(&self.counters),
-        );
-        match RunningIo::start(self.aggregate.0, Some(input_proc), context) {
-            Ok(running) => {
-                self.running = Some(running);
-                Ok(())
-            }
-            // The sink is dropped with its context, so the ring's consumer sees it abandoned.
-            Err((_context, error)) => Err(error.into()),
-        }
+            &self.counters,
+            Arc::new(move || far_format(aggregate, tap)),
+            "the far end",
+        )?;
+        self.running = Some(running);
+        self.listener = Some(listener);
+        Ok(())
     }
 
     fn stop(&mut self) -> Result<SourceStats, PlatformError> {
         let Some(running) = self.running.take() else {
             return Ok(SourceStats::default());
         };
-        finish(running, &self.counters, "far end")
+        let result = finish(running, &self.counters, "far end", self.format.sample_rate);
+        self.listener = None;
+        result
     }
 }
 
@@ -539,5 +569,27 @@ mod tests {
         let a = AggregateSpec::tap_only("o".into(), "t".into());
         let b = AggregateSpec::tap_only("o".into(), "t".into());
         assert_ne!(a.uid, b.uid);
+    }
+
+    /// A denied tap delivers silence, so after a probe in this process said Denied the far end
+    /// refuses to start, as the mic does, rather than record a silent meeting.
+    #[test]
+    fn a_far_end_refuses_to_start_after_a_denied_probe() {
+        assert_eq!(
+            start_gate(true, Some(PermissionState::Denied)),
+            Err(PlatformError::PermissionDenied(Permission::SystemAudio))
+        );
+        assert_eq!(start_gate(true, Some(PermissionState::Granted)), Ok(()));
+        assert_eq!(
+            start_gate(true, None),
+            Ok(()),
+            "never probed: start, and let it be judged"
+        );
+    }
+
+    /// The probe's own tap is never gated, or a denial could never be seen lifted.
+    #[test]
+    fn the_probe_own_tap_is_never_gated() {
+        assert_eq!(start_gate(false, Some(PermissionState::Denied)), Ok(()));
     }
 }

@@ -16,14 +16,13 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ink_audio::{capture_ring, unguarded};
+use ink_audio::{LevelMeter, capture_ring, unguarded};
 use ink_core::{AudioSource, Clock, PermissionState, PlatformError};
 use objc2_core_audio::{CATapMuteBehavior, kAudioObjectPropertyScopeOutput};
 
 use crate::capture::hal::{self, Direction, capture_format};
 use crate::capture::{
-    LevelMeter, MacFarEndSource, ProcessHal, RunningIo, SystemHal, TapScope, ToneContext, own_pid,
-    tone_proc,
+    MacFarEndSource, ProcessHal, RunningIo, SystemHal, TapScope, ToneContext, own_pid, tone_proc,
 };
 use crate::clock::MacClock;
 
@@ -170,6 +169,7 @@ pub(crate) fn run(clock: MacClock) -> Result<ProbeReport, PlatformError> {
     let mut tap = MacFarEndSource::open(
         TapScope::Only(vec![own]),
         CATapMuteBehavior::MutedWhenTapped,
+        false, // never gated: the probe is how a denial is seen lifted
         clock,
         unguarded(),
     )?;
