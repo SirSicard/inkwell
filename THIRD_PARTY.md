@@ -21,6 +21,7 @@ checks in CI cover them. Model weights are listed in [docs/MODEL-WEIGHTS.md](doc
 | [ggml](https://github.com/ggml-org/ggml), NeMo-Speech.cpp's copy | MIT | Built with NeMo-Speech.cpp, as its own shared libraries | NeMo's submodule, commit `c03b4e2bcece5134827881af90242086daf75be5`, with NeMo's `ggml-patches/` applied. |
 | [SentencePiece](https://github.com/google/sentencepiece) by Google | Apache-2.0 | Linked by NeMo-Speech.cpp | Version 0.2.2. Its library carries its own copy of Abseil (Apache-2.0) and two BSD-3-Clause components, per SentencePiece 0.2.2's `third_party/` licences: protobuf-lite (Copyright 2008 Google Inc.) and Darts-clone (Copyright (c) 2008-2011, Susumu Yata). BSD-3-Clause requires both notices in the app's documentation: the About screen. |
 | [Abseil](https://github.com/abseil/abseil-cpp) by Google | Apache-2.0 | Linked by NeMo-Speech.cpp | Version 20260817.0. |
+| [aec3](https://github.com/RubyBit/aec3-rs) 0.4.0, a Rust port of WebRTC AEC3 by Angelos-Ermis Mangos | MIT OR BSD-3-Clause | `core/crates/ink-echo` (Cargo dependency) | Listed here although `cargo deny` sees it: the WebRTC-derived parts are BSD-3-Clause ("Copyright (c) 2011, The WebRTC project authors"), and that notice and Google's WebRTC patent grant (the crate's `PATENT` file) must ship in the app's About screen. |
 
 ## Rules
 
