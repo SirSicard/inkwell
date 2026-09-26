@@ -251,9 +251,12 @@ pub const MIN_INLIERS: usize = 6;
 /// inliers are already most of the candidates (67 of 72 with echo); a session of an hour has
 /// thousands of candidates, among which six can line up by chance.
 pub const MIN_INLIER_SHARE: f64 = 0.25;
-/// At most this many candidates propose lines, spread evenly over the session, so the fit stays
-/// quick for an hour of windows. Every candidate still votes. S0.3's recordings had fewer.
+/// At most this many candidates propose lines, spread evenly over the session.
 pub const MAX_PROPOSERS: usize = 256;
+/// At most this many candidates vote on which proposed line wins, spread evenly over the
+/// session. Every candidate still counts for the refinement, the inliers and the share. S0.3's
+/// recordings (72 to 74 candidates) sit under both bounds, so they are fitted exactly as before.
+pub const MAX_VOTERS: usize = 1_024;
 
 /// The consensus fit of `lag = a + b·t` over the candidate windows.
 ///
@@ -261,13 +264,31 @@ pub const MAX_PROPOSERS: usize = 256;
 /// reached PNR 19 while real double-talk windows sat near 9. What separates them is agreement:
 /// echo windows fall on one line (residual ~0.01 ms), chance peaks scatter by hundreds of ms. So
 /// every pair of proposing windows at least 5 s apart (and every single one, at zero slope)
-/// proposes a line with |drift| ≤ 500 ppm; the line with the most candidates within ±1 ms wins
-/// (ties go to the larger PNR sum); least squares refines it on its inliers, three times. Under
-/// a 10 s inlier span the drift cannot be estimated and the fit is delay only (the median lag).
+/// proposes a line with |drift| ≤ 500 ppm; the line with the most voting candidates within
+/// ±1 ms wins (ties go to the larger PNR sum); least squares refines it on its inliers, three
+/// times. Under a 10 s inlier span the drift cannot be estimated and the fit is delay only (the
+/// median lag).
 ///
 /// Returns the fit and which windows are its inliers, or `None` when it falls short of
 /// [`MIN_INLIERS`] or [`MIN_INLIER_SHARE`].
+///
+/// # Cost and cadence
+///
+/// The search scores up to [`MAX_PROPOSERS`]² / 2 lines against up to [`MAX_VOTERS`]
+/// candidates, then refines on all of them: under 1 ms for S0.3's 90 s recordings, 20 ms
+/// for an hour of windows in a release build, several times that in a debug one. It is meant to
+/// run a few times a minute during a meeting (the live pipeline throttles
+/// [`PathFinder::estimate`](crate::PathFinder::estimate)) and once over the whole recording at
+/// the end, never per window.
 pub fn consensus_fit(windows: &[WindowEstimate]) -> (Option<LineFit>, Vec<bool>) {
+    consensus_fit_with(windows, MAX_VOTERS)
+}
+
+/// [`consensus_fit`] with `max_voters` in place of [`MAX_VOTERS`].
+pub(crate) fn consensus_fit_with(
+    windows: &[WindowEstimate],
+    max_voters: usize,
+) -> (Option<LineFit>, Vec<bool>) {
     let tol = 1.0e-3 * RATE;
     let max_slope = 500e-6 * RATE;
     let cand: Vec<usize> = (0..windows.len())
@@ -285,8 +306,14 @@ pub fn consensus_fit(windows: &[WindowEstimate]) -> (Option<LineFit>, Vec<bool>)
             .filter(|&i| (windows[i].lag - (a + b * windows[i].center_s)).abs() <= tol)
             .collect()
     };
+    let voters: Vec<usize> = cand
+        .iter()
+        .copied()
+        .step_by(cand.len().div_ceil(max_voters.max(1)))
+        .collect();
     let score = |a: f64, b: f64| -> (usize, f64) {
-        cand.iter()
+        voters
+            .iter()
             .filter(|&&i| (windows[i].lag - (a + b * windows[i].center_s)).abs() <= tol)
             .fold((0, 0.0), |(n, w), &i| (n + 1, w + windows[i].pnr))
     };
@@ -486,6 +513,44 @@ mod tests {
             let est = g.analyze(&far[..w], &far[..w], 1.0);
             assert!(est.lag.is_finite(), "{params:?}");
         }
+    }
+
+    /// An hour of windows: a path on three quarters of them, chance peaks on the rest.
+    fn an_hour() -> Vec<WindowEstimate> {
+        let mut s = 1u64;
+        (0..3_600)
+            .map(|i| {
+                s = s
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let t = f64::from(i) + 1.0;
+                let chance = (s >> 40).is_multiple_of(4);
+                let lag = if chance {
+                    ((s >> 20) % 16_000) as f64 - 8_000.0
+                } else {
+                    736.0 + 0.03 * t
+                };
+                est(t, lag)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bounding_the_voters_finds_the_same_line_on_an_hour() {
+        let ws = an_hour();
+        let (bounded, used_b) = consensus_fit(&ws);
+        let (every, used_e) = consensus_fit_with(&ws, usize::MAX);
+        let (b, e) = (bounded.expect("a path"), every.expect("a path"));
+        assert_eq!(b, e);
+        assert_eq!(used_b, used_e);
+        assert!(b.inliers > 2_500, "{b:?}");
+    }
+
+    #[test]
+    fn under_the_bound_every_candidate_votes() {
+        // Fewer candidates than MAX_VOTERS (every S0.3 recording): the bound changes nothing.
+        let ws: Vec<WindowEstimate> = an_hour().into_iter().take(90).collect();
+        assert_eq!(consensus_fit(&ws), consensus_fit_with(&ws, usize::MAX));
     }
 
     fn est(center_s: f64, lag: f64) -> WindowEstimate {

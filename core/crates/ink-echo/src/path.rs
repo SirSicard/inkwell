@@ -182,7 +182,9 @@ impl PathFinder {
         &self.windows
     }
 
-    /// The consensus over every window so far.
+    /// The consensus over every window so far. It costs up to tens of milliseconds for an hour
+    /// of windows (see [`consensus_fit`]): call it a few times a minute while a meeting runs,
+    /// and once at the end, not after every push.
     pub fn estimate(&self) -> PathReport {
         let candidates = self.windows.iter().filter(|w| w.candidate).count();
         let (fit, inliers) = consensus_fit(&self.windows);

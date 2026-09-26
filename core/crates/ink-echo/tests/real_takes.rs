@@ -164,6 +164,12 @@ fn the_speakers_take_reproduces_the_measured_path_and_erle() {
     let report = find(&mic, &far);
     eprintln!("speakers: {report}");
     let path = report.path.expect("S0.3 found a path here");
+    // The same windows and the same consensus as S0.3: 67 of 72 candidates, 81 windows.
+    assert_eq!(
+        (report.inliers, report.candidates, report.windows),
+        (67, 72, 81),
+        "{report}"
+    );
     assert!((path.delay_ms() - 46.0).abs() < 0.5, "{report}");
     assert!((path.drift_ppm() - 1.8).abs() < 1.5, "{report}");
 
@@ -231,6 +237,11 @@ fn the_double_talk_mix_keeps_the_near_end_on_the_linear_output() {
     let (near, _, _) = load(&take, "mic", Some(&mix_dir.join("near.f32")));
     let report = find(&mic, &far);
     eprintln!("mix: {report}");
+    assert_eq!(
+        (report.inliers, report.candidates, report.windows),
+        (64, 72, 81),
+        "{report}"
+    );
     let path = report.path.expect("S0.3 found a path here");
     let out = cancel(&mic, &far, path);
     let n = out.mic.len().min(near.len());
