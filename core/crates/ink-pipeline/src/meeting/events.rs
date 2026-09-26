@@ -71,6 +71,13 @@ pub enum MeetingWarning {
         /// Events counted.
         count: u64,
     },
+    /// No signal from the far end for a minute or more while the mic was audible: maybe the wrong
+    /// app is tapped, or its audio goes elsewhere; maybe only a presentation. A soft warning, once
+    /// per quiet stretch ([`watchdog`](crate::meeting::watchdog)).
+    FarEndQuietWhileYouSpeak {
+        /// How long the far end had been without signal, ms.
+        quiet_ms: u64,
+    },
     /// The live engine has fallen behind real time.
     LiveEngineStalled {
         /// Which side.
@@ -128,6 +135,26 @@ pub enum MeetingWarning {
         /// Time found as speech, ms.
         speech_ms: u64,
     },
+    /// A side captured audio, and every sample of it is exactly zero: no data at all (a denied
+    /// capture that still called back, or input muted to zero). A quiet side is not this: its
+    /// samples are small, not zero.
+    CapturedOnlyZeros {
+        /// Which side.
+        channel: Channel,
+    },
+    /// The mic was a Bluetooth headset mic, and every sample it captured is exactly zero. Such a
+    /// mic gates to zeros while its user is silent, so this may be someone who never spoke; it is
+    /// also what a headset mic that never worked looks like. Softer than
+    /// [`CapturedOnlyZeros`](Self::CapturedOnlyZeros), which says no data was captured at all.
+    BluetoothMicOnlyZeros,
+    /// A side's recorded audio could not even be listed (its directory is gone, or unreadable).
+    /// The final pass stops before writing anything, and returns the error too.
+    AudioUnlisted {
+        /// Which side.
+        channel: Channel,
+        /// Why, naming the directory, never audio.
+        reason: String,
+    },
     /// A side has no recorded audio at all: no chunk was ever written for it (a device that never
     /// delivered, a permission denied, a tap that never started). Silence would still have chunks.
     NothingCaptured {
@@ -167,6 +194,9 @@ pub struct ChannelPass {
     pub chunks: usize,
     /// Audio in the readable chunks (an import: in the file), ms. Zero: nothing was captured.
     pub captured_ms: u64,
+    /// Live finals saved without the speech check, because too many waited on the VAD at once
+    /// ([`MeetingWarning::LiveFinalsBacklog`]).
+    pub backlogged_finals: u64,
     /// Of that, time above the audible floor
     /// ([`AUDIBLE_FLOOR_DBFS`](crate::speech::AUDIBLE_FLOOR_DBFS)), measured before any gain:
     /// what [`speech_ms`](Self::speech_ms) is checked against.
@@ -227,6 +257,15 @@ pub enum MeetingEvent {
         channel: Channel,
         /// The state.
         state: VoiceDetection,
+    },
+    /// What a side is delivering, as the silent-channel watchdog judges it
+    /// ([`watchdog`](crate::meeting::watchdog)). Sent when it changes: a side that stopped, or
+    /// gives only digital zeros, within the watchdog's limit; and back to `Ok` when it recovers.
+    SideState {
+        /// Which side.
+        channel: Channel,
+        /// Its state.
+        state: crate::meeting::watchdog::SideState,
     },
     /// Provisional live text. Never saved (architecture rule 4); each replaces the last.
     Partial {

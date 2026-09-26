@@ -1018,11 +1018,121 @@ fn the_queue_of_unchecked_live_finals_is_capped() {
     );
     // While live, the 44 pushed out were saved unchecked, per side.
     assert_eq!(rig.store.segments(&record).unwrap().len(), 88);
-    let _ = rig.stop();
+    let ended = rig.stop();
     assert_eq!(
         rig.store.segments(&record).unwrap().len(),
         2 * (MAX_PENDING_FINALS + 44),
         "none lost"
+    );
+    // Re-check follow-up: how many were saved unchecked travels with each side's outcome.
+    let outcome = ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
+    assert_eq!(outcome.mic.backlogged_finals, 44);
+    assert_eq!(outcome.far.backlogged_finals, 44);
+}
+
+/// Re-check follow-up: a side that captured audio made only of exact zeros (a denied capture that
+/// still called back) is flagged. A quiet side is not: its samples are not zero.
+#[test]
+fn a_side_that_captured_only_zeros_is_flagged_and_a_quiet_one_is_not() {
+    let talk = join(&[silence(0.5), speech(2.0, -30.0, 151), silence(5.5)]);
+    let mut rig = RigBuilder::default().build();
+    rig.feed(&talk, &silence(8.0));
+    let outcome = rig.finish().unwrap();
+    assert_eq!(outcome.far.captured_ms, 8_000);
+    assert!(rig.warnings().contains(&MeetingWarning::CapturedOnlyZeros {
+        channel: Channel::Far
+    }));
+
+    let mut rig = RigBuilder::default().build();
+    let room: Vec<f32> = ink_audio::synth::noise(8.0, -70.0, 152);
+    rig.feed(&talk, &room);
+    rig.finish().unwrap();
+    assert!(
+        !rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::CapturedOnlyZeros { .. }))
+    );
+}
+
+/// Review: a Bluetooth headset mic gates to zeros while its user is silent, so a whole meeting of
+/// zeros from one is not "a denied capture": it gets the softer warning that says so.
+#[test]
+fn a_bluetooth_mic_of_only_zeros_gets_the_softer_warning() {
+    let far = join(&[silence(1.0), speech(3.0, -30.0, 153), silence(4.0)]);
+    let mut rig = RigBuilder {
+        routing: ink_pipeline::meeting::watchdog::Routing {
+            mic: ink_core::Transport::Bluetooth,
+            ..Default::default()
+        },
+        ..RigBuilder::default()
+    }
+    .build();
+    rig.feed(&silence(8.0), &far);
+    rig.finish().unwrap();
+    let warnings = rig.warnings();
+    assert!(warnings.contains(&MeetingWarning::BluetoothMicOnlyZeros));
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::CapturedOnlyZeros { .. }))
+    );
+}
+
+/// Re-check follow-up: when a side's chunks cannot even be listed, the pass says so as an event
+/// before it returns the error (and nothing is written).
+#[test]
+fn a_chunk_listing_that_fails_is_reported() {
+    let mut rig = RigBuilder::default().build();
+    let record = rig.chain().record().clone();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    let ended = rig.stop();
+    std::fs::remove_dir_all(rig.chunks.dir()).unwrap();
+    assert!(matches!(
+        ended.finalize(&rig.chunks, &CancelToken::new()),
+        Err(ink_pipeline::meeting::FinalizeError::Chunks(_))
+    ));
+    assert!(rig.warnings().iter().any(|w| matches!(
+        w,
+        MeetingWarning::AudioUnlisted {
+            channel: Channel::Mic,
+            ..
+        }
+    )));
+    assert_eq!(rig.store.record(&record).unwrap().unwrap().revision, 1);
+}
+
+/// Re-check follow-up: the revision is unknown (`None`) only when the live transcript was kept
+/// and the record could not be read; both happen here, and the pass still finishes.
+#[test]
+fn the_revision_is_unknown_when_the_record_is_unreadable_and_the_live_one_is_kept() {
+    let flaky = Arc::new(FlakyStore::default());
+    let answer: Answer = Arc::new(|channel, n, audio| match channel {
+        Channel::Mic => Ok(words("hm", audio.len())),
+        Channel::Far => numbered()(channel, n, audio),
+    });
+    let mut rig = RigBuilder {
+        answer,
+        store: Some(flaky.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    let ended = rig.stop();
+    flaky.fail(&["record"]);
+    let outcome = ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
+    assert!(!outcome.superseded);
+    assert_eq!(outcome.revision, None);
+    let events = rig.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, MeetingEvent::KeptLive(KeptLive::Refused(_))))
+    );
+    assert_eq!(
+        events.last(),
+        Some(&MeetingEvent::Finished { revision: None })
     );
 }
 

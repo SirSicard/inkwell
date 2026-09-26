@@ -389,6 +389,11 @@ pub struct RigBuilder {
     pub title: Option<String>,
     /// A live engine in place of the rig's `Onsets`.
     pub live_engine: Option<Arc<dyn StreamingEngine>>,
+    /// The capture's routing, for the watchdog.
+    pub routing: ink_pipeline::meeting::watchdog::Routing,
+    /// A mock clock that moves 10 ms with every 10 ms fed (the default clock stands still, so
+    /// the watchdog never sees time pass).
+    pub moving_clock: bool,
 }
 
 impl Default for RigBuilder {
@@ -405,6 +410,8 @@ impl Default for RigBuilder {
             far_format: StreamFormat::CANONICAL,
             title: Some("Weekly sync".into()),
             live_engine: None,
+            routing: Default::default(),
+            moving_clock: false,
         }
     }
 }
@@ -427,6 +434,8 @@ pub struct Rig {
     pub issues: Vec<(Channel, CaptureIssue)>,
     /// Frames fed per side, in the side's own format.
     frames: [u64; 2],
+    /// The moving clock, when the rig has one.
+    pub clock: Option<Arc<MockClock>>,
 }
 
 impl RigBuilder {
@@ -435,10 +444,14 @@ impl RigBuilder {
         let chunks = ChunkStore::open(dir.path().join("record")).unwrap();
         let mem = Arc::new(MemStore::new());
         let store: Arc<dyn Store> = self.store.clone().unwrap_or_else(|| mem.clone());
-        let clock: Arc<dyn Clock> = self
-            .clock
-            .clone()
-            .unwrap_or_else(|| Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)));
+        let moving = self
+            .moving_clock
+            .then(|| Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)));
+        let clock: Arc<dyn Clock> = match (&self.clock, &moving) {
+            (Some(clock), _) => clock.clone(),
+            (None, Some(moving)) => moving.clone(),
+            (None, None) => Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)),
+        };
         let engine = Final::new(self.answer.clone());
         let live = Onsets::new();
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -465,6 +478,7 @@ impl RigBuilder {
                 title: self.title.clone(),
                 source_app: Some("com.example.meet".into()),
                 audio_dir: Some("record".into()),
+                routing: self.routing,
             },
         )
         .unwrap();
@@ -493,6 +507,7 @@ impl RigBuilder {
             events,
             issues: Vec::new(),
             frames: [0, 0],
+            clock: moving,
         }
     }
 }
@@ -563,7 +578,20 @@ impl Rig {
         for piece in signal.chunks(BLOCK) {
             let device = to_device(piece, format);
             self.push_block(channel, &device);
+            self.advance(10_000_000);
         }
+    }
+
+    /// Moves the moving clock on (nothing without one).
+    pub fn advance(&mut self, ns: u64) {
+        if let Some(clock) = &self.clock {
+            clock.advance_ns(ns);
+        }
+    }
+
+    /// Lets the chain judge its sides with no audio arriving, as its owner does at its deadline.
+    pub fn tick(&mut self) {
+        self.chain().tick();
     }
 
     /// Feeds two 16 kHz mono signals side by side in 10 ms blocks, converted to each side's format
@@ -584,6 +612,7 @@ impl Rig {
                 let device = to_device(&piece, format);
                 self.push_block(channel, &device);
             }
+            self.advance(10_000_000);
             at = end;
         }
     }

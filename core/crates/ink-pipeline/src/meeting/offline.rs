@@ -31,7 +31,7 @@
 
 use std::collections::VecDeque;
 
-use ink_audio::{ChunkInfo, ChunkStore, Downmix, StreamResampler, WindowError};
+use ink_audio::{ChunkInfo, ChunkStore, Downmix, LevelMeter, StreamResampler, WindowError};
 use ink_core::{
     CancelToken, Channel, DiarizeInput, EngineError, MAX_DIARIZE_WINDOW, OfflineEngine, Segment,
     SpeakerTurn, StreamFormat, TranscribeOptions,
@@ -81,6 +81,9 @@ pub(crate) struct SideRead {
     pub audible_ms: u64,
     /// Time the VAD found as speech, ms ([`SpeechPass::speech_ms`]).
     pub speech_ms: u64,
+    /// Every sample the readable chunks hold is exactly zero, and there was at least one: the
+    /// side captured no data at all (a denied capture that still called back).
+    pub only_zeros: bool,
 }
 
 /// Zeros fed per push while filling a gap.
@@ -110,6 +113,8 @@ pub(crate) struct SideReader<'a> {
     out: Vec<f32>,
     done: bool,
     read: SideRead,
+    /// Every sample decoded, as stored: for telling a side of exact zeros from a quiet one.
+    stored: LevelMeter,
 }
 
 impl<'a> SideReader<'a> {
@@ -132,6 +137,7 @@ impl<'a> SideReader<'a> {
             skipped: list.unreadable.len(),
             audible_ms: 0,
             speech_ms: 0,
+            only_zeros: false,
         };
         Ok(Self {
             audio,
@@ -148,6 +154,7 @@ impl<'a> SideReader<'a> {
             out: Vec::new(),
             done: false,
             read,
+            stored: LevelMeter::new(),
         })
     }
 
@@ -169,6 +176,7 @@ impl<'a> SideReader<'a> {
         SideRead {
             audible_ms: self.pass.audible_ms(),
             speech_ms: self.pass.speech_ms(),
+            only_zeros: self.stored.all_zero(),
             ..self.read
         }
     }
@@ -196,6 +204,7 @@ impl<'a> SideReader<'a> {
                 return self.end_run();
             }
         };
+        self.stored.add(&data);
         let continues = self.run.as_ref().is_some_and(|(format, _, next)| {
             !chunk.after_gap && *format == chunk.format && *next == chunk.index
         });
@@ -417,6 +426,7 @@ pub(crate) fn report(channel: Channel) -> ChannelPass {
         chunks: 0,
         captured_ms: 0,
         audible_ms: 0,
+        backlogged_finals: 0,
         regions: 0,
         empty_regions: 0,
         failed_regions: 0,

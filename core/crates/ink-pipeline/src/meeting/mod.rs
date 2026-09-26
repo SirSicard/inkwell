@@ -33,6 +33,7 @@ pub mod events;
 mod live;
 pub(crate) mod offline;
 pub mod timeline;
+pub mod watchdog;
 
 pub use live::MAX_PENDING_FINALS;
 
@@ -57,6 +58,7 @@ use self::diarize::{rule5, to_meeting};
 use self::events::{KeptLive, MeetingEvent, MeetingWarning, Phase};
 use self::live::{LiveChannel, Settled};
 use self::offline::{Pass, RegionWindows, SideRead, SideReader, Stop};
+use self::watchdog::{Routing, SideState, Watch, Watchdog};
 use crate::capture::SideSummary;
 use crate::redact::Spoken;
 use crate::speech::{RegionConfig, SpeechPass, VadSource, little_speech_heard};
@@ -102,6 +104,8 @@ pub struct MeetingStart {
     pub source_app: Option<String>,
     /// Where its chunks are written, relative to the data directory.
     pub audio_dir: Option<String>,
+    /// How the capture is routed, for the silent-channel watchdog ([`watchdog`]).
+    pub routing: Routing,
 }
 
 /// A live meeting. See the module docs.
@@ -110,6 +114,7 @@ pub struct MeetingChain {
     mic: LiveChannel,
     far: LiveChannel,
     asr: Receiver<(Channel, AsrEvent)>,
+    watchdog: Watchdog,
 }
 
 /// What a meeting keeps from start to end.
@@ -123,6 +128,11 @@ struct Core {
     t0_ns: u64,
     /// What the pump reported writing for each side (mic, far).
     written: [Option<SideSummary>; 2],
+    /// Live finals each side saved unchecked (mic, far).
+    backlogged: [u64; 2],
+    /// Whether the mic was a Bluetooth headset mic at any point: its zeros can be its user's
+    /// silence.
+    mic_bluetooth: bool,
     /// Live events that arrived after the meeting stopped.
     late: Arc<Late>,
 }
@@ -189,6 +199,8 @@ impl MeetingChain {
             started_unix_ms,
             t0_ns,
             written: [None, None],
+            backlogged: [0, 0],
+            mic_bluetooth: start.routing.mic == ink_core::Transport::Bluetooth,
             late: Arc::default(),
         };
         let (tx, asr) = mpsc::channel();
@@ -236,6 +248,7 @@ impl MeetingChain {
             mic,
             far,
             asr,
+            watchdog: Watchdog::new(start.routing, t0_ns),
         })
     }
 
@@ -274,6 +287,47 @@ impl MeetingChain {
         let events = self.core.events.clone();
         self.side(channel).push(samples, host_time_ns, &*events);
         self.collect(false);
+        let now = self.core.services.clock.now_ns();
+        for watch in self.watchdog.observe(channel, samples, now) {
+            self.watched(watch);
+        }
+    }
+
+    /// Judges both sides with no audio arriving: the silent-channel watchdog. The owning thread
+    /// calls it when it wakes at [`deadline_ns`](Self::deadline_ns) (the chain has no timer; S1.7
+    /// wires this into the worker's wait, as the dictation worker does with its tail).
+    pub fn tick(&mut self) {
+        let now = self.core.services.clock.now_ns();
+        for watch in self.watchdog.check(now) {
+            self.watched(watch);
+        }
+    }
+
+    /// When [`tick`](Self::tick) should next run, as host time, if no audio arrives before.
+    pub fn deadline_ns(&self) -> Option<u64> {
+        self.watchdog.deadline_ns()
+    }
+
+    /// The capture's routing changed (a device switched, the headset-mic setting).
+    pub fn set_routing(&mut self, routing: Routing) {
+        self.core.mic_bluetooth |= routing.mic == ink_core::Transport::Bluetooth;
+        self.watchdog.set_routing(routing);
+    }
+
+    fn watched(&self, watch: Watch) {
+        match watch {
+            Watch::State { channel, state } => {
+                if state != SideState::Ok {
+                    log::warn!("meeting: the {channel:?} side is {state:?}");
+                }
+                self.core.emit(MeetingEvent::SideState { channel, state });
+            }
+            Watch::FarQuietWhileYouSpeak { quiet_ms } => {
+                log::info!("meeting: no far-end audio for {quiet_ms} ms while the mic is audible");
+                self.core
+                    .warn(MeetingWarning::FarEndQuietWhileYouSpeak { quiet_ms });
+            }
+        }
     }
 
     /// What the pump wrote for one side ([`SideCapture::finish`](crate::capture::SideCapture::finish)).
@@ -361,6 +415,7 @@ impl MeetingChain {
         self.collect(true);
         // From here, a live event is late: every stream has finished. What raced in before the
         // close is counted too.
+        self.core.backlogged = [self.mic.backlogged(), self.far.backlogged()];
         self.core.late.closed.store(true, Ordering::Release);
         while self.asr.try_recv().is_ok() {
             self.core.late.count.fetch_add(1, Ordering::Relaxed);
@@ -587,6 +642,21 @@ impl EndedMeeting {
             self.core.written[usize::from(channel == Channel::Far)].map(|w| w.chunks);
         report.chunks = read.chunks;
         report.captured_ms = read.captured_ms;
+        report.backlogged_finals = self.core.backlogged[usize::from(channel == Channel::Far)];
+        if read.only_zeros {
+            log::warn!("meeting final pass: every sample of the {channel:?} side is zero");
+            // A Bluetooth headset mic gates to zeros while its user is silent, so a meeting of its
+            // zeros may be a listener who never spoke: the softer warning, not "a denied capture".
+            // Not suppressed: it is also what a headset mic that never worked looks like, and a
+            // whole meeting of it is worth a word (the live watchdog, judging 10 s at a time,
+            // rightly says nothing).
+            if channel == Channel::Mic && self.core.mic_bluetooth {
+                self.core.warn(MeetingWarning::BluetoothMicOnlyZeros);
+            } else {
+                self.core
+                    .warn(MeetingWarning::CapturedOnlyZeros { channel });
+            }
+        }
         report.audible_ms = read.audible_ms;
         report.speech_ms = read.speech_ms;
         if little_speech_heard(read.audible_ms, read.speech_ms) {
@@ -619,7 +689,20 @@ impl EndedMeeting {
         let (vad, error) = core.vad.open();
         let pass = SpeechPass::new(vad, core.settings.vad, core.settings.regions)
             .map_err(FinalizeError::Regions)?;
-        let reader = SideReader::open(audio, channel, core.t0_ns, pass)?;
+        let reader = match SideReader::open(audio, channel, core.t0_ns, pass) {
+            Ok(reader) => reader,
+            Err(Stop::Chunks(e)) => {
+                log::warn!(
+                    "meeting final pass: the {channel:?} side's chunks cannot be listed: {e}"
+                );
+                core.warn(MeetingWarning::AudioUnlisted {
+                    channel,
+                    reason: e.to_string(),
+                });
+                return Err(FinalizeError::Chunks(e));
+            }
+            Err(stop) => return Err(stop.into()),
+        };
         Ok((reader, error))
     }
 
