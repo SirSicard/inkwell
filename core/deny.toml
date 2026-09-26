@@ -17,7 +17,8 @@ exceptions = [
   # unicode-ident's Unicode tables are Unicode-3.0, a permissive data licence. It arrives with every
   # proc-macro dependency. Crate-scoped, not added to `allow`.
   { allow = ["Unicode-3.0"], crate = "unicode-ident" },
-  # Test-only (a dev-dependency of ink-audio): proves the realtime capture path never allocates (I4).
+  # Test-only (a dev-dependency of ink-audio and ink-platform-mac): proves the realtime capture path
+  # and the Core Audio IOProcs never allocate (I4).
   # BSD-1-Clause is more permissive than BSD-2; approved by the maintainer on 2026-09-26. Never ships.
   { allow = ["BSD-1-Clause"], crate = "assert_no_alloc" },
 ]

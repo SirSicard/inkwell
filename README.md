@@ -61,9 +61,9 @@ A mode bundles a writing style, speech cleanup and AI polish, and switches itsel
 
 Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases). macOS builds are signed with a Developer ID and notarized by Apple, so they open normally. Windows is not signed yet, so SmartScreen still warns there.
 
-### macOS (Apple Silicon, primary platform)
+### macOS (Apple Silicon, primary platform; Intel supported)
 
-1. Download the `.dmg`, drag Inkwell to Applications, open it. No security warning to click past: the app is signed and notarized.
+1. Download the `.dmg` for your Mac (`aarch64` for Apple Silicon, `x64` for Intel), drag Inkwell to Applications, open it. No security warning to click past: the app is signed and notarized.
 2. Grant **Microphone** access when prompted (System Settings > Privacy & Security > Microphone).
 3. Grant **Accessibility** access (System Settings > Privacy & Security > Accessibility). Inkwell types the result into the focused app with a synthetic paste, which macOS blocks until this is granted. Without it, transcription works but nothing appears.
 
@@ -137,7 +137,7 @@ Voice editing and AI polish are the only features that need one. Groq has a free
   <img src="docs/media/inkwell-ai.png" alt="The AI tab, showing the API key field with Groq selected and marked as a free key" width="900">
 </picture>
 
-Your key is stored in the operating system keyring, macOS Keychain or the Windows Credential Manager, never in a config file in plain text. It is sent directly from your machine to the provider you chose. There is no server belonging to this project in the path.
+Your key is stored in the operating system keyring, macOS Keychain, the Windows Credential Manager or the Secret Service on Linux, never in a config file in plain text. It is sent directly from your machine to the provider you chose. There is no server belonging to this project in the path.
 
 > [!IMPORTANT]
 > Dictation never needs a key and never leaves your machine. This is only for the two features that rewrite text. If you skip this section entirely, everything else still works.
@@ -182,7 +182,7 @@ Rust + [Tauri v2](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sh
 
 ## Requirements
 
-- macOS on Apple Silicon, Windows 10/11, or a recent Linux desktop
+- macOS on Apple Silicon or Intel, Windows 10/11, or a recent Linux desktop
 - 2 GB free RAM with Parakeet V3, less with the small models
 - Disk: about 50 MB for the app plus the model you choose (240 MB to 940 MB)
 - Any microphone
