@@ -40,7 +40,7 @@ export const APP_VERSION = "0.2.9";
 
 /** Author. */
 export const AUTHOR_NAME = "Mattias Hjemgaard";
-export const AUTHOR_URL = "https://mattiasherzig.com";
+export const AUTHOR_URL = "https://github.com/SirSicard";
 
 /** Upstream projects we lean on, credited in the footer. */
 export const SHERPA_ONNX_URL = "https://github.com/k2-fsa/sherpa-onnx";
