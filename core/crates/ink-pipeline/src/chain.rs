@@ -187,7 +187,11 @@ impl Drop for HalfSaved<'_> {
             self.store.delete_record(id)
         }));
         match deleted {
-            Ok(Ok(())) => {}
+            // Logged every time: it should only follow a failed or interrupted save, and a line here
+            // is how a record removed in error would ever be noticed.
+            Ok(Ok(())) => {
+                log::warn!("dictation: a half-saved record was removed after an unfinished save")
+            }
             Ok(Err(e)) => log::warn!("dictation: a half-saved record could not be removed: {e}"),
             Err(_) => log::warn!("dictation: removing a half-saved record panicked"),
         }
