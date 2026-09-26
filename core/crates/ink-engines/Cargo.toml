@@ -8,5 +8,19 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+default = ["http"]
+# The real HTTP transport for the downloader. Off, the crate still builds and every test runs:
+# tests use an in-memory fetcher.
+http = ["dep:ureq"]
+
 [dependencies]
 ink-core.workspace = true
+# Model files are checked against the registry's sha256 before they are moved into place.
+sha2 = "0.10.9"
+# One HTTP stack for the whole core: ureq 2 with the OS's TLS (native-tls), no rustls, so no
+# webpki-roots.
+ureq = { version = "2.12.1", default-features = false, features = ["native-tls"], optional = true }
+
+[dev-dependencies]
+ink-core = { workspace = true, features = ["mock"] }
