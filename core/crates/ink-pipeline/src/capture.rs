@@ -22,7 +22,8 @@
 //!
 //! **Pump**, every method: bounded work per call, never waiting on an engine, the store or the
 //! chain. Blocks for the chain are handed over by value, so the caller queues them to the chain's
-//! thread.
+//! thread. That queue, and its bound (what the pump does when the chain falls behind), belong to
+//! the C ABI's wiring of the threads (S1.7), not to this module.
 
 use std::fmt;
 

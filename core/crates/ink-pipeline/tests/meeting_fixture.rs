@@ -7,6 +7,13 @@
 //! the engines and diarizer are mocks. A real VAD is tested on this audio, never on synthetic
 //! speech: the Silero binding scores every synthetic speech fixture as "no speech". That test
 //! needs the Silero binding (not in this crate's tree yet); it belongs here, `#[ignore]`d.
+//!
+//! **What the diarization assertions prove, and what they do not.** The diarizer here is
+//! `MockDiarizer`: it ignores the audio and returns the same scripted turns every time. So these
+//! tests prove the plumbing around diarization: only the far end reaches the diarizer, rule 5 is
+//! applied to its turns, far regions are cut where the turns change speaker, and each segment gets
+//! the speaker holding most of it. They prove nothing about whether a diarizer finds the three
+//! people who actually speak in this excerpt: that takes the real diarizer, in an ignored test.
 
 mod meeting_rig;
 
@@ -130,8 +137,8 @@ fn assert_monotonic(segments: &[Segment]) {
 }
 
 /// The step's check: replayed through the whole chain, the fixture gives revision 2, every
-/// segment on the side it was captured on, and times in order; the far end is diarized and its
-/// speakers kept (three substantial clusters).
+/// segment on the side it was captured on, and times in order. The far end goes to the diarizer
+/// (a mock with scripted turns: see the module docs) and its labels come through rule 5.
 #[test]
 fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
     let clock = Arc::new(MockClock::new(T0_NS, T0_UNIX_MS));
@@ -140,7 +147,8 @@ fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
     let store = Arc::new(MemStore::new());
     let engine = Final::new(numbered());
     let live = Onsets::new();
-    // Three speakers over the far end's speech, end to end.
+    // Scripted turns, not a diarization of this audio: three speakers over the far end's speech,
+    // end to end.
     let diarizer = diarizer(&[
         ("spk0", 0, 5_000),
         ("spk1", 5_000, 10_000),
@@ -207,7 +215,7 @@ fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
         assert!(s.text.starts_with(side), "{s:?}");
     }
     assert_monotonic(&finals);
-    // You were never diarized; they were, and more than one of them spoke.
+    // You never reached the diarizer; the far end did, and its scripted speakers came through.
     assert!(
         finals
             .iter()

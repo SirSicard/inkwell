@@ -530,10 +530,11 @@ fn two_far_speakers() -> (Vec<f32>, Vec<f32>) {
     (mic, far)
 }
 
-/// Rule 5: only the far end is diarized, and with two substantial clusters the far segments are
-/// labelled, each engine call holding one speaker.
+/// Rule 5's plumbing, with a mock diarizer's scripted turns: only the far end reaches the
+/// diarizer, and with two substantial clusters the far segments are labelled, each engine call
+/// holding one speaker. (Whether a real diarizer finds the right turns is not tested here.)
 #[test]
-fn the_far_end_alone_is_diarized_and_labelled() {
+fn only_the_far_end_reaches_the_diarizer_and_its_turns_label_it() {
     // On the far end's speech end to end: the first region starts 250 ms before its speech.
     let diarizer = diarizer(&[("spk0", 0, 3_300), ("spk1", 3_750, 7_000)]);
     let mut rig = RigBuilder {
