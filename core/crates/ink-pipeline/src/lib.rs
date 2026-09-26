@@ -20,6 +20,12 @@
 //! | [`update`] | Replacing a model's files only after it is unloaded. |
 //! | [`export`] | Dictations as text, SRT, JSON or CSV. |
 //!
+//! # Meetings and file import
+//!
+//! | Module | Holds |
+//! |---|---|
+//! | [`speech`] | What of a long recording an offline engine may hear: VAD-gated gain per window, and speech regions. |
+//!
 //! # Privacy (I5)
 //!
 //! Transcripts never reach a log or an error. Log lines carry counts, levels and timings, and
@@ -41,6 +47,7 @@ pub mod mic;
 pub mod modes;
 pub mod redact;
 pub mod snippets;
+pub mod speech;
 pub mod style;
 pub mod tail;
 pub mod text;
