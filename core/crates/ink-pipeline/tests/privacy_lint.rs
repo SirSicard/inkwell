@@ -73,8 +73,16 @@ const SINKS: &[&str] = &[
     "format_args!(",
 ];
 
-/// The comment that exempts the statement below it, with a reason after the colon.
+/// The comment that exempts the statement below it. A reason must follow the colon: a bare marker
+/// exempts nothing and is reported itself.
 const ALLOW: &str = "// i5-allow:";
+
+/// Whether `line` is an [`ALLOW`] marker with a reason.
+fn is_reasoned_allow(line: &str) -> bool {
+    line.trim()
+        .strip_prefix(ALLOW)
+        .is_some_and(|reason| !reason.trim().is_empty())
+}
 
 /// Wrappers that make an argument safe: it becomes a count.
 const SAFE: &[&str] = &["redact(", ".len()", ".chars().count()", ".count()"];
@@ -193,7 +201,7 @@ fn statements(source: &str) -> Vec<(usize, String)> {
             i += 1;
         }
         let compact: String = statement.chars().filter(|c| !c.is_whitespace()).collect();
-        let allowed = start > 0 && lines[start - 1].trim().starts_with(ALLOW);
+        let allowed = start > 0 && is_reasoned_allow(lines[start - 1]);
         if !allowed && SINKS.iter().any(|sink| compact.contains(sink)) {
             out.push((start + 1, statement));
         }
@@ -203,6 +211,11 @@ fn statements(source: &str) -> Vec<(usize, String)> {
 }
 
 fn lint(name: &str, source: &str) -> Vec<String> {
+    let bare = source
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.trim().starts_with(ALLOW) && !is_reasoned_allow(l))
+        .map(|(i, _)| format!("{name}:{}: `{ALLOW}` without a reason", i + 1));
     statements(source)
         .into_iter()
         .flat_map(|(line, s)| {
@@ -210,6 +223,7 @@ fn lint(name: &str, source: &str) -> Vec<String> {
                 .into_iter()
                 .map(move |l| format!("{name}:{line}: {l}"))
         })
+        .chain(bare)
         .collect()
 }
 
@@ -376,4 +390,30 @@ fn f() {
     let found = lint("marked.rs", source);
     assert_eq!(found.len(), 1, "{found:#?}");
     assert!(found[0].starts_with("marked.rs:5:"), "{found:#?}");
+}
+
+/// An exemption must say why: a bare marker exempts nothing and is itself reported.
+#[test]
+fn a_bare_marker_is_rejected() {
+    let source = r#"
+fn f() {
+    // i5-allow:
+    let a = format!("{written} ");
+    // i5-allow:    
+    let b = format!("{} chars", text.len());
+}
+"#;
+    let found = lint("bare.rs", source);
+    assert!(
+        found
+            .iter()
+            .any(|f| f.starts_with("bare.rs:4:") && f.contains("{written}")),
+        "the statement under a bare marker is still checked: {found:#?}"
+    );
+    let bare: Vec<&String> = found
+        .iter()
+        .filter(|f| f.contains("without a reason"))
+        .collect();
+    assert_eq!(bare.len(), 2, "each bare marker is reported: {found:#?}");
+    assert!(bare[0].starts_with("bare.rs:3:") && bare[1].starts_with("bare.rs:5:"));
 }

@@ -19,9 +19,10 @@ use ink_audio::synth::speech_like;
 use ink_audio::{CaptureConsumer, SpeechProbability, capture_ring};
 use ink_core::mock::{MemStore, MockEngine, MockPlatform};
 use ink_core::{
-    AudioSource, CaptureControl, Channel, Clock, EngineError, EventSink, HotkeyBinding,
-    HotkeyEvent, HotkeySource, Job, Llm, OfflineEngine, Record, RecordKind, RecordQuery, Store,
-    TimedText, TranscribeOptions, Transcript,
+    AudioSource, CaptureControl, Channel, Clock, Commitment, CommitmentId, EngineError, EventSink,
+    HotkeyBinding, HotkeyEvent, HotkeySource, Job, Llm, NewCommitment, NewRecord, Note, NoteId,
+    OfflineEngine, Record, RecordId, RecordKind, RecordQuery, SearchHit, Segment, SpeakerId, Store,
+    StoreError, Summary, TimedText, TranscribeOptions, Transcript,
 };
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
 use ink_pipeline::events::{DictationEvent, VadUnavailable};
@@ -382,5 +383,121 @@ impl Rig {
                 limit: 100,
             })
             .unwrap()
+    }
+}
+
+/// How a [`FaultyStore`] goes wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// Writing a record's text fails with an error.
+    AppendFails,
+    /// Writing a record's text panics.
+    AppendPanics,
+    /// Marking a record finished panics (after its text was written).
+    FinishPanics,
+}
+
+/// A store that creates records and then goes wrong writing them, as `fault` says. Everything
+/// else is a `MemStore`'s.
+pub struct FaultyStore {
+    pub inner: MemStore,
+    fault: Fault,
+}
+
+impl FaultyStore {
+    pub fn new(fault: Fault) -> Self {
+        Self {
+            inner: MemStore::new(),
+            fault,
+        }
+    }
+}
+
+impl Store for FaultyStore {
+    fn create_record(&self, record: NewRecord) -> Result<RecordId, StoreError> {
+        self.inner.create_record(record)
+    }
+    fn record(&self, id: &RecordId) -> Result<Option<Record>, StoreError> {
+        self.inner.record(id)
+    }
+    fn records(&self, query: &RecordQuery) -> Result<Vec<Record>, StoreError> {
+        self.inner.records(query)
+    }
+    fn set_title(&self, id: &RecordId, title: &str) -> Result<(), StoreError> {
+        self.inner.set_title(id, title)
+    }
+    fn finish_record(&self, id: &RecordId, at: i64) -> Result<(), StoreError> {
+        if self.fault == Fault::FinishPanics {
+            panic!("scripted store panic in finish_record");
+        }
+        self.inner.finish_record(id, at)
+    }
+    fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.inner.delete_record(id)
+    }
+    fn append_segments(&self, id: &RecordId, segments: &[Segment]) -> Result<(), StoreError> {
+        match self.fault {
+            Fault::AppendFails => Err(StoreError::Backend("disk full".into())),
+            Fault::AppendPanics => panic!("scripted store panic in append_segments"),
+            Fault::FinishPanics => self.inner.append_segments(id, segments),
+        }
+    }
+    fn segments(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.inner.segments(id)
+    }
+    fn supersede(&self, id: &RecordId, s: &[Segment]) -> Result<u32, StoreError> {
+        self.inner.supersede(id, s)
+    }
+    fn search(&self, q: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
+        self.inner.search(q, limit)
+    }
+    fn add_note(&self, id: &RecordId, at: u64, text: &str) -> Result<NoteId, StoreError> {
+        self.inner.add_note(id, at, text)
+    }
+    fn update_note(&self, id: &NoteId, text: &str) -> Result<(), StoreError> {
+        self.inner.update_note(id, text)
+    }
+    fn delete_note(&self, id: &NoteId) -> Result<(), StoreError> {
+        self.inner.delete_note(id)
+    }
+    fn notes(&self, id: &RecordId) -> Result<Vec<Note>, StoreError> {
+        self.inner.notes(id)
+    }
+    fn save_summary(&self, id: &RecordId, s: &Summary) -> Result<(), StoreError> {
+        self.inner.save_summary(id, s)
+    }
+    fn summary(&self, id: &RecordId) -> Result<Option<Summary>, StoreError> {
+        self.inner.summary(id)
+    }
+    fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, n: &str) -> Result<(), StoreError> {
+        self.inner.set_speaker_name(id, s, n)
+    }
+    fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
+        self.inner.speaker_names(id)
+    }
+    fn add_commitments(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        self.inner.add_commitments(id, items)
+    }
+    fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
+        self.inner.commitments(id)
+    }
+    fn open_commitments(&self, limit: usize) -> Result<Vec<Commitment>, StoreError> {
+        self.inner.open_commitments(limit)
+    }
+    fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {
+        self.inner.set_commitment_done(id, done)
+    }
+    fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError> {
+        self.inner.merge_commitment(id, into)
+    }
+    fn setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        self.inner.setting(key)
+    }
+    fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        self.inner.set_setting(key, value)
     }
 }

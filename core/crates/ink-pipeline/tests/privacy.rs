@@ -6,12 +6,10 @@ mod common;
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use common::{Rig, speech_48k};
-use ink_core::mock::MemStore;
+use common::{Fault, FaultyStore, Rig, speech_48k};
 use ink_core::{
-    CancelToken, Commitment, CommitmentId, Endpoint, Llm, LlmError, LlmInfo, LlmRequest,
-    LlmResponse, NewCommitment, NewRecord, Note, NoteId, Permission, PermissionState, Record,
-    RecordId, RecordQuery, SearchHit, Segment, SpeakerId, Store, StoreError, Summary,
+    CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse, Permission,
+    PermissionState,
 };
 use ink_pipeline::events::{DictationEvent, TakeFailure, Warning};
 
@@ -72,91 +70,6 @@ fn printed(events: &[DictationEvent]) -> Vec<String> {
         .collect()
 }
 
-/// A store that creates records and then fails to write their text.
-struct BrokenStore(MemStore);
-
-impl Store for BrokenStore {
-    fn create_record(&self, record: NewRecord) -> Result<RecordId, StoreError> {
-        self.0.create_record(record)
-    }
-    fn record(&self, id: &RecordId) -> Result<Option<Record>, StoreError> {
-        self.0.record(id)
-    }
-    fn records(&self, query: &RecordQuery) -> Result<Vec<Record>, StoreError> {
-        self.0.records(query)
-    }
-    fn set_title(&self, id: &RecordId, title: &str) -> Result<(), StoreError> {
-        self.0.set_title(id, title)
-    }
-    fn finish_record(&self, id: &RecordId, at: i64) -> Result<(), StoreError> {
-        self.0.finish_record(id, at)
-    }
-    fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
-        self.0.delete_record(id)
-    }
-    fn append_segments(&self, _: &RecordId, _: &[Segment]) -> Result<(), StoreError> {
-        Err(StoreError::Backend("disk full".into()))
-    }
-    fn segments(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
-        self.0.segments(id)
-    }
-    fn supersede(&self, id: &RecordId, s: &[Segment]) -> Result<u32, StoreError> {
-        self.0.supersede(id, s)
-    }
-    fn search(&self, q: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
-        self.0.search(q, limit)
-    }
-    fn add_note(&self, id: &RecordId, at: u64, text: &str) -> Result<NoteId, StoreError> {
-        self.0.add_note(id, at, text)
-    }
-    fn update_note(&self, id: &NoteId, text: &str) -> Result<(), StoreError> {
-        self.0.update_note(id, text)
-    }
-    fn delete_note(&self, id: &NoteId) -> Result<(), StoreError> {
-        self.0.delete_note(id)
-    }
-    fn notes(&self, id: &RecordId) -> Result<Vec<Note>, StoreError> {
-        self.0.notes(id)
-    }
-    fn save_summary(&self, id: &RecordId, s: &Summary) -> Result<(), StoreError> {
-        self.0.save_summary(id, s)
-    }
-    fn summary(&self, id: &RecordId) -> Result<Option<Summary>, StoreError> {
-        self.0.summary(id)
-    }
-    fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, n: &str) -> Result<(), StoreError> {
-        self.0.set_speaker_name(id, s, n)
-    }
-    fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
-        self.0.speaker_names(id)
-    }
-    fn add_commitments(
-        &self,
-        id: &RecordId,
-        items: &[NewCommitment],
-    ) -> Result<Vec<CommitmentId>, StoreError> {
-        self.0.add_commitments(id, items)
-    }
-    fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
-        self.0.commitments(id)
-    }
-    fn open_commitments(&self, limit: usize) -> Result<Vec<Commitment>, StoreError> {
-        self.0.open_commitments(limit)
-    }
-    fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {
-        self.0.set_commitment_done(id, done)
-    }
-    fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError> {
-        self.0.merge_commitment(id, into)
-    }
-    fn setting(&self, key: &str) -> Result<Option<String>, StoreError> {
-        self.0.setting(key)
-    }
-    fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
-        self.0.set_setting(key, value)
-    }
-}
-
 /// A model that answers with nothing, which the polish task refuses.
 struct EmptyLlm;
 
@@ -181,7 +94,7 @@ fn no_dictated_word_reaches_a_log_an_event_or_an_error() {
     let rig = Rig::builder()
         .settings(|s| s.modes.modes[0].polish_enabled = true)
         .llm(Arc::new(EmptyLlm))
-        .store(Arc::new(BrokenStore(MemStore::new())))
+        .store(Arc::new(FaultyStore::new(Fault::AppendFails)))
         .build();
     rig.platform
         .set_permission(Permission::Accessibility, PermissionState::Denied);

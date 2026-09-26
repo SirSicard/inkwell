@@ -245,10 +245,19 @@ fn run(mut chain: DictationChain, rx: &Receiver<Input>, clock: &dyn Clock) -> Di
                     "dictation worker: a stage panicked ({panics} in a row); {}",
                     if recovered { "recovered" } else { "stopping" }
                 );
-                // Emitting runs the shell's sink; if that panics too, stop.
+                // Emitting runs the shell's sink; if that panics too, stop. The log is then the
+                // only place the failure is recorded, so it says so (and nothing else: the
+                // payload is not read).
                 let reported =
                     panic::catch_unwind(AssertUnwindSafe(|| chain.recover_from_panic(recovered)));
-                if !recovered || reported.is_err() {
+                if reported.is_err() {
+                    log::error!(
+                        "dictation worker: the event sink panicked, so the failure could not be \
+                         reported to the shell; stopping"
+                    );
+                    return chain;
+                }
+                if !recovered {
                     return chain;
                 }
             }
