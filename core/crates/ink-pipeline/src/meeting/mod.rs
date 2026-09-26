@@ -33,6 +33,7 @@ pub mod events;
 mod live;
 pub(crate) mod offline;
 pub mod timeline;
+pub mod watchdog;
 
 pub use live::MAX_PENDING_FINALS;
 
@@ -57,6 +58,7 @@ use self::diarize::{rule5, to_meeting};
 use self::events::{KeptLive, MeetingEvent, MeetingWarning, Phase};
 use self::live::{LiveChannel, Settled};
 use self::offline::{Pass, RegionWindows, SideRead, SideReader, Stop};
+use self::watchdog::{Routing, SideState, Watch, Watchdog};
 use crate::capture::SideSummary;
 use crate::redact::Spoken;
 use crate::speech::{RegionConfig, SpeechPass, VadSource, little_speech_heard};
@@ -102,6 +104,8 @@ pub struct MeetingStart {
     pub source_app: Option<String>,
     /// Where its chunks are written, relative to the data directory.
     pub audio_dir: Option<String>,
+    /// How the capture is routed, for the silent-channel watchdog ([`watchdog`]).
+    pub routing: Routing,
 }
 
 /// A live meeting. See the module docs.
@@ -110,6 +114,7 @@ pub struct MeetingChain {
     mic: LiveChannel,
     far: LiveChannel,
     asr: Receiver<(Channel, AsrEvent)>,
+    watchdog: Watchdog,
 }
 
 /// What a meeting keeps from start to end.
@@ -236,6 +241,7 @@ impl MeetingChain {
             mic,
             far,
             asr,
+            watchdog: Watchdog::new(start.routing, t0_ns),
         })
     }
 
@@ -274,6 +280,46 @@ impl MeetingChain {
         let events = self.core.events.clone();
         self.side(channel).push(samples, host_time_ns, &*events);
         self.collect(false);
+        let now = self.core.services.clock.now_ns();
+        for watch in self.watchdog.observe(channel, samples, now) {
+            self.watched(watch);
+        }
+    }
+
+    /// Judges both sides with no audio arriving: the silent-channel watchdog. The owning thread
+    /// calls it when it wakes at [`deadline_ns`](Self::deadline_ns) (the chain has no timer; S1.7
+    /// wires this into the worker's wait, as the dictation worker does with its tail).
+    pub fn tick(&mut self) {
+        let now = self.core.services.clock.now_ns();
+        for watch in self.watchdog.check(now) {
+            self.watched(watch);
+        }
+    }
+
+    /// When [`tick`](Self::tick) should next run, as host time, if no audio arrives before.
+    pub fn deadline_ns(&self) -> Option<u64> {
+        self.watchdog.deadline_ns()
+    }
+
+    /// The capture's routing changed (a device switched, the headset-mic setting).
+    pub fn set_routing(&mut self, routing: Routing) {
+        self.watchdog.set_routing(routing);
+    }
+
+    fn watched(&self, watch: Watch) {
+        match watch {
+            Watch::State { channel, state } => {
+                if state != SideState::Ok {
+                    log::warn!("meeting: the {channel:?} side is {state:?}");
+                }
+                self.core.emit(MeetingEvent::SideState { channel, state });
+            }
+            Watch::FarQuietWhileYouSpeak { quiet_ms } => {
+                log::info!("meeting: no far-end audio for {quiet_ms} ms while the mic is audible");
+                self.core
+                    .warn(MeetingWarning::FarEndQuietWhileYouSpeak { quiet_ms });
+            }
+        }
     }
 
     /// What the pump wrote for one side ([`SideCapture::finish`](crate::capture::SideCapture::finish)).

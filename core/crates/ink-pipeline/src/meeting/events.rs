@@ -71,6 +71,13 @@ pub enum MeetingWarning {
         /// Events counted.
         count: u64,
     },
+    /// No signal from the far end for a minute or more while the mic was audible: maybe the wrong
+    /// app is tapped, or its audio goes elsewhere; maybe only a presentation. A soft warning, once
+    /// per quiet stretch ([`watchdog`](crate::meeting::watchdog)).
+    FarEndQuietWhileYouSpeak {
+        /// How long the far end had been without signal, ms.
+        quiet_ms: u64,
+    },
     /// The live engine has fallen behind real time.
     LiveEngineStalled {
         /// Which side.
@@ -227,6 +234,15 @@ pub enum MeetingEvent {
         channel: Channel,
         /// The state.
         state: VoiceDetection,
+    },
+    /// What a side is delivering, as the silent-channel watchdog judges it
+    /// ([`watchdog`](crate::meeting::watchdog)). Sent when it changes: a side that stopped, or
+    /// gives only digital zeros, within the watchdog's limit; and back to `Ok` when it recovers.
+    SideState {
+        /// Which side.
+        channel: Channel,
+        /// Its state.
+        state: crate::meeting::watchdog::SideState,
     },
     /// Provisional live text. Never saved (architecture rule 4); each replaces the last.
     Partial {
