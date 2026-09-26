@@ -132,6 +132,11 @@ pub enum HotkeyEvent {
     /// The OS stopped delivering key events (a disabled event tap, lost focus of a low-level
     /// hook). The core ends any hold in progress rather than leaving it stuck down.
     Cancelled,
+    /// The OS removed the hotkey (for example, Accessibility was revoked mid-session). It also
+    /// ends any hold in progress, and nothing more arrives until [`HotkeySource::start`] is
+    /// called again. The core re-checks permissions and tells the user; it never retries in a
+    /// loop. If a hold was in progress, [`HotkeyEvent::Cancelled`] arrives first.
+    Lost,
 }
 
 /// A global hotkey.
@@ -159,6 +164,10 @@ pub enum InsertOutcome {
     /// Secure Input (macOS) or an elevated target (Windows) blocks synthetic input. Nothing was
     /// inserted, and the UI says so instead of failing silently.
     Blocked,
+    /// The text is in, by paste or by a fallback, but the previous clipboard could not be put
+    /// back fully. It is a success, never retried (a retry would insert the text twice); the UI
+    /// says once that the clipboard changed.
+    InsertedClipboardNotRestored,
 }
 
 /// Puts text into the focused application.
@@ -195,9 +204,11 @@ pub enum Permission {
     Microphone,
     /// System-audio capture (a process tap on macOS).
     SystemAudio,
-    /// Accessibility: synthetic input and reading focus.
+    /// Accessibility: synthetic input, reading focus and the selection, and an active (blocking)
+    /// event tap, which is what the macOS hotkey is.
     Accessibility,
-    /// Input Monitoring: the event tap for the hotkey.
+    /// Input Monitoring: only for a listen-only event tap. None is planned on macOS (the hotkey tap
+    /// is active, under Accessibility), and the Windows low-level keyboard hook needs neither.
     InputMonitoring,
 }
 

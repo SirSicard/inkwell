@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::lock;
@@ -115,6 +115,7 @@ pub struct MockPlatform {
     far_targets: Mutex<Vec<FarEndTarget>>,
     meetings: Mutex<Option<EventSink<MeetingSignal>>>,
     hotkey: Mutex<Option<BoundHotkey>>,
+    hotkey_held: AtomicBool,
     inserted: Mutex<Vec<String>>,
     insert_outcome: Mutex<InsertOutcome>,
     focus: Mutex<FocusInfo>,
@@ -158,6 +159,7 @@ impl Default for MockPlatform {
             far_targets: Mutex::default(),
             meetings: Mutex::default(),
             hotkey: Mutex::default(),
+            hotkey_held: AtomicBool::new(false),
             inserted: Mutex::default(),
             insert_outcome: Mutex::new(InsertOutcome::Pasted),
             focus: Mutex::default(),
@@ -235,7 +237,12 @@ impl MockPlatform {
 
     fn hotkey_event(&self, event: HotkeyEvent) -> bool {
         let sink = lock(&self.hotkey).as_ref().map(|(_, s)| s.clone());
-        sink.map(|s| s(event)).is_some()
+        let delivered = sink.map(|s| s(event)).is_some();
+        if delivered {
+            let held = matches!(event, HotkeyEvent::Pressed { .. });
+            self.hotkey_held.store(held, Ordering::Release);
+        }
+        delivered
     }
 
     /// Presses the hotkey now. Returns whether a binding was listening.
@@ -255,6 +262,24 @@ impl MockPlatform {
     /// Reports the event tap lost. Returns whether a binding was listening.
     pub fn cancel_hotkey(&self) -> bool {
         self.hotkey_event(HotkeyEvent::Cancelled)
+    }
+
+    /// The OS removes the hotkey: sends [`HotkeyEvent::Cancelled`] if a hold is in progress, then
+    /// [`HotkeyEvent::Lost`], and unbinds, as the real
+    /// platforms do, so nothing arrives until `start` again. Returns whether a binding was
+    /// listening.
+    pub fn lose_hotkey(&self) -> bool {
+        let bound = lock(&self.hotkey).take();
+        let was_held = self.hotkey_held.swap(false, Ordering::AcqRel);
+        bound
+            .map(|(_, sink)| {
+                // The Mac tap ends a hold in progress before reporting the loss; so does the mock.
+                if was_held {
+                    sink(HotkeyEvent::Cancelled);
+                }
+                sink(HotkeyEvent::Lost)
+            })
+            .is_some()
     }
 
     /// The current binding, if the hotkey is started.
@@ -354,7 +379,8 @@ impl HotkeySource for MockPlatform {
         binding: &HotkeyBinding,
         on_event: EventSink<HotkeyEvent>,
     ) -> Result<(), PlatformError> {
-        self.require(Permission::InputMonitoring)?;
+        // The macOS hotkey is an active event tap, which needs Accessibility.
+        self.require(Permission::Accessibility)?;
         if binding.0.trim().is_empty() {
             return Err(PlatformError::Unsupported("an empty hotkey binding"));
         }

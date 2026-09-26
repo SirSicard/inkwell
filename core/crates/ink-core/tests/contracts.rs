@@ -865,10 +865,19 @@ fn denied_permissions_fail_the_calls_that_need_them() {
         PermissionState::NotDetermined
     );
 
+    // The hotkey is an active (blocking) event tap, which needs Accessibility; Input Monitoring
+    // is only for a listen-only tap, so denying it alone blocks nothing.
+    mock.set_permission(Permission::InputMonitoring, PermissionState::Denied);
+    assert_eq!(
+        p.hotkeys
+            .start(&HotkeyBinding("fn".into()), Arc::new(|_| {})),
+        Ok(())
+    );
+    p.hotkeys.stop();
+
     mock.set_permission(Permission::Microphone, PermissionState::Denied);
     mock.set_permission(Permission::SystemAudio, PermissionState::Denied);
     mock.set_permission(Permission::Accessibility, PermissionState::Denied);
-    mock.set_permission(Permission::InputMonitoring, PermissionState::Denied);
     assert_eq!(
         p.capture.open_mic(None).err(),
         Some(PlatformError::PermissionDenied(Permission::Microphone))
@@ -884,7 +893,7 @@ fn denied_permissions_fail_the_calls_that_need_them() {
     assert_eq!(
         p.hotkeys
             .start(&HotkeyBinding("fn".into()), Arc::new(|_| {})),
-        Err(PlatformError::PermissionDenied(Permission::InputMonitoring))
+        Err(PlatformError::PermissionDenied(Permission::Accessibility))
     );
     assert!(mock.inserted().is_empty());
 
@@ -989,6 +998,52 @@ fn insertion_is_blocked_under_secure_input() {
     );
 }
 
+/// An insertion whose clipboard could not be put back is still an insertion: the text is in, so it
+/// is an `Ok` outcome the pipeline never retries, never an error.
+#[test]
+fn an_insertion_that_could_not_restore_the_clipboard_is_still_an_insertion() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    mock.set_insert_outcome(InsertOutcome::InsertedClipboardNotRestored);
+    assert_eq!(
+        p.inserter.insert("hello"),
+        Ok(InsertOutcome::InsertedClipboardNotRestored)
+    );
+    assert_eq!(mock.inserted(), vec!["hello".to_string()]);
+}
+
+/// `Lost` ends the binding: the OS removed the hotkey, nothing arrives until `start` again.
+#[test]
+fn a_lost_hotkey_stays_lost_until_started_again() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let on_event: EventSink<HotkeyEvent> = Arc::new(move |e| sink.lock().unwrap().push(e));
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), on_event.clone())
+        .unwrap();
+    assert!(mock.press());
+    assert!(mock.lose_hotkey());
+    assert!(!mock.release(), "nothing is bound after a loss");
+    assert!(!mock.lose_hotkey());
+    assert_eq!(mock.hotkey_binding(), None);
+
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), on_event)
+        .unwrap();
+    assert!(mock.press());
+    assert_eq!(
+        *events.lock().unwrap(),
+        vec![
+            HotkeyEvent::Pressed { at_ns: 0 },
+            HotkeyEvent::Cancelled,
+            HotkeyEvent::Lost,
+            HotkeyEvent::Pressed { at_ns: 0 },
+        ]
+    );
+}
+
 #[test]
 fn meeting_signals_reach_the_detector_until_it_stops() {
     let mock = Arc::new(MockPlatform::new());
@@ -1009,4 +1064,38 @@ fn meeting_signals_reach_the_detector_until_it_stops() {
     p.meetings.stop();
     assert!(!mock.emit_meeting(MeetingSignal::MicReleased { app: app.clone() }));
     assert_eq!(*seen.lock().unwrap(), vec![MeetingSignal::MicInUse { app }]);
+}
+
+/// Losing the hotkey mid-hold ends the hold first, exactly as the Mac tap does: `Cancelled`, then
+/// `Lost`. Losing it while idle sends `Lost` alone.
+#[test]
+fn losing_the_hotkey_mid_hold_cancels_the_hold_first() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let record: EventSink<HotkeyEvent> = Arc::new(move |e| sink.lock().unwrap().push(e));
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), record.clone())
+        .unwrap();
+    assert!(mock.press());
+    assert!(mock.lose_hotkey());
+    assert_eq!(
+        events.lock().unwrap().split_off(1),
+        vec![HotkeyEvent::Cancelled, HotkeyEvent::Lost]
+    );
+
+    events.lock().unwrap().clear();
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), record)
+        .unwrap();
+    assert!(mock.press());
+    assert!(mock.release());
+    assert!(mock.lose_hotkey());
+    assert_eq!(events.lock().unwrap().last(), Some(&HotkeyEvent::Lost));
+    assert_eq!(
+        events.lock().unwrap().len(),
+        3,
+        "idle loss sends Lost alone"
+    );
 }

@@ -10,3 +10,44 @@ publish.workspace = true
 
 [dependencies]
 ink-core.workspace = true
+
+# macOS only. On every other OS the crate builds empty, so none of these reach the Windows build.
+# Default features are off throughout: the framework crates otherwise pull in every header.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSData",
+    "NSObject",
+    "NSString",
+    "NSURL",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "libc",
+    "NSPasteboard",
+    "NSPasteboardItem",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFDate",
+    "CFMachPort",
+    "CFNumber",
+    "CFRunLoop",
+    "CFString",
+] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGRemoteOperation",
+] }
+
+# The input checklist binary checks that the main run loop is serving (the pasteboard promise is
+# answered there) by dispatching to it.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
