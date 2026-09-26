@@ -39,6 +39,34 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The engine adapters sit behind features the workspace build leaves off.
+      # Silero VAD: the model its tests run on, from the commit tag v6.2.3 points at, checked
+      # against the hash the registry row pins. A mismatch fails the job.
+      - name: Fetch the Silero VAD model
+        shell: bash
+        env:
+          SILERO_URL: https://raw.githubusercontent.com/snakers4/silero-vad/5cd7945676eb32225748052e2e6a0580e4686a08/src/silero_vad/data/silero_vad_16k_op15.onnx
+          SILERO_SHA256: 7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49
+        run: |
+          model="$RUNNER_TEMP/silero_vad_16k_op15.onnx"
+          curl -fsSL --retry 3 -o "$model" "$SILERO_URL"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sum=$(sha256sum <"$model" | cut -d' ' -f1)
+          else
+            sum=$(shasum -a 256 <"$model" | cut -d' ' -f1)
+          fi
+          if [ "$sum" != "$SILERO_SHA256" ]; then
+            echo "::error::Silero VAD model sha256 is $sum, expected $SILERO_SHA256"
+            exit 1
+          fi
+          echo "INK_SILERO_MODEL=$model" >>"$GITHUB_ENV"
+      - run: cargo clippy -p ink-engines --all-targets --locked --features engine-silero -- -D warnings
+      - run: cargo test -p ink-engines --locked --features engine-silero
+      # NeMo-Speech.cpp is a native library CI does not build: the adapter is compiled and linted
+      # without linking it.
+      - run: cargo clippy -p ink-engines --all-targets --locked --features engine-nemo -- -D warnings
+        env:
+          INK_NEMO_CHECK_ONLY: "1"
 
   deny:
     name: licences, advisories, sources

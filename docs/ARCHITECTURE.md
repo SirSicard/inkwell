@@ -81,6 +81,33 @@ Later: `mac/` (Swift package: app, Apple engines, renderer, the core as an XCFra
 `windows/` (the WinUI 3 solution), `shaders/ink.wgsl` (one shader, translated by naga to MSL and
 HLSL), `schema/events.schema.json`, and `fixtures/` (synthetic and public-licensed audio only).
 
+## The diarizer's native library
+
+The diarizer (Nemotron-3-Diarization) runs on NeMo-Speech.cpp, a C++ library with a C API. The
+VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
+
+- **Built outside cargo, not vendored.** `core/crates/ink-engines/native/build-nemo-speech.sh`
+  builds NeMo-Speech.cpp at its pinned commit from a checkout (the upstream `metal-diar` preset and
+  upstream's own ggml patch step) and installs it into a prefix; `NEMO_SPEECH_DIR` names that
+  prefix when building with `--features engine-nemo`. There is no submodule and no copy of the
+  sources: the repository carries no C++ and no machine paths, and cargo never runs CMake or
+  touches the network.
+- **Checked before it is linked.** `build.rs` compares the installed headers with the pinned
+  commit's (the adapter declares the C ABI by hand) and checks every installed library against
+  the manifest the build script wrote (the commit and each library's SHA-256).
+- **In CI** the adapter is compiled and linted without the library (`INK_NEMO_CHECK_ONLY=1`); the
+  tests that run it, and reproduce the diarizer's DER on AMI, run locally.
+- **Its ggml stays its own.** NeMo-Speech.cpp ships its own (patched) ggml as separate shared
+  libraries that only NeMo's library links; none of their symbols enter the Rust link. On macOS
+  the two-level namespace binds each library's references to the ggml it was linked against, and
+  on Windows each DLL's imports name the DLL they come from, so NeMo's ggml stays apart from the
+  copy of ggml the llama.cpp adapter links statically. The two must not be installed as shared
+  libraries under the same names in one directory. Linux is not a target; if it becomes one, its
+  flat namespace would let one copy's symbols stand in for the other's, and the llama.cpp
+  adapter's ggml must then hide its symbols.
+- **Its dependencies**, SentencePiece and Abseil, are listed in [THIRD_PARTY.md](../THIRD_PARTY.md)
+  with NeMo-Speech.cpp and its ggml; `cargo deny` cannot see them.
+
 ## Threads
 
 Every trait method in `ink-core` names the thread it may run on
