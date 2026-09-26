@@ -31,8 +31,8 @@ pub mod replay;
 pub mod ring;
 
 pub use chunk::{
-    CHUNK_DURATION, ChunkError, ChunkInfo, ChunkStore, ChunkWriter, RecoveryReport, Repair,
-    WriterSummary,
+    CHUNK_DURATION, ChunkError, ChunkInfo, ChunkList, ChunkStore, ChunkWriter, RecoveryReport,
+    Repair, UnreadableChunk, WriterSummary,
 };
 pub use rate::{Continuity, RateCheck, RateVerdict};
 pub use realtime::{RealtimeGuard, unguarded};

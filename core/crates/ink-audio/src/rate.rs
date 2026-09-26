@@ -26,6 +26,9 @@ pub const RATE_MIN_SPAN: Duration = Duration::from_secs(1);
 /// 100 ms, so even a 6× mislabelled rate stays well under 250 ms per block, while a silent tap
 /// jumps by seconds. A glitch shorter than this is absorbed into the chunk; the next chunk
 /// re-anchors on a device timestamp.
+///
+/// It assumes device blocks of at most about 100 ms. A backend that batches callbacks into longer
+/// blocks needs it revisited, or a mislabelled rate would start to look like gaps.
 pub const GAP_THRESHOLD: Duration = Duration::from_millis(250);
 
 /// Whether a stream's rate agrees with the host clock.

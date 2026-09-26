@@ -11,9 +11,12 @@
 //! # The unit of "lose nothing"
 //!
 //! [`CHUNK_DURATION`] is 10 seconds of audio. Each block is written straight to the file (no
-//! userspace buffer), so a killed process loses only what was still in the capture ring. A chunk is
-//! synced to disk when it closes, so a power cut loses at most the open chunk. Ten seconds keeps
-//! that loss small while an hour stays 360 files per channel, not thousands.
+//! userspace buffer), so a killed process loses only what was still in the capture ring. When a
+//! chunk closes, its data is synced, and on Unix so is the record directory, so the chunk's name
+//! survives with its bytes (a new record directory's own entry is synced when it is created). On
+//! Windows std cannot open a directory to sync it, and NTFS journals the entry. So a power cut
+//! loses at most the open chunk, on a disk that honours flushes. Ten seconds keeps that loss small
+//! while an hour stays 360 files per channel, not thousands.
 //!
 //! # Layout
 //!
@@ -70,6 +73,7 @@ const VERSION: u16 = 1;
 const ENCODING_F32_LE: u8 = 1;
 const FLAG_AFTER_GAP: u16 = 1;
 const FLAG_HOST_TIME_ESTIMATED: u16 = 1 << 1;
+const FLAG_FORMAT_ESTIMATED: u16 = 1 << 2;
 const SAMPLE_BYTES: u64 = 4;
 const HEADER_BYTES: u64 = HEADER_LEN as u64;
 
@@ -103,6 +107,13 @@ pub enum ChunkError {
         /// What is wrong with it.
         reason: &'static str,
     },
+    /// Recovery could only guess this chunk's format, so its frames cannot be read as audio
+    /// without the caller deciding the format. [`ChunkStore::read_raw_samples`] returns the
+    /// samples as stored.
+    FormatEstimated {
+        /// The file name.
+        file: String,
+    },
 }
 
 impl fmt::Display for ChunkError {
@@ -122,6 +133,10 @@ impl fmt::Display for ChunkError {
             Self::Unreadable { file, reason } => {
                 write!(f, "chunk store: {file} is unreadable: {reason}")
             }
+            Self::FormatEstimated { file } => write!(
+                f,
+                "chunk store: {file} has a format recovery could only estimate"
+            ),
         }
     }
 }
@@ -278,6 +293,10 @@ pub struct ChunkInfo {
     /// The format the device declared.
     pub format: StreamFormat,
     /// Host time of the first frame, ns, on the capture clock.
+    ///
+    /// When [`host_time_estimated`](Self::host_time_estimated) is set this is an extrapolation
+    /// that assumes the stream ran on without a gap across the torn chunk. A consumer aligning the
+    /// mic with the far end must check the flag.
     pub host_time_ns: u64,
     /// Whole frames on disk. A torn partial frame at the end is not counted.
     pub frames: u64,
@@ -286,8 +305,34 @@ pub struct ChunkInfo {
     pub after_gap: bool,
     /// Recovery rebuilt the header, and the host time is extrapolated from a neighbour.
     pub host_time_estimated: bool,
+    /// Recovery rebuilt the header and could only guess the format (the stream may have changed
+    /// format at this chunk). `format` and `frames` are that guess: [`ChunkStore::read`] refuses
+    /// the chunk and the rate check leaves it out.
+    pub format_estimated: bool,
     /// Where it is.
     pub path: PathBuf,
+}
+
+/// A chunk file whose header cannot be read, listed so it is never silently skipped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnreadableChunk {
+    /// Which stream.
+    pub channel: Channel,
+    /// Position in the channel's sequence, from the file name.
+    pub index: u64,
+    /// What is wrong with its header.
+    pub reason: &'static str,
+    /// Where it is.
+    pub path: PathBuf,
+}
+
+/// A channel's chunks: the readable ones, and every file whose header cannot be read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChunkList {
+    /// Readable chunks, in index order.
+    pub chunks: Vec<ChunkInfo>,
+    /// Unreadable chunk files, in index order. Their audio is still on disk.
+    pub unreadable: Vec<UnreadableChunk>,
 }
 
 /// What a writer did, returned by [`ChunkWriter::finish`].
@@ -318,8 +363,11 @@ pub enum Repair {
         bytes_removed: u64,
     },
     /// The header was missing, truncated or corrupt, and was rebuilt from a neighbouring chunk of
-    /// the same channel. The audio after it was kept (trimmed to whole frames), and the host time
-    /// is marked estimated.
+    /// the same channel. The host time is marked estimated.
+    ///
+    /// The format is certain only when both adjacent chunks survived, agree, and the next one
+    /// continues this one without a gap; then a torn partial frame is trimmed. Otherwise the format
+    /// is marked estimated and not a byte after the header is touched.
     RebuiltHeader {
         /// Which stream.
         channel: Channel,
@@ -327,8 +375,10 @@ pub enum Repair {
         index: u64,
         /// The chunk whose format and timing it was rebuilt from.
         from_index: u64,
-        /// Whole frames kept.
-        frames_kept: u64,
+        /// Whether the format is a guess.
+        format_estimated: bool,
+        /// Bytes of audio after the header, all kept.
+        bytes_kept: u64,
     },
     /// Nothing to rebuild from (no readable chunk in the channel). The file is left exactly as it
     /// was, never deleted.
@@ -362,6 +412,8 @@ struct Found {
     path: PathBuf,
     len: u64,
     header: Result<Header, &'static str>,
+    /// Rebuilt by this recovery pass: readable now, but not evidence about its neighbours.
+    rebuilt: bool,
 }
 
 impl Found {
@@ -385,6 +437,14 @@ impl Found {
             path,
             len,
             header,
+            rebuilt: false,
+        })
+    }
+
+    /// The header as the writer left it: readable, not rebuilt, nothing estimated.
+    fn original(&self) -> Option<Header> {
+        self.header.ok().filter(|h| {
+            !self.rebuilt && h.flags & (FLAG_HOST_TIME_ESTIMATED | FLAG_FORMAT_ESTIMATED) == 0
         })
     }
 
@@ -407,7 +467,14 @@ impl ChunkStore {
     /// **Worker.** After a crash, call [`recover`](Self::recover) before opening writers.
     pub fn open(dir: impl Into<PathBuf>) -> Result<Self, ChunkError> {
         let dir = dir.into();
+        let existed = dir.is_dir();
         fs::create_dir_all(&dir).map_err(io_error("create directory", &dir))?;
+        if !existed {
+            // A new record's own entry must survive a power cut too, or its chunks are unreachable.
+            if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+                sync_dir(parent)?;
+            }
+        }
         Ok(Self {
             dir,
             chunk_duration: CHUNK_DURATION,
@@ -488,19 +555,29 @@ impl ChunkStore {
         })
     }
 
-    /// The chunks of `channel`, in order.
+    /// The chunks of `channel`, in order: the readable ones, and every file whose header cannot
+    /// be read, so one torn chunk never hides the chunks after it.
     ///
-    /// **Worker or pump.** A chunk still being written is listed with its whole frames so far. An
-    /// unreadable chunk is an error; [`recover`](Self::recover) repairs it.
-    pub fn chunks(&self, channel: Channel) -> Result<Vec<ChunkInfo>, ChunkError> {
-        let mut chunks = Vec::new();
+    /// **Worker or pump.** A chunk still being written is listed with its whole frames so far.
+    /// [`recover`](Self::recover) repairs unreadable chunks where it can. Only a failure to list
+    /// or open files is an error.
+    pub fn chunks(&self, channel: Channel) -> Result<ChunkList, ChunkError> {
+        let mut list = ChunkList::default();
         for (index, path) in self.list(channel)? {
             let found = Found::inspect(channel, index, path)?;
-            let header = found.header.map_err(|reason| ChunkError::Unreadable {
-                file: file_name(&found.path),
-                reason,
-            })?;
-            chunks.push(ChunkInfo {
+            let header = match found.header {
+                Ok(header) => header,
+                Err(reason) => {
+                    list.unreadable.push(UnreadableChunk {
+                        channel,
+                        index,
+                        reason,
+                        path: found.path,
+                    });
+                    continue;
+                }
+            };
+            list.chunks.push(ChunkInfo {
                 channel,
                 index,
                 format: header.format,
@@ -508,14 +585,38 @@ impl ChunkStore {
                 frames: found.whole_frames(&header),
                 after_gap: header.flags & FLAG_AFTER_GAP != 0,
                 host_time_estimated: header.flags & FLAG_HOST_TIME_ESTIMATED != 0,
+                format_estimated: header.flags & FLAG_FORMAT_ESTIMATED != 0,
                 path: found.path,
             });
         }
-        Ok(chunks)
+        Ok(list)
+    }
+
+    /// Every whole sample after the header, as stored, with no frame alignment: for a chunk whose
+    /// format recovery could only estimate, where the caller decides what the samples are.
+    pub fn read_raw_samples(&self, chunk: &ChunkInfo) -> Result<Vec<f32>, ChunkError> {
+        let (_, bytes) = self.load(chunk)?;
+        Ok(decode_samples(&bytes[HEADER_LEN..]))
     }
 
     /// A chunk's whole frames as they are on disk now, interleaved.
+    ///
+    /// A chunk whose format recovery could only estimate is refused with
+    /// [`ChunkError::FormatEstimated`]: reading it as frames would assert a format nobody knows.
     pub fn read(&self, chunk: &ChunkInfo) -> Result<Vec<f32>, ChunkError> {
+        let (header, bytes) = self.load(chunk)?;
+        if header.flags & FLAG_FORMAT_ESTIMATED != 0 {
+            return Err(ChunkError::FormatEstimated {
+                file: file_name(&chunk.path),
+            });
+        }
+        let data = &bytes[HEADER_LEN..];
+        let whole = data.len() - data.len() % (header.frame_bytes() as usize);
+        Ok(decode_samples(&data[..whole]))
+    }
+
+    /// The file's bytes and its verified header.
+    fn load(&self, chunk: &ChunkInfo) -> Result<(Header, Vec<u8>), ChunkError> {
         let bytes = fs::read(&chunk.path).map_err(io_error("read", &chunk.path))?;
         let unreadable = |reason| ChunkError::Unreadable {
             file: file_name(&chunk.path),
@@ -525,16 +626,18 @@ impl ChunkStore {
         if header.channel != chunk.channel || header.index != chunk.index {
             return Err(unreadable("header names another chunk"));
         }
-        let data = &bytes[HEADER_LEN..];
-        let whole = data.len() - data.len() % (header.frame_bytes() as usize);
-        Ok(data[..whole]
-            .chunks_exact(SAMPLE_BYTES as usize)
-            .map(|s| f32::from_le_bytes(le(s)))
-            .collect())
+        Ok((header, bytes))
     }
 
-    /// Repairs what a crash left: trims torn partial frames and rebuilds unreadable headers from a
-    /// neighbouring chunk, keeping every whole frame. Never deletes a file. Idempotent.
+    /// Repairs what a crash left. Never deletes a file, never trims on a guess, and is idempotent.
+    ///
+    /// - A readable chunk with a torn partial frame is trimmed to whole frames.
+    /// - An unreadable header is rebuilt from a neighbouring chunk. Its format is certain only when
+    ///   both adjacent chunks survived, agree, and the next continues this one without a gap; then
+    ///   a torn frame is trimmed as above. Otherwise the header says the format is estimated, every
+    ///   byte after it is kept, and readers treat the chunk as such (see
+    ///   [`ChunkInfo::format_estimated`]).
+    /// - With no readable chunk in the channel, the file is left as it is and reported.
     ///
     /// **Worker.** Run it before opening writers on the directory.
     pub fn recover(&self) -> Result<RecoveryReport, ChunkError> {
@@ -555,9 +658,13 @@ impl ChunkStore {
             found.push(Found::inspect(channel, index, path)?);
         }
 
-        // Readable chunks first: a torn tail loses its partial frame, nothing more.
+        // Readable chunks first: a torn tail loses its partial frame, nothing more. A chunk whose
+        // format is only estimated is never trimmed: its frame size is a guess.
         for f in &mut found {
             let Ok(header) = f.header else { continue };
+            if header.flags & FLAG_FORMAT_ESTIMATED != 0 {
+                continue;
+            }
             let partial = f.len.saturating_sub(HEADER_BYTES) % header.frame_bytes();
             if partial > 0 {
                 set_len(&f.path, f.len - partial)?;
@@ -575,65 +682,116 @@ impl ChunkStore {
             if found[i].header.is_ok() {
                 continue;
             }
-            let readable = |f: &Found| f.header.ok().map(|h| (f.index, f.whole_frames(&h), h));
-            let previous = found[..i].iter().rev().find_map(readable);
-            let next = found[i + 1..].iter().find_map(readable);
-            let (from_index, format, host_time_ns) = match (previous, next) {
-                (Some((index, frames, h)), _) => {
-                    // Where the previous chunk ends, if the stream continued without a gap.
-                    let end = h
-                        .host_time_ns
-                        .saturating_add(frames_to_ns(frames, h.format.sample_rate));
-                    (index, h.format, end)
-                }
-                (None, Some((index, _, h))) => {
-                    let frames = found[i].len.saturating_sub(HEADER_BYTES) / h.frame_bytes();
-                    let start = h
-                        .host_time_ns
-                        .saturating_sub(frames_to_ns(frames, h.format.sample_rate));
-                    (index, h.format, start)
-                }
-                (None, None) => {
-                    repairs.push(Repair::Unrecoverable {
-                        channel,
-                        index: found[i].index,
-                        reason: "no readable chunk in this channel to rebuild its header from",
-                    });
-                    continue;
-                }
+            let index = found[i].index;
+            let data_bytes = found[i].len.saturating_sub(HEADER_BYTES);
+
+            // Evidence: the adjacent chunks as their writer left them. The writer flags the first
+            // chunk after any gap or restart (and a format change always restarts it), so a next
+            // chunk without that flag was written by the same writer, straight after this one.
+            let adjacent = |j: usize, want: u64| {
+                found
+                    .get(j)
+                    .filter(|f| f.index == want)
+                    .and_then(Found::original)
+            };
+            let previous = i
+                .checked_sub(1)
+                .and_then(|j| adjacent(j, index.wrapping_sub(1)));
+            let continuing =
+                adjacent(i + 1, index.wrapping_add(1)).filter(|h| h.flags & FLAG_AFTER_GAP == 0);
+            // Certain only when both neighbours survived, agree, and the next one continues this
+            // chunk. Anything less is a guess, and a guess never trims a byte.
+            let certain =
+                matches!((previous, continuing), (Some(p), Some(n)) if p.format == n.format);
+
+            // The source of the format guess and the time estimate: the chunk that continues this
+            // one if there is one, else the nearest readable chunk before it, else after it.
+            let readable = |f: &Found| f.header.ok().map(|h| (f.index, h, f.whole_frames(&h)));
+            let source = match continuing {
+                Some(h) => Some(Source::After(index.wrapping_add(1), h)),
+                None => found[..i]
+                    .iter()
+                    .rev()
+                    .find_map(readable)
+                    .map(|(j, h, frames)| Source::Before(j, h, frames))
+                    .or_else(|| {
+                        found[i + 1..]
+                            .iter()
+                            .find_map(readable)
+                            .map(|(j, h, _)| Source::After(j, h))
+                    }),
+            };
+            let Some(source) = source else {
+                repairs.push(Repair::Unrecoverable {
+                    channel,
+                    index,
+                    reason: "no readable chunk in this channel to rebuild its header from",
+                });
+                continue;
+            };
+            let (from_index, format, host_time_ns) = match source {
+                // Where the previous chunk ends, if the stream continued without a gap.
+                Source::Before(j, h, frames) => (
+                    j,
+                    h.format,
+                    h.host_time_ns
+                        .saturating_add(frames_to_ns(frames, h.format.sample_rate)),
+                ),
+                // Back from the chunk after it, by this chunk's frames in that chunk's format.
+                Source::After(j, h) => (
+                    j,
+                    h.format,
+                    h.host_time_ns.saturating_sub(frames_to_ns(
+                        data_bytes / h.frame_bytes(),
+                        h.format.sample_rate,
+                    )),
+                ),
             };
             let header = Header {
                 channel,
-                index: found[i].index,
+                index,
                 format,
                 host_time_ns,
-                flags: FLAG_HOST_TIME_ESTIMATED,
+                flags: if certain {
+                    FLAG_HOST_TIME_ESTIMATED
+                } else {
+                    FLAG_HOST_TIME_ESTIMATED | FLAG_FORMAT_ESTIMATED
+                },
             };
-            let frames_kept = found[i].whole_frames(&header);
-            let len = HEADER_BYTES + frames_kept * header.frame_bytes();
+            // A certain format may trim a torn partial frame, as for any readable chunk. A guessed
+            // one keeps every byte; a file shorter than a header only grows to hold one.
+            let len = if certain {
+                HEADER_BYTES + data_bytes / header.frame_bytes() * header.frame_bytes()
+            } else {
+                found[i].len.max(HEADER_BYTES)
+            };
             rewrite_header(&found[i].path, &header, len)?;
             found[i].header = Ok(header);
+            found[i].rebuilt = true;
             found[i].len = len;
             repairs.push(Repair::RebuiltHeader {
                 channel,
-                index: found[i].index,
+                index,
                 from_index,
-                frames_kept,
+                format_estimated: !certain,
+                bytes_kept: len - HEADER_BYTES,
             });
         }
         Ok(())
     }
 
     /// The sample-rate check recomputed from the chunk headers alone, for a record whose writer
-    /// died with the process. Runs are split where a header says the chunk follows a gap, or the
-    /// format changes; chunks whose host time recovery estimated are left out. The first mismatch
-    /// found wins.
+    /// died with the process. It runs on the readable chunks; unreadable ones are listed by
+    /// [`chunks`](Self::chunks). Runs are split where a header says the chunk follows a gap, or the
+    /// format changes; chunks whose time or format recovery estimated are left out. The first
+    /// mismatch found wins.
     pub fn rate_check(&self, channel: Channel) -> Result<RateVerdict, ChunkError> {
         let mut verdict = RateVerdict::Pending;
         let mut current: Option<(StreamFormat, RateCheck)> = None;
         let mut break_next = false;
-        for chunk in self.chunks(channel)? {
-            if chunk.host_time_estimated {
+        for chunk in self.chunks(channel)?.chunks {
+            // Estimated times and formats are exactly what this check must not trust.
+            if chunk.host_time_estimated || chunk.format_estimated {
                 break_next = true;
                 continue;
             }
@@ -655,6 +813,23 @@ impl ChunkStore {
         }
         Ok(verdict)
     }
+}
+
+/// Where recovery takes a rebuilt header's format and time from.
+#[derive(Clone, Copy)]
+enum Source {
+    /// A chunk before the torn one: (index, header, whole frames).
+    Before(u64, Header, u64),
+    /// A chunk after it: (index, header).
+    After(u64, Header),
+}
+
+/// Little-endian `f32` samples; a trailing partial sample is left out.
+fn decode_samples(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(SAMPLE_BYTES as usize)
+        .map(|s| f32::from_le_bytes(le(s)))
+        .collect()
 }
 
 /// Keeps the first mismatch; otherwise the latest consistent verdict; otherwise pending.
@@ -714,12 +889,31 @@ struct OpenChunk {
     frames: u64,
 }
 
-/// Syncs a finished chunk to disk and closes it: from here a power cut cannot take it.
+/// Syncs a finished chunk to disk, then its directory entry, and closes it: from here a power cut
+/// cannot take it.
 fn sync(chunk: OpenChunk) -> Result<(), ChunkError> {
     chunk
         .file
         .sync_data()
-        .map_err(io_error("sync", &chunk.path))
+        .map_err(io_error("sync", &chunk.path))?;
+    match chunk.path.parent() {
+        Some(dir) => sync_dir(dir),
+        None => Ok(()),
+    }
+}
+
+/// Makes a directory's entries durable: a new file's name, not only its bytes.
+///
+/// On Unix the directory itself is synced. On Windows std cannot open a directory to sync it, and
+/// NTFS journals the entry, so there is nothing to do.
+fn sync_dir(dir: &Path) -> Result<(), ChunkError> {
+    #[cfg(unix)]
+    File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(io_error("sync directory", dir))?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 impl ChunkWriter {

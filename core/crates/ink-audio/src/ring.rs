@@ -189,10 +189,13 @@ impl AudioSink for CaptureProducer {
             dropped_blocks_before: self.pending_blocks,
             dropped_frames_before: self.pending_frames,
         };
-        let (first, second) = slot.as_mut_slices();
-        if let Some(record) = first.first_mut().or(second.first_mut()) {
-            *record = meta;
-        }
+        // Cannot fail: rtrb's first slice is empty only when zero slots were reserved, and this
+        // reservation is for one. Loud rather than a silent no-op, which would commit a blank
+        // record and desynchronise every block after it.
+        let (first, _) = slot.as_mut_slices();
+        *first
+            .first_mut()
+            .expect("a one-slot reservation has its slot in the first slice") = meta;
         slot.commit_all();
         self.pending_blocks = 0;
         self.pending_frames = 0;

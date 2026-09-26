@@ -49,6 +49,7 @@ fn read_all(store: &ChunkStore, channel: Channel) -> Vec<f32> {
     store
         .chunks(channel)
         .unwrap()
+        .chunks
         .iter()
         .flat_map(|c| store.read(c).unwrap())
         .collect()
@@ -146,7 +147,7 @@ fn chunks_read_back_exactly_what_was_written_per_channel() {
     assert_eq!(read_all(&store, Channel::Mic), mic_audio);
     assert_eq!(read_all(&store, Channel::Far), far_audio);
 
-    let mic_chunks = store.chunks(Channel::Mic).unwrap();
+    let mic_chunks = store.chunks(Channel::Mic).unwrap().chunks;
     let got: Vec<(u64, u64, u64)> = mic_chunks
         .iter()
         .map(|c| (c.index, c.frames, c.host_time_ns))
@@ -163,7 +164,7 @@ fn chunks_read_back_exactly_what_was_written_per_channel() {
         assert_eq!((c.channel, c.format), (Channel::Mic, MONO_16K));
         assert!(!c.after_gap && !c.host_time_estimated);
     }
-    let far_chunks = store.chunks(Channel::Far).unwrap();
+    let far_chunks = store.chunks(Channel::Far).unwrap().chunks;
     assert_eq!(far_chunks.len(), 3);
     assert!(far_chunks.iter().all(|c| c.format == STEREO_48K));
 }
@@ -180,7 +181,7 @@ fn chunks_close_on_block_boundaries_so_every_header_time_is_a_device_timestamp()
     let audio = write_stream(&mut writer, MONO_16K, 45_000, 3_000, 4);
     writer.finish().unwrap();
 
-    let chunks = store.chunks(Channel::Mic).unwrap();
+    let chunks = store.chunks(Channel::Mic).unwrap().chunks;
     let got: Vec<(u64, u64)> = chunks.iter().map(|c| (c.frames, c.host_time_ns)).collect();
     assert_eq!(
         got,
@@ -203,7 +204,7 @@ fn a_block_longer_than_a_whole_chunk_is_split_across_chunks() {
     let audio = write_stream(&mut writer, MONO_16K, 500, 500, 15);
     writer.finish().unwrap();
 
-    let chunks = store.chunks(Channel::Mic).unwrap();
+    let chunks = store.chunks(Channel::Mic).unwrap().chunks;
     let got: Vec<(u64, u64)> = chunks.iter().map(|c| (c.frames, c.host_time_ns)).collect();
     assert_eq!(
         got,
@@ -238,7 +239,7 @@ fn a_jump_in_device_time_closes_the_chunk_and_flags_the_next() {
         .unwrap();
     let summary = writer.finish().unwrap();
 
-    let chunks = store.chunks(Channel::Far).unwrap();
+    let chunks = store.chunks(Channel::Far).unwrap().chunks;
     assert_eq!(chunks.len(), 2, "the open chunk closed at the gap");
     assert_eq!((chunks[0].frames, chunks[0].after_gap), (32_000, false));
     assert_eq!(
@@ -275,7 +276,7 @@ fn a_ring_overrun_closes_the_chunk_and_flags_the_next() {
         .unwrap();
     let summary = writer.finish().unwrap();
 
-    let chunks = store.chunks(Channel::Mic).unwrap();
+    let chunks = store.chunks(Channel::Mic).unwrap().chunks;
     assert_eq!(chunks.len(), 2);
     assert!(chunks[1].after_gap);
     assert_eq!(chunks[1].host_time_ns, at(T0, 3_840, 16_000));
@@ -363,7 +364,7 @@ fn a_new_writer_continues_the_sequence_and_never_overwrites() {
     let after = snapshot(tmp.path());
     assert_eq!(after[0], before[0], "the first chunk is untouched");
     assert_eq!(after[1].0, "mic-000001.pcm");
-    let chunks = store.chunks(Channel::Mic).unwrap();
+    let chunks = store.chunks(Channel::Mic).unwrap().chunks;
     assert_eq!(
         chunks.iter().map(|c| c.format).collect::<Vec<_>>(),
         vec![MONO_16K, STEREO_48K]
@@ -411,7 +412,7 @@ fn a_failed_write_is_reported_and_the_next_chunk_follows_a_gap() {
     writer.write(&block(1), 0).unwrap();
     let summary = writer.finish().unwrap();
 
-    let chunks = store.chunks(Channel::Mic).unwrap();
+    let chunks = store.chunks(Channel::Mic).unwrap().chunks;
     assert_eq!(chunks.len(), 1);
     assert_eq!(chunks[0].index, 1, "the failed index is not reused");
     assert!(chunks[0].after_gap, "the lost block is a gap, not silence");
@@ -465,10 +466,10 @@ fn torn_chunk_with_a_partial_frame_is_trimmed_to_whole_frames_and_kept() {
 }
 
 #[test]
-fn torn_chunk_with_a_truncated_header_is_rebuilt_from_the_previous_chunk() {
+fn torn_chunk_with_a_truncated_header_is_rebuilt_with_an_estimated_format() {
     let tmp = TempDir::new("truncated");
     let (store, _) = crashed_store(&tmp);
-    let before = store.chunks(Channel::Far).unwrap();
+    let before = store.chunks(Channel::Far).unwrap().chunks;
     // The crash hit while the chunk's header was being written.
     let last = chunk_path(&store, 2);
     OpenOptions::new()
@@ -477,10 +478,20 @@ fn torn_chunk_with_a_truncated_header_is_rebuilt_from_the_previous_chunk() {
         .unwrap()
         .set_len(20)
         .unwrap();
-    assert!(matches!(
-        store.chunks(Channel::Far),
-        Err(ChunkError::Unreadable { .. })
-    ));
+    let listed = store.chunks(Channel::Far).unwrap();
+    assert_eq!(
+        listed.chunks,
+        before[..2],
+        "the readable chunks stay visible"
+    );
+    assert_eq!(
+        listed
+            .unreadable
+            .iter()
+            .map(|u| u.index)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
     let intact = snapshot(tmp.path());
 
     let report = store.recover().unwrap();
@@ -490,36 +501,38 @@ fn torn_chunk_with_a_truncated_header_is_rebuilt_from_the_previous_chunk() {
             channel: Channel::Far,
             index: 2,
             from_index: 1,
-            frames_kept: 0,
+            format_estimated: true,
+            bytes_kept: 0,
         }]
     );
     let after = store.chunks(Channel::Far).unwrap();
-    assert_eq!(after.len(), 3);
-    assert_eq!(after[..2], before[..2]);
+    assert!(after.unreadable.is_empty());
+    assert_eq!(after.chunks[..2], before[..2]);
     assert_eq!(
         snapshot(tmp.path())[..2],
         intact[..2],
         "earlier chunks untouched"
     );
-    let rebuilt = &after[2];
-    assert_eq!(rebuilt.format, STEREO_48K);
-    assert_eq!(rebuilt.frames, 0);
-    assert!(rebuilt.host_time_estimated);
+    let rebuilt = &after.chunks[2];
+    assert_eq!((rebuilt.format, rebuilt.frames), (STEREO_48K, 0), "a guess");
+    assert!(rebuilt.format_estimated && rebuilt.host_time_estimated);
     assert_eq!(rebuilt.host_time_ns, at(T0, 96_000, 48_000));
     assert!(store.recover().unwrap().is_clean(), "idempotent");
 }
 
 #[test]
-fn torn_chunk_with_a_zeroed_header_keeps_its_audio() {
-    // After a power cut a file can have its length but zeros where the header was.
+fn torn_last_chunk_with_a_zeroed_header_keeps_every_byte() {
+    // After a power cut a file can have its length but zeros where the header was. Only the
+    // previous chunk survives to rebuild from, so the format is a guess: nothing is trimmed.
     let tmp = TempDir::new("zeroed");
     let (store, audio) = crashed_store(&tmp);
     let last = chunk_path(&store, 2);
     let mut file = OpenOptions::new().write(true).open(&last).unwrap();
     file.write_all(&[0u8; HEADER_LEN]).unwrap();
     file.seek(SeekFrom::End(0)).unwrap();
-    file.write_all(&[1, 2, 3]).unwrap(); // and a partial frame
+    file.write_all(&[1, 2, 3]).unwrap(); // and a torn tail
     drop(file);
+    let torn = std::fs::read(&last).unwrap();
 
     let report = store.recover().unwrap();
     assert_eq!(
@@ -528,14 +541,34 @@ fn torn_chunk_with_a_zeroed_header_keeps_its_audio() {
             channel: Channel::Far,
             index: 2,
             from_index: 1,
-            frames_kept: 24_000,
+            format_estimated: true,
+            bytes_kept: 24_000 * 8 + 3,
         }]
     );
-    assert_eq!(read_all(&store, Channel::Far), audio, "no audio lost");
+    let repaired = std::fs::read(&last).unwrap();
+    assert_eq!(repaired[HEADER_LEN..], torn[HEADER_LEN..], "no byte lost");
+    assert!(
+        store.recover().unwrap().is_clean(),
+        "idempotent: still nothing trimmed"
+    );
+    assert_eq!(std::fs::read(&last).unwrap(), repaired);
+
+    let chunks = store.chunks(Channel::Far).unwrap().chunks;
+    assert!(matches!(
+        store.read(&chunks[2]),
+        Err(ChunkError::FormatEstimated { .. })
+    ));
+    let raw = store.read_raw_samples(&chunks[2]).unwrap();
+    assert_eq!(raw, audio[96_000 * 2..], "every whole sample, as stored");
+    let first_two: Vec<f32> = chunks[..2]
+        .iter()
+        .flat_map(|c| store.read(c).unwrap())
+        .collect();
+    assert_eq!(first_two, audio[..96_000 * 2]);
 }
 
 #[test]
-fn a_torn_first_chunk_is_rebuilt_from_the_next_one() {
+fn a_torn_first_chunk_is_rebuilt_from_the_next_one_with_an_estimated_format() {
     let tmp = TempDir::new("first");
     let (store, audio) = crashed_store(&tmp);
     // Flip one header byte of chunk 0: the checksum no longer matches.
@@ -551,19 +584,123 @@ fn a_torn_first_chunk_is_rebuilt_from_the_next_one() {
             channel: Channel::Far,
             index: 0,
             from_index: 1,
-            frames_kept: 48_000,
+            format_estimated: true,
+            bytes_kept: 48_000 * 8,
         }]
     );
-    let chunks = store.chunks(Channel::Far).unwrap();
+    let chunks = store.chunks(Channel::Far).unwrap().chunks;
     assert_eq!(chunks[0].host_time_ns, T0, "extrapolated back from chunk 1");
-    assert!(chunks[0].host_time_estimated);
+    assert!(chunks[0].host_time_estimated && chunks[0].format_estimated);
+    assert_eq!(
+        store.read_raw_samples(&chunks[0]).unwrap(),
+        audio[..48_000 * 2]
+    );
+}
+
+#[test]
+fn a_torn_chunk_between_matching_continuing_neighbours_gets_a_certain_format() {
+    let tmp = TempDir::new("middle");
+    let (store, audio) = crashed_store(&tmp);
+    let middle = chunk_path(&store, 1);
+    let mut bytes = std::fs::read(&middle).unwrap();
+    bytes[..HEADER_LEN].fill(0);
+    std::fs::write(&middle, &bytes).unwrap();
+
+    let report = store.recover().unwrap();
+    assert_eq!(
+        report.repairs,
+        vec![Repair::RebuiltHeader {
+            channel: Channel::Far,
+            index: 1,
+            from_index: 2,
+            format_estimated: false,
+            bytes_kept: 48_000 * 8,
+        }]
+    );
+    let chunks = store.chunks(Channel::Far).unwrap().chunks;
+    assert!(!chunks[1].format_estimated && chunks[1].host_time_estimated);
+    assert_eq!(
+        chunks[1].host_time_ns,
+        at(T0, 48_000, 48_000),
+        "back from the chunk that continues it"
+    );
     assert_eq!(read_all(&store, Channel::Far), audio);
+}
+
+#[test]
+fn a_torn_chunk_where_the_format_changed_keeps_every_byte_and_flags_the_format() {
+    // The writer reopens on a format change, so a torn header can sit exactly where the format
+    // changed: the chunk before is mono 16 kHz, this one and the next are stereo 48 kHz.
+    let tmp = TempDir::new("format-change");
+    let store = ChunkStore::open(tmp.path())
+        .unwrap()
+        .with_chunk_duration(Duration::from_secs(1));
+    let mut mono = store.writer(Channel::Mic, MONO_16K).unwrap();
+    let mono_audio = write_stream(&mut mono, MONO_16K, 24_000, 320, 40);
+    mono.finish().unwrap();
+    let mut stereo = store.writer(Channel::Mic, STEREO_48K).unwrap();
+    let stereo_audio = write_stream(&mut stereo, STEREO_48K, 72_000, 480, 41);
+    drop(stereo);
+
+    let torn_path = store.dir().join(chunk_file_name(Channel::Mic, 2));
+    let mut torn = std::fs::read(&torn_path).unwrap();
+    torn[..HEADER_LEN].fill(0);
+    torn.extend_from_slice(&[9, 9, 9]); // a torn tail as well
+    std::fs::write(&torn_path, &torn).unwrap();
+
+    let report = store.recover().unwrap();
+    assert_eq!(
+        report.repairs,
+        vec![Repair::RebuiltHeader {
+            channel: Channel::Mic,
+            index: 2,
+            from_index: 3,
+            format_estimated: true,
+            bytes_kept: 48_000 * 8 + 3,
+        }]
+    );
+    let repaired = std::fs::read(&torn_path).unwrap();
+    assert_eq!(repaired.len(), torn.len(), "no byte lost");
+    assert_eq!(repaired[HEADER_LEN..], torn[HEADER_LEN..]);
+    assert!(store.recover().unwrap().is_clean());
+    assert_eq!(std::fs::read(&torn_path).unwrap(), repaired, "idempotent");
+
+    let listed = store.chunks(Channel::Mic).unwrap();
+    assert!(listed.unreadable.is_empty());
+    let flags: Vec<(u64, bool)> = listed
+        .chunks
+        .iter()
+        .map(|c| (c.index, c.format_estimated))
+        .collect();
+    assert_eq!(flags, vec![(0, false), (1, false), (2, true), (3, false)]);
+    let c = &listed.chunks;
+    assert!(matches!(
+        store.read(&c[2]),
+        Err(ChunkError::FormatEstimated { .. })
+    ));
+    assert_eq!(
+        store.read_raw_samples(&c[2]).unwrap(),
+        stereo_audio[..48_000 * 2]
+    );
+    let mono_back: Vec<f32> = c[..2].iter().flat_map(|c| store.read(c).unwrap()).collect();
+    assert_eq!(mono_back, mono_audio);
+    assert_eq!(store.read(&c[3]).unwrap(), stereo_audio[48_000 * 2..]);
+    // The estimated chunk is left out of the rate math; the mono run still measures.
+    assert_eq!(
+        store.rate_check(Channel::Mic).unwrap(),
+        RateVerdict::Consistent {
+            measured_hz: 16_000
+        }
+    );
 }
 
 #[test]
 fn an_unreadable_chunk_with_nothing_to_rebuild_from_is_left_in_place() {
     let tmp = TempDir::new("lone");
-    let store = ChunkStore::open(tmp.path()).unwrap();
+    // One-second chunks, so the resumed stream spans two and the header rate check can measure.
+    let store = ChunkStore::open(tmp.path())
+        .unwrap()
+        .with_chunk_duration(Duration::from_secs(1));
     let mut writer = store.writer(Channel::Mic, MONO_16K).unwrap();
     write_stream(&mut writer, MONO_16K, 1_600, 320, 21);
     drop(writer);
@@ -589,10 +726,35 @@ fn an_unreadable_chunk_with_nothing_to_rebuild_from_is_left_in_place() {
 
     // Capture that resumes into this record does not overwrite it.
     let mut writer = store.writer(Channel::Mic, MONO_16K).unwrap();
-    write_stream(&mut writer, MONO_16K, 320, 320, 22);
+    let resumed = write_stream(&mut writer, MONO_16K, 32_000, 320, 22);
     writer.finish().unwrap();
     assert!(store.dir().join(chunk_file_name(Channel::Mic, 1)).exists());
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+    // The unreadable chunk hides nothing after it: chunk 1 is listed, chunk 0 is reported.
+    let listed = store.chunks(Channel::Mic).unwrap();
+    assert_eq!(
+        listed.chunks.iter().map(|c| c.index).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    let back: Vec<f32> = listed
+        .chunks
+        .iter()
+        .flat_map(|c| store.read(c).unwrap())
+        .collect();
+    assert_eq!(back, resumed);
+    assert_eq!(listed.unreadable.len(), 1);
+    let lost = &listed.unreadable[0];
+    assert_eq!((lost.channel, lost.index), (Channel::Mic, 0));
+    assert_eq!(lost.path, path);
+    assert_eq!(lost.reason, "not a chunk header");
+    assert_eq!(
+        store.rate_check(Channel::Mic).unwrap(),
+        RateVerdict::Consistent {
+            measured_hz: 16_000
+        },
+        "the rate check runs on the readable chunks"
+    );
 }
 
 #[test]
@@ -645,7 +807,7 @@ fn rate_mismatch_48k_audio_declared_as_16k_is_reported_not_resampled() {
         "every sample kept, none resampled"
     );
     assert_eq!(summary.gaps, 0, "a wrong rate is not a gap");
-    let chunks = store.chunks(Channel::Mic).unwrap();
+    let chunks = store.chunks(Channel::Mic).unwrap().chunks;
     assert!(
         chunks.iter().all(|c| c.format == MONO_16K),
         "the declared rate stays in the header"

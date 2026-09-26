@@ -66,6 +66,7 @@ fn replaying_a_fixture_twice_gives_byte_identical_chunks() {
         let samples: Vec<f32> = store
             .chunks(Channel::Mic)
             .unwrap()
+            .chunks
             .iter()
             .flat_map(|c| store.read(c).unwrap())
             .collect();
@@ -316,7 +317,7 @@ fn a_mislabelled_rate_is_caught_end_to_end_and_the_audio_kept() {
             measured_hz: 48_000
         }
     );
-    let chunks = store.chunks(Channel::Mic).unwrap();
+    let chunks = store.chunks(Channel::Mic).unwrap().chunks;
     assert!(chunks.iter().all(|c| c.format == MONO_16K));
     let kept: Vec<f32> = chunks.iter().flat_map(|c| store.read(c).unwrap()).collect();
     assert_eq!(kept, audio, "not resampled");
