@@ -46,6 +46,8 @@ recordings/
 inkwell_debug*.wav
 # Add sound assets with `git add -f` if any are ever bundled.
 *.wav
+# Test fixtures are public-licensed excerpts (fixtures/ATTRIBUTION.md), tracked on purpose.
+!fixtures/**/*.wav
 
 # Editor directories and files
 .vscode/*

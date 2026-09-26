@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::lock;
 use crate::audio::Channel;
 use crate::engine::{
-    AsrEvent, Diarizer, EngineInfo, EngineStream, Job, OfflineEngine, SpeakerTurn, StreamingEngine,
-    TranscribeOptions, Transcript,
+    AsrEvent, DiarizeInput, Diarizer, EngineInfo, EngineStream, Job, OfflineEngine, SpeakerTurn,
+    StreamingEngine, TranscribeOptions, Transcript,
 };
 use crate::error::{EngineError, LlmError};
 use crate::llm::{Endpoint, Llm, LlmInfo, LlmRequest, LlmResponse};
@@ -195,10 +195,13 @@ impl EngineStream for MockStream {
     }
 }
 
-/// A diarizer that returns the same turns every time.
+/// A diarizer that returns the same turns every time, whatever the audio. It reads its whole
+/// input, as a real one does, and counts what it was given.
 pub struct MockDiarizer {
     turns: Vec<SpeakerTurn>,
     calls: AtomicUsize,
+    samples: AtomicU64,
+    largest: AtomicUsize,
 }
 
 impl MockDiarizer {
@@ -207,12 +210,24 @@ impl MockDiarizer {
         Self {
             turns,
             calls: AtomicUsize::new(0),
+            samples: AtomicU64::new(0),
+            largest: AtomicUsize::new(0),
         }
     }
 
     /// Offline calls so far.
     pub fn calls(&self) -> usize {
         self.calls.load(Ordering::Relaxed)
+    }
+
+    /// Samples read by the offline calls so far.
+    pub fn samples(&self) -> u64 {
+        self.samples.load(Ordering::Relaxed)
+    }
+
+    /// The largest window an offline call was handed.
+    pub fn largest_window(&self) -> usize {
+        self.largest.load(Ordering::Relaxed)
     }
 }
 
@@ -227,13 +242,18 @@ impl Diarizer for MockDiarizer {
 
     fn diarize(
         &self,
-        _audio: &[f32],
+        audio: &mut dyn DiarizeInput,
         cancel: &CancelToken,
     ) -> Result<Vec<SpeakerTurn>, EngineError> {
         if cancel.is_cancelled() {
             return Err(EngineError::Cancelled);
         }
         self.calls.fetch_add(1, Ordering::Relaxed);
+        while let Some(window) = audio.next_window() {
+            self.samples
+                .fetch_add(window.len() as u64, Ordering::Relaxed);
+            self.largest.fetch_max(window.len(), Ordering::Relaxed);
+        }
         Ok(self.turns.clone())
     }
 

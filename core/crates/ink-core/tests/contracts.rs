@@ -736,7 +736,7 @@ fn cancelled_calls_stop_before_any_work() {
 
     let diarizer = MockDiarizer::new(vec![]);
     assert_eq!(
-        diarizer.diarize(&[], &opts.cancel),
+        diarizer.diarize(&mut SliceWindows::new(&[]), &opts.cancel),
         Err(EngineError::Cancelled)
     );
     let llm = MockLlm::new(Endpoint::InProcess, "ok");
@@ -796,7 +796,12 @@ fn diarizer_streams_and_offline_calls_return_its_turns() {
         end_ms: 2_000,
     }];
     let diarizer = MockDiarizer::new(turns.clone());
-    assert_eq!(diarizer.diarize(&[], &CancelToken::new()).unwrap(), turns);
+    assert_eq!(
+        diarizer
+            .diarize(&mut SliceWindows::new(&[]), &CancelToken::new())
+            .unwrap(),
+        turns
+    );
     assert_eq!(diarizer.calls(), 1);
 
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1134,4 +1139,42 @@ fn losing_the_hotkey_mid_hold_cancels_the_hold_first() {
         3,
         "idle loss sends Lost alone"
     );
+}
+
+/// The offline diarizer pulls its audio a window at a time: a buffer in memory is cut into
+/// consecutive windows of at most `MAX_DIARIZE_WINDOW`, nothing lost or repeated.
+#[test]
+fn a_buffer_is_handed_to_the_diarizer_in_capped_consecutive_windows() {
+    let audio: Vec<f32> = (0..2 * MAX_DIARIZE_WINDOW + 7).map(|i| i as f32).collect();
+    let mut input = SliceWindows::new(&audio);
+    let mut seen = Vec::new();
+    let mut sizes = Vec::new();
+    while let Some(window) = input.next_window() {
+        sizes.push(window.len());
+        seen.extend_from_slice(window);
+    }
+    assert_eq!(sizes, [MAX_DIARIZE_WINDOW, MAX_DIARIZE_WINDOW, 7]);
+    assert_eq!(seen, audio);
+    assert!(input.next_window().is_none(), "the end stays the end");
+    let mut small = SliceWindows::with_window(&audio[..10], 4);
+    let sizes: Vec<usize> = std::iter::from_fn(|| small.next_window().map(<[f32]>::len)).collect();
+    assert_eq!(sizes, [4, 4, 2]);
+    // A window above the cap is capped.
+    let mut big = SliceWindows::with_window(&audio, usize::MAX);
+    assert_eq!(
+        big.next_window().map(<[f32]>::len),
+        Some(MAX_DIARIZE_WINDOW)
+    );
+}
+
+/// The mock drains its input, as a real diarizer does, and says what it was given.
+#[test]
+fn the_mock_diarizer_reads_its_whole_input() {
+    let diarizer = MockDiarizer::new(vec![]);
+    let audio = vec![0.1f32; MAX_DIARIZE_WINDOW + 5];
+    diarizer
+        .diarize(&mut SliceWindows::new(&audio), &CancelToken::new())
+        .unwrap();
+    assert_eq!(diarizer.samples(), audio.len() as u64);
+    assert_eq!(diarizer.largest_window(), MAX_DIARIZE_WINDOW);
 }

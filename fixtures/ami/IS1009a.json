@@ -1,0 +1,41 @@
+{
+  "dataset": "AMI Meeting Corpus",
+  "licence": "CC-BY-4.0",
+  "meeting": "IS1009a",
+  "source": {
+    "dir": "ami-ihm-full/IS1009a",
+    "format": "16 kHz mono 16-bit PCM WAV, individual headset microphones",
+    "sha256": {
+      "IS1009a.Headset-0.wav": "634f42207e488b0eab3b34a81ff16d565705f8fc5e37be7cc3c3b56617ae3257",
+      "IS1009a.Headset-1.wav": "db98d175dda0d07613795c715667a72b99c5372aabd14ee4dcb94d1fa9c273ee",
+      "IS1009a.Headset-2.wav": "9e28bfd55727b07d6a6020b7bf2797d113b35c69a1a3ad25cc4150be0937bf28",
+      "IS1009a.Headset-3.wav": "7a0b041ad2f2cd9af1c8fcee08e598d6d88bd8f77a3174d7eb9e281a30ca0413"
+    }
+  },
+  "range": {
+    "start_s": 792.5,
+    "end_s": 822.5,
+    "start_sample": 12680000,
+    "end_sample": 13160000,
+    "chosen_by": "30 s windows ranked by seconds of 100 ms frames in which each headset was the loudest and within 12 dB of its own 95th-percentile level: 4.8 s (headset 0), 2.6 s, 4.6 s and 3.0 s (headsets 1-3), so all three remote speakers talk; both ends moved to the quietest 10 ms nearby"
+  },
+  "channels": [
+    {
+      "file": "IS1009a-mic.wav",
+      "stream": "mic",
+      "sources": ["IS1009a.Headset-0.wav"],
+      "gain": 1.0,
+      "sha256": "3646ed509124cd3e0ef71406fd0fcc3b954d4c96e783fb0a2c34a25a2b4006bf"
+    },
+    {
+      "file": "IS1009a-far.wav",
+      "stream": "far",
+      "sources": ["IS1009a.Headset-1.wav", "IS1009a.Headset-2.wav", "IS1009a.Headset-3.wav"],
+      "gain": 0.88,
+      "sha256": "9f7ced9793b04a5f90c26ddd3f06510f96b1911274179d132608f3ae1ea6a27d"
+    }
+  ],
+  "mix": "per channel: sum the sources' 16-bit samples, multiply by gain, round half to even, clip to 16 bits (the far sum peaks at 1.121 of full scale over the range; 0.88 keeps it under)",
+  "notes": "Individual headsets hear the other talkers faintly (crosstalk), so the far channel carries headset 0's voice some 20 dB down, and the mic channel the others'. A real system tap would not.",
+  "regenerate": "INK_BENCH_DIR=<bench directory> python3 fixtures/ami/make_excerpt.py"
+}

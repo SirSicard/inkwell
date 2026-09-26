@@ -39,8 +39,9 @@ pub use audio::{
 };
 pub use clock::Clock;
 pub use engine::{
-    AsrEvent, Diarizer, EngineInfo, EngineStream, Job, OfflineEngine, SpeakerId, SpeakerTurn,
-    StreamingEngine, TimedText, TranscribeOptions, Transcript,
+    AsrEvent, DiarizeInput, Diarizer, EngineInfo, EngineStream, Job, MAX_DIARIZE_WINDOW,
+    OfflineEngine, SliceWindows, SpeakerId, SpeakerTurn, StreamingEngine, TimedText,
+    TranscribeOptions, Transcript,
 };
 pub use error::{EngineError, LlmError, PlatformError, StoreError};
 pub use llm::{Endpoint, Llm, LlmInfo, LlmRequest, LlmResponse};

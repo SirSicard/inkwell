@@ -1,8 +1,10 @@
-//! Stage 2 for dictation: the mic stream after the capture ring, turned into 16 kHz mono with the
-//! host time of every block.
+//! Stage 2: a capture stream after the capture ring, turned into 16 kHz mono with the host time of
+//! every block. Dictation uses it for the mic; a meeting uses one per side
+//! ([`MicPath::for_channel`]), and the far end is averaged rather than reduced to its primary
+//! channel (see [`Downmix`]).
 //!
 //! ```text
-//! ring ─► CapturedBlock (device format) ─► Downmix::Primary ─► StreamResampler ─► 16 kHz mono
+//! ring ─► CapturedBlock (device format) ─► Downmix (mic: primary, far: average) ─► StreamResampler ─► 16 kHz mono
 //! ```
 //!
 //! The host time is what lets a key press, stamped on the same clock, be placed on the sample
@@ -64,12 +66,13 @@ impl From<ResampleError> for MicPathError {
     }
 }
 
-/// The mic's downmix and resampler, built once per device stream.
+/// A stream's downmix and resampler, built once per device stream.
 ///
 /// **Pump or worker.** `push` allocates nothing once its buffers have grown to the device's block
 /// size.
 pub struct MicPath {
     format: StreamFormat,
+    downmix: Downmix,
     resampler: StreamResampler,
     mono: Vec<f32>,
     out: Vec<f32>,
@@ -80,11 +83,18 @@ pub struct MicPath {
 impl MicPath {
     /// A path for a mic stream in `format`. **Allocates.**
     pub fn new(format: StreamFormat) -> Result<Self, MicPathError> {
+        Self::for_channel(Channel::Mic, format)
+    }
+
+    /// A path for `channel`'s stream in `format`, downmixed as that side needs
+    /// ([`Downmix::for_channel`]). **Allocates.**
+    pub fn for_channel(channel: Channel, format: StreamFormat) -> Result<Self, MicPathError> {
         if format.channels == 0 {
             return Err(MicPathError::NoChannels);
         }
         Ok(Self {
             format,
+            downmix: Downmix::for_channel(channel),
             resampler: StreamResampler::new(format.sample_rate)?,
             mono: Vec::new(),
             out: Vec::new(),
@@ -102,11 +112,8 @@ impl MicPath {
             });
         }
         self.mono.clear();
-        Downmix::for_channel(Channel::Mic).apply(
-            block.samples,
-            block.format.channels,
-            &mut self.mono,
-        );
+        self.downmix
+            .apply(block.samples, block.format.channels, &mut self.mono);
         self.out.clear();
         self.out
             .reserve(self.resampler.max_output_frames(self.mono.len()));
@@ -203,6 +210,22 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_far_end_is_averaged_not_reduced_to_its_first_channel() {
+        let mut path = MicPath::for_channel(Channel::Far, STEREO_48K).unwrap();
+        // A voice panned hard right: the left channel is silent.
+        let mut interleaved = Vec::new();
+        for i in 0..4_800 {
+            interleaved.extend([0.0, (i as f32 * 0.05).sin() * 0.5]);
+        }
+        let mut energy = 0.0f32;
+        for chunk in interleaved.chunks(960) {
+            let out = path.push(&block(chunk, STEREO_48K, 0)).unwrap();
+            energy += out.samples.iter().map(|s| s * s).sum::<f32>();
+        }
+        assert!(energy > 1.0, "the right-hand voice came through");
     }
 
     #[test]

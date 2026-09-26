@@ -7,6 +7,12 @@ Every excerpt gets a row: the file, the dataset, the source item and time range,
 
 | File | Dataset | Source item and range | Licence |
 |---|---|---|---|
+| `ami/IS1009a-mic.wav` | AMI Meeting Corpus | meeting IS1009a, individual headset 0, 792.5–822.5 s | CC-BY-4.0 |
+| `ami/IS1009a-far.wav` | AMI Meeting Corpus | meeting IS1009a, individual headsets 1–3 summed and scaled by 0.88, 792.5–822.5 s | CC-BY-4.0 |
+
+The AMI excerpts are modified: cut to 30 s, and the far side is a mix of three headsets. The
+manifest `ami/IS1009a.json` records the source files' SHA-256, the range and the mix, and
+`ami/make_excerpt.py` regenerates both files byte for byte from the corpus.
 
 ## Datasets
 

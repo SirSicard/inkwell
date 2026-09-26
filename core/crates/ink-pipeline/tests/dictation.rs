@@ -747,17 +747,55 @@ fn wer_counts_word_edits() {
     assert_eq!(wer("a b", ""), 1.0);
 }
 
-/// The dictation engine the router would pick on this machine. No adapter is built into this
-/// branch yet (the llama.cpp one lands separately); until then this test cannot run.
-fn real_dictation_engine() -> Arc<dyn ink_core::OfflineEngine> {
-    panic!("no real dictation engine is built into this branch: the llama.cpp adapter provides it")
+/// Qwen3-ASR 1.7B, the dictation engine the router picks on a Mac (the gate's choice), loaded from
+/// `$INK_BENCH_DIR/models/qwen3-asr-1.7b-gguf/`.
+#[cfg(feature = "engine-llama")]
+fn real_dictation_engine(bench: &std::path::Path) -> Arc<dyn ink_core::OfflineEngine> {
+    let row = ink_engines::Registry::builtin()
+        .expect("the built-in registry")
+        .get("qwen3-asr-1.7b-q8")
+        .expect("the Qwen3-ASR row")
+        .clone();
+    let dir = bench.join("models/qwen3-asr-1.7b-gguf");
+    Arc::new(
+        ink_engines::llama::QwenAsr::load(
+            &dir.join(&row.files[0].name),
+            &dir.join(&row.files[1].name),
+            row.info(),
+        )
+        .expect("Qwen3-ASR loads"),
+    )
 }
 
-/// An AMI close-talk clip dictated through the whole chain with a real engine and a real
-/// resampler path, against its human transcript. Run with
-/// `INK_BENCH_DIR=<bench data> cargo test -p ink-pipeline -- --ignored`.
+/// A bench clip: 16 kHz mono, stored as 32-bit float (the AMI IHM clips) or 16-bit PCM.
+#[cfg(feature = "engine-llama")]
+fn read_clip(path: &std::path::Path) -> Vec<f32> {
+    let mut reader = hound::WavReader::open(path).expect("the clip");
+    let spec = reader.spec();
+    assert_eq!(
+        (spec.sample_rate, spec.channels),
+        (16_000, 1),
+        "a 16 kHz mono clip"
+    );
+    match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .map(|s| s.expect("a sample"))
+            .collect(),
+        hound::SampleFormat::Int => reader
+            .samples::<i16>()
+            .map(|s| f32::from(s.expect("a sample")) / 32_768.0)
+            .collect(),
+    }
+}
+
+/// An AMI close-talk clip dictated through the whole chain with Qwen3-ASR and a real resampler
+/// path, against its human transcript. Run with
+/// `INK_BENCH_DIR=<bench data> cargo test -p ink-pipeline --features engine-llama --release -- --ignored a_real_engine`.
+/// Measured on an M5 Pro (2026-09-26): WER 0.186 on `ami-ihm-00.wav` (70.6 s).
+#[cfg(feature = "engine-llama")]
 #[test]
-#[ignore = "needs $INK_BENCH_DIR and a real dictation engine"]
+#[ignore = "needs $INK_BENCH_DIR (an AMI clip and the Qwen3-ASR model); run locally"]
 fn a_real_engine_transcribes_a_bench_clip_through_the_chain() {
     use ink_core::mock::{MemStore, MockPlatform};
     use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
@@ -770,19 +808,16 @@ fn a_real_engine_transcribes_a_bench_clip_through_the_chain() {
         fields.next().expect("a file"),
         fields.next().expect("a text"),
     );
-    let mut reader = hound::WavReader::open(dir.join("ami-ihm").join(file)).expect("the clip");
-    assert_eq!(reader.spec().sample_rate, 16_000, "a 16 kHz clip");
-    let clip: Vec<f32> = reader
-        .samples::<i16>()
-        .map(|s| f32::from(s.expect("a sample")) / 32_768.0)
-        .collect();
+    // The reference column is followed by more tab-separated columns; the text is the first.
+    let reference = reference.split('\t').next().expect("a text");
+    let clip = read_clip(&dir.join("ami-ihm").join(file));
 
     let platform = Arc::new(MockPlatform::new());
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     let mut chain = DictationChain::new(
         Services {
-            engine: real_dictation_engine(),
+            engine: real_dictation_engine(&dir),
             store: Arc::new(MemStore::new()),
             inserter: platform.clone(),
             focus: platform.clone(),

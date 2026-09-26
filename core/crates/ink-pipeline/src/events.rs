@@ -21,6 +21,9 @@ pub enum VadUnavailable {
     Downloading,
     /// It could not be loaded.
     LoadFailed,
+    /// It failed while running (a meeting's AGC or final pass), and the fallback took over for
+    /// the rest of that stream or pass.
+    Failed,
 }
 
 /// Whether takes are levelled with voice detection.
