@@ -644,10 +644,12 @@ impl ChunkStore {
                 _ => continue,
             };
             let path = entry.path();
-            // Follows links, so a link to a chunk works and a link to nowhere is reported.
-            let problem = match fs::metadata(&path) {
-                Err(_) => {
-                    Some("cannot be examined: a dangling link, no permission, or it vanished")
+            // Never follows a link: the store owns its directory, and recovery must never write
+            // through a link to a file somewhere else. A link is reported like any other stranger.
+            let problem = match fs::symlink_metadata(&path) {
+                Err(_) => Some("cannot be examined: no permission, or it vanished"),
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    Some("a link; the store never follows links out of its directory")
                 }
                 Ok(meta) if !meta.is_file() => Some("not a regular file"),
                 Ok(_) if name.is_none() => Some(UNPLACEABLE),

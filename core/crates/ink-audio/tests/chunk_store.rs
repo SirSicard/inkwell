@@ -1285,3 +1285,61 @@ fn rate_mismatch_is_found_from_the_headers_after_a_crash() {
         }
     );
 }
+
+/// The store owns its directory and never follows a link out of it: a link named like a chunk is
+/// reported, never read, and recovery never writes through it, even when it points at a real,
+/// torn chunk file elsewhere.
+#[cfg(unix)]
+#[test]
+fn a_link_named_like_a_chunk_is_reported_and_never_followed() {
+    let tmp = TempDir::new("link");
+    let outside = TempDir::new("link-target");
+    let store = ChunkStore::open(tmp.path())
+        .unwrap()
+        .with_chunk_duration(Duration::from_secs(1));
+    let mut writer = store.writer(Channel::Mic, MONO_16K).unwrap();
+    let audio = write_stream(&mut writer, MONO_16K, 32_000, 320, 52);
+    writer.finish().unwrap();
+
+    // A genuine chunk 6 (its header agrees with its name) in another store outside this one,
+    // torn by 3 bytes and linked in where chunk 6 would be. Following the link, recovery would
+    // trim that outside file.
+    let other = ChunkStore::open(outside.path())
+        .unwrap()
+        .with_chunk_duration(Duration::from_secs(1));
+    let mut other_writer = other.writer(Channel::Mic, MONO_16K).unwrap();
+    write_stream(&mut other_writer, MONO_16K, 7 * 16_000 + 320, 320, 53);
+    other_writer.finish().unwrap();
+    let name = chunk_file_name(Channel::Mic, 6, MONO_16K);
+    let target = other.dir().join(&name);
+    assert!(target.is_file(), "the outside store wrote a chunk 6");
+    let mut torn = OpenOptions::new().append(true).open(&target).unwrap();
+    torn.write_all(&[1, 2, 3]).unwrap();
+    drop(torn);
+    let before = std::fs::read(&target).unwrap();
+    let link = store.dir().join(&name);
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let listed = store.chunks(Channel::Mic).unwrap();
+    assert_eq!(
+        listed.chunks.iter().map(|c| c.index).collect::<Vec<_>>(),
+        vec![0, 1],
+        "the link is not read as a chunk"
+    );
+    assert_eq!(
+        listed
+            .unreadable
+            .iter()
+            .map(|u| (u.index, u.path.clone()))
+            .collect::<Vec<_>>(),
+        vec![(Some(6), link.clone())]
+    );
+    assert_eq!(read_all(&store, Channel::Mic), audio);
+
+    store.recover().unwrap();
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        before,
+        "recovery never writes through a link"
+    );
+}
