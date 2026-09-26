@@ -778,6 +778,7 @@ fn a_lost_hotkey_stays_lost_until_started_again() {
         *events.lock().unwrap(),
         vec![
             HotkeyEvent::Pressed { at_ns: 0 },
+            HotkeyEvent::Cancelled,
             HotkeyEvent::Lost,
             HotkeyEvent::Pressed { at_ns: 0 },
         ]
