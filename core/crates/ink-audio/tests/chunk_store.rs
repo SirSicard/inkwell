@@ -941,6 +941,149 @@ fn a_name_and_header_that_disagree_are_reported_and_left_untouched() {
 }
 
 #[test]
+fn a_wrong_format_guess_at_a_real_format_change_keeps_every_byte_and_is_refused() {
+    // Mono chunks, then the stream switches to stereo: its first stereo chunk is renamed by hand
+    // to a name without a format, and torn. The only neighbour is mono, so the guess is mono, and
+    // wrong. It must stay a flagged guess that destroys nothing.
+    let tmp = TempDir::new("wrong-guess");
+    let store = ChunkStore::open(tmp.path())
+        .unwrap()
+        .with_chunk_duration(Duration::from_secs(1));
+    let mut mono = store.writer(Channel::Mic, MONO_16K).unwrap();
+    let mono_audio = write_stream(&mut mono, MONO_16K, 24_000, 320, 50);
+    mono.finish().unwrap();
+    let mut stereo = store.writer(Channel::Mic, STEREO_48K).unwrap();
+    let stereo_audio = write_stream(&mut stereo, STEREO_48K, 36_000, 480, 51);
+    drop(stereo);
+    let renamed = store.dir().join("mic-000002.pcm");
+    std::fs::rename(path_of(&store, Channel::Mic, 2), &renamed).unwrap();
+    let torn = tear(&renamed, &[7, 7, 7]);
+
+    let report = store.recover().unwrap();
+    assert_eq!(
+        report.repairs,
+        vec![Repair::RebuiltHeader {
+            channel: Channel::Mic,
+            index: 2,
+            time_from: Some(1),
+            format_estimated: true,
+            bytes_kept: 36_000 * 8 + 3,
+        }]
+    );
+    let repaired = std::fs::read(&renamed).unwrap();
+    assert_eq!(repaired.len(), torn.len(), "every byte kept");
+    assert_eq!(repaired[HEADER_LEN..], torn[HEADER_LEN..]);
+    assert!(
+        store.recover().unwrap().is_clean(),
+        "the wrong frame size never trims"
+    );
+    assert_eq!(std::fs::read(&renamed).unwrap(), repaired);
+
+    let listed = store.chunks(Channel::Mic).unwrap();
+    let guessed = &listed.chunks[2];
+    assert!(guessed.format_estimated);
+    assert_eq!(
+        guessed.format, MONO_16K,
+        "the guess, wrong and flagged as a guess"
+    );
+    assert!(matches!(
+        store.read(guessed),
+        Err(ChunkError::FormatEstimated { .. })
+    ));
+    assert_eq!(
+        store.read_raw_samples(guessed).unwrap(),
+        stereo_audio,
+        "the samples as stored; the caller decides what they are"
+    );
+    let mono_back: Vec<f32> = listed.chunks[..2]
+        .iter()
+        .flat_map(|c| store.read(c).unwrap())
+        .collect();
+    assert_eq!(mono_back, mono_audio);
+    // Read at the guessed 16 kHz mono, 72000 "frames" would span 4.5 s; the check leaves the
+    // chunk out, so the mono run still measures right.
+    assert_eq!(
+        store.rate_check(Channel::Mic).unwrap(),
+        RateVerdict::Consistent {
+            measured_hz: 16_000
+        }
+    );
+}
+
+#[test]
+fn an_entry_named_like_a_chunk_that_is_not_a_readable_file_is_reported_and_hides_nothing() {
+    let tmp = TempDir::new("not-a-file");
+    let store = ChunkStore::open(tmp.path())
+        .unwrap()
+        .with_chunk_duration(Duration::from_secs(1));
+    let mut writer = store.writer(Channel::Mic, MONO_16K).unwrap();
+    let audio = write_stream(&mut writer, MONO_16K, 32_000, 320, 52);
+    writer.finish().unwrap();
+    // A directory where chunk 5 would be: stat works, but it is no chunk.
+    let dir_entry = store.dir().join(chunk_file_name(Channel::Mic, 5, MONO_16K));
+    std::fs::create_dir(&dir_entry).unwrap();
+    let mut expected = vec![(Some(5), dir_entry.clone())];
+    // A link to nowhere where chunk 7 would be: stat itself fails.
+    #[cfg(unix)]
+    {
+        let dangling = store.dir().join(chunk_file_name(Channel::Mic, 7, MONO_16K));
+        std::os::unix::fs::symlink(store.dir().join("gone"), &dangling).unwrap();
+        expected.push((Some(7), dangling));
+    }
+
+    let listed = store.chunks(Channel::Mic).unwrap();
+    assert_eq!(
+        listed.chunks.iter().map(|c| c.index).collect::<Vec<_>>(),
+        vec![0, 1],
+        "the real chunks are all still listed"
+    );
+    assert_eq!(
+        listed
+            .unreadable
+            .iter()
+            .map(|u| (u.index, u.path.clone()))
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(listed.unreadable.iter().all(|u| !u.reason.is_empty()));
+    assert_eq!(read_all(&store, Channel::Mic), audio);
+    assert_eq!(
+        store.rate_check(Channel::Mic).unwrap(),
+        RateVerdict::Consistent {
+            measured_hz: 16_000
+        }
+    );
+
+    let report = store.recover().unwrap();
+    let reported: Vec<Option<u64>> = report
+        .repairs
+        .iter()
+        .map(|r| match r {
+            Repair::Unrecoverable { index, .. } => *index,
+            other => panic!("unexpected repair {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        reported,
+        expected.iter().map(|e| e.0).collect::<Vec<_>>(),
+        "reported, and left as they are"
+    );
+    assert!(dir_entry.is_dir());
+
+    // A writer never reuses an index a name already claims, readable or not.
+    let mut writer = store.writer(Channel::Mic, MONO_16K).unwrap();
+    write_stream(&mut writer, MONO_16K, 320, 320, 53);
+    writer.finish().unwrap();
+    let next = if cfg!(unix) { 8 } else { 6 };
+    assert!(
+        store
+            .dir()
+            .join(chunk_file_name(Channel::Mic, next, MONO_16K))
+            .is_file()
+    );
+}
+
+#[test]
 fn recovery_of_intact_chunks_changes_nothing() {
     let tmp = TempDir::new("intact");
     let (store, _) = crashed_store(&tmp);

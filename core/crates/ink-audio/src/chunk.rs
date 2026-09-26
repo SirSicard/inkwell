@@ -480,10 +480,30 @@ const UNPLACEABLE: &str = "the file name gives no position in the sequence";
 /// Chunk files of one channel, by what their names say.
 #[derive(Default)]
 struct Listing {
-    /// Placed by their names, in index order.
+    /// Regular files placed by their names, in index order.
     named: Vec<(ChunkName, PathBuf)>,
-    /// Chunk files of this channel whose names give no index.
-    unplaceable: Vec<PathBuf>,
+    /// Entries named like this channel's chunks that cannot be used: no index in the name, not a
+    /// regular file, or not examinable at all. In index order, those without one last.
+    problems: Vec<Problem>,
+}
+
+impl Listing {
+    /// One past the highest index any name claims, readable or not: a writer never reuses one.
+    fn next_index(&self) -> u64 {
+        let named = self.named.iter().map(|(name, _)| name.index);
+        let claimed = self.problems.iter().filter_map(|p| p.index);
+        named
+            .chain(claimed)
+            .max()
+            .map_or(0, |index| index.saturating_add(1))
+    }
+}
+
+/// An entry that looks like one of this channel's chunks but cannot be used as one.
+struct Problem {
+    index: Option<u64>,
+    path: PathBuf,
+    reason: &'static str,
 }
 
 /// What a chunk file's header says, measured against its name.
@@ -508,14 +528,24 @@ struct Found {
 }
 
 impl Found {
-    fn inspect(name: ChunkName, path: PathBuf) -> Result<Self, ChunkError> {
-        let mut file = File::open(&path).map_err(io_error("open", &path))?;
-        let len = file.metadata().map_err(io_error("stat", &path))?.len();
+    /// Reads the header. A file that cannot be opened or read is a reason, not an error: it is
+    /// reported with the channel's other chunks, never allowed to hide them.
+    fn inspect(name: ChunkName, path: PathBuf) -> Result<Self, (&'static str, PathBuf)> {
+        let Ok(mut file) = File::open(&path) else {
+            return Err(("cannot be opened", path));
+        };
+        let Ok(meta) = file.metadata() else {
+            return Err(("cannot be examined", path));
+        };
+        let len = meta.len();
         let mut head = Vec::with_capacity(HEADER_LEN);
-        (&mut file)
+        if (&mut file)
             .take(HEADER_BYTES)
             .read_to_end(&mut head)
-            .map_err(io_error("read", &path))?;
+            .is_err()
+        {
+            return Err(("cannot be read", path));
+        }
         let state = match Header::decode(&head) {
             Err(reason) => State::Torn(reason),
             Ok(h) if h.channel != name.channel || h.index != name.index => {
@@ -600,31 +630,42 @@ impl ChunkStore {
     fn list(&self, channel: Channel) -> Result<Listing, ChunkError> {
         let mut listing = Listing::default();
         for entry in fs::read_dir(&self.dir).map_err(io_error("list", &self.dir))? {
+            // Only a failure to list the directory is an error; one bad entry never hides the rest.
             let entry = entry.map_err(io_error("list", &self.dir))?;
             let parsed = entry
                 .file_name()
                 .to_str()
                 .map_or(ParsedName::Foreign, parse_chunk_file_name);
-            let ours = match parsed {
-                ParsedName::Chunk(name) => name.channel == channel,
-                ParsedName::Unparseable(c) => c == channel,
-                ParsedName::Foreign => false,
+            let (index, name) = match parsed {
+                ParsedName::Chunk(name) if name.channel == channel => {
+                    (Some(name.index), Some(name))
+                }
+                ParsedName::Unparseable(c) if c == channel => (None, None),
+                _ => continue,
             };
-            let is_file = ours
-                && entry
-                    .file_type()
-                    .map_err(io_error("stat", &entry.path()))?
-                    .is_file();
-            if !is_file {
-                continue;
-            }
-            match parsed {
-                ParsedName::Chunk(name) => listing.named.push((name, entry.path())),
-                _ => listing.unplaceable.push(entry.path()),
+            let path = entry.path();
+            // Follows links, so a link to a chunk works and a link to nowhere is reported.
+            let problem = match fs::metadata(&path) {
+                Err(_) => {
+                    Some("cannot be examined: a dangling link, no permission, or it vanished")
+                }
+                Ok(meta) if !meta.is_file() => Some("not a regular file"),
+                Ok(_) if name.is_none() => Some(UNPLACEABLE),
+                Ok(_) => None,
+            };
+            match (problem, name) {
+                (None, Some(name)) => listing.named.push((name, path)),
+                (reason, _) => listing.problems.push(Problem {
+                    index,
+                    path,
+                    reason: reason.unwrap_or(UNPLACEABLE),
+                }),
             }
         }
         listing.named.sort_unstable_by_key(|(name, _)| name.index);
-        listing.unplaceable.sort_unstable();
+        listing.problems.sort_unstable_by(|a, b| {
+            (a.index.is_none(), a.index, &a.path).cmp(&(b.index.is_none(), b.index, &b.path))
+        });
         Ok(listing)
     }
 
@@ -643,11 +684,7 @@ impl ChunkStore {
             u128::from(format.sample_rate) * self.chunk_duration.as_nanos() / 1_000_000_000;
         let chunk_frames = u64::try_from(chunk_frames).unwrap_or(u64::MAX).max(1);
         // After every existing file, readable or not: a writer never reuses an index.
-        let next_index = self
-            .list(channel)?
-            .named
-            .last()
-            .map_or(0, |(name, _)| name.index.saturating_add(1));
+        let next_index = self.list(channel)?.next_index();
         Ok(ChunkWriter {
             dir: self.dir.clone(),
             channel,
@@ -679,7 +716,18 @@ impl ChunkStore {
         let listing = self.list(channel)?;
         let mut list = ChunkList::default();
         for (name, path) in listing.named {
-            let found = Found::inspect(name, path)?;
+            let found = match Found::inspect(name, path) {
+                Ok(found) => found,
+                Err((reason, path)) => {
+                    list.unreadable.push(UnreadableChunk {
+                        channel,
+                        index: Some(name.index),
+                        reason,
+                        path,
+                    });
+                    continue;
+                }
+            };
             let header = match found.state {
                 State::Valid(header) => header,
                 State::Torn(reason) | State::Conflict(reason) => {
@@ -705,12 +753,14 @@ impl ChunkStore {
             });
         }
         list.unreadable
-            .extend(listing.unplaceable.into_iter().map(|path| UnreadableChunk {
+            .extend(listing.problems.into_iter().map(|p| UnreadableChunk {
                 channel,
-                index: None,
-                reason: UNPLACEABLE,
-                path,
+                index: p.index,
+                reason: p.reason,
+                path: p.path,
             }));
+        list.unreadable
+            .sort_by_key(|u| (u.index.is_none(), u.index));
         Ok(list)
     }
 
@@ -778,10 +828,18 @@ impl ChunkStore {
         channel: Channel,
         repairs: &mut Vec<Repair>,
     ) -> Result<(), ChunkError> {
-        let Listing { named, unplaceable } = self.list(channel)?;
+        let Listing { named, problems } = self.list(channel)?;
         let mut found = Vec::new();
         for (name, path) in named {
-            found.push(Found::inspect(name, path)?);
+            match Found::inspect(name, path) {
+                Ok(f) => found.push(f),
+                // Left out of `found`, so it is neither repaired nor used as a neighbour.
+                Err((reason, _)) => repairs.push(Repair::Unrecoverable {
+                    channel,
+                    index: Some(name.index),
+                    reason,
+                }),
+            }
         }
 
         // Readable chunks first: a torn tail loses its partial frame, nothing more. A chunk whose
@@ -907,10 +965,10 @@ impl ChunkStore {
             });
         }
 
-        repairs.extend(unplaceable.iter().map(|_| Repair::Unrecoverable {
+        repairs.extend(problems.into_iter().map(|p| Repair::Unrecoverable {
             channel,
-            index: None,
-            reason: UNPLACEABLE,
+            index: p.index,
+            reason: p.reason,
         }));
         Ok(())
     }
