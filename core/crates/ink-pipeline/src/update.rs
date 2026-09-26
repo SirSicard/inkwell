@@ -1,28 +1,31 @@
 //! Updating a model: unload it through residency first, then replace its files.
 //!
 //! A loaded model holds its files open (memory-mapped weights), and Windows refuses to replace or
-//! delete an open file. So the order is fixed, and nothing is written while the model is loaded:
+//! delete an open file. So the order is fixed, and nothing is written while a model is loaded:
 //!
-//! 1. stop keeping it warm;
-//! 2. unload it, and confirm it is gone. If it cannot be unloaded, stop: nothing on disk changes,
-//!    and it is warm again ([`UpdateError::StillLoaded`]);
-//! 3. install the new row;
-//! 4. warm the new model if the old one was warm. A failed install warms the old one again.
+//! 1. **Unload** the model being replaced ([`Residency::unload`], which also stops keeping it
+//!    warm), and any model already loaded under the new id, whose files the install could also
+//!    write. Refused while a job holds either one ([`UpdateError::StillLoaded`]).
+//! 2. **Confirm** they are gone. A model residency had loaded but now reports as not loaded means
+//!    the caller and residency disagree about which model this is: a wrong id must not let an
+//!    update write under a live model, so that stops the update ([`UpdateError::Mismatch`]).
+//! 3. **Install** the new row.
+//! 4. **Warm** the new model if the old one was warm.
 //!
-//! **Gap, reported:** `ink-engines`' [`Residency`] has no way to unload a model on demand; it
-//! unloads a model only after five idle minutes, and never the warm one. Its implementation of
-//! [`ModelResidency::unload`] therefore unloads when `tick` can, and otherwise refuses with
-//! [`EngineError::Unsupported`], so today an update of a loaded model fails closed rather than
-//! writing under it. The smallest fix is one method on `Residency`: unload one id now, refusing
-//! while a lease holds it.
+//! When the update stops after step 1 unloaded the warm model, the old model is warmed again, and
+//! if that fails too the error says so ([`UpdateError::no_model_warm`]).
+//!
+//! **Caller's part:** unloading does not keep a model out; a job that asks for it loads it again.
+//! Run an update where no dictation or meeting job can start meanwhile (on the thread that owns
+//! them, or with them paused).
 
 use std::fmt;
 use std::sync::Arc;
 
 use ink_core::{CancelToken, EngineError};
-use ink_engines::{DownloadError, Downloader, EngineRow, Residency};
+use ink_engines::{DownloadError, Downloader, EngineRow, Residency, Unloaded};
 
-/// What an update needs from residency.
+/// What an update needs from residency. [`Residency`] is the real one.
 pub trait ModelResidency: Send + Sync {
     /// The id of the model kept warm.
     fn warm(&self) -> Option<String>;
@@ -33,9 +36,9 @@ pub trait ModelResidency: Send + Sync {
     /// Whether `id` is loaded.
     fn is_resident(&self, id: &str) -> bool;
 
-    /// **Worker.** Unloads `id` now, or refuses. When it returns `Ok`, no copy of the model is
-    /// loaded and its files are closed.
-    fn unload(&self, id: &str) -> Result<(), EngineError>;
+    /// **Worker.** Unloads `id` now and stops keeping it warm, or refuses (and changes nothing)
+    /// while a job holds it. Says whether it was loaded.
+    fn unload(&self, id: &str) -> Result<Unloaded, EngineError>;
 }
 
 /// What an update needs to install a row's files.
@@ -65,17 +68,8 @@ impl<M: Send + Sync + 'static> ModelResidency for Residency<M> {
         self.resident().iter().any(|r| r == id)
     }
 
-    fn unload(&self, id: &str) -> Result<(), EngineError> {
-        if !self.is_resident(id) {
-            return Ok(());
-        }
-        self.tick();
-        if self.is_resident(id) {
-            return Err(EngineError::Unsupported(
-                "unloading a model on demand (residency unloads only after five idle minutes)",
-            ));
-        }
-        Ok(())
+    fn unload(&self, id: &str) -> Result<Unloaded, EngineError> {
+        Residency::unload(self, id)
     }
 }
 
@@ -85,10 +79,18 @@ impl<M: Send + Sync + 'static> ModelResidency for Residency<M> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UpdateError {
-    /// The model could not be unloaded. Nothing on disk changed.
+    /// A model could not be unloaded (a job holds it). Nothing on disk changed.
     StillLoaded {
         /// Why it could not be unloaded.
         error: EngineError,
+        /// Set when it was warm and could not be loaded again: no model is warm.
+        rewarm_failed: Option<EngineError>,
+    },
+    /// Residency had the model loaded, then reported it as not loaded: the caller and residency
+    /// disagree about which model this is. Nothing on disk changed.
+    Mismatch {
+        /// The id the update was told to replace.
+        id: String,
         /// Set when it was warm and could not be loaded again: no model is warm.
         rewarm_failed: Option<EngineError>,
     },
@@ -112,9 +114,9 @@ impl UpdateError {
     /// Whether the update left no model warm: dictation has no model until one is loaded.
     pub fn no_model_warm(&self) -> bool {
         match self {
-            Self::StillLoaded { rewarm_failed, .. } | Self::Install { rewarm_failed, .. } => {
-                rewarm_failed.is_some()
-            }
+            Self::StillLoaded { rewarm_failed, .. }
+            | Self::Mismatch { rewarm_failed, .. }
+            | Self::Install { rewarm_failed, .. } => rewarm_failed.is_some(),
             Self::Warm { .. } => true,
         }
     }
@@ -132,6 +134,13 @@ impl fmt::Display for UpdateError {
                 rewarm_failed,
             } => {
                 write!(f, "the model could not be unloaded: {error}")?;
+                rewarm(f, rewarm_failed)
+            }
+            Self::Mismatch { id, rewarm_failed } => {
+                write!(
+                    f,
+                    "model {id} was loaded but residency reported it not loaded; nothing was replaced"
+                )?;
                 rewarm(f, rewarm_failed)
             }
             Self::Install {
@@ -159,42 +168,55 @@ pub fn update_model(
     cancel: &CancelToken,
 ) -> Result<(), UpdateError> {
     let was_warm = residency.warm().as_deref() == Some(current.id.as_str());
-    // Warms the previous model again after a failed update; its failure goes into the error.
+    // Warms the previous model again once the update has stopped, if the update un-warmed it; its
+    // failure goes into the error.
     let rewarm_current = || {
-        if was_warm {
+        let lost = was_warm && residency.warm().as_deref() != Some(current.id.as_str());
+        if lost {
             residency.set_warm(Some(current)).err()
         } else {
             None
         }
     };
-    if was_warm && let Err(error) = residency.set_warm(None) {
-        return Err(UpdateError::StillLoaded {
-            error,
-            rewarm_failed: None,
-        });
+
+    // 1 and 2: unload, and confirm. `current` first; then a model under the new id, if other.
+    let mut ids = vec![current.id.as_str()];
+    if next.id != current.id {
+        ids.push(next.id.as_str());
     }
-    let unloaded = residency.unload(&current.id).and_then(|()| {
-        // Trust, but check: an update must never write under a loaded model.
-        if residency.is_resident(&current.id) {
-            Err(EngineError::Failed(
-                "the model is still loaded after unloading it".into(),
-            ))
-        } else {
-            Ok(())
+    for id in ids {
+        let expected = residency.is_resident(id);
+        match residency.unload(id) {
+            Err(error) => {
+                return Err(UpdateError::StillLoaded {
+                    error,
+                    rewarm_failed: rewarm_current(),
+                });
+            }
+            Ok(Unloaded::NotLoaded) if expected => {
+                return Err(UpdateError::Mismatch {
+                    id: id.to_owned(),
+                    rewarm_failed: rewarm_current(),
+                });
+            }
+            Ok(Unloaded::WasLoaded | Unloaded::NotLoaded) => {}
         }
-    });
-    if let Err(error) = unloaded {
-        return Err(UpdateError::StillLoaded {
-            error,
-            rewarm_failed: rewarm_current(),
-        });
+        if residency.is_resident(id) {
+            return Err(UpdateError::StillLoaded {
+                error: EngineError::Failed(format!("model {id} is still loaded after unloading")),
+                rewarm_failed: rewarm_current(),
+            });
+        }
     }
+
+    // 3.
     if let Err(error) = installer.install(next, cancel) {
         return Err(UpdateError::Install {
             error,
             rewarm_failed: rewarm_current(),
         });
     }
+    // 4.
     if was_warm && let Err(error) = residency.set_warm(Some(next)) {
         return Err(UpdateError::Warm {
             id: next.id.clone(),

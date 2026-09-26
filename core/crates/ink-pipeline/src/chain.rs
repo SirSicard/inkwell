@@ -159,6 +159,45 @@ struct Open {
     lost_frames: u64,
 }
 
+/// A record being written. Dropped before [`keep`](Self::keep), by an error return or a panic in
+/// the store, it deletes the record.
+struct HalfSaved<'a> {
+    store: &'a dyn Store,
+    id: RecordId,
+    armed: bool,
+}
+
+impl HalfSaved<'_> {
+    /// The record is complete: keep it.
+    fn keep(mut self) -> RecordId {
+        self.armed = false;
+        self.id.clone()
+    }
+}
+
+impl Drop for HalfSaved<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let id = &self.id;
+        // During a panic a second panic here would abort the process: the store is asked once,
+        // and a failure is logged, never raised.
+        let deleted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.store.delete_record(id)
+        }));
+        match deleted {
+            // Logged every time: it should only follow a failed or interrupted save, and a line here
+            // is how a record removed in error would ever be noticed.
+            Ok(Ok(())) => {
+                log::warn!("dictation: a half-saved record was removed after an unfinished save")
+            }
+            Ok(Err(e)) => log::warn!("dictation: a half-saved record could not be removed: {e}"),
+            Err(_) => log::warn!("dictation: removing a half-saved record panicked"),
+        }
+    }
+}
+
 /// The dictation chain. See the module docs.
 pub struct DictationChain {
     services: Services,
@@ -611,7 +650,8 @@ impl DictationChain {
     }
 
     /// Stage 10: one dictation record with one mic segment. A record left half-written is
-    /// deleted, so the library never shows an empty dictation.
+    /// deleted, so the library never shows an empty dictation: by a drop guard, so a store that
+    /// panics half way is cleaned up too.
     fn save(
         &self,
         written: &str,
@@ -619,7 +659,7 @@ impl DictationChain {
         live_ms: u64,
         app: Option<String>,
     ) -> Result<RecordId, StoreError> {
-        let store = &self.services.store;
+        let store = self.services.store.as_ref();
         let id = store.create_record(NewRecord {
             kind: RecordKind::Dictation,
             title: None,
@@ -628,25 +668,23 @@ impl DictationChain {
             // A dictation keeps no audio.
             audio_dir: None,
         })?;
-        let filled = store
-            .append_segments(
-                &id,
-                &[Segment {
-                    channel: Channel::Mic,
-                    start_ms: 0,
-                    end_ms: live_ms,
-                    text: written.to_owned(),
-                    speaker: None,
-                }],
-            )
-            .and_then(|()| store.finish_record(&id, self.services.clock.unix_ms()));
-        if let Err(error) = filled {
-            if let Err(cleanup) = store.delete_record(&id) {
-                log::warn!("dictation: a half-saved record could not be removed: {cleanup}");
-            }
-            return Err(error);
-        }
-        Ok(id)
+        let half = HalfSaved {
+            store,
+            id,
+            armed: true,
+        };
+        store.append_segments(
+            &half.id,
+            &[Segment {
+                channel: Channel::Mic,
+                start_ms: 0,
+                end_ms: live_ms,
+                text: written.to_owned(),
+                speaker: None,
+            }],
+        )?;
+        store.finish_record(&half.id, self.services.clock.unix_ms())?;
+        Ok(half.keep())
     }
 
     /// The chain's part of a voice command: style and polish. The rest is the shell's.

@@ -495,6 +495,23 @@ fn a_blank_polish_answer_keeps_the_text_instead_of_emptying_it() {
 }
 
 #[test]
+fn a_panic_while_saving_leaves_no_half_written_record() {
+    for fault in [common::Fault::AppendPanics, common::Fault::FinishPanics] {
+        let store = Arc::new(common::FaultyStore::new(fault));
+        let rig = Rig::builder().store(store.clone()).build();
+        let speech = speech_48k(2.0, -30.0, 61);
+        rig.teach(&speech, "half saved");
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rig.dictate(&speech)));
+        assert!(outcome.is_err(), "{fault:?}: the store panicked");
+        assert!(
+            rig.dictation_records().is_empty(),
+            "{fault:?}: the record the panic interrupted was deleted"
+        );
+    }
+}
+
+#[test]
 fn an_engine_failure_inserts_and_saves_nothing() {
     let rig = Rig::builder().build();
     rig.dictate(&speech_48k(2.0, -30.0, 31)); // no fixture: the mock engine fails
