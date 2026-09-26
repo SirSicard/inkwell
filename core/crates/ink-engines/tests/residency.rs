@@ -14,7 +14,7 @@ use ink_core::{
     CancelToken, Channel, Clock, EngineError, Job, OfflineEngine, TimedText, TranscribeOptions,
     Transcript,
 };
-use ink_engines::{EngineRow, IDLE_UNLOAD, Lease, Loader, Residency};
+use ink_engines::{EngineRow, IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 
 const MINUTE_NS: u64 = 60_000_000_000;
 const IDLE_NS: u64 = IDLE_UNLOAD.as_secs() * 1_000_000_000;
@@ -453,4 +453,123 @@ fn residency_and_leases_cross_threads() {
     fn assert_send<T: Send>() {}
     assert_send_sync::<Residency<Model>>();
     assert_send::<Lease<Model>>();
+}
+
+// On-demand unload, for an update that replaces a model's files.
+
+#[test]
+fn unload_drops_an_idle_model_at_once_and_clears_its_warm_state() {
+    let s = setup();
+    s.res.set_warm(Some(&dictation())).unwrap();
+    drop(s.res.acquire(&meeting()).unwrap());
+
+    // No five-minute wait, warm or not.
+    assert_eq!(s.res.unload("synthetic-dictation"), Ok(Unloaded::WasLoaded));
+    assert_eq!(s.res.warm(), None, "no longer kept warm");
+    assert_eq!(s.res.unload("synthetic-meeting"), Ok(Unloaded::WasLoaded));
+    assert!(s.res.resident().is_empty());
+    assert_eq!(s.counts().unloads(), 2);
+
+    // The next use loads it again (from the new files, after an update).
+    drop(s.res.acquire(&dictation()).unwrap());
+    assert_eq!(s.counts().loads(), 3);
+    assert_eq!(s.counts().max_live("synthetic-dictation"), 1);
+}
+
+#[test]
+fn unload_is_refused_while_a_lease_holds_the_model() {
+    let s = setup();
+    s.res.set_warm(Some(&dictation())).unwrap();
+    let lease = s.res.acquire(&dictation()).unwrap();
+
+    match s.res.unload("synthetic-dictation") {
+        Err(EngineError::Failed(msg)) => {
+            assert!(
+                msg.contains("synthetic-dictation") && msg.contains("in use"),
+                "{msg}"
+            );
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    // A refusal changes nothing.
+    assert_eq!(s.res.resident(), vec!["synthetic-dictation".to_string()]);
+    assert_eq!(s.res.warm().as_deref(), Some("synthetic-dictation"));
+    assert_eq!(s.counts().unloads(), 0);
+
+    drop(lease);
+    assert_eq!(s.res.unload("synthetic-dictation"), Ok(Unloaded::WasLoaded));
+    assert!(s.res.resident().is_empty());
+}
+
+#[test]
+fn unloading_an_id_that_is_not_loaded_says_so_and_changes_nothing() {
+    let s = setup();
+    s.res.set_warm(Some(&dictation())).unwrap();
+    // A wrong id and a model already unloaded both answer NotLoaded, never a silent Ok.
+    assert_eq!(s.res.unload("never-loaded"), Ok(Unloaded::NotLoaded));
+    drop(s.res.acquire(&meeting()).unwrap());
+    assert_eq!(s.res.unload("synthetic-meeting"), Ok(Unloaded::WasLoaded));
+    assert_eq!(s.res.unload("synthetic-meeting"), Ok(Unloaded::NotLoaded));
+    // Only the one real unload dropped anything; the warm model was never touched.
+    assert_eq!(s.res.resident(), vec!["synthetic-dictation".to_string()]);
+    assert_eq!(s.res.warm().as_deref(), Some("synthetic-dictation"));
+    assert_eq!(s.counts().unloads(), 1);
+}
+
+/// A model whose drop calls back into the residency that holds it.
+struct Reentrant {
+    residency: Arc<std::sync::OnceLock<std::sync::Weak<Residency<Reentrant>>>>,
+    seen: mpsc::Sender<(Vec<String>, Option<String>)>,
+}
+
+impl Drop for Reentrant {
+    fn drop(&mut self) {
+        if let Some(res) = self.residency.get().and_then(std::sync::Weak::upgrade) {
+            let _ = self.seen.send((res.resident(), res.warm()));
+        }
+    }
+}
+
+struct ReentrantLoader {
+    residency: Arc<std::sync::OnceLock<std::sync::Weak<Residency<Reentrant>>>>,
+    seen: mpsc::Sender<(Vec<String>, Option<String>)>,
+}
+
+impl Loader<Reentrant> for ReentrantLoader {
+    fn load(&self, _row: &EngineRow) -> Result<Reentrant, EngineError> {
+        Ok(Reentrant {
+            residency: Arc::clone(&self.residency),
+            seen: self.seen.clone(),
+        })
+    }
+}
+
+#[test]
+fn unload_drops_the_model_outside_the_lock() {
+    let handle = Arc::new(std::sync::OnceLock::new());
+    let (seen_tx, seen_rx) = mpsc::channel();
+    let res = Arc::new(Residency::new(
+        Arc::new(ReentrantLoader {
+            residency: Arc::clone(&handle),
+            seen: seen_tx,
+        }) as Arc<dyn Loader<Reentrant>>,
+        Arc::new(MockClock::new(1_000, 1_700_000_000_000)) as Arc<dyn Clock>,
+    ));
+    let _ = handle.set(Arc::downgrade(&res));
+    res.set_warm(Some(&dictation())).unwrap();
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = Arc::clone(&res);
+    std::thread::spawn(move || {
+        let _ = done_tx.send(worker.unload("synthetic-dictation"));
+    });
+    // A drop run under the lock would deadlock here on its own call into residency.
+    assert_eq!(recv(&done_rx), Ok(Unloaded::WasLoaded));
+    let (resident, warm) = recv(&seen_rx);
+    assert!(
+        resident.is_empty(),
+        "mid-unload it is no longer listed as resident"
+    );
+    assert_eq!(warm, None, "warm was cleared before the drop");
+    assert!(res.resident().is_empty());
 }

@@ -21,6 +21,8 @@
 mod download;
 #[cfg(feature = "http")]
 mod http;
+#[cfg(feature = "engine-llama")]
+pub mod llama;
 mod model_dir;
 mod registry;
 mod residency;
@@ -36,7 +38,7 @@ pub use registry::{
     ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_NAME_LEN, ModelFile, Os, Registry,
     RegistryError, Runtime, builtin_rows,
 };
-pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency};
+pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 pub use router::{ExternalEngine, Route, RouteError, Router};
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
