@@ -26,6 +26,16 @@ log = "0.4"
 # macros, as ink-llm does.
 serde_json = "1"
 
+[features]
+# The real engines, for the ignored tests that run them (tests/real_engines.rs and the dictation
+# bench test). Off in every default and CI build: engine-nemo links NeMo's library (it needs
+# NEMO_SPEECH_DIR) and engine-llama builds llama.cpp. They are features passed through to
+# ink-engines rather than dev-dependency features, because a dev-dependency's features are on in
+# every test build.
+engine-silero = ["ink-engines/engine-silero"]
+engine-nemo = ["ink-engines/engine-nemo"]
+engine-llama = ["ink-engines/engine-llama"]
+
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }
 # The meeting tests run the supersede against the real SQLite store too.

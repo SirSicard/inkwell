@@ -5,8 +5,8 @@
 //! Replayed through `FileReplaySource` (architecture rule 7) into capture rings, the pump, the live
 //! chain and the final pass. CI has no models, so the VAD is scripted (an energy threshold) and
 //! the engines and diarizer are mocks. A real VAD is tested on this audio, never on synthetic
-//! speech: the Silero binding scores every synthetic speech fixture as "no speech". That test
-//! needs the Silero binding (not in this crate's tree yet); it belongs here, `#[ignore]`d.
+//! speech: the Silero binding scores every synthetic speech fixture as "no speech". That test, with
+//! the real diarizer and ASR too, is `tests/real_engines.rs` (ignored; needs the models).
 //!
 //! **What the diarization assertions prove, and what they do not.** The diarizer here is
 //! `MockDiarizer`: it ignores the audio and returns the same scripted turns every time. So these
