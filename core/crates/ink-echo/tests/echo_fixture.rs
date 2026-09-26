@@ -36,6 +36,18 @@ fn the_echo_path_is_found_within_2_ms_and_5_ppm() {
 }
 
 #[test]
+fn the_path_stands_within_seconds_of_the_far_end_starting() {
+    // The far end starts at 1 s; windows are 2 s long, a second apart. Six inlier windows, the
+    // first of them reaching back before the far end, put the earliest stable point near 7 s.
+    let report = &speakers_run().report;
+    let stable = report.stable_from_s.expect("stable once found");
+    eprintln!("stable from {stable:.1} s");
+    assert!((5.0..=10.0).contains(&stable), "stable from {stable} s");
+    let earbuds = find_path(&scene(SceneSpec::earbuds()));
+    assert_eq!(earbuds.stable_from_s, None);
+}
+
+#[test]
 fn a_mic_that_leads_the_far_end_is_aligned_too() {
     let spec = SceneSpec::mic_leads();
     check_alignment(spec, &find_path(&scene(spec)));
