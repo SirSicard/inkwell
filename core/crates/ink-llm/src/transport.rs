@@ -19,19 +19,39 @@
 //!
 //! This crate logs nothing, but ureq logs at `debug` level through the `log` facade, including
 //! each request's header block with only `Authorization` and `Cookie` masked. Anthropic's key goes
-//! in `x-api-key`, so whoever installs a logger must keep the targets in [`QUIET_LOG_TARGETS`] at
-//! `info` or quieter.
+//! in `x-api-key`, so it would be written in clear by any logger running at `debug`. **Every
+//! logger in the app must drop the records [`log_record_allowed`] refuses.** A test drives a
+//! real Anthropic request through this client under a capturing logger, and shows the key is
+//! logged without the filter and absent with it.
+//!
+//! When the key is dropped, its copies here (the header values of an [`HttpRequest`]) are wiped.
+//! Copies inside ureq and the OS are out of reach.
 
 use std::io::{self, Read};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use zeroize::Zeroize;
+
 use crate::guard::is_loopback_host;
 
-/// Log targets that must never be enabled at `debug` or `trace`: their debug output includes
-/// request headers, and so API keys (see the module docs).
+/// Log targets whose `debug` and `trace` output includes request headers, and so API keys. A
+/// target matches itself and its submodules (`ureq`, `ureq::unit`).
 pub const QUIET_LOG_TARGETS: &[&str] = &["ureq"];
+
+/// Whether a log record may be written. **Every logger in the app must call this** (in its
+/// `Log::log`, since the `log` macros never call `Log::enabled`) and drop what it refuses: a
+/// record from a [`QUIET_LOG_TARGETS`] target below `info`, which can carry an API key.
+pub fn log_record_allowed(metadata: &log::Metadata<'_>) -> bool {
+    let target = metadata.target();
+    let quiet = QUIET_LOG_TARGETS.iter().any(|quiet| {
+        target
+            .strip_prefix(quiet)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+    });
+    !quiet || metadata.level() <= log::Level::Info
+}
 
 /// One POST. It holds an API key and the user's text, so its `Debug` shows neither.
 pub struct HttpRequest {
@@ -55,6 +75,15 @@ impl std::fmt::Debug for HttpRequest {
             .field("body_bytes", &self.body.len())
             .field("loopback_only", &self.loopback_only)
             .finish()
+    }
+}
+
+impl Drop for HttpRequest {
+    /// Header values can hold an API key: wipe them.
+    fn drop(&mut self) {
+        for (_, value) in &mut self.headers {
+            value.zeroize();
+        }
     }
 }
 
@@ -285,6 +314,23 @@ mod tests {
         }
         let addrs = resolve("127.0.0.1:9").unwrap();
         assert_eq!(addrs, vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 9))]);
+    }
+
+    #[test]
+    fn the_log_filter_drops_ureq_below_info_only() {
+        let allowed = |target: &str, level: log::Level| {
+            log_record_allowed(&log::Metadata::builder().target(target).level(level).build())
+        };
+        for target in ["ureq", "ureq::unit", "ureq::stream"] {
+            assert!(!allowed(target, log::Level::Debug), "{target}");
+            assert!(!allowed(target, log::Level::Trace), "{target}");
+            assert!(allowed(target, log::Level::Info), "{target}");
+            assert!(allowed(target, log::Level::Warn), "{target}");
+            assert!(allowed(target, log::Level::Error), "{target}");
+        }
+        for target in ["ureqx", "ink_llm", "keyring_core", "app::ureq"] {
+            assert!(allowed(target, log::Level::Trace), "{target}");
+        }
     }
 
     #[test]

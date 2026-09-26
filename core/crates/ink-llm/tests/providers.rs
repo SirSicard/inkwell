@@ -224,35 +224,72 @@ fn custom_server_with_a_key_sends_it() {
     );
 }
 
+/// A built-in provider's key only ever goes to that provider: its endpoint is fixed, and a
+/// configuration that points it elsewhere is refused before the keychain is asked.
 #[test]
-fn a_key_never_travels_over_plain_http_to_another_machine() {
-    // A built-in provider refuses the URL outright.
-    let keys = Arc::new(MemKeys::with("openai", "sk-synthetic"));
+fn a_built_in_providers_endpoint_cannot_be_overridden() {
+    for provider in [
+        Provider::OpenAi,
+        Provider::Groq,
+        Provider::Anthropic,
+        Provider::OpenRouter,
+    ] {
+        for url in [
+            "https://proxy.example.com/v1",
+            "http://127.0.0.1:8080/v1",
+            provider.default_base_url(),
+        ] {
+            let keys = Arc::new(MemKeys::with(provider.id(), "sk-synthetic"));
+            let transport = Arc::new(CountingTransport::ok(OPENAI_OK));
+            let config = ByokConfig {
+                base_url: Some(url.into()),
+                ..ByokConfig::new(provider)
+            };
+            let built = ByokLlm::new(
+                config,
+                keys.clone(),
+                transport.clone(),
+                LocalOnly::new(false),
+            );
+            assert_eq!(
+                built.err(),
+                Some(EndpointError::FixedEndpoint),
+                "{provider:?} accepted {url}"
+            );
+            assert_eq!(keys.reads(), 0);
+            assert_eq!(transport.calls(), 0);
+        }
+    }
+}
+
+#[test]
+fn a_custom_endpoint_override_works() {
+    let keys = Arc::new(MemKeys::with("custom", "custom-synthetic-key"));
     let transport = Arc::new(CountingTransport::ok(OPENAI_OK));
     let config = ByokConfig {
-        base_url: Some("http://proxy.example.com/v1".into()),
-        ..ByokConfig::new(Provider::OpenAi)
+        base_url: Some("https://models.example.com/v1".into()),
+        ..ByokConfig::new(Provider::Custom)
     };
+    run(&byok(config, &keys, &transport, false), &request(None)).unwrap();
+    let seen = transport.last();
+    assert_eq!(seen.url, "https://models.example.com/v1/chat/completions");
     assert_eq!(
-        ByokLlm::new(
-            config,
-            keys.clone(),
-            transport.clone(),
-            LocalOnly::new(false)
-        )
-        .err(),
-        Some(EndpointError::PlainHttp)
+        seen.header("Authorization"),
+        Some("Bearer custom-synthetic-key")
     );
+}
 
-    // A custom server there is called without its key, which is never even read.
+#[test]
+fn a_custom_server_over_plain_http_elsewhere_never_gets_the_key() {
     let keys = Arc::new(MemKeys::with("custom", "sk-synthetic"));
+    let transport = Arc::new(CountingTransport::ok(OPENAI_OK));
     let config = ByokConfig {
         base_url: Some("http://192.0.2.10:11434/v1".into()),
         ..ByokConfig::new(Provider::Custom)
     };
     run(&byok(config, &keys, &transport, false), &request(None)).unwrap();
     assert_eq!(transport.last().header("Authorization"), None);
-    assert_eq!(keys.reads(), 0);
+    assert_eq!(keys.reads(), 0, "the key is not even read");
 }
 
 #[test]

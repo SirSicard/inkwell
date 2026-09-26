@@ -9,7 +9,7 @@ use std::time::Duration;
 use ink_core::{CancelToken, Llm, LlmError, LlmRequest};
 use ink_llm::transport::TransportConfig;
 use ink_llm::{ByokConfig, ByokLlm, LocalOnly, Provider, UreqTransport};
-use support::{MemKeys, http_response, loopback_server};
+use support::{MemKeys, ToLoopback, http_response, loopback_server};
 
 const OPENAI_OK: &str =
     r#"{"choices":[{"message":{"role":"assistant","content":"Local answer."}}]}"#;
@@ -89,13 +89,12 @@ fn localhost_resolves_to_the_loopback_server() {
 fn the_anthropic_shape_reaches_a_loopback_server() {
     let answer = r#"{"content":[{"type":"text","text":"Local answer."}]}"#;
     let (port, received) = loopback_server(http_response(200, "OK", answer), 1);
+    // Anthropic's endpoint is fixed, so the real request is redirected to the test server by
+    // the transport, not by configuration.
     let llm = ByokLlm::new(
-        ByokConfig {
-            base_url: Some(format!("http://127.0.0.1:{port}")),
-            ..ByokConfig::new(Provider::Anthropic)
-        },
+        ByokConfig::new(Provider::Anthropic),
         Arc::new(MemKeys::with("anthropic", "sk-ant-synthetic")),
-        transport(),
+        Arc::new(ToLoopback::new(port)),
         LocalOnly::new(false),
     )
     .unwrap();

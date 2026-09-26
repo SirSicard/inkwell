@@ -70,7 +70,7 @@ impl Provider {
         Self::ALL.into_iter().find(|p| p.id() == id)
     }
 
-    /// The base URL used when the configuration names none.
+    /// The endpoint: fixed for a built-in provider, the default for [`Provider::Custom`].
     pub fn default_base_url(self) -> &'static str {
         match self {
             Self::OpenAi => "https://api.openai.com/v1",
@@ -115,8 +115,9 @@ pub struct ByokConfig {
     pub provider: Provider,
     /// The model id; the provider's default when `None`.
     pub model: Option<String>,
-    /// The base URL; the provider's default when `None`. For [`Provider::Custom`] this is the
-    /// server the user named. For the others it can point at a compatible proxy.
+    /// For [`Provider::Custom`] only: the server the user named (Ollama's default when `None`).
+    /// A built-in provider's endpoint is fixed, so its stored key can only ever reach that
+    /// provider; giving one a URL is refused ([`EndpointError::FixedEndpoint`]).
     pub base_url: Option<String>,
 }
 
@@ -146,9 +147,9 @@ impl ByokLlm {
     /// Builds a provider. Pass [`UreqTransport::shared`](crate::UreqTransport::shared) as the
     /// transport outside tests, so every provider shares one client.
     ///
-    /// Refuses a base URL the guard cannot parse, and plain `http` to another machine for a
-    /// provider that needs a key ([`EndpointError::PlainHttp`]). A custom server over plain
-    /// `http` elsewhere is allowed, but its key is never read or sent.
+    /// Refuses a URL for a built-in provider ([`EndpointError::FixedEndpoint`]), and a custom URL
+    /// the guard cannot parse. Nothing is read from the keychain here. A custom server over
+    /// plain `http` on another machine is allowed, but its key is never read or sent.
     pub fn new(
         config: ByokConfig,
         keys: Arc<dyn KeyStore>,
@@ -156,15 +157,11 @@ impl ByokLlm {
         local_only: LocalOnly,
     ) -> Result<Self, EndpointError> {
         let provider = config.provider;
-        let base = EndpointUrl::parse(
-            config
-                .base_url
-                .as_deref()
-                .unwrap_or(provider.default_base_url()),
-        )?;
-        if provider.needs_key() && !base.is_https() && !base.is_loopback() {
-            return Err(EndpointError::PlainHttp);
-        }
+        let base = match (provider, config.base_url.as_deref()) {
+            (Provider::Custom, Some(url)) => EndpointUrl::parse(url)?,
+            (_, None) => EndpointUrl::parse(provider.default_base_url())?,
+            (_, Some(_)) => return Err(EndpointError::FixedEndpoint),
+        };
         let model = config
             .model
             .filter(|m| !m.trim().is_empty())
@@ -186,7 +183,8 @@ impl ByokLlm {
 
     fn key(&self) -> Result<Option<ApiKey>, LlmError> {
         if !self.key_may_travel() {
-            // Only a custom server gets here (`new` refuses the rest); it is called without one.
+            // Only a custom server can get here (built-in endpoints are fixed https); it is
+            // called without a key.
             return Ok(None);
         }
         match self.keys.read_key(self.provider.id()) {
@@ -383,6 +381,18 @@ mod tests {
             assert_eq!(Provider::from_id(p.id()), Some(p));
         }
         assert_eq!(Provider::from_id("OpenAI"), None);
+    }
+
+    #[test]
+    fn built_in_endpoints_are_fixed_https_urls() {
+        for p in Provider::ALL {
+            let url = EndpointUrl::parse(p.default_base_url()).unwrap();
+            if p == Provider::Custom {
+                assert!(url.is_loopback());
+            } else {
+                assert!(url.is_https() && !url.is_loopback(), "{p:?}");
+            }
+        }
     }
 
     #[test]

@@ -19,6 +19,11 @@ ureq = { version = "2.12", default-features = false, features = ["native-tls"] }
 http = "1"
 # Request bodies and answers are built and read as `serde_json::Value`, with no derive macros.
 serde_json = "1"
+# Only for `log_record_allowed`, the filter every logger in the app applies: ureq's debug log
+# writes request headers. This crate itself logs nothing.
+log = "0.4"
+# API keys are wiped from memory when dropped.
+zeroize = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The login keychain, where Inkwell 0.2 kept its keys (re-linked by reference in S2.9a). The

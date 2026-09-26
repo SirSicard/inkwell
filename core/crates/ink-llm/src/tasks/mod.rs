@@ -43,6 +43,17 @@ pub(crate) fn ask(
     llm.complete(request, cancel).map(|r| r.text)
 }
 
+/// Whether `quote` appears verbatim in `text`: the anti-hallucination gate the commitment judge
+/// and the summary share. Surrounding whitespace and quotation marks are ignored; everything else
+/// must match exactly, case included.
+pub fn quote_found(quote: &str, text: &str) -> bool {
+    let quote = quote
+        .trim()
+        .trim_matches(['"', '\u{201c}', '\u{201d}'])
+        .trim();
+    !quote.is_empty() && text.contains(quote)
+}
+
 /// Whether an error ends a whole task rather than one item of it. A malformed answer is one
 /// item's problem; a refusal, a missing key or a dead network is every item's, and asking again
 /// would only repeat it (or, for the keychain, prompt again).

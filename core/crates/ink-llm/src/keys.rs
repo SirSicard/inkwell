@@ -28,18 +28,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use keyring_core::{CredentialStore, Error as KeyringError};
+use zeroize::Zeroizing;
 
 /// The keychain service every key is stored under, as in Inkwell 0.2, so its keys are found. One
 /// constant because the writer and the existence check must agree.
 pub const KEYRING_SERVICE: &str = "inkwell";
 
-/// An API key. Its `Debug` never shows it.
-pub struct ApiKey(String);
+/// An API key. Its `Debug` never shows it, and its memory is wiped when it is dropped. Copies
+/// made to send it are wiped with their request ([`HttpRequest`](crate::HttpRequest)); copies
+/// inside the keychain API, the HTTP client and the OS are out of reach.
+pub struct ApiKey(Zeroizing<String>);
 
 impl ApiKey {
     /// Wraps a key.
     pub fn new(key: String) -> Self {
-        Self(key)
+        Self(Zeroizing::new(key))
     }
 
     /// The key, for the one place it is needed: the request header.
@@ -158,9 +161,9 @@ impl KeyStore for OsKeyStore {
     }
 
     fn read_key(&self, provider: &str) -> Result<ApiKey, KeyStoreError> {
-        match self.entry(provider)?.get_password() {
+        match self.entry(provider)?.get_password().map(Zeroizing::new) {
             Ok(key) if key.is_empty() => Err(KeyStoreError::NotFound),
-            Ok(key) => Ok(ApiKey::new(key)),
+            Ok(key) => Ok(ApiKey(key)),
             // Fail closed: anything but a clean "not there" is a refusal, and nothing is sent.
             Err(KeyringError::NoEntry) => Err(KeyStoreError::NotFound),
             Err(e) => Err(match map_error(&e) {

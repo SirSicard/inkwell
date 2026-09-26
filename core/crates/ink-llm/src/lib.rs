@@ -23,7 +23,8 @@
 //! # Privacy
 //!
 //! Prompts, transcripts, keys and answers never reach a log or an error (I5). This crate does not
-//! log at all. Errors name what failed (a status code, a missing field), never what was said, and
+//! log at all, but the HTTP client it uses logs request headers at `debug`, so **every logger in
+//! the app must apply [`log_record_allowed`]**. Errors name what failed (a status code, a missing field), never what was said, and
 //! an HTTP error body is never read into an error, because providers echo the request back in it.
 //!
 //! [`Llm`]: ink_core::Llm
@@ -42,4 +43,6 @@ mod json;
 pub use guard::{EndpointError, EndpointUrl, GuardedLlm, LocalOnly};
 pub use keys::{ApiKey, KEYRING_SERVICE, KeyStore, KeyStoreError, OsKeyStore};
 pub use provider::{ByokConfig, ByokLlm, Provider};
-pub use transport::{HttpRequest, HttpResponse, Transport, TransportError, UreqTransport};
+pub use transport::{
+    HttpRequest, HttpResponse, Transport, TransportError, UreqTransport, log_record_allowed,
+};

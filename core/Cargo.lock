@@ -212,9 +212,11 @@ dependencies = [
  "http",
  "ink-core",
  "keyring-core",
+ "log",
  "serde_json",
  "ureq",
  "windows-native-keyring-store",
+ "zeroize",
 ]
 
 [[package]]

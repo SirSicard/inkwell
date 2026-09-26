@@ -16,6 +16,7 @@ use std::thread;
 use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
 use ink_llm::{
     ApiKey, HttpRequest, HttpResponse, KeyStore, KeyStoreError, Transport, TransportError,
+    UreqTransport,
 };
 
 /// What a [`CountingTransport`] saw of one request.
@@ -281,4 +282,37 @@ pub fn http_response(status: u16, reason: &str, body: &str) -> String {
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
+}
+
+/// The real client, with a built-in provider's fixed https origin swapped for a loopback test
+/// server's, so a provider's real request (headers and all) goes over the real client without
+/// leaving the machine. Any other URL is refused.
+pub struct ToLoopback {
+    inner: UreqTransport,
+    port: u16,
+}
+
+impl ToLoopback {
+    pub fn new(port: u16) -> Self {
+        Self {
+            inner: UreqTransport::new(ink_llm::transport::TransportConfig::default()),
+            port,
+        }
+    }
+}
+
+impl Transport for ToLoopback {
+    fn post(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+        let path = ["https://api.anthropic.com", "https://api.openai.com"]
+            .iter()
+            .find_map(|origin| request.url.strip_prefix(origin))
+            .expect("a built-in provider's URL");
+        let local = HttpRequest {
+            url: format!("http://127.0.0.1:{}{path}", self.port),
+            headers: request.headers.clone(),
+            body: request.body.clone(),
+            loopback_only: true,
+        };
+        self.inner.post(&local)
+    }
 }

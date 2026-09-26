@@ -1,6 +1,7 @@
 //! I5 for this crate: prompts, transcripts, keys and answers never reach a log or an error.
 //!
-//! The crate logs nothing at all, which a source scan can hold it to. Errors are checked by
+//! The crate logs nothing at all (it uses the `log` crate only for [`ink_llm::log_record_allowed`]),
+//! which a source scan can hold it to. Errors are checked by
 //! behaviour: a canary in every input, and no canary in any error.
 
 mod support;
@@ -44,7 +45,9 @@ fn the_crate_has_no_logging_or_printing() {
         ["print", "!("].concat(),
         ["eprint", "!("].concat(),
         ["dbg", "!("].concat(),
-        ["log", "::"].concat(),
+        // The `log` crate itself is used, for the filter the app's loggers apply; its macros are
+        // not: `log!(` also catches `log::log!(`, and the level macros are below.
+        ["log", "!("].concat(),
         ["tracing", "::"].concat(),
         ["debug", "!("].concat(),
         ["info", "!("].concat(),

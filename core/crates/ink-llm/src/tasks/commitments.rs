@@ -23,7 +23,7 @@ use ink_core::{
 };
 
 use super::due::{RecordTime, resolve_due};
-use super::{ask, is_fatal, transcript};
+use super::{ask, is_fatal, quote_found, transcript};
 use crate::json::{Fields, bad_field, object_in};
 
 /// First-person promise openers, lowercase, matched at word boundaries. "We'll" is in: on the
@@ -294,11 +294,7 @@ pub fn parse_judgement(text: &str) -> Result<Judgement, LlmError> {
 /// The anti-hallucination gate: the quote is non-empty and appears verbatim in the sentence
 /// (surrounding quotation marks aside).
 pub fn quote_holds(quote: &str, candidate: &Candidate) -> bool {
-    let quote = quote
-        .trim()
-        .trim_matches(['"', '\u{201c}', '\u{201d}'])
-        .trim();
-    !quote.is_empty() && candidate.sentence.contains(quote)
+    quote_found(quote, &candidate.sentence)
 }
 
 /// What [`harvest`] did, so a run that files nothing can say why instead of looking empty.

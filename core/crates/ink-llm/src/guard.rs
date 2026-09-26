@@ -51,9 +51,10 @@ pub enum EndpointError {
     QueryOrFragment,
     /// The port is not a number from 0 to 65535.
     BadPort,
-    /// Plain `http` to another machine, for a provider that needs an API key. A key only
-    /// travels over `https`, or to this machine.
-    PlainHttp,
+    /// A built-in provider was given another URL. Its endpoint is fixed, so its key only ever
+    /// goes to that provider; another server is configured as a custom provider, with its own
+    /// key.
+    FixedEndpoint,
 }
 
 impl std::fmt::Display for EndpointError {
@@ -65,7 +66,9 @@ impl std::fmt::Display for EndpointError {
             Self::UserInfo => "the URL must not contain a user name or password",
             Self::QueryOrFragment => "the URL must not contain a query (?) or a fragment (#)",
             Self::BadPort => "the URL's port is not valid",
-            Self::PlainHttp => "an API key is only sent over https, or to this machine",
+            Self::FixedEndpoint => {
+                "this provider's address cannot be changed; add another server as a custom provider"
+            }
         })
     }
 }
