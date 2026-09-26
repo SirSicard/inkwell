@@ -13,6 +13,12 @@ default = ["http"]
 # The real HTTP transport for the downloader. Off, the crate still builds and every test runs:
 # tests use an in-memory fetcher.
 http = ["dep:ureq"]
+# Silero VAD on tract, a pure-Rust ONNX runtime: ink-audio's speech probability, no native code and
+# no build-time download.
+engine-silero = ["dep:tract-onnx", "dep:ink-audio"]
+# Nemotron-3-Diarization through NeMo-Speech.cpp's C API. Links a library built outside cargo:
+# set NEMO_SPEECH_DIR to its install prefix (native/build-nemo-speech.sh; checked in build.rs).
+engine-nemo = []
 
 [dependencies]
 ink-core.workspace = true
@@ -21,6 +27,21 @@ sha2 = "0.10.9"
 # One HTTP stack for the whole core: ureq 2 with the OS's TLS (native-tls), no rustls, so no
 # webpki-roots.
 ureq = { version = "2.12.1", default-features = false, features = ["native-tls"], optional = true }
+# engine-silero: the speech-probability trait it implements.
+ink-audio = { path = "../ink-audio", optional = true }
+# engine-silero: ONNX inference in pure Rust (MIT OR Apache-2.0). Exact pin: the model graph is
+# checked against this version's optimiser. Default features off: they add tract-transformers,
+# which the VAD does not need.
+tract-onnx = { version = "=0.23.8", default-features = false, optional = true }
+
+[build-dependencies]
+# build.rs checks the NeMo-Speech.cpp headers it links against by SHA-256 (already a dependency).
+sha2 = "0.10.9"
 
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }
+# The Silero tests' synthetic non-speech fixtures, lifted as the gain stage lifts them.
+ink-audio = { path = "../ink-audio" }
+# Reads the local benchmark WAVs in the #[ignore] tests (Apache-2.0; already in the tree via
+# ink-audio).
+hound = "3.5.1"

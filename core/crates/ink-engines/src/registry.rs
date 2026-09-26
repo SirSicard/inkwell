@@ -53,8 +53,10 @@ pub enum Runtime {
     LlamaCpp,
     /// sherpa-onnx, for ONNX speech models.
     SherpaOnnx,
-    /// NeMo-Speech.cpp, for the diarizer.
+    /// NeMo-Speech.cpp, for the diarizer (`engine-nemo`).
     NemoSpeechCpp,
+    /// tract, a pure-Rust ONNX runtime, for Silero VAD (`engine-silero`).
+    Tract,
 }
 
 /// One job a row can fill, with its measured error rate on that job's benchmark.
@@ -382,8 +384,14 @@ impl Registry {
 
 /// The models the app ships knowing about.
 ///
-/// Empty for now: each model's revision, hashes and sizes are confirmed against its repository
-/// when its adapter lands, and a row is only added then.
+/// A row is added when its adapter lands, with its revision, hashes and sizes confirmed, and it
+/// is listed only in builds that include that adapter: a build must not offer a download it
+/// cannot run.
 pub fn builtin_rows() -> Vec<EngineRow> {
-    Vec::new()
+    [
+        #[cfg(feature = "engine-nemo")]
+        crate::rows::nemotron_3_diarization(),
+    ]
+    .into_iter()
+    .collect()
 }
