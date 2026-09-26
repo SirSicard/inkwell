@@ -105,6 +105,11 @@ fn file_import_reaches_the_engine_at_the_gain_target() {
     assert!(segments[0].start_ms.abs_diff(750) <= 50, "{segments:?}");
     assert_eq!(outcome.detection, VoiceDetection::Available);
     assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    assert_eq!(outcome.pass.captured_ms, 5_000, "the file's length");
+    assert_eq!(
+        (outcome.pass.chunks, outcome.pass.chunks_written),
+        (0, None)
+    );
 }
 
 #[test]

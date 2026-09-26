@@ -87,6 +87,25 @@ impl fmt::Display for CaptureIssue {
     }
 }
 
+/// What the pump wrote for one side, from its chunk writers ([`WriterSummary`]), for the chain's
+/// report ([`MeetingChain::capture_ended`]). It tells a side that never captured anything (no
+/// chunks) from one that captured silence.
+///
+/// [`MeetingChain::capture_ended`]: crate::meeting::MeetingChain::capture_ended
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SideSummary {
+    /// Which side.
+    pub channel: Channel,
+    /// Chunk files written.
+    pub chunks: u64,
+    /// Audio written, ms, each writer's frames at its own rate.
+    pub captured_ms: u64,
+    /// Places where the stream did not continue (overruns, jumps in device time, failed writes).
+    pub gaps: u64,
+    /// Device frames the ring reported dropped.
+    pub lost_frames: u64,
+}
+
 /// One side's ring, chunks and canonical path.
 pub struct SideCapture {
     ring: CaptureConsumer,
@@ -103,7 +122,8 @@ struct Outlets {
     rate_reported: bool,
     /// Host time of the next canonical sample, for the resampler's tail.
     next_ns: u64,
-    summaries: Vec<WriterSummary>,
+    /// What each writer did, with the format it wrote.
+    summaries: Vec<(StreamFormat, WriterSummary)>,
 }
 
 impl SideCapture {
@@ -140,15 +160,30 @@ impl SideCapture {
     }
 
     /// Ends the side once capture has stopped: drains the ring, flushes the path, and syncs the
-    /// last chunk. Returns what each writer did (one per format the device used).
+    /// last chunk. Returns what the side's writers did, together (one writer per format the device
+    /// used), for [`MeetingChain::capture_ended`](crate::meeting::MeetingChain::capture_ended).
+    #[must_use = "hand it to MeetingChain::capture_ended, or the side's report cannot say what was written"]
     pub fn finish(
         mut self,
         on_block: &mut dyn FnMut(CanonicalBlock),
         on_issue: &mut dyn FnMut(CaptureIssue),
-    ) -> Vec<WriterSummary> {
+    ) -> SideSummary {
         self.drain(on_block, on_issue);
         self.out.close(on_block, on_issue);
-        self.out.summaries
+        let mut summary = SideSummary {
+            channel: self.out.channel,
+            chunks: 0,
+            captured_ms: 0,
+            gaps: 0,
+            lost_frames: 0,
+        };
+        for (format, w) in &self.out.summaries {
+            summary.chunks += w.chunks;
+            summary.captured_ms += w.frames * 1_000 / u64::from(format.sample_rate.max(1));
+            summary.gaps += w.gaps;
+            summary.lost_frames += w.lost_frames;
+        }
+        summary
     }
 }
 
@@ -242,8 +277,9 @@ impl Outlets {
             }
         }
         if let Some(writer) = self.writer.take() {
+            let format = writer.format();
             match writer.finish() {
-                Ok(summary) => self.summaries.push(summary),
+                Ok(summary) => self.summaries.push((format, summary)),
                 Err(e) => on_issue(CaptureIssue::ChunkWrite(e.to_string())),
             }
         }

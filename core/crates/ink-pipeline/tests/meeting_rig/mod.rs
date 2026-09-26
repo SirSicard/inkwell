@@ -547,6 +547,18 @@ impl Rig {
         }
     }
 
+    /// Feeds one side only, in 10 ms blocks: the other side's device delivers nothing.
+    pub fn feed_side(&mut self, channel: Channel, signal: &[f32]) {
+        let format = match channel {
+            Channel::Mic => self.mic_format,
+            Channel::Far => self.far_format,
+        };
+        for piece in signal.chunks(BLOCK) {
+            let device = to_device(piece, format);
+            self.push_block(channel, &device);
+        }
+    }
+
     /// Feeds two 16 kHz mono signals side by side in 10 ms blocks, converted to each side's format
     /// (48 kHz by repeating samples, stereo by duplicating them).
     pub fn feed(&mut self, mic: &[f32], far: &[f32]) {
@@ -578,7 +590,7 @@ impl Rig {
         ] {
             let Some(side) = side else { continue };
             let mut issues = Vec::new();
-            side.finish(
+            let summary = side.finish(
                 &mut |b| chain.push_audio(b.channel, &b.samples, b.host_time_ns, b.dropped_frames),
                 &mut |i| issues.push(i),
             );
@@ -586,6 +598,7 @@ impl Rig {
                 chain.capture_issue(channel, issue.clone());
                 self.issues.push((channel, issue));
             }
+            chain.capture_ended(summary);
         }
         chain.stop()
     }

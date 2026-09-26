@@ -238,6 +238,8 @@ fn import(
     };
     let mut report = offline::report(Channel::Mic);
     let mut segments: Vec<Segment> = Vec::new();
+    // Frames read from the file: its length, as the pass's captured audio.
+    let mut frames: u64 = 0;
     {
         let mut on_region = |region: Region| -> Result<(), Stop> {
             segments.extend(offline::transcribe(
@@ -264,6 +266,7 @@ fn import(
             if buf.is_empty() {
                 break;
             }
+            frames += (buf.len() / usize::from(format.channels)) as u64;
             mono.clear();
             Downmix::Average.apply(&buf, format.channels, &mut mono);
             out.clear();
@@ -296,6 +299,7 @@ fn import(
         }));
     }
     let detection = pass.detection();
+    report.captured_ms = frames * 1_000 / u64::from(format.sample_rate);
     let warnings = warnings.into_inner();
     if ink_core::store::word_count(&segments) == 0 {
         log::info!(

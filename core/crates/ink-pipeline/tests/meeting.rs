@@ -24,9 +24,7 @@ use ink_core::{
     StoreError, StreamFormat,
 };
 use ink_pipeline::events::{VadUnavailable, VoiceDetection};
-use ink_pipeline::meeting::events::{
-    ChannelPass, Diarization, KeptLive, MeetingEvent, MeetingWarning, Phase,
-};
+use ink_pipeline::meeting::events::{Diarization, KeptLive, MeetingEvent, MeetingWarning, Phase};
 use ink_pipeline::speech::VadSource;
 use meeting_rig::*;
 
@@ -402,17 +400,9 @@ fn only_vad_speech_regions_reach_the_final_engine() {
             "{zeros} samples of silence reached the engine"
         );
     }
-    assert_eq!(
-        outcome.far,
-        ChannelPass {
-            channel: Channel::Far,
-            regions: 0,
-            empty_regions: 0,
-            failed_regions: 0,
-            word_count: 0,
-            speech_ms: 0,
-        }
-    );
+    assert_eq!(outcome.far.regions, 0);
+    assert_eq!(outcome.far.speech_ms, 0);
+    assert_eq!(outcome.far.captured_ms, 10_000, "captured, and silent");
     assert_eq!(outcome.mic.regions, 2);
     assert!(outcome.mic.speech_ms < 3_200, "{:?}", outcome.mic);
 }
@@ -824,6 +814,39 @@ fn an_unreadable_chunk_leaves_a_gap_and_later_audio_in_place() {
     assert!(
         mic[1].start_ms.abs_diff(24_750) <= 50,
         "after the hole, in place: {mic:?}"
+    );
+}
+
+/// HIGH from review: a side that never captured anything is told from one that was silent. The
+/// pump's chunk count and the audio found on disk travel with each side's pass, and a side with no
+/// audio at all is a warning.
+#[test]
+fn a_side_that_captured_nothing_is_told_from_a_silent_one() {
+    let speech_mic = join(&[silence(0.5), speech(2.0, -30.0, 111), silence(5.5)]);
+
+    // The far end's device delivered nothing: no chunks at all.
+    let mut rig = RigBuilder::default().build();
+    rig.feed_side(Channel::Mic, &speech_mic);
+    let dead = rig.finish().unwrap();
+    assert_eq!(dead.far.chunks_written, Some(0));
+    assert_eq!((dead.far.chunks, dead.far.captured_ms), (0, 0));
+    assert!(rig.warnings().contains(&MeetingWarning::NothingCaptured {
+        channel: Channel::Far
+    }));
+    assert_eq!(dead.mic.chunks_written, Some(1));
+    assert_eq!((dead.mic.chunks, dead.mic.captured_ms), (1, 8_000));
+
+    // The far end delivered eight seconds of silence: captured, just quiet.
+    let mut rig = RigBuilder::default().build();
+    rig.feed(&speech_mic, &silence(8.0));
+    let quiet = rig.finish().unwrap();
+    assert_eq!(quiet.far.chunks_written, Some(1));
+    assert_eq!((quiet.far.chunks, quiet.far.captured_ms), (1, 8_000));
+    assert_eq!(quiet.far.speech_ms, 0);
+    assert!(
+        !rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::NothingCaptured { .. }))
     );
 }
 

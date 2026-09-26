@@ -102,6 +102,12 @@ pub enum MeetingWarning {
         /// Chunk files skipped, or cut short.
         chunks: usize,
     },
+    /// A side has no recorded audio at all: no chunk was ever written for it (a device that never
+    /// delivered, a permission denied, a tap that never started). Silence would still have chunks.
+    NothingCaptured {
+        /// Which side.
+        channel: Channel,
+    },
     /// The diarizer failed: the far end keeps no speaker labels.
     DiarizationFailed(EngineError),
     /// The store failed: a live final, the final pass, the summary or commitments could not be
@@ -120,10 +126,21 @@ pub enum MeetingWarning {
 }
 
 /// What the final pass did on one side.
+///
+/// `chunks` and `captured_ms` tell a side that never captured anything (no chunks, nothing
+/// captured) from one that was silent (chunks full of silence, no speech).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChannelPass {
     /// Which side.
     pub channel: Channel,
+    /// Chunk files the pump wrote for this side, as its writers counted them
+    /// ([`SideSummary`](crate::capture::SideSummary)). `None` when the pump did not report: a
+    /// meeting finalized after a restart, or an import.
+    pub chunks_written: Option<u64>,
+    /// Chunk files the final pass found for this side, readable or not. An import has none.
+    pub chunks: usize,
+    /// Audio in the readable chunks (an import: in the file), ms. Zero: nothing was captured.
+    pub captured_ms: u64,
     /// Speech regions the engine was given.
     pub regions: usize,
     /// Of those, how many came back without words.

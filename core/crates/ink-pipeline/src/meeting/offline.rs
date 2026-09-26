@@ -56,18 +56,35 @@ pub(crate) struct Pass<'a> {
 /// Zeros fed per push while filling a gap.
 const GAP_BLOCK: usize = 16_000;
 
+/// What reading a side's chunks found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SideRead {
+    /// Chunk files, readable or not.
+    pub chunks: usize,
+    /// Audio in the readable ones, ms.
+    pub captured_ms: u64,
+    /// Chunk files that could not be used (unreadable, or their audio failed to resample): the
+    /// pass has a gap at each.
+    pub skipped: usize,
+}
+
 /// Reads `channel`'s chunks onto the meeting timeline (host time `t0_ns` is sample 0), through
-/// `pass`, handing each region to `on_region` as it closes. Returns how many chunk files could not
-/// be used (unreadable, or their audio failed to resample): the pass has a gap at each.
+/// `pass`, handing each region to `on_region` as it closes.
 pub(crate) fn read_side(
     audio: &ChunkStore,
     channel: Channel,
     t0_ns: u64,
     pass: &mut SpeechPass,
     on_region: &mut dyn FnMut(Region) -> Result<(), Stop>,
-) -> Result<usize, Stop> {
+) -> Result<SideRead, Stop> {
     let list = audio.chunks(channel).map_err(Stop::Chunks)?;
     let mut skipped = list.unreadable.len();
+    let captured_ms = list
+        .chunks
+        .iter()
+        .filter(|c| !c.format_estimated)
+        .map(|c| c.frames * 1_000 / u64::from(c.format.sample_rate.max(1)))
+        .sum();
     let mut feed = Feed {
         pass,
         on_region,
@@ -126,7 +143,11 @@ pub(crate) fn read_side(
     for region in feed.regions.drain(..) {
         (feed.on_region)(region)?;
     }
-    Ok(skipped)
+    Ok(SideRead {
+        chunks: list.chunks.len() + list.unreadable.len(),
+        captured_ms,
+        skipped,
+    })
 }
 
 /// Ends the current run: its resampler's last samples go into the pass. Returns 1 when that flush
@@ -265,6 +286,9 @@ pub(crate) fn transcribe(
 pub(crate) fn report(channel: Channel) -> ChannelPass {
     ChannelPass {
         channel,
+        chunks_written: None,
+        chunks: 0,
+        captured_ms: 0,
         regions: 0,
         empty_regions: 0,
         failed_regions: 0,

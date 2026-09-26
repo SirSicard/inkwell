@@ -52,7 +52,8 @@ use ink_llm::tasks::summary::{SummaryOptions, summarize};
 
 use self::events::{KeptLive, MeetingEvent, MeetingWarning, Phase};
 use self::live::{LiveChannel, Settled};
-use self::offline::{Pass, Stop};
+use self::offline::{Pass, SideRead, Stop};
+use crate::capture::SideSummary;
 use crate::redact::Spoken;
 use crate::speech::{Region, RegionConfig, SpeechPass, VadSource};
 
@@ -116,6 +117,8 @@ struct Core {
     record: RecordId,
     started_unix_ms: i64,
     t0_ns: u64,
+    /// What the pump reported writing for each side (mic, far).
+    written: [Option<SideSummary>; 2],
 }
 
 impl Core {
@@ -172,6 +175,7 @@ impl MeetingChain {
             record,
             started_unix_ms,
             t0_ns,
+            written: [None, None],
         };
         let (tx, asr) = mpsc::channel();
         let open = |channel: Channel| {
@@ -252,6 +256,12 @@ impl MeetingChain {
         let events = self.core.events.clone();
         self.side(channel).push(samples, host_time_ns, &*events);
         self.collect(false);
+    }
+
+    /// What the pump wrote for one side ([`SideCapture::finish`](crate::capture::SideCapture::finish)).
+    /// It travels with that side's final pass as [`ChannelPass::chunks_written`](events::ChannelPass).
+    pub fn capture_ended(&mut self, summary: SideSummary) {
+        self.core.written[usize::from(summary.channel == Channel::Far)] = Some(summary);
     }
 
     /// Something the pump could not do for one side ([`SideCapture`](crate::capture::SideCapture)).
@@ -434,7 +444,7 @@ impl EndedMeeting {
         // The mic: each region transcribed as it closes.
         let mut mic_report = offline::report(Channel::Mic);
         let mut mic = Vec::new();
-        self.side_pass(audio, Channel::Mic, &mut |region| {
+        let read = self.side_pass(audio, Channel::Mic, &mut |region| {
             mic.extend(offline::transcribe(
                 &ctx,
                 Channel::Mic,
@@ -444,6 +454,7 @@ impl EndedMeeting {
             )?);
             Ok(())
         })?;
+        self.account(&mut mic_report, read);
         core.emit(MeetingEvent::Transcribed(mic_report));
 
         // The far end: diarized first when a diarizer is installed, so each call has one speaker.
@@ -451,15 +462,16 @@ impl EndedMeeting {
         let (far, diarization) = match &core.services.diarizer {
             Some(diarizer) => {
                 let mut regions: Vec<Region> = Vec::new();
-                self.side_pass(audio, Channel::Far, &mut |region| {
+                let read = self.side_pass(audio, Channel::Far, &mut |region| {
                     regions.push(region);
                     Ok(())
                 })?;
+                self.account(&mut far_report, read);
                 offline::far_with_speakers(&ctx, diarizer.as_ref(), regions, &mut far_report)?
             }
             None => {
                 let mut far = Vec::new();
-                self.side_pass(audio, Channel::Far, &mut |region| {
+                let read = self.side_pass(audio, Channel::Far, &mut |region| {
                     far.extend(offline::transcribe(
                         &ctx,
                         Channel::Far,
@@ -469,6 +481,7 @@ impl EndedMeeting {
                     )?);
                     Ok(())
                 })?;
+                self.account(&mut far_report, read);
                 (far, None)
             }
         };
@@ -514,13 +527,27 @@ impl EndedMeeting {
         })
     }
 
+    /// What a side captured, into its report: the pump's count, what is on disk, and a warning
+    /// when there is nothing at all.
+    fn account(&self, report: &mut events::ChannelPass, read: SideRead) {
+        let channel = report.channel;
+        report.chunks_written =
+            self.core.written[usize::from(channel == Channel::Far)].map(|w| w.chunks);
+        report.chunks = read.chunks;
+        report.captured_ms = read.captured_ms;
+        if read.chunks == 0 {
+            log::warn!("meeting final pass: the {channel:?} side has no recorded audio at all");
+            self.core.warn(MeetingWarning::NothingCaptured { channel });
+        }
+    }
+
     /// Runs one side's chunks through a speech pass, and reports its VAD's health.
     fn side_pass(
         &self,
         audio: &ChunkStore,
         channel: Channel,
         on_region: &mut dyn FnMut(Region) -> Result<(), Stop>,
-    ) -> Result<(), FinalizeError> {
+    ) -> Result<SideRead, FinalizeError> {
         let core = &self.core;
         let (vad, error) = core.vad.open();
         if let Some(error) = error {
@@ -532,7 +559,8 @@ impl EndedMeeting {
         }
         let mut pass = SpeechPass::new(vad, core.settings.vad, core.settings.regions)
             .map_err(FinalizeError::Regions)?;
-        let skipped = offline::read_side(audio, channel, core.t0_ns, &mut pass, on_region)?;
+        let read = offline::read_side(audio, channel, core.t0_ns, &mut pass, on_region)?;
+        let skipped = read.skipped;
         if let Some(error) = pass.vad_error().cloned() {
             log::warn!("meeting final pass: the {channel:?} VAD failed; the fallback finished it");
             core.warn(MeetingWarning::VadFailed {
@@ -548,7 +576,7 @@ impl EndedMeeting {
                 chunks: skipped,
             });
         }
-        Ok(())
+        Ok(read)
     }
 
     /// Replaces the live transcript with `new`, unless a region failed or the guard refuses.

@@ -182,10 +182,12 @@ fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
         sides.push(SideCapture::new(channel, rx, chunks.clone()));
     }
     for side in sides {
-        side.finish(
+        let summary = side.finish(
             &mut |b| chain.push_audio(b.channel, &b.samples, b.host_time_ns, b.dropped_frames),
             &mut |i| panic!("capture: {i}"),
         );
+        assert_eq!((summary.chunks, summary.captured_ms), (3, 30_000));
+        chain.capture_ended(summary);
     }
     let ended = chain.stop();
     let live_segments = store.segments(&record).unwrap();
@@ -221,6 +223,8 @@ fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
     assert!(d.labelled && d.substantial >= 2, "{d:?}");
     // Speech regions only: neither side sent all 30 s.
     for pass in [outcome.mic, outcome.far] {
+        assert_eq!(pass.chunks_written, Some(3));
+        assert_eq!((pass.chunks, pass.captured_ms), (3, 30_000));
         assert!(pass.regions >= 1, "{pass:?}");
         assert!(pass.speech_ms < 30_000, "{pass:?}");
         assert_eq!(pass.failed_regions, 0);
