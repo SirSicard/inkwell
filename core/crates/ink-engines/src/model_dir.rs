@@ -9,10 +9,26 @@ use crate::registry::{EngineRow, ModelFile};
 /// never be mistaken for, or collide with, a finished one.
 pub const PART_SUFFIX: &str = ".part";
 
-/// The directory models are installed in: `<root>/<row id>/<revision>/<file name>`.
+/// How many leading hex digits of a row's revision name its directory. Unique enough within one
+/// id (a row changes revision a handful of times), and short enough for Windows paths. The row
+/// itself keeps, and is validated against, the full revision.
+pub const REVISION_DIR_LEN: usize = 12;
+
+/// The longest path below a [`ModelDir`] root, in characters: id, revision directory and file
+/// name at their limits plus separators and [`PART_SUFFIX`] is 64 + 1 + 12 + 1 + 64 + 5 = 147.
 ///
-/// The revision is part of the path so a row that moves to a new revision downloads fresh files
-/// instead of trusting same-named files from the old one.
+/// Windows' classic `MAX_PATH` is 260 characters including the drive and the terminating NUL, so a
+/// root of up to about 100 characters keeps every model path inside it. The Windows shell picks a
+/// short root under its local app data. As a second line of defence the Windows app manifest
+/// declares `longPathAware` (set when the WinUI solution is created), which lifts the limit where
+/// the OS allows it.
+pub const MAX_RELATIVE_PATH_LEN: usize = 150;
+
+/// The directory models are installed in: `<root>/<row id>/<revision prefix>/<file name>`.
+///
+/// The revision (its first [`REVISION_DIR_LEN`] hex digits) is part of the path so a row that
+/// moves to a new revision downloads fresh files instead of trusting same-named files from the
+/// old one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelDir {
     root: PathBuf,
@@ -31,7 +47,13 @@ impl ModelDir {
 
     /// The directory holding one row's files.
     pub fn row_dir(&self, row: &EngineRow) -> PathBuf {
-        self.root.join(&row.id).join(&row.revision)
+        // A validated revision is 40 or 64 ASCII hex digits, so the prefix always exists; an
+        // unvalidated shorter or non-ASCII one is used whole rather than panicking here.
+        let revision = row
+            .revision
+            .get(..REVISION_DIR_LEN)
+            .unwrap_or(&row.revision);
+        self.root.join(&row.id).join(revision)
     }
 
     /// Where a finished file lives.

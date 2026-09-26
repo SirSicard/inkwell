@@ -19,7 +19,8 @@ pub enum ExternalEngine {
 }
 
 impl ExternalEngine {
-    /// What the engine says it is.
+    /// What the engine says it is now. It may be a call into the shell, and its id may differ from
+    /// the one it was registered under; route and unregister by [`Route::id`] instead.
     pub fn info(&self) -> EngineInfo {
         match self {
             Self::Offline(e) => e.info(),
@@ -29,15 +30,13 @@ impl ExternalEngine {
 }
 
 impl fmt::Debug for ExternalEngine {
+    // The kind only: `info()` may call into the shell, which a debug print should not do. The id a
+    // route carries is printed by `Route`'s own `Debug`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let kind = match self {
-            Self::Offline(_) => "Offline",
-            Self::Streaming(_) => "Streaming",
-        };
-        f.debug_struct("ExternalEngine")
-            .field("kind", &kind)
-            .field("id", &self.info().id)
-            .finish()
+        f.write_str(match self {
+            Self::Offline(_) => "ExternalEngine::Offline",
+            Self::Streaming(_) => "ExternalEngine::Streaming",
+        })
     }
 }
 
@@ -48,15 +47,21 @@ pub enum Route {
     /// [`Residency::acquire`](crate::Residency::acquire).
     Model(Arc<EngineRow>),
     /// An engine the shell registered. Call it directly.
-    External(ExternalEngine),
+    External {
+        /// The id it was registered, and is routed, under.
+        id: String,
+        /// The engine.
+        engine: ExternalEngine,
+    },
 }
 
 impl Route {
-    /// The chosen engine's id.
-    pub fn id(&self) -> String {
+    /// The chosen engine's id: the registry id, or the id a shell engine was registered under
+    /// (which [`Router::unregister`] takes), whatever the engine reports now.
+    pub fn id(&self) -> &str {
         match self {
-            Self::Model(row) => row.id.clone(),
-            Self::External(e) => e.info().id,
+            Self::Model(row) => &row.id,
+            Self::External { id, .. } => id,
         }
     }
 }
@@ -165,7 +170,15 @@ impl Router {
             };
         for (wer, id, engine) in &externals {
             if better(*wer, false, id, &best) {
-                best = Some((*wer, false, id, Route::External(engine.clone())));
+                best = Some((
+                    *wer,
+                    false,
+                    id,
+                    Route::External {
+                        id: id.clone(),
+                        engine: engine.clone(),
+                    },
+                ));
             }
         }
         for row in &self.rows {

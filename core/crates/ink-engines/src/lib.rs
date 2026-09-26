@@ -29,10 +29,10 @@ mod router;
 pub use download::{DownloadError, DownloadProgress, Downloader, Fetch, FetchError, Fetched};
 #[cfg(feature = "http")]
 pub use http::HttpFetch;
-pub use model_dir::{ModelDir, PART_SUFFIX};
+pub use model_dir::{MAX_RELATIVE_PATH_LEN, ModelDir, PART_SUFFIX, REVISION_DIR_LEN};
 pub use registry::{
-    ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, ModelFile, Os, Registry, RegistryError, Runtime,
-    builtin_rows,
+    ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_NAME_LEN, ModelFile, Os, Registry,
+    RegistryError, Runtime, builtin_rows,
 };
 pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency};
 pub use router::{ExternalEngine, Route, RouteError, Router};

@@ -17,8 +17,9 @@ use crate::model_dir::PART_SUFFIX;
 /// Open Model Licence and Hugging Face's `other`, needs a policy change before a row can use it.
 pub const ALLOWED_WEIGHT_LICENCES: &[&str] = &["Apache-2.0", "MIT", "OpenMDW-1.1", "CC-BY-4.0"];
 
-/// Longest id or file name a row may use, so paths stay well inside Windows' `MAX_PATH`.
-const MAX_NAME_LEN: usize = 96;
+/// Longest id or file name a row may use. With the short revision directory this keeps every
+/// model path within [`MAX_RELATIVE_PATH_LEN`](crate::MAX_RELATIVE_PATH_LEN) below the root.
+pub const MAX_NAME_LEN: usize = 64;
 
 /// An operating system the core ships on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -2,10 +2,11 @@
 
 mod common;
 
-use common::{REV, row};
+use common::{REV, row, sha256_hex};
 use ink_core::Job;
 use ink_engines::{
-    ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, Os, Registry, RegistryError, builtin_rows,
+    ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_RELATIVE_PATH_LEN, ModelDir, ModelFile, Os,
+    Registry, RegistryError, builtin_rows,
 };
 
 fn valid() -> EngineRow {
@@ -223,4 +224,48 @@ fn rows_need_jobs_files_an_os_a_size_and_finite_error_rates() {
 fn builtin_rows_pass_validation() {
     let reg = Registry::builtin().unwrap();
     assert_eq!(reg.rows().len(), builtin_rows().len());
+}
+
+#[test]
+fn paths_at_the_name_limits_fit_the_windows_path_budget() {
+    // The limits: ids and file names up to 64 characters; the revision directory is the first 12
+    // hex digits of the revision. The budget for everything below the root is 150 characters.
+    const MAX: usize = 64;
+    const BUDGET: usize = 150;
+    assert_eq!(MAX_RELATIVE_PATH_LEN, BUDGET);
+
+    let id = "i".repeat(MAX);
+    let name = "n".repeat(MAX);
+    let revision = "b".repeat(64); // the longer (SHA-256) commit form
+    let mut r = row("placeholder", &[(Job::DictationFinal, 5.0)]);
+    r.id = id.clone();
+    r.revision = revision.clone();
+    r.files = vec![ModelFile {
+        name: name.clone(),
+        url: format!("https://models.example/synthetic/{id}/resolve/{revision}/{name}"),
+        sha256: sha256_hex(b"x"),
+        size: 1,
+    }];
+    let reg = Registry::new(vec![r]).expect("a row at the limits is valid");
+    let r = &reg.rows()[0];
+    assert_eq!(r.revision, revision, "the row keeps the full revision");
+
+    let root = std::env::temp_dir().join("ink-engines-path-budget");
+    let dir = ModelDir::new(&root);
+    assert_eq!(
+        dir.row_dir(r).file_name().unwrap().to_str().unwrap(),
+        &revision[..12]
+    );
+    for path in [dir.file_path(r, &r.files[0]), dir.part_path(r, &r.files[0])] {
+        let relative = path.strip_prefix(&root).unwrap().as_os_str().len();
+        assert!(relative <= BUDGET, "{relative} characters below the root");
+    }
+
+    // One character over either limit is refused.
+    let mut long_id = reg.rows()[0].clone();
+    long_id.id.push('i');
+    assert!(matches!(refused(long_id), RegistryError::Invalid { .. }));
+    let mut long_name = reg.rows()[0].clone();
+    long_name.files[0].name.push('n');
+    assert!(matches!(refused(long_name), RegistryError::Invalid { .. }));
 }

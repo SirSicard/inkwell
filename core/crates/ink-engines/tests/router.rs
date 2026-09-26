@@ -2,12 +2,12 @@
 
 mod common;
 
-use std::sync::Arc;
+use std::sync::{Arc, Barrier, Mutex};
 
 use common::{Scratch, install, row, row_with};
 use ink_core::mock::MockEngine;
 use ink_core::{
-    CancelToken, Channel, EngineError, Job, OfflineEngine, StreamingEngine, TimedText,
+    CancelToken, Channel, EngineError, EngineInfo, Job, OfflineEngine, StreamingEngine, TimedText,
     TranscribeOptions, Transcript,
 };
 use ink_engines::{
@@ -23,7 +23,7 @@ fn router(scratch: &Scratch, rows: Vec<EngineRow>, os: Os) -> (Router, ModelDir)
 fn model_id(route: Route) -> String {
     match route {
         Route::Model(row) => row.id.clone(),
-        Route::External(e) => panic!("expected a registry model, got {e:?}"),
+        other @ Route::External { .. } => panic!("expected a registry model, got {other:?}"),
     }
 }
 
@@ -216,7 +216,10 @@ fn shell_engines_route_like_builtin_ones_and_unregister_cleanly() {
     r.register_streaming(better, &scores(&[(Job::LivePartials, 4.0)]))
         .unwrap();
     match r.route(Job::LivePartials).unwrap() {
-        Route::External(ExternalEngine::Streaming(e)) => {
+        Route::External {
+            engine: ExternalEngine::Streaming(e),
+            ..
+        } => {
             assert_eq!(StreamingEngine::info(&*e).id, "shell-better")
         }
         other => panic!("expected the shell's streaming engine, got {other:?}"),
@@ -261,7 +264,10 @@ fn a_routed_shell_engine_is_the_one_that_answers() {
     )
     .unwrap();
 
-    let Route::External(ExternalEngine::Offline(chosen)) = r.route(Job::DictationFinal).unwrap()
+    let Route::External {
+        engine: ExternalEngine::Offline(chosen),
+        ..
+    } = r.route(Job::DictationFinal).unwrap()
     else {
         panic!("expected the shell's offline engine");
     };
@@ -393,4 +399,85 @@ fn the_router_is_send_and_sync_and_usable_from_many_threads() {
     for h in handles {
         h.join().unwrap();
     }
+}
+
+/// An engine whose reported id can change after it is registered, as a shell engine's could.
+struct RenamingEngine {
+    id: Mutex<String>,
+}
+
+impl OfflineEngine for RenamingEngine {
+    fn info(&self) -> EngineInfo {
+        EngineInfo {
+            id: self.id.lock().unwrap().clone(),
+            jobs: vec![Job::DictationFinal],
+            licence: "MIT".into(),
+        }
+    }
+
+    fn transcribe(
+        &self,
+        _audio: &[f32],
+        _options: &TranscribeOptions,
+    ) -> Result<Transcript, EngineError> {
+        Err(EngineError::Unsupported("synthetic engine"))
+    }
+}
+
+#[test]
+fn a_route_carries_the_id_the_engine_was_registered_under() {
+    let s = Scratch::new("renamed");
+    let (r, _dir) = router(&s, vec![], Os::MacOs);
+    let engine = Arc::new(RenamingEngine {
+        id: Mutex::new("shell-v1".into()),
+    });
+    r.register_offline(engine.clone(), &scores(&[(Job::DictationFinal, 3.0)]))
+        .unwrap();
+    *engine.id.lock().unwrap() = "shell-v2".into();
+
+    let route = r.route(Job::DictationFinal).unwrap();
+    assert_eq!(route.id(), "shell-v1");
+    // So unregistering by the route's id removes what was routed.
+    assert!(r.unregister(route.id()));
+    assert_eq!(
+        r.route(Job::DictationFinal).unwrap_err(),
+        RouteError::NoEngine {
+            job: Job::DictationFinal
+        }
+    );
+}
+
+#[test]
+fn racing_registrations_of_one_id_admit_exactly_one() {
+    const THREADS: usize = 16;
+    let s = Scratch::new("race");
+    let (r, _dir) = router(&s, vec![], Os::Windows);
+    let r = Arc::new(r);
+    let start = Arc::new(Barrier::new(THREADS));
+    let handles: Vec<_> = (0..THREADS)
+        .map(|t| {
+            let (r, start) = (Arc::clone(&r), Arc::clone(&start));
+            std::thread::spawn(move || {
+                start.wait();
+                r.register_offline(
+                    Arc::new(MockEngine::new("shell-contested", &[Job::MeetingFinal])),
+                    &scores(&[(Job::MeetingFinal, t as f32)]),
+                )
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    assert_eq!(
+        results.iter().filter(|r| r.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    assert!(results.iter().all(|r| r.is_ok()
+        || *r
+            == Err(RouteError::AlreadyRegistered {
+                id: "shell-contested".into()
+            })));
+    assert_eq!(r.route(Job::MeetingFinal).unwrap().id(), "shell-contested");
+    assert!(r.unregister("shell-contested"));
+    assert!(!r.unregister("shell-contested"));
 }
