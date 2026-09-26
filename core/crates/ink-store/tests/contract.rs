@@ -1,62 +1,28 @@
-//! The trait contracts, exercised through the mocks. Later crates rely on these behaviours, so a
-//! mock that drifts from them fails here first.
+//! The `Store` contract, run against `MemStore` and `SqliteStore` alike.
+//!
+//! The first eleven scenarios restate the store section of `ink-core`'s contract tests; the rest
+//! pin behaviour both stores must share that those tests leave implicit. Each scenario runs three
+//! times: on the in-memory mock, on SQLite in memory, and on SQLite in a WAL file. Where the two
+//! stores could disagree, the `ink-core` docs decide.
 
-use std::sync::{Arc, Mutex};
+mod common;
 
-use ink_core::mock::{MemStore, MockDiarizer, MockEngine, MockLlm, MockPlatform, fixture_hash};
+use common::{meeting, seg};
 use ink_core::*;
 
 fn assert_send_sync<T: ?Sized + Send + Sync>() {}
-fn assert_send<T: ?Sized + Send>() {}
 
 #[test]
-fn traits_are_object_safe_with_the_documented_bounds() {
+fn both_stores_are_send_sync_store_objects() {
     assert_send_sync::<dyn Store>();
-    assert_send_sync::<dyn OfflineEngine>();
-    assert_send_sync::<dyn StreamingEngine>();
-    assert_send_sync::<dyn Diarizer>();
-    assert_send_sync::<dyn Llm>();
-    assert_send_sync::<dyn CaptureControl>();
-    assert_send_sync::<dyn MeetingDetector>();
-    assert_send_sync::<dyn HotkeySource>();
-    assert_send_sync::<dyn TextInserter>();
-    assert_send_sync::<dyn FocusReader>();
-    assert_send_sync::<dyn PermissionProbe>();
-    assert_send_sync::<dyn Clock>();
-    assert_send_sync::<Platform>();
-    assert_send::<dyn AudioSource>();
-    assert_send::<dyn AudioSink>();
-    assert_send::<dyn EngineStream>();
+    assert_send_sync::<ink_store::SqliteStore>();
+    assert_send_sync::<ink_core::mock::MemStore>();
 }
 
-// --- Store ---------------------------------------------------------------------------------
+// --- Restated from ink-core/tests/contracts.rs -------------------------------------------------
 
-fn seg(channel: Channel, start_ms: u64, text: &str) -> Segment {
-    Segment {
-        channel,
-        start_ms,
-        end_ms: start_ms + 1_000,
-        text: text.into(),
-        speaker: None,
-    }
-}
-
-fn meeting(store: &MemStore, started: i64) -> RecordId {
-    store
-        .create_record(NewRecord {
-            kind: RecordKind::Meeting,
-            title: None,
-            started_at_unix_ms: started,
-            source_app: Some("com.example.meet".into()),
-            audio_dir: None,
-        })
-        .unwrap()
-}
-
-#[test]
-fn supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one() {
-    let store = MemStore::new();
-    let id = meeting(&store, 1);
+fn supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one(store: &dyn Store) {
+    let id = meeting(store, 1);
     let live = [
         seg(Channel::Mic, 0, "one two three four"),
         seg(Channel::Far, 1_000, "five six seven eight"),
@@ -88,11 +54,8 @@ fn supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one() {
     assert_eq!(store.record(&id).unwrap().unwrap().revision, 2);
 }
 
-/// The guard is per channel: a healthy far end must not pad a mic transcript that came back empty.
-#[test]
-fn one_channel_collapsing_is_refused_even_when_the_total_passes() {
-    let store = MemStore::new();
-    let id = meeting(&store, 1);
+fn one_channel_collapsing_is_refused_even_when_the_total_passes(store: &dyn Store) {
+    let id = meeting(store, 1);
     let ten = "w w w w w w w w w w";
     store
         .append_segments(
@@ -112,8 +75,7 @@ fn one_channel_collapsing_is_refused_even_when_the_total_passes() {
     );
     assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
 
-    // A channel the live pass never heard may appear in the offline pass.
-    let other = meeting(&store, 2);
+    let other = meeting(store, 2);
     store
         .append_segments(&other, &[seg(Channel::Mic, 0, ten)])
         .unwrap();
@@ -126,9 +88,7 @@ fn one_channel_collapsing_is_refused_even_when_the_total_passes() {
     );
 }
 
-#[test]
-fn unknown_records_are_not_found() {
-    let store = MemStore::new();
+fn unknown_records_are_not_found(store: &dyn Store) {
     let ghost = RecordId("nope".into());
     assert_eq!(store.record(&ghost), Ok(None));
     assert_eq!(store.segments(&ghost), Err(StoreError::NotFound));
@@ -141,11 +101,9 @@ fn unknown_records_are_not_found() {
     assert_eq!(store.add_note(&ghost, 0, "x"), Err(StoreError::NotFound));
 }
 
-#[test]
-fn records_segments_search_speakers_and_settings() {
-    let store = MemStore::new();
-    let older = meeting(&store, 100);
-    let newer = meeting(&store, 200);
+fn records_segments_search_speakers_and_settings(store: &dyn Store) {
+    let older = meeting(store, 100);
+    let newer = meeting(store, 200);
     let dictation = store
         .create_record(NewRecord {
             kind: RecordKind::Dictation,
@@ -266,10 +224,8 @@ fn records_segments_search_speakers_and_settings() {
     assert_eq!(store.setting("hotkey").unwrap().as_deref(), Some("fn"));
 }
 
-#[test]
-fn commitments_merge_complete_and_go_with_their_record() {
-    let store = MemStore::new();
-    let id = meeting(&store, 1);
+fn commitments_merge_complete_and_go_with_their_record(store: &dyn Store) {
+    let id = meeting(store, 1);
     let said = |text: &str, at: u64| NewCommitment {
         text: text.into(),
         owner: Some("Guest".into()),
@@ -316,12 +272,9 @@ fn commitments_merge_complete_and_go_with_their_record() {
     );
 }
 
-/// The Owed and Today screens read open commitments across every record, soonest due first.
-#[test]
-fn open_commitments_span_records_and_skip_done_and_merged() {
-    let store = MemStore::new();
-    let a = meeting(&store, 1);
-    let b = meeting(&store, 2);
+fn open_commitments_span_records_and_skip_done_and_merged(store: &dyn Store) {
+    let a = meeting(store, 1);
+    let b = meeting(store, 2);
     let owe = |text: &str, due_at: Option<i64>| NewCommitment {
         text: text.into(),
         owner: Some("Guest".into()),
@@ -358,11 +311,8 @@ fn open_commitments_span_records_and_skip_done_and_merged() {
     assert_eq!(store.open_commitments(1).unwrap().len(), 1);
 }
 
-/// Notes carry their own time on the record, for the timestamp chips.
-#[test]
-fn notes_are_kept_in_time_order_and_go_with_their_record() {
-    let store = MemStore::new();
-    let id = meeting(&store, 1);
+fn notes_are_kept_in_time_order_and_go_with_their_record(store: &dyn Store) {
+    let id = meeting(store, 1);
     let late = store.add_note(&id, 9_000, "follow up on pricing").unwrap();
     let early = store.add_note(&id, 1_000, "agenda").unwrap();
     store
@@ -387,16 +337,12 @@ fn notes_are_kept_in_time_order_and_go_with_their_record() {
     assert_eq!(store.update_note(&late, "x"), Err(StoreError::NotFound));
 }
 
-/// A keyset cursor pages through records that share a start time (a batch of imports) without
-/// skipping or repeating any.
-#[test]
-fn paging_by_cursor_returns_every_record_exactly_once() {
-    let store = MemStore::new();
-    let mut same_ms: Vec<RecordId> = (0..5).map(|_| meeting(&store, 700)).collect();
+fn paging_by_cursor_returns_every_record_exactly_once(store: &dyn Store) {
+    let mut same_ms: Vec<RecordId> = (0..5).map(|_| meeting(store, 700)).collect();
     same_ms.sort();
     same_ms.reverse();
-    let newest = meeting(&store, 900);
-    let oldest = meeting(&store, 100);
+    let newest = meeting(store, 900);
+    let oldest = meeting(store, 100);
     let expected: Vec<RecordId> = std::iter::once(newest)
         .chain(same_ms)
         .chain(std::iter::once(oldest))
@@ -419,13 +365,9 @@ fn paging_by_cursor_returns_every_record_exactly_once() {
     assert_eq!(seen, expected);
 }
 
-/// Merges point at a canonical commitment, so they never form a cycle, and a duplicate outlives
-/// the record of the commitment it was folded into.
-#[test]
-fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
-    let store = MemStore::new();
-    let a = meeting(&store, 1);
-    let b = meeting(&store, 2);
+fn merges_point_at_a_canonical_commitment_and_outlive_its_record(store: &dyn Store) {
+    let a = meeting(store, 1);
+    let b = meeting(store, 2);
     let owe = |text: &str| NewCommitment {
         text: text.into(),
         owner: None,
@@ -456,7 +398,7 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
         "so no cycle can form"
     );
     store.merge_commitment(&dupes[1], &first).unwrap();
-    let open = |store: &MemStore| -> Vec<CommitmentId> {
+    let open = || -> Vec<CommitmentId> {
         store
             .open_commitments(10)
             .unwrap()
@@ -464,10 +406,10 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
             .map(|c| c.id)
             .collect()
     };
-    assert_eq!(open(&store), vec![first.clone()]);
+    assert_eq!(open(), vec![first.clone()]);
 
     store.delete_record(&a).unwrap();
-    assert_eq!(open(&store), dupes, "still owed, so open again");
+    assert_eq!(open(), dupes, "still owed, so open again");
     assert!(
         store
             .commitments(&b)
@@ -478,8 +420,8 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
 
     // Merging a canonical re-points its duplicates, so `merged_into` always names an unmerged
     // commitment: C into A, then A into B leaves C and A both pointing at B.
-    let c = meeting(&store, 3);
-    let d = meeting(&store, 4);
+    let c = meeting(store, 3);
+    let d = meeting(store, 4);
     let in_c = store
         .add_commitments(&c, &[owe("call the vendor"), owe("ring the vendor")])
         .unwrap();
@@ -500,7 +442,7 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
     let mut expected = dupes.clone();
     expected.push(canonical.clone());
     assert_eq!(
-        open(&store),
+        open(),
         expected,
         "the canonical is the only open one of the three"
     );
@@ -509,16 +451,12 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
     store.delete_record(&d).unwrap();
     let mut expected = dupes.clone();
     expected.extend(in_c.iter().cloned());
-    assert_eq!(open(&store), expected);
+    assert_eq!(open(), expected);
 }
 
-/// Each query word matches as a case-insensitive word prefix, any word is enough, and the segment
-/// matching more of the words comes first.
-#[test]
-fn search_matches_any_word_as_a_prefix_best_first() {
-    let store = MemStore::new();
+fn search_matches_any_word_as_a_prefix_best_first(store: &dyn Store) {
     let add = |text: &str| {
-        let id = meeting(&store, 1);
+        let id = meeting(store, 1);
         store
             .append_segments(&id, &[seg(Channel::Mic, 0, text)])
             .unwrap();
@@ -548,14 +486,10 @@ fn search_matches_any_word_as_a_prefix_best_first() {
     assert!(records("AND (").is_empty(), "no query syntax");
 }
 
-/// Times above `MAX_TIME_MS`, and an end before its start, are refused: the whole call, before
-/// anything changes.
-#[test]
-fn out_of_range_or_reversed_times_are_invalid_and_change_nothing() {
+fn out_of_range_or_reversed_times_are_invalid_and_change_nothing(store: &dyn Store) {
     use ink_core::store::MAX_TIME_MS;
 
-    let store = MemStore::new();
-    let id = meeting(&store, 1);
+    let id = meeting(store, 1);
     let mut late = seg(Channel::Mic, 0, "too late");
     late.end_ms = MAX_TIME_MS + 1;
     assert!(matches!(
@@ -645,368 +579,371 @@ fn out_of_range_or_reversed_times_are_invalid_and_change_nothing() {
     store.add_note(&id, MAX_TIME_MS, "at the limit").unwrap();
 }
 
-// --- Engines -------------------------------------------------------------------------------
+// --- Shared behaviour the ink-core tests leave implicit ------------------------------------------
 
-/// A 440 Hz sine at `rms_dbfs`, 16 kHz, one second.
-fn tone(rms_dbfs: f64) -> Vec<f32> {
-    let amplitude = 2f64.sqrt() * 10f64.powf(rms_dbfs / 20.0);
-    (0..16_000)
-        .map(|n| {
-            (amplitude * (2.0 * std::f64::consts::PI * 440.0 * f64::from(n) / 16_000.0).sin())
-                as f32
+/// Every call scoped to one record reports an unknown record the same way; only `record` answers
+/// `None`.
+fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store) {
+    let ghost = RecordId("nope".into());
+    let nf = Err(StoreError::NotFound);
+    assert_eq!(store.finish_record(&ghost, 1), nf);
+    assert_eq!(
+        store.append_segments(&ghost, &[seg(Channel::Mic, 0, "x")]),
+        nf
+    );
+    assert_eq!(store.append_segments(&ghost, &[]), nf);
+    assert_eq!(store.notes(&ghost), Err(StoreError::NotFound));
+    let summary = Summary {
+        text: "s".into(),
+        model: "m".into(),
+        created_at_unix_ms: 1,
+    };
+    assert_eq!(store.save_summary(&ghost, &summary), nf);
+    assert_eq!(store.summary(&ghost), Err(StoreError::NotFound));
+    assert_eq!(
+        store.set_speaker_name(&ghost, &SpeakerId("spk0".into()), "A"),
+        nf
+    );
+    assert_eq!(store.speaker_names(&ghost), Err(StoreError::NotFound));
+    assert_eq!(
+        store.add_commitments(&ghost, &[]),
+        Err(StoreError::NotFound)
+    );
+    assert_eq!(store.commitments(&ghost), Err(StoreError::NotFound));
+
+    let gone = CommitmentId("gone".into());
+    assert_eq!(store.set_commitment_done(&gone, true), nf);
+    assert_eq!(
+        store.merge_commitment(&gone, &CommitmentId("also gone".into())),
+        nf
+    );
+    let real = meeting(store, 1);
+    let ids = store
+        .add_commitments(
+            &real,
+            &[NewCommitment {
+                text: "t".into(),
+                owner: None,
+                due: None,
+                due_at_unix_ms: None,
+                provenance: vec![],
+            }],
+        )
+        .unwrap();
+    assert_eq!(store.merge_commitment(&gone, &ids[0]), nf);
+    assert_eq!(store.update_note(&NoteId("gone".into()), "x"), nf);
+    assert_eq!(store.delete_note(&NoteId("gone".into())), nf);
+}
+
+/// Records that started in the same millisecond still list in one stable order: id descending.
+fn records_with_the_same_start_order_by_id_descending(store: &dyn Store) {
+    let mut ids: Vec<RecordId> = (0..6).map(|_| meeting(store, 500)).collect();
+    ids.sort();
+    ids.reverse();
+    let listed: Vec<RecordId> = store
+        .records(&RecordQuery {
+            kind: None,
+            before: None,
+            limit: 100,
         })
-        .collect()
-}
-
-fn transcript(text: &str) -> Transcript {
-    Transcript {
-        segments: vec![TimedText {
-            start_ms: 0,
-            end_ms: 1_000,
-            text: text.into(),
-        }],
-    }
-}
-
-fn options(channel: Channel) -> TranscribeOptions {
-    TranscribeOptions {
-        channel,
-        context: None,
-        cancel: CancelToken::new(),
-    }
-}
-
-#[test]
-fn fixture_hash_is_the_documented_fnv1a_over_little_endian_bits() {
-    // Cross-checked against an independent implementation (Python, struct.pack('<f')).
-    assert_eq!(fixture_hash(&[]), 0xcbf2_9ce4_8422_2325);
-    assert_eq!(fixture_hash(&[0.0, 1.0, -0.5, 0.25]), FIXTURE_HASH_GOLDEN);
-    assert_ne!(fixture_hash(&[0.0]), fixture_hash(&[-0.0]));
-}
-
-const FIXTURE_HASH_GOLDEN: u64 = 0x9ff6_6d3e_055f_db2b;
-
-#[test]
-fn mock_engine_answers_fixtures_and_records_what_it_heard() {
-    let quiet = tone(-75.0);
-    let engine = MockEngine::new("mock-asr", &[Job::DictationFinal])
-        .with_fixture(&quiet, transcript("quick brown fox"));
-
-    let out = engine.transcribe(&quiet, &options(Channel::Mic)).unwrap();
-    assert_eq!(out.text(), "quick brown fox");
-
-    let calls = engine.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].hash, fixture_hash(&quiet));
-    assert_eq!(calls[0].frames, 16_000);
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(listed, ids);
     assert!(
-        (calls[0].rms_dbfs + 75.0).abs() < 0.05,
-        "{}",
-        calls[0].rms_dbfs
-    );
-    assert_eq!(calls[0].channel, Channel::Mic);
-}
-
-#[test]
-fn mock_engine_never_answers_unknown_audio_with_an_empty_transcript() {
-    let engine = MockEngine::new("mock-asr", &[Job::MeetingFinal]);
-    let audio = tone(-20.0);
-    let err = engine
-        .transcribe(&audio, &options(Channel::Far))
-        .unwrap_err();
-    let EngineError::Failed(msg) = err else {
-        panic!("expected Failed, got {err:?}")
-    };
-    assert!(
-        msg.contains(&format!("{:016x}", fixture_hash(&audio))),
-        "{msg}"
-    );
-}
-
-#[test]
-fn cancelled_calls_stop_before_any_work() {
-    let engine = MockEngine::new("mock-asr", &[Job::MeetingFinal]);
-    let opts = options(Channel::Far);
-    opts.cancel.cancel();
-    assert_eq!(
-        engine.transcribe(&tone(-20.0), &opts),
-        Err(EngineError::Cancelled)
-    );
-    assert!(engine.calls().is_empty());
-
-    let diarizer = MockDiarizer::new(vec![]);
-    assert_eq!(
-        diarizer.diarize(&[], &opts.cancel),
-        Err(EngineError::Cancelled)
-    );
-    let llm = MockLlm::new(Endpoint::InProcess, "ok");
-    let request = LlmRequest {
-        system: String::new(),
-        user: String::new(),
-        max_tokens: 16,
-        temperature: 0.0,
-        json_schema: None,
-    };
-    assert_eq!(
-        llm.complete(&request, &opts.cancel),
-        Err(LlmError::Cancelled)
-    );
-    assert_eq!(
-        llm.complete(&request, &CancelToken::new()).unwrap().text,
-        "ok"
-    );
-    assert_eq!(llm.calls(), 1);
-}
-
-#[test]
-fn a_stream_reports_partials_then_its_finals() {
-    let first = tone(-30.0);
-    let second = tone(-31.0);
-    let whole: Vec<f32> = first.iter().chain(&second).copied().collect();
-    let engine = MockEngine::new("mock-live", &[Job::LivePartials])
-        .with_fixture(&whole, transcript("settled text"));
-
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let sink = events.clone();
-    let mut stream = engine
-        .open_stream(
-            Channel::Mic,
-            Arc::new(move |e| sink.lock().unwrap().push(e)),
-        )
-        .unwrap();
-    stream.push(&first).unwrap();
-    stream.push(&second).unwrap();
-    stream.finish().unwrap();
-
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 3);
-    assert!(matches!(events[0], AsrEvent::Partial { .. }));
-    assert!(matches!(events[1], AsrEvent::Partial { .. }));
-    assert_eq!(
-        events[2],
-        AsrEvent::Final(transcript("settled text").segments[0].clone())
-    );
-}
-
-#[test]
-fn diarizer_streams_and_offline_calls_return_its_turns() {
-    let turns = vec![SpeakerTurn {
-        speaker: SpeakerId("spk0".into()),
-        start_ms: 0,
-        end_ms: 2_000,
-    }];
-    let diarizer = MockDiarizer::new(turns.clone());
-    assert_eq!(diarizer.diarize(&[], &CancelToken::new()).unwrap(), turns);
-    assert_eq!(diarizer.calls(), 1);
-
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let sink = seen.clone();
-    let mut stream = diarizer
-        .open_stream(Arc::new(move |t| sink.lock().unwrap().push(t)))
-        .unwrap();
-    stream.push(&[0.0; 160]).unwrap();
-    stream.finish().unwrap();
-    assert_eq!(*seen.lock().unwrap(), turns);
-}
-
-// --- Platform ------------------------------------------------------------------------------
-
-/// Records (host time, frames, format) per block, the way the capture ring would see them.
-struct Recorder(Arc<Mutex<Vec<(u64, usize, StreamFormat)>>>);
-
-impl AudioSink for Recorder {
-    fn push(&mut self, block: &AudioBlock<'_>) {
-        self.0
-            .lock()
+        store
+            .records(&RecordQuery {
+                kind: None,
+                before: None,
+                limit: 0,
+            })
             .unwrap()
-            .push((block.host_time_ns, block.frames(), block.format));
+            .is_empty()
+    );
+}
+
+/// Ties in due time keep the order the commitments were added, whatever their ids sort as.
+fn open_commitment_ties_keep_the_order_they_were_added(store: &dyn Store) {
+    let a = meeting(store, 1);
+    let b = meeting(store, 2);
+    let owe = |text: String, due_at: Option<i64>| NewCommitment {
+        text,
+        owner: None,
+        due: None,
+        due_at_unix_ms: due_at,
+        provenance: vec![],
+    };
+    let mut expected_dated = Vec::new();
+    let mut expected_undated = Vec::new();
+    for round in 0..10 {
+        let record = if round % 2 == 0 { &a } else { &b };
+        let dated = format!("dated {round}");
+        let undated = format!("undated {round}");
+        store
+            .add_commitments(
+                record,
+                &[owe(undated.clone(), None), owe(dated.clone(), Some(7_000))],
+            )
+            .unwrap();
+        expected_dated.push(dated);
+        expected_undated.push(undated);
     }
-}
-
-#[test]
-fn capture_delivers_only_between_start_and_stop() {
-    let mock = Arc::new(MockPlatform::new());
-    let platform = mock.platform();
-    let mut far = platform
-        .capture
-        .open_far_end(&FarEndTarget::AllOutput)
-        .unwrap();
-    assert_eq!(far.channel(), Channel::Far);
-    assert_eq!(mock.far_targets(), vec![FarEndTarget::AllOutput]);
-
-    let stereo = vec![0.1f32; 960];
-    assert!(!mock.feed(Channel::Far, &stereo, 1), "not started yet");
-
-    let blocks = Arc::new(Mutex::new(Vec::new()));
-    far.start(Box::new(Recorder(blocks.clone()))).unwrap();
-    assert!(
-        far.start(Box::new(Recorder(blocks.clone()))).is_err(),
-        "a second start is refused"
-    );
-    assert!(mock.feed(Channel::Far, &stereo, 10));
-    assert!(mock.feed(Channel::Far, &stereo, 20));
-    let stats = far.stop().unwrap();
-    assert!(!mock.feed(Channel::Far, &stereo, 30), "stopped");
-
-    assert_eq!(stats.frames, 960);
-    assert_eq!(far.stop().unwrap(), SourceStats::default());
-    let blocks = blocks.lock().unwrap();
-    assert_eq!(blocks.len(), 2);
-    assert_eq!(blocks[0], (10, 480, far.format()));
-    assert_eq!(far.format().channels, 2);
-}
-
-#[test]
-fn denied_permissions_fail_the_calls_that_need_them() {
-    let mock = Arc::new(MockPlatform::new());
-    let p = mock.platform();
+    let expected: Vec<String> = expected_dated.into_iter().chain(expected_undated).collect();
+    let open: Vec<String> = store
+        .open_commitments(100)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.text)
+        .collect();
+    assert_eq!(open, expected);
     assert_eq!(
-        p.permissions.check(Permission::Microphone),
-        PermissionState::NotDetermined
+        store.open_commitments(3).unwrap().len(),
+        3,
+        "the limit applies after ordering"
     );
 
-    mock.set_permission(Permission::Microphone, PermissionState::Denied);
-    mock.set_permission(Permission::SystemAudio, PermissionState::Denied);
-    mock.set_permission(Permission::Accessibility, PermissionState::Denied);
-    mock.set_permission(Permission::InputMonitoring, PermissionState::Denied);
+    let texts = |r: &RecordId| -> Vec<String> {
+        store
+            .commitments(r)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.text)
+            .collect()
+    };
     assert_eq!(
-        p.capture.open_mic(None).err(),
-        Some(PlatformError::PermissionDenied(Permission::Microphone))
-    );
-    assert_eq!(
-        p.capture.open_far_end(&FarEndTarget::AllOutput).err(),
-        Some(PlatformError::PermissionDenied(Permission::SystemAudio))
-    );
-    assert_eq!(
-        p.inserter.insert("x"),
-        Err(PlatformError::PermissionDenied(Permission::Accessibility))
-    );
-    assert_eq!(
-        p.hotkeys
-            .start(&HotkeyBinding("fn".into()), Arc::new(|_| {})),
-        Err(PlatformError::PermissionDenied(Permission::InputMonitoring))
-    );
-    assert!(mock.inserted().is_empty());
-
-    p.permissions.request(Permission::Microphone).unwrap();
-    assert_eq!(mock.requested(), vec![Permission::Microphone]);
-}
-
-#[test]
-fn unknown_input_devices_are_refused() {
-    let mock = Arc::new(MockPlatform::new());
-    let p = mock.platform();
-    let devices = p.capture.input_devices().unwrap();
-    assert_eq!(devices.len(), 1);
-    assert!(p.capture.open_mic(Some(&devices[0].id)).is_ok());
-    assert!(matches!(
-        p.capture.open_mic(Some(&DeviceId("unplugged".into()))),
-        Err(PlatformError::Device(_))
-    ));
-    assert_eq!(
-        p.capture.default_output().unwrap().map(|d| d.transport),
-        Some(Transport::BuiltIn)
+        texts(&a)[..4],
+        ["undated 0", "dated 0", "undated 2", "dated 2"]
     );
 }
 
-#[test]
-fn hotkey_events_carry_host_time_and_stop_when_stopped() {
-    let mock = Arc::new(MockPlatform::new());
-    let p = mock.platform();
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let sink = events.clone();
-    assert!(matches!(
-        p.hotkeys
-            .start(&HotkeyBinding(" ".into()), Arc::new(|_| {})),
-        Err(PlatformError::Unsupported(_))
-    ));
-    p.hotkeys
-        .start(
-            &HotkeyBinding("fn".into()),
-            Arc::new(move |e| sink.lock().unwrap().push(e)),
+/// Segments sharing a start time list the mic first, then in the order they were appended; notes
+/// sharing a stamp keep the order they were added.
+fn same_time_segments_and_notes_keep_a_stable_order(store: &dyn Store) {
+    let id = meeting(store, 1);
+    store
+        .append_segments(
+            &id,
+            &[
+                seg(Channel::Far, 2_000, "far first"),
+                seg(Channel::Mic, 2_000, "mic first"),
+                seg(Channel::Far, 2_000, "far second"),
+                seg(Channel::Mic, 2_000, "mic second"),
+                seg(Channel::Mic, 0, "opening"),
+            ],
         )
         .unwrap();
-    assert_eq!(mock.hotkey_binding(), Some(HotkeyBinding("fn".into())));
-
-    mock.clock().advance_ns(5_000_000);
-    assert!(mock.press());
-    mock.clock().advance_ns(250_000_000);
-    assert!(mock.release());
-    assert!(mock.cancel_hotkey());
-    p.hotkeys.stop();
-    assert!(!mock.press());
-
+    let texts: Vec<String> = store
+        .segments(&id)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.text)
+        .collect();
     assert_eq!(
-        *events.lock().unwrap(),
-        vec![
-            HotkeyEvent::Pressed { at_ns: 5_000_000 },
-            HotkeyEvent::Released { at_ns: 255_000_000 },
-            HotkeyEvent::Cancelled,
+        texts,
+        [
+            "opening",
+            "mic first",
+            "mic second",
+            "far first",
+            "far second"
         ]
     );
-    assert_eq!(p.clock.unix_ms(), 255);
+
+    let notes: Vec<NoteId> = (0..6)
+        .map(|n| store.add_note(&id, 4_000, &format!("note {n}")).unwrap())
+        .collect();
+    let listed: Vec<NoteId> = store
+        .notes(&id)
+        .unwrap()
+        .into_iter()
+        .map(|n| n.id)
+        .collect();
+    assert_eq!(listed, notes);
 }
 
-/// Wall time is derived from host time, so sub-millisecond steps add up instead of rounding away.
-#[test]
-fn mock_clock_wall_time_follows_host_time_without_drift() {
-    let clock = ink_core::mock::MockClock::new(0, 1_000);
-    for _ in 0..1_000 {
-        clock.advance_ns(999_999);
-    }
-    assert_eq!(clock.now_ns(), 999_999_000);
-    assert_eq!(clock.unix_ms(), 1_000 + 999);
-}
+/// Setting a value twice keeps the second; so do speaker names and summaries.
+fn upserts_replace_the_previous_value(store: &dyn Store) {
+    let id = meeting(store, 1);
+    store.set_setting("theme", "dark").unwrap();
+    store.set_setting("theme", "light").unwrap();
+    assert_eq!(store.setting("theme").unwrap().as_deref(), Some("light"));
 
-#[test]
-fn insertion_is_blocked_under_secure_input() {
-    let mock = Arc::new(MockPlatform::new());
-    let p = mock.platform();
-    assert_eq!(p.inserter.insert("hello"), Ok(InsertOutcome::Pasted));
-    mock.set_insert_outcome(InsertOutcome::Typed);
-    assert_eq!(p.inserter.insert("again"), Ok(InsertOutcome::Typed));
-
-    mock.set_focus(FocusInfo {
-        app: Some(AppRef {
-            id: "com.example.terminal".into(),
-            pid: Some(42),
-            name: "Terminal".into(),
-        }),
-        secure_input: true,
-    });
-    assert_eq!(p.inserter.insert("secret"), Ok(InsertOutcome::Blocked));
+    let s1 = SpeakerId("spk1".into());
+    let s0 = SpeakerId("spk0".into());
+    store.set_speaker_name(&id, &s1, "Host").unwrap();
+    store.set_speaker_name(&id, &s0, "Guest").unwrap();
+    store.set_speaker_name(&id, &s1, "Chair").unwrap();
     assert_eq!(
-        mock.inserted(),
-        vec!["hello".to_string(), "again".to_string()]
+        store.speaker_names(&id).unwrap(),
+        vec![(s0, "Guest".to_string()), (s1, "Chair".to_string())]
     );
-    assert_eq!(p.focus.focus().unwrap().app.unwrap().pid, Some(42));
 
-    assert_eq!(p.focus.selected_text().unwrap(), None);
-    mock.set_selection(Some("fix this"));
-    assert_eq!(
-        p.focus.selected_text().unwrap().as_deref(),
-        Some("fix this")
-    );
-}
-
-#[test]
-fn meeting_signals_reach_the_detector_until_it_stops() {
-    let mock = Arc::new(MockPlatform::new());
-    let p = mock.platform();
-    let app = AppRef {
-        id: "com.example.meet".into(),
-        pid: None,
-        name: "Meet".into(),
+    let first = Summary {
+        text: "first".into(),
+        model: "a".into(),
+        created_at_unix_ms: 1,
     };
-    assert!(!mock.emit_meeting(MeetingSignal::MicInUse { app: app.clone() }));
-
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let sink = seen.clone();
-    p.meetings
-        .start(Arc::new(move |s| sink.lock().unwrap().push(s)))
-        .unwrap();
-    assert!(mock.emit_meeting(MeetingSignal::MicInUse { app: app.clone() }));
-    p.meetings.stop();
-    assert!(!mock.emit_meeting(MeetingSignal::MicReleased { app: app.clone() }));
-    assert_eq!(*seen.lock().unwrap(), vec![MeetingSignal::MicInUse { app }]);
+    let second = Summary {
+        text: "second".into(),
+        model: "b".into(),
+        created_at_unix_ms: 2,
+    };
+    store.save_summary(&id, &first).unwrap();
+    store.save_summary(&id, &second).unwrap();
+    assert_eq!(store.summary(&id).unwrap(), Some(second));
 }
+
+/// Search sees the current revision only, and forgets a deleted record.
+fn search_follows_supersede_and_delete(store: &dyn Store) {
+    let id = meeting(store, 1);
+    store
+        .append_segments(&id, &[seg(Channel::Mic, 0, "alpha bravo charlie")])
+        .unwrap();
+    assert_eq!(store.search("alpha", 10).unwrap().len(), 1);
+
+    store
+        .supersede(&id, &[seg(Channel::Mic, 250, "delta echo foxtrot")])
+        .unwrap();
+    assert!(store.search("alpha", 10).unwrap().is_empty());
+    let hits = store.search("echo", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].start_ms, 250);
+    assert_eq!(hits[0].snippet, "delta echo foxtrot");
+
+    assert!(store.search("echo", 0).unwrap().is_empty());
+    assert!(store.search("", 10).unwrap().is_empty());
+    assert!(store.search("\t\n ", 10).unwrap().is_empty());
+
+    store.delete_record(&id).unwrap();
+    assert!(store.search("echo", 10).unwrap().is_empty());
+}
+
+/// Every field of a record and a commitment survives the round trip.
+fn fields_round_trip(store: &dyn Store) {
+    let id = store
+        .create_record(NewRecord {
+            kind: RecordKind::FileImport,
+            title: Some("Quarterly sync.m4a".into()),
+            started_at_unix_ms: -5,
+            source_app: Some("com.example.files".into()),
+            audio_dir: Some("audio/x".into()),
+        })
+        .unwrap();
+    store.finish_record(&id, 1_700_000_000_000).unwrap();
+    let record = store.record(&id).unwrap().unwrap();
+    assert_eq!(
+        record,
+        Record {
+            id: id.clone(),
+            kind: RecordKind::FileImport,
+            title: Some("Quarterly sync.m4a".into()),
+            started_at_unix_ms: -5,
+            ended_at_unix_ms: Some(1_700_000_000_000),
+            source_app: Some("com.example.files".into()),
+            audio_dir: Some("audio/x".into()),
+            revision: 1,
+        }
+    );
+
+    let segment = Segment {
+        channel: Channel::Far,
+        start_ms: 61_250,
+        end_ms: 64_900,
+        text: "Café au lait, s'il vous plaît".into(),
+        speaker: Some(SpeakerId("spk2".into())),
+    };
+    store
+        .append_segments(&id, std::slice::from_ref(&segment))
+        .unwrap();
+    assert_eq!(store.segments(&id).unwrap(), vec![segment]);
+
+    let provenance = vec![
+        Span {
+            channel: Channel::Mic,
+            start_ms: 10,
+            end_ms: 20,
+        },
+        Span {
+            channel: Channel::Far,
+            start_ms: 30,
+            end_ms: 45,
+        },
+    ];
+    let ids = store
+        .add_commitments(
+            &id,
+            &[NewCommitment {
+                text: "draft the plan".into(),
+                owner: Some("Host".into()),
+                due: Some("next Tuesday".into()),
+                due_at_unix_ms: Some(1_700_100_000_000),
+                provenance: provenance.clone(),
+            }],
+        )
+        .unwrap();
+    assert_eq!(
+        store.commitments(&id).unwrap(),
+        vec![Commitment {
+            id: ids[0].clone(),
+            record: id.clone(),
+            text: "draft the plan".into(),
+            owner: Some("Host".into()),
+            due: Some("next Tuesday".into()),
+            due_at_unix_ms: Some(1_700_100_000_000),
+            provenance,
+            merged_into: None,
+            done: false,
+        }]
+    );
+    assert_eq!(store.open_commitments(10).unwrap().len(), 1);
+    store.set_commitment_done(&ids[0], true).unwrap();
+    assert!(store.open_commitments(10).unwrap().is_empty());
+    store.set_commitment_done(&ids[0], false).unwrap();
+    assert_eq!(store.open_commitments(10).unwrap().len(), 1);
+}
+
+macro_rules! contract {
+    ($($scenario:ident),* $(,)?) => {
+        mod mem {
+            $(#[test]
+            fn $scenario() {
+                super::$scenario(&ink_core::mock::MemStore::new());
+            })*
+        }
+        mod sqlite_memory {
+            $(#[test]
+            fn $scenario() {
+                super::$scenario(&ink_store::SqliteStore::open_in_memory().unwrap());
+            })*
+        }
+        mod sqlite_file {
+            $(#[test]
+            fn $scenario() {
+                let db = crate::common::TempDb::new(stringify!($scenario));
+                super::$scenario(&db.open());
+            })*
+        }
+    };
+}
+
+contract!(
+    supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one,
+    one_channel_collapsing_is_refused_even_when_the_total_passes,
+    unknown_records_are_not_found,
+    records_segments_search_speakers_and_settings,
+    commitments_merge_complete_and_go_with_their_record,
+    open_commitments_span_records_and_skip_done_and_merged,
+    notes_are_kept_in_time_order_and_go_with_their_record,
+    paging_by_cursor_returns_every_record_exactly_once,
+    merges_point_at_a_canonical_commitment_and_outlive_its_record,
+    search_matches_any_word_as_a_prefix_best_first,
+    out_of_range_or_reversed_times_are_invalid_and_change_nothing,
+    every_record_scoped_call_on_an_unknown_record_is_not_found,
+    records_with_the_same_start_order_by_id_descending,
+    open_commitment_ties_keep_the_order_they_were_added,
+    same_time_segments_and_notes_keep_a_stable_order,
+    upserts_replace_the_previous_value,
+    search_follows_supersede_and_delete,
+    fields_round_trip,
+);
