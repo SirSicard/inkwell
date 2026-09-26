@@ -23,8 +23,12 @@
 //! gated stretch a failure. [`STOP_LIMIT`] is also 10 s: a device switch (a headset connecting)
 //! can pause input for a few seconds.
 //!
-//! A state returns to [`SideState::Ok`] as soon as the side delivers again (real samples, for
-//! [`SideState::Zeros`]).
+//! A state returns to [`SideState::Ok`] only with real samples. A side that comes back from
+//! [`SideState::Stopped`] with zeros has delivered nothing since it stopped: it goes straight to
+//! [`SideState::Zeros`] (a Bluetooth mic excepted, whose zeros are its user's silence).
+//!
+//! **No callbacks count as no signal for the soft warning:** its quiet stretch runs from the far
+//! end's last real samples, so a tap that never calls back earns it just as zeros would.
 //!
 //! Pure and deterministic: the caller passes the time. The meeting chain feeds it every block and
 //! calls [`Watchdog::check`] at [`Watchdog::deadline_ns`] when no block arrives.
@@ -176,9 +180,17 @@ impl Watchdog {
     pub fn observe(&mut self, channel: Channel, samples: &[f32], now_ns: u64) -> Vec<Watch> {
         let mut meter = LevelMeter::new();
         meter.add(samples);
+        let zeros_expected = channel == Channel::Mic && self.routing.mic == Transport::Bluetooth;
+        let start = self.start;
         let s = &mut self.sides[side(channel)];
         match assess(channel, 1, &meter) {
             CaptureHealth::DigitalSilence => {
+                if s.state == SideState::Stopped && !zeros_expected {
+                    // Leaving `Stopped` needs real audio: a side that comes back with zeros has
+                    // delivered nothing since it stopped, so the zero stretch counts from then
+                    // and it goes straight to `Zeros`, never reading `Ok` on the way.
+                    s.zeros_since.get_or_insert(s.last_block.unwrap_or(start));
+                }
                 s.last_block = Some(now_ns);
                 // The zeros began with the block's first sample, a block's length before it
                 // arrived: ten seconds of zeros are ten seconds of audio.
@@ -406,6 +418,56 @@ mod tests {
             }]
         );
         // Bluetooth or not: a device that stops calling back has stopped.
+    }
+
+    /// Review MEDIUM: leaving `Stopped` needs real audio. A side that comes back with zeros goes
+    /// straight to `Zeros`, its zero stretch counted from when the audio stopped, and never reads
+    /// `Ok` in between. A Bluetooth mic's zeros are still normal.
+    #[test]
+    fn a_stopped_side_that_returns_with_zeros_never_reads_ok() {
+        let zeros = [0.0f32; 160];
+        let mut w = Watchdog::new(Routing::default(), 0);
+        run(&mut w, &[(Channel::Mic, &tone())], 0, 2);
+        let stopped = w.check(2 * S - BLOCK + STOP_LIMIT_NS);
+        assert_eq!(
+            stopped,
+            [Watch::State {
+                channel: Channel::Mic,
+                state: SideState::Stopped
+            }]
+        );
+        let back = w.observe(Channel::Mic, &zeros, 13 * S);
+        assert_eq!(
+            back,
+            [Watch::State {
+                channel: Channel::Mic,
+                state: SideState::Zeros
+            }],
+            "straight from Stopped to Zeros"
+        );
+        assert_eq!(
+            w.observe(Channel::Mic, &tone(), 14 * S),
+            [Watch::State {
+                channel: Channel::Mic,
+                state: SideState::Ok
+            }]
+        );
+
+        let bluetooth = Routing {
+            mic: Transport::Bluetooth,
+            ..Routing::default()
+        };
+        let mut w = Watchdog::new(bluetooth, 0);
+        run(&mut w, &[(Channel::Mic, &tone())], 0, 2);
+        w.check(2 * S - BLOCK + STOP_LIMIT_NS);
+        assert_eq!(
+            w.observe(Channel::Mic, &zeros, 13 * S),
+            [Watch::State {
+                channel: Channel::Mic,
+                state: SideState::Ok
+            }],
+            "a Bluetooth mic's zeros are its silence"
+        );
     }
 
     #[test]

@@ -142,6 +142,11 @@ pub enum MeetingWarning {
         /// Which side.
         channel: Channel,
     },
+    /// The mic was a Bluetooth headset mic, and every sample it captured is exactly zero. Such a
+    /// mic gates to zeros while its user is silent, so this may be someone who never spoke; it is
+    /// also what a headset mic that never worked looks like. Softer than
+    /// [`CapturedOnlyZeros`](Self::CapturedOnlyZeros), which says no data was captured at all.
+    BluetoothMicOnlyZeros,
     /// A side's recorded audio could not even be listed (its directory is gone, or unreadable).
     /// The final pass stops before writing anything, and returns the error too.
     AudioUnlisted {

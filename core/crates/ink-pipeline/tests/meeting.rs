@@ -1054,6 +1054,30 @@ fn a_side_that_captured_only_zeros_is_flagged_and_a_quiet_one_is_not() {
     );
 }
 
+/// Review: a Bluetooth headset mic gates to zeros while its user is silent, so a whole meeting of
+/// zeros from one is not "a denied capture": it gets the softer warning that says so.
+#[test]
+fn a_bluetooth_mic_of_only_zeros_gets_the_softer_warning() {
+    let far = join(&[silence(1.0), speech(3.0, -30.0, 153), silence(4.0)]);
+    let mut rig = RigBuilder {
+        routing: ink_pipeline::meeting::watchdog::Routing {
+            mic: ink_core::Transport::Bluetooth,
+            ..Default::default()
+        },
+        ..RigBuilder::default()
+    }
+    .build();
+    rig.feed(&silence(8.0), &far);
+    rig.finish().unwrap();
+    let warnings = rig.warnings();
+    assert!(warnings.contains(&MeetingWarning::BluetoothMicOnlyZeros));
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::CapturedOnlyZeros { .. }))
+    );
+}
+
 /// Re-check follow-up: when a side's chunks cannot even be listed, the pass says so as an event
 /// before it returns the error (and nothing is written).
 #[test]

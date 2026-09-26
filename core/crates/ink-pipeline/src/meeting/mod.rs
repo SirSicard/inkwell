@@ -130,6 +130,9 @@ struct Core {
     written: [Option<SideSummary>; 2],
     /// Live finals each side saved unchecked (mic, far).
     backlogged: [u64; 2],
+    /// Whether the mic was a Bluetooth headset mic at any point: its zeros can be its user's
+    /// silence.
+    mic_bluetooth: bool,
     /// Live events that arrived after the meeting stopped.
     late: Arc<Late>,
 }
@@ -197,6 +200,7 @@ impl MeetingChain {
             t0_ns,
             written: [None, None],
             backlogged: [0, 0],
+            mic_bluetooth: start.routing.mic == ink_core::Transport::Bluetooth,
             late: Arc::default(),
         };
         let (tx, asr) = mpsc::channel();
@@ -306,6 +310,7 @@ impl MeetingChain {
 
     /// The capture's routing changed (a device switched, the headset-mic setting).
     pub fn set_routing(&mut self, routing: Routing) {
+        self.core.mic_bluetooth |= routing.mic == ink_core::Transport::Bluetooth;
         self.watchdog.set_routing(routing);
     }
 
@@ -640,8 +645,17 @@ impl EndedMeeting {
         report.backlogged_finals = self.core.backlogged[usize::from(channel == Channel::Far)];
         if read.only_zeros {
             log::warn!("meeting final pass: every sample of the {channel:?} side is zero");
-            self.core
-                .warn(MeetingWarning::CapturedOnlyZeros { channel });
+            // A Bluetooth headset mic gates to zeros while its user is silent, so a meeting of its
+            // zeros may be a listener who never spoke: the softer warning, not "a denied capture".
+            // Not suppressed: it is also what a headset mic that never worked looks like, and a
+            // whole meeting of it is worth a word (the live watchdog, judging 10 s at a time,
+            // rightly says nothing).
+            if channel == Channel::Mic && self.core.mic_bluetooth {
+                self.core.warn(MeetingWarning::BluetoothMicOnlyZeros);
+            } else {
+                self.core
+                    .warn(MeetingWarning::CapturedOnlyZeros { channel });
+            }
         }
         report.audible_ms = read.audible_ms;
         report.speech_ms = read.speech_ms;
