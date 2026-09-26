@@ -1022,6 +1022,8 @@ fn an_entry_named_like_a_chunk_that_is_not_a_readable_file_is_reported_and_hides
     // A directory where chunk 5 would be: stat works, but it is no chunk.
     let dir_entry = store.dir().join(chunk_file_name(Channel::Mic, 5, MONO_16K));
     std::fs::create_dir(&dir_entry).unwrap();
+    // Only Unix adds the dangling link below, so the binding is mutable there alone.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut expected = vec![(Some(5), dir_entry.clone())];
     // A link to nowhere where chunk 7 would be: stat itself fails.
     #[cfg(unix)]
