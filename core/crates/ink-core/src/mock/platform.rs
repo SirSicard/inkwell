@@ -235,6 +235,19 @@ impl MockPlatform {
         sink.map(|s| s(signal)).is_some()
     }
 
+    /// Detection stops on its own: sends [`MeetingSignal::Lost`] once and stops watching, as the
+    /// real platforms do, so nothing arrives until `start` again. Returns whether a detector was
+    /// listening.
+    pub fn lose_meetings(&self, reason: &str) -> bool {
+        let sink = lock(&self.meetings).take();
+        sink.map(|s| {
+            s(MeetingSignal::Lost {
+                reason: reason.to_owned(),
+            })
+        })
+        .is_some()
+    }
+
     fn hotkey_event(&self, event: HotkeyEvent) -> bool {
         let sink = lock(&self.hotkey).as_ref().map(|(_, s)| s.clone());
         let delivered = sink.map(|s| s(event)).is_some();

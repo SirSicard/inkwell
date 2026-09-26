@@ -81,6 +81,27 @@ Later: `mac/` (Swift package: app, Apple engines, renderer, the core as an XCFra
 `windows/` (the WinUI 3 solution), `shaders/ink.wgsl` (one shader, translated by naga to MSL and
 HLSL), `schema/events.schema.json`, and `fixtures/` (synthetic and public-licensed audio only).
 
+### ggml: two copies, kept apart
+
+Two engines bring their own ggml, the tensor library under llama.cpp: llama.cpp (Qwen3-ASR and
+local chat models, the `engine-llama` feature) and NeMo-Speech.cpp (the diarizer). The versions
+are far apart: llama-cpp-sys-2 0.1.157 vendors ggml 0.24.0, and NeMo-Speech.cpp ships 0.12 as its
+own `libggml*` libraries. So they are **not** built against one shared ggml: each engine keeps the
+ggml it was measured with, and a llama.cpp update never drags the diarizer along.
+
+- llama.cpp and its ggml are linked **statically** into the core. The core loads no llama or ggml
+  library, so nothing of ours can collide with the diarizer's `libggml*` at load time.
+- The diarizer stays in its own shared library beside its own ggml, bound per library (the
+  two-level namespace on macOS, per-DLL imports on Windows). Its adapter calls only the diarizer's
+  C API and never links ggml by name: `-lggml` would bind to whichever ggml the linker meets first.
+- `core/crates/ink-engines/tests/ggml_link.rs` checks this on the linked binary: no engine library
+  is loaded, no `ggml_*`, `llama_*` or `mtmd_*` symbol is imported, llama.cpp's are all defined in
+  the core, and the ggml the core calls reports llama.cpp's version. With the diarizer's feature on,
+  it also shows the diarizer's library importing ggml from its own copy, and both copies answering
+  in one process.
+
+The cost is a second copy of ggml's code and a second Metal device setup.
+
 ## The diarizer's native library
 
 The diarizer (Nemotron-3-Diarization) runs on NeMo-Speech.cpp, a C++ library with a C API. The
@@ -97,14 +118,9 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   the manifest the build script wrote (the commit and each library's SHA-256).
 - **In CI** the adapter is compiled and linted without the library (`INK_NEMO_CHECK_ONLY=1`); the
   tests that run it, and reproduce the diarizer's DER on AMI, run locally.
-- **Its ggml stays its own.** NeMo-Speech.cpp ships its own (patched) ggml as separate shared
-  libraries that only NeMo's library links; none of their symbols enter the Rust link. On macOS
-  the two-level namespace binds each library's references to the ggml it was linked against, and
-  on Windows each DLL's imports name the DLL they come from, so NeMo's ggml stays apart from the
-  copy of ggml the llama.cpp adapter links statically. The two must not be installed as shared
-  libraries under the same names in one directory. Linux is not a target; if it becomes one, its
-  flat namespace would let one copy's symbols stand in for the other's, and the llama.cpp
-  adapter's ggml must then hide its symbols.
+- **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
+  apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
+  symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
 - **Its dependencies**, SentencePiece and Abseil, are listed in [THIRD_PARTY.md](../THIRD_PARTY.md)
   with NeMo-Speech.cpp and its ggml; `cargo deny` cannot see them.
 

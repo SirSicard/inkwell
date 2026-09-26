@@ -97,6 +97,14 @@ pub enum MeetingSignal {
         /// The application.
         app: AppRef,
     },
+    /// Detection stopped on its own: the OS stopped answering, or the watcher hit a bug. Which apps
+    /// hold the microphone is unknown from here on, and nothing more arrives until
+    /// [`MeetingDetector::start`] is called again. Sent once. The core treats meeting state as
+    /// unknown, tells the user, and never restarts detection in a loop.
+    Lost {
+        /// What went wrong, for the log and the UI. Never audio or transcript content.
+        reason: String,
+    },
 }
 
 /// Watches for applications that start and stop using the microphone. The core debounces the
@@ -104,7 +112,8 @@ pub enum MeetingSignal {
 /// daemons (for example CoreSpeech on macOS).
 pub trait MeetingDetector: Send + Sync {
     /// **Worker.** Starts watching. `on_signal` runs on a callback thread and must not block.
-    /// Calling `start` again replaces the callback.
+    /// Calling `start` again replaces the callback. If detection stops without [`stop`](Self::stop)
+    /// (the OS stops answering), the callback gets [`MeetingSignal::Lost`] once and nothing after.
     fn start(&self, on_signal: EventSink<MeetingSignal>) -> Result<(), PlatformError>;
 
     /// **Worker.** Stops watching. When it returns, the callback will not run again.

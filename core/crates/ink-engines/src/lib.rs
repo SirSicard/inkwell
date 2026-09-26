@@ -24,6 +24,8 @@
 mod download;
 #[cfg(feature = "http")]
 mod http;
+#[cfg(feature = "engine-llama")]
+pub mod llama;
 mod model_dir;
 #[cfg(feature = "engine-nemo")]
 #[allow(unsafe_code)]
@@ -47,7 +49,7 @@ pub use registry::{
     ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_NAME_LEN, ModelFile, Os, Registry,
     RegistryError, Runtime, builtin_rows,
 };
-pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency};
+pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 pub use router::{ExternalEngine, Route, RouteError, Router};
 pub use rows::{NEMOTRON_DIARIZATION_ID, SILERO_VAD_ID, nemotron_3_diarization, silero_vad};
 #[cfg(feature = "engine-silero")]

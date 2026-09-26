@@ -1066,6 +1066,42 @@ fn meeting_signals_reach_the_detector_until_it_stops() {
     assert_eq!(*seen.lock().unwrap(), vec![MeetingSignal::MicInUse { app }]);
 }
 
+/// Detection that stops on its own (the audio server stops answering, a bug in the watcher) says
+/// so once with `Lost`, and nothing arrives after it until `start` again.
+#[test]
+fn losing_meeting_detection_sends_lost_once_and_ends_it() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    assert!(!mock.lose_meetings("not watching"), "nobody listening");
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let record: EventSink<MeetingSignal> = Arc::new(move |s| sink.lock().unwrap().push(s));
+    p.meetings.start(record.clone()).unwrap();
+    assert!(mock.lose_meetings("the audio server stopped answering"));
+    let app = AppRef {
+        id: "com.example.meet".into(),
+        pid: None,
+        name: "Meet".into(),
+    };
+    assert!(
+        !mock.emit_meeting(MeetingSignal::MicInUse { app: app.clone() }),
+        "ended"
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![MeetingSignal::Lost {
+            reason: "the audio server stopped answering".into()
+        }]
+    );
+
+    p.meetings.start(record).unwrap();
+    assert!(
+        mock.emit_meeting(MeetingSignal::MicInUse { app }),
+        "start again resumes"
+    );
+}
+
 /// Losing the hotkey mid-hold ends the hold first, exactly as the Mac tap does: `Cancelled`, then
 /// `Lost`. Losing it while idle sends `Lost` alone.
 #[test]

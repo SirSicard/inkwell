@@ -14,13 +14,14 @@
 //! - deleted means deleted: SQLite's `secure_delete` and the index's `secure-delete` option
 //!   overwrite the text of deleted and superseded rows instead of leaving it in free pages.
 //!
-//! Importers for the stores of earlier versions arrive in a later step.
+//! The [`import`] module brings an Inkwell 0.2 data directory in, read-only, in one transaction.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod codec;
 mod fts;
+pub mod import;
 mod schema;
 
 use std::path::Path;
@@ -267,6 +268,48 @@ fn revision(conn: &Connection, id: &RecordId) -> Result<u32, Fail> {
     .ok_or_else(|| StoreError::NotFound.into())
 }
 
+/// Inserts a record at revision 1 under `id`. [`Store::create_record`] and the importer share it.
+fn insert_record(conn: &Connection, id: &str, record: &NewRecord) -> Result<(), Fail> {
+    conn.execute(
+        "INSERT INTO record (id, kind, title, started_at_unix_ms, source_app, audio_dir)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            id,
+            kind_text(record.kind),
+            record.title,
+            record.started_at_unix_ms,
+            record.source_app,
+            record.audio_dir
+        ],
+    )?;
+    Ok(())
+}
+
+/// Marks a record as ended, or `NotFound`.
+fn set_ended(conn: &Connection, id: &str, ended_at_unix_ms: i64) -> Result<(), Fail> {
+    changed(conn.execute(
+        "UPDATE record SET ended_at_unix_ms = ?2 WHERE id = ?1",
+        params![id, ended_at_unix_ms],
+    )?)
+}
+
+fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, Fail> {
+    Ok(conn
+        .query_row("SELECT value FROM setting WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()?)
+}
+
+fn put_setting(conn: &Connection, key: &str, value: &str) -> Result<(), Fail> {
+    conn.execute(
+        "INSERT INTO setting (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
 /// The columns [`record_at`] reads, as a macro so queries can be `concat!`-ed constants.
 macro_rules! record_columns {
     () => {
@@ -411,21 +454,7 @@ fn commitments_from(
 impl Store for SqliteStore {
     fn create_record(&self, record: NewRecord) -> Result<RecordId, StoreError> {
         let id = new_id()?;
-        self.with("create_record", |conn| {
-            conn.execute(
-                "INSERT INTO record (id, kind, title, started_at_unix_ms, source_app, audio_dir)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    id,
-                    kind_text(record.kind),
-                    record.title,
-                    record.started_at_unix_ms,
-                    record.source_app,
-                    record.audio_dir
-                ],
-            )?;
-            Ok(())
-        })?;
+        self.with("create_record", |conn| insert_record(conn, &id, &record))?;
         Ok(RecordId(id))
     }
 
@@ -493,10 +522,7 @@ impl Store for SqliteStore {
 
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError> {
         self.with("finish_record", |conn| {
-            changed(conn.execute(
-                "UPDATE record SET ended_at_unix_ms = ?2 WHERE id = ?1",
-                params![id.0, ended_at_unix_ms],
-            )?)
+            set_ended(conn, &id.0, ended_at_unix_ms)
         })
     }
 
@@ -838,24 +864,11 @@ impl Store for SqliteStore {
     }
 
     fn setting(&self, key: &str) -> Result<Option<String>, StoreError> {
-        self.with("setting", |conn| {
-            Ok(conn
-                .query_row("SELECT value FROM setting WHERE key = ?1", [key], |row| {
-                    row.get(0)
-                })
-                .optional()?)
-        })
+        self.with("setting", |conn| get_setting(conn, key))
     }
 
     fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
-        self.with("set_setting", |conn| {
-            conn.execute(
-                "INSERT INTO setting (key, value) VALUES (?1, ?2)
-                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                params![key, value],
-            )?;
-            Ok(())
-        })
+        self.with("set_setting", |conn| put_setting(conn, key, value))
     }
 }
 

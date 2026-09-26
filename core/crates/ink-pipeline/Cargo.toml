@@ -10,3 +10,21 @@ publish.workspace = true
 
 [dependencies]
 ink-core.workspace = true
+# The capture path after the ring (downmix, resampler), dictation takes, the VAD-gated gain stage.
+ink-audio = { path = "../ink-audio" }
+# Model updates go through the engine framework's residency and downloader.
+ink-engines = { path = "../ink-engines" }
+# AI polish (stage 9) is ink-llm's task, not a second copy of it here.
+ink-llm = { path = "../ink-llm" }
+# Snippet and voice-command triggers (MIT OR Unlicense). Already in the tree through regex.
+aho-corasick = "1.1.5"
+# Diagnostics: counts, levels and timings only, never text (I5, `tests/privacy_lint.rs`).
+log = "0.4"
+# Export and the dictionary's stored form, built and read as `serde_json::Value`, with no derive
+# macros, as ink-llm does.
+serde_json = "1"
+
+[dev-dependencies]
+ink-core = { workspace = true, features = ["mock"] }
+# The real-engine test reads a bench clip (Apache-2.0; already in the tree through ink-audio).
+hound = "3.5.1"
