@@ -7,12 +7,16 @@ import SectionHeading from "./SectionHeading";
   stripped from settings.json), src-tauri/src/history.rs + setup.rs (SQLite in
   the app data dir), src-tauri/src/llm.rs (BYOK providers, keyring lookup),
   src-tauri/tauri.conf.json (updater endpoint), src-tauri/src/commands.rs
-  (`hf_base`; model files come from Hugging Face), src/App.tsx (the update
+  (`hf_base`; model files come from Hugging Face), src-tauri/src/setup.rs
+  (SILERO_VAD_URL; the VAD model comes from sherpa-onnx's GitHub releases),
+  src-tauri/src/voiceedit.rs (voice editing uses the same BYOK provider),
+  inkwell-updater/src/index.ts (reads KV, logs nothing), src/App.tsx (the update
   check is a 5000 ms setTimeout on mount; no setting disables it).
 
   "Only three network calls" is meant literally: grepping every http(s) URL in
-  src-tauri/src yields exactly these three destinations: Hugging Face model
-  repos, the updater worker, and the BYOK LLM endpoints. Fonts are local
+  src-tauri/src yields exactly these destinations: Hugging Face model repos and
+  one GitHub release asset (downloads), the updater worker, and the BYOK LLM
+  endpoints. Fonts are local
   (public/fonts) and the Tauri CSP has no remote connect-src.
 */
 
@@ -26,15 +30,15 @@ const local = [
 const leaves = [
   {
     title: "Model downloads",
-    body: "When you choose a model, Inkwell pulls the files from Hugging Face. That is a plain file download; nothing about you goes with it.",
+    body: "When you choose a model, Inkwell pulls the files from Hugging Face, and on first run it fetches the small voice-detection model from the sherpa-onnx releases on GitHub. Plain file downloads; nothing about you goes with them.",
   },
   {
     title: "Update checks",
-    body: "Five seconds after launch the app asks the release endpoint whether a newer version exists, and shows a dismissible toast if so. It runs automatically; there is no switch for it yet.",
+    body: "Five seconds after launch the app asks the release endpoint whether a newer version exists, and shows a dismissible toast if so. The request carries the app version, OS and CPU architecture, and the endpoint only reads the latest release record. It runs automatically; there is no switch for it yet.",
   },
   {
-    title: "AI polish, only if you enable it",
-    body: "Off by default. When on, the transcribed text (never the audio) goes straight from your machine to the provider whose key you supplied. There is no Inkwell server in the middle: earlier builds had a free proxy tier and it has been removed. Bring your own key or the feature does nothing.",
+    title: "AI polish and voice editing, only if you use them",
+    body: "Off by default. When you use them, the text (never the audio) goes straight from your machine to the provider whose key you supplied. There is no Inkwell server in the middle: earlier builds had a free proxy tier and it has been removed. Bring your own key or the feature does nothing.",
   },
 ];
 
@@ -122,9 +126,9 @@ export default function PrivacySection() {
                 color: "var(--text-tertiary)",
               }}
             >
-              With polish off and your model already on disk, the update check is
-              the only thing Inkwell sends, and dictation itself keeps working
-              with the network unplugged.
+              With polish and voice editing unused and your models already on
+              disk, the update check is the only thing Inkwell sends, and
+              dictation itself keeps working with the network unplugged.
             </p>
           </div>
         </Reveal>

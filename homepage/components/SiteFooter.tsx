@@ -19,6 +19,7 @@ const links = [
   { label: "Issues", href: GITHUB_ISSUES_URL },
   { label: "MIT licence", href: GITHUB_LICENSE_URL },
   { label: "Privacy", href: "#privacy" },
+  { label: "Code signing", href: "#code-signing" },
 ];
 
 export default function SiteFooter() {

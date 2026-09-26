@@ -54,6 +54,7 @@ A mode bundles a writing style, speech cleanup and AI polish, and switches itsel
 - Transcripts live in a local SQLite file in your app data directory. Nothing syncs.
 - There is no telemetry, no analytics, no crash reporting, no account, no server owned by this project that your text passes through.
 - **AI polish and voice editing can send text to your selected provider when you use those features.** You supply your own API key for OpenAI, Groq, Anthropic, OpenRouter or a custom OpenAI-compatible endpoint. The key is stored in the OS keyring. When polish is on, the transcribed **text** (never the audio) is sent directly from your machine to the provider you chose. Turn it off and Inkwell makes no network calls except model downloads and update checks.
+- **Every network call, listed.** Model downloads fetch files from Hugging Face, plus the Silero VAD model from the sherpa-onnx releases on GitHub if it is missing. Five seconds after launch the update check asks `inkwell-updater.mattias-e67.workers.dev` whether a newer version exists; the request carries the app version, OS target and CPU architecture, and the worker only reads the latest release record. Beyond those, only AI polish and voice editing connect, as above.
 - Earlier builds shipped a free proxy tier that routed polish requests through a server the maintainer paid for. That is gone. BYOK is the only path.
 
 ## Install
@@ -193,6 +194,19 @@ Bug reports and PRs are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first. 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [SirSicard](https://github.com/SirSicard)
+- Approvers: [SirSicard](https://github.com/SirSicard)
+
+Only artifacts built by this repository's GitHub Actions workflows from this repository's own source are signed. Each release signing request is approved by hand.
+
+**Privacy policy:** see [Privacy](#privacy). This program does not send your audio anywhere. It contacts networked systems only to check for updates, to download the speech and voice-detection models it runs on, and, when you use AI polish or voice editing with your own API key, to send text to the provider you selected.
+
+Status: Windows builds up to v0.2.9 are not signed yet.
 
 ## Credits
 

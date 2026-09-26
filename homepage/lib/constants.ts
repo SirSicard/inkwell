@@ -48,3 +48,8 @@ export const TAURI_URL = "https://tauri.app";
 export const HANDY_URL = "https://github.com/cjpais/Handy";
 /** Silero VAD supplies silero_vad.onnx, used in src-tauri/src/vad.rs. */
 export const SILERO_VAD_URL = "https://github.com/snakers4/silero-vad";
+
+/** Windows code signing, required wording for the SignPath Foundation programme. */
+export const SIGNPATH_URL = "https://signpath.io";
+export const SIGNPATH_FOUNDATION_URL = "https://signpath.org";
+export const MAINTAINER_GITHUB_URL = "https://github.com/SirSicard";

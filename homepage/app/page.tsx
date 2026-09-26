@@ -4,6 +4,7 @@ import Hero from "@/components/Hero";
 import HowItWorks from "@/components/HowItWorks";
 import ModelsSection from "@/components/ModelsSection";
 import PrivacySection from "@/components/PrivacySection";
+import CodeSigningSection from "@/components/CodeSigningSection";
 import ScreenshotSection from "@/components/ScreenshotSection";
 import SiteFooter from "@/components/SiteFooter";
 import SiteHeader from "@/components/SiteHeader";
@@ -26,6 +27,7 @@ export default function Home() {
         <PrivacySection />
         <DownloadSection />
         <SupportSection />
+        <CodeSigningSection />
       </main>
       <SiteFooter />
     </>
