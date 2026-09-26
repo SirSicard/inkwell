@@ -135,6 +135,21 @@ pub enum MeetingWarning {
         /// Time found as speech, ms.
         speech_ms: u64,
     },
+    /// A side captured audio, and every sample of it is exactly zero: no data at all (a denied
+    /// capture that still called back, or input muted to zero). A quiet side is not this: its
+    /// samples are small, not zero.
+    CapturedOnlyZeros {
+        /// Which side.
+        channel: Channel,
+    },
+    /// A side's recorded audio could not even be listed (its directory is gone, or unreadable).
+    /// The final pass stops before writing anything, and returns the error too.
+    AudioUnlisted {
+        /// Which side.
+        channel: Channel,
+        /// Why, naming the directory, never audio.
+        reason: String,
+    },
     /// A side has no recorded audio at all: no chunk was ever written for it (a device that never
     /// delivered, a permission denied, a tap that never started). Silence would still have chunks.
     NothingCaptured {
@@ -174,6 +189,9 @@ pub struct ChannelPass {
     pub chunks: usize,
     /// Audio in the readable chunks (an import: in the file), ms. Zero: nothing was captured.
     pub captured_ms: u64,
+    /// Live finals saved without the speech check, because too many waited on the VAD at once
+    /// ([`MeetingWarning::LiveFinalsBacklog`]).
+    pub backlogged_finals: u64,
     /// Of that, time above the audible floor
     /// ([`AUDIBLE_FLOOR_DBFS`](crate::speech::AUDIBLE_FLOOR_DBFS)), measured before any gain:
     /// what [`speech_ms`](Self::speech_ms) is checked against.

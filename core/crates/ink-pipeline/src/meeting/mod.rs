@@ -128,6 +128,8 @@ struct Core {
     t0_ns: u64,
     /// What the pump reported writing for each side (mic, far).
     written: [Option<SideSummary>; 2],
+    /// Live finals each side saved unchecked (mic, far).
+    backlogged: [u64; 2],
     /// Live events that arrived after the meeting stopped.
     late: Arc<Late>,
 }
@@ -194,6 +196,7 @@ impl MeetingChain {
             started_unix_ms,
             t0_ns,
             written: [None, None],
+            backlogged: [0, 0],
             late: Arc::default(),
         };
         let (tx, asr) = mpsc::channel();
@@ -407,6 +410,7 @@ impl MeetingChain {
         self.collect(true);
         // From here, a live event is late: every stream has finished. What raced in before the
         // close is counted too.
+        self.core.backlogged = [self.mic.backlogged(), self.far.backlogged()];
         self.core.late.closed.store(true, Ordering::Release);
         while self.asr.try_recv().is_ok() {
             self.core.late.count.fetch_add(1, Ordering::Relaxed);
@@ -633,6 +637,12 @@ impl EndedMeeting {
             self.core.written[usize::from(channel == Channel::Far)].map(|w| w.chunks);
         report.chunks = read.chunks;
         report.captured_ms = read.captured_ms;
+        report.backlogged_finals = self.core.backlogged[usize::from(channel == Channel::Far)];
+        if read.only_zeros {
+            log::warn!("meeting final pass: every sample of the {channel:?} side is zero");
+            self.core
+                .warn(MeetingWarning::CapturedOnlyZeros { channel });
+        }
         report.audible_ms = read.audible_ms;
         report.speech_ms = read.speech_ms;
         if little_speech_heard(read.audible_ms, read.speech_ms) {
@@ -665,7 +675,20 @@ impl EndedMeeting {
         let (vad, error) = core.vad.open();
         let pass = SpeechPass::new(vad, core.settings.vad, core.settings.regions)
             .map_err(FinalizeError::Regions)?;
-        let reader = SideReader::open(audio, channel, core.t0_ns, pass)?;
+        let reader = match SideReader::open(audio, channel, core.t0_ns, pass) {
+            Ok(reader) => reader,
+            Err(Stop::Chunks(e)) => {
+                log::warn!(
+                    "meeting final pass: the {channel:?} side's chunks cannot be listed: {e}"
+                );
+                core.warn(MeetingWarning::AudioUnlisted {
+                    channel,
+                    reason: e.to_string(),
+                });
+                return Err(FinalizeError::Chunks(e));
+            }
+            Err(stop) => return Err(stop.into()),
+        };
         Ok((reader, error))
     }
 

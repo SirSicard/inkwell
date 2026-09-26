@@ -184,8 +184,8 @@ pub(crate) struct LiveChannel {
     /// Leading output samples of a replacement AGC still to drop.
     skip: usize,
     pending: VecDeque<Pending>,
-    /// Whether the pending queue has overflowed (reported once).
-    backlogged: bool,
+    /// Finals saved unchecked because the pending queue was full (reported once, counted always).
+    backlogged: u64,
     scratch: Vec<f32>,
 }
 
@@ -234,7 +234,7 @@ impl LiveChannel {
             input: 0,
             skip: 0,
             pending: VecDeque::new(),
-            backlogged: false,
+            backlogged: 0,
             scratch: Vec::new(),
         }
     }
@@ -316,8 +316,8 @@ impl LiveChannel {
             return None;
         }
         let overflow = if self.pending.len() >= MAX_PENDING_FINALS {
-            if !self.backlogged {
-                self.backlogged = true;
+            self.backlogged += 1;
+            if self.backlogged == 1 {
                 log::warn!(
                     "meeting: {MAX_PENDING_FINALS} {:?} live finals wait on the VAD; the oldest are saved unchecked",
                     self.channel
@@ -346,6 +346,11 @@ impl LiveChannel {
             text: text.text,
         });
         overflow
+    }
+
+    /// Finals saved unchecked because too many waited at once.
+    pub(crate) fn backlogged(&self) -> u64 {
+        self.backlogged
     }
 
     fn keep(&self, p: Pending) -> Settled {
