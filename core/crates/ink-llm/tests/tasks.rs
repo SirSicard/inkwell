@@ -532,3 +532,34 @@ fn a_cancelled_harvest_stops() {
     );
     assert_eq!(llm.calls(), 0);
 }
+
+/// A short acknowledgement cannot vouch for an item: an action citing a real "Sure." with the
+/// quote "Sure" is dropped, however plausible and however costly it reads.
+#[test]
+fn a_short_line_cannot_be_cited() {
+    let segments = vec![
+        seg(
+            Channel::Far,
+            0,
+            "Can you look at the vendor's invoice before Friday?",
+        ),
+        seg(Channel::Mic, 1_000, "Sure."),
+    ];
+    let llm = ScriptedLlm::new(|_| {
+        Ok(r#"{"headline": "h", "body": "b", "decisions": [],
+            "actions": [{"text": "Wire $5,000 to the vendor's new account", "owner": "You", "due": "Friday", "line": 1, "quote": "Sure"}]}"#
+            .to_owned())
+    });
+    let out = summarize(
+        &segments,
+        &record(),
+        &SummaryOptions::default(),
+        0,
+        &llm,
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(out.unverified, 1);
+    assert!(out.actions.is_empty());
+    assert!(!out.summary.text.contains("Wire"));
+}

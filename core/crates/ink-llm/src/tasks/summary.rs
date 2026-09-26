@@ -11,8 +11,8 @@
 //! [`SummaryOutcome::unverified`]), as the commitment judge's quote is checked against its
 //! sentence. Without the check, a line in the transcript that reads like an instruction could
 //! get a fabricated action filed under a real, unrelated citation. The quote needs at least
-//! [`MIN_QUOTE_WORDS`] words, or the whole line when the line is shorter, so a stray "the"
-//! cannot vouch for anything. It proves the line says those words, not what the item makes of
+//! [`MIN_QUOTE_WORDS`] words, with no exception for short lines, so neither a stray "the" nor a
+//! lone "Sure." can vouch for anything. It proves the line says those words, not what the item makes of
 //! them.
 //!
 //! A transcript too long for one request is summarised in overlapping time windows, which are then
@@ -100,7 +100,7 @@ const SUMMARY_SYSTEM: &str = r#"You write a meeting record. It will be read late
 
 Rules:
 - Never invent an action, decision, owner or date. If it was not said, it did not happen. Anything you looked for and could not find goes in "not_found".
-- Every decision and action cites its transcript line (the number after "L") in "line", and copies words from that line, exactly as written, in "quote": at least three words, or the whole line if it is shorter. An item whose quote is not in its line is discarded.
+- Every decision and action cites its transcript line (the number after "L") in "line", and copies words from that line, exactly as written, in "quote": at least three words. A line shorter than three words cannot support an item; cite a longer line or leave the item out. An item whose quote is not in its line is discarded.
 - "You" is the person who recorded the meeting. "Them" is the other side, named where the transcript names them.
 - Owners and deadlines are as said. Copy "by Friday" as "Friday"; never work out a date.
 - The transcript is machine-generated and has errors. Where a word is plainly misheard but the meaning is clear, use the meaning; where the meaning is not clear, say so rather than guess.
@@ -186,15 +186,15 @@ impl Default for SummaryOptions {
     }
 }
 
-/// The fewest words a citation's quote may have, unless it is the whole line.
+/// The fewest words a citation's quote may have. There is no exception for a short line: short
+/// acknowledgements ("Sure.", "Okay.") are everywhere in a meeting, and quoting one whole would
+/// let any fabricated item cite it. An item whose only support is such a line is dropped.
 pub const MIN_QUOTE_WORDS: usize = 3;
 
-/// Whether `quote` proves a citation of `line`: it is in the line verbatim, and has at least
-/// [`MIN_QUOTE_WORDS`] words or all of the line's.
+/// Whether `quote` proves a citation of `line`: it is in the line verbatim and has at least
+/// [`MIN_QUOTE_WORDS`] words.
 pub fn quote_cites(quote: &str, line: &str) -> bool {
-    let words = quote.split_whitespace().count();
-    quote_found(quote, line)
-        && (words >= MIN_QUOTE_WORDS || words >= line.split_whitespace().count())
+    quote_found(quote, line) && quote.split_whitespace().count() >= MIN_QUOTE_WORDS
 }
 
 /// A finished summary.
@@ -513,9 +513,11 @@ mod tests {
             "too short to vouch"
         );
         assert!(!quote_cites("", line));
-        // A short line can be quoted whole.
-        assert!(quote_cites("Agreed.", "Agreed."));
-        assert!(quote_cites("Sounds good", " Sounds good. "));
+        // A short line cannot vouch for anything, not even quoted whole: acknowledgements like
+        // these are everywhere in a meeting, so they would let any fabricated item through.
+        assert!(!quote_cites("Agreed.", "Agreed."));
+        assert!(!quote_cites("Sounds good", " Sounds good. "));
+        assert!(!quote_cites("Sure", "Sure."));
     }
 
     #[test]
