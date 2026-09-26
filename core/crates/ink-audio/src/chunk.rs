@@ -20,10 +20,12 @@
 //!
 //! # Layout
 //!
-//! One directory per record. Each channel writes its own sequence: `mic-000000.pcm`,
-//! `mic-000001.pcm`, …, `far-000000.pcm`, …. The index in the name is the order; the header
-//! repeats the channel and index and adds the format, the host time of the chunk's first frame,
-//! and flags.
+//! One directory per record. Each channel writes its own sequence: `mic-000000-48000x1.pcm`,
+//! `mic-000001-48000x1.pcm`, …, `far-000000-48000x2.pcm`, …. The name holds the order (the index)
+//! and the format (rate × channels). The file is created under its name before any byte is written,
+//! so even a chunk whose header a crash tore still says, by its name, how its bytes divide into
+//! frames: recovery never has to guess it. The header repeats the channel, index and format and
+//! adds the host time of the chunk's first frame and flags.
 //!
 //! A chunk holds at most [`CHUNK_DURATION`] and closes on a block boundary: a block that would not
 //! fit starts the next chunk (only a block longer than a whole chunk is split). It also closes at a
@@ -40,7 +42,7 @@
 //! | 12..16 | sample rate, Hz, as the device declared it |
 //! | 16 | stream: 0 mic, 1 far end |
 //! | 17 | sample encoding: 1 = `f32` little-endian |
-//! | 18..20 | flags: bit 0 after a gap, bit 1 host time estimated by recovery |
+//! | 18..20 | flags: bit 0 after a gap, bit 1 host time estimated by recovery, bit 2 format estimated by recovery (only for a file whose name gives no format) |
 //! | 20..24 | reserved, zero |
 //! | 24..32 | chunk index |
 //! | 32..40 | host time of the first frame, ns |
@@ -107,9 +109,9 @@ pub enum ChunkError {
         /// What is wrong with it.
         reason: &'static str,
     },
-    /// Recovery could only guess this chunk's format, so its frames cannot be read as audio
-    /// without the caller deciding the format. [`ChunkStore::read_raw_samples`] returns the
-    /// samples as stored.
+    /// Recovery could only guess this chunk's format (its header was torn and its name, renamed by
+    /// hand, gives none), so its frames cannot be read as audio without the caller deciding the
+    /// format. [`ChunkStore::read_raw_samples`] returns the samples as stored.
     FormatEstimated {
         /// The file name.
         file: String,
@@ -168,32 +170,94 @@ fn channel_tag(channel: Channel) -> &'static str {
     }
 }
 
-/// The file name of chunk `index` of `channel`.
-///
-/// The only place a chunk name is built. Both parts are typed, and the index is formatted by
-/// Rust's type-checked formatting: an earlier implementation built names with a C-style `%d` and a
-/// 64-bit value, which silently produced no file at all. The host time is not in the name; it lives
-/// in the header, where it is checksummed.
-pub fn chunk_file_name(channel: Channel, index: u64) -> String {
-    // Six digits keep an ordinary recording sorted in a directory listing; order is always taken
-    // from the parsed number, so longer indexes still sort correctly here.
-    format!("{}-{index:06}.{CHUNK_EXTENSION}", channel_tag(channel))
+/// What a chunk file's name says about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChunkName {
+    /// Which stream.
+    pub channel: Channel,
+    /// Position in the channel's sequence.
+    pub index: u64,
+    /// The format the chunk was created with, or `None` for a name without a usable one (a file
+    /// renamed by hand): then only its header can say.
+    pub format: Option<StreamFormat>,
 }
 
-/// The channel and index a chunk file name encodes, or `None` for anything else.
-pub fn parse_chunk_file_name(name: &str) -> Option<(Channel, u64)> {
-    let stem = name.strip_suffix(CHUNK_EXTENSION)?.strip_suffix('.')?;
-    let (tag, digits) = stem.split_once('-')?;
+/// How a file in a record directory is classified by its name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParsedName {
+    /// A chunk.
+    Chunk(ChunkName),
+    /// Looks like a chunk of this channel (`mic-….pcm`) but cannot be placed in its sequence. It is
+    /// reported, and never touched.
+    Unparseable(Channel),
+    /// Not a chunk file. Ignored.
+    Foreign,
+}
+
+/// The file name of chunk `index` of `channel`, created in `format`: `far-000012-48000x2.pcm`.
+///
+/// The only place a chunk name is built, and the file is created under it (`create_new`) before
+/// any byte is written, so the format in the name is there even when a crash tears the header:
+/// recovery reads a torn chunk's frame size from its name, not from a guess. Every part is typed
+/// and formatted by Rust's type-checked formatting: an earlier implementation built names with a
+/// C-style `%d` and a 64-bit value, which silently produced no file at all. The host time is not
+/// in the name; it lives in the header, where it is checksummed.
+pub fn chunk_file_name(channel: Channel, index: u64, format: StreamFormat) -> String {
+    // Six digits keep an ordinary recording sorted in a directory listing; order is always taken
+    // from the parsed number, so longer indexes still sort correctly here.
+    format!(
+        "{}-{index:06}-{}x{}.{CHUNK_EXTENSION}",
+        channel_tag(channel),
+        format.sample_rate,
+        format.channels
+    )
+}
+
+/// What a file name says: the inverse of [`chunk_file_name`].
+pub fn parse_chunk_file_name(name: &str) -> ParsedName {
+    let Some(stem) = name
+        .strip_suffix(CHUNK_EXTENSION)
+        .and_then(|s| s.strip_suffix('.'))
+    else {
+        return ParsedName::Foreign;
+    };
+    let Some((tag, rest)) = stem.split_once('-') else {
+        return ParsedName::Foreign;
+    };
     let channel = match tag {
         "mic" => Channel::Mic,
         "far" => Channel::Far,
-        _ => return None,
+        _ => return ParsedName::Foreign,
     };
-    // `u64::from_str` also takes a leading '+', which no name we write has.
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+    let (index, format) = match rest.split_once('-') {
+        Some((index, format)) => (index, Some(format)),
+        None => (rest, None),
+    };
+    let Some(index) = digits::<u64>(index) else {
+        return ParsedName::Unparseable(channel);
+    };
+    let format = format.and_then(|f| {
+        let (rate, channels) = f.split_once('x')?;
+        let format = StreamFormat {
+            sample_rate: digits(rate)?,
+            channels: digits(channels)?,
+        };
+        (format.sample_rate > 0 && format.channels > 0).then_some(format)
+    });
+    ParsedName::Chunk(ChunkName {
+        channel,
+        index,
+        format,
+    })
+}
+
+/// A non-empty run of ASCII digits that fits `T`. (`from_str` alone would also take a leading
+/// `+`, which no name we write has.)
+fn digits<T: std::str::FromStr>(s: &str) -> Option<T> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    Some((channel, digits.parse().ok()?))
+    s.parse().ok()
 }
 
 /// A chunk header. See the module docs for the byte layout.
@@ -303,24 +367,26 @@ pub struct ChunkInfo {
     /// The chunk does not continue the previous one: audio was lost between them (a ring overrun
     /// or a jump in device time), or the stream restarted with a new writer.
     pub after_gap: bool,
-    /// Recovery rebuilt the header, and the host time is extrapolated from a neighbour.
+    /// Recovery rebuilt the header, and the host time is extrapolated from a neighbour, or unknown
+    /// (0) when no chunk of the channel survived to take it from.
     pub host_time_estimated: bool,
-    /// Recovery rebuilt the header and could only guess the format (the stream may have changed
-    /// format at this chunk). `format` and `frames` are that guess: [`ChunkStore::read`] refuses
-    /// the chunk and the rate check leaves it out.
+    /// Recovery rebuilt the header and could only guess the format, because the file's name gives
+    /// none (it was renamed by hand; names the writer creates always carry the format). `format`
+    /// and `frames` are that guess: [`ChunkStore::read`] refuses the chunk and the rate check
+    /// leaves it out.
     pub format_estimated: bool,
     /// Where it is.
     pub path: PathBuf,
 }
 
-/// A chunk file whose header cannot be read, listed so it is never silently skipped.
+/// A chunk file that cannot be read, listed so it is never silently skipped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnreadableChunk {
     /// Which stream.
     pub channel: Channel,
-    /// Position in the channel's sequence, from the file name.
-    pub index: u64,
-    /// What is wrong with its header.
+    /// Position in the channel's sequence, from the file name; `None` when the name does not say.
+    pub index: Option<u64>,
+    /// What is wrong with it.
     pub reason: &'static str,
     /// Where it is.
     pub path: PathBuf,
@@ -331,7 +397,8 @@ pub struct UnreadableChunk {
 pub struct ChunkList {
     /// Readable chunks, in index order.
     pub chunks: Vec<ChunkInfo>,
-    /// Unreadable chunk files, in index order. Their audio is still on disk.
+    /// Unreadable chunk files, in index order, then those whose names give no index. Their audio is
+    /// still on disk.
     pub unreadable: Vec<UnreadableChunk>,
 }
 
@@ -362,31 +429,33 @@ pub enum Repair {
         /// Bytes removed (less than one frame).
         bytes_removed: u64,
     },
-    /// The header was missing, truncated or corrupt, and was rebuilt from a neighbouring chunk of
-    /// the same channel. The host time is marked estimated.
+    /// The header was missing, truncated or corrupt, and was rebuilt.
     ///
-    /// The format is certain only when both adjacent chunks survived, agree, and the next one
-    /// continues this one without a gap; then a torn partial frame is trimmed. Otherwise the format
-    /// is marked estimated and not a byte after the header is touched.
+    /// The format comes from the file name, which the writer set before any byte was written, so
+    /// it is certain and a torn partial frame is trimmed to that frame size. Only a name without a
+    /// format (a file renamed by hand) leaves a guess from a neighbour: then the format is marked
+    /// estimated and not a byte after the header is touched. The host time is always marked
+    /// estimated: it is extrapolated from a neighbour, or unknown (0) when none survived.
     RebuiltHeader {
         /// Which stream.
         channel: Channel,
         /// Which chunk.
         index: u64,
-        /// The chunk whose format and timing it was rebuilt from.
-        from_index: u64,
+        /// The chunk the host time was extrapolated from, or `None` when no chunk survived.
+        time_from: Option<u64>,
         /// Whether the format is a guess.
         format_estimated: bool,
         /// Bytes of audio after the header, all kept.
         bytes_kept: u64,
     },
-    /// Nothing to rebuild from (no readable chunk in the channel). The file is left exactly as it
-    /// was, never deleted.
+    /// Left exactly as it was, never deleted: a name that cannot be placed in the sequence, a
+    /// header that contradicts its name (a rename, not a crash), or a torn header whose format
+    /// nothing gives.
     Unrecoverable {
         /// Which stream.
         channel: Channel,
-        /// Which chunk.
-        index: u64,
+        /// Which chunk, when the name says.
+        index: Option<u64>,
         /// Why.
         reason: &'static str,
     },
@@ -406,18 +475,40 @@ impl RecoveryReport {
     }
 }
 
+const UNPLACEABLE: &str = "the file name gives no position in the sequence";
+
+/// Chunk files of one channel, by what their names say.
+#[derive(Default)]
+struct Listing {
+    /// Placed by their names, in index order.
+    named: Vec<(ChunkName, PathBuf)>,
+    /// Chunk files of this channel whose names give no index.
+    unplaceable: Vec<PathBuf>,
+}
+
+/// What a chunk file's header says, measured against its name.
+#[derive(Clone, Copy)]
+enum State {
+    Valid(Header),
+    /// The header does not decode: what a crash leaves. Recovery rebuilds it.
+    Torn(&'static str),
+    /// The header decodes but contradicts the name: a rename, not a crash. Neither side is
+    /// trusted over the other, so it is reported and left alone.
+    Conflict(&'static str),
+}
+
 /// A chunk file as found on disk, before anything is trusted.
 struct Found {
-    index: u64,
+    name: ChunkName,
     path: PathBuf,
     len: u64,
-    header: Result<Header, &'static str>,
+    state: State,
     /// Rebuilt by this recovery pass: readable now, but not evidence about its neighbours.
     rebuilt: bool,
 }
 
 impl Found {
-    fn inspect(channel: Channel, index: u64, path: PathBuf) -> Result<Self, ChunkError> {
+    fn inspect(name: ChunkName, path: PathBuf) -> Result<Self, ChunkError> {
         let mut file = File::open(&path).map_err(io_error("open", &path))?;
         let len = file.metadata().map_err(io_error("stat", &path))?.len();
         let mut head = Vec::with_capacity(HEADER_LEN);
@@ -425,25 +516,35 @@ impl Found {
             .take(HEADER_BYTES)
             .read_to_end(&mut head)
             .map_err(io_error("read", &path))?;
-        let header = Header::decode(&head).and_then(|h| {
-            if h.channel == channel && h.index == index {
-                Ok(h)
-            } else {
-                Err("header names another chunk")
+        let state = match Header::decode(&head) {
+            Err(reason) => State::Torn(reason),
+            Ok(h) if h.channel != name.channel || h.index != name.index => {
+                State::Conflict("the header names another chunk")
             }
-        });
+            Ok(h) if name.format.is_some_and(|f| f != h.format) => {
+                State::Conflict("the name and the header disagree on the format")
+            }
+            Ok(h) => State::Valid(h),
+        };
         Ok(Self {
-            index,
+            name,
             path,
             len,
-            header,
+            state,
             rebuilt: false,
         })
     }
 
+    fn header(&self) -> Option<Header> {
+        match self.state {
+            State::Valid(h) => Some(h),
+            State::Torn(_) | State::Conflict(_) => None,
+        }
+    }
+
     /// The header as the writer left it: readable, not rebuilt, nothing estimated.
     fn original(&self) -> Option<Header> {
-        self.header.ok().filter(|h| {
+        self.header().filter(|h| {
             !self.rebuilt && h.flags & (FLAG_HOST_TIME_ESTIMATED | FLAG_FORMAT_ESTIMATED) == 0
         })
     }
@@ -493,26 +594,38 @@ impl ChunkStore {
         &self.dir
     }
 
-    /// Chunk files of `channel` by index, whatever their state. Other files are not ours and are
-    /// ignored.
-    fn list(&self, channel: Channel) -> Result<Vec<(u64, PathBuf)>, ChunkError> {
-        let mut found = Vec::new();
+    /// Chunk files of `channel`, whatever their state: those whose names place them, by index, and
+    /// those whose names look like this channel's chunks but give no index. Other files are not
+    /// ours and are ignored.
+    fn list(&self, channel: Channel) -> Result<Listing, ChunkError> {
+        let mut listing = Listing::default();
         for entry in fs::read_dir(&self.dir).map_err(io_error("list", &self.dir))? {
             let entry = entry.map_err(io_error("list", &self.dir))?;
-            let Some((c, index)) = entry.file_name().to_str().and_then(parse_chunk_file_name)
-            else {
-                continue;
+            let parsed = entry
+                .file_name()
+                .to_str()
+                .map_or(ParsedName::Foreign, parse_chunk_file_name);
+            let ours = match parsed {
+                ParsedName::Chunk(name) => name.channel == channel,
+                ParsedName::Unparseable(c) => c == channel,
+                ParsedName::Foreign => false,
             };
-            let is_file = entry
-                .file_type()
-                .map_err(io_error("stat", &entry.path()))?
-                .is_file();
-            if c == channel && is_file {
-                found.push((index, entry.path()));
+            let is_file = ours
+                && entry
+                    .file_type()
+                    .map_err(io_error("stat", &entry.path()))?
+                    .is_file();
+            if !is_file {
+                continue;
+            }
+            match parsed {
+                ParsedName::Chunk(name) => listing.named.push((name, entry.path())),
+                _ => listing.unplaceable.push(entry.path()),
             }
         }
-        found.sort_unstable_by_key(|(index, _)| *index);
-        Ok(found)
+        listing.named.sort_unstable_by_key(|(name, _)| name.index);
+        listing.unplaceable.sort_unstable();
+        Ok(listing)
     }
 
     /// A writer for `channel`, continuing after any chunks already on disk.
@@ -532,8 +645,9 @@ impl ChunkStore {
         // After every existing file, readable or not: a writer never reuses an index.
         let next_index = self
             .list(channel)?
+            .named
             .last()
-            .map_or(0, |(index, _)| index.saturating_add(1));
+            .map_or(0, |(name, _)| name.index.saturating_add(1));
         Ok(ChunkWriter {
             dir: self.dir.clone(),
             channel,
@@ -562,15 +676,16 @@ impl ChunkStore {
     /// [`recover`](Self::recover) repairs unreadable chunks where it can. Only a failure to list
     /// or open files is an error.
     pub fn chunks(&self, channel: Channel) -> Result<ChunkList, ChunkError> {
+        let listing = self.list(channel)?;
         let mut list = ChunkList::default();
-        for (index, path) in self.list(channel)? {
-            let found = Found::inspect(channel, index, path)?;
-            let header = match found.header {
-                Ok(header) => header,
-                Err(reason) => {
+        for (name, path) in listing.named {
+            let found = Found::inspect(name, path)?;
+            let header = match found.state {
+                State::Valid(header) => header,
+                State::Torn(reason) | State::Conflict(reason) => {
                     list.unreadable.push(UnreadableChunk {
                         channel,
-                        index,
+                        index: Some(name.index),
                         reason,
                         path: found.path,
                     });
@@ -579,7 +694,7 @@ impl ChunkStore {
             };
             list.chunks.push(ChunkInfo {
                 channel,
-                index,
+                index: name.index,
                 format: header.format,
                 host_time_ns: header.host_time_ns,
                 frames: found.whole_frames(&header),
@@ -589,11 +704,19 @@ impl ChunkStore {
                 path: found.path,
             });
         }
+        list.unreadable
+            .extend(listing.unplaceable.into_iter().map(|path| UnreadableChunk {
+                channel,
+                index: None,
+                reason: UNPLACEABLE,
+                path,
+            }));
         Ok(list)
     }
 
     /// Every whole sample after the header, as stored, with no frame alignment: for a chunk whose
-    /// format recovery could only estimate, where the caller decides what the samples are.
+    /// format recovery could only estimate (see [`ChunkInfo::format_estimated`]), where the caller
+    /// decides what the samples are.
     pub fn read_raw_samples(&self, chunk: &ChunkInfo) -> Result<Vec<f32>, ChunkError> {
         let (_, bytes) = self.load(chunk)?;
         Ok(decode_samples(&bytes[HEADER_LEN..]))
@@ -632,12 +755,14 @@ impl ChunkStore {
     /// Repairs what a crash left. Never deletes a file, never trims on a guess, and is idempotent.
     ///
     /// - A readable chunk with a torn partial frame is trimmed to whole frames.
-    /// - An unreadable header is rebuilt from a neighbouring chunk. Its format is certain only when
-    ///   both adjacent chunks survived, agree, and the next continues this one without a gap; then
-    ///   a torn frame is trimmed as above. Otherwise the header says the format is estimated, every
-    ///   byte after it is kept, and readers treat the chunk as such (see
+    /// - A torn header is rebuilt with the format from the file name, which is certain, so a torn
+    ///   partial frame is trimmed as above and the chunk reads normally. Its host time is
+    ///   extrapolated from a neighbouring chunk (unknown, 0, when none survived) and marked
+    ///   estimated. Only a name without a format (renamed by hand) leaves the format a guess:
+    ///   then it is marked estimated, every byte is kept, and readers treat the chunk as such (see
     ///   [`ChunkInfo::format_estimated`]).
-    /// - With no readable chunk in the channel, the file is left as it is and reported.
+    /// - A file whose name gives no index, or whose intact header contradicts its name, is left as
+    ///   it is and reported.
     ///
     /// **Worker.** Run it before opening writers on the directory.
     pub fn recover(&self) -> Result<RecoveryReport, ChunkError> {
@@ -653,15 +778,18 @@ impl ChunkStore {
         channel: Channel,
         repairs: &mut Vec<Repair>,
     ) -> Result<(), ChunkError> {
+        let Listing { named, unplaceable } = self.list(channel)?;
         let mut found = Vec::new();
-        for (index, path) in self.list(channel)? {
-            found.push(Found::inspect(channel, index, path)?);
+        for (name, path) in named {
+            found.push(Found::inspect(name, path)?);
         }
 
         // Readable chunks first: a torn tail loses its partial frame, nothing more. A chunk whose
         // format is only estimated is never trimmed: its frame size is a guess.
         for f in &mut found {
-            let Ok(header) = f.header else { continue };
+            let State::Valid(header) = f.state else {
+                continue;
+            };
             if header.flags & FLAG_FORMAT_ESTIMATED != 0 {
                 continue;
             }
@@ -671,42 +799,38 @@ impl ChunkStore {
                 f.len -= partial;
                 repairs.push(Repair::TrimmedPartialFrame {
                     channel,
-                    index: f.index,
+                    index: f.name.index,
                     bytes_removed: partial,
                 });
             }
         }
 
-        // Then unreadable headers, in index order, so a rebuilt chunk can serve the one after it.
+        // Then torn headers, in index order, so a rebuilt chunk can serve the one after it.
         for i in 0..found.len() {
-            if found[i].header.is_ok() {
-                continue;
+            let index = found[i].name.index;
+            match found[i].state {
+                State::Valid(_) => continue,
+                State::Conflict(reason) => {
+                    repairs.push(Repair::Unrecoverable {
+                        channel,
+                        index: Some(index),
+                        reason,
+                    });
+                    continue;
+                }
+                State::Torn(_) => {}
             }
-            let index = found[i].index;
             let data_bytes = found[i].len.saturating_sub(HEADER_BYTES);
 
-            // Evidence: the adjacent chunks as their writer left them. The writer flags the first
-            // chunk after any gap or restart (and a format change always restarts it), so a next
-            // chunk without that flag was written by the same writer, straight after this one.
-            let adjacent = |j: usize, want: u64| {
-                found
-                    .get(j)
-                    .filter(|f| f.index == want)
-                    .and_then(Found::original)
-            };
-            let previous = i
-                .checked_sub(1)
-                .and_then(|j| adjacent(j, index.wrapping_sub(1)));
-            let continuing =
-                adjacent(i + 1, index.wrapping_add(1)).filter(|h| h.flags & FLAG_AFTER_GAP == 0);
-            // Certain only when both neighbours survived, agree, and the next one continues this
-            // chunk. Anything less is a guess, and a guess never trims a byte.
-            let certain =
-                matches!((previous, continuing), (Some(p), Some(n)) if p.format == n.format);
-
-            // The source of the format guess and the time estimate: the chunk that continues this
-            // one if there is one, else the nearest readable chunk before it, else after it.
-            let readable = |f: &Found| f.header.ok().map(|h| (f.index, h, f.whole_frames(&h)));
+            // The time source: the next chunk if it continues this one (the writer flags the
+            // first chunk after any gap or restart, so an unflagged next chunk was written
+            // straight after this one), else the nearest readable chunk before, else after.
+            let continuing = found
+                .get(i + 1)
+                .filter(|f| f.name.index == index.wrapping_add(1))
+                .and_then(Found::original)
+                .filter(|h| h.flags & FLAG_AFTER_GAP == 0);
+            let readable = |f: &Found| f.header().map(|h| (f.name.index, h, f.whole_frames(&h)));
             let source = match continuing {
                 Some(h) => Some(Source::After(index.wrapping_add(1), h)),
                 None => found[..i]
@@ -721,31 +845,36 @@ impl ChunkStore {
                             .map(|(j, h, _)| Source::After(j, h))
                     }),
             };
-            let Some(source) = source else {
-                repairs.push(Repair::Unrecoverable {
-                    channel,
-                    index,
-                    reason: "no readable chunk in this channel to rebuild its header from",
-                });
-                continue;
+
+            // The format: from the name, which the writer set before the first byte. Only a name
+            // without one (renamed by hand) leaves a guess from the time source.
+            let (format, certain) = match (found[i].name.format, source) {
+                (Some(format), _) => (format, true),
+                (None, Some(Source::Before(_, h, _) | Source::After(_, h))) => (h.format, false),
+                (None, None) => {
+                    repairs.push(Repair::Unrecoverable {
+                        channel,
+                        index: Some(index),
+                        reason: "neither its name nor a surviving chunk gives its format",
+                    });
+                    continue;
+                }
             };
-            let (from_index, format, host_time_ns) = match source {
+            let frame_bytes = u64::from(format.channels) * SAMPLE_BYTES;
+            let (time_from, host_time_ns) = match source {
                 // Where the previous chunk ends, if the stream continued without a gap.
-                Source::Before(j, h, frames) => (
-                    j,
-                    h.format,
+                Some(Source::Before(j, h, frames)) => (
+                    Some(j),
                     h.host_time_ns
                         .saturating_add(frames_to_ns(frames, h.format.sample_rate)),
                 ),
-                // Back from the chunk after it, by this chunk's frames in that chunk's format.
-                Source::After(j, h) => (
-                    j,
-                    h.format,
-                    h.host_time_ns.saturating_sub(frames_to_ns(
-                        data_bytes / h.frame_bytes(),
-                        h.format.sample_rate,
-                    )),
+                // Back from the chunk after it, by this chunk's own frames and rate.
+                Some(Source::After(j, h)) => (
+                    Some(j),
+                    h.host_time_ns
+                        .saturating_sub(frames_to_ns(data_bytes / frame_bytes, format.sample_rate)),
                 ),
+                None => (None, 0),
             };
             let header = Header {
                 channel,
@@ -758,25 +887,31 @@ impl ChunkStore {
                     FLAG_HOST_TIME_ESTIMATED | FLAG_FORMAT_ESTIMATED
                 },
             };
-            // A certain format may trim a torn partial frame, as for any readable chunk. A guessed
+            // A certain format trims a torn partial frame, as for any readable chunk. A guessed
             // one keeps every byte; a file shorter than a header only grows to hold one.
             let len = if certain {
-                HEADER_BYTES + data_bytes / header.frame_bytes() * header.frame_bytes()
+                HEADER_BYTES + data_bytes / frame_bytes * frame_bytes
             } else {
                 found[i].len.max(HEADER_BYTES)
             };
             rewrite_header(&found[i].path, &header, len)?;
-            found[i].header = Ok(header);
+            found[i].state = State::Valid(header);
             found[i].rebuilt = true;
             found[i].len = len;
             repairs.push(Repair::RebuiltHeader {
                 channel,
                 index,
-                from_index,
+                time_from,
                 format_estimated: !certain,
                 bytes_kept: len - HEADER_BYTES,
             });
         }
+
+        repairs.extend(unplaceable.iter().map(|_| Repair::Unrecoverable {
+            channel,
+            index: None,
+            reason: UNPLACEABLE,
+        }));
         Ok(())
     }
 
@@ -1031,7 +1166,9 @@ impl ChunkWriter {
 
     fn open_chunk(&mut self, host_time_ns: u64, after_gap: bool) -> Result<OpenChunk, ChunkError> {
         let index = self.next_index;
-        let path = self.dir.join(chunk_file_name(self.channel, index));
+        let path = self
+            .dir
+            .join(chunk_file_name(self.channel, index, self.format));
         // `create_new`: an existing chunk is never overwritten, whatever the caller did.
         let mut file = OpenOptions::new()
             .write(true)
