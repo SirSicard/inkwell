@@ -14,9 +14,10 @@
 //! Every method's documentation names the thread it may run on. The terms are defined in
 //! [`threading`]; read that module first.
 //!
-//! With the `mock` feature, [`mock`] provides an in-memory store, mock engines keyed by fixture
-//! hash, and a scriptable platform, so every crate can test against these traits without devices,
-//! models or a database.
+//! With the `mock` feature, the `mock` module provides an in-memory store, mock engines keyed by
+//! fixture hash, and a scriptable platform, so every crate can test against these traits without
+//! devices, models or a database. (Plain text, not a link: the module exists only with the
+//! feature, and the docs must build either way.)
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

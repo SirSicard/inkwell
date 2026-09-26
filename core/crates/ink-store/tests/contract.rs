@@ -417,6 +417,41 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record(store: &dyn Sto
             .iter()
             .all(|c| c.merged_into.is_none())
     );
+
+    // Merging a canonical re-points its duplicates, so `merged_into` always names an unmerged
+    // commitment: C into A, then A into B leaves C and A both pointing at B.
+    let c = meeting(store, 3);
+    let d = meeting(store, 4);
+    let in_c = store
+        .add_commitments(&c, &[owe("call the vendor"), owe("ring the vendor")])
+        .unwrap();
+    let canonical = store
+        .add_commitments(&d, &[owe("phone the vendor")])
+        .unwrap()
+        .remove(0);
+    store.merge_commitment(&in_c[1], &in_c[0]).unwrap();
+    store.merge_commitment(&in_c[0], &canonical).unwrap();
+    assert!(
+        store
+            .commitments(&c)
+            .unwrap()
+            .iter()
+            .all(|item| item.merged_into.as_ref() == Some(&canonical)),
+        "no chains"
+    );
+    let mut expected = dupes.clone();
+    expected.push(canonical.clone());
+    assert_eq!(
+        open(),
+        expected,
+        "the canonical is the only open one of the three"
+    );
+
+    // Its record deleted, both duplicates are owed again.
+    store.delete_record(&d).unwrap();
+    let mut expected = dupes.clone();
+    expected.extend(in_c.iter().cloned());
+    assert_eq!(open(), expected);
 }
 
 fn search_matches_any_word_as_a_prefix_best_first(store: &dyn Store) {

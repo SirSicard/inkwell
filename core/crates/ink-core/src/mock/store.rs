@@ -397,6 +397,13 @@ impl Store for MemStore {
             ));
         }
         inner.commitment(id)?.merged_into = Some(into.clone());
+        // Flatten: whatever was folded into `id` now points at `into`, so `merged_into` always
+        // names an unmerged canonical.
+        for c in &mut inner.commitments {
+            if c.merged_into.as_ref() == Some(id) {
+                c.merged_into = Some(into.clone());
+            }
+        }
         Ok(())
     }
 

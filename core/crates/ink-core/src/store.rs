@@ -313,10 +313,12 @@ pub trait Store: Send + Sync {
 
     /// Folds `id` into `into`: the deduplicated "said twice" case.
     ///
-    /// `into` must be canonical. Merging into a commitment that is itself merged into another is
-    /// [`StoreError::Invalid`] (merge into its canonical instead), which keeps merges free of
-    /// cycles; so is merging a commitment into itself. If `into`'s record is deleted later, `id`
-    /// is un-merged and open again (see [`Store::delete_record`]).
+    /// `into` must be canonical: merging into a commitment that is itself merged into another is
+    /// [`StoreError::Invalid`] (merge into its canonical instead), and so is merging a commitment
+    /// into itself. Commitments already merged into `id` are re-pointed to `into` in the same
+    /// call, so `merged_into` always names an unmerged canonical: no chains, no cycles. If
+    /// `into`'s record is deleted later, everything merged into it is un-merged and open again
+    /// (see [`Store::delete_record`]).
     fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError>;
 
     /// A setting's value, or `None`.

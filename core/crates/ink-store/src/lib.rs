@@ -822,7 +822,14 @@ impl Store for SqliteStore {
             changed(tx.execute(
                 "UPDATE commitment SET merged_into = ?2 WHERE id = ?1",
                 params![id.0, into.0],
-            )?)
+            )?)?;
+            // Flatten in the same transaction: what was folded into `id` now points at `into`,
+            // so `merged_into` always names an unmerged canonical (no chains, no cycles).
+            tx.execute(
+                "UPDATE commitment SET merged_into = ?2 WHERE merged_into = ?1",
+                params![id.0, into.0],
+            )?;
+            Ok(())
         })
     }
 
