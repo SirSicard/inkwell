@@ -79,25 +79,71 @@ impl<M: Send + Sync + 'static> ModelResidency for Residency<M> {
     }
 }
 
-/// Why an update stopped.
+/// Why an update stopped. Every variant says whether a model is left warm
+/// ([`no_model_warm`](Self::no_model_warm)), so the shell can tell the user that dictation needs
+/// a model before the next take finds out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UpdateError {
-    /// The model could not be unloaded. Nothing on disk changed and it is warm again if it was.
-    StillLoaded(EngineError),
-    /// The new files could not be installed. The old model is warm again if it was (a failure to
-    /// warm it is logged).
-    Install(DownloadError),
-    /// Installed, but the new model failed to load.
-    Warm(EngineError),
+    /// The model could not be unloaded. Nothing on disk changed.
+    StillLoaded {
+        /// Why it could not be unloaded.
+        error: EngineError,
+        /// Set when it was warm and could not be loaded again: no model is warm.
+        rewarm_failed: Option<EngineError>,
+    },
+    /// The new files could not be installed.
+    Install {
+        /// Why.
+        error: DownloadError,
+        /// Set when the previous model was warm and could not be loaded again: no model is warm.
+        rewarm_failed: Option<EngineError>,
+    },
+    /// The new model was installed but did not load. No model is warm.
+    Warm {
+        /// The new model's registry id, for the shell to name.
+        id: String,
+        /// Why it did not load.
+        error: EngineError,
+    },
+}
+
+impl UpdateError {
+    /// Whether the update left no model warm: dictation has no model until one is loaded.
+    pub fn no_model_warm(&self) -> bool {
+        match self {
+            Self::StillLoaded { rewarm_failed, .. } | Self::Install { rewarm_failed, .. } => {
+                rewarm_failed.is_some()
+            }
+            Self::Warm { .. } => true,
+        }
+    }
 }
 
 impl fmt::Display for UpdateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let rewarm = |f: &mut fmt::Formatter<'_>, failed: &Option<EngineError>| match failed {
+            Some(e) => write!(f, "; the previous model did not load again either: {e}"),
+            None => Ok(()),
+        };
         match self {
-            Self::StillLoaded(e) => write!(f, "the model could not be unloaded: {e}"),
-            Self::Install(e) => write!(f, "the new model could not be installed: {e}"),
-            Self::Warm(e) => write!(f, "the new model was installed but did not load: {e}"),
+            Self::StillLoaded {
+                error,
+                rewarm_failed,
+            } => {
+                write!(f, "the model could not be unloaded: {error}")?;
+                rewarm(f, rewarm_failed)
+            }
+            Self::Install {
+                error,
+                rewarm_failed,
+            } => {
+                write!(f, "the new model could not be installed: {error}")?;
+                rewarm(f, rewarm_failed)
+            }
+            Self::Warm { id, error } => {
+                write!(f, "model {id} was installed but did not load: {error}")
+            }
         }
     }
 }
@@ -113,13 +159,19 @@ pub fn update_model(
     cancel: &CancelToken,
 ) -> Result<(), UpdateError> {
     let was_warm = residency.warm().as_deref() == Some(current.id.as_str());
+    // Warms the previous model again after a failed update; its failure goes into the error.
     let rewarm_current = || {
-        if was_warm && let Err(e) = residency.set_warm(Some(current)) {
-            log::error!("model update: the previous model could not be loaded again: {e}");
+        if was_warm {
+            residency.set_warm(Some(current)).err()
+        } else {
+            None
         }
     };
-    if was_warm {
-        residency.set_warm(None).map_err(UpdateError::StillLoaded)?;
+    if was_warm && let Err(error) = residency.set_warm(None) {
+        return Err(UpdateError::StillLoaded {
+            error,
+            rewarm_failed: None,
+        });
     }
     let unloaded = residency.unload(&current.id).and_then(|()| {
         // Trust, but check: an update must never write under a loaded model.
@@ -131,16 +183,23 @@ pub fn update_model(
             Ok(())
         }
     });
-    if let Err(e) = unloaded {
-        rewarm_current();
-        return Err(UpdateError::StillLoaded(e));
+    if let Err(error) = unloaded {
+        return Err(UpdateError::StillLoaded {
+            error,
+            rewarm_failed: rewarm_current(),
+        });
     }
-    if let Err(e) = installer.install(next, cancel) {
-        rewarm_current();
-        return Err(UpdateError::Install(e));
+    if let Err(error) = installer.install(next, cancel) {
+        return Err(UpdateError::Install {
+            error,
+            rewarm_failed: rewarm_current(),
+        });
     }
-    if was_warm {
-        residency.set_warm(Some(next)).map_err(UpdateError::Warm)?;
+    if was_warm && let Err(error) = residency.set_warm(Some(next)) {
+        return Err(UpdateError::Warm {
+            id: next.id.clone(),
+            error,
+        });
     }
     Ok(())
 }

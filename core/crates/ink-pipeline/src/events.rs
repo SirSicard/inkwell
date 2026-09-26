@@ -47,8 +47,11 @@ pub enum Discard {
     Silence,
     /// The VAD found no speech. No engine saw the take.
     NoSpeech,
-    /// The engine heard nothing, or only fillers.
+    /// The engine returned no words.
     NothingHeard,
+    /// The engine returned words, and the mode's cleanup and the dictionary removed them all (a
+    /// take of only fillers). Nothing was sent to polish, saved or inserted.
+    NothingLeft,
     /// The hotkey was cancelled or lost with the take open, before it was confirmed.
     Cancelled,
 }
@@ -123,4 +126,12 @@ pub enum DictationEvent {
     Warning(Warning),
     /// The OS removed the hotkey. Nothing more arrives until it is started again.
     HotkeyLost,
+    /// A stage panicked (an engine, the store, polish, the inserter, or the chain itself). The take
+    /// in progress is lost. With `recovered`, the chain is idle again and the next take works;
+    /// without it, the worker has stopped after repeated panics and dictation is off until the
+    /// shell starts a new one.
+    WorkerFailed {
+        /// Whether the worker is still serving.
+        recovered: bool,
+    },
 }

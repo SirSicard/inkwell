@@ -50,6 +50,8 @@ struct FakeResidency {
     warm: Mutex<Option<String>>,
     /// A lease the caller cannot see holds the model: unloading fails.
     pinned: bool,
+    /// Loading any model fails.
+    broken_loader: bool,
 }
 
 impl FakeResidency {
@@ -62,6 +64,7 @@ impl FakeResidency {
                 loaded: Mutex::new(vec![(warm.id.clone(), engine)]),
                 warm: Mutex::new(Some(warm.id.clone())),
                 pinned,
+                broken_loader: false,
             },
             weak,
         )
@@ -76,6 +79,9 @@ impl ModelResidency for FakeResidency {
     fn set_warm(&self, row: Option<&EngineRow>) -> Result<(), EngineError> {
         self.journal
             .push(format!("warm {}", row.map_or("none", |r| r.id.as_str())));
+        if row.is_some() && self.broken_loader {
+            return Err(EngineError::ModelMissing("scripted".into()));
+        }
         if let Some(r) = row {
             let mut loaded = self.loaded.lock().unwrap();
             if !loaded.iter().any(|(id, _)| *id == r.id) {
@@ -153,7 +159,13 @@ fn an_update_is_refused_while_the_model_stays_loaded() {
     };
     let result = update_model(&residency, &installer, &old, &new, &CancelToken::new());
     assert!(
-        matches!(result, Err(UpdateError::StillLoaded(_))),
+        matches!(
+            result,
+            Err(UpdateError::StillLoaded {
+                rewarm_failed: None,
+                ..
+            })
+        ),
         "{result:?}"
     );
     assert!(
@@ -176,7 +188,13 @@ fn a_failed_install_brings_the_old_model_back() {
     };
     let result = update_model(&residency, &installer, &old, &new, &CancelToken::new());
     assert!(
-        matches!(result, Err(UpdateError::Install(DownloadError::Cancelled))),
+        matches!(
+            result,
+            Err(UpdateError::Install {
+                error: DownloadError::Cancelled,
+                rewarm_failed: None
+            })
+        ),
         "{result:?}"
     );
     assert_eq!(
@@ -211,7 +229,10 @@ fn todays_residency_cannot_unload_on_demand_so_the_update_fails_closed() {
     assert!(
         matches!(
             result,
-            Err(UpdateError::StillLoaded(EngineError::Unsupported(_)))
+            Err(UpdateError::StillLoaded {
+                error: EngineError::Unsupported(_),
+                rewarm_failed: None
+            })
         ),
         "{result:?}"
     );
@@ -222,4 +243,49 @@ fn todays_residency_cannot_unload_on_demand_so_the_update_fails_closed() {
         "warm again"
     );
     assert!(residency.is_resident("asr"));
+}
+
+#[test]
+fn a_previous_model_that_will_not_load_again_is_reported_not_just_logged() {
+    let journal = Arc::new(Journal::default());
+    let (old, new) = (row("asr", 'a'), row("asr-next", 'b'));
+    let (mut residency, weak) = FakeResidency::new(&journal, &old, false);
+    residency.broken_loader = true;
+    let installer = CheckingInstaller {
+        journal: journal.clone(),
+        must_be_gone: weak,
+        fail: true,
+    };
+    let result = update_model(&residency, &installer, &old, &new, &CancelToken::new());
+    match &result {
+        Err(
+            e @ UpdateError::Install {
+                rewarm_failed: Some(EngineError::ModelMissing(_)),
+                ..
+            },
+        ) => assert!(e.no_model_warm(), "{e}"),
+        other => panic!("expected the failed re-warm in the error, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_new_model_that_will_not_load_is_named() {
+    let journal = Arc::new(Journal::default());
+    let (old, new) = (row("asr", 'a'), row("asr-next", 'b'));
+    let (mut residency, weak) = FakeResidency::new(&journal, &old, false);
+    residency.broken_loader = true;
+    let installer = CheckingInstaller {
+        journal: journal.clone(),
+        must_be_gone: weak,
+        fail: false,
+    };
+    let result = update_model(&residency, &installer, &old, &new, &CancelToken::new());
+    match &result {
+        Err(e @ UpdateError::Warm { id, .. }) => {
+            assert_eq!(id, "asr-next");
+            assert!(e.no_model_warm());
+            assert!(e.to_string().contains("asr-next"), "{e}");
+        }
+        other => panic!("expected a warm failure naming the model, got {other:?}"),
+    }
 }

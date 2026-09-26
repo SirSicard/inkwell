@@ -65,9 +65,15 @@ pub enum CommandAction {
 impl CommandAction {
     /// How much confirmation the action needs.
     pub fn risk(&self) -> RiskLevel {
+        // Exhaustive on purpose: a new action must make its own risk decision.
         match self {
             Self::OpenUrl { .. } | Self::OpenApp { .. } => RiskLevel::Moderate,
-            _ => RiskLevel::Safe,
+            Self::Undo
+            | Self::ChangeStyle { .. }
+            | Self::SwitchModel { .. }
+            | Self::TogglePolish
+            | Self::ToggleDictation
+            | Self::InsertText { .. } => RiskLevel::Safe,
         }
     }
 }

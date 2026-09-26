@@ -48,6 +48,7 @@ pub fn to_txt(entries: &[ExportEntry]) -> String {
     entries
         .iter()
         .map(|t| {
+            // i5-allow: an export is the user's own text, written where they asked for it
             format!(
                 "[{}] [{}] [{}ms]\n{}",
                 t.created_at, t.model, t.audio_duration_ms, t.text

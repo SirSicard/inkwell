@@ -34,8 +34,8 @@ use ink_audio::take::{TAIL, Take};
 use ink_audio::{TakeRecorder, VadConfig};
 use ink_core::{
     CANONICAL_RATE, CancelToken, Channel, Clock, EventSink, FocusReader, HotkeyEvent, Llm,
-    NewRecord, OfflineEngine, RecordId, RecordKind, Segment, Store, StoreError, TextInserter,
-    TranscribeOptions,
+    LlmError, NewRecord, OfflineEngine, RecordId, RecordKind, Segment, Store, StoreError,
+    TextInserter, TranscribeOptions,
 };
 
 use crate::dictionary::Dictionary;
@@ -173,6 +173,8 @@ pub struct DictationChain {
     open: Option<Open>,
     /// A mode chosen by voice command, overriding app matching.
     pinned_mode: Option<String>,
+    /// Takes processed to the end without a panic; the worker's panic policy reads it.
+    completed_takes: u64,
     /// Polish turned on or off by voice command, overriding the mode.
     polish_override: Option<bool>,
 }
@@ -205,6 +207,7 @@ impl DictationChain {
             open: None,
             pinned_mode: None,
             polish_override: None,
+            completed_takes: 0,
         }
     }
 
@@ -229,6 +232,24 @@ impl DictationChain {
     /// Whether a take is open and the key is down (or, in toggle mode, not yet pressed again).
     pub fn is_recording(&self) -> bool {
         matches!(self.hold, Hold::Pending { .. } | Hold::Recording)
+    }
+
+    /// Takes processed to the end (inserted, discarded or failed) without a panic.
+    pub fn completed_takes(&self) -> u64 {
+        self.completed_takes
+    }
+
+    /// Puts the chain back to idle after a stage panicked, and tells the shell. The take in
+    /// progress is dropped, and the recorder, the tail and the timeline start over, so nothing a
+    /// panic interrupted half way is trusted again. Settings, the VAD and a pinned mode are kept.
+    /// `recovered` is what the shell is told: whether the owner goes on serving.
+    pub fn recover_from_panic(&mut self, recovered: bool) {
+        self.recorder = TakeRecorder::new();
+        self.tail = TailTracker::default();
+        self.anchor = None;
+        self.hold = Hold::Idle;
+        self.open = None;
+        self.emit(DictationEvent::WorkerFailed { recovered });
     }
 
     /// The mode a voice command pinned, if any.
@@ -444,6 +465,8 @@ impl DictationChain {
         }
         let started = open.map_or_else(|| self.services.clock.unix_ms(), |o| o.started_unix_ms);
         self.process(take, started);
+        // Not reached when a stage panics: that is what the count is for.
+        self.completed_takes += 1;
     }
 
     /// Stages 3–11 for one take.
@@ -507,26 +530,25 @@ impl DictationChain {
         let mode = self
             .settings
             .modes
-            .resolve_with_override(app.as_deref(), self.pinned_mode.as_deref())
-            .clone();
+            .resolve_with_override(app.as_deref(), self.pinned_mode.as_deref());
         let vars = SnippetVars::at(
             self.services.clock.unix_ms(),
             self.settings.utc_offset_minutes,
         );
         let written = text::write(
             &raw,
-            &mode,
+            mode,
             &self.settings.dictionary,
             &self.settings.snippets,
             &vars,
         );
-
-        // Stage 9.
-        let written = self.polish(written, &mode);
         if written.trim().is_empty() {
-            self.emit(DictationEvent::Discarded(Discard::NothingHeard));
+            self.emit(DictationEvent::Discarded(Discard::NothingLeft));
             return;
         }
+
+        // Stage 9. Never empties the text: see `polish`.
+        let written = self.polish(written, mode);
 
         // Stage 10.
         let record = match self.save(&written, started_unix_ms, live_ms, app) {
@@ -539,6 +561,7 @@ impl DictationChain {
 
         // Stage 11. The space is added here only: the record and the event hold what was said.
         let insert = if self.settings.append_space {
+            // i5-allow: the dictation itself, on its way into the focused app
             format!("{written} ")
         } else {
             written.clone()
@@ -557,7 +580,8 @@ impl DictationChain {
     }
 
     /// Stage 9: polish when the mode (or a voice command) asks for it. Any failure keeps the text
-    /// as written, and says so.
+    /// as written, and says so. A blank answer is a failure, never an empty dictation (ink-llm's
+    /// task refuses one; this checks again rather than rely on it).
     fn polish(&self, written: String, mode: &Mode) -> String {
         if !self.polish_override.unwrap_or(mode.polish_enabled) {
             return written;
@@ -572,7 +596,13 @@ impl DictationChain {
             &mode.polish_prompt
         };
         match ink_llm::tasks::polish::polish(llm.as_ref(), prompt, &written, &CancelToken::new()) {
-            Ok(polished) => polished,
+            Ok(polished) if !polished.trim().is_empty() => polished,
+            Ok(_) => {
+                self.emit(DictationEvent::Warning(Warning::PolishFailed(
+                    LlmError::BadResponse("polish: the answer was blank".into()),
+                )));
+                written
+            }
             Err(error) => {
                 self.emit(DictationEvent::Warning(Warning::PolishFailed(error)));
                 written

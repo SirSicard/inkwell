@@ -460,6 +460,41 @@ impl Llm for DownLlm {
 }
 
 #[test]
+fn a_take_of_only_fillers_is_nothing_left_not_nothing_heard() {
+    let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Should not be asked."));
+    let rig = Rig::builder()
+        .settings(|s| s.modes.modes[0].polish_enabled = true)
+        .llm(llm.clone())
+        .build();
+    rig.dictate_fixture("um uh hmm", 2.0, -30.0);
+    let events = rig.events();
+    assert!(
+        has(&events, |e| *e
+            == DictationEvent::Discarded(Discard::NothingLeft)),
+        "{events:?}"
+    );
+    assert!(!has(&events, |e| *e
+        == DictationEvent::Discarded(Discard::NothingHeard)));
+    assert_eq!(llm.calls(), 0, "nothing was sent to be polished");
+    assert!(rig.inserted().is_empty());
+    assert!(rig.dictation_records().is_empty());
+}
+
+#[test]
+fn a_blank_polish_answer_keeps_the_text_instead_of_emptying_it() {
+    let rig = Rig::builder()
+        .settings(|s| s.modes.modes[0].polish_enabled = true)
+        .llm(Arc::new(MockLlm::new(Endpoint::InProcess, "   ")))
+        .build();
+    rig.dictate_fixture("keep me", 2.0, -30.0);
+    assert_eq!(rig.inserted(), vec!["Keep me. ".to_owned()]);
+    assert!(has(&rig.events(), |e| matches!(
+        e,
+        DictationEvent::Warning(Warning::PolishFailed(LlmError::BadResponse(_)))
+    )));
+}
+
+#[test]
 fn an_engine_failure_inserts_and_saves_nothing() {
     let rig = Rig::builder().build();
     rig.dictate(&speech_48k(2.0, -30.0, 31)); // no fixture: the mock engine fails
