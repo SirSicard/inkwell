@@ -29,7 +29,305 @@ pub mod dictation;
 pub mod events;
 #[allow(unsafe_code)]
 pub mod external;
+pub mod gate;
 pub mod hub;
 pub mod logging;
 pub mod mailbox;
+pub mod meeting;
+pub mod runtime;
 pub mod schema;
+
+use std::ffi::{CStr, c_char, c_void};
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
+
+use ink_audio::{BandsReader, BandsWriter, bands_channel};
+
+use crate::external::{CompleteError, ExternalOffline, InkEngineVTable};
+use crate::runtime::{Config, Core, Parts};
+
+/// `INK_OK`.
+pub const INK_OK: i32 = 0;
+/// `INK_ERR_NOT_INITIALIZED`.
+pub const INK_ERR_NOT_INITIALIZED: i32 = -1;
+/// `INK_ERR_ALREADY_INITIALIZED`.
+pub const INK_ERR_ALREADY_INITIALIZED: i32 = -2;
+/// `INK_ERR_INVALID_ARGUMENT`.
+pub const INK_ERR_INVALID_ARGUMENT: i32 = -3;
+/// `INK_ERR_FAILED`.
+pub const INK_ERR_FAILED: i32 = -4;
+/// `INK_ERR_UNKNOWN_CALL`.
+pub const INK_ERR_UNKNOWN_CALL: i32 = -5;
+/// `INK_ERR_PANIC`.
+pub const INK_ERR_PANIC: i32 = -6;
+
+/// `InkEventCallback`.
+pub type InkEventCallback = unsafe extern "C" fn(ctx: *mut c_void, json: *const c_char, len: usize);
+
+/// `InkBands`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InkBands {
+    /// 80-500 Hz.
+    pub low: f32,
+    /// 500 Hz-2 kHz.
+    pub mid: f32,
+    /// 2-8 kHz.
+    pub high: f32,
+    /// Bands published so far.
+    pub published: u64,
+}
+
+/// The running core. Commands take it shared; init and shutdown swap it.
+static CORE: RwLock<Option<Core>> = RwLock::new(None);
+/// Held by `ink_init` and `ink_shutdown` for their whole run, so one waits for the other, while
+/// `CORE`'s own lock is only ever held briefly (a command from the event thread during shutdown
+/// then finds no core rather than a deadlock).
+static LIFECYCLE: Mutex<()> = Mutex::new(());
+/// The ink's bands: one writer, lent to each core in turn, and one reader for the process.
+static BANDS_WRITER: Mutex<Option<BandsWriter>> = Mutex::new(None);
+static BANDS_READER: OnceLock<BandsReader> = OnceLock::new();
+
+fn guard(f: impl FnOnce() -> i32) -> i32 {
+    panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        // The payload is not logged: it could hold what was said (I5).
+        log::error!("a panic reached the C ABI boundary");
+        INK_ERR_PANIC
+    })
+}
+
+/// A string argument: `None` for NULL or bad UTF-8.
+///
+/// # Safety
+///
+/// `s` is NULL or a NUL-terminated string valid for this call.
+#[allow(unsafe_code)]
+unsafe fn arg<'a>(s: *const c_char) -> Option<&'a str> {
+    if s.is_null() {
+        return None;
+    }
+    // SAFETY: non-null, and the caller guarantees a NUL-terminated string for this call.
+    unsafe { CStr::from_ptr(s) }.to_str().ok()
+}
+
+/// The shell's callback and context, moved to the event thread.
+struct Callback {
+    cb: InkEventCallback,
+    ctx: *mut c_void,
+}
+
+// SAFETY: the header requires `ctx` to be usable from the event thread until `ink_shutdown`
+// returns, which is when the event thread has ended; the function pointer is plain code.
+#[allow(unsafe_code)]
+unsafe impl Send for Callback {}
+
+impl Callback {
+    #[allow(unsafe_code)]
+    fn call(&self, buf: &[u8]) {
+        // SAFETY: `buf` ends with a NUL the length leaves out, and lives for the call; the shell
+        // registered `cb` for exactly this signature.
+        unsafe { (self.cb)(self.ctx, buf.as_ptr().cast(), buf.len() - 1) };
+    }
+}
+
+/// See `inkwell.h`.
+///
+/// # Safety
+///
+/// `config_json` is NULL or a NUL-terminated string; `cb` is a valid function for the whole run
+/// and `ctx` what it expects, usable from the event thread until `ink_shutdown` returns.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ink_init(
+    config_json: *const c_char,
+    cb: Option<InkEventCallback>,
+    ctx: *mut c_void,
+) -> i32 {
+    // SAFETY: forwarded from this function's own contract.
+    let config = unsafe { arg(config_json) };
+    guard(|| {
+        let (Some(config), Some(cb)) = (config, cb) else {
+            return INK_ERR_INVALID_ARGUMENT;
+        };
+        let _lifecycle = LIFECYCLE.lock().unwrap_or_else(PoisonError::into_inner);
+        if CORE
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+        {
+            return INK_ERR_ALREADY_INITIALIZED;
+        }
+        let config = match Config::parse(config) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("ink_init: {e}");
+                return INK_ERR_INVALID_ARGUMENT;
+            }
+        };
+        if let Err(e) = logging::install(config.log_level, config.log_stderr) {
+            eprintln!("ink_init: {e}");
+            return INK_ERR_FAILED;
+        }
+        let parts = match Parts::production(&config) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("ink_init: {e}");
+                return INK_ERR_FAILED;
+            }
+        };
+        let callback = Callback { cb, ctx };
+        let mut buf = Vec::new();
+        let out = Box::new(move |json: &str| {
+            buf.clear();
+            buf.extend_from_slice(json.as_bytes());
+            buf.push(0);
+            callback.call(&buf);
+        });
+        match Core::start(parts, out) {
+            Ok(core) => {
+                let mut slot = BANDS_WRITER.lock().unwrap_or_else(PoisonError::into_inner);
+                let writer = slot.take().unwrap_or_else(|| {
+                    // The first start in this process makes the one pair; its reader serves every
+                    // later `ink_bands_read`. The writer is lent only to a core that started, and
+                    // comes back at shutdown, so it is never lost.
+                    let (writer, reader) = bands_channel();
+                    let _ = BANDS_READER.set(reader);
+                    writer
+                });
+                drop(slot);
+                core.lend_bands(writer);
+                *CORE.write().unwrap_or_else(PoisonError::into_inner) = Some(core);
+                INK_OK
+            }
+            Err(e) => {
+                log::error!("ink_init: a core thread did not start: {e}");
+                INK_ERR_FAILED
+            }
+        }
+    })
+}
+
+/// See `inkwell.h`.
+///
+/// # Safety
+///
+/// `command_json` is NULL or a NUL-terminated string valid for this call.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ink_command(command_json: *const c_char) -> i32 {
+    // SAFETY: forwarded from this function's own contract.
+    let json = unsafe { arg(command_json) };
+    guard(|| {
+        let Some(json) = json else {
+            return INK_ERR_INVALID_ARGUMENT;
+        };
+        let core = CORE.read().unwrap_or_else(PoisonError::into_inner);
+        let Some(core) = core.as_ref() else {
+            return INK_ERR_NOT_INITIALIZED;
+        };
+        match core.command(json) {
+            Ok(()) => INK_OK,
+            Err(e) => {
+                log::warn!("ink_command: {e}");
+                INK_ERR_INVALID_ARGUMENT
+            }
+        }
+    })
+}
+
+/// See `inkwell.h`. Lock-free and allocation-free: a render thread may call it.
+///
+/// # Safety
+///
+/// `out` is NULL or points to writable memory for one `InkBands`.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ink_bands_read(out: *mut InkBands) -> i32 {
+    if out.is_null() {
+        return INK_ERR_INVALID_ARGUMENT;
+    }
+    // No panic boundary: nothing here can panic, and `catch_unwind` itself costs nothing to
+    // leave out on a path a render loop calls.
+    let bands = BANDS_READER
+        .get()
+        .map(BandsReader::read)
+        .map_or_else(InkBands::default, |s| InkBands {
+            low: s.bands.low,
+            mid: s.bands.mid,
+            high: s.bands.high,
+            published: s.published,
+        });
+    // SAFETY: non-null, and the caller guarantees it is writable for one `InkBands`.
+    unsafe { out.write(bands) };
+    INK_OK
+}
+
+/// See `inkwell.h`.
+///
+/// # Safety
+///
+/// `vtable` is NULL or points to a readable `InkEngineVTable` of the size it states, whose
+/// functions and `ctx` honour the header's contract until `release` is called.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ink_register_engine(vtable: *const InkEngineVTable) -> i32 {
+    guard(|| {
+        let core = CORE.read().unwrap_or_else(PoisonError::into_inner);
+        let Some(core) = core.as_ref() else {
+            return INK_ERR_NOT_INITIALIZED;
+        };
+        // SAFETY: forwarded from this function's own contract.
+        let engine =
+            match unsafe { ExternalOffline::from_table(vtable, core.shared().shutdown.clone()) } {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!("ink_register_engine: {}", e.0);
+                    return INK_ERR_INVALID_ARGUMENT;
+                }
+            };
+        match core.register(engine) {
+            Ok(_) => INK_OK,
+            Err(e) => {
+                log::warn!("ink_register_engine: {e}");
+                INK_ERR_FAILED
+            }
+        }
+    })
+}
+
+/// See `inkwell.h`. Any thread.
+///
+/// # Safety
+///
+/// `result_json` is NULL or a NUL-terminated string valid for this call.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ink_engine_complete(call: u64, result_json: *const c_char) -> i32 {
+    // SAFETY: forwarded from this function's own contract.
+    let json = unsafe { arg(result_json) };
+    guard(|| match external::complete(call, json.unwrap_or("")) {
+        Ok(()) => INK_OK,
+        Err(CompleteError::Unknown) => INK_ERR_UNKNOWN_CALL,
+        Err(CompleteError::Malformed) => INK_ERR_INVALID_ARGUMENT,
+    })
+}
+
+/// See `inkwell.h`.
+#[allow(unsafe_code)] // `no_mangle` only: the function itself is safe.
+#[unsafe(no_mangle)]
+pub extern "C" fn ink_shutdown() -> i32 {
+    guard(|| {
+        let _lifecycle = LIFECYCLE.lock().unwrap_or_else(PoisonError::into_inner);
+        // Taken out under a brief lock: shutting down joins the event thread, which may be
+        // calling ink_command, which must then find no core instead of waiting on this lock.
+        let core = CORE.write().unwrap_or_else(PoisonError::into_inner).take();
+        let Some(core) = core else {
+            return INK_ERR_NOT_INITIALIZED;
+        };
+        let stopped = core.shutdown();
+        if let Some(writer) = stopped.bands {
+            *BANDS_WRITER.lock().unwrap_or_else(PoisonError::into_inner) = Some(writer);
+        }
+        INK_OK
+    })
+}
