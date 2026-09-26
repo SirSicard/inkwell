@@ -618,7 +618,7 @@ fn a_diarizer_failure_keeps_the_far_end_unlabelled() {
         }
         fn diarize(
             &self,
-            _: &[f32],
+            _: &mut dyn ink_core::DiarizeInput,
             _: &CancelToken,
         ) -> Result<Vec<ink_core::SpeakerTurn>, EngineError> {
             Err(EngineError::Failed("scripted diarizer failure".into()))

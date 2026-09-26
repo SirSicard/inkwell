@@ -25,7 +25,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ink_core::mock::MockClock;
-use ink_core::{CancelToken, Diarizer, EngineError, EngineInfo, EventSink, Job, SpeakerTurn};
+use ink_core::{
+    CancelToken, Diarizer, EngineError, EngineInfo, EventSink, Job, SliceWindows, SpeakerTurn,
+};
 use ink_engines::{
     ModelDir, NemoDevice, NemoDiarizer, NemoLoader, Residency, nemotron_3_diarization,
 };
@@ -148,7 +150,9 @@ fn the_final_pass_reproduces_the_gate_der() {
     for (name, gate, _, people) in MEETINGS {
         let (audio, reference) = meeting(name);
         let started = Instant::now();
-        let turns = diarizer.diarize(&audio, &CancelToken::new()).unwrap();
+        let turns = diarizer
+            .diarize(&mut SliceWindows::new(&audio), &CancelToken::new())
+            .unwrap();
         let took = started.elapsed();
         let hypothesis = as_turns(&turns);
         save(name, "offline", &hypothesis);
@@ -176,8 +180,12 @@ fn the_final_pass_is_deterministic() {
     let diarizer = diarizer();
     let (audio, _) = meeting("EN2002c");
     let audio = &audio[..3 * 60 * 16_000];
-    let a = diarizer.diarize(audio, &CancelToken::new()).unwrap();
-    let b = diarizer.diarize(audio, &CancelToken::new()).unwrap();
+    let a = diarizer
+        .diarize(&mut SliceWindows::new(audio), &CancelToken::new())
+        .unwrap();
+    let b = diarizer
+        .diarize(&mut SliceWindows::new(audio), &CancelToken::new())
+        .unwrap();
     assert!(!a.is_empty());
     assert_eq!(a, b);
 }
@@ -191,12 +199,15 @@ fn cancelling_stops_the_final_pass() {
     let cancel = CancelToken::new();
     cancel.cancel();
     assert_eq!(
-        diarizer.diarize(&audio, &cancel),
+        diarizer.diarize(&mut SliceWindows::new(&audio), &cancel),
         Err(EngineError::Cancelled)
     );
     // Cancelled 100 ms into a pass that takes seconds: it stops at the next push.
     diarizer
-        .diarize(&audio[..16_000], &CancelToken::new())
+        .diarize(
+            &mut SliceWindows::new(&audio[..16_000]),
+            &CancelToken::new(),
+        )
         .unwrap(); // load the model first
     let cancel = CancelToken::new();
     let remote = cancel.clone();
@@ -205,7 +216,7 @@ fn cancelling_stops_the_final_pass() {
         remote.cancel();
     });
     let started = Instant::now();
-    let result = diarizer.diarize(&audio, &cancel);
+    let result = diarizer.diarize(&mut SliceWindows::new(&audio), &cancel);
     canceller.join().unwrap();
     assert_eq!(result, Err(EngineError::Cancelled));
     assert!(
@@ -213,6 +224,44 @@ fn cancelling_stops_the_final_pass() {
         "{:?}",
         started.elapsed()
     );
+}
+
+/// The final pass pulls its audio a window at a time (ink-core's `DiarizeInput`). How the windows
+/// are cut changes nothing: 60 s windows and 7.3 s windows give the same turns, and the DER
+/// matches the gate. With `INK_DIAR_BASELINE` pointing at RTTMs written (through `INK_DIAR_OUT`)
+/// by the earlier one-buffer `diarize`, the turns are compared with those too, byte for byte.
+#[test]
+#[ignore = "needs the Nemotron model and the AMI meetings (INK_BENCH_DIR, INK_DIAR_SET)"]
+fn the_windowed_feed_leaves_the_final_pass_unchanged() {
+    let diarizer = diarizer();
+    let baseline = std::env::var_os("INK_DIAR_BASELINE").map(PathBuf::from);
+    for (name, gate, _, _) in MEETINGS {
+        let (audio, reference) = meeting(name);
+        let whole = diarizer
+            .diarize(&mut SliceWindows::new(&audio), &CancelToken::new())
+            .unwrap();
+        let cut = diarizer
+            .diarize(
+                &mut SliceWindows::with_window(&audio, 116_800),
+                &CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(whole, cut, "{name}: the windows changed the turns");
+        let hypothesis = as_turns(&whole);
+        check_against_gate(name, &reference, &hypothesis, gate);
+        if let Some(dir) = &baseline {
+            let before = fs::read_to_string(dir.join(format!("{name}.offline.rttm"))).unwrap();
+            assert_eq!(
+                to_rttm(name, &hypothesis),
+                before,
+                "{name}: differs from the one-buffer baseline"
+            );
+            println!(
+                "{name}: identical to the one-buffer baseline ({} turns)",
+                whole.len()
+            );
+        }
+    }
 }
 
 // --- Live labels. -------------------------------------------------------------------------------
@@ -298,9 +347,13 @@ fn a_corrupt_model_fails_on_first_use_with_the_librarys_reason() {
     fs::write(&path, b"not a gguf file").unwrap();
     let diarizer = NemoDiarizer::new(&path, info(), NemoDevice::Cpu).unwrap();
     // No audio, nothing to load.
-    assert_eq!(diarizer.diarize(&[], &CancelToken::new()), Ok(vec![]));
+    assert_eq!(
+        diarizer.diarize(&mut SliceWindows::new(&[]), &CancelToken::new()),
+        Ok(vec![])
+    );
+    let second = [0.0; 16_000];
     let err = diarizer
-        .diarize(&[0.0; 16_000], &CancelToken::new())
+        .diarize(&mut SliceWindows::new(&second), &CancelToken::new())
         .unwrap_err();
     let _ = fs::remove_dir_all(&dir);
     assert!(
@@ -326,7 +379,10 @@ fn the_loader_loads_the_installed_row_through_residency() {
     assert_eq!(lease.info().id, row.id);
     let (audio, _) = meeting("EN2002c");
     let turns = lease
-        .diarize(&audio[..60 * 16_000], &CancelToken::new())
+        .diarize(
+            &mut SliceWindows::new(&audio[..60 * 16_000]),
+            &CancelToken::new(),
+        )
         .unwrap();
     drop(lease);
     let _ = fs::remove_dir_all(&root);

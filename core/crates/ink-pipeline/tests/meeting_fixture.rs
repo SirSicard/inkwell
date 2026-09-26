@@ -23,6 +23,8 @@ use std::time::Duration;
 
 use ink_audio::gain::{TARGET_PEAK, robust_peak, to_dbfs};
 use ink_audio::{ChunkStore, FileReplaySource, capture_ring};
+#[allow(unused_imports)]
+use ink_core::Diarizer;
 use ink_core::mock::{MemStore, MockClock};
 use ink_core::{AudioSource, CancelToken, Channel, EventSink, Segment, Store, StreamFormat};
 use ink_pipeline::capture::SideCapture;
@@ -266,3 +268,97 @@ fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
         finals.len()
     );
 }
+
+/// Item 7 of the review: the far pass diarizes by streaming regions from disk and transcribes
+/// region by region, and its result is identical to the earlier path, which handed the diarizer
+/// the far end's speech as one buffer. The diarizer here (`Hearing`) derives its turns from the
+/// audio it receives and hashes every sample, so identical results mean it heard exactly the same
+/// stream. The expected values were recorded from the one-buffer path before it was replaced.
+#[test]
+fn the_far_pass_matches_the_one_buffer_path_on_the_fixture() {
+    let clock = Arc::new(MockClock::new(T0_NS, T0_UNIX_MS));
+    let dir = TempDir::new("ami-hearing");
+    let chunks = ChunkStore::open(dir.path().join("record")).unwrap();
+    let store = Arc::new(MemStore::new());
+    let hearing = Arc::new(Hearing::default());
+    let mut chain = MeetingChain::start(
+        MeetingServices {
+            live: None,
+            offline: Final::new(numbered()),
+            diarizer: Some(hearing.clone()),
+            store: store.clone(),
+            clock: clock.clone(),
+            llm: None,
+        },
+        Default::default(),
+        vad_source(|_| Box::new(EnergyVad(-35.0))),
+        Arc::new(|_| {}),
+        MeetingStart::default(),
+    )
+    .unwrap();
+    let record = chain.record().clone();
+    for (channel, file) in [
+        (Channel::Mic, "IS1009a-mic.wav"),
+        (Channel::Far, "IS1009a-far.wav"),
+    ] {
+        let (tx, rx) = capture_ring(StreamFormat::CANONICAL, Duration::from_secs(31)).unwrap();
+        let mut source =
+            FileReplaySource::open(fixtures().join(file), channel, clock.clone()).unwrap();
+        source.start(Box::new(tx)).unwrap();
+        source.wait().unwrap();
+        let summary = SideCapture::new(channel, rx, chunks.clone()).finish(
+            &mut |b| chain.push_audio(b.channel, &b.samples, b.host_time_ns, b.dropped_frames),
+            &mut |i| panic!("capture: {i}"),
+        );
+        chain.capture_ended(summary);
+    }
+    chain.stop().finalize(&chunks, &CancelToken::new()).unwrap();
+    let heard = hearing.heard.lock().unwrap().clone();
+    // Exactly the samples the one-buffer path handed over, in the same order...
+    assert_eq!(heard.hash, 13_517_183_488_456_109_793);
+    assert_eq!(heard.samples, 377_216);
+    // ...but never more than a window at a time (the one-buffer path handed over all 377,216).
+    assert!(heard.largest <= ink_core::MAX_DIARIZE_WINDOW, "{heard:?}");
+    let finals: Vec<String> = store
+        .segments(&record)
+        .unwrap()
+        .iter()
+        .map(|s| {
+            format!(
+                "{:?} {}-{} {:?} {}",
+                s.channel,
+                s.start_ms,
+                s.end_ms,
+                s.speaker.as_ref().map(|x| x.0.as_str()),
+                s.text
+            )
+        })
+        .collect();
+    assert_eq!(finals, ONE_BUFFER_FINALS);
+}
+
+/// The final transcript the one-buffer path gave on the fixture with `Hearing` (recorded before it
+/// was replaced): side, span, speaker and text of each segment.
+const ONE_BUFFER_FINALS: [&str; 21] = [
+    "Far 0-1000 Some(\"spk2\") far words 1 alpha beta",
+    "Mic 486-1274 None mic words 1 alpha beta",
+    "Far 1000-2000 Some(\"spk0\") far words 2 alpha beta",
+    "Far 2000-3000 Some(\"spk1\") far words 3 alpha beta",
+    "Mic 2822-3642 None mic words 2 alpha beta",
+    "Far 3000-4000 Some(\"spk0\") far words 4 alpha beta",
+    "Far 4000-5000 Some(\"spk1\") far words 5 alpha beta",
+    "Far 5000-7000 Some(\"spk0\") far words 6 alpha beta",
+    "Mic 5222-12890 None mic words 3 alpha beta",
+    "Far 7000-8000 Some(\"spk2\") far words 7 alpha beta",
+    "Far 8000-12000 Some(\"spk0\") far words 8 alpha beta",
+    "Far 12000-13466 Some(\"spk2\") far words 9 alpha beta",
+    "Far 18278-19258 Some(\"spk2\") far words 10 alpha beta",
+    "Mic 19782-20538 None mic words 4 alpha beta",
+    "Far 20870-22424 Some(\"spk2\") far words 11 alpha beta",
+    "Far 22424-23424 Some(\"spk1\") far words 12 alpha beta",
+    "Far 23424-25424 Some(\"spk0\") far words 13 alpha beta",
+    "Mic 24646-25786 None mic words 5 alpha beta",
+    "Far 25424-26424 Some(\"spk2\") far words 14 alpha beta",
+    "Far 26424-27424 Some(\"spk1\") far words 15 alpha beta",
+    "Far 27424-30000 Some(\"spk2\") far words 16 alpha beta",
+];

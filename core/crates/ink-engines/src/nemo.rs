@@ -3,7 +3,11 @@
 //!
 //! - **Final pass:** [`Diarizer::diarize`] runs the `v3-offline` preset (larger chunks and caches
 //!   of the same streaming state machine; the stateless full-attention path is limited to a few
-//!   minutes of audio) over the whole channel, with the library's default segmentation.
+//!   minutes of audio) over the whole channel, with the library's default segmentation. Every
+//!   preset runs the streaming state machine (`diar.h`), so the channel is pulled from its
+//!   [`DiarizeInput`] a window at a time and pushed into one stream: the adapter never holds more
+//!   than a window, and how the caller cuts the windows does not change the turns
+//!   (`tests/nemo.rs`, against the gate's meetings).
 //! - **Live labels:** [`Diarizer::open_stream`] runs the model's default low-latency V3 preset and
 //!   reports each turn once it can no longer change.
 //!
@@ -44,8 +48,8 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 use ink_core::{
-    CANONICAL_RATE, CancelToken, Diarizer, EngineError, EngineInfo, EngineStream, EventSink,
-    SpeakerId, SpeakerTurn,
+    CANONICAL_RATE, CancelToken, DiarizeInput, Diarizer, EngineError, EngineInfo, EngineStream,
+    EventSink, SpeakerId, SpeakerTurn,
 };
 
 use crate::lock;
@@ -543,24 +547,37 @@ impl Diarizer for NemoDiarizer {
 
     fn diarize(
         &self,
-        audio: &[f32],
+        audio: &mut dyn DiarizeInput,
         cancel: &CancelToken,
     ) -> Result<Vec<SpeakerTurn>, EngineError> {
         if cancel.is_cancelled() {
             return Err(EngineError::Cancelled);
         }
-        check_samples(audio)?;
-        if audio.is_empty() {
-            return Ok(Vec::new());
-        }
-        let model = self.model(false)?;
-        let mut stream = Stream::open(&model)?;
-        for chunk in audio.chunks(PUSH_SAMPLES) {
-            if cancel.is_cancelled() {
-                return Err(EngineError::Cancelled);
+        // Opened at the first audio, so a stream with none loads nothing.
+        let mut open: Option<(Arc<Model>, Stream)> = None;
+        while let Some(window) = audio.next_window() {
+            check_samples(window)?;
+            if window.is_empty() {
+                continue;
             }
-            stream.push(chunk)?;
+            let stream = match &mut open {
+                Some((_, stream)) => stream,
+                None => {
+                    let model = self.model(false)?;
+                    let stream = Stream::open(&model)?;
+                    &mut open.insert((model, stream)).1
+                }
+            };
+            for chunk in window.chunks(PUSH_SAMPLES) {
+                if cancel.is_cancelled() {
+                    return Err(EngineError::Cancelled);
+                }
+                stream.push(chunk)?;
+            }
         }
+        let Some((model, mut stream)) = open else {
+            return Ok(Vec::new());
+        };
         if cancel.is_cancelled() {
             return Err(EngineError::Cancelled);
         }

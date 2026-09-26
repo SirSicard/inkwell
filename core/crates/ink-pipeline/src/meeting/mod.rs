@@ -14,7 +14,7 @@
 //! | Capture and chunks | [`capture`](crate::capture): the pump writes each side's chunks and hands canonical audio on |
 //! | Live, per side | `live`: the AGC with a VAD (the fallback when it fails), the live engine, finals placed in the meeting and saved only over VAD speech |
 //! | Final pass, per side | `offline`: the chunks read back, VAD-gated gain, one engine call per speech region, empty regions reported |
-//! | Diarization | [`diarize`]: the far end only; labels kept with at least two substantial clusters |
+//! | Diarization | [`diarize`]: the far end only, its speech streamed from disk into the diarizer a window at a time; labels kept with at least two substantial clusters |
 //! | Supersede | the final pass replaces the live transcript in one transaction, as revision 2, unless the guard ([`check_supersede`]) refuses it or a region failed |
 //! | Summary, commitments | `ink-llm`: a summary (in overlapping windows when long), commitments from it and from the mic, deduplicated |
 //!
@@ -44,21 +44,22 @@ use std::sync::mpsc::{self, Receiver};
 use ink_audio::{ChunkError, ChunkStore, VadConfig, WindowError};
 use ink_core::store::check_supersede;
 use ink_core::{
-    AsrEvent, CancelToken, Channel, Clock, Diarizer, EventSink, Llm, LlmError, NewCommitment,
-    NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment, Store, StoreError,
-    StreamingEngine,
+    AsrEvent, CancelToken, Channel, Clock, Diarizer, EngineError, EventSink, Llm, LlmError,
+    NewCommitment, NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment, Store,
+    StoreError, StreamingEngine,
 };
 use ink_llm::tasks::commitments::{RecordContext, harvest};
 use ink_llm::tasks::dedup::{apply_merges, dedup};
 use ink_llm::tasks::due::RecordTime;
 use ink_llm::tasks::summary::{SummaryOptions, summarize};
 
+use self::diarize::{rule5, to_meeting};
 use self::events::{KeptLive, MeetingEvent, MeetingWarning, Phase};
 use self::live::{LiveChannel, Settled};
-use self::offline::{Pass, SideRead, Stop};
+use self::offline::{Pass, RegionWindows, SideRead, SideReader, Stop};
 use crate::capture::SideSummary;
 use crate::redact::Spoken;
-use crate::speech::{Region, RegionConfig, SpeechPass, VadSource, little_speech_heard};
+use crate::speech::{RegionConfig, SpeechPass, VadSource, little_speech_heard};
 
 /// What the chain calls.
 #[derive(Clone)]
@@ -469,10 +470,11 @@ impl EndedMeeting {
             emit: &*core.events,
         };
 
-        // The mic: each region transcribed as it closes.
+        // The mic: each region transcribed as it is read.
         let mut mic_report = offline::report(Channel::Mic);
         let mut mic = Vec::new();
-        let read = self.side_pass(audio, Channel::Mic, &mut |region| {
+        let (mut reader, opened) = self.open_reader(audio, Channel::Mic)?;
+        while let Some(region) = reader.next_region()? {
             mic.extend(offline::transcribe(
                 &ctx,
                 Channel::Mic,
@@ -480,39 +482,56 @@ impl EndedMeeting {
                 region.start,
                 &mut mic_report,
             )?);
-            Ok(())
-        })?;
+        }
+        let read = self.close_reader(&reader, Channel::Mic, opened);
         self.account(&mut mic_report, read);
         core.emit(MeetingEvent::Transcribed(mic_report));
 
-        // The far end: diarized first when a diarizer is installed, so each call has one speaker.
+        // The far end. With a diarizer, in two passes over the recorded audio, each holding one
+        // region at a time: the diarizer hears the far end's speech streamed from disk, then each
+        // region is read again and transcribed, cut where the speaker changes.
         let mut far_report = offline::report(Channel::Far);
-        let (far, diarization) = match &core.services.diarizer {
-            Some(diarizer) => {
-                let mut regions: Vec<Region> = Vec::new();
-                let read = self.side_pass(audio, Channel::Far, &mut |region| {
-                    regions.push(region);
-                    Ok(())
-                })?;
-                self.account(&mut far_report, read);
-                offline::far_with_speakers(&ctx, diarizer.as_ref(), regions, &mut far_report)?
+        let mut far = Vec::new();
+        let mut decided = None;
+        let mut first_vad_error = None;
+        if let Some(diarizer) = &core.services.diarizer {
+            let (mut reader, opened) = self.open_reader(audio, Channel::Far)?;
+            let mut windows = RegionWindows::new(&mut reader);
+            let turns = diarizer.diarize(&mut windows, cancel);
+            if let Some(stop) = windows.failed.take() {
+                return Err(stop.into());
             }
-            None => {
-                let mut far = Vec::new();
-                let read = self.side_pass(audio, Channel::Far, &mut |region| {
-                    far.extend(offline::transcribe(
-                        &ctx,
-                        Channel::Far,
-                        &region.audio,
-                        region.start,
-                        &mut far_report,
-                    )?);
-                    Ok(())
-                })?;
-                self.account(&mut far_report, read);
-                (far, None)
-            }
-        };
+            let pieces = std::mem::take(&mut windows.pieces);
+            first_vad_error = opened.or_else(|| reader.vad_error().cloned());
+            decided = match turns {
+                Ok(turns) => Some(rule5(&to_meeting(&turns, &pieces))),
+                Err(EngineError::Cancelled) => return Err(FinalizeError::Cancelled),
+                Err(error) => {
+                    log::warn!("meeting final pass: diarization failed: {error}");
+                    core.warn(MeetingWarning::DiarizationFailed(error));
+                    None
+                }
+            };
+        }
+        let labels = decided.as_ref().and_then(|r| r.turns.as_deref());
+        let (mut reader, opened) = self.open_reader(audio, Channel::Far)?;
+        while let Some(region) = reader.next_region()? {
+            far.extend(offline::transcribe_region(
+                &ctx,
+                Channel::Far,
+                &region,
+                labels,
+                &mut far_report,
+            )?);
+        }
+        let read = self.close_reader(&reader, Channel::Far, opened.or(first_vad_error));
+        self.account(&mut far_report, read);
+        let diarization = decided.map(|r| events::Diarization {
+            clusters: r.clusters,
+            substantial: r.substantial.len(),
+            labelled: r.turns.is_some(),
+            attributed: far.iter().filter(|s| s.speaker.is_some()).count(),
+        });
         core.emit(MeetingEvent::Transcribed(far_report));
         if let Some(d) = diarization {
             core.emit(MeetingEvent::Diarized(d));
@@ -588,27 +607,32 @@ impl EndedMeeting {
         }
     }
 
-    /// Runs one side's chunks through a speech pass, and reports its VAD's health.
-    fn side_pass(
+    /// A reader over one side's chunks, with a fresh VAD. Returns, too, the error the VAD factory
+    /// failed with, if it did (the pass then levels with the fallback), for
+    /// [`close_reader`](Self::close_reader) to report.
+    fn open_reader<'a>(
         &self,
-        audio: &ChunkStore,
+        audio: &'a ChunkStore,
         channel: Channel,
-        on_region: &mut dyn FnMut(Region) -> Result<(), Stop>,
-    ) -> Result<SideRead, FinalizeError> {
+    ) -> Result<(SideReader<'a>, Option<EngineError>), FinalizeError> {
         let core = &self.core;
         let (vad, error) = core.vad.open();
-        if let Some(error) = error {
-            core.warn(MeetingWarning::VadFailed {
-                channel,
-                phase: Phase::Final,
-                error,
-            });
-        }
-        let mut pass = SpeechPass::new(vad, core.settings.vad, core.settings.regions)
+        let pass = SpeechPass::new(vad, core.settings.vad, core.settings.regions)
             .map_err(FinalizeError::Regions)?;
-        let read = offline::read_side(audio, channel, core.t0_ns, &mut pass, on_region)?;
-        let skipped = read.skipped;
-        if let Some(error) = pass.vad_error().cloned() {
+        let reader = SideReader::open(audio, channel, core.t0_ns, pass)?;
+        Ok((reader, error))
+    }
+
+    /// Reports a finished side's VAD health and unreadable audio, once per side, and returns
+    /// what it read. `vad_error` is the VAD factory's error, or another pass's over the same side.
+    fn close_reader(
+        &self,
+        reader: &SideReader<'_>,
+        channel: Channel,
+        vad_error: Option<EngineError>,
+    ) -> SideRead {
+        let core = &self.core;
+        if let Some(error) = vad_error.or_else(|| reader.vad_error().cloned()) {
             log::warn!("meeting final pass: the {channel:?} VAD failed; the fallback finished it");
             core.warn(MeetingWarning::VadFailed {
                 channel,
@@ -616,14 +640,18 @@ impl EndedMeeting {
                 error,
             });
         }
-        if skipped > 0 {
-            log::warn!("meeting final pass: {skipped} {channel:?} chunk files could not be read");
+        let read = reader.summary();
+        if read.skipped > 0 {
+            log::warn!(
+                "meeting final pass: {} {channel:?} chunk files could not be read",
+                read.skipped
+            );
             core.warn(MeetingWarning::AudioUnreadable {
                 channel,
-                chunks: skipped,
+                chunks: read.skipped,
             });
         }
-        Ok(read)
+        read
     }
 
     /// Replaces the live transcript with `new`, unless a region failed or the guard refuses.

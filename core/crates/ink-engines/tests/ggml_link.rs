@@ -317,7 +317,12 @@ mod diarizer {
         // In turn, twice: each engine answers with the other one loaded and used.
         for round in 0..2 {
             let text = asr.transcribe(&audio, &options).unwrap().text();
-            let turns = diarizer.diarize(&audio, &CancelToken::new()).unwrap();
+            let turns = diarizer
+                .diarize(
+                    &mut ink_core::SliceWindows::new(&audio),
+                    &CancelToken::new(),
+                )
+                .unwrap();
             println!(
                 "round {round}: {} words transcribed, {} turns diarized",
                 text.split_whitespace().count(),

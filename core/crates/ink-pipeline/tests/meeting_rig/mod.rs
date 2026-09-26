@@ -797,3 +797,96 @@ impl Store for FlakyStore {
         self.inner.set_setting(key, value)
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// A diarizer whose turns depend on the audio it is given
+
+/// What [`Hearing`] received.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Heard {
+    /// FNV-1a over every sample's bits, in the order received.
+    pub hash: u64,
+    /// Samples received.
+    pub samples: u64,
+    /// The largest piece handed over at once.
+    pub largest: usize,
+}
+
+/// A diarizer whose turns are a function of its input stream alone: each whole second of audio
+/// is given to one of three speakers by its level (6 dB bands), and runs of one speaker are
+/// merged. Two feeds of the same stream, however it is cut up, get the same turns; and it records
+/// a hash of everything it received.
+#[derive(Default)]
+pub struct Hearing {
+    pub heard: Mutex<Heard>,
+}
+
+impl Hearing {
+    /// Turns for a stream whose 1 s block levels (dBFS) are `levels`.
+    fn turns(levels: &[f32]) -> Vec<ink_core::SpeakerTurn> {
+        let mut turns: Vec<ink_core::SpeakerTurn> = Vec::new();
+        for (k, &db) in levels.iter().enumerate() {
+            let band = ((-db / 6.0).floor() as i64).rem_euclid(3);
+            let speaker = ink_core::SpeakerId(format!("spk{band}"));
+            let (start, end) = (k as u64 * 1_000, (k as u64 + 1) * 1_000);
+            match turns.last_mut() {
+                Some(last) if last.speaker == speaker && last.end_ms == start => last.end_ms = end,
+                _ => turns.push(ink_core::SpeakerTurn {
+                    speaker,
+                    start_ms: start,
+                    end_ms: end,
+                }),
+            }
+        }
+        turns
+    }
+
+    /// Takes one piece of the stream: hashes it, and adds it to the 1 s block levels.
+    fn take(&self, piece: &[f32], block: &mut Vec<f32>, levels: &mut Vec<f32>) {
+        let mut heard = self.heard.lock().unwrap();
+        for &s in piece {
+            for b in s.to_bits().to_le_bytes() {
+                heard.hash = (heard.hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            block.push(s);
+            if block.len() == RATE {
+                levels.push(rms_dbfs(block));
+                block.clear();
+            }
+        }
+        heard.samples += piece.len() as u64;
+        heard.largest = heard.largest.max(piece.len());
+    }
+}
+
+impl Diarizer for Hearing {
+    fn info(&self) -> EngineInfo {
+        EngineInfo {
+            id: "hearing".into(),
+            jobs: vec![Job::Diarization],
+            licence: "MIT".into(),
+        }
+    }
+
+    fn diarize(
+        &self,
+        audio: &mut dyn ink_core::DiarizeInput,
+        cancel: &CancelToken,
+    ) -> Result<Vec<ink_core::SpeakerTurn>, EngineError> {
+        if cancel.is_cancelled() {
+            return Err(EngineError::Cancelled);
+        }
+        let (mut block, mut levels) = (Vec::new(), Vec::new());
+        while let Some(window) = audio.next_window() {
+            self.take(window, &mut block, &mut levels);
+        }
+        Ok(Self::turns(&levels))
+    }
+
+    fn open_stream(
+        &self,
+        _: EventSink<ink_core::SpeakerTurn>,
+    ) -> Result<Box<dyn EngineStream>, EngineError> {
+        Err(EngineError::Unsupported("live labels"))
+    }
+}
