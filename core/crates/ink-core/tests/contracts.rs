@@ -548,9 +548,10 @@ fn search_matches_any_word_as_a_prefix_best_first() {
     assert!(records("AND (").is_empty(), "no query syntax");
 }
 
-/// Times above `MAX_TIME_MS` cannot be stored: the whole call is refused and nothing changes.
+/// Times above `MAX_TIME_MS`, and an end before its start, are refused: the whole call, before
+/// anything changes.
 #[test]
-fn times_beyond_the_store_range_are_invalid_and_change_nothing() {
+fn out_of_range_or_reversed_times_are_invalid_and_change_nothing() {
     use ink_core::store::MAX_TIME_MS;
 
     let store = MemStore::new();
@@ -595,6 +596,52 @@ fn times_beyond_the_store_range_are_invalid_and_change_nothing() {
     ));
     assert!(store.commitments(&id).unwrap().is_empty());
 
+    // An end before its start is refused the same way, whole.
+    let backwards = Segment {
+        channel: Channel::Far,
+        start_ms: 5_000,
+        end_ms: 4_999,
+        text: "reversed".into(),
+        speaker: None,
+    };
+    assert!(matches!(
+        store.append_segments(&id, &[seg(Channel::Far, 0, "fine"), backwards.clone()]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        store.supersede(&id, &[seg(Channel::Mic, 0, "one two three"), backwards]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(
+        store.segments(&id).unwrap().len(),
+        1,
+        "only the valid append"
+    );
+    assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
+    let reversed = NewCommitment {
+        provenance: vec![Span {
+            channel: Channel::Mic,
+            start_ms: 10,
+            end_ms: 9,
+        }],
+        ..said(0)
+    };
+    assert!(matches!(
+        store.add_commitments(&id, &[said(0), reversed]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(store.commitments(&id).unwrap().is_empty());
+
+    // The limits themselves are fine: a zero-length stretch, a time of exactly MAX_TIME_MS.
+    let instant = Segment {
+        channel: Channel::Mic,
+        start_ms: 7_000,
+        end_ms: 7_000,
+        text: "instant".into(),
+        speaker: None,
+    };
+    store.append_segments(&id, &[instant]).unwrap();
+    store.add_commitments(&id, &[said(3)]).unwrap();
     store.add_note(&id, MAX_TIME_MS, "at the limit").unwrap();
 }
 

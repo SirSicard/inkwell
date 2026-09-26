@@ -67,6 +67,17 @@ pub(crate) fn ms(value: u64) -> Result<i64, StoreError> {
         .map_err(|_| StoreError::Invalid("a time is beyond the range the store can hold".into()))
 }
 
+/// A stretch (`start_ms`, `end_ms`) for binding: both in range, and the end not before the start.
+pub(crate) fn stretch(start_ms: u64, end_ms: u64) -> Result<(i64, i64), StoreError> {
+    let (start, end) = (ms(start_ms)?, ms(end_ms)?);
+    if end < start {
+        return Err(StoreError::Invalid(
+            "a stretch ends before it starts".into(),
+        ));
+    }
+    Ok((start, end))
+}
+
 /// A stored time or position back as `u64`. The schema's CHECKs keep them non-negative.
 pub(crate) fn ms_at(row: &Row<'_>, index: usize) -> rusqlite::Result<u64> {
     let value: i64 = row.get(index)?;
@@ -152,5 +163,13 @@ mod tests {
         assert_eq!(ms(0), Ok(0));
         assert_eq!(ms(i64::MAX as u64), Ok(i64::MAX));
         assert!(matches!(ms(u64::MAX), Err(StoreError::Invalid(_))));
+    }
+
+    #[test]
+    fn a_stretch_may_be_empty_but_not_reversed() {
+        assert_eq!(stretch(5, 5), Ok((5, 5)));
+        assert_eq!(stretch(5, 9), Ok((5, 9)));
+        assert!(matches!(stretch(9, 5), Err(StoreError::Invalid(_))));
+        assert!(matches!(stretch(0, u64::MAX), Err(StoreError::Invalid(_))));
     }
 }

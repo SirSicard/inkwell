@@ -37,7 +37,7 @@ use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Row, Transaction, TransactionBehavior, params,
 };
 
-use codec::{Fail, channel_at, channel_text, kind_at, kind_text, ms, ms_at};
+use codec::{Fail, channel_at, channel_text, kind_at, kind_text, ms, ms_at, stretch};
 
 pub use schema::SCHEMA_VERSION;
 
@@ -300,10 +300,11 @@ fn segment_rows(segments: &[Segment]) -> Result<Vec<SegmentRow<'_>>, StoreError>
     segments
         .iter()
         .map(|s| {
+            let (start_ms, end_ms) = stretch(s.start_ms, s.end_ms)?;
             Ok(SegmentRow {
                 channel: channel_text(s.channel),
-                start_ms: ms(s.start_ms)?,
-                end_ms: ms(s.end_ms)?,
+                start_ms,
+                end_ms,
                 text: &s.text,
                 speaker: s.speaker.as_ref().map(|sp| sp.0.as_str()),
             })
@@ -719,7 +720,10 @@ impl Store for SqliteStore {
                     spans: item
                         .provenance
                         .iter()
-                        .map(|s| Ok((channel_text(s.channel), ms(s.start_ms)?, ms(s.end_ms)?)))
+                        .map(|s| {
+                            let (start, end) = stretch(s.start_ms, s.end_ms)?;
+                            Ok((channel_text(s.channel), start, end))
+                        })
                         .collect::<Result<_, StoreError>>()?,
                 })
             })

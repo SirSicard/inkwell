@@ -19,8 +19,21 @@ fn check_times(times: impl IntoIterator<Item = u64>) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn segment_times(segments: &[Segment]) -> impl Iterator<Item = u64> + '_ {
-    segments.iter().flat_map(|s| [s.start_ms, s.end_ms])
+/// Refuses a stretch a store could not hold, or one that ends before it starts.
+fn check_stretches(stretches: impl IntoIterator<Item = (u64, u64)>) -> Result<(), StoreError> {
+    for (start, end) in stretches {
+        check_times([start, end])?;
+        if end < start {
+            return Err(StoreError::Invalid(
+                "a stretch ends before it starts".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn segment_stretches(segments: &[Segment]) -> impl Iterator<Item = (u64, u64)> + '_ {
+    segments.iter().map(|s| (s.start_ms, s.end_ms))
 }
 
 /// Lowercased words: runs of letters and digits. Everything else separates words.
@@ -180,7 +193,7 @@ impl Store for MemStore {
     }
 
     fn append_segments(&self, id: &RecordId, segments: &[Segment]) -> Result<(), StoreError> {
-        check_times(segment_times(segments))?;
+        check_stretches(segment_stretches(segments))?;
         lock(&self.inner)
             .data(id)?
             .segments
@@ -196,7 +209,7 @@ impl Store for MemStore {
     }
 
     fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
-        check_times(segment_times(segments))?;
+        check_stretches(segment_stretches(segments))?;
         let mut inner = lock(&self.inner);
         let data = inner.data(id)?;
         check_supersede(&data.segments, segments)?;
@@ -326,11 +339,11 @@ impl Store for MemStore {
         id: &RecordId,
         items: &[NewCommitment],
     ) -> Result<Vec<CommitmentId>, StoreError> {
-        check_times(
+        check_stretches(
             items
                 .iter()
                 .flat_map(|i| &i.provenance)
-                .flat_map(|s| [s.start_ms, s.end_ms]),
+                .map(|s| (s.start_ms, s.end_ms)),
         )?;
         let mut inner = lock(&self.inner);
         inner.data(id)?;

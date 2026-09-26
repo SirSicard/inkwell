@@ -53,7 +53,7 @@ CREATE TABLE segment (
     channel   TEXT NOT NULL CHECK (channel IN ('mic', 'far')),
     -- Where the engine placed it, ms from the record's start. Live finals carry real times too.
     start_ms  INTEGER NOT NULL CHECK (start_ms >= 0),
-    end_ms    INTEGER NOT NULL CHECK (end_ms >= 0),
+    end_ms    INTEGER NOT NULL CHECK (end_ms >= start_ms),
     text      TEXT NOT NULL,
     speaker   TEXT
 ) STRICT;
@@ -144,7 +144,7 @@ CREATE TABLE commitment_span (
     ord           INTEGER NOT NULL CHECK (ord >= 0),
     channel       TEXT NOT NULL CHECK (channel IN ('mic', 'far')),
     start_ms      INTEGER NOT NULL CHECK (start_ms >= 0),
-    end_ms        INTEGER NOT NULL CHECK (end_ms >= 0),
+    end_ms        INTEGER NOT NULL CHECK (end_ms >= start_ms),
     PRIMARY KEY (commitment_id, ord)
 ) STRICT, WITHOUT ROWID;
 

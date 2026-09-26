@@ -486,7 +486,7 @@ fn search_matches_any_word_as_a_prefix_best_first(store: &dyn Store) {
     assert!(records("AND (").is_empty(), "no query syntax");
 }
 
-fn times_beyond_the_store_range_are_invalid_and_change_nothing(store: &dyn Store) {
+fn out_of_range_or_reversed_times_are_invalid_and_change_nothing(store: &dyn Store) {
     use ink_core::store::MAX_TIME_MS;
 
     let id = meeting(store, 1);
@@ -530,6 +530,52 @@ fn times_beyond_the_store_range_are_invalid_and_change_nothing(store: &dyn Store
     ));
     assert!(store.commitments(&id).unwrap().is_empty());
 
+    // An end before its start is refused the same way, whole.
+    let backwards = Segment {
+        channel: Channel::Far,
+        start_ms: 5_000,
+        end_ms: 4_999,
+        text: "reversed".into(),
+        speaker: None,
+    };
+    assert!(matches!(
+        store.append_segments(&id, &[seg(Channel::Far, 0, "fine"), backwards.clone()]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(matches!(
+        store.supersede(&id, &[seg(Channel::Mic, 0, "one two three"), backwards]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(
+        store.segments(&id).unwrap().len(),
+        1,
+        "only the valid append"
+    );
+    assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
+    let reversed = NewCommitment {
+        provenance: vec![Span {
+            channel: Channel::Mic,
+            start_ms: 10,
+            end_ms: 9,
+        }],
+        ..said(0)
+    };
+    assert!(matches!(
+        store.add_commitments(&id, &[said(0), reversed]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(store.commitments(&id).unwrap().is_empty());
+
+    // The limits themselves are fine: a zero-length stretch, a time of exactly MAX_TIME_MS.
+    let instant = Segment {
+        channel: Channel::Mic,
+        start_ms: 7_000,
+        end_ms: 7_000,
+        text: "instant".into(),
+        speaker: None,
+    };
+    store.append_segments(&id, &[instant]).unwrap();
+    store.add_commitments(&id, &[said(3)]).unwrap();
     store.add_note(&id, MAX_TIME_MS, "at the limit").unwrap();
 }
 
@@ -892,7 +938,7 @@ contract!(
     paging_by_cursor_returns_every_record_exactly_once,
     merges_point_at_a_canonical_commitment_and_outlive_its_record,
     search_matches_any_word_as_a_prefix_best_first,
-    times_beyond_the_store_range_are_invalid_and_change_nothing,
+    out_of_range_or_reversed_times_are_invalid_and_change_nothing,
     every_record_scoped_call_on_an_unknown_record_is_not_found,
     records_with_the_same_start_order_by_id_descending,
     open_commitment_ties_keep_the_order_they_were_added,

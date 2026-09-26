@@ -6,8 +6,10 @@
 //! - **Supersede refuses** an empty result, and any channel that falls below half its previous
 //!   words: both are far more likely an engine failure than a correction. [`check_supersede`] is
 //!   the one definition every implementation calls.
-//! - **Times fit SQLite's integers.** A `u64` time or position above [`MAX_TIME_MS`] is refused
-//!   with [`StoreError::Invalid`], and the whole call with it, in every store.
+//! - **Times fit SQLite's integers, and stretches run forward.** A `u64` time or position above
+//!   [`MAX_TIME_MS`], or a [`Segment`] or [`Span`] whose `end_ms` is before its `start_ms`, is
+//!   refused with [`StoreError::Invalid`] before anything is written, and the whole call with it,
+//!   in every store.
 
 use std::collections::BTreeMap;
 
@@ -77,6 +79,10 @@ pub struct Record {
 }
 
 /// The largest time or position, in ms, a store accepts: SQLite integers are signed 64-bit.
+///
+/// Every store checks each time against it, and each [`Segment`] and [`Span`] for
+/// `end_ms >= start_ms` (zero length is fine), before any write: one bad value refuses the whole
+/// call with [`StoreError::Invalid`].
 pub const MAX_TIME_MS: u64 = i64::MAX as u64;
 
 /// Which records to list: newest first, optionally one kind, optionally after a cursor.
@@ -118,7 +124,7 @@ pub struct Segment {
     pub channel: Channel,
     /// Start, ms from the start of the record, at most [`MAX_TIME_MS`].
     pub start_ms: u64,
-    /// End, ms from the start of the record, at most [`MAX_TIME_MS`].
+    /// End, ms from the start of the record: not before `start_ms`, at most [`MAX_TIME_MS`].
     pub end_ms: u64,
     /// The text.
     pub text: String,
@@ -159,7 +165,7 @@ pub struct Span {
     pub channel: Channel,
     /// Start, ms from the start of the record, at most [`MAX_TIME_MS`].
     pub start_ms: u64,
-    /// End, ms from the start of the record, at most [`MAX_TIME_MS`].
+    /// End, ms from the start of the record: not before `start_ms`, at most [`MAX_TIME_MS`].
     pub end_ms: u64,
 }
 

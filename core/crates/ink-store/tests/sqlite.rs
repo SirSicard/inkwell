@@ -378,6 +378,49 @@ fn live_segments_keep_their_engine_timestamps() {
     assert_eq!(hit.start_ms, 3_600_000);
 }
 
+#[test]
+fn the_schema_refuses_an_end_before_its_start() {
+    let db = TempDb::new("reversed");
+    let store = db.open();
+    let id = meeting(&store, 1);
+    let ids = store
+        .add_commitments(
+            &id,
+            &[NewCommitment {
+                text: "t".into(),
+                owner: None,
+                due: None,
+                due_at_unix_ms: None,
+                provenance: vec![],
+            }],
+        )
+        .unwrap();
+    let raw = db.raw();
+    // Below the trait's own check: a row written by any other path is refused too.
+    assert!(
+        raw.execute(
+            "INSERT INTO segment (record_id, revision, channel, start_ms, end_ms, text)
+             VALUES (?1, 1, 'mic', 10, 9, 'x')",
+            [&id.0],
+        )
+        .is_err()
+    );
+    assert!(
+        raw.execute(
+            "INSERT INTO commitment_span (commitment_id, ord, channel, start_ms, end_ms)
+             VALUES (?1, 0, 'mic', 10, 9)",
+            [&ids[0].0],
+        )
+        .is_err()
+    );
+    raw.execute(
+        "INSERT INTO commitment_span (commitment_id, ord, channel, start_ms, end_ms)
+         VALUES (?1, 0, 'mic', 10, 10)",
+        [&ids[0].0],
+    )
+    .unwrap();
+}
+
 // --- Search ------------------------------------------------------------------------------------
 
 #[test]
