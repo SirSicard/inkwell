@@ -10,3 +10,9 @@ publish.workspace = true
 
 [dependencies]
 ink-core.workspace = true
+# The capture ring: a wait-free SPSC ring, safe on the realtime producer side.
+rtrb = "0.3.5"
+
+[dev-dependencies]
+# I4: tests prove the realtime path never allocates. BSD-1-Clause, test-only (allowed for this crate in deny.toml).
+assert_no_alloc = "1.1.2"

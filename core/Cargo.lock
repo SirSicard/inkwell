@@ -3,10 +3,18 @@
 version = 4
 
 [[package]]
+name = "assert_no_alloc"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55ca83137a482d61d916ceb1eba52a684f98004f18e0cafea230fe5579c178a3"
+
+[[package]]
 name = "ink-audio"
 version = "0.0.0"
 dependencies = [
+ "assert_no_alloc",
  "ink-core",
+ "rtrb",
 ]
 
 [[package]]
@@ -78,3 +86,9 @@ version = "0.0.0"
 dependencies = [
  "ink-core",
 ]
+
+[[package]]
+name = "rtrb"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fae8ee26b0371a29a77d2b2d6b3ae13aa81def6f9bf1b1b92a32d279a5e709b7"
