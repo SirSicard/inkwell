@@ -26,8 +26,15 @@
 //!                   far: average)                               ├─► BandAnalyzer ─► BandsWriter ═► BandsReader (shell)
 //!                                                               └─► Windower (import, final pass)
 //!
-//! a take or a window ─► normalise ─► vad::trim_ends ─► engine
+//! a take or a window ─► normalise ─► vad::trim_ends ─┬─► Some(range) ─► engine
+//!                                                     └─► None ─► discarded: no engine sees it
 //! ```
+//!
+//! **The gain stages decide level, not speech.** [`normalise`] and [`Agc`] lift anything with
+//! loud frames standing out from quiet ones, speech or not: knocks, a cycling fan, a cough. So
+//! the VAD's verdict is binding: a take or window in which [`trim_ends`] finds no speech is
+//! discarded before any engine sees it, never passed on whole (a recogniser handed lifted noise
+//! may invent words).
 //!
 //! - [`downmix`]: one channel from many, chosen per stream: the mic's primary channel, the far
 //!   end's average.

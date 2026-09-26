@@ -4,9 +4,9 @@
 //! [`Agc::LATENCY`] samples; the helpers below undo that so output and input line up.
 
 use ink_audio::Agc;
-use ink_audio::agc::{FALL_DB_PER_S, RISE_DB_PER_S};
-use ink_audio::gain::{LEVEL_FRAME, TARGET_PEAK, robust_peak, to_dbfs};
-use ink_audio::synth::{noise, speech_like};
+use ink_audio::agc::{FALL_DB_PER_S, LIMITER_BLOCK, RISE_DB_PER_S};
+use ink_audio::gain::{LEVEL_FRAME, MAX_GAIN, TARGET_PEAK, robust_peak, to_dbfs};
+use ink_audio::synth::{breathy_speech, noise, speech_like, with_noise};
 
 const SR: usize = 16_000;
 
@@ -215,4 +215,99 @@ fn agc_push_sizes_do_not_change_the_output() {
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
     assert!(worst <= 1e-7, "push sizes changed the output by {worst}");
+}
+
+#[test]
+fn agc_ramps_down_ahead_of_a_transient_and_keeps_its_gain_after_it() {
+    // A quiet talker has the gain locked high (about +39 dB) when a cough arrives: 40 ms of noise
+    // peaking near full scale. The look-ahead lets the limiter ramp the gain down before the cough
+    // reaches the output, so it neither clips nor steps; and a transient that short does not move
+    // the level, so the speech after it comes out at the target, not ducked.
+    let speech = speech_like(12.0, -60.0, 20);
+    let mut input = speech.clone();
+    // Mid-syllable, 8 s in: the samples either side of the cough are voiced, so the gain can be
+    // read off every one of them.
+    let cough_at = (secs(8.0)..)
+        .find(|&i| input[i - 400..i + 400].iter().all(|&s| s != 0.0))
+        .expect("a voiced stretch");
+    let burst = noise(0.04, -12.0, 21);
+    for (i, s) in burst.iter().enumerate() {
+        let t = i as f32 / SR as f32;
+        input[cough_at + i] += s * (t / 0.003).min(1.0) * (-t / 0.012).exp();
+    }
+    let cough_end = cough_at + burst.len();
+    let (out, gains) = run(&input);
+
+    let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(peak <= 1.0, "clipped: output peak {peak}");
+
+    // Sample-to-sample gain change, read off the output: every change is spread over a whole
+    // limiter block, so no two consecutive samples differ by more than the widest possible
+    // change (the full 60 dB range) over one block.
+    let bound_db = to_dbfs(MAX_GAIN) / LIMITER_BLOCK as f32 + 0.01;
+    let gain_at = |n: usize| (input[n].abs() >= 1e-6).then(|| to_dbfs((out[n] / input[n]).abs()));
+    let mut steepest = 0.0f32;
+    for n in 0..input.len() - 1 {
+        if let (Some(a), Some(b)) = (gain_at(n), gain_at(n + 1)) {
+            steepest = steepest.max((b - a).abs());
+        }
+    }
+    assert!(
+        steepest <= bound_db,
+        "the gain stepped {steepest:.2} dB between two samples (bound {bound_db:.3} dB)"
+    );
+    // The gain really was high before the ramp (which starts at most two blocks early), and
+    // really did come down for the cough.
+    let before = gain_at(cough_at - 2 * LIMITER_BLOCK - 80).expect("speech before the cough");
+    assert!(before > 35.0, "locked at {before:.1} dB");
+    let lowest = (cough_at..cough_end)
+        .filter_map(gain_at)
+        .fold(f32::MAX, f32::min);
+    assert!(lowest < 10.0, "the cough got {lowest:.1} dB");
+
+    // The persistent gain is what it would have been without the cough. The cough's two or three
+    // frames join the level window and shift which frame is the robust peak by a place or two, so
+    // allow 0.1 dB; a duck would be tens of dB.
+    let (_, without) = run(&speech);
+    let moved = gains[cough_at / LEVEL_FRAME..]
+        .iter()
+        .zip(&without[cough_at / LEVEL_FRAME..])
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        moved < 0.1,
+        "the cough moved the gain by {moved:.3} dB from where it would have been"
+    );
+    let after = db_from_target(&out[cough_end + secs(0.2)..cough_end + secs(1.2)]);
+    assert!(
+        after.abs() < CONVERGED_TOLERANCE_DB,
+        "speech after the cough came out {after:+.2} dB from the target"
+    );
+}
+
+#[test]
+fn agc_lifts_low_crest_speech_in_noise_to_the_target() {
+    // Continuous, breathy speech 8 dB over room tone, at −75 dBFS RMS overall: its loud frames
+    // stand only 5–9 dB over its quiet ones. The AGC decides level, as the normaliser does, so it
+    // must lift this to the target rather than wait for frames that stand 10 dB clear.
+    let input = with_noise(&breathy_speech(20.0, -75.0, 0.35, 1), 8.0, -75.0, 2);
+    let (out, _) = run(&input);
+    let converged = db_from_target(&out[secs(10.0)..]);
+    assert!(
+        converged.abs() < CONVERGED_TOLERANCE_DB,
+        "held {converged:+.2} dB from the target"
+    );
+}
+
+#[test]
+fn agc_never_lifts_a_long_stretch_of_room_tone() {
+    // Three minutes of a quiet room and nothing else: long enough for rare loud noise frames to
+    // turn up, and none of them may start the gain climbing.
+    let input = noise(180.0, -70.0, 23);
+    let (_, gains) = run(&input);
+    let highest = gains.iter().fold(f32::MIN, |m, &g| m.max(g));
+    assert_eq!(
+        highest, 0.0,
+        "the gain rose to {highest:.2} dB on room tone"
+    );
 }

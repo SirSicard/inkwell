@@ -3,10 +3,10 @@
 //! Levels are compared in dB with stated tolerances, never bit-for-bit across platforms.
 
 use ink_audio::gain::{
-    GainOutcome, MAX_GAIN, NOISE_FLOOR, TARGET_PEAK, from_dbfs, normalise, rms, robust_peak,
-    to_dbfs,
+    GainOutcome, LEVEL_FRAME, MAX_GAIN, MIN_DYNAMICS_DB, NOISE_FLOOR, TARGET_PEAK, from_dbfs,
+    levels, normalise, rms, robust_peak, to_dbfs,
 };
-use ink_audio::synth::{noise, speech_like};
+use ink_audio::synth::{breathy_speech, cycling_fan, knocks, noise, speech_like, with_noise};
 
 /// How close to the target a lifted buffer must land. The gain is computed from the robust peak,
 /// so only float rounding separates them.
@@ -14,6 +14,25 @@ const TARGET_TOLERANCE_DB: f32 = 0.05;
 
 fn db_from_target(samples: &[f32]) -> f32 {
     to_dbfs(robust_peak(samples)) - to_dbfs(TARGET_PEAK)
+}
+
+/// The contrast the dynamics guard judges: robust peak over the 10th-percentile frame, in dB.
+fn contrast_db(samples: &[f32]) -> f32 {
+    let l = levels(samples);
+    to_dbfs(l.robust_peak) - to_dbfs(l.quiet)
+}
+
+fn assert_lifted_to_target(take: &mut [f32], what: &str) {
+    let report = normalise(take);
+    assert!(
+        matches!(report.outcome, GainOutcome::Applied { .. }),
+        "{what}: {report:?}"
+    );
+    let off = db_from_target(take);
+    assert!(
+        off.abs() < TARGET_TOLERANCE_DB,
+        "{what}: {off:+.3} dB from the target"
+    );
 }
 
 #[test]
@@ -161,4 +180,79 @@ fn the_report_says_what_was_measured_and_applied() {
     assert_eq!(report.before.robust_peak, before);
     assert!((report.gain() - TARGET_PEAK / before).abs() / report.gain() < 1e-6);
     assert!((to_dbfs(from_dbfs(-60.0)) + 60.0).abs() < 1e-4);
+}
+
+#[test]
+fn low_crest_breathy_speech_is_lifted_to_the_target() {
+    // Continuous, breathy speech at −75 dBFS RMS: no pauses, and its quiet frames sit only about
+    // 8 dB below its loud ones.
+    let mut take = breathy_speech(4.0, -75.0, 0.35, 1);
+    let contrast = contrast_db(&take);
+    assert!(
+        (7.0..9.5).contains(&contrast),
+        "fixture contrast {contrast:.2} dB"
+    );
+    assert_lifted_to_target(&mut take, "breathy speech");
+}
+
+#[test]
+fn low_crest_speech_at_8_db_snr_is_lifted_to_the_target() {
+    // The same speech 8 dB over room tone, at −75 dBFS RMS overall. The noise fills its troughs
+    // and the contrast falls to 5–6 dB, under a 6 dB guard; every take must still be lifted.
+    let mut lowest = f32::MAX;
+    for seed in 0..8 {
+        for seconds in [1.0, 4.0] {
+            let speech = breathy_speech(seconds, -75.0, 0.35, seed);
+            let mut take = with_noise(&speech, 8.0, -75.0, seed + 100);
+            lowest = lowest.min(contrast_db(&take));
+            assert_lifted_to_target(&mut take, &format!("seed {seed}, {seconds} s"));
+        }
+    }
+    assert!(
+        lowest < 6.0,
+        "the fixtures should reach below 6 dB of contrast; lowest {lowest:.2} dB"
+    );
+}
+
+/// 100 level frames alternating between a loud level and one `contrast_db` below it.
+fn two_level_frames(contrast_db: f32) -> Vec<f32> {
+    let loud = 1.0e-3;
+    let quiet = loud / from_dbfs(contrast_db);
+    (0..100)
+        .flat_map(|k| {
+            let v = if k % 2 == 0 { loud } else { quiet };
+            std::iter::repeat_n(v, LEVEL_FRAME)
+        })
+        .collect()
+}
+
+#[test]
+fn the_dynamics_guard_stops_lifting_below_4_db_of_contrast() {
+    // Exactly where the guard sits. Above it, anything is lifted; below it, the take is treated as
+    // stationary (room tone, hum) and left alone.
+    assert_eq!(MIN_DYNAMICS_DB, 4.0);
+    let mut above = two_level_frames(4.2);
+    assert!(matches!(
+        normalise(&mut above).outcome,
+        GainOutcome::Applied { .. }
+    ));
+    let below = two_level_frames(3.8);
+    let mut take = below.clone();
+    assert_eq!(normalise(&mut take).outcome, GainOutcome::Stationary);
+    assert_eq!(take, below);
+}
+
+#[test]
+fn bursty_noise_is_lifted_because_the_gain_stage_is_not_a_speech_detector() {
+    // Knocks and a cycling fan have loud frames standing well clear of quiet ones, as speech does.
+    // The gain stage decides level only, so it lifts them to the target like speech. A take with
+    // no speech is the VAD's to discard (`trim_ends` returns `None`) before any engine sees it.
+    for (what, audio) in [
+        ("knocks", knocks(4.0, -60.0, 1)),
+        ("cycling fan", cycling_fan(6.0, -60.0, 2)),
+    ] {
+        let mut take = audio;
+        assert!(contrast_db(&take) > 10.0, "{what}");
+        assert_lifted_to_target(&mut take, what);
+    }
 }

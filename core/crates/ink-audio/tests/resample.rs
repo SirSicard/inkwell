@@ -239,3 +239,18 @@ fn finish_leaves_the_resampler_ready_for_the_same_devices_next_stream() {
         assert_eq!(out, resample(&second, rate).unwrap(), "{rate} Hz second");
     }
 }
+
+#[test]
+fn resampled_len_rounds_an_exact_half_up() {
+    // Exact ties: 3 frames at 96 kHz last exactly half a 16 kHz sample, and a half rounds up.
+    assert_eq!(resampled_len(3, 96_000), 1);
+    assert_eq!(resampled_len(9, 96_000), 2); // 1.5
+    assert_eq!(resampled_len(1, 32_000), 1); // 0.5
+    assert_eq!(resampled_len(3, 32_000), 2); // 1.5
+    // Just either side of a tie.
+    assert_eq!(resampled_len(2, 96_000), 0); // 0.33
+    assert_eq!(resampled_len(4, 96_000), 1); // 0.67
+    // And the resampler's output has exactly that length.
+    assert_eq!(resample(&[0.1; 3], 96_000).unwrap().len(), 1);
+    assert_eq!(resample(&[0.1; 3], 32_000).unwrap().len(), 2);
+}

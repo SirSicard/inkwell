@@ -22,16 +22,37 @@
 //! - **Silence:** a robust peak under [`NOISE_FLOOR`]. There is nothing to rescue, and the VAD
 //!   after this stage should still see silence.
 //! - **Healthy audio:** a robust peak at or above the target. Never attenuated.
-//! - **Stationary audio:** a robust peak less than [`MIN_DYNAMICS`] above the take's quiet frames
-//!   (its [`QUIET_PERCENTILE`]th-percentile frame). Room tone, hum and fan noise have no loud
-//!   frames standing out from quiet ones; speech does. This guard is new in 1.0: the gain cap had
-//!   to rise from 60× to [`MAX_GAIN`] for a −75 dBFS talker to reach the target, and without it a
-//!   quiet room just above the floor would be lifted into full-level hiss.
-//! - **Anything shorter than [`MIN_FRAMES`]:** too short to tell speech from noise.
+//! - **Stationary audio:** a robust peak less than [`MIN_DYNAMICS_DB`] (4 dB) above the take's
+//!   quiet frames (its [`QUIET_PERCENTILE`]th-percentile frame). See the next section.
+//! - **Anything shorter than [`MIN_FRAMES`]:** too short to judge.
 //!
 //! The gain is capped at [`MAX_GAIN`]. Samples are clamped to ±1.0 afterwards, so the rare
 //! transient above the robust peak is shaved rather than wrapped: a shaved click is harmless where
 //! an unamplified dictation is not.
+//!
+//! # Level, not speech
+//!
+//! This stage decides **level only**. Whether a take holds speech is the VAD's question, asked
+//! after it: a take with no speech must be discarded there ([`trim_ends`](crate::trim_ends)
+//! returns `None`) before any engine sees it, never passed on whole. Knocks, a cycling fan or a
+//! cough have loud frames standing out from quiet ones, just as speech does, and are lifted to the
+//! target like speech.
+//!
+//! The one guard that looks past level is the stationary one. It is new in 1.0: the cap had to rise
+//! from 60× to [`MAX_GAIN`] for a −75 dBFS talker to reach the target, and without a guard, steady
+//! room tone just above the floor would be lifted into full-level hiss. It asks only whether
+//! anything stands out from the take's quiet frames, and the line is drawn where the measurements
+//! put it (contrast is the robust peak over the 10th-percentile frame, over 20 seeds):
+//!
+//! - **White room tone** measures 0.9–3.8 dB, rising with length (0.5 s to 30 s buffers), so it
+//!   stays under the line.
+//! - **Low-crest speech** (continuous and breathy, about 8 dB of contrast clean) at 8 dB SNR falls
+//!   to 4.9 dB on a 1 s take. An earlier 6 dB line refused such takes; 4 dB lifts them.
+//!
+//! What the 4 dB line costs: band-limited room tone (a rumble low-passed near 250 Hz measures up
+//! to 4.3 dB) and white room tone in buffers much longer than 30 s (an imported file's 60 s
+//! window of silence) can cross it and be lifted. The VAD then has to discard them, as it must any
+//! take without speech.
 
 /// The length of a level frame: 20 ms at 16 kHz. Every level in this crate is measured on these.
 pub const LEVEL_FRAME: usize = 320;
@@ -53,10 +74,13 @@ pub const TRANSIENT_FRAMES: usize = 8;
 /// The percentile of frame peaks that stands for the take's quiet frames (its noise).
 pub const QUIET_PERCENTILE: usize = 10;
 
-/// How far (as a ratio, 6 dB) the robust peak must stand above the quiet frames for the take to
-/// count as more than stationary noise. Frame peaks of steady noise stay within about 3 dB of each
-/// other; speech's loud frames stand 20 dB or more above its pauses.
-pub const MIN_DYNAMICS: f32 = 2.0;
+/// How far the robust peak must stand above the quiet frames (as a ratio: [`MIN_DYNAMICS_DB`])
+/// for the take to be lifted at all. Below it the take is stationary (room tone, hum) and left
+/// alone. Why 4 dB, and what it costs: see the module docs.
+pub const MIN_DYNAMICS: f32 = 1.584_893_2;
+
+/// [`MIN_DYNAMICS`] in dB: 4 dB.
+pub const MIN_DYNAMICS_DB: f32 = 4.0;
 
 /// The fewest level frames (200 ms) a buffer needs before it is judged at all.
 pub const MIN_FRAMES: usize = 10;
@@ -137,7 +161,7 @@ pub enum GainOutcome {
     Healthy,
     /// Robust peak below [`NOISE_FLOOR`]: untouched.
     Silence,
-    /// No loud frames stand out from the quiet ones (room tone, hum): untouched.
+    /// Nothing stands [`MIN_DYNAMICS_DB`] above the quiet frames (room tone, hum): untouched.
     Stationary,
     /// Fewer than [`MIN_FRAMES`] level frames: untouched.
     TooShort,
@@ -224,6 +248,11 @@ mod tests {
     #[test]
     fn a_nan_sample_does_not_poison_the_level() {
         assert_eq!(frame_peak(&[0.1, f32::NAN, -0.2]), 0.2);
+    }
+
+    #[test]
+    fn the_dynamics_ratio_is_its_db_value() {
+        assert!((to_dbfs(MIN_DYNAMICS) - MIN_DYNAMICS_DB).abs() < 1e-5);
     }
 
     #[test]

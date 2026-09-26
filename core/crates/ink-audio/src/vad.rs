@@ -189,6 +189,10 @@ impl SpeechSegmenter {
 /// included, padded by [`VadConfig::edge_pad`] and clamped to the buffer. `None` when there is no
 /// speech at all.
 ///
+/// `None` is a verdict, not a failure: discard the buffer. The gain stage ahead of the VAD lifts
+/// knocks and fans as readily as speech, so passing an untrimmed buffer on instead would hand an
+/// engine lifted noise.
+///
 /// **Worker.** Resets `source` first. No allocation (the last window is padded on the stack). An
 /// error from the source, or a probability outside `0.0..=1.0`, is returned as an
 /// [`EngineError`], never replaced by a guess.
