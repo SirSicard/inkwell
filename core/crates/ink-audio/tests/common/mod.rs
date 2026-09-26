@@ -127,3 +127,110 @@ pub fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
 pub fn at(start_ns: u64, frame: u64, rate: u32) -> u64 {
     start_ns + (u128::from(frame) * 1_000_000_000 / u128::from(rate)) as u64
 }
+
+// --- Scripted VADs for the gain stages. -------------------------------------------------------
+
+use ink_audio::vad::{SpeechProbability, VAD_WINDOW};
+use ink_core::EngineError;
+
+fn window_rms(w: &[f32]) -> f32 {
+    (w.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / w.len().max(1) as f64).sqrt() as f32
+}
+
+/// The truth, per VAD window, from a clean speech signal: a window is speech when its RMS is within
+/// 30 dB of the loudest window's.
+pub fn speech_mask(clean: &[f32]) -> Vec<bool> {
+    let rms: Vec<f32> = clean.chunks(VAD_WINDOW).map(window_rms).collect();
+    let loudest = rms.iter().fold(0.0f32, |m, &r| m.max(r));
+    rms.iter()
+        .map(|&r| r > 0.0 && r >= loudest * 0.031_6)
+        .collect()
+}
+
+/// A VAD that knows the truth: 0.9 on the mask's speech windows, 0.05 elsewhere (and past its
+/// end). Windows are counted from the last reset.
+pub struct Oracle {
+    mask: Vec<bool>,
+    next: usize,
+}
+
+impl Oracle {
+    pub fn new(mask: Vec<bool>) -> Self {
+        Self { mask, next: 0 }
+    }
+
+    pub fn boxed(mask: Vec<bool>) -> Box<dyn SpeechProbability> {
+        Box::new(Self::new(mask))
+    }
+}
+
+impl SpeechProbability for Oracle {
+    fn reset(&mut self) {
+        self.next = 0;
+    }
+
+    fn probability(&mut self, _: &[f32; VAD_WINDOW]) -> Result<f32, EngineError> {
+        let speech = self.mask.get(self.next).copied().unwrap_or(false);
+        self.next += 1;
+        Ok(if speech { 0.9 } else { 0.05 })
+    }
+}
+
+/// As [`Oracle`], but deaf to windows quieter than `hearing_dbfs` RMS, as a real VAD is: it cannot
+/// hear −75 dBFS speech.
+pub struct DeafOracle {
+    oracle: Oracle,
+    hearing: f32,
+}
+
+impl DeafOracle {
+    pub const HEARING_DBFS: f32 = -50.0;
+
+    pub fn new(mask: Vec<bool>) -> Self {
+        Self {
+            oracle: Oracle::new(mask),
+            hearing: 10f32.powf(Self::HEARING_DBFS / 20.0),
+        }
+    }
+
+    pub fn boxed(mask: Vec<bool>) -> Box<dyn SpeechProbability> {
+        Box::new(Self::new(mask))
+    }
+}
+
+impl SpeechProbability for DeafOracle {
+    fn reset(&mut self) {
+        self.oracle.reset();
+    }
+
+    fn probability(&mut self, window: &[f32; VAD_WINDOW]) -> Result<f32, EngineError> {
+        let p = self.oracle.probability(window)?;
+        Ok(if window_rms(window) >= self.hearing {
+            p
+        } else {
+            0.05
+        })
+    }
+}
+
+/// A VAD that says the same thing about every window.
+pub struct Always(pub f32);
+
+impl SpeechProbability for Always {
+    fn reset(&mut self) {}
+
+    fn probability(&mut self, _: &[f32; VAD_WINDOW]) -> Result<f32, EngineError> {
+        Ok(self.0)
+    }
+}
+
+/// A VAD whose model is missing.
+pub struct Failing;
+
+impl SpeechProbability for Failing {
+    fn reset(&mut self) {}
+
+    fn probability(&mut self, _: &[f32; VAD_WINDOW]) -> Result<f32, EngineError> {
+        Err(EngineError::ModelMissing("vad".into()))
+    }
+}
