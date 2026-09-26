@@ -1,0 +1,430 @@
+@import "tailwindcss";
+/* Archivo (Omnibus-Type, OFL-1.1), variable in weight and width. One family: the width axis carries
+   the roles. Expanded and heavy is the instrument's nameplate; normal width is the operating text. */
+@import "@fontsource-variable/archivo/wdth.css";
+
+/* Tokens. Every colour is one of the app's own (src/index.css light theme and the ink shader). */
+@theme {
+  --color-paper: #f0ede8;  /* app --color-bg-base (light) = the ink shader's field, vec3(.94,.93,.91) */
+  --color-sheet: #ffffff;  /* app --color-bg-surface (light): the text field the words land in */
+  --color-ink: #0f0f0f;    /* the shader's ink, vec3(.06): headline, text, the key's skirt, the button */
+  --color-pencil: #4d4c4a; /* app --color-text-secondary (black at 68% on paper), 7.35:1 */
+  --color-rule: #ceccc8;   /* app --color-border (black at 14% on paper): table rules, field edge */
+  --color-lamp: #e84040;   /* app --color-accent-recording: the recording lamp, and nothing else */
+  --font-sans: "Archivo Variable", "Archivo", sans-serif;
+}
+
+:root {
+  --gutter: clamp(1.25rem, 0.55rem + 2.8vw, 3.5rem);
+  --step--2: 0.8125rem;                                  /* 13: captions */
+  --step--1: 0.9375rem;                                  /* 15: specs, notes */
+  --step-0: 1.0625rem;                                   /* 17: body */
+  --step-1: clamp(1.125rem, 1.05rem + 0.35vw, 1.3125rem);  /* 18 → 21: lead */
+  --step-2: clamp(1.625rem, 1.2rem + 1.6vw, 2.5rem);     /* 26 → 40: section heading */
+  --step-3: clamp(2.5rem, 1.6rem + 3.2vw, 4.375rem);     /* 40 → 70: the headline */
+  --r-field: 6px;
+  --r-key: 12px;
+  /* The measure. Every text block is capped in ch of its own size, so small text can't run long:
+     caps in rem let 13-15 px text run to about 100 characters a line. */
+  --measure: 56ch; /* Archivo's ch (the zero) is wider than its average letter: 56ch measured ≤ 80 characters */
+  /* Distance from the content's right edge to the viewport's: where the hero window bleeds to. */
+  --bleed: max(var(--gutter), (100vw - 82.5rem) / 2);
+  --section-gap: clamp(4rem, 3rem + 4vw, 7rem);
+}
+
+html {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+}
+body {
+  font-size: var(--step-0);
+  line-height: 1.55;
+  font-stretch: 100%;
+  overflow-x: clip;
+}
+::selection { background: var(--color-ink); color: var(--color-paper); }
+
+a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.22em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 3px; border-radius: 3px; }
+[id] { scroll-margin-top: 1.25rem; }
+
+p, li, dd, figcaption { max-width: var(--measure); }
+code, kbd { font: inherit; font-weight: 600; white-space: nowrap; }
+h2, h3 { text-wrap: balance; }
+
+.wrap { width: min(100% - 2 * var(--gutter), 82.5rem); margin-inline: auto; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.js-only { display: none; }
+html.js .js-only { display: inline; }
+
+.skip {
+  position: absolute; left: var(--gutter); top: -4rem; z-index: 10;
+  background: var(--color-ink); color: var(--color-paper); padding: 0.6rem 1rem; border-radius: var(--r-field);
+  text-decoration: none; font-weight: 600;
+}
+.skip:focus { top: 0.75rem; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.site-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: 1.1rem; }
+.wordmark {
+  font-size: 1.375rem; font-weight: 820; font-stretch: 125%; letter-spacing: -0.01em;
+  text-decoration: none; line-height: 1; flex: none;
+}
+.site-header ul { display: flex; gap: clamp(0.85rem, 2.4vw, 2rem); list-style: none; margin: 0; padding: 0; }
+.site-header nav a { font-size: var(--step--1); font-weight: 560; text-decoration: none; white-space: nowrap; }
+.site-header nav a:hover { text-decoration: underline; }
+/* Narrow screens keep the three links that matter most; every section is still one scroll away, and
+   the source link sits under the download button. At 320 px only two fit beside the wordmark. */
+@media (max-width: 47.99rem) { .nav-wide { display: none; } }
+@media (max-width: 23.99rem) { .nav-mid { display: none; } }
+
+/* ── Sections: shared parts ─────────────────────────────────────────────── */
+main > section + section { margin-top: var(--section-gap); }
+.section-head { display: grid; gap: 1rem; margin-bottom: clamp(2rem, 1.5rem + 2vw, 3.25rem); }
+.section-head h2, .signing h2 {
+  font-size: var(--step-2); font-weight: 780; font-stretch: 114%; line-height: 1.04; letter-spacing: -0.015em;
+  margin: 0; max-width: 18em;
+}
+.section-intro { text-wrap: pretty; }
+@media (min-width: 64rem) {
+  /* The heading sits in the same 5 : 7 split as the hero, so every section starts on the same line. */
+  .section-head { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: clamp(2.5rem, 4.6vw, 4.5rem); align-items: start; }
+  .section-intro { padding-top: 0.35rem; }
+}
+
+/* Spec groups: a label on the left, a definition list on the right. Spacing separates, not rules. */
+.spec-group + .spec-group { margin-top: clamp(2.5rem, 2rem + 2vw, 3.5rem); }
+.spec-group h3, .install-after h3 {
+  font-size: 1.1875rem; font-weight: 720; font-stretch: 112%; line-height: 1.2; margin: 0;
+}
+.spec-label p { margin-top: 0.6rem; font-size: var(--step--1); color: var(--color-pencil); max-width: 34ch; text-wrap: pretty; }
+@media (min-width: 64rem) {
+  .spec-group { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); grid-template-rows: auto 1fr; column-gap: clamp(2.5rem, 4.6vw, 4.5rem); }
+  .spec-group > h3, .spec-group > .spec-label { grid-column: 1; grid-row: 1; }
+  .spec-group > :not(h3):not(.spec-label):not(.shot) { grid-column: 2; grid-row: 1 / span 2; }
+  /* The screenshot sits under the group's label, in the left column the definitions leave empty. */
+  .spec-group > .shot { grid-column: 1; grid-row: 2; align-self: start; }
+  /* The ledger is a real four-column table: it takes the full width under its heading. */
+  .spec-group.is-table { display: block; }
+  .spec-group.is-table .ledger-wrap { margin-top: 1.25rem; }
+  .spec-group.is-table .after-ledger { margin-left: calc((100% - clamp(2.5rem, 4.6vw, 4.5rem)) * 5 / 12 + clamp(2.5rem, 4.6vw, 4.5rem)); }
+}
+.spec { display: grid; gap: 1.5rem 2.5rem; margin: 1.25rem 0 0; align-content: start; } /* rows keep their height beside a tall screenshot */
+@media (min-width: 40rem) { .spec { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .spec-wide { grid-column: 1 / -1; } }
+@media (min-width: 64rem) { .spec { margin-top: 0; } }
+.spec dt { font-weight: 680; font-stretch: 108%; line-height: 1.3; }
+.spec dd { margin: 0.3rem 0 0; color: var(--color-pencil); text-wrap: pretty; }
+
+.shot { margin: 2rem 0 0; max-width: 34rem; }
+@media (min-width: 64rem) { .shot { margin-top: 1.5rem; max-width: 100%; } }
+.shot img { display: block; width: 100%; height: auto; border-radius: 10px; }
+.shot figcaption { margin-top: 0.7rem; font-size: var(--step--2); line-height: 1.45; color: var(--color-pencil); }
+
+.not-built { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; gap: 0.6rem; color: var(--color-pencil); }
+@media (min-width: 64rem) { .not-built { margin-top: 0; } }
+
+/* ── Hero ───────────────────────────────────────────────────────────────── */
+.hero { padding-block: clamp(0.75rem, 1vw, 1.25rem) 0; }
+@media (min-width: 64rem) {
+  /* Desktop: copy and specs stack on the left, the instrument spans the right. On phones the DOM
+     order puts the instrument straight after the download, before the specs. */
+  .hero {
+    display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); grid-template-rows: auto 1fr;
+    grid-template-areas: "copy instrument" "specs instrument";
+    column-gap: clamp(2.5rem, 4.6vw, 4.5rem); align-items: start;
+  }
+  .hero-copy { grid-area: copy; }
+  .instrument { grid-area: instrument; }
+  .hero-specs { grid-area: specs; }
+}
+.hero h1 {
+  font-size: var(--step-3); font-weight: 800; font-stretch: 116%; line-height: 0.98; letter-spacing: -0.022em;
+  margin: 0; max-width: 11.5em;
+}
+/* In the two-column hero the headline shares 5/12 of the width: step it down between 1024 and 1440 so
+   "on your desk." keeps one line (52 px at 1024, the full 70 px from 1440). */
+/* Below 360 px the unbreakable "on your desk." is wider than the measure: step down to fit 280 px. */
+@media (max-width: 22.49rem) { .hero h1 { font-size: 2.25rem; } }
+@media (min-width: 64rem) { .hero h1 { font-size: clamp(3.25rem, 0.48rem + 4.33vw, 4.375rem); } }
+.lead { font-size: var(--step-1); line-height: 1.45; margin-top: 1.4rem; max-width: 33rem; text-wrap: pretty; }
+
+.get { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem 1.6rem; margin-top: 2rem; }
+.btn {
+  display: inline-flex; align-items: center; gap: 0.65rem;
+  background: var(--color-ink); color: var(--color-paper);
+  padding: 0.95rem 1.35rem 0.95rem 1.15rem; border-radius: var(--r-field);
+  font-weight: 660; font-stretch: 108%; font-size: var(--step-0); line-height: 1.1; text-decoration: none;
+}
+.btn:hover { text-decoration: none; }
+.btn:hover > span { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.22em; }
+.btn svg { flex: none; }
+/* The quiet button: for the tip, so it never competes with the download. */
+.btn-quiet { background: transparent; color: var(--color-ink); box-shadow: inset 0 0 0 1.5px var(--color-ink); padding-inline: 1.25rem; }
+.btn-quiet:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.22em; }
+.text-link { font-weight: 600; font-size: var(--step-0); }
+.get-meta { margin-top: 0.85rem; font-size: var(--step--1); color: var(--color-pencil); }
+
+.hero-specs { margin-top: 2.5rem; }
+@media (min-width: 64rem) { .hero-specs { margin-top: 1.6rem; } }
+.builds { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.55rem; max-width: 34rem; font-size: var(--step--1); line-height: 1.45; }
+.builds li { display: grid; grid-template-columns: 5.25rem minmax(0, 1fr); column-gap: 0.75rem; }
+.builds li > a { font-weight: 680; }
+.builds li > span { color: var(--color-pencil); }
+.builds li[data-detected] > a { font-weight: 820; }
+.calls { margin-top: 1.4rem; max-width: min(34rem, var(--measure)); font-size: var(--step--1); line-height: 1.5; color: var(--color-pencil); text-wrap: pretty; }
+.calls a { color: var(--color-ink); }
+
+/* ── The instrument: the real window, its live ink, the key and a text field ── */
+.instrument { margin: 3rem 0 0; container-type: inline-size; }
+@media (min-width: 64rem) { .instrument { margin-top: 0; } }
+
+/* The window is cropped just above the app's status bar (y 990 of 1038), which drops the stale
+   "v0.2.6" at every width. Rounded corners are the screenshot's own 20 px, scaled. */
+.window {
+  position: relative; overflow: hidden;
+  aspect-ratio: 1600 / 990;
+  border-radius: 1.25% / 2.02%;
+  box-shadow: 0 1px 1px rgb(15 15 15 / 0.06), 0 12px 24px -10px rgb(15 15 15 / 0.28), 0 34px 60px -24px rgb(15 15 15 / 0.32);
+}
+.window-inner { position: relative; width: 100%; }
+.window-shot, .window-shot img { display: block; width: 100%; height: auto; }
+/* Over the app's own ink panel (x 0-481, y 180-1038 of 1600 × 1038, just under its wordmark). The
+   screenshot underneath is the poster: no JS, no WebGL or a lost context leaves the app's real frame
+   showing. The top edge is feathered so the live paper meets the captured paper without a seam. */
+.window-ink {
+  position: absolute; left: 0; top: 17.35%; width: 30.07%; height: 82.65%; display: block;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 4.5%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 4.5%);
+}
+
+@media (max-width: 39.99rem) {
+  /* Phones: crop to the ink panel and sidebar, bleeding off the right edge like a window on a desk. */
+  .window { aspect-ratio: 832 / 990; margin-right: calc(-1 * var(--gutter)); border-radius: 14px 0 0 14px; }
+  .window-inner { width: 192.31%; }
+}
+@media (min-width: 64rem) {
+  /* Desktop: the same crop idea at a larger scale. The window is sized by its height (93% of the
+     column's width) and runs off the right edge of the screen, so the ink panel is a large share of the
+     hero and the transcript list is cropped rather than shrunk. */
+  .window {
+    --h: calc(100cqw * 0.93);
+    aspect-ratio: auto;
+    height: var(--h);
+    width: min(calc(100cqw + var(--bleed)), calc(var(--h) * 1600 / 990));
+    border-radius: calc(var(--h) * 20 / 990) 0 0 calc(var(--h) * 20 / 990);
+  }
+  .window-inner { width: calc(var(--h) * 1600 / 990); }
+}
+
+.controls { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 1rem 1.25rem; align-items: stretch; margin-top: 1.1rem; }
+
+.keycap {
+  position: relative; display: flex; align-items: flex-end; justify-content: flex-start;
+  width: 7.25rem; min-height: 5.5rem; padding: 0 0 0.75rem 0.9rem; margin-bottom: 6px;
+  background: var(--color-sheet); color: var(--color-ink);
+  border: 1.5px solid var(--color-ink); border-radius: var(--r-key);
+  box-shadow: 0 6px 0 0 var(--color-ink);
+  font: inherit; font-size: 1.1875rem; font-weight: 720; font-stretch: 118%; line-height: 1;
+  cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  transition: transform 80ms ease-out, box-shadow 80ms ease-out;
+}
+.keycap:disabled { cursor: default; }
+/* Pressed with a pointer: keep focus (so Space works next) but not the keyboard ring. */
+.keycap[data-pointer]:focus-visible { outline: none; }
+.is-recording .keycap { transform: translateY(5px); box-shadow: 0 1px 0 0 var(--color-ink); }
+.keycap-lamp {
+  position: absolute; top: 0.7rem; right: 0.75rem; width: 0.55rem; height: 0.55rem; border-radius: 50%;
+  background: var(--color-rule); box-shadow: inset 0 0 0 1px rgb(15 15 15 / 0.3);
+}
+.is-recording .keycap-lamp { background: var(--color-lamp); box-shadow: 0 0 0 3px rgb(232 64 64 / 0.22); }
+
+.field {
+  min-width: 0; display: flex; flex-direction: column;
+  background: var(--color-sheet); border: 1px solid var(--color-rule); border-radius: var(--r-field);
+  padding: 0.7rem 1rem 0.8rem;
+}
+.field-label { font-size: var(--step--2); color: var(--color-pencil); line-height: 1.3; }
+.field-window { height: 4.5em; overflow: hidden; margin-top: 0.35rem; font-size: var(--step-0); line-height: 1.5; }
+.caret { display: inline-block; width: 2px; height: 1.15em; margin-left: 2px; vertical-align: -0.2em; background: var(--color-ink); }
+
+.demo-status { margin-top: 0.9rem; min-height: 1.5em; font-size: var(--step--1); font-weight: 560; }
+.instrument figcaption { margin-top: 0.2rem; font-size: var(--step--2); line-height: 1.45; color: var(--color-pencil); }
+
+@media (max-width: 29.99rem) {
+  .keycap { width: 5.75rem; min-height: 4.75rem; align-self: start; font-size: 1.0625rem; }
+  .field-window { height: 6em; font-size: var(--step--1); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The one orchestrated moment ends here: the pasted sentence soaks in like ink, once. */
+  .landed { animation: soak 560ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .caret.blink { animation: blink 1.06s steps(1) 4; } /* 4.2 s: under the 5 s of WCAG 2.2.2 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .keycap { transition: none; }
+}
+@keyframes soak {
+  from { opacity: 0; filter: blur(5px); }
+  45% { opacity: 0.9; filter: blur(1.2px); }
+  to { opacity: 1; filter: blur(0); }
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ── Models: a real table, with plain meters on a shared zero baseline ──── */
+.model-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.model-table thead th {
+  text-align: left; vertical-align: bottom; font-size: var(--step--1); font-weight: 600; color: var(--color-pencil);
+  padding: 0 1.25rem 0.8rem 0; border-bottom: 1.5px solid var(--color-ink); line-height: 1.3;
+}
+.th-note { display: block; font-weight: 400; }
+.model-table tbody tr { border-bottom: 1px solid var(--color-rule); }
+.model-table tbody th, .model-table tbody td { text-align: left; vertical-align: top; padding: 1.1rem 1.25rem 1.1rem 0; font-weight: 400; }
+.model-name { display: block; font-size: 1.1875rem; font-weight: 720; font-stretch: 112%; white-space: nowrap; line-height: 1.3; }
+.model-maker { display: block; font-size: var(--step--1); color: var(--color-pencil); }
+.figure { display: block; font-size: 1.1875rem; font-weight: 680; font-stretch: 108%; white-space: nowrap; line-height: 1.3; }
+/* Meter: a recessive track and an ink bar grown from zero, square at the baseline, rounded at the tip. */
+.meter { display: block; width: 7.5rem; height: 6px; margin-top: 0.55rem; background: var(--color-rule); border-radius: 0 3px 3px 0; }
+.meter > span { display: block; width: var(--v); height: 100%; background: var(--color-ink); border-radius: 0 3px 3px 0; }
+.num { white-space: nowrap; }
+.c-langs { min-width: 7rem; }
+.c-when { color: var(--color-pencil); max-width: 26rem; text-wrap: pretty; }
+.m-only { display: none; }
+.scale-note { margin-top: 0.8rem; font-size: var(--step--2); color: var(--color-pencil); }
+.footnote { margin-top: 1.25rem; font-size: var(--step--1); color: var(--color-pencil); text-wrap: pretty; }
+
+@media (max-width: 55.99rem) {
+  /* Narrow screens: each model becomes a block. Explicit ARIA roles on the table keep its
+     semantics when display changes (Safari drops them otherwise). */
+  .model-table, .model-table tbody { display: block; }
+  .model-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .model-table tbody tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "name name" "wer time" "size langs" "when when";
+    column-gap: 1.25rem; row-gap: 0.7rem; padding-block: 1.1rem;
+  }
+  .model-table tbody tr:first-child { border-top: 1.5px solid var(--color-ink); }
+  .model-table tbody th, .model-table tbody td { padding: 0; max-width: var(--measure); }
+  .model-table .c-name { grid-area: name; }
+  .model-table .c-name .model-name, .model-table .c-name .model-maker { display: inline; }
+  .model-table .c-name .model-maker::before { content: " "; }
+  .model-table .c-wer { grid-area: wer; }
+  .model-table .c-time { grid-area: time; }
+  .model-table .c-size { grid-area: size; font-size: var(--step--1); color: var(--color-pencil); }
+  .model-table .c-langs { grid-area: langs; font-size: var(--step--1); color: var(--color-pencil); min-width: 0; }
+  .model-table .c-when { grid-area: when; }
+  .m-only { display: inline; }
+  .model-table .figure .m-only { display: block; font-size: var(--step--2); font-weight: 400; font-stretch: 100%; color: var(--color-pencil); white-space: normal; }
+  .meter { width: 100%; max-width: 9rem; }
+}
+
+/* ── Privacy: what stays, and the ledger of every call ──────────────────── */
+.ledger { width: 100%; border-collapse: collapse; font-size: var(--step--1); line-height: 1.45; }
+.ledger thead th {
+  text-align: left; vertical-align: bottom; font-weight: 600; color: var(--color-pencil);
+  padding: 0 1rem 0.7rem 0; border-bottom: 1.5px solid var(--color-ink);
+}
+.ledger tbody tr { border-bottom: 1px solid var(--color-rule); }
+.ledger tbody th, .ledger tbody td { text-align: left; vertical-align: top; padding: 0.95rem 1rem 0.95rem 0; font-weight: 400; }
+.ledger tbody th { font-weight: 680; font-stretch: 108%; font-size: var(--step-0); line-height: 1.3; width: 20%; }
+.ledger tbody td { color: var(--color-pencil); }
+.ledger tbody td:nth-child(2) { color: var(--color-ink); }
+.host > span { white-space: nowrap; } /* breaks only at the <wbr> after each dot */
+.after-ledger { margin-top: 1.25rem; text-wrap: pretty; }
+@media (min-width: 64rem) { .ledger-wrap { margin-top: 0; } }
+@media (max-width: 55.99rem) {
+  .ledger-wrap { margin-top: 1.25rem; }
+  .ledger, .ledger tbody { display: block; }
+  .ledger thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .ledger tbody tr { display: grid; gap: 0.35rem; padding-block: 1rem; }
+  .ledger tbody tr:first-child { border-top: 1.5px solid var(--color-ink); }
+  .ledger tbody th, .ledger tbody td { padding: 0; width: auto; max-width: var(--measure); }
+  /* Stacked rows keep their column names as small labels. */
+  .ledger .m-only { display: block; font-size: var(--step--2); font-weight: 600; color: var(--color-pencil); }
+  .ledger tbody td + td { margin-top: 0.35rem; }
+}
+
+/* ── Install ────────────────────────────────────────────────────────────── */
+.platforms { border-top: 1.5px solid var(--color-ink); }
+.platform { padding-block: 1.6rem; border-bottom: 1px solid var(--color-rule); display: grid; gap: 1rem; }
+@media (min-width: 64rem) {
+  .platform { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: clamp(2.5rem, 4.6vw, 4.5rem); }
+}
+.platform h3 { font-size: var(--step-2); font-weight: 780; font-stretch: 114%; line-height: 1.04; letter-spacing: -0.015em; margin: 0; }
+.platform-head > p { margin-top: 0.4rem; color: var(--color-pencil); }
+.platform-head > .detected-note { margin-top: 0.4rem; font-size: var(--step--1); font-weight: 680; color: var(--color-ink); }
+.platform-head > .detected-note[hidden] { display: none; }
+.files { list-style: none; padding: 0; margin: 0.9rem 0 0; display: grid; gap: 0.6rem; }
+.files a { font-weight: 660; overflow-wrap: anywhere; }
+/* Size on its own line: inline, the entries wrapped at different points and lost their shared rhythm. */
+.files span { display: block; color: var(--color-pencil); font-size: var(--step--1); white-space: nowrap; }
+.steps { margin: 0; padding-left: 1.4rem; display: grid; gap: 0.6rem; list-style: decimal outside; }
+.steps li { padding-left: 0.2rem; }
+.steps li::marker { font-weight: 700; }
+.notes { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.5rem; list-style: disc outside; }
+@media (min-width: 64rem) {
+  /* Hang the numerals and bullets in the column gap, so the text lines up with everything above. */
+  .platform-body .steps, .platform-body .notes, .platform-body .steps li { padding-left: 0; }
+}
+.platform-note, .step-single + .platform-note { margin-top: 0.8rem; font-size: var(--step--1); color: var(--color-pencil); }
+
+.install-after { display: grid; gap: 2.5rem; margin-top: clamp(2.5rem, 2rem + 2vw, 3.5rem); }
+@media (min-width: 64rem) {
+  .install-after { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: clamp(2.5rem, 4.6vw, 4.5rem); }
+}
+.install-after h3 + * { margin-top: 1rem; }
+.reqs { margin: 0; display: grid; gap: 0.55rem; }
+.reqs > div { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); column-gap: 1rem; }
+.reqs dt { font-weight: 680; }
+.reqs dd { margin: 0; color: var(--color-pencil); }
+@media (max-width: 29.99rem) { .reqs > div { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── What it costs ─────────────────────────────────────────────────────── */
+.cost-actions { display: grid; gap: 1.25rem; justify-items: start; }
+@media (min-width: 64rem) {
+  .cost .section-head { margin-bottom: 1.5rem; }
+  .cost-actions { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: clamp(2.5rem, 4.6vw, 4.5rem); align-items: center; }
+  .cost-actions .btn { grid-column: 2; justify-self: start; }
+  .cost-actions p { grid-column: 2; }
+}
+.cost-actions p { color: var(--color-pencil); }
+.cost-actions p a { color: var(--color-ink); }
+
+/* ── Code signing policy: required wording, set small ────────────────────── */
+.signing { display: grid; gap: 1rem; font-size: var(--step--1); padding-bottom: var(--section-gap); }
+.signing h2 { font-size: 1.1875rem; font-weight: 720; font-stretch: 112%; letter-spacing: 0; }
+@media (min-width: 64rem) {
+  .signing { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: clamp(2.5rem, 4.6vw, 4.5rem); }
+}
+.signing-body { display: grid; gap: 0.75rem; color: var(--color-pencil); }
+.signing-body ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.2rem; }
+.signing-body a { color: var(--color-ink); }
+
+/* ── Colophon ───────────────────────────────────────────────────────────── */
+.colophon { border-top: 1px solid var(--color-rule); padding-block: 2.25rem 3rem; font-size: var(--step--1); color: var(--color-pencil); }
+.colophon a { color: var(--color-ink); }
+.colophon-grid { display: grid; gap: 1.5rem; }
+@media (min-width: 64rem) {
+  .colophon-grid { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); column-gap: 4rem; }
+}
+.colophon-text p + p { margin-top: 0.75rem; }
+.colophon-text p { text-wrap: pretty; }
+.colophon-links { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; align-content: start; }
+
+/* ── 404 ────────────────────────────────────────────────────────────────── */
+.lost { display: grid; gap: 2rem; align-items: center; padding-block: clamp(2rem, 6vw, 5rem) var(--section-gap); }
+@media (min-width: 48rem) { .lost { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); column-gap: clamp(2.5rem, 4.6vw, 4.5rem); } }
+.lost h1 {
+  font-size: var(--step-3); font-weight: 800; font-stretch: 116%; line-height: 0.98; letter-spacing: -0.022em;
+  margin: 0; max-width: 11em; text-wrap: balance;
+}
+.lost-blot { aspect-ratio: 1; width: min(100%, 22rem); justify-self: center; }
+.lost-blot svg { display: block; width: 100%; height: auto; }
+.lost-blot path { fill: var(--color-ink); }
+@media (min-width: 48rem) { .lost-blot { order: 2; } }

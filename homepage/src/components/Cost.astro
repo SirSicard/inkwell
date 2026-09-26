@@ -1,0 +1,22 @@
+---
+// What it costs, from the README's "Support the project". The donation link must stay on the page.
+import { CONTRIBUTING_URL, DONATION_SUGGESTED, DONATION_URL, GITHUB_URL, ISSUES_URL } from '../lib/constants';
+---
+
+<section class="cost wrap" id="support" aria-labelledby="support-title">
+  <div class="section-head">
+    <h2 id="support-title">What it costs: nothing.</h2>
+    <p class="section-intro">
+      No paid tier, no licence keys, no account, and no feature behind a paywall, now or later. If Inkwell
+      saves you time, you can leave a tip. {DONATION_SUGGESTED} is the suggested amount, it is entirely
+      voluntary, and nothing in the app is gated behind it.
+    </p>
+  </div>
+  <div class="cost-actions">
+    <a class="btn btn-quiet" href={DONATION_URL}>Buy me a coffee</a>
+    <p>
+      Help that is worth more: <a href={ISSUES_URL}>report what breaks on your hardware</a>,
+      <a href={CONTRIBUTING_URL}>send a pull request</a>, or <a href={GITHUB_URL}>star the repository</a>.
+    </p>
+  </div>
+</section>

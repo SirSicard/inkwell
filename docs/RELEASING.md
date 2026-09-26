@@ -35,7 +35,7 @@ same failure after tagging costs a deleted tag and a burnt version.
 #    and the CHANGELOG heading (## [Unreleased] -> ## [X.Y.Z] - date)
 #    (cd src-tauri && cargo check)   regenerates Cargo.lock
 #
-#    NOT homepage/lib/constants.ts. That is the fifth place and it waits
+#    NOT homepage/src/lib/constants.ts. That is the fifth place and it waits
 #    for step 7, because the homepage deploys on push and its own rule is
 #    that the site may only advertise a version a release exists for.
 #    Bumping it here puts the new number on a page whose Download button
@@ -74,9 +74,12 @@ inkwell-updater/publish-latest.sh
 #    and on a URL that does not return 200.
 bin/update-cask.sh
 
-# 8. Now bump homepage/lib/constants.ts to the same version and push. The
-#    release exists, so the site can describe it honestly. Pushing this is
-#    what deploys the homepage.
+# 8. Now set APP_VERSION in homepage/src/lib/constants.ts to the same
+#    version, run (cd homepage && node scripts/snapshot-release.mjs) to copy
+#    the release's asset list into src/data/release.json, and push. The
+#    release exists, so the site can describe it honestly, and the build
+#    refuses a version the snapshot doesn't match. Pushing this is what
+#    deploys the homepage.
 ```
 
 ## What no longer needs doing

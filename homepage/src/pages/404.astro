@@ -1,0 +1,34 @@
+---
+// The designed 404. Served with a real 404 status by the host, kept out of the sitemap, not indexed.
+// No script: the ink here is the favicon's blot (one still frame of the app's shader, traced by
+// scripts/make-icons.mjs), so the page works the same with JS off.
+import blot from '../data/blot.json';
+import Base from '../layouts/Base.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+import Colophon from '../components/Colophon.astro';
+import { RELEASES_LATEST_URL } from '../lib/constants';
+---
+
+<Base
+  title="Page not found | Inkwell"
+  description="This page doesn’t exist. Inkwell’s homepage has the download, the models and the full privacy list."
+  noindex
+>
+  <a class="skip" href="#main">Skip to content</a>
+  <SiteHeader base="/" />
+  <main id="main" class="lost wrap">
+    <div class="lost-blot" aria-hidden="true"><svg viewBox={blot.viewBox} focusable="false"><path d={blot.d}></path></svg></div>
+    <div class="lost-copy">
+      <h1>Nothing was written here.</h1>
+      <p class="lead">
+        The page you asked for doesn’t exist, or it moved. The homepage has the download, the models and the
+        full list of what Inkwell sends.
+      </p>
+      <div class="get">
+        <a class="btn" href="/">Go to the homepage</a>
+        <a class="text-link" href={RELEASES_LATEST_URL}>Latest release on GitHub</a>
+      </div>
+    </div>
+  </main>
+  <Colophon base="/" />
+</Base>
