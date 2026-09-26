@@ -17,27 +17,70 @@
 //!   fixtures, deterministically, on every OS.
 //! - [`realtime`]: the guard seam that lets tests prove every realtime push allocation-free (I4).
 //!
-//! Resampling, downmix, the gain stage, VAD and bands arrive in their own modules later.
+//! After the ring, everything runs on the pump or a worker, never the realtime thread. The DSP
+//! between the device's format and an engine:
+//!
+//! ```text
+//! device format ─► Downmix ─► StreamResampler ─► 16 kHz mono ─┬─► TakeRecorder (dictation)
+//!  (interleaved)   (mic: primary,  (built once per device)     ├─► Agc (a live meeting)
+//!                   far: average)                               ├─► BandAnalyzer ─► BandsWriter ═► BandsReader (shell)
+//!                                                               └─► Windower (import, final pass)
+//!
+//! a take or a window ─► normalise ─► vad::trim_ends ─► engine
+//! ```
+//!
+//! - [`downmix`]: one channel from many, chosen per stream: the mic's primary channel, the far
+//!   end's average.
+//! - [`resample`](mod@resample): to 16 kHz, time-aligned, with the tail flushed; streaming and
+//!   offline.
+//! - [`take`]: a dictation take with 300 ms of lead before the press and tail after the release.
+//! - [`gain`]: the per-utterance robust-peak normaliser ahead of every engine (architecture rule
+//!   11), and the level measures everything else uses.
+//! - [`agc`]: the slow meeting AGC toward the same target, which holds through pauses.
+//! - [`vad`]: trims the dead air at the ends of a take, never the pauses inside; the model sits
+//!   behind [`SpeechProbability`].
+//! - [`window`]: long audio in windows of at most 60 s, cut at the quietest point, overlapping by
+//!   2 s.
+//! - [`bands`]: three energy bands per FFT hop for the ink, read out through a copy-out reader.
+//! - [`synth`]: deterministic synthetic signals for tests and fixtures (real audio never enters
+//!   the repository).
 //!
 //! [`AudioSink`]: ink_core::AudioSink
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod agc;
+pub mod bands;
 pub mod chunk;
+pub mod downmix;
+pub mod gain;
 pub mod rate;
 pub mod realtime;
 pub mod replay;
+pub mod resample;
 pub mod ring;
+pub mod synth;
+pub mod take;
+pub mod vad;
+pub mod window;
 
+pub use agc::Agc;
+pub use bands::{BandAnalyzer, Bands, BandsReader, BandsSnapshot, BandsWriter, bands_channel};
 pub use chunk::{
     CHUNK_DURATION, ChunkError, ChunkInfo, ChunkList, ChunkStore, ChunkWriter, RecoveryReport,
     Repair, UnreadableChunk, WriterSummary,
 };
+pub use downmix::Downmix;
+pub use gain::{GainOutcome, GainReport, TARGET_PEAK, normalise, robust_peak};
 pub use rate::{Continuity, RateCheck, RateVerdict};
 pub use realtime::{RealtimeGuard, unguarded};
 pub use replay::{FileReplaySource, Pacing};
+pub use resample::{ResampleError, StreamResampler, resample};
 pub use ring::{
     CaptureConsumer, CaptureProducer, CapturedBlock, DEFAULT_RING_DURATION, Overruns, RingError,
     capture_ring,
 };
+pub use take::{Take, TakeRecorder};
+pub use vad::{SpeechProbability, SpeechSegmenter, VadConfig, trim_ends};
+pub use window::{Window, WindowConfig, WindowError, Windower, plan_windows};
