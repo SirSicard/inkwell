@@ -10,3 +10,13 @@ publish.workspace = true
 
 [dependencies]
 ink-core.workspace = true
+# API keys live in the OS keychain (keyring 4.x split into a core crate and per-OS stores).
+keyring-core = "1.0.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The login keychain, where Inkwell 0.2 kept its keys (re-linked by reference in S2.9a). The
+# data-protection keychain ("protected") needs a signed app with a keychain entitlement (S2.3).
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1.0"
