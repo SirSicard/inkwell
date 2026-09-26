@@ -22,6 +22,8 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSObject",
     "NSString",
     "NSURL",
+    "NSUUID",
+    "NSValue",
 ] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
@@ -33,7 +35,9 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
     "std",
+    "CFArray",
     "CFDate",
+    "CFDictionary",
     "CFMachPort",
     "CFNumber",
     "CFRunLoop",
@@ -46,8 +50,28 @@ objc2-core-graphics = { version = "0.3.2", default-features = false, features = 
     "CGEventTypes",
     "CGRemoteOperation",
 ] }
+# Capture (S2.1a): the HAL, process taps (`CATapDescription`, macOS 14.2+) and aggregate devices.
+objc2-core-audio = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "AudioHardware",
+    "objc2",
+    "objc2-core-audio-types",
+    "objc2-foundation",
+] }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CoreAudioBaseTypes",
+] }
+# The completion handler of the microphone prompt (`requestAccessForMediaType:completionHandler:`).
+block2 = { version = "0.6.2", default-features = false, features = ["std"] }
+# The realtime guard seam (I4) and, in the probe, the capture ring the IOProcs push into.
+ink-audio = { path = "../ink-audio" }
 
 # The input checklist binary checks that the main run loop is serving (the pasteboard promise is
 # answered there) by dispatching to it.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+# I4: the IOProcs are proven allocation-free, in the unit tests (synthetic buffer lists) and in
+# the capture checklist binary (real devices). BSD-1-Clause, test-only (deny.toml has the
+# crate-scoped exception). Warn mode in both profiles, as in ink-audio: a test counts violations.
+assert_no_alloc = { version = "1.1.2", default-features = false, features = ["warn_debug", "warn_release"] }
