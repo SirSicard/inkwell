@@ -27,6 +27,7 @@
 //! | [`capture`] | The pump's half: each side's capture ring into its chunks on disk, and on as canonical audio. |
 //! | [`meeting`] | Two sides live (the AGC with a VAD, live finals over VAD speech), then the final pass per side, far-end diarization, the supersede, the summary and commitments. |
 //! | [`speech`] | What of a long recording an offline engine may hear: VAD-gated gain per window, and speech regions. |
+//! | [`import`] | A file becomes a record, through the same gain and speech regions. |
 //!
 //! # Privacy (I5)
 //!
@@ -46,6 +47,7 @@ pub mod dictionary;
 pub mod events;
 pub mod export;
 pub mod gain_stage;
+pub mod import;
 pub mod meeting;
 pub mod mic;
 pub mod modes;
