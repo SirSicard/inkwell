@@ -378,26 +378,6 @@ fn live_segments_keep_their_engine_timestamps() {
     assert_eq!(hit.start_ms, 3_600_000);
 }
 
-#[test]
-fn times_beyond_sqlite_integers_are_refused_whole() {
-    let store = SqliteStore::open_in_memory().unwrap();
-    let id = meeting(&store, 1);
-    let mut huge = seg(Channel::Mic, 0, "overflow");
-    huge.end_ms = u64::MAX;
-    assert!(matches!(
-        store.append_segments(&id, &[seg(Channel::Mic, 0, "fine"), huge]),
-        Err(StoreError::Invalid(_))
-    ));
-    assert!(
-        store.segments(&id).unwrap().is_empty(),
-        "an append is all or nothing"
-    );
-    assert!(matches!(
-        store.add_note(&id, u64::MAX, "x"),
-        Err(StoreError::Invalid(_))
-    ));
-}
-
 // --- Search ------------------------------------------------------------------------------------
 
 #[test]
@@ -649,6 +629,161 @@ fn deleting_a_record_removes_everything_it_owns() {
     assert_eq!(open[0].merged_into, None);
 }
 
+// --- Deleted means deleted ---------------------------------------------------------------------
+
+/// Moves everything from the WAL into the database file and truncates the WAL to nothing.
+fn checkpoint(db: &TempDb) {
+    let (busy, _, _): (i64, i64, i64) = db
+        .raw()
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(busy, 0, "the checkpoint completed");
+}
+
+/// How often `marker` appears in the raw bytes of the database file and its WAL.
+fn on_disk(db: &TempDb, marker: &str) -> usize {
+    ["", "-wal"]
+        .into_iter()
+        .filter_map(|suffix| {
+            let mut path = db.path().into_os_string();
+            path.push(suffix);
+            std::fs::read(path).ok()
+        })
+        .map(|bytes| {
+            bytes
+                .windows(marker.len())
+                .filter(|w| *w == marker.as_bytes())
+                .count()
+        })
+        .sum()
+}
+
+/// A record the deleted one shares pages with, so deletions happen inside live pages too.
+fn neighbour(store: &SqliteStore) {
+    let id = meeting(store, 5);
+    let lines: Vec<Segment> = (0..40)
+        .map(|n| {
+            seg(
+                Channel::Far,
+                n * 1_000,
+                &format!("ordinary words in line {n}"),
+            )
+        })
+        .collect();
+    store.append_segments(&id, &lines).unwrap();
+    store.add_note(&id, 0, "a kept note").unwrap();
+}
+
+#[test]
+fn a_deleted_record_leaves_no_text_on_disk() {
+    let db = TempDb::new("scrub-delete");
+    let store = db.open();
+    neighbour(&store);
+    let doomed = meeting(&store, 9);
+    store.set_title(&doomed, "zqxtitlemarker").unwrap();
+    store
+        .append_segments(
+            &doomed,
+            &[seg(
+                Channel::Mic,
+                0,
+                "the codename is zqxsegmentmarker today",
+            )],
+        )
+        .unwrap();
+    store.add_note(&doomed, 10, "zqxnotemarker").unwrap();
+    store
+        .save_summary(
+            &doomed,
+            &Summary {
+                text: "zqxsummarymarker".into(),
+                model: "m".into(),
+                created_at_unix_ms: 1,
+            },
+        )
+        .unwrap();
+    store
+        .set_speaker_name(&doomed, &SpeakerId("spk0".into()), "zqxspeakermarker")
+        .unwrap();
+    store
+        .add_commitments(
+            &doomed,
+            &[NewCommitment {
+                text: "zqxcommitmentmarker".into(),
+                owner: None,
+                due: None,
+                due_at_unix_ms: None,
+                provenance: vec![],
+            }],
+        )
+        .unwrap();
+    let markers = [
+        "zqxtitlemarker",
+        "zqxsegmentmarker",
+        "zqxnotemarker",
+        "zqxsummarymarker",
+        "zqxspeakermarker",
+        "zqxcommitmentmarker",
+    ];
+    checkpoint(&db);
+    for marker in markers {
+        assert!(on_disk(&db, marker) >= 1, "{marker} is written before");
+    }
+    assert!(
+        on_disk(&db, "zqxsegmentmarker") >= 2,
+        "the segment text and its search index entry are both on disk"
+    );
+
+    store.delete_record(&doomed).unwrap();
+    checkpoint(&db);
+    for marker in markers {
+        assert_eq!(on_disk(&db, marker), 0, "{marker} is overwritten");
+    }
+    assert_eq!(store.search("ordinary", 100).unwrap().len(), 40);
+    fts_is_consistent(&db.raw());
+}
+
+#[test]
+fn superseded_and_replaced_text_leaves_no_trace_on_disk() {
+    let db = TempDb::new("scrub-supersede");
+    let store = db.open();
+    neighbour(&store);
+    let id = meeting(&store, 9);
+    store
+        .append_segments(
+            &id,
+            &[seg(Channel::Mic, 0, "alpha zqxlivemarker beta gamma")],
+        )
+        .unwrap();
+    let note = store.add_note(&id, 0, "zqxoldnotemarker").unwrap();
+    let summary = |text: &str| Summary {
+        text: text.into(),
+        model: "m".into(),
+        created_at_unix_ms: 1,
+    };
+    store
+        .save_summary(&id, &summary("zqxoldsummarymarker"))
+        .unwrap();
+    checkpoint(&db);
+    assert!(on_disk(&db, "zqxlivemarker") >= 2);
+    assert!(on_disk(&db, "zqxoldnotemarker") >= 1);
+    assert!(on_disk(&db, "zqxoldsummarymarker") >= 1);
+
+    store
+        .supersede(&id, &[seg(Channel::Mic, 0, "alpha beta gamma delta")])
+        .unwrap();
+    store.update_note(&note, "new").unwrap();
+    store.save_summary(&id, &summary("new")).unwrap();
+    checkpoint(&db);
+    for marker in ["zqxlivemarker", "zqxoldnotemarker", "zqxoldsummarymarker"] {
+        assert_eq!(on_disk(&db, marker), 0, "{marker} is overwritten");
+    }
+    assert_eq!(store.search("delta", 10).unwrap().len(), 1);
+    fts_is_consistent(&db.raw());
+}
+
 // --- Threads -----------------------------------------------------------------------------------
 
 #[test]
@@ -686,7 +821,7 @@ fn one_store_serves_many_worker_threads() {
         store
             .records(&RecordQuery {
                 kind: None,
-                started_before_unix_ms: None,
+                before: None,
                 limit: 1_000
             })
             .unwrap()

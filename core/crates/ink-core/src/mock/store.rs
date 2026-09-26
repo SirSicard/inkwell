@@ -1,13 +1,45 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
 use super::lock;
 use crate::engine::SpeakerId;
 use crate::error::StoreError;
 use crate::store::{
-    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
-    RecordQuery, SearchHit, Segment, Store, Summary, check_supersede,
+    Commitment, CommitmentId, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId, Record,
+    RecordId, RecordQuery, SearchHit, Segment, Store, Summary, check_supersede,
 };
+
+/// Refuses times a SQLite store could not hold, before anything changes.
+fn check_times(times: impl IntoIterator<Item = u64>) -> Result<(), StoreError> {
+    if times.into_iter().any(|t| t > MAX_TIME_MS) {
+        return Err(StoreError::Invalid(
+            "a time is beyond the range a store can hold".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn segment_times(segments: &[Segment]) -> impl Iterator<Item = u64> + '_ {
+    segments.iter().flat_map(|s| [s.start_ms, s.end_ms])
+}
+
+/// Lowercased words: runs of letters and digits. Everything else separates words.
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// How often one query word (its parts, in sequence, the last as a prefix) occurs in `text`.
+fn occurrences(term: &[String], text: &[String]) -> usize {
+    let Some((last, head)) = term.split_last() else {
+        return 0;
+    };
+    text.windows(term.len())
+        .filter(|w| w[..head.len()] == *head && w[head.len()].starts_with(last.as_str()))
+        .count()
+}
 
 struct RecordData {
     record: Record,
@@ -102,10 +134,12 @@ impl Store for MemStore {
             .values()
             .map(|d| &d.record)
             .filter(|r| query.kind.is_none_or(|k| r.kind == k))
+            // Strictly after the cursor in the listing order (start, then id, both descending).
             .filter(|r| {
                 query
-                    .started_before_unix_ms
-                    .is_none_or(|t| r.started_at_unix_ms < t)
+                    .before
+                    .as_ref()
+                    .is_none_or(|c| (r.started_at_unix_ms, &r.id) < (c.started_at_unix_ms, &c.id))
             })
             .cloned()
             .collect();
@@ -129,11 +163,24 @@ impl Store for MemStore {
         let mut inner = lock(&self.inner);
         inner.records.remove(id).ok_or(StoreError::NotFound)?;
         inner.notes.retain(|n| &n.record != id);
+        let removed: HashSet<CommitmentId> = inner
+            .commitments
+            .iter()
+            .filter(|c| &c.record == id)
+            .map(|c| c.id.clone())
+            .collect();
         inner.commitments.retain(|c| &c.record != id);
+        // A duplicate folded into a deleted commitment is still owed: un-merge it.
+        for c in &mut inner.commitments {
+            if c.merged_into.as_ref().is_some_and(|m| removed.contains(m)) {
+                c.merged_into = None;
+            }
+        }
         Ok(())
     }
 
     fn append_segments(&self, id: &RecordId, segments: &[Segment]) -> Result<(), StoreError> {
+        check_times(segment_times(segments))?;
         lock(&self.inner)
             .data(id)?
             .segments
@@ -149,6 +196,7 @@ impl Store for MemStore {
     }
 
     fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+        check_times(segment_times(segments))?;
         let mut inner = lock(&self.inner);
         let data = inner.data(id)?;
         check_supersede(&data.segments, segments)?;
@@ -158,33 +206,48 @@ impl Store for MemStore {
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
-        let needle = query.trim().to_lowercase();
-        if needle.is_empty() {
+        // Query words split on whitespace (and control characters, as the SQLite store does);
+        // each keeps its parts so `e-mail` matches "e" then "mail…" in sequence.
+        let terms: Vec<Vec<String>> = query
+            .split(|c: char| c.is_whitespace() || c.is_control())
+            .map(words)
+            .filter(|t| !t.is_empty())
+            .collect();
+        if terms.is_empty() {
             return Ok(Vec::new());
         }
         let inner = lock(&self.inner);
-        let mut hits: Vec<SearchHit> = inner
+        // (words matched, occurrences) ranks a hit: more of the words first, then more often.
+        let mut scored: Vec<((usize, usize), SearchHit)> = inner
             .records
             .values()
             .flat_map(|d| {
-                d.segments
-                    .iter()
-                    .filter(|s| s.text.to_lowercase().contains(&needle))
-                    .map(|s| SearchHit {
-                        record: d.record.id.clone(),
-                        title: d.record.title.clone(),
-                        started_at_unix_ms: d.record.started_at_unix_ms,
-                        start_ms: s.start_ms,
-                        snippet: s.text.clone(),
+                d.segments.iter().filter_map(|s| {
+                    let text = words(&s.text);
+                    let counts: Vec<usize> = terms.iter().map(|t| occurrences(t, &text)).collect();
+                    let matched = counts.iter().filter(|&&n| n > 0).count();
+                    (matched > 0).then(|| {
+                        let hit = SearchHit {
+                            record: d.record.id.clone(),
+                            title: d.record.title.clone(),
+                            started_at_unix_ms: d.record.started_at_unix_ms,
+                            start_ms: s.start_ms,
+                            snippet: s.text.clone(),
+                        };
+                        ((matched, counts.iter().sum()), hit)
                     })
+                })
             })
             .collect();
-        hits.sort_by(|a, b| (&a.record.0, a.start_ms).cmp(&(&b.record.0, b.start_ms)));
-        hits.truncate(limit);
-        Ok(hits)
+        scored.sort_by(|(sa, a), (sb, b)| {
+            sb.cmp(sa)
+                .then_with(|| (&a.record.0, a.start_ms).cmp(&(&b.record.0, b.start_ms)))
+        });
+        Ok(scored.into_iter().take(limit).map(|(_, hit)| hit).collect())
     }
 
     fn add_note(&self, id: &RecordId, at_ms: u64, text: &str) -> Result<NoteId, StoreError> {
+        check_times([at_ms])?;
         let mut inner = lock(&self.inner);
         inner.data(id)?;
         let note_id = NoteId(inner.next("note"));
@@ -263,6 +326,12 @@ impl Store for MemStore {
         id: &RecordId,
         items: &[NewCommitment],
     ) -> Result<Vec<CommitmentId>, StoreError> {
+        check_times(
+            items
+                .iter()
+                .flat_map(|i| &i.provenance)
+                .flat_map(|s| [s.start_ms, s.end_ms]),
+        )?;
         let mut inner = lock(&self.inner);
         inner.data(id)?;
         let mut ids = Vec::with_capacity(items.len());
@@ -322,7 +391,11 @@ impl Store for MemStore {
             ));
         }
         let mut inner = lock(&self.inner);
-        inner.commitment(into)?;
+        if inner.commitment(into)?.merged_into.is_some() {
+            return Err(StoreError::Invalid(
+                "merge into the canonical commitment, not one that is itself merged".into(),
+            ));
+        }
         inner.commitment(id)?.merged_into = Some(into.clone());
         Ok(())
     }

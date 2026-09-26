@@ -1,6 +1,6 @@
 //! The `Store` contract, run against `MemStore` and `SqliteStore` alike.
 //!
-//! The first seven scenarios restate the store section of `ink-core`'s contract tests; the rest
+//! The first eleven scenarios restate the store section of `ink-core`'s contract tests; the rest
 //! pin behaviour both stores must share that those tests leave implicit. Each scenario runs three
 //! times: on the in-memory mock, on SQLite in memory, and on SQLite in a WAL file. Where the two
 //! stores could disagree, the `ink-core` docs decide.
@@ -123,7 +123,7 @@ fn records_segments_search_speakers_and_settings(store: &dyn Store) {
     };
     let all = RecordQuery {
         kind: None,
-        started_before_unix_ms: None,
+        before: None,
         limit: 10,
     };
     assert_eq!(
@@ -144,9 +144,10 @@ fn records_segments_search_speakers_and_settings(store: &dyn Store) {
         }),
         vec![newer.clone(), older.clone()]
     );
+    let newer_record = store.record(&newer).unwrap().unwrap();
     assert_eq!(
         ids(&RecordQuery {
-            started_before_unix_ms: Some(200),
+            before: Some(RecordCursor::from(&newer_record)),
             ..all.clone()
         }),
         vec![older.clone()],
@@ -336,6 +337,167 @@ fn notes_are_kept_in_time_order_and_go_with_their_record(store: &dyn Store) {
     assert_eq!(store.update_note(&late, "x"), Err(StoreError::NotFound));
 }
 
+fn paging_by_cursor_returns_every_record_exactly_once(store: &dyn Store) {
+    let mut same_ms: Vec<RecordId> = (0..5).map(|_| meeting(store, 700)).collect();
+    same_ms.sort();
+    same_ms.reverse();
+    let newest = meeting(store, 900);
+    let oldest = meeting(store, 100);
+    let expected: Vec<RecordId> = std::iter::once(newest)
+        .chain(same_ms)
+        .chain(std::iter::once(oldest))
+        .collect();
+
+    let mut seen = Vec::new();
+    let mut before = None;
+    while seen.len() <= expected.len() {
+        let page = store
+            .records(&RecordQuery {
+                kind: None,
+                before: before.clone(),
+                limit: 1,
+            })
+            .unwrap();
+        let Some(last) = page.last() else { break };
+        before = Some(RecordCursor::from(last));
+        seen.extend(page.into_iter().map(|r| r.id));
+    }
+    assert_eq!(seen, expected);
+}
+
+fn merges_point_at_a_canonical_commitment_and_outlive_its_record(store: &dyn Store) {
+    let a = meeting(store, 1);
+    let b = meeting(store, 2);
+    let owe = |text: &str| NewCommitment {
+        text: text.into(),
+        owner: None,
+        due: None,
+        due_at_unix_ms: None,
+        provenance: vec![],
+    };
+    let first = store
+        .add_commitments(&a, &[owe("send the deck")])
+        .unwrap()
+        .remove(0);
+    let dupes = store
+        .add_commitments(&b, &[owe("send over the deck"), owe("the deck, again")])
+        .unwrap();
+    store.merge_commitment(&dupes[0], &first).unwrap();
+    assert!(
+        matches!(
+            store.merge_commitment(&dupes[1], &dupes[0]),
+            Err(StoreError::Invalid(_))
+        ),
+        "a merged commitment takes no merges: merge into its canonical"
+    );
+    assert!(
+        matches!(
+            store.merge_commitment(&first, &dupes[0]),
+            Err(StoreError::Invalid(_))
+        ),
+        "so no cycle can form"
+    );
+    store.merge_commitment(&dupes[1], &first).unwrap();
+    let open = || -> Vec<CommitmentId> {
+        store
+            .open_commitments(10)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    };
+    assert_eq!(open(), vec![first.clone()]);
+
+    store.delete_record(&a).unwrap();
+    assert_eq!(open(), dupes, "still owed, so open again");
+    assert!(
+        store
+            .commitments(&b)
+            .unwrap()
+            .iter()
+            .all(|c| c.merged_into.is_none())
+    );
+}
+
+fn search_matches_any_word_as_a_prefix_best_first(store: &dyn Store) {
+    let add = |text: &str| {
+        let id = meeting(store, 1);
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, text)])
+            .unwrap();
+        id
+    };
+    for n in 0..6 {
+        add(&format!("lunch chatter number {n}"));
+    }
+    let both = add("Budget forecast for the quarter");
+    let one = add("forecasting the weather");
+    let mail = add("reply to the e-mail thread");
+
+    let records = |q: &str| -> Vec<RecordId> {
+        store
+            .search(q, 10)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.record)
+            .collect()
+    };
+    let hits = records("budg FORECAST");
+    assert_eq!(hits.len(), 2, "{hits:?}");
+    assert_eq!(hits[0], both, "the segment matching both words is first");
+    assert!(hits.contains(&one));
+    assert!(records("udget").is_empty(), "prefixes, not infixes");
+    assert_eq!(records("E-MAIL"), vec![mail]);
+    assert!(records("AND (").is_empty(), "no query syntax");
+}
+
+fn times_beyond_the_store_range_are_invalid_and_change_nothing(store: &dyn Store) {
+    use ink_core::store::MAX_TIME_MS;
+
+    let id = meeting(store, 1);
+    let mut late = seg(Channel::Mic, 0, "too late");
+    late.end_ms = MAX_TIME_MS + 1;
+    assert!(matches!(
+        store.append_segments(&id, &[seg(Channel::Mic, 0, "fine"), late.clone()]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(store.segments(&id).unwrap().is_empty());
+
+    store
+        .append_segments(&id, &[seg(Channel::Mic, 0, "one two")])
+        .unwrap();
+    assert!(matches!(
+        store.supersede(&id, &[seg(Channel::Mic, 0, "one two three"), late]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
+
+    assert!(matches!(
+        store.add_note(&id, MAX_TIME_MS + 1, "x"),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(store.notes(&id).unwrap().is_empty());
+
+    let said = |start_ms: u64| NewCommitment {
+        text: "t".into(),
+        owner: None,
+        due: None,
+        due_at_unix_ms: None,
+        provenance: vec![Span {
+            channel: Channel::Far,
+            start_ms,
+            end_ms: start_ms,
+        }],
+    };
+    assert!(matches!(
+        store.add_commitments(&id, &[said(0), said(u64::MAX)]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert!(store.commitments(&id).unwrap().is_empty());
+
+    store.add_note(&id, MAX_TIME_MS, "at the limit").unwrap();
+}
+
 // --- Shared behaviour the ink-core tests leave implicit ------------------------------------------
 
 /// Every call scoped to one record reports an unknown record the same way; only `record` answers
@@ -400,7 +562,7 @@ fn records_with_the_same_start_order_by_id_descending(store: &dyn Store) {
     let listed: Vec<RecordId> = store
         .records(&RecordQuery {
             kind: None,
-            started_before_unix_ms: None,
+            before: None,
             limit: 100,
         })
         .unwrap()
@@ -412,7 +574,7 @@ fn records_with_the_same_start_order_by_id_descending(store: &dyn Store) {
         store
             .records(&RecordQuery {
                 kind: None,
-                started_before_unix_ms: None,
+                before: None,
                 limit: 0,
             })
             .unwrap()
@@ -692,6 +854,10 @@ contract!(
     commitments_merge_complete_and_go_with_their_record,
     open_commitments_span_records_and_skip_done_and_merged,
     notes_are_kept_in_time_order_and_go_with_their_record,
+    paging_by_cursor_returns_every_record_exactly_once,
+    merges_point_at_a_canonical_commitment_and_outlive_its_record,
+    search_matches_any_word_as_a_prefix_best_first,
+    times_beyond_the_store_range_are_invalid_and_change_nothing,
     every_record_scoped_call_on_an_unknown_record_is_not_found,
     records_with_the_same_start_order_by_id_descending,
     open_commitment_ties_keep_the_order_they_were_added,

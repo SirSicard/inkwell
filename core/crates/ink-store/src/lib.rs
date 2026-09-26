@@ -5,12 +5,14 @@
 //! with everything that reads or writes records: the store is the core's one connection to the
 //! file, not something each caller opens for itself.
 //!
-//! What the schema holds and why is in the `schema` module's documentation. Three decisions
+//! What the schema holds and why is in the `schema` module's documentation. Four decisions
 //! differ from an earlier implementation of the same design:
 //! - one connection owned by the core, instead of one per caller;
 //! - search runs on the FTS5 index and ranks with bm25, instead of `LIKE` over every row;
 //! - live segments are stored with the times the engine gave them. Nothing here rewrites a
-//!   segment's `start_ms` or `end_ms`.
+//!   segment's `start_ms` or `end_ms`;
+//! - deleted means deleted: SQLite's `secure_delete` and the index's `secure-delete` option
+//!   overwrite the text of deleted and superseded rows instead of leaving it in free pages.
 //!
 //! Importers for the stores of earlier versions arrive in a later step.
 
@@ -152,6 +154,18 @@ fn configure(conn: &mut Connection, file: bool) -> Result<(), Fail> {
         }
     }
     conn.pragma_update(None, "synchronous", "FULL")?;
+    // Deleted means deleted: SQLite zeroes the space a deleted or replaced row leaves, instead of
+    // leaving the old text in free pages. Together with the search index's own `secure-delete`
+    // option (set in the schema) no superseded or deleted transcript text stays in the file.
+    // This pragma adds about a tenth to a delete; the index option is the expensive half, and the
+    // schema records the measurement.
+    conn.pragma_update(None, "secure_delete", true)?;
+    let scrubbing: bool = conn.pragma_query_value(None, "secure_delete", |row| row.get(0))?;
+    if !scrubbing {
+        return Err(Fail::backend(
+            "open: this SQLite build cannot overwrite deleted content".to_string(),
+        ));
+    }
     // Off by default in SQLite, per connection. The cascades that delete a record's rows depend
     // on it, so it is checked rather than assumed.
     conn.pragma_update(None, "foreign_keys", true)?;
@@ -433,26 +447,31 @@ impl Store for SqliteStore {
         } else {
             "?1 IS NULL"
         };
-        let before = if query.started_before_unix_ms.is_some() {
-            "started_at_unix_ms < ?2"
+        // Keyset paging: strictly after the cursor in (start, id) descending order. The row-value
+        // comparison is a range on the (kind,) start, id index, so records sharing a millisecond
+        // are neither skipped nor repeated. BINARY collation orders ids as `RecordId`'s `Ord` does.
+        let before = if query.before.is_some() {
+            "(started_at_unix_ms, id) < (?2, ?3)"
         } else {
-            "?2 IS NULL"
+            "?2 IS NULL AND ?3 IS NULL"
         };
         let sql = format!(
             concat!(
                 "SELECT ",
                 record_columns!(),
-                " FROM record WHERE {} AND {} ORDER BY started_at_unix_ms DESC, id DESC LIMIT ?3"
+                " FROM record WHERE {} AND {} ORDER BY started_at_unix_ms DESC, id DESC LIMIT ?4"
             ),
             kind, before
         );
+        let cursor = query.before.as_ref();
         self.with("records", |conn| {
             let mut select = conn.prepare(&sql)?;
             let records = select
                 .query_map(
                     params![
                         query.kind.map(kind_text),
-                        query.started_before_unix_ms,
+                        cursor.map(|c| c.started_at_unix_ms),
+                        cursor.map(|c| c.id.0.as_str()),
                         sql_limit(query.limit)
                     ],
                     record_at,
@@ -784,11 +803,22 @@ impl Store for SqliteStore {
             ));
         }
         self.write("merge_commitment", |tx| {
-            tx.query_row("SELECT 1 FROM commitment WHERE id = ?1", [&into.0], |_| {
-                Ok(())
-            })
-            .optional()?
-            .ok_or(StoreError::NotFound)?;
+            let into_is_merged: bool = tx
+                .query_row(
+                    "SELECT merged_into IS NOT NULL FROM commitment WHERE id = ?1",
+                    [&into.0],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or(StoreError::NotFound)?;
+            // Merges point at a canonical commitment, so they can never form a cycle.
+            if into_is_merged {
+                return Err(StoreError::Invalid(
+                    "merge into the canonical commitment, not one that is itself merged"
+                        .to_string(),
+                )
+                .into());
+            }
             changed(tx.execute(
                 "UPDATE commitment SET merged_into = ?2 WHERE id = ?1",
                 params![id.0, into.0],
@@ -837,6 +867,24 @@ mod tests {
             [],
         );
         assert!(orphan.is_err());
+    }
+
+    #[test]
+    fn deleted_text_is_overwritten_by_sqlite_and_the_search_index() {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        let pragma: i64 = conn
+            .pragma_query_value(None, "secure_delete", |row| row.get(0))
+            .unwrap();
+        assert_eq!(pragma, 1);
+        let fts: i64 = conn
+            .query_row(
+                "SELECT v FROM segment_fts_config WHERE k = 'secure-delete'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts, 1);
     }
 
     #[test]

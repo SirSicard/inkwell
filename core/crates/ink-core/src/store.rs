@@ -6,6 +6,8 @@
 //! - **Supersede refuses** an empty result, and any channel that falls below half its previous
 //!   words: both are far more likely an engine failure than a correction. [`check_supersede`] is
 //!   the one definition every implementation calls.
+//! - **Times fit SQLite's integers.** A `u64` time or position above [`MAX_TIME_MS`] is refused
+//!   with [`StoreError::Invalid`], and the whole call with it, in every store.
 
 use std::collections::BTreeMap;
 
@@ -74,16 +76,39 @@ pub struct Record {
     pub revision: u32,
 }
 
-/// Which records to list: newest first, optionally one kind, optionally before a cursor.
+/// The largest time or position, in ms, a store accepts: SQLite integers are signed 64-bit.
+pub const MAX_TIME_MS: u64 = i64::MAX as u64;
+
+/// Which records to list: newest first, optionally one kind, optionally after a cursor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordQuery {
     /// Only this kind, or every kind.
     pub kind: Option<RecordKind>,
-    /// Only records that started strictly before this time, Unix ms. Pass the last page's oldest
-    /// start to page on without repeats.
-    pub started_before_unix_ms: Option<i64>,
+    /// Only records strictly after this one in the listing order (start time descending, then id
+    /// descending). Pass the last record of the previous page, `RecordCursor::from(&last)`:
+    /// records that started in the same millisecond are then neither repeated nor skipped.
+    pub before: Option<RecordCursor>,
     /// At most this many.
     pub limit: usize,
+}
+
+/// A position in the record listing: a keyset cursor over (start time, id), so it stays exact
+/// when several records share a start time (a batch of imports does).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordCursor {
+    /// The record's start, Unix ms.
+    pub started_at_unix_ms: i64,
+    /// The record's id, which breaks ties between equal starts.
+    pub id: RecordId,
+}
+
+impl From<&Record> for RecordCursor {
+    fn from(record: &Record) -> Self {
+        Self {
+            started_at_unix_ms: record.started_at_unix_ms,
+            id: record.id.clone(),
+        }
+    }
 }
 
 /// Settled transcript text on the record's timeline.
@@ -91,9 +116,9 @@ pub struct RecordQuery {
 pub struct Segment {
     /// Mic ("you") or far end ("them").
     pub channel: Channel,
-    /// Start, ms from the start of the record.
+    /// Start, ms from the start of the record, at most [`MAX_TIME_MS`].
     pub start_ms: u64,
-    /// End, ms from the start of the record.
+    /// End, ms from the start of the record, at most [`MAX_TIME_MS`].
     pub end_ms: u64,
     /// The text.
     pub text: String,
@@ -108,7 +133,8 @@ pub struct Note {
     pub id: NoteId,
     /// The record it belongs to.
     pub record: RecordId,
-    /// Where in the record it was written, ms from the start: the timestamp chip.
+    /// Where in the record it was written, ms from the start: the timestamp chip. At most
+    /// [`MAX_TIME_MS`].
     pub at_ms: u64,
     /// The text.
     pub text: String,
@@ -131,9 +157,9 @@ pub struct Summary {
 pub struct Span {
     /// Which side said it.
     pub channel: Channel,
-    /// Start, ms from the start of the record.
+    /// Start, ms from the start of the record, at most [`MAX_TIME_MS`].
     pub start_ms: u64,
-    /// End, ms from the start of the record.
+    /// End, ms from the start of the record, at most [`MAX_TIME_MS`].
     pub end_ms: u64,
 }
 
@@ -203,7 +229,7 @@ pub trait Store: Send + Sync {
     /// One record, or `None`.
     fn record(&self, id: &RecordId) -> Result<Option<Record>, StoreError>;
 
-    /// Records matching `query`, newest first (by start time, then id).
+    /// Records matching `query`, newest first (by start time, then id, both descending).
     fn records(&self, query: &RecordQuery) -> Result<Vec<Record>, StoreError>;
 
     /// Sets a record's title.
@@ -213,6 +239,9 @@ pub trait Store: Send + Sync {
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError>;
 
     /// Deletes a record with its transcript, notes, summary, speakers and commitments.
+    ///
+    /// A commitment in another record that was merged into one of the deleted commitments is
+    /// still owed: it is un-merged (`merged_into` cleared) and open again, not deleted with it.
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError>;
 
     /// Appends live finals to the current revision.
@@ -226,6 +255,14 @@ pub trait Store: Send + Sync {
     fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError>;
 
     /// Full-text search across every record's current revision.
+    ///
+    /// The query is split into words on whitespace. Each word matches as a case-insensitive
+    /// prefix of a word in a segment (`budg` finds "Budget"), and a segment matches when any of
+    /// the words does. Nothing in the query is syntax: punctuation separates words, and a query
+    /// word with punctuation inside (`e-mail`) matches its parts in sequence. Implementations may
+    /// also fold diacritics. Results are best first: a segment matching more of the words, or
+    /// matching them more often, comes before one matching fewer; beyond that the order is the
+    /// implementation's. A query with no words, or a `limit` of 0, returns nothing.
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError>;
 
     /// Adds a note at `at_ms` in the record.
@@ -274,8 +311,12 @@ pub trait Store: Send + Sync {
     /// Marks a commitment done or not done.
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError>;
 
-    /// Folds `id` into `into`: the deduplicated "said twice" case. Merging a commitment into
-    /// itself is [`StoreError::Invalid`].
+    /// Folds `id` into `into`: the deduplicated "said twice" case.
+    ///
+    /// `into` must be canonical. Merging into a commitment that is itself merged into another is
+    /// [`StoreError::Invalid`] (merge into its canonical instead), which keeps merges free of
+    /// cycles; so is merging a commitment into itself. If `into`'s record is deleted later, `id`
+    /// is un-merged and open again (see [`Store::delete_record`]).
     fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError>;
 
     /// A setting's value, or `None`.

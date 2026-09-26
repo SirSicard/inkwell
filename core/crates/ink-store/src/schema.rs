@@ -67,6 +67,14 @@ CREATE VIRTUAL TABLE segment_fts USING fts5 (
     content_rowid = 'seq',
     tokenize = 'unicode61 remove_diacritics 2'
 );
+-- Remove a deleted row's entries from the index at once, instead of leaving delete markers
+-- beside the original terms until a later merge: with the connection's `secure_delete`, the
+-- words of deleted and superseded segments are then gone from the file (SQLite 3.44 and later).
+-- The cost is on deletes only, and this option is nearly all of it. Measured on an M-series Mac,
+-- release build, an index of 21,000 segments of about 20 words: superseding a 1,000-segment
+-- meeting went from 10 ms to 240 ms, deleting one from 1 ms to 220 ms; one live append stayed
+-- near 0.1 ms. Both run once per meeting on a worker thread, so privacy wins.
+INSERT INTO segment_fts (segment_fts, rank) VALUES ('secure-delete', 1);
 CREATE TRIGGER segment_fts_insert AFTER INSERT ON segment BEGIN
     INSERT INTO segment_fts (rowid, text) VALUES (new.seq, new.text);
 END;
