@@ -805,3 +805,37 @@ fn meeting_signals_reach_the_detector_until_it_stops() {
     assert!(!mock.emit_meeting(MeetingSignal::MicReleased { app: app.clone() }));
     assert_eq!(*seen.lock().unwrap(), vec![MeetingSignal::MicInUse { app }]);
 }
+
+/// Losing the hotkey mid-hold ends the hold first, exactly as the Mac tap does: `Cancelled`, then
+/// `Lost`. Losing it while idle sends `Lost` alone.
+#[test]
+fn losing_the_hotkey_mid_hold_cancels_the_hold_first() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let record: EventSink<HotkeyEvent> = Arc::new(move |e| sink.lock().unwrap().push(e));
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), record.clone())
+        .unwrap();
+    assert!(mock.press());
+    assert!(mock.lose_hotkey());
+    assert_eq!(
+        events.lock().unwrap().split_off(1),
+        vec![HotkeyEvent::Cancelled, HotkeyEvent::Lost]
+    );
+
+    events.lock().unwrap().clear();
+    p.hotkeys
+        .start(&HotkeyBinding("fn".into()), record)
+        .unwrap();
+    assert!(mock.press());
+    assert!(mock.release());
+    assert!(mock.lose_hotkey());
+    assert_eq!(events.lock().unwrap().last(), Some(&HotkeyEvent::Lost));
+    assert_eq!(
+        events.lock().unwrap().len(),
+        3,
+        "idle loss sends Lost alone"
+    );
+}

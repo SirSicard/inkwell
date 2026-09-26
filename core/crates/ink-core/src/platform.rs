@@ -135,7 +135,7 @@ pub enum HotkeyEvent {
     /// The OS removed the hotkey (for example, Accessibility was revoked mid-session). It also
     /// ends any hold in progress, and nothing more arrives until [`HotkeySource::start`] is
     /// called again. The core re-checks permissions and tells the user; it never retries in a
-    /// loop.
+    /// loop. If a hold was in progress, [`HotkeyEvent::Cancelled`] arrives first.
     Lost,
 }
 
