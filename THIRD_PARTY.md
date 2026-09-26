@@ -8,6 +8,7 @@ checks in CI cover them. Model weights are listed in [docs/MODEL-WEIGHTS.md](doc
 |---|---|---|---|
 | [Handy](https://github.com/cjpais/Handy) by CJ Pais | MIT | `src-tauri/` (legacy 0.2 app) | Inkwell 0.2 was originally based on it. |
 | [SQLite](https://sqlite.org) | Public domain | `core/crates/ink-store`, compiled in by `libsqlite3-sys` (`bundled` feature) | The C source ships inside `libsqlite3-sys` (MIT), so `cargo deny` sees only that crate's licence. The version is whichever one the locked `libsqlite3-sys` bundles. |
+| [webgl-noise](https://github.com/ashima/webgl-noise) by Ian McEwan, Ashima Arts | MIT | `src/components/InkCanvas.tsx` (legacy 0.2 app) and `homepage/components/InkCanvas.tsx` | The ink shader's 2D simplex noise, `snoise()`. Copyright (C) 2011 Ashima Arts. |
 
 ## Rules
 
