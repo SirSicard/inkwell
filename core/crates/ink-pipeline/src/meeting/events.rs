@@ -102,6 +102,17 @@ pub enum MeetingWarning {
         /// Chunk files skipped, or cut short.
         chunks: usize,
     },
+    /// A side was clearly audible, and the VAD found under a tenth of it as speech
+    /// ([`little_speech_heard`](crate::speech::little_speech_heard)): the VAD may be deaf (a wrong
+    /// model, audio at the wrong rate). A diagnostic: nothing was sent or dropped because of it.
+    LittleSpeechHeard {
+        /// Which side.
+        channel: Channel,
+        /// Time above the audible floor, ms.
+        audible_ms: u64,
+        /// Time found as speech, ms.
+        speech_ms: u64,
+    },
     /// A side has no recorded audio at all: no chunk was ever written for it (a device that never
     /// delivered, a permission denied, a tap that never started). Silence would still have chunks.
     NothingCaptured {
@@ -141,6 +152,10 @@ pub struct ChannelPass {
     pub chunks: usize,
     /// Audio in the readable chunks (an import: in the file), ms. Zero: nothing was captured.
     pub captured_ms: u64,
+    /// Of that, time above the audible floor
+    /// ([`AUDIBLE_FLOOR_DBFS`](crate::speech::AUDIBLE_FLOOR_DBFS)), measured before any gain:
+    /// what [`speech_ms`](Self::speech_ms) is checked against.
+    pub audible_ms: u64,
     /// Speech regions the engine was given.
     pub regions: usize,
     /// Of those, how many came back without words.
@@ -149,7 +164,8 @@ pub struct ChannelPass {
     pub failed_regions: usize,
     /// Words in the result.
     pub word_count: usize,
-    /// Audio heard, ms (the regions only; silence never reaches the engine).
+    /// Time the VAD found as speech, ms: the regions, padding included (silence never reaches the
+    /// engine).
     pub speech_ms: u64,
 }
 

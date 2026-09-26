@@ -66,6 +66,10 @@ pub(crate) struct SideRead {
     /// Chunk files that could not be used (unreadable, or their audio failed to resample): the
     /// pass has a gap at each.
     pub skipped: usize,
+    /// Time above the audible floor, ms ([`SpeechPass::audible_ms`]).
+    pub audible_ms: u64,
+    /// Time the VAD found as speech, ms ([`SpeechPass::speech_ms`]).
+    pub speech_ms: u64,
 }
 
 /// Reads `channel`'s chunks onto the meeting timeline (host time `t0_ns` is sample 0), through
@@ -147,6 +151,8 @@ pub(crate) fn read_side(
         chunks: list.chunks.len() + list.unreadable.len(),
         captured_ms,
         skipped,
+        audible_ms: feed.pass.audible_ms(),
+        speech_ms: feed.pass.speech_ms(),
     })
 }
 
@@ -229,7 +235,6 @@ pub(crate) fn transcribe(
         samples_to_ms(start + audio.len() as u64),
     );
     report.regions += 1;
-    report.speech_ms += end_ms - start_ms;
     let options = TranscribeOptions {
         channel,
         context: ctx.context.map(str::to_owned),
@@ -289,6 +294,7 @@ pub(crate) fn report(channel: Channel) -> ChannelPass {
         chunks_written: None,
         chunks: 0,
         captured_ms: 0,
+        audible_ms: 0,
         regions: 0,
         empty_regions: 0,
         failed_regions: 0,

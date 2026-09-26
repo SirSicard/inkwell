@@ -850,6 +850,57 @@ fn a_side_that_captured_nothing_is_told_from_a_silent_one() {
     );
 }
 
+/// A VAD that hears nothing in clearly audible audio is reported, and only reported: the pass
+/// sends nothing it would not have sent, and drops nothing it found. The diagnostic compares the
+/// time above the audible floor with the speech the VAD found.
+#[test]
+fn a_deaf_vad_on_clearly_audible_audio_is_reported_not_acted_on() {
+    let talk = join(&[speech(60.0, -25.0, 121), silence(1.0)]);
+    let run = |final_vad: fn() -> Box<dyn SpeechProbability>| {
+        // Instances 0 and 1 are live; the final pass's are 2 (mic) and 3 (far).
+        let vad = vad_source(move |n| -> Box<dyn SpeechProbability> {
+            if n >= 2 {
+                final_vad()
+            } else {
+                Box::new(EnergyVad(-50.0))
+            }
+        });
+        let mut rig = RigBuilder {
+            vad,
+            ..RigBuilder::default()
+        }
+        .build();
+        rig.feed_side(Channel::Mic, &talk);
+        let outcome = rig.finish().unwrap();
+        (outcome, rig.warnings())
+    };
+
+    let (deaf, warnings) = run(|| Box::new(NeverVad));
+    assert!(deaf.mic.audible_ms > 30_000, "{:?}", deaf.mic);
+    assert_eq!(deaf.mic.speech_ms, 0);
+    assert_eq!(
+        deaf.mic.regions, 0,
+        "nothing is sent because of the warning"
+    );
+    assert!(warnings.contains(&MeetingWarning::LittleSpeechHeard {
+        channel: Channel::Mic,
+        audible_ms: deaf.mic.audible_ms,
+        speech_ms: 0
+    }));
+
+    let (heard, warnings) = run(|| Box::new(EnergyVad(-50.0)));
+    assert_eq!(
+        heard.mic.audible_ms, deaf.mic.audible_ms,
+        "measured before any VAD"
+    );
+    assert!(heard.mic.speech_ms > 55_000, "{:?}", heard.mic);
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::LittleSpeechHeard { .. }))
+    );
+}
+
 /// Audio the capture ring dropped is reported as lost.
 #[test]
 fn ring_overruns_are_reported() {

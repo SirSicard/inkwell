@@ -39,7 +39,7 @@ use ink_core::{
 use crate::events::VoiceDetection;
 use crate::meeting::events::{ChannelPass, MeetingEvent, MeetingWarning, Phase};
 use crate::meeting::offline::{self, Pass, Stop};
-use crate::speech::{Region, RegionConfig, SpeechPass, VadSource};
+use crate::speech::{Region, RegionConfig, SpeechPass, VadSource, little_speech_heard};
 
 /// What an import calls.
 #[derive(Clone)]
@@ -300,6 +300,15 @@ fn import(
     }
     let detection = pass.detection();
     report.captured_ms = frames * 1_000 / u64::from(format.sample_rate);
+    report.audible_ms = pass.audible_ms();
+    report.speech_ms = pass.speech_ms();
+    if little_speech_heard(report.audible_ms, report.speech_ms) {
+        emit(MeetingEvent::Warning(MeetingWarning::LittleSpeechHeard {
+            channel: Channel::Mic,
+            audible_ms: report.audible_ms,
+            speech_ms: report.speech_ms,
+        }));
+    }
     let warnings = warnings.into_inner();
     if ink_core::store::word_count(&segments) == 0 {
         log::info!(

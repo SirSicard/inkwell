@@ -39,6 +39,16 @@
 //! silence nor stationary becomes speech. That can hand the engine non-speech; the shell shows
 //! voice detection as unavailable for as long as it lasts, as it does for dictation.
 //!
+//! # Audible time: a check on the VAD
+//!
+//! A pass also counts the time its audio stands above [`AUDIBLE_FLOOR_DBFS`], measured on the
+//! audio as it arrived (before any gain, so it does not depend on the VAD either).
+//! [`little_speech_heard`] compares it with the speech the VAD found: a VAD that hears under a tenth
+//! of what is clearly audible is more likely deaf (a model that is wrong, audio at the wrong rate)
+//! than listening to a quiet room. That is a diagnostic only: nothing is sent to an engine or
+//! dropped because of it. It cannot see a deaf VAD on quiet audio (a −60 dBFS talker is under the
+//! floor), which the gain stage's own tests cover.
+//!
 //! # Threads and memory
 //!
 //! **Worker.** A pass holds about one window and one region: at most two minutes of audio, never
@@ -48,7 +58,8 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use ink_audio::gain::{
-    GainOutcome, NOISE_FLOOR, apply_gain, gain_for, levels, provisional_gain, speech_levels,
+    GainOutcome, LEVEL_FRAME, NOISE_FLOOR, apply_gain, from_dbfs, gain_for, levels,
+    provisional_gain, rms, speech_levels,
 };
 use ink_audio::window::quietest_cut;
 use ink_audio::{
@@ -66,6 +77,22 @@ const SAMPLES_PER_MS: u64 = CANONICAL_RATE as u64 / 1_000;
 /// A sample position on a 16 kHz timeline, in ms.
 pub fn samples_to_ms(samples: u64) -> u64 {
     samples / SAMPLES_PER_MS
+}
+
+/// A 20 ms frame whose RMS is above this is "audible": 10 dB over the room floor of a real
+/// reading on a built-in mic (−50.6 dBFS, the gate's echo measurements), the same margin those
+/// measurements used to call a frame talking. On the AMI meeting fixture, 8.3 s of the mic's 30 s
+/// and 14.6 s of the far end's are above it, less than the speech a VAD finds there, so an
+/// ordinary meeting does not trip the check.
+pub const AUDIBLE_FLOOR_DBFS: f32 = -40.0;
+
+/// Audible time under which [`little_speech_heard`] says nothing: too little to judge a VAD on.
+pub const MIN_AUDIBLE_TO_JUDGE_MS: u64 = 30_000;
+
+/// Whether the VAD found suspiciously little speech: at least [`MIN_AUDIBLE_TO_JUDGE_MS`] of
+/// audible audio, and speech under a tenth of it. A diagnostic, never a decision.
+pub fn little_speech_heard(audible_ms: u64, speech_ms: u64) -> bool {
+    audible_ms >= MIN_AUDIBLE_TO_JUDGE_MS && speech_ms.saturating_mul(10) < audible_ms
 }
 
 /// Makes a fresh VAD instance. Each use (a live AGC per channel, a final pass, an import) needs its
@@ -168,6 +195,10 @@ pub struct SpeechPass {
     /// The VAD's error, once it failed; from then on the fallback levels every window.
     vad_error: Option<EngineError>,
     regions: RegionBuilder,
+    /// Samples in frames above [`AUDIBLE_FLOOR_DBFS`].
+    audible: u64,
+    /// Samples handed out as regions.
+    speech: u64,
 }
 
 impl SpeechPass {
@@ -179,7 +210,19 @@ impl SpeechPass {
             cfg,
             vad_error: None,
             regions: RegionBuilder::new(regions, cfg.edge_pad),
+            audible: 0,
+            speech: 0,
         })
+    }
+
+    /// Time the audio so far stood above [`AUDIBLE_FLOOR_DBFS`], ms.
+    pub fn audible_ms(&self) -> u64 {
+        samples_to_ms(self.audible)
+    }
+
+    /// Time handed out as speech regions so far, ms.
+    pub fn speech_ms(&self) -> u64 {
+        samples_to_ms(self.speech)
     }
 
     /// Whether windows are being judged by a VAD.
@@ -199,19 +242,33 @@ impl SpeechPass {
     /// Appends audio; regions that closed are appended to `out`.
     pub fn push(&mut self, audio: &[f32], out: &mut Vec<Region>) -> Result<(), WindowError> {
         self.windower.push(audio)?;
+        let from = out.len();
         self.drain(out);
+        self.count(&out[from..]);
         Ok(())
     }
 
     /// Ends the recording: the rest comes out.
     pub fn finish(&mut self, out: &mut Vec<Region>) {
         self.windower.finish();
+        let from = out.len();
         self.drain(out);
         self.regions.finish(out);
+        self.count(&out[from..]);
+    }
+
+    fn count(&mut self, regions: &[Region]) {
+        self.speech += regions.iter().map(|r| r.audio.len() as u64).sum::<u64>();
     }
 
     fn drain(&mut self, out: &mut Vec<Region>) {
+        let floor = from_dbfs(AUDIBLE_FLOOR_DBFS);
         while let Some((window, samples)) = self.windower.next_window() {
+            self.audible += samples
+                .chunks(LEVEL_FRAME)
+                .filter(|frame| rms(frame) > floor)
+                .map(|frame| frame.len() as u64)
+                .sum::<u64>();
             let speech = judge(&mut self.vad, &mut self.vad_error, &self.cfg, samples);
             let (gain, spans) = match speech {
                 Judged::Speech { gain, spans } => (gain, spans),
@@ -563,6 +620,50 @@ mod tests {
         window(&mut b, 5_000, &[], &mut out);
         assert!(out.is_empty());
         assert_eq!(b.buf.len(), 20);
+    }
+
+    #[test]
+    fn audible_time_counts_frames_above_the_floor_before_any_gain() {
+        let mut pass = SpeechPass::new(
+            Vad::Unavailable(VadUnavailable::ModelMissing),
+            VadConfig::default(),
+            RegionConfig::default(),
+        )
+        .unwrap();
+        // One second at −30 dBFS RMS (a square wave), one at −50, one of digital silence.
+        let level = |dbfs: f32| from_dbfs(dbfs);
+        let mut audio: Vec<f32> = (0..16_000)
+            .map(|i| {
+                if i % 2 == 0 {
+                    level(-30.0)
+                } else {
+                    -level(-30.0)
+                }
+            })
+            .collect();
+        audio.extend((0..16_000).map(|i| {
+            if i % 2 == 0 {
+                level(-50.0)
+            } else {
+                -level(-50.0)
+            }
+        }));
+        audio.extend(std::iter::repeat_n(0.0, 16_000));
+        let mut out = Vec::new();
+        pass.push(&audio, &mut out).unwrap();
+        pass.finish(&mut out);
+        assert_eq!(pass.audible_ms(), 1_000);
+        assert_eq!(
+            pass.speech_ms(),
+            out.iter().map(|r| r.audio.len() as u64 / 16).sum::<u64>()
+        );
+    }
+
+    #[test]
+    fn little_speech_is_judged_only_on_enough_audible_time() {
+        assert!(little_speech_heard(30_000, 2_999));
+        assert!(!little_speech_heard(30_000, 3_000));
+        assert!(!little_speech_heard(29_999, 0), "too little to judge");
     }
 
     #[test]

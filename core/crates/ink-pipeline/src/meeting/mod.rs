@@ -55,7 +55,7 @@ use self::live::{LiveChannel, Settled};
 use self::offline::{Pass, SideRead, Stop};
 use crate::capture::SideSummary;
 use crate::redact::Spoken;
-use crate::speech::{Region, RegionConfig, SpeechPass, VadSource};
+use crate::speech::{Region, RegionConfig, SpeechPass, VadSource, little_speech_heard};
 
 /// What the chain calls.
 #[derive(Clone)]
@@ -535,6 +535,20 @@ impl EndedMeeting {
             self.core.written[usize::from(channel == Channel::Far)].map(|w| w.chunks);
         report.chunks = read.chunks;
         report.captured_ms = read.captured_ms;
+        report.audible_ms = read.audible_ms;
+        report.speech_ms = read.speech_ms;
+        if little_speech_heard(read.audible_ms, read.speech_ms) {
+            log::warn!(
+                "meeting final pass: the {channel:?} side was audible for {} ms and the VAD found {} ms of speech",
+                read.audible_ms,
+                read.speech_ms
+            );
+            self.core.warn(MeetingWarning::LittleSpeechHeard {
+                channel,
+                audible_ms: read.audible_ms,
+                speech_ms: read.speech_ms,
+            });
+        }
         if read.chunks == 0 {
             log::warn!("meeting final pass: the {channel:?} side has no recorded audio at all");
             self.core.warn(MeetingWarning::NothingCaptured { channel });
