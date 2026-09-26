@@ -1,0 +1,78 @@
+---
+// The five models, measured. The ink stays the voice (it only appears in the hero); the figures here
+// carry plain meters on a shared zero baseline per column, so the rows compare at a glance.
+import { MODELS, SECONDS_SCALE_MAX, SHERPA_ONNX_URL, WER_SCALE_MAX } from '../lib/constants';
+
+const pct = (v: number, max: number) => `${((v / max) * 100).toFixed(1)}%`;
+---
+
+<section class="models wrap" id="models" aria-labelledby="models-title">
+  <div class="section-head">
+    <h2 id="models-title">Five models, measured rather than quoted.</h2>
+    <p class="section-intro">
+      All five run on your CPU through <a href={SHERPA_ONNX_URL}>sherpa-onnx</a>. None ships inside the
+      installer: each downloads from Hugging Face the first time you pick it, and after that it needs no
+      internet. Parakeet V3 is the default.
+    </p>
+  </div>
+
+  <table class="model-table" role="table">
+    <caption class="sr-only">
+      The five speech recognition models in Inkwell, sorted by measured word error rate, lowest first.
+    </caption>
+    <thead role="rowgroup">
+      <tr role="row">
+        <th scope="col" role="columnheader">Model</th>
+        <th scope="col" role="columnheader">Word error rate<span class="th-note">lower is better</span></th>
+        <th scope="col" role="columnheader">Time for 57&nbsp;s of audio</th>
+        <th scope="col" role="columnheader">Download</th>
+        <th scope="col" role="columnheader">Languages</th>
+        <th scope="col" role="columnheader">Pick it when</th>
+      </tr>
+    </thead>
+    <tbody role="rowgroup">
+      {
+        MODELS.map((m) => (
+          <tr role="row">
+            <th scope="row" role="rowheader" class="c-name">
+              <span class="model-name">{m.name}</span>
+              <span class="model-maker">{m.maker}</span>
+            </th>
+            <td role="cell" class="c-wer">
+              <span class="figure">
+                {m.wer.toFixed(1)}%<span class="m-only"> word error rate</span>
+              </span>
+              <span class="meter" aria-hidden="true">
+                <span style={`--v: ${pct(m.wer, WER_SCALE_MAX)}`} />
+              </span>
+            </td>
+            <td role="cell" class="c-time">
+              <span class="figure">
+                {m.seconds.toFixed(1)}&nbsp;s<span class="m-only"> for 57&nbsp;s of audio</span>
+              </span>
+              <span class="meter" aria-hidden="true">
+                <span style={`--v: ${pct(m.seconds, SECONDS_SCALE_MAX)}`} />
+              </span>
+            </td>
+            <td role="cell" class="c-size num">
+              {m.mb}&nbsp;MB<span class="m-only"> download</span>
+            </td>
+            <td role="cell" class="c-langs">
+              <span class="m-only">Languages: </span>
+              {m.languages}
+            </td>
+            <td role="cell" class="c-when">{m.when}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+  <p class="scale-note" aria-hidden="true">Meters run from zero to {WER_SCALE_MAX}% and to {SECONDS_SCALE_MAX}&nbsp;s.</p>
+
+  <p class="footnote">
+    Word error rates are measured on eight recordings of one voice, scored against what was actually said,
+    with the tool in the repository. Eight clips is directional, not a benchmark, and your voice is not that
+    voice: measure your own with Save Debug Audio and the same tool. The times are for those same 57&nbsp;seconds of audio, on a Mac’s
+    CPU. The list is short on purpose. It was thirteen models, most of which lost on every axis at once.
+  </p>
+</section>

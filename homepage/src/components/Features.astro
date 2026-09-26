@@ -1,0 +1,183 @@
+---
+// What else it does, as the instrument's spec sheet: grouped definition lists, no cards. Facts come from
+// the README's "What it does", "Voice editing", "Getting a free API key" and "Not built" sections; the
+// Advanced Mode and clipboard lines were checked against the app source at the v0.2.9 tag.
+import { Image } from 'astro:assets';
+import modesPanel from '../assets/inkwell-modes-panel.png';
+import aiPanel from '../assets/inkwell-ai-panel.png';
+import { GROQ_CONSOLE_URL } from '../lib/constants';
+---
+
+<section class="features wrap" id="features" aria-labelledby="features-title">
+  <div class="section-head">
+    <h2 id="features-title">What else it does.</h2>
+    <p class="section-intro">
+      Everything here runs on your machine, apart from the two features that need your own API key. A fresh
+      install shows four tabs; the rest appear when you switch on Advanced Mode in General settings, so the
+      first run stays a hotkey and nothing else.
+    </p>
+  </div>
+
+  <div class="spec-group">
+    <h3>Dictation</h3>
+    <dl class="spec">
+      <div>
+        <dt>Anywhere you type</dt>
+        <dd>
+          A global hotkey, push to talk by default or toggle. Transcription starts when you let go, the text is pasted
+          into the focused app, and the text that was on your clipboard is put back. (An image on the
+          clipboard can’t be restored; it stays replaced.)
+        </dd>
+      </div>
+      <div>
+        <dt>Tray and overlay</dt>
+        <dd>
+          It lives in the tray, and the hotkey works with the window hidden. A small always-on-top overlay
+          shows when it is recording.
+        </dd>
+      </div>
+      <div>
+        <dt>Live preview</dt>
+        <dd>
+          Optional, off by default. The words appear on the overlay while you are still speaking. They come
+          from a second, faster model, so they are lowercase and unpunctuated; what gets pasted is made the
+          usual way. It costs a 73&nbsp;MB English download.
+        </dd>
+      </div>
+      <div>
+        <dt>Speech cleanup</dt>
+        <dd>“Um”, “uh” and immediate stutters are removed before the paste, without changing what the sentence says.</dd>
+      </div>
+      <div>
+        <dt>Voice commands</dt>
+        <dd>A wake word plus an action: “inkwell, scratch that”, “inkwell, formal mode”. Off until you switch them on.</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="spec-group">
+    <h3>How it writes</h3>
+    <dl class="spec">
+      <div class="spec-wide">
+        <dt>Modes</dt>
+        <dd>
+          A mode bundles a writing style, speech cleanup and AI polish, and switches itself on by the app you
+          are typing into: formal and polished in email, lowercase and unpunctuated in a terminal, without
+          touching a setting. The first mode whose app list matches wins; otherwise the default applies. On
+          macOS and Windows.
+        </dd>
+      </div>
+      <div>
+        <dt>Style</dt>
+        <dd>Formal, Casual or Relaxed. Sets capitalisation and punctuation without touching a model.</dd>
+      </div>
+      <div>
+        <dt>Dictionary</dt>
+        <dd>Fix the words your model keeps getting wrong. Case insensitive, matched on word boundaries.</dd>
+      </div>
+      <div>
+        <dt>Snippets</dt>
+        <dd>Trigger phrases expand to full text, with <code>{'{date}'}</code>, <code>{'{time}'}</code> and <code>{'{clipboard}'}</code> filled in.</dd>
+      </div>
+    </dl>
+    <figure class="shot">
+      <Image
+        src={modesPanel}
+        widths={[480, 720, 899]}
+        sizes="(min-width: 64rem) 34rem, 92vw"
+        alt="The Modes tab. A Default mode with Formal style, speech cleanup and AI polish on; a Casual mode for slack.exe, discord.exe and their macOS bundle identifiers; and a Relaxed mode for WhatsApp, Telegram, Signal and code editors."
+        loading="lazy"
+        decoding="async"
+      />
+      <figcaption>
+        The Modes tab. Apps are matched by executable name on Windows (<code>slack.exe</code>) and by bundle
+        identifier on macOS (<code>com.tinyspeck.slackmacgap</code>).
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="spec-group">
+    <h3>What it keeps</h3>
+    <dl class="spec">
+      <div>
+        <dt>History</dt>
+        <dd>
+          Every transcript, in a SQLite file on your machine: searchable, editable, and exported as TXT, SRT,
+          JSON or CSV. Nothing syncs.
+        </dd>
+      </div>
+      <div>
+        <dt>Files</dt>
+        <dd>Drag in audio or video (MP3, WAV, FLAC, OGG, M4A, MP4, MKV and more) and it is transcribed by the same local model.</dd>
+      </div>
+      <div>
+        <dt>Stats</dt>
+        <dd>
+          Words dictated, speaking time, streak, daily activity and model usage, computed from the history you
+          can see and delete, not from a hidden counter.
+        </dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="spec-group">
+    <div class="spec-label">
+      <h3>With your own key</h3>
+      <p>
+        Two features rewrite text, which is a language model’s job, so they need an API key. Dictation itself
+        never does, and never leaves your machine.
+      </p>
+    </div>
+    <dl class="spec">
+      <div class="spec-wide">
+        <dt>Voice editing</dt>
+        <dd>
+          Select text anywhere, hold the edit hotkey (<kbd>Cmd+Shift+E</kbd> on macOS, <kbd>Ctrl+Shift+E</kbd>
+          elsewhere), say what to change, and the rewrite replaces the selection: “make this shorter”, “fix the
+          grammar”, “turn this into bullet points”. Clear the hotkey in General to turn it off.
+        </dd>
+      </div>
+      <div>
+        <dt>AI polish</dt>
+        <dd>
+          Optional, off by default. Cleans up grammar and false starts. Your text, never the audio, goes from
+          your machine to OpenAI, Groq, Anthropic, OpenRouter or an OpenAI-compatible endpoint you run
+          yourself. The key stays in the OS keyring.
+        </dd>
+      </div>
+      <div>
+        <dt>A free key</dt>
+        <dd>
+          Groq’s free tier covers ordinary personal use and needs no credit card. Sign in at
+          <a href={GROQ_CONSOLE_URL}>console.groq.com</a>, create a key under API Keys and copy it (Groq shows
+          it once), then paste it into Inkwell’s AI tab. About two minutes.
+        </dd>
+      </div>
+    </dl>
+    <figure class="shot">
+      <Image
+        src={aiPanel}
+        widths={[480, 720, 899]}
+        sizes="(min-width: 64rem) 34rem, 92vw"
+        alt="The AI tab. AI Polish is switched on with no API key yet; the API Keys panel has Groq selected, marked free key, next to OpenAI, Anthropic and OpenRouter."
+        loading="lazy"
+        decoding="async"
+      />
+      <figcaption>The AI tab, with Groq selected and marked as a free key.</figcaption>
+    </figure>
+  </div>
+
+  <div class="spec-group">
+    <h3>What it does not do</h3>
+    <ul class="not-built">
+      <li>Speaker labels, meeting mode or calendar integration. Not planned.</li>
+      <li>GPU acceleration. Everything runs on the CPU.</li>
+      <li>Per-app modes on Linux, where the foreground app can’t be read.</li>
+      <li>A voice agent mode. It was removed in the rehaul; it targeted a gateway that no longer exists.</li>
+      <li>
+        Silence trimming before its model arrives. The voice-detection model downloads on first run; until it
+        has, dictation works, silence isn’t trimmed, and the app says so.
+      </li>
+    </ul>
+  </div>
+</section>

@@ -1,0 +1,100 @@
+---
+// What stays and every network call, from the README's Privacy section ("Every network call, listed").
+// The update check's contents are the README's words. Checked against the app at the v0.2.9 tag: the
+// check runs five seconds after launch with no setting to turn it off, the Silero model URL is the
+// sherpa-onnx GitHub release, and Save Debug Audio defaults to off.
+import { HUGGING_FACE_URL, UPDATER_HOST } from '../lib/constants';
+---
+
+<section class="privacy wrap" id="privacy" aria-labelledby="privacy-title">
+  <div class="section-head">
+    <h2 id="privacy-title">What it sends, all of it.</h2>
+    <p class="section-intro">
+      No account, no telemetry, no analytics, no crash reporting, and no server of this project’s that your
+      text passes through. Here is what stays, and every call that goes out.
+    </p>
+  </div>
+
+  <div class="spec-group">
+    <h3>Stays on this machine</h3>
+    <dl class="spec">
+      <div>
+        <dt>Your voice</dt>
+        <dd>
+          Captured, resampled and transcribed in memory by a model on your CPU. Never uploaded, and never
+          written to disk unless you switch on Save Debug Audio, a troubleshooting setting that is off by
+          default.
+        </dd>
+      </div>
+      <div>
+        <dt>Your transcripts</dt>
+        <dd>A SQLite file in the app’s data directory. Nothing syncs.</dd>
+      </div>
+      <div>
+        <dt>Your settings</dt>
+        <dd>Modes, snippets, dictionary and voice commands, as plain files on your disk.</dd>
+      </div>
+      <div>
+        <dt>Your API key</dt>
+        <dd>
+          If you add one, it lives in the OS keyring (the macOS Keychain, the Windows Credential Manager or the Secret Service on Linux),
+          never in a config file in plain text. A key an older build did write in plain text is stripped the
+          next time settings load.
+        </dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="spec-group is-table">
+    <h3 id="calls-title">Every network call</h3>
+    <div class="ledger-wrap">
+      <table class="ledger" role="table" aria-labelledby="calls-title">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th scope="col" role="columnheader">Call</th>
+            <th scope="col" role="columnheader">Goes to</th>
+            <th scope="col" role="columnheader">When</th>
+            <th scope="col" role="columnheader">What it carries</th>
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          <tr role="row">
+            <th scope="row" role="rowheader">Speech model download</th>
+            <td role="cell"><span class="m-only">Goes to</span><a href={HUGGING_FACE_URL}>Hugging Face</a></td>
+            <td role="cell"><span class="m-only">When</span>The first time you pick a model</td>
+            <td role="cell"><span class="m-only">What it carries</span>A request for the model’s files</td>
+          </tr>
+          <tr role="row">
+            <th scope="row" role="rowheader">Voice-detection model download</th>
+            <td role="cell"><span class="m-only">Goes to</span>GitHub, the sherpa-onnx releases</td>
+            <td role="cell"><span class="m-only">When</span>On first run, if the Silero VAD model is missing</td>
+            <td role="cell"><span class="m-only">What it carries</span>A request for that one file</td>
+          </tr>
+          <tr role="row">
+            <th scope="row" role="rowheader">Update check</th>
+            <td role="cell"><span class="m-only">Goes to</span>The project’s own worker, <span class="host" translate="no" set:html={UPDATER_HOST.split('.').map((part) => `<span>${part}</span>`).join('.<wbr>')} /></td>
+            <td role="cell"><span class="m-only">When</span>Five seconds after every launch. There is no switch for it yet</td>
+            <td role="cell">
+              <span class="m-only">What it carries</span>The app version, OS target and CPU architecture. The worker
+              only reads the latest release record
+            </td>
+          </tr>
+          <tr role="row">
+            <th scope="row" role="rowheader">AI polish and voice editing</th>
+            <td role="cell">
+              <span class="m-only">Goes to</span>The provider whose key you added: OpenAI, Groq, Anthropic,
+              OpenRouter or your own endpoint
+            </td>
+            <td role="cell"><span class="m-only">When</span>Only while polish is on, or when you use voice editing</td>
+            <td role="cell"><span class="m-only">What it carries</span>Your text, never the audio, sent straight from your machine</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="after-ledger">
+      Without polish or voice editing, and with your models on disk, the update check is the only call left:
+      dictation works with the network unplugged. Earlier builds had a free proxy tier that routed polish through a
+      server the maintainer paid for. It is gone; your own key is the only path.
+    </p>
+  </div>
+</section>
