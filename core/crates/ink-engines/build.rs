@@ -163,6 +163,7 @@ fn link(dir: &Path, library: &Path) {
     let lib = dir.join("lib");
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=dylib=nemo_speech_asr_c");
+    println!("cargo:lib_dir={}", lib.display());
     // This package's own tests and examples find the library where it was installed. A shipped
     // app bundles it next to the binary and sets its own rpath.
     match env::var("CARGO_CFG_TARGET_OS") {

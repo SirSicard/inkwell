@@ -118,6 +118,12 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   the manifest the build script wrote (the commit and each library's SHA-256).
 - **In CI** the adapter is compiled and linted without the library (`INK_NEMO_CHECK_ONLY=1`); the
   tests that run it, and reproduce the diarizer's DER on AMI, run locally.
+- **Found at run time by rpath, never by `DYLD_LIBRARY_PATH`.** Test binaries: ink-engines
+  declares `links = "nemo_speech_asr_c"` and hands the library's directory to dependents' build
+  scripts; ink-engines gives its own binaries the rpath, and ink-pipeline's `build.rs` gives its
+  test binaries the same. The app bundle ships NeMo-Speech.cpp's libraries (which already find
+  each other through `@rpath`) in `Contents/Frameworks`, and the app binary gets an rpath to
+  them (`@executable_path/../Frameworks`).
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
   apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
