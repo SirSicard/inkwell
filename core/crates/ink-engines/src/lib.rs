@@ -21,6 +21,8 @@
 mod download;
 #[cfg(feature = "http")]
 mod http;
+#[cfg(feature = "engine-llama")]
+pub mod llama;
 mod model_dir;
 mod registry;
 mod residency;
