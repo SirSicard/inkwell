@@ -81,6 +81,27 @@ Later: `mac/` (Swift package: app, Apple engines, renderer, the core as an XCFra
 `windows/` (the WinUI 3 solution), `shaders/ink.wgsl` (one shader, translated by naga to MSL and
 HLSL), `schema/events.schema.json`, and `fixtures/` (synthetic and public-licensed audio only).
 
+### ggml: two copies, kept apart
+
+Two engines bring their own ggml, the tensor library under llama.cpp: llama.cpp (Qwen3-ASR and
+local chat models, the `engine-llama` feature) and NeMo-Speech.cpp (the diarizer). The versions
+are far apart: llama-cpp-sys-2 0.1.157 vendors ggml 0.24.0, and NeMo-Speech.cpp ships 0.12 as its
+own `libggml*` libraries. So they are **not** built against one shared ggml: each engine keeps the
+ggml it was measured with, and a llama.cpp update never drags the diarizer along.
+
+- llama.cpp and its ggml are linked **statically** into the core. The core loads no llama or ggml
+  library, so nothing of ours can collide with the diarizer's `libggml*` at load time.
+- The diarizer stays in its own shared library beside its own ggml, bound per library (the
+  two-level namespace on macOS, per-DLL imports on Windows). Its adapter calls only the diarizer's
+  C API and never links ggml by name: `-lggml` would bind to whichever ggml the linker meets first.
+- `core/crates/ink-engines/tests/ggml_link.rs` checks this on the linked binary: no engine library
+  is loaded, no `ggml_*`, `llama_*` or `mtmd_*` symbol is imported, llama.cpp's are all defined in
+  the core, and the ggml the core calls reports llama.cpp's version. With the diarizer's feature on,
+  it also shows the diarizer's library importing ggml from its own copy, and both copies answering
+  in one process.
+
+The cost is a second copy of ggml's code and a second Metal device setup.
+
 ## Threads
 
 Every trait method in `ink-core` names the thread it may run on

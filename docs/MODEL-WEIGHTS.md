@@ -18,7 +18,7 @@ registry in `ink-engines` holds each model's pinned revision, sha256 and size.
 
 | Job | Model | Runtime | Licence | Size (approx.) |
 |---|---|---|---|---|
-| Dictation final, meeting final | Qwen3-ASR 1.7B, Q8_0 GGUF plus the audio projector | llama.cpp | Apache-2.0 (from the Qwen model; the GGUF repository shows no tag, so confirm before adding the row) | 2.5 GB |
+| Dictation final, meeting final | Qwen3-ASR 1.7B, Q8_0 GGUF plus the audio projector | llama.cpp | Apache-2.0 (confirmed on the base model `Qwen/Qwen3-ASR-1.7B`'s card; the GGUF repository shows no tag) | 2.5 GB |
 | Live partials (Mac) | Parakeet TDT 0.6B v3, Core ML | FluidAudio | CC-BY-4.0 | registry |
 | Live partials (Windows) | Parakeet TDT 0.6B v3, int8 ONNX | sherpa-onnx | CC-BY-4.0 | registry |
 | Far-end diarization | Nemotron-3-Diarization, q8_0 | NeMo-Speech.cpp | OpenMDW-1.1 | 0.11 GB |
