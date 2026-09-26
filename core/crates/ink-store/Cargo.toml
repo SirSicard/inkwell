@@ -10,3 +10,15 @@ publish.workspace = true
 
 [dependencies]
 ink-core.workspace = true
+# `bundled` compiles SQLite in (libsqlite3-sys, MIT; SQLite itself is public domain), so FTS5 is
+# present on every OS and no system SQLite version is assumed. Default features are off: `cache`
+# would add hashlink for a statement cache this store does not need, and the other default only
+# matters on wasm.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+# Ids are UUID v4 text. The random bytes come from getrandom directly because uuid's own `v4`
+# constructor panics when the OS random source fails; here that is an error the caller sees.
+getrandom = { version = "0.4.3", default-features = false }
+uuid = { version = "1.24.0", default-features = false }
+
+[dev-dependencies]
+ink-core = { workspace = true, features = ["mock"] }
