@@ -210,4 +210,4 @@ Status: Windows builds up to v0.2.9 are not signed yet.
 
 ## Credits
 
-Built by [Mattias Hjemgaard](https://mattiasherzig.com). Originally based on [Handy](https://github.com/cjpais/Handy) by CJ Pais. Powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [Tauri](https://tauri.app) and [Silero VAD](https://github.com/snakers4/silero-vad).
+Built by [Mattias Hjemgaard](https://github.com/SirSicard). Originally based on [Handy](https://github.com/cjpais/Handy) by CJ Pais. Powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [Tauri](https://tauri.app) and [Silero VAD](https://github.com/snakers4/silero-vad).
