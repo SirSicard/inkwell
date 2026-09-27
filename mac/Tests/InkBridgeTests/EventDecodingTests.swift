@@ -42,6 +42,49 @@ final class EventDecodingTests: XCTestCase {
         }
     }
 
+    func testTheEchoEventsDecode() throws {
+        let found = try decode(
+            #"{"type":"meeting.echo","record":"r1","state":"cancelling","from_ms":10000,"unprotected_ms":10000,"stable_from_ms":7000,"delay_ms":-4.5,"drift_ppm":1.63}"#
+        )
+        guard case .meetingEcho(let echo) = found else {
+            return XCTFail("\(found)")
+        }
+        XCTAssertEqual(echo.state, .cancelling)
+        XCTAssertEqual(echo.unprotectedMs, 10000)
+        XCTAssertEqual(echo.delayMs, -4.5)
+
+        let failed = try decode(
+            #"{"type":"meeting.echo","record":"r1","state":"failed","failure":"backlog","channel":"far"}"#)
+        guard case .meetingEcho(let why) = failed else {
+            return XCTFail("\(failed)")
+        }
+        XCTAssertEqual(why.failure, .backlog)
+        XCTAssertEqual(why.channel, .far)
+
+        let pass = try decode(
+            #"{"type":"meeting.echo_pass","record":"r1","path":{"delay_ms":46.04,"drift_ppm":1.63,"inliers":64},"windows":81,"candidates":72,"cancelled":true,"erle_db":26,"removed":1,"kept_near_speech":0,"kept_no_evidence":0,"live_echo_finals":2}"#
+        )
+        guard case .meetingEchoPass(let p) = pass else {
+            return XCTFail("\(pass)")
+        }
+        XCTAssertEqual(p.path?.inliers, 64)
+        XCTAssertNil(p.erleFirstDb)
+        XCTAssertEqual(p.liveEchoFinals, 2)
+
+        // The removed lines come by place and span: no words.
+        let removed = try decode(
+            #"{"type":"meeting.removed_as_echo","record":"r1","lines":[{"index":0,"start_ms":19700,"end_ms":20500,"far":[{"start_ms":19550,"end_ms":20550}],"words":6,"matched":6}]}"#
+        )
+        guard case .meetingRemovedAsEcho(let lines) = removed else {
+            return XCTFail("\(removed)")
+        }
+        XCTAssertEqual(lines.lines.first?.index, 0)
+        XCTAssertEqual(lines.lines.first?.far.first?.startMs, 19550)
+        for event in [found, failed, pass, removed] {
+            XCTAssertEqual(try InkEvent.decode(JSONEncoder().encode(event)), event)
+        }
+    }
+
     func testJSONWithoutATypeStillThrows() {
         XCTAssertThrowsError(try decode(#"{"abi":1}"#))
     }

@@ -11,7 +11,10 @@ use ink_core::{Channel, InsertOutcome, Job, RecordId};
 use ink_pipeline::events::{
     DictationEvent, Discard, TakeFailure, VadUnavailable, VoiceDetection, Warning,
 };
-use ink_pipeline::meeting::events::{ChannelPass, KeptLive, MeetingEvent, MeetingWarning, Phase};
+use ink_pipeline::meeting::events::{
+    ChannelPass, EchoFailure, EchoPass, EchoSearch, EchoState, KeptLive, MeetingEvent,
+    MeetingWarning, Phase, RemovedEcho,
+};
 use ink_pipeline::meeting::watchdog::SideState;
 use ink_pipeline::voicecommand::{CommandAction, RiskLevel};
 use serde_json::{Map, Value, json};
@@ -261,6 +264,122 @@ fn event_fields(fields: &[(&str, Option<Value>)]) -> Value {
     Value::Object(map)
 }
 
+fn echo_search(why: EchoSearch) -> &'static str {
+    match why {
+        EchoSearch::Start => "start",
+        EchoSearch::DeviceSwitch => "device_switch",
+        EchoSearch::AfterFailure => "after_failure",
+    }
+}
+
+/// An echo failure's name, and the side that ran ahead for a backlog.
+fn echo_failure(f: EchoFailure) -> [(&'static str, Option<Value>); 2] {
+    match f {
+        EchoFailure::Backlog { ahead } => [
+            ("failure", some("backlog")),
+            ("channel", some(channel(ahead))),
+        ],
+        EchoFailure::BadAlignment => [("failure", some("bad_alignment")), ("channel", None)],
+        EchoFailure::Internal => [("failure", some("internal")), ("channel", None)],
+    }
+}
+
+/// A measured number: omitted when it is not finite (JSON has no NaN), and a level in dB to
+/// hundredths.
+fn number(x: f64) -> Option<Value> {
+    x.is_finite().then(|| Value::from(x))
+}
+
+fn db(x: f32) -> Option<Value> {
+    number((f64::from(x) * 100.0).round() / 100.0)
+}
+
+/// `meeting.echo`'s fields for one state.
+fn echo_state(s: &EchoState) -> Vec<(&'static str, Option<Value>)> {
+    let state = |name: &'static str| ("state", some(name));
+    match *s {
+        EchoState::Searching { since_ms, why } => vec![
+            state("searching"),
+            ("since_ms", some(since_ms)),
+            ("why", some(echo_search(why))),
+        ],
+        EchoState::Cancelling {
+            from_ms,
+            unprotected_ms,
+            stable_from_ms,
+            delay_ms,
+            drift_ppm,
+        } => vec![
+            state("cancelling"),
+            ("from_ms", some(from_ms)),
+            ("unprotected_ms", some(unprotected_ms)),
+            ("stable_from_ms", stable_from_ms.map(Value::from)),
+            ("delay_ms", number(delay_ms)),
+            ("drift_ppm", number(drift_ppm)),
+        ],
+        EchoState::Degraded { erle_db } => vec![state("degraded"), ("erle_db", db(erle_db))],
+        EchoState::Failed(f) => [vec![state("failed")], echo_failure(f).to_vec()].concat(),
+        EchoState::FoundAtEnd {
+            unprotected_ms,
+            stable_from_ms,
+        } => vec![
+            state("found_at_end"),
+            ("unprotected_ms", some(unprotected_ms)),
+            ("stable_from_ms", stable_from_ms.map(Value::from)),
+        ],
+    }
+}
+
+fn echo_pass(p: &EchoPass) -> Vec<(&'static str, Option<Value>)> {
+    let path = p.path.map(|path| {
+        event_fields(&[
+            ("delay_ms", number(path.delay_ms)),
+            ("drift_ppm", number(path.drift_ppm)),
+            ("inliers", some(path.inliers)),
+            ("stable_from_ms", path.stable_from_ms.map(Value::from)),
+        ])
+    });
+    vec![
+        ("path", path),
+        ("windows", some(p.windows)),
+        ("candidates", some(p.candidates)),
+        ("cancelled", some(p.cancelled)),
+        ("erle_first_db", p.erle_first_db.and_then(db)),
+        ("erle_db", p.erle_db.and_then(db)),
+        ("linear_erle_db", p.linear_erle_db.and_then(db)),
+        ("removed", some(p.removed)),
+        ("kept_near_speech", some(p.kept_near_speech)),
+        ("kept_no_evidence", some(p.kept_no_evidence)),
+        ("live_echo_finals", some(p.live_echo_finals)),
+    ]
+}
+
+/// The lines removed as echo, by their place in the record's removed lines (the store keeps them
+/// in this order, by start time) and their spans: never their words, which stay in the store.
+fn removed_lines(lines: &[RemovedEcho]) -> Value {
+    Value::Array(
+        lines
+            .iter()
+            .enumerate()
+            .map(|(index, l)| {
+                let far = l
+                    .far
+                    .iter()
+                    .map(|f| json!({"start_ms": f.start_ms, "end_ms": f.end_ms}))
+                    .collect::<Vec<_>>();
+                event_fields(&[
+                    ("index", some(index)),
+                    ("start_ms", some(l.start_ms)),
+                    ("end_ms", some(l.end_ms)),
+                    ("far", some(far)),
+                    ("words", some(l.words)),
+                    ("matched", some(l.matched)),
+                ])
+            })
+            .collect(),
+    )
+}
+
 /// The fields of `meeting.warning` for one warning: its kind, then what it carries.
 fn meeting_warning(w: &MeetingWarning) -> Vec<(&'static str, Option<Value>)> {
     let ch = |c: &Channel| ("channel", some(channel(*c)));
@@ -363,6 +482,26 @@ fn meeting_warning(w: &MeetingWarning) -> Vec<(&'static str, Option<Value>)> {
         MeetingWarning::CommitmentsFailed(e) => {
             vec![kind("commitments_failed"), msg(e.to_string())]
         }
+        MeetingWarning::EchoOnlyFinal { start_ms, end_ms } => [
+            vec![kind("echo_only_final"), ("channel", some("mic"))],
+            span(start_ms, end_ms).to_vec(),
+        ]
+        .concat(),
+        MeetingWarning::EchoGateVadFailed(e) => vec![
+            kind("echo_gate_vad_failed"),
+            ("channel", some("mic")),
+            ("phase", some("live")),
+            msg(e.to_string()),
+        ],
+        MeetingWarning::EchoFailed(f) => {
+            let mut fields = vec![kind("echo_failed"), ("phase", some("final"))];
+            fields.extend(echo_failure(*f));
+            // A backlog names the side that ran ahead; otherwise it is the mic's pass.
+            if !matches!(f, EchoFailure::Backlog { .. }) {
+                fields.push(("channel", some("mic")));
+            }
+            fields
+        }
         _ => vec![kind(unmapped("meeting warning"))],
     }
 }
@@ -436,6 +575,16 @@ pub fn meeting(record: &RecordId, e: &MeetingEvent) -> Value {
                 ("attributed", some(d.attributed)),
             ],
         ),
+        MeetingEvent::Echo(state) => {
+            event("meeting.echo", &[vec![rec], echo_state(state)].concat())
+        }
+        MeetingEvent::EchoPass(p) => {
+            event("meeting.echo_pass", &[vec![rec], echo_pass(p)].concat())
+        }
+        MeetingEvent::RemovedAsEcho(lines) => event(
+            "meeting.removed_as_echo",
+            &[rec, ("lines", Some(removed_lines(lines)))],
+        ),
         MeetingEvent::Superseded { revision } => {
             event("meeting.superseded", &[rec, ("revision", some(*revision))])
         }
@@ -493,7 +642,7 @@ pub fn ready() -> Value {
 mod tests {
     use ink_core::{EngineError, LlmError, PlatformError, StoreError};
     use ink_pipeline::capture::CaptureIssue;
-    use ink_pipeline::meeting::events::Diarization;
+    use ink_pipeline::meeting::events::{Diarization, EchoPath, FarLine};
     use ink_pipeline::redact::Spoken;
 
     use super::*;
@@ -602,6 +751,15 @@ mod tests {
             MeetingWarning::ClockWentBack,
             MeetingWarning::SummaryUnavailable,
             MeetingWarning::CommitmentsFailed(LlmError::Cancelled),
+            MeetingWarning::EchoOnlyFinal {
+                start_ms: 2_000,
+                end_ms: 4_000,
+            },
+            MeetingWarning::EchoGateVadFailed(e()),
+            MeetingWarning::EchoFailed(EchoFailure::Backlog {
+                ahead: Channel::Far,
+            }),
+            MeetingWarning::EchoFailed(EchoFailure::Internal),
         ];
         let mut meeting_events = vec![
             MeetingEvent::Started {
@@ -643,6 +801,44 @@ mod tests {
             },
             MeetingEvent::Finished { revision: Some(2) },
             MeetingEvent::Finished { revision: None },
+            MeetingEvent::Echo(EchoState::Searching {
+                since_ms: 0,
+                why: EchoSearch::Start,
+            }),
+            MeetingEvent::Echo(EchoState::Searching {
+                since_ms: 25_000,
+                why: EchoSearch::DeviceSwitch,
+            }),
+            MeetingEvent::Echo(EchoState::Searching {
+                since_ms: 30_000,
+                why: EchoSearch::AfterFailure,
+            }),
+            MeetingEvent::Echo(EchoState::Cancelling {
+                from_ms: 10_000,
+                unprotected_ms: 10_000,
+                stable_from_ms: Some(7_000),
+                delay_ms: -4.5,
+                drift_ppm: 1.6,
+            }),
+            MeetingEvent::Echo(EchoState::Cancelling {
+                from_ms: 30_000,
+                unprotected_ms: 0,
+                stable_from_ms: None,
+                delay_ms: 46.0,
+                drift_ppm: 0.0,
+            }),
+            MeetingEvent::Echo(EchoState::Degraded { erle_db: -1.5 }),
+            MeetingEvent::Echo(EchoState::Failed(EchoFailure::Backlog {
+                ahead: Channel::Mic,
+            })),
+            MeetingEvent::Echo(EchoState::Failed(EchoFailure::BadAlignment)),
+            MeetingEvent::Echo(EchoState::FoundAtEnd {
+                unprotected_ms: 45_000,
+                stable_from_ms: Some(9_000),
+            }),
+            MeetingEvent::EchoPass(EchoPass::default()),
+            MeetingEvent::EchoPass(echo_pass()),
+            MeetingEvent::RemovedAsEcho(vec![removed_line()]),
         ];
         meeting_events.extend(warnings.into_iter().map(MeetingEvent::Warning));
         all.extend(meeting_events.iter().map(|m| meeting(&record, m)));
@@ -651,5 +847,105 @@ mod tests {
                 panic!("{v} does not match the schema: {e}");
             }
         }
+    }
+
+    fn echo_pass() -> EchoPass {
+        EchoPass {
+            path: Some(EchoPath {
+                delay_ms: 46.04,
+                drift_ppm: 1.63,
+                inliers: 64,
+                stable_from_ms: Some(7_000),
+            }),
+            windows: 81,
+            candidates: 72,
+            cancelled: true,
+            erle_first_db: Some(25.75),
+            erle_db: Some(26.0),
+            linear_erle_db: Some(11.5),
+            removed: 1,
+            kept_near_speech: 2,
+            kept_no_evidence: 0,
+            live_echo_finals: 3,
+        }
+    }
+
+    fn removed_line() -> RemovedEcho {
+        RemovedEcho {
+            start_ms: 19_700,
+            end_ms: 20_500,
+            text: Spoken::new("the budget is due on friday"),
+            far: vec![FarLine {
+                start_ms: 19_550,
+                end_ms: 20_550,
+            }],
+            words: 6,
+            matched: 6,
+        }
+    }
+
+    #[test]
+    fn the_echo_state_and_pass_reach_the_shell_field_by_field() {
+        let record = RecordId("r1".into());
+        let found = meeting(
+            &record,
+            &MeetingEvent::Echo(EchoState::Cancelling {
+                from_ms: 10_000,
+                unprotected_ms: 10_000,
+                stable_from_ms: Some(7_000),
+                delay_ms: 46.5,
+                drift_ppm: 1.5,
+            }),
+        );
+        assert_eq!(
+            found,
+            json!({"type": "meeting.echo", "record": "r1", "state": "cancelling",
+                   "from_ms": 10_000, "unprotected_ms": 10_000, "stable_from_ms": 7_000,
+                   "delay_ms": 46.5, "drift_ppm": 1.5})
+        );
+        let failed = meeting(
+            &record,
+            &MeetingEvent::Echo(EchoState::Failed(EchoFailure::Backlog {
+                ahead: Channel::Far,
+            })),
+        );
+        assert_eq!(
+            failed,
+            json!({"type": "meeting.echo", "record": "r1", "state": "failed",
+                   "failure": "backlog", "channel": "far"})
+        );
+        let pass = meeting(&record, &MeetingEvent::EchoPass(echo_pass()));
+        assert_eq!(pass["type"], "meeting.echo_pass");
+        assert_eq!(pass["path"]["delay_ms"], 46.04);
+        assert_eq!(pass["live_echo_finals"], 3);
+        let none = meeting(&record, &MeetingEvent::EchoPass(EchoPass::default()));
+        assert!(
+            none.get("path").is_none() && none.get("erle_db").is_none(),
+            "{none}"
+        );
+    }
+
+    /// The lines removed as echo go to the shell as their place in the record's removed list and
+    /// their spans; the words stay in the store (`Store::removed`).
+    #[test]
+    fn lines_removed_as_echo_reach_the_shell_without_their_words() {
+        let record = RecordId("r1".into());
+        let mut second = removed_line();
+        second.start_ms = 30_000;
+        second.end_ms = 31_000;
+        let v = meeting(
+            &record,
+            &MeetingEvent::RemovedAsEcho(vec![removed_line(), second]),
+        );
+        assert_eq!(
+            v,
+            json!({"type": "meeting.removed_as_echo", "record": "r1", "lines": [
+                {"index": 0, "start_ms": 19_700, "end_ms": 20_500,
+                 "far": [{"start_ms": 19_550, "end_ms": 20_550}], "words": 6, "matched": 6},
+                {"index": 1, "start_ms": 30_000, "end_ms": 31_000,
+                 "far": [{"start_ms": 19_550, "end_ms": 20_550}], "words": 6, "matched": 6},
+            ]})
+        );
+        assert!(!v.to_string().contains("budget"));
     }
 }

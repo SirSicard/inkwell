@@ -71,6 +71,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case meetingTranscribed(MeetingTranscribed)
     /// `meeting.diarized`
     case meetingDiarized(MeetingDiarized)
+    /// `meeting.echo`
+    case meetingEcho(MeetingEcho)
+    /// `meeting.echo_pass`
+    case meetingEchoPass(MeetingEchoPass)
+    /// `meeting.removed_as_echo`
+    case meetingRemovedAsEcho(MeetingRemovedAsEcho)
     /// `meeting.superseded`
     case meetingSuperseded(MeetingSuperseded)
     /// `meeting.kept_live`
@@ -141,6 +147,9 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "meeting.stopped": self = .meetingStopped(try MeetingStopped(from: decoder))
             case "meeting.transcribed": self = .meetingTranscribed(try MeetingTranscribed(from: decoder))
             case "meeting.diarized": self = .meetingDiarized(try MeetingDiarized(from: decoder))
+            case "meeting.echo": self = .meetingEcho(try MeetingEcho(from: decoder))
+            case "meeting.echo_pass": self = .meetingEchoPass(try MeetingEchoPass(from: decoder))
+            case "meeting.removed_as_echo": self = .meetingRemovedAsEcho(try MeetingRemovedAsEcho(from: decoder))
             case "meeting.superseded": self = .meetingSuperseded(try MeetingSuperseded(from: decoder))
             case "meeting.kept_live": self = .meetingKeptLive(try MeetingKeptLive(from: decoder))
             case "meeting.summarized": self = .meetingSummarized(try MeetingSummarized(from: decoder))
@@ -189,6 +198,9 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .meetingStopped(let event): try event.encode(to: encoder)
         case .meetingTranscribed(let event): try event.encode(to: encoder)
         case .meetingDiarized(let event): try event.encode(to: encoder)
+        case .meetingEcho(let event): try event.encode(to: encoder)
+        case .meetingEchoPass(let event): try event.encode(to: encoder)
+        case .meetingRemovedAsEcho(let event): try event.encode(to: encoder)
         case .meetingSuperseded(let event): try event.encode(to: encoder)
         case .meetingKeptLive(let event): try event.encode(to: encoder)
         case .meetingSummarized(let event): try event.encode(to: encoder)
@@ -461,6 +473,69 @@ public enum Discard: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
+/// Why echo cancellation stopped: backlog (one side ran more than 10 s ahead of the other;
+/// channel says which), bad_alignment (a path no canceller follows), internal (a bug inside the
+/// core, reported rather than hidden).
+public enum EchoFailure: String, Codable, Sendable, Equatable, CaseIterable {
+    case backlog
+    case badAlignment = "bad_alignment"
+    case `internal`
+}
+
+/// The echo path the final pass fitted over the whole recording.
+public struct EchoPath: Codable, Sendable, Equatable {
+    /// How late the mic hears the far end at the start, ms.
+    public let delayMs: Double
+    /// How fast the mic's clock runs against the far end's, ppm.
+    public let driftPpm: Double
+    /// Windows on the path.
+    public let inliers: Int64
+    /// Where the windows first supported it, ms into the meeting.
+    public let stableFromMs: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case delayMs = "delay_ms"
+        case driftPpm = "drift_ppm"
+        case inliers
+        case stableFromMs = "stable_from_ms"
+    }
+}
+
+/// Why the live echo search (re)started: the meeting started, the capture's device changed (a
+/// new device is a new echo path), or cancellation failed.
+public enum EchoSearch: String, Codable, Sendable, Equatable, CaseIterable {
+    case start
+    case deviceSwitch = "device_switch"
+    case afterFailure = "after_failure"
+}
+
+/// A stretch of the meeting.
+public struct EchoSpan: Codable, Sendable, Equatable {
+    /// Its end.
+    public let endMs: Int64
+    /// Its start, ms into the meeting.
+    public let startMs: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case endMs = "end_ms"
+        case startMs = "start_ms"
+    }
+}
+
+/// Whether the live mic is protected from the far end's echo. searching: no echo path yet, the
+/// mic reaches the live transcript as captured (unprotected; with earbuds there is none to
+/// find); cancelling: a path was found, the live you transcript hears the cancelled mic behind
+/// the echo gate; degraded: cancelling, but the linear stage takes almost no echo off; failed:
+/// cancellation stopped, and the search starts again; found_at_end: at the end, the search that
+/// was still running found a path, so the mic went unprotected throughout it.
+public enum EchoState: String, Codable, Sendable, Equatable, CaseIterable {
+    case searching
+    case cancelling
+    case degraded
+    case failed
+    case foundAtEnd = "found_at_end"
+}
+
 /// An engine the shell registered is in the router.
 public struct EngineRegistered: Codable, Sendable, Equatable {
     /// Its id.
@@ -560,6 +635,102 @@ public struct MeetingDiarized: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// Whether the live mic is protected from echo, when it changes. Which fields are present
+/// depends on state.
+public struct MeetingEcho: Codable, Sendable, Equatable {
+    /// The side that ran ahead, for a backlog.
+    public let channel: Channel?
+    /// How late the mic hears the far end, ms, for cancelling.
+    public let delayMs: Double?
+    /// How fast the mic's clock runs against the far end's, ppm, for cancelling.
+    public let driftPpm: Double?
+    /// The linear stage's echo return loss enhancement over the last 20 s of far-end audio, dB,
+    /// for degraded.
+    public let erleDb: Double?
+    /// What failed, for failed.
+    public let failure: EchoFailure?
+    /// Where cancellation began, ms into the meeting, for cancelling.
+    public let fromMs: Int64?
+    /// The meeting's record id.
+    public let record: String
+    /// Where the search began, ms into the meeting, for searching.
+    public let sinceMs: Int64?
+    /// Where the search's windows first supported the path, ms into the meeting, for cancelling
+    /// and found_at_end.
+    public let stableFromMs: Int64?
+    /// The state.
+    public let state: EchoState
+    /// Always `meeting.echo`.
+    public let type: String
+    /// How long the mic went uncancelled since the search began, ms, for cancelling (0 when
+    /// cancellation carries on along a better fit) and found_at_end.
+    public let unprotectedMs: Int64?
+    /// Why the search began, for searching.
+    public let why: EchoSearch?
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case delayMs = "delay_ms"
+        case driftPpm = "drift_ppm"
+        case erleDb = "erle_db"
+        case failure
+        case fromMs = "from_ms"
+        case record
+        case sinceMs = "since_ms"
+        case stableFromMs = "stable_from_ms"
+        case state
+        case type
+        case unprotectedMs = "unprotected_ms"
+        case why
+    }
+}
+
+/// What echo cancellation did in the final pass. Sent before the supersede.
+public struct MeetingEchoPass: Codable, Sendable, Equatable {
+    /// Whether the mic was cancelled (false: no path, or cancellation failed).
+    public let cancelled: Bool
+    /// Windows loud and clear enough to vote.
+    public let candidates: Int64
+    /// Echo return loss enhancement over far-end audio after that, dB.
+    public let erleDb: Double?
+    /// Echo return loss enhancement over the first 10 s of far-end audio, dB.
+    public let erleFirstDb: Double?
+    /// Lines that repeated the far end but were kept: the near end was heard over them.
+    public let keptNearSpeech: Int64
+    /// Lines that repeated the far end but were kept for want of acoustic evidence.
+    public let keptNoEvidence: Int64
+    /// The same for the linear output alone (what the you transcript hears), dB.
+    public let linearErleDb: Double?
+    /// Live you finals the pass judged to be echo; the supersede guard does not count them.
+    public let liveEchoFinals: Int64
+    /// The path, when the recording has one.
+    public let path: EchoPath?
+    /// The meeting's record id.
+    public let record: String
+    /// You lines removed as echo of the far end.
+    public let removed: Int64
+    /// Always `meeting.echo_pass`.
+    public let type: String
+    /// Windows analysed.
+    public let windows: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case cancelled
+        case candidates
+        case erleDb = "erle_db"
+        case erleFirstDb = "erle_first_db"
+        case keptNearSpeech = "kept_near_speech"
+        case keptNoEvidence = "kept_no_evidence"
+        case linearErleDb = "linear_erle_db"
+        case liveEchoFinals = "live_echo_finals"
+        case path
+        case record
+        case removed
+        case type
+        case windows
+    }
+}
+
 /// A meeting could not start, or its final pass stopped before replacing the live transcript
 /// (which then stands, and the pass can run again).
 public struct MeetingFailed: Codable, Sendable, Equatable {
@@ -639,6 +810,17 @@ public struct MeetingPartial: Codable, Sendable, Equatable {
     /// The hypothesis.
     public let text: String
     /// Always `meeting.partial`.
+    public let type: String
+}
+
+/// You lines the final pass removed as echo, by place and span only. Sent only when there are
+/// some, before the supersede.
+public struct MeetingRemovedAsEcho: Codable, Sendable, Equatable {
+    /// The lines, by start time.
+    public let lines: [RemovedEchoLine]
+    /// The meeting's record id.
+    public let record: String
+    /// Always `meeting.removed_as_echo`.
     public let type: String
 }
 
@@ -740,6 +922,9 @@ public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case summaryUnavailable = "summary_unavailable"
     case summaryFailed = "summary_failed"
     case commitmentsFailed = "commitments_failed"
+    case echoOnlyFinal = "echo_only_final"
+    case echoGateVadFailed = "echo_gate_vad_failed"
+    case echoFailed = "echo_failed"
     case other
 }
 
@@ -756,6 +941,8 @@ public struct MeetingWarningEvent: Codable, Sendable, Equatable {
     public let count: Int64?
     /// End of the stretch.
     public let endMs: Int64?
+    /// What failed, for echo_failed.
+    public let failure: EchoFailure?
     /// Frames lost.
     public let frames: Int64?
     /// What.
@@ -781,6 +968,7 @@ public struct MeetingWarningEvent: Codable, Sendable, Equatable {
         case chunks
         case count
         case endMs = "end_ms"
+        case failure
         case frames
         case kind
         case message
@@ -881,6 +1069,33 @@ public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
 /// Why a job's model was refused.
 public enum Refusal: String, Codable, Sendable, Equatable, CaseIterable {
     case updating
+}
+
+/// A you line the final pass removed as echo of the far end. Its words are not here: the store
+/// keeps the line with the record, at index in its removed lines (by start time), so it can be
+/// put back.
+public struct RemovedEchoLine: Codable, Sendable, Equatable {
+    /// Its end.
+    public let endMs: Int64
+    /// The far-end lines whose words it matched, in time order.
+    public let far: [EchoSpan]
+    /// Its place in the record's removed lines.
+    public let index: Int64
+    /// How many of them matched the far end, in order.
+    public let matched: Int64
+    /// Its start, ms into the meeting.
+    public let startMs: Int64
+    /// Its words, normalised.
+    public let words: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case endMs = "end_ms"
+        case far
+        case index
+        case matched
+        case startMs = "start_ms"
+        case words
+    }
 }
 
 /// How much confirmation a voice command needs: safe runs at once, moderate gets a brief notice

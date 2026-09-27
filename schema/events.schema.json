@@ -98,6 +98,15 @@
       "$ref": "#/$defs/MeetingDiarized"
     },
     {
+      "$ref": "#/$defs/MeetingEcho"
+    },
+    {
+      "$ref": "#/$defs/MeetingEchoPass"
+    },
+    {
+      "$ref": "#/$defs/MeetingRemovedAsEcho"
+    },
+    {
       "$ref": "#/$defs/MeetingSuperseded"
     },
     {
@@ -286,6 +295,9 @@
         "summary_unavailable",
         "summary_failed",
         "commitments_failed",
+        "echo_only_final",
+        "echo_gate_vad_failed",
+        "echo_failed",
         "other"
       ]
     },
@@ -1108,6 +1120,10 @@
         "message": {
           "type": "string",
           "description": "The error, where there was one. Never the meeting's words."
+        },
+        "failure": {
+          "$ref": "#/$defs/EchoFailure",
+          "description": "What failed, for echo_failed."
         }
       },
       "required": [
@@ -1196,6 +1212,303 @@
         "substantial",
         "labelled",
         "attributed"
+      ],
+      "additionalProperties": false
+    },
+    "EchoState": {
+      "type": "string",
+      "description": "Whether the live mic is protected from the far end's echo. searching: no echo path yet, the mic reaches the live transcript as captured (unprotected; with earbuds there is none to find); cancelling: a path was found, the live you transcript hears the cancelled mic behind the echo gate; degraded: cancelling, but the linear stage takes almost no echo off; failed: cancellation stopped, and the search starts again; found_at_end: at the end, the search that was still running found a path, so the mic went unprotected throughout it.",
+      "enum": [
+        "searching",
+        "cancelling",
+        "degraded",
+        "failed",
+        "found_at_end"
+      ]
+    },
+    "EchoSearch": {
+      "type": "string",
+      "description": "Why the live echo search (re)started: the meeting started, the capture's device changed (a new device is a new echo path), or cancellation failed.",
+      "enum": [
+        "start",
+        "device_switch",
+        "after_failure"
+      ]
+    },
+    "EchoFailure": {
+      "type": "string",
+      "description": "Why echo cancellation stopped: backlog (one side ran more than 10 s ahead of the other; channel says which), bad_alignment (a path no canceller follows), internal (a bug inside the core, reported rather than hidden).",
+      "enum": [
+        "backlog",
+        "bad_alignment",
+        "internal"
+      ]
+    },
+    "MeetingEcho": {
+      "type": "object",
+      "description": "Whether the live mic is protected from echo, when it changes. Which fields are present depends on state.",
+      "properties": {
+        "type": {
+          "const": "meeting.echo"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "state": {
+          "$ref": "#/$defs/EchoState",
+          "description": "The state."
+        },
+        "why": {
+          "$ref": "#/$defs/EchoSearch",
+          "description": "Why the search began, for searching."
+        },
+        "since_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where the search began, ms into the meeting, for searching."
+        },
+        "from_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where cancellation began, ms into the meeting, for cancelling."
+        },
+        "unprotected_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How long the mic went uncancelled since the search began, ms, for cancelling (0 when cancellation carries on along a better fit) and found_at_end."
+        },
+        "stable_from_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where the search's windows first supported the path, ms into the meeting, for cancelling and found_at_end."
+        },
+        "delay_ms": {
+          "type": "number",
+          "description": "How late the mic hears the far end, ms, for cancelling."
+        },
+        "drift_ppm": {
+          "type": "number",
+          "description": "How fast the mic's clock runs against the far end's, ppm, for cancelling."
+        },
+        "erle_db": {
+          "type": "number",
+          "description": "The linear stage's echo return loss enhancement over the last 20 s of far-end audio, dB, for degraded."
+        },
+        "failure": {
+          "$ref": "#/$defs/EchoFailure",
+          "description": "What failed, for failed."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "The side that ran ahead, for a backlog."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "EchoPath": {
+      "type": "object",
+      "description": "The echo path the final pass fitted over the whole recording.",
+      "properties": {
+        "delay_ms": {
+          "type": "number",
+          "description": "How late the mic hears the far end at the start, ms."
+        },
+        "drift_ppm": {
+          "type": "number",
+          "description": "How fast the mic's clock runs against the far end's, ppm."
+        },
+        "inliers": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Windows on the path."
+        },
+        "stable_from_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where the windows first supported it, ms into the meeting."
+        }
+      },
+      "required": [
+        "delay_ms",
+        "drift_ppm",
+        "inliers"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingEchoPass": {
+      "type": "object",
+      "description": "What echo cancellation did in the final pass. Sent before the supersede.",
+      "properties": {
+        "type": {
+          "const": "meeting.echo_pass"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "path": {
+          "$ref": "#/$defs/EchoPath",
+          "description": "The path, when the recording has one."
+        },
+        "windows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Windows analysed."
+        },
+        "candidates": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Windows loud and clear enough to vote."
+        },
+        "cancelled": {
+          "type": "boolean",
+          "description": "Whether the mic was cancelled (false: no path, or cancellation failed)."
+        },
+        "erle_first_db": {
+          "type": "number",
+          "description": "Echo return loss enhancement over the first 10 s of far-end audio, dB."
+        },
+        "erle_db": {
+          "type": "number",
+          "description": "Echo return loss enhancement over far-end audio after that, dB."
+        },
+        "linear_erle_db": {
+          "type": "number",
+          "description": "The same for the linear output alone (what the you transcript hears), dB."
+        },
+        "removed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "You lines removed as echo of the far end."
+        },
+        "kept_near_speech": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lines that repeated the far end but were kept: the near end was heard over them."
+        },
+        "kept_no_evidence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lines that repeated the far end but were kept for want of acoustic evidence."
+        },
+        "live_echo_finals": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Live you finals the pass judged to be echo; the supersede guard does not count them."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "windows",
+        "candidates",
+        "cancelled",
+        "removed",
+        "kept_near_speech",
+        "kept_no_evidence",
+        "live_echo_finals"
+      ],
+      "additionalProperties": false
+    },
+    "EchoSpan": {
+      "type": "object",
+      "description": "A stretch of the meeting.",
+      "properties": {
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its start, ms into the meeting."
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its end."
+        }
+      },
+      "required": [
+        "start_ms",
+        "end_ms"
+      ],
+      "additionalProperties": false
+    },
+    "RemovedEchoLine": {
+      "type": "object",
+      "description": "A you line the final pass removed as echo of the far end. Its words are not here: the store keeps the line with the record, at index in its removed lines (by start time), so it can be put back.",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its place in the record's removed lines."
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its start, ms into the meeting."
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its end."
+        },
+        "far": {
+          "type": "array",
+          "description": "The far-end lines whose words it matched, in time order.",
+          "items": {
+            "$ref": "#/$defs/EchoSpan",
+            "description": "A far-end line."
+          }
+        },
+        "words": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its words, normalised."
+        },
+        "matched": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many of them matched the far end, in order."
+        }
+      },
+      "required": [
+        "index",
+        "start_ms",
+        "end_ms",
+        "far",
+        "words",
+        "matched"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingRemovedAsEcho": {
+      "type": "object",
+      "description": "You lines the final pass removed as echo, by place and span only. Sent only when there are some, before the supersede.",
+      "properties": {
+        "type": {
+          "const": "meeting.removed_as_echo"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "lines": {
+          "type": "array",
+          "description": "The lines, by start time.",
+          "items": {
+            "$ref": "#/$defs/RemovedEchoLine",
+            "description": "A removed line."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "lines"
       ],
       "additionalProperties": false
     },
