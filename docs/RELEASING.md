@@ -18,14 +18,56 @@ a person publishes the draft. Installed apps read the feed of the latest publish
 
 | Job | Runs on | Holds | Does |
 |---|---|---|---|
-| `build` | tag and dry run | the `APPLE_*` secrets; read access | build, sign, notarize, staple, Gatekeeper check, the dmg as a run artifact |
+| `build` | tag and dry run | the `APPLE_*` secrets; read access | build the engines, then the app; sign, notarize, staple, Gatekeeper check, the dmg as a run artifact |
 | `appcast-rehearsal` | dry run only | nothing secret; read access | the appcast signed with a throwaway key, and checked |
 | `publish` | tag only | `SPARKLE_ED_PRIVATE_KEY` (environment `release`); write access | the appcast signed and checked against the app's key; the draft release |
 
 Everything a step does lives in a script under `mac/scripts/` that runs the same on a Mac:
-`build-mac.sh --timestamp`, `notarize.sh`, `package-dmg.sh`, `verify-release.sh`,
-`sparkle-tools.sh` and `appcast.sh` (with `appcast-check.swift`). Each prints nothing that names the
-signing identity (`lib/redact-signing.sh`).
+`build-core.sh`, `build-mac.sh --timestamp --engines`, `notarize.sh`, `package-dmg.sh`,
+`verify-release.sh`, `sparkle-tools.sh` and `appcast.sh` (with `appcast-check.swift`), and
+`core/crates/ink-engines/native/build-nemo-speech.sh`. Each prints nothing that names the signing
+identity (`lib/redact-signing.sh`).
+
+### The engines
+
+A release carries its speech engines: Qwen3-ASR on llama.cpp (the dictation and meeting finals),
+Silero VAD on tract, and Nemotron diarization of the far end on NeMo-Speech.cpp. Their model
+weights are never in the app: it downloads them when they are first needed
+([MODEL-WEIGHTS.md](MODEL-WEIGHTS.md)). `build-mac.sh --timestamp` refuses to build without
+`--engines`, and `--engines` refuses a core built with any other feature set.
+
+- **What ships where.** llama.cpp (with its ggml) and tract are linked into the core statically.
+  NeMo-Speech.cpp is a set of shared libraries with its own ggml, built from its pinned commit by
+  `build-nemo-speech.sh`, and goes in `Contents/Frameworks` with the SentencePiece and Abseil
+  libraries it loads, each signed like the app
+  ([ARCHITECTURE.md](ARCHITECTURE.md), "The diarizer's native library").
+- **Homebrew at build time only.** The workflow installs CMake, Ninja, SentencePiece and Abseil
+  from Homebrew. `build-nemo-speech.sh` copies the two libraries into its prefix and loads them by
+  `@rpath`, and `build-mac.sh` fails if any Mach-O in the app loads a path outside the bundle and
+  the OS, has an absolute rpath, or loads a library it cannot find inside the bundle. Their
+  versions are Homebrew's of the day; the workflow prints them, and the prefix's manifest names
+  each copy's source.
+- **Every Apple silicon Mac on macOS 26.** Both ggml copies are built with `GGML_NATIVE=OFF` and no
+  `-march`, the M1's instruction set: `build-core.sh` reads llama.cpp's value back from its CMake
+  cache, and ink-engines' `build.rs` refuses a NeMo prefix whose manifest does not record it.
+  Everything is built for macOS 26, and `build-mac.sh` fails on any Mach-O built for a newer one.
+  The workflow runs on `macos-26`, whose Homebrew builds for macOS 26; on a Mac running a newer
+  macOS, Homebrew's libraries are built for that one, so a local build of the engines needs
+  `INK_ALLOW_NEWER_MACOS=1` (a warning instead of a failure; `--timestamp` refuses it), and that
+  build will not start on macOS 26.
+- **The diarizer's source.** The workflow fetches NeMo-Speech.cpp at the commit
+  `build-nemo-speech.sh` pins, with its ggml submodule; the script checks both commits.
+
+The same build on a Mac with Homebrew (for a local check; the release is CI's):
+
+```bash
+brew install cmake ninja sentencepiece abseil
+commit="$(sed -n 's/^NEMO_COMMIT=//p' core/crates/ink-engines/native/build-nemo-speech.sh)"
+git clone https://github.com/NVIDIA/NeMo-Speech.cpp ~/src/NeMo-Speech.cpp
+git -C ~/src/NeMo-Speech.cpp checkout "$commit" && git -C ~/src/NeMo-Speech.cpp submodule update --init ggml
+core/crates/ink-engines/native/build-nemo-speech.sh ~/src/NeMo-Speech.cpp ~/nemo-speech
+NEMO_SPEECH_DIR=~/nemo-speech mac/scripts/build-mac.sh --engines
+```
 
 ### Once: the update key (the maintainer, by hand)
 
@@ -148,12 +190,18 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
   Neither trigger can come from a pull request, so no fork's code runs next to a secret.
 - **Pinned inputs.** Actions by commit; Sparkle's framework by URL and SHA-256 in `mac/Package.swift`
   (and in the Swift licence audit's vetted list); Sparkle's tools by size and SHA-256 in
-  `sparkle-tools.sh`. The release build restores no cache.
+  `sparkle-tools.sh`; llama.cpp by the exact `llama-cpp-2` version in `Cargo.lock`; NeMo-Speech.cpp
+  and its ggml by commit. Not pinned: SentencePiece and Abseil, Homebrew's current builds (printed
+  in the log). The release build restores no cache.
+- **Third-party build code runs before the key is there.** The engines (NeMo-Speech.cpp's CMake
+  build, the core's cargo build scripts) are built before the signing keychain is created, so no
+  build script ever runs next to an unlocked Developer ID key.
 - **No new entitlements.** The app is not sandboxed, so Sparkle installs through its `Autoupdate`
   tool and `Updater.app` as ordinary helpers and never starts its XPC services (they serve sandboxed
   apps, which opt in through Info.plist). `build-mac.sh` signs all of Sparkle's code with the app's
   identity, hardened runtime and timestamp, and fails if any signature but the app's carries an
-  entitlement. The app keeps only `audio-input`.
+  entitlement. The engines' libraries in `Contents/Frameworks` are signed the same way. The app
+  keeps only `audio-input`.
 - **Asked, not assumed.** Sparkle asks the user before its first automatic check, and a check sends
   no system profile (`SUEnableSystemProfiling` off).
 

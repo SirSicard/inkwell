@@ -96,6 +96,51 @@ jobs:
       - run: rustup toolchain install
         working-directory: core
 
+      # The engines are built before the signing keychain exists: their builds run third-party
+      # build code (CMake scripts, cargo build scripts), which never shares a job step, or a
+      # moment, with an unlocked Developer ID key.
+      #
+      # Homebrew serves the diarizer's build tools and its two libraries, SentencePiece and Abseil
+      # (Apache-2.0). It is a build-time source only: build-nemo-speech.sh copies both libraries
+      # into its prefix and loads them by @rpath, and build-mac.sh fails if anything in the app
+      # still loads a path outside the bundle and the OS. Their versions are whatever Homebrew
+      # serves today; printed here for the record (THIRD_PARTY.md).
+      - name: Engine build tools and libraries (Homebrew)
+        env:
+          HOMEBREW_NO_ANALYTICS: '1'
+        run: |
+          brew install cmake ninja sentencepiece abseil
+          brew list --versions cmake ninja sentencepiece abseil
+
+      # NeMo-Speech.cpp (the diarizer) at the commit the adapter is written against, read from the
+      # build script, with only the ggml submodule. build-nemo-speech.sh checks both commits.
+      - name: NeMo-Speech.cpp source
+        run: |
+          commit="$(sed -n 's/^NEMO_COMMIT=//p' core/crates/ink-engines/native/build-nemo-speech.sh)"
+          src="$RUNNER_TEMP/nemo-speech-src"
+          git init -q "$src"
+          git -C "$src" remote add origin https://github.com/NVIDIA/NeMo-Speech.cpp.git
+          git -C "$src" fetch -q --depth 1 origin "$commit"
+          git -C "$src" checkout -q --detach FETCH_HEAD
+          git -C "$src" submodule update -q --init --depth 1 ggml
+          echo "NeMo-Speech.cpp $(git -C "$src" rev-parse HEAD), ggml $(git -C "$src/ggml" rev-parse HEAD)"
+
+      # GGML_NATIVE=OFF and macOS 26 (the script's defaults); a prefix that loads nothing from
+      # Homebrew.
+      - name: Build NeMo-Speech.cpp
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '26.0'
+        run: |
+          core/crates/ink-engines/native/build-nemo-speech.sh "$RUNNER_TEMP/nemo-speech-src" "$RUNNER_TEMP/nemo-speech"
+          echo "NEMO_SPEECH_DIR=$RUNNER_TEMP/nemo-speech" >>"$GITHUB_ENV"
+
+      # The core with the release's engines (build-mac.sh --engines checks it is exactly this set):
+      # llama.cpp built GGML_NATIVE=OFF (build-core.sh reads it back), NeMo linked from its prefix.
+      - name: Build the core, with its engines
+        env:
+          INK_CORE_FEATURES: engine-llama,ink-engines/engine-silero,ink-engines/engine-nemo
+        run: mac/scripts/build-core.sh
+
       # The Developer ID certificate goes into a keychain made for this run, with a random password,
       # and deleted at the end; only Apple's signing tools may use its key without asking. The
       # notarization credentials are stored in it as a notarytool profile, so no later step passes
@@ -147,15 +192,18 @@ jobs:
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_PASSWORD" >/dev/null
           echo "signing keychain ready"
 
-      # Release build, signed with the Developer ID and Apple's secure timestamp. build-mac.sh
-      # checks every Mach-O (Sparkle's helpers too) for the identity's team, the hardened runtime,
-      # the timestamp and no entitlements but the app's, and prints nothing that names the identity.
+      # Release build, signed with the Developer ID and Apple's secure timestamp, around the core
+      # built above. build-mac.sh bundles the engines' libraries in Contents/Frameworks, checks
+      # what every Mach-O loads (nothing outside the bundle and the OS, nothing built for a newer
+      # macOS than 26), checks every Mach-O (Sparkle's helpers and the engines' libraries too) for
+      # the identity's team, the hardened runtime, the timestamp and no entitlements but the app's,
+      # and prints nothing that names the identity.
       - name: Build and sign the app
         env:
           INK_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           INK_VERSION: ${{ steps.version.outputs.version }}
           INK_BUILD_NUMBER: ${{ steps.version.outputs.version }}
-        run: mac/scripts/build-mac.sh --timestamp
+        run: mac/scripts/build-mac.sh --timestamp --engines --skip-core
 
       # What the build fetched: Sparkle's archive, unpacked, and its licence file.
       - name: Swift licence audit (checkouts and binaries)

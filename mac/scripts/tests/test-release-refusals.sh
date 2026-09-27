@@ -16,13 +16,20 @@ touch "$work/some.zip" "$work/Inkwell.dmg"
 run() {
   local label=$1 text=$2 out status=0
   shift 2
-  out="$(env -u INK_SIGN_IDENTITY -u NOTARY_PROFILE -u SPARKLE_BIN "$@" 2>&1 </dev/null)" || status=$?
+  out="$(env -u INK_SIGN_IDENTITY -u NOTARY_PROFILE -u SPARKLE_BIN -u INK_CORE_FEATURES \
+    -u INK_ALLOW_NEWER_MACOS "$@" 2>&1 </dev/null)" || status=$?
   if [ "$status" = 0 ]; then flunk "$label: it succeeded"; else pass "$label"; fi
   assert_contains "$label: says why" "$out" "$text"
 }
 
 run "a timestamped build without an identity" "--timestamp needs INK_SIGN_IDENTITY" \
+  /bin/bash "$scripts/build-mac.sh" --skip-core --timestamp --engines
+run "a release without its engines" "a release ships its engines: add --engines" \
   /bin/bash "$scripts/build-mac.sh" --skip-core --timestamp
+run "a release allowed code for a newer macOS" "INK_ALLOW_NEWER_MACOS is for local builds" \
+  INK_ALLOW_NEWER_MACOS=1 /bin/bash "$scripts/build-mac.sh" --skip-core --timestamp --engines
+run "the engines with other core features" "--engines builds the core with" \
+  INK_CORE_FEATURES=engine-llama /bin/bash "$scripts/build-mac.sh" --skip-core --engines
 run "a dmg without an identity" "the dmg would go out unsigned" \
   /bin/bash "$scripts/package-dmg.sh" "$work/Inkwell.app" "$work/out.dmg"
 run "a dmg named otherwise" "the output must end in .dmg" \
