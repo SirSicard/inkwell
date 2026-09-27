@@ -103,6 +103,39 @@ final class DictationModelTests: XCTestCase {
         XCTAssertFalse(dictation.canRetry)
     }
 
+    /// A key macOS stopped sending is never shown as working: Settings says so until dictation is
+    /// enabled again (coming back to the app tries), the Drop says it once, and Today lists it.
+    func testALostKeyIsShownAsNotWorkingUntilDictationIsEnabledAgain() {
+        let sent = Sent()
+        let dictation = DictationModel(send: sent.send)
+        dictation.apply(event(#"{"type":"dictation.ready","key":"fn","edit_key":"right_command"}"#))
+        XCTAssertNil(dictation.editKeyProblem)
+        dictation.apply(event(#"{"type":"dictation.edit_hotkey_lost"}"#))
+        XCTAssertEqual(dictation.editKeyProblem, DictationModel.editKeyLostText)
+        XCTAssertTrue(dictation.isProblem)
+        XCTAssertEqual(dictation.note?.text.title, "The edit key stopped working")
+        // Back from System Settings: asked again, and the answer clears it.
+        let before = sent.commands.count
+        dictation.appBecameActive()
+        XCTAssertEqual(sent.commands.count, before + 1)
+        dictation.apply(event(#"{"type":"dictation.ready","key":"fn","edit_key":"right_command"}"#))
+        XCTAssertNil(dictation.editKeyProblem)
+        XCTAssertFalse(dictation.isProblem)
+
+        dictation.apply(event(#"{"type":"dictation.hotkey_lost"}"#))
+        XCTAssertEqual(dictation.status, DictationModel.keyLostText)
+        XCTAssertTrue(dictation.isProblem)
+        XCTAssertEqual(dictation.note?.text.title, "The dictation key stopped working")
+        dictation.apply(event(#"{"type":"dictation.ready","key":"fn"}"#))
+        XCTAssertEqual(dictation.status, "Hold fn, speak, let go.")
+
+        let store = CoreStore()
+        store.apply([event(#"{"type":"dictation.edit_hotkey_lost"}"#)])
+        let kinds = store.notices.map(\.kind)
+        XCTAssertEqual(kinds, [.editKeyLost])
+        XCTAssertEqual(NeedsYou.describe(.editKeyLost)?.0, "The edit key stopped working")
+    }
+
     /// A key setting that could not be saved or read reads "couldn't", never as the key changed.
     func testAKeySettingThatCouldNotBeSavedSaysSo() {
         let dictation = DictationModel(send: { _ in })

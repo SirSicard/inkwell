@@ -239,7 +239,7 @@ private struct VoiceSection: View {
                 }
                 .labelsHidden()
                 .fixedSize()
-                if let edit = dictation.editKey {
+                if let edit = dictation.editKey, dictation.editKeyProblem == nil {
                     Key(text: DictationModel.key(edit)?.cap ?? edit)
                 }
                 Text("select text, hold, say what to change").foregroundStyle(Theme.secondaryText)
@@ -256,7 +256,8 @@ private struct VoiceSection: View {
                     Button("Turn dictation on") { dictation.enable() }
                 }
                 if let problem = dictation.editKeyProblem {
-                    Text("The edit key isn't held: \(problem)").foregroundStyle(Theme.alert)
+                    Text(problem == DictationModel.editKeyLostText ? problem : "The edit key isn't held: \(problem)")
+                        .foregroundStyle(Theme.alert)
                 }
                 if let problem = dictation.settingsProblem {
                     Text("Dictation \(problem), so it uses the defaults for them.").foregroundStyle(Theme.alert)

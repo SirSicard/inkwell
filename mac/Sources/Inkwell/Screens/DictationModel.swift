@@ -66,6 +66,12 @@ final class DictationModel {
     private(set) var settingsProblem: String?
     /// A key setting could not be read or saved.
     private(set) var keyFailure: String?
+    /// macOS stopped sending the dictation key (Accessibility revoked, say): not working until
+    /// dictation is enabled again.
+    private(set) var keyLost = false
+
+    static let keyLostText = "The dictation key stopped working: macOS stopped sending it to Inkwell. Check \u{201C}Type for you\u{201D}, then come back."
+    static let editKeyLostText = "The edit key stopped working: macOS stopped sending it to Inkwell. Check \u{201C}Type for you\u{201D}, then come back."
     /// The latest note for the Drop.
     private(set) var note: Note?
 
@@ -103,6 +109,8 @@ final class DictationModel {
     /// Back from System Settings, perhaps with Accessibility granted: try again.
     func appBecameActive() {
         if case .off(let reason, _) = state, reason == .needsAccessibility || reason == .keyRefused {
+            enable()
+        } else if keyLost || editKeyProblem == Self.editKeyLostText {
             enable()
         }
     }
@@ -143,6 +151,7 @@ final class DictationModel {
 
     /// The line under the keys in Settings.
     var status: String {
+        if keyLost { return Self.keyLostText }
         switch state {
         case .starting:
             return "Starting…"
@@ -170,7 +179,7 @@ final class DictationModel {
     /// Whether the status is a problem to show in the alert colour.
     var isProblem: Bool {
         if case .off(let reason, _) = state { return reason != .disabled }
-        return keyFailure != nil
+        return keyFailure != nil || keyLost || editKeyProblem != nil
     }
 
     private func show(_ text: DropText?) {
@@ -185,10 +194,18 @@ final class DictationModel {
             state = .starting
         case .dictationReady(let ready):
             state = .live(key: ready.key, editKey: ready.editKey)
+            keyLost = false
             editKeyProblem = ready.editKeyError
             settingsProblem = ready.settingsError
         case .dictationOff(let off):
             state = .off(off.reason, message: off.message)
+            keyLost = false
+        case .dictationHotkeyLost:
+            keyLost = true
+            show(DropText(title: "The dictation key stopped working", detail: "Check \u{201C}Type for you\u{201D} in Settings", tone: .alert))
+        case .dictationEditHotkeyLost:
+            editKeyProblem = Self.editKeyLostText
+            show(DropText(title: "The edit key stopped working", detail: "Check \u{201C}Type for you\u{201D} in Settings", tone: .alert))
         case .settingValue(let value) where value.key == ShellSetting.dictationKey.rawValue:
             keySetting = value.value
         case .settingValue(let value) where value.key == ShellSetting.dictationEditKey.rawValue:
