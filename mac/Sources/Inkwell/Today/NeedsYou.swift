@@ -85,7 +85,7 @@ enum NeedsYou {
                 detail: detail, actionTitle: "Allow system audio", action: allowAudio))
         } else if farSilentMeetings > 0 {
             let count = farSilentMeetings == 1 ? "Your last meeting" : "Your last \(farSilentMeetings) meetings"
-            let from = since.map { " (since \($0))" } ?? ""
+            let from = farSilentMeetings > 1 ? since.map { " (since \($0))" } ?? "" : ""
             items.append(.init(
                 id: "far-silent", title: "Inkwell didn't hear the other side of your calls",
                 detail: "\(count)\(from) kept only your own voice. Check that system audio is allowed.",

@@ -107,7 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMainWindow() {
         measurement?.windowShown()
         if mainWindow == nil {
-            mainWindow = MainWindowController(router: router, store: core.store, ink: ink, updates: updates)
+            mainWindow = MainWindowController(
+                router: router, store: core.store, ink: ink, updates: updates, library: core.library)
         }
         mainWindow?.present()
     }

@@ -8,10 +8,14 @@
   silently (no prompt, the grant simply reads as denied). System audio capture (process taps) is
   not a hardened-runtime resource and needs no entitlement; its prompt text is in Info.plist.
 
+  calendars: Today's "Up next" reads the next event with EventKit. Under the hardened runtime,
+  calendar access is refused without this entitlement, whatever the user answers the prompt.
+
   Add an entitlement only with the feature that needs it, and say why here.
 -->
 <plist version="1.0">
 <dict>
   <key>com.apple.security.device.audio-input</key><true/>
+  <key>com.apple.security.personal-information.calendars</key><true/>
 </dict>
 </plist>

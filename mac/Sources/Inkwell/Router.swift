@@ -107,9 +107,12 @@ struct RouteScreen: View {
 
     var body: some View {
         switch route {
-        // Every route shows the placeholder until its screen lands: Today and Library in S2.5,
-        // Owed, Live and Settings in S2.6.
-        case .today, .library, .owed, .live, .settings:
+        case .today:
+            TodayScreen()
+        case .library:
+            LibraryScreen()
+        // The placeholder until their screens land in S2.6.
+        case .owed, .live, .settings:
             PlaceholderScreen(route: route)
         }
     }

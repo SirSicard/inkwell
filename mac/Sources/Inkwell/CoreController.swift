@@ -11,6 +11,8 @@ import os
 final class CoreController {
     /// Everything the screens show about the core.
     let store = CoreStore()
+    /// What the screens show of the library (Today, Library, a record), asked for by query.
+    let library = LibraryModel()
     /// Sees every batch after the store (the measurement marks), when set.
     var observer: ((_ batch: [InkEvent]) -> Void)?
 
@@ -20,6 +22,10 @@ final class CoreController {
 
     /// Whether the core is running (started, and not yet told to stop).
     var isRunning: Bool { session != nil }
+
+    init() {
+        library.send = { [weak self] json in self?.send(json: json) }
+    }
 
     /// Starts the core with the library at `dataDirectory`. A failure is shown through the store.
     func start(environment: [String: String] = ProcessInfo.processInfo.environment) {
@@ -51,6 +57,18 @@ final class CoreController {
         }
     }
 
+    /// Queues a command already written as JSON (the library's queries carry numbers and objects).
+    func send(json: String) {
+        guard let session else { return }
+        do {
+            try session.command(json)
+        } catch {
+            // The command's name only: a query can carry the user's search words.
+            let name = (try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["cmd"] as? String
+            log.error("the core refused a \(name ?? "?", privacy: .public) command: \(String(describing: error), privacy: .public)")
+        }
+    }
+
     /// Stops the core off the main thread (it waits for its workers and unloads every model), then
     /// calls `done` on the main thread. When `done` runs, no event arrives any more.
     ///
@@ -77,6 +95,7 @@ final class CoreController {
 
     private func received(_ batch: [InkEvent]) {
         store.apply(batch)
+        library.apply(batch)
         // Keep the dictation model warm from the start: the first dictation of the day is as quick
         // as any other (the shell budget, I7, is measured with it warm).
         if batch.contains(where: { if case .coreReady = $0 { true } else { false } }),

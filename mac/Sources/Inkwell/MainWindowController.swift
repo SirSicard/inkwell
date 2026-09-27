@@ -11,9 +11,18 @@ import SwiftUI
 
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
-    /// `ink` is what the rail draws; `updates` is in the environment for the Settings screen.
-    init(router: Router, store: CoreStore, ink: ShellInk, updates: Updates) {
+    /// Reads the calendars for Today's Up next; lives as long as the window.
+    private let calendar: EventKitCalendar
+
+    /// `ink` is what the rail draws; `updates` is in the environment for the Settings screen;
+    /// `library` feeds Today and the Library.
+    init(router: Router, store: CoreStore, ink: ShellInk, updates: Updates, library: LibraryModel) {
+        let calendar = EventKitCalendar()
+        let upNext = UpNextModel(source: calendar)
+        calendar.observe { [weak upNext] in upNext?.refresh() }
+        self.calendar = calendar
         let root = ShellView(router: router).environment(store).environment(ink).environment(updates)
+            .environment(library).environment(upNext).environment(router)
         let hosting = NSHostingController(rootView: root)
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]

@@ -386,6 +386,25 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertNil(library.document, "Today's record is not the Library's selection")
     }
 
+    /// The permission check can play a muted tone: Today asks again only when the last answer has
+    /// aged, or when the user comes back from System Settings.
+    func testPermissionsAreCheckedOnlyWhenThereIsAReason() {
+        let (library, sent) = model()
+        var clock = Date(timeIntervalSince1970: 1_000)
+        library.now = { clock }
+        let checks = { sent().filter { command($0)["cmd"] as? String == "permissions.check" }.count }
+        library.refreshPermissions(ifOlderThan: 300)
+        XCTAssertEqual(checks(), 1, "the first time")
+        clock += 60
+        library.refreshPermissions(ifOlderThan: 300)
+        XCTAssertEqual(checks(), 1, "a minute later, Today appearing again asks nothing")
+        library.refreshPermissions()
+        XCTAssertEqual(checks(), 2, "back from System Settings: always")
+        clock += 301
+        library.refreshPermissions(ifOlderThan: 300)
+        XCTAssertEqual(checks(), 3, "once the answer has aged")
+    }
+
     func testANewRecordOrAMarkedCommitmentRefreshesWhatIsShown() {
         let (library, sent) = model()
         let before = sent().count

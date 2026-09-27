@@ -94,6 +94,7 @@ final class LibraryModel {
     /// Where to put the playhead once the record being opened arrives.
     @ObservationIgnored private var pendingSeek: Int64?
     @ObservationIgnored private var pendingPlay = false
+    @ObservationIgnored private var permissionsAskedAt: Date?
 
     init() {}
 
@@ -150,8 +151,16 @@ final class LibraryModel {
         ask(.stats(sinceUnixMs: Int64(weekStart.timeIntervalSince1970 * 1000)), for: .statsWeek)
     }
 
-    /// Checks the permissions again (Today on appear, and when the app comes back to the front).
-    func refreshPermissions() {
+    /// Checks the permissions again. Once the app has asked for system audio, the check plays a
+    /// muted tone for about a second, so it runs when there is a reason: Today appearing after
+    /// the last check has aged (`maxAge`), or the user coming back from System Settings (`nil`,
+    /// always). Never on a timer.
+    func refreshPermissions(ifOlderThan maxAge: TimeInterval? = nil) {
+        let now = now()
+        if let maxAge, let last = permissionsAskedAt, now.timeIntervalSince(last) < maxAge {
+            return
+        }
+        permissionsAskedAt = now
         ask(.permissions, for: .permissions)
     }
 
