@@ -94,9 +94,6 @@ public final class InkView: NSView {
         simulation.t = Double.random(in: 0..<30)
         simulation.cy = inkCentreHeight
         _ = schedule.set(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(displayOptionsChanged(_:)),
-            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
     }
 
     @available(*, unavailable)
@@ -120,6 +117,10 @@ public final class InkView: NSView {
 
     // MARK: Being on screen
 
+    /// Whether the view listens for Reduce Motion changes: only while it is in a window, as it
+    /// listens for its window being covered.
+    private(set) var observesDisplayOptions = false
+
     public override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
         if let window {
@@ -131,10 +132,23 @@ public final class InkView: NSView {
                 self, selector: #selector(occlusionChanged(_:)),
                 name: NSWindow.didChangeOcclusionStateNotification, object: newWindow)
         }
+        let workspace = NSWorkspace.shared.notificationCenter
+        if newWindow != nil, !observesDisplayOptions {
+            workspace.addObserver(
+                self, selector: #selector(displayOptionsChanged(_:)),
+                name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+            observesDisplayOptions = true
+        } else if newWindow == nil, observesDisplayOptions {
+            workspace.removeObserver(
+                self, name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+            observesDisplayOptions = false
+        }
     }
 
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        // The setting may have changed while the view was out of a window, unheard.
+        perform(schedule.set(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
         updateCanvas()
         visibilityChanged()
     }

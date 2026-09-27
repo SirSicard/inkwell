@@ -59,6 +59,22 @@ final class InkViewTests: XCTestCase {
         XCTAssertFalse(view.isAnimating)
     }
 
+    /// The Reduce Motion observer lives exactly as long as the view is in a window, like the
+    /// occlusion observer: a view taken out of its window listens to nothing.
+    func testTheReduceMotionObserverIsPairedWithTheWindow() {
+        let view = InkView(frame: NSRect(x: 0, y: 0, width: 84, height: 84))
+        XCTAssertFalse(view.observesDisplayOptions, "not before it is in a window")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 84, height: 84), styleMask: [.borderless],
+                              backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        XCTAssertTrue(view.observesDisplayOptions, "in a window")
+        window.contentView = NSView()
+        XCTAssertFalse(view.observesDisplayOptions, "removed with the window")
+        window.contentView = view
+        XCTAssertTrue(view.observesDisplayOptions, "and added again, once")
+    }
+
     private func spin(_ seconds: Double) async throws {
         try await Task.sleep(for: .seconds(seconds))
     }
