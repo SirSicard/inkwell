@@ -848,7 +848,11 @@ fn controller(
             }
         };
         let closed = pump(shared, platform, inbox, rx, activity, &mut mic);
-        let _ = mic.source.stop();
+        if let Err(e) = mic.source.stop() {
+            // The device may still be held (the microphone indicator stays on); the next press opens
+            // a new stream either way. The error names the device, never audio.
+            log::warn!("dictation: the mic did not stop cleanly: {e}");
+        }
         match closed {
             Closed::Idle | Closed::Stop => {
                 let _ = inbox.send(Input::MicClosed);
