@@ -12,6 +12,7 @@
 //! | [`gate`] | exclusive holds on models during updates, and the engine every chain calls |
 //! | [`mailbox`] | the bounded queue from the pump to a chain's worker |
 //! | [`meeting`] | a meeting run: capture, the pump, the meeting worker |
+//! | [`queries`] | the screens' commands (permissions, owed, notes, settings, modes, models), on their own thread |
 //! | [`dictation`] | the dictation worker |
 //! | [`logging`] | the only logger and `tracing` subscriber, with both privacy filters |
 //!
@@ -36,6 +37,7 @@ pub mod llms;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;
+pub mod queries;
 pub mod runtime;
 pub mod schema;
 
