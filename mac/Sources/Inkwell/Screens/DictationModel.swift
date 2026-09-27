@@ -204,8 +204,9 @@ final class DictationModel {
 
     /// The line under the keys in Settings.
     var status: String {
-        if keyLost { return Self.keyLostText }
+        // The user's latest action first: a turn-off that failed outranks an older lost key.
         if commandFailure == .disable { return "Dictation couldn't be turned off." }
+        if keyLost { return Self.keyLostText }
         switch state {
         case .starting:
             return "Starting…"

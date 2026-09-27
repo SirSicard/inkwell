@@ -167,6 +167,21 @@ final class DictationModelTests: XCTestCase {
         XCTAssertFalse(dictation.isProblem)
     }
 
+    /// The user's latest action speaks first: with the key already lost, turning dictation off
+    /// and failing reads as that failure, not as the older lost key.
+    func testAFailedTurnOffReadsAsSuchEvenWithTheKeyLost() {
+        let sent = Sent()
+        let dictation = DictationModel(send: sent.send)
+        dictation.apply(event(#"{"type":"dictation.ready","key":"fn"}"#))
+        dictation.apply(event(#"{"type":"dictation.hotkey_lost"}"#))
+        XCTAssertEqual(dictation.status, DictationModel.keyLostText)
+        dictation.setOn(false)
+        guard case .dictationDisable(let ref) = sent.commands.last else { return XCTFail() }
+        dictation.apply(event(#"{"type":"command.failed","command":"dictation.disable","id":"\#(ref)","message":"the queries thread has stopped"}"#))
+        XCTAssertEqual(dictation.status, "Dictation couldn't be turned off.")
+        XCTAssertEqual(dictation.retryTitle, "Try again")
+    }
+
     /// Settings > Voice turns dictation off and on; the choice is kept, and a launch with it off
     /// holds no key.
     func testDictationCanBeTurnedOffAndStaysOffAtTheNextLaunch() {
