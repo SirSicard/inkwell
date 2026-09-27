@@ -1,0 +1,14 @@
+# The notices in mac/Sources/Inkwell/Screens/Notices.swift that are composed from a licence's
+# standard text and the component's copyright line, because the component's own licence file was
+# not on hand when they were written. Each is compared with that file before a release.
+#
+#   <notice id> verified=<no|YYYY-MM-DD> <the file to compare it with>
+#
+# `no` until compared (replace the text in Notices.swift where it differs), the date after. A
+# release tag refuses to build while any line reads `no` (mac/scripts/notices-verified.sh, which
+# mac/scripts/release-version.sh runs for a tag; a dry run only lists them). ComposedNoticesTests
+# holds this list to the notices About shows.
+
+protobuf-lite  verified=no  the protobuf-lite licence in SentencePiece's third_party directory, at the version the release bundles
+darts-clone    verified=no  the Darts-clone licence in SentencePiece's third_party directory, at the version the release bundles
+silero-vad     verified=no  the LICENSE of the silero-vad repository at the commit the model is pinned to

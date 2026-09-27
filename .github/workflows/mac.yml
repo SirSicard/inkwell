@@ -39,6 +39,10 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: core
+      # The Rust crates' licence notices that About shows match a fresh run over the release graph:
+      # a dependency change cannot ship without its notice.
+      - name: Rust licence notices are current
+        run: mac/scripts/rust-notices.sh --check
       # No INK_SIGN_IDENTITY here: ad-hoc.
       - name: Build the app bundle
         run: mac/scripts/build-mac.sh
