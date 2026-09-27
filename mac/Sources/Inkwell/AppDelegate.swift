@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self?.measurement?.inkReady(outcome, took: took)
         }
-        drop = DropController(ink: ink)
+        drop = DropController(ink: ink, notes: core.screens.dictation)
         if let interval = DropDemo.interval(from: ProcessInfo.processInfo.environment) {
             dropDemo = DropDemo(ink: ink, interval: interval)
         }

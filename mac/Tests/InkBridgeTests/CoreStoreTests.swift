@@ -60,7 +60,7 @@ final class CoreStoreTests: XCTestCase {
     @MainActor
     func testADictationFromKeyDownToATooShortTake() {
         let store = CoreStore()
-        store.apply([event(#"{"type":"dictation.started"}"#)])
+        store.apply([event(#"{"type":"dictation.started","take":0,"edit":false}"#)])
         XCTAssertEqual(store.dictation, .listening)
         store.apply([event(#"{"type":"dictation.stopped"}"#)])
         XCTAssertEqual(store.dictation, .transcribing)
@@ -117,7 +117,7 @@ final class CoreStoreTests: XCTestCase {
         let store = CoreStore()
         store.apply([
             event(#"{"type":"meeting.started","record":"r1"}"#),
-            event(#"{"type":"dictation.started"}"#),
+            event(#"{"type":"dictation.started","take":0,"edit":false}"#),
             event(#"{"type":"core.stopped"}"#),
         ])
         XCTAssertNil(store.meeting)

@@ -21,7 +21,8 @@
 #   SECONDS_EACH=5  utterance length
 #   BUSY_MAX=15     refuse while the machine is busier than this (%)
 #   FORCE=1         measure anyway when the preflight refuses (the summary says so)
-#   SMOKE=1         one short run of each phase, to prove the script works (not a measurement)
+#   SMOKE=1         one short run of each phase, to prove the script works (not a measurement);
+#                   its idle is 35 s, just past the 30 s after which a take's start warms the engine
 #
 # Exit: 0 every phase ran (the numbers say whether the targets were met); 2 a phase failed;
 # 3 refused before measuring.
@@ -38,7 +39,7 @@ IDLE="${IDLE:-240}"
 SECONDS_EACH="${SECONDS_EACH:-5}"
 BUSY_MAX="${BUSY_MAX:-15}"
 if [ "${SMOKE:-0}" = 1 ]; then
-  RUNS=2 RUNS_IDLE=1 IDLE=5
+  RUNS=2 RUNS_IDLE=1 IDLE=35
 fi
 stamp="$(date +%Y%m%d-%H%M%S)"
 out="$INK_BENCH_DIR/out/s2.7/latency-$stamp"

@@ -48,7 +48,8 @@ struct SettingsScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 30) {
                         PermissionsSection(permissions: screens.permissions).id(SettingsSection.permissions)
-                        VoiceSection().id(SettingsSection.voice)
+                        VoiceSection(dictation: screens.dictation, permissions: screens.permissions)
+                            .id(SettingsSection.voice)
                         ModesSection(modes: screens.modes).id(SettingsSection.modes)
                         AISection(polish: screens.polish).id(SettingsSection.ai)
                         MeetingsSection(permissions: screens.permissions).id(SettingsSection.meetings)
@@ -70,6 +71,7 @@ struct SettingsScreen: View {
             screens.permissions.screenAppeared()
             screens.modes.load()
             screens.polish.load()
+            screens.dictation.load()
             screens.catalogue.requery()
             screens.storage.measure()
         }
@@ -201,19 +203,69 @@ private struct PermissionRow: View {
 
 // MARK: - Voice
 
+/// The dictation key and the voice-edit key, each held by the core: a change rebinds it at once.
 private struct VoiceSection: View {
+    let dictation: DictationModel
+    let permissions: PermissionsModel
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Voice")
-            HStack(spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Dictate").frame(width: 150, alignment: .leading)
-                Key(text: "fn")
+                Picker("Dictate", selection: Binding(get: { dictation.key }, set: { dictation.setKey($0) })) {
+                    ForEach(DictationModel.keys) { key in
+                        Text(key.name).tag(key.token)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                Key(text: DictationModel.key(dictation.key)?.cap ?? dictation.key)
                 Text("hold, speak, let go").foregroundStyle(Theme.secondaryText)
             }
             .font(Typography.body)
-            .padding(.vertical, 9)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Dictate: hold the fn key, speak, and let go")
+            .padding(.vertical, 5)
+            .accessibilityElement(children: .contain)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Edit a selection").frame(width: 150, alignment: .leading)
+                Picker("Edit a selection", selection: Binding(
+                    get: { dictation.editKey ?? "off" },
+                    set: { dictation.setEditKey($0 == "off" ? nil : $0) }
+                )) {
+                    Text("Off").tag("off")
+                    ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
+                        Text(key.name).tag(key.token)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                if let edit = dictation.editKey {
+                    Key(text: DictationModel.key(edit)?.cap ?? edit)
+                }
+                Text("select text, hold, say what to change").foregroundStyle(Theme.secondaryText)
+            }
+            .font(Typography.body)
+            .padding(.vertical, 5)
+            .accessibilityElement(children: .contain)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(dictation.keyFailure ?? dictation.status)
+                    .foregroundStyle(dictation.isProblem ? Theme.alert : Theme.secondaryText)
+                if case .off(.needsAccessibility, _) = dictation.state {
+                    Button("Allow \u{201C}Type for you\u{201D}") { permissions.request(.typeForYou) }
+                }
+                if let problem = dictation.editKeyProblem {
+                    Text("The edit key isn't held: \(problem)").foregroundStyle(Theme.alert)
+                }
+                if let problem = dictation.settingsProblem {
+                    Text("Dictation \(problem), so it uses the defaults for them.").foregroundStyle(Theme.alert)
+                }
+            }
+            .font(Typography.caption)
+            .fixedSize(horizontal: false, vertical: true)
+            Text("Editing sends the selection and what you say to Apple Intelligence on this Mac, and replaces the selection with the answer. Edits are not saved in the Library.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -322,7 +374,7 @@ private struct AISection: View {
                         .accessibilityHint(polish.status)
                     Text(polish.status)
                         .font(Typography.caption)
-                        .foregroundStyle(polish.keepsTimingOut ? Theme.alert : Theme.secondaryText)
+                        .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityHidden(true)
                 }

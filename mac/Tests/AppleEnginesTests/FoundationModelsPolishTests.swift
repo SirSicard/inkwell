@@ -159,7 +159,7 @@ final class FoundationModelsPolishTests: XCTestCase {
         let backend = Recorder()
         let engines = AppleEngines(session: core.session, polish: FoundationModelsPolish(availability: { .available }, backend: backend))
         XCTAssertEqual(engines.syncPolish(availability: .available), .registered)
-        let started = try InkEvent.decode(Data(#"{"type":"dictation.started"}"#.utf8))
+        let started = try InkEvent.decode(Data(#"{"type":"dictation.started","take":0,"edit":false}"#.utf8))
         engines.handle(try InkEvent.decode(Data(#"{"type":"core.ready","abi":2,"version":"0"}"#.utf8)))
         XCTAssertEqual(backend.prewarmed.withLock { $0.count }, 0)
         engines.handle(started)

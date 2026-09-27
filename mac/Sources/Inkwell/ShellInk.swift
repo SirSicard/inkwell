@@ -30,7 +30,7 @@ final class ShellInk {
 
     /// What the Drop says beside it.
     var dropText: DropText {
-        DropText.for(state, dictation: store.dictation)
+        DropText.for(state, dictation: store.dictation, live: store.liveDictation)
     }
 
     /// The state for what is live. A meeting outranks a dictation. Only the far end sets the
@@ -54,7 +54,7 @@ final class ShellInk {
     }
 }
 
-/// The Drop's two lines. The live screens (S2.7, S2.8) fill the second with partials and prompts.
+/// The Drop's two lines. While a dictation is held the second holds its live words.
 struct DropText: Equatable, Sendable {
     /// How the Drop colours the title and its border.
     enum Tone: Equatable, Sendable {
@@ -68,13 +68,19 @@ struct DropText: Equatable, Sendable {
     var title: String
     var detail: String
     var tone = Tone.plain
+    /// The detail is the live words of a take being held: its end matters (the head is cut, not
+    /// the tail), and its newest words are still wet.
+    var liveWords = false
 
-    static func `for`(_ state: InkState, dictation: CoreStore.DictationPhase) -> DropText {
+    /// How many of the newest live words are shown wet (italic, muted), as on the canvas.
+    static let wetWords = 2
+
+    static func `for`(_ state: InkState, dictation: CoreStore.DictationPhase, live: CoreStore.LiveDictation? = nil) -> DropText {
         switch state {
         case .idle:
             DropText(title: "", detail: "")
         case .dictating:
-            DropText(title: "Dictating", detail: dictation == .transcribing ? "Transcribing" : "Listening")
+            dictating(dictation, live: live)
         case .meeting:
             DropText(title: "● REC", detail: "Recording this meeting", tone: .recording)
         case .blotting:
@@ -82,6 +88,42 @@ struct DropText: Equatable, Sendable {
         case .problem:
             DropText(title: "Far end silent", detail: "Nothing is arriving from the call", tone: .alert)
         }
+    }
+
+    /// A take: "Dictating · Slack · Chat" (the app in front and its mode) over its live words, or
+    /// what it is doing when there are none.
+    static func dictating(_ phase: CoreStore.DictationPhase, live: CoreStore.LiveDictation?) -> DropText {
+        if live?.edit == true {
+            return DropText(title: "Editing the selection", detail: phase == .transcribing ? "Rewriting" : "Say what to change")
+        }
+        let place = [live?.app, live?.mode].compactMap { $0 }.filter { !$0.isEmpty }
+        let title = (["Dictating"] + place).joined(separator: " · ")
+        if phase == .transcribing {
+            return DropText(title: title, detail: "Transcribing")
+        }
+        if let words = live?.partial, !words.trimmingCharacters(in: .whitespaces).isEmpty {
+            return DropText(title: title, detail: words, liveWords: true)
+        }
+        return DropText(title: title, detail: "Listening")
+    }
+
+    /// Where the wet words of `detail` start: the last `wetWords` words.
+    static func wetStart(_ detail: String) -> String.Index {
+        var index = detail.endIndex
+        var words = 0
+        var inWord = false
+        for i in detail.indices.reversed() {
+            let space = detail[i].isWhitespace
+            if !space && !inWord {
+                words += 1
+                inWord = true
+            } else if space && inWord {
+                inWord = false
+                if words == wetWords { return index }
+            }
+            if !space { index = i }
+        }
+        return detail.startIndex
     }
 }
 

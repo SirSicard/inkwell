@@ -27,6 +27,11 @@ enum CoreCommand: Equatable, Sendable {
     case recordsSearch(query: String, limit: Int, ref: String)
     case recordOpen(record: String, ref: String)
     case libraryStats(sinceUnixMs: Int64, ref: String)
+    /// Dictation live (the core holds the keys): answered by `dictation.ready` or `dictation.off`
+    /// with `ref`. `utcOffsetMinutes` is for {date} and {time} in snippets.
+    case dictationEnable(utcOffsetMinutes: Int, ref: String)
+    /// Lets go of the keys and the mic: `dictation.off` with `ref`.
+    case dictationDisable(ref: String)
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -59,6 +64,8 @@ enum CoreCommand: Equatable, Sendable {
         case .recordsSearch(let query, let limit, let ref): ["cmd": "records.search", "query": query, "limit": limit, "id": ref]
         case .recordOpen(let record, let ref): ["cmd": "record.open", "record": record, "id": ref]
         case .libraryStats(let since, let ref): ["cmd": "library.stats", "since_unix_ms": since, "id": ref]
+        case .dictationEnable(let offset, let ref): ["cmd": "dictation.enable", "utc_offset_minutes": offset, "id": ref]
+        case .dictationDisable(let ref): ["cmd": "dictation.disable", "id": ref]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -84,6 +91,8 @@ enum CoreCommand: Equatable, Sendable {
         case .recordsSearch: "records.search"
         case .recordOpen: "record.open"
         case .libraryStats: "library.stats"
+        case .dictationEnable: "dictation.enable"
+        case .dictationDisable: "dictation.disable"
         }
     }
 }
@@ -94,6 +103,10 @@ enum ShellSetting: String, Sendable {
     case onboardingDone = "onboarding.done"
     /// "on" or "off": the user's wish for dictation polish.
     case dictationPolish = "dictation.polish"
+    /// The dictation key (a token: fn, right_option, ...).
+    case dictationKey = "dictation.key"
+    /// The voice-edit key, or "off".
+    case dictationEditKey = "dictation.edit_key"
 }
 
 /// Where the screens' commands go.

@@ -181,6 +181,7 @@ final class ScreenModels {
     let live: LiveModel
     let onboarding: OnboardingModel
     let storage: StorageModel
+    let dictation: DictationModel
 
     init(
         send: @escaping SendCommand,
@@ -199,6 +200,8 @@ final class ScreenModels {
         live = LiveModel(send: send, ask: ask)
         onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
+        dictation = DictationModel(send: send)
+        dictation.hasLanguageModel = { [polish] in polish.hasWorkingEngine }
     }
 
     /// A batch of the core's events, after the CoreStore has applied it.
@@ -214,6 +217,7 @@ final class ScreenModels {
             owed.apply(event)
             live.apply(event)
             onboarding.apply(event)
+            dictation.apply(event)
         }
     }
 
@@ -224,11 +228,16 @@ final class ScreenModels {
         polish.load()
         permissions.refresh()
         catalogue.requery()
+        dictation.load()
+        // The core holds the keys from here; without Accessibility it answers dictation.off, and
+        // coming back to the app tries again.
+        dictation.enable()
     }
 
     /// The app became active again.
     func appBecameActive() {
         permissions.appBecameActive()
+        dictation.appBecameActive()
     }
 
     /// The core is about to stop: hand it what the screens hold unsaved.
@@ -243,7 +252,13 @@ final class ScreenModels {
              "note.add", "note.update", "note.delete":
             true
         case "setting.get":
-            failed.id == OnboardingModel.settingID
+            failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
+                || dictation.handles(failed)
+        case "setting.set":
+            // Onboarding's is not shown (the first run shows again next launch), so it is logged.
+            failed.id == PolishModel.settingID || dictation.handles(failed)
+        case "dictation.enable", "dictation.disable":
+            dictation.handles(failed)
         default:
             false
         }
