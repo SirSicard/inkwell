@@ -20,7 +20,7 @@ voice`), and the shell (`swift test --package-path mac --filter Dictation`).
 
 - [ ] Stage the dictation models from the bench data (symlinks, nothing downloaded):
 
-      INK_BENCH_DIR=~/.blotter-bench scripts/stage-dictation-models.sh /tmp/inkwell-dictation-models
+      INK_BENCH_DIR=<bench data> scripts/stage-dictation-models.sh /tmp/inkwell-dictation-models
 
 - [ ] Start it on a scratch library with those models:
 
@@ -137,7 +137,7 @@ reads only the document's length, never its text.
 Not by hand, but it needs a quiet Mac, so it is here. About 45 minutes; it refuses while the
 machine is busy.
 
-- [ ] `INK_BENCH_DIR=~/.blotter-bench scripts/dictation-latency.sh`
+- [ ] `INK_BENCH_DIR=<bench data> scripts/dictation-latency.sh`
 - [ ] Record from its summary: warm p50 ______ / p95 ______ ms (target 350 / 700); the first take
       after 240 s idle with the warm-up ______ ms and without ______ ms.
 
