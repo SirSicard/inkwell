@@ -48,7 +48,8 @@
  *   debug output (which prints API-key headers) and llama.cpp's debug output (which quotes
  *   generated text). Shells must not install their own logger or subscriber for the core's
  *   targets; there is nothing to configure beyond "log_level" in the config. Event payloads carry
- *   the user's words (dictation.inserted, meeting.partial, meeting.final): never log them.
+ *   the user's words (dictation.inserted, meeting.partial, meeting.final, and the library's
+ *   answers: library.records, library.search, library.record, commitments.listed): never log them.
  *
  * SHUTDOWN
  *   ink_shutdown stops every worker, lets go of every engine the shell registered (their release
@@ -170,6 +171,23 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
+ *   {"cmd":"records.list","kind":"meeting","limit":50,"before":{"started_at_unix_ms":0,"id":"..."}}
+ *       "library.records": records newest first (by start time, then id). All fields optional:
+ *       "kind" is meeting, dictation or file_import; "limit" 1-500 (default 50); "before" is the
+ *       last record of the previous page. "more" says whether another page follows.
+ *   {"cmd":"records.search","query":"<words>","limit":50}
+ *       "library.search": full-text matches across every record's current transcript, best first.
+ *   {"cmd":"record.open","record":"<record id>"}
+ *       "library.record": the record whole: transcript, notes, summary (markdown, to be rendered),
+ *       commitments, named speakers, and its audio chunks placed on its timeline ("estimated"
+ *       when the meeting's start was not written; "left_out" counts chunks that cannot be
+ *       played or placed). An audio directory outside the library is refused: command.failed.
+ *   {"cmd":"library.stats","since_unix_ms":0}
+ *       "library.stats": per kind, records, time and words since the moment (at most 31 days
+ *       back: it reads each transcript to count words; an older moment is refused); and how many
+ *       of the newest meetings in a row kept the user's words and none of the far end's.
+ *       These four answer with the command's "id" as "ref"; a failure is "command.failed" with
+ *       that "id", so a screen can tell "could not load" from "empty".
  *
  * Returns INK_OK once the command is queued; its outcome arrives as events. A command the core
  * cannot read returns INK_ERR_INVALID_ARGUMENT and queues nothing.

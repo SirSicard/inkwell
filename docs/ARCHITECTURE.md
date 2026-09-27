@@ -229,6 +229,30 @@ modes, and a short whitelist of settings the shell owns (`onboarding.done`, `dic
 - Replies carry the user's words only where the screen asked for them (a commitment's text); a
   note's words are never echoed back, and errors never quote them.
 
+The Library and a record read through four more, on the same thread: `records.list`,
+`records.search`, `record.open` and `library.stats`. Each answer echoes the command's id as `ref`,
+and a failure is `command.failed` with that id, so a screen can say "could not load" rather than
+show an empty library.
+
+- **Order.** Records list newest first, by start time and then id, with a keyset cursor for the
+  next page. The shell never re-sorts by anything else.
+- **Summaries are stored as markdown** (a headline, then sections). The shells render them; raw
+  markdown never reaches the screen. A meeting's title is its summary's headline unless the
+  meeting had one.
+- **Audio.** `record.open` lists a meeting's chunk files, each placed on the record's timeline:
+  the meeting worker writes the host time of the timeline's zero beside the chunks
+  (`timeline.json`), and a chunk's place is its first frame's host time minus that. A record
+  without the file (older ones) is placed from its earliest chunk and says so. A chunk whose format
+  or host time only recovery could guess is left out and counted, never placed on a guess. The
+  audio directory must stay inside the library (no `..`, no absolute path, links resolved). The
+  shell plays the chunks from disk a few seconds at a time; a meeting is never read into memory
+  whole.
+- **Counts.** `library.stats` reads every transcript in its window to count words, so the core
+  bounds the window at 31 days and refuses an older moment. (The store has no aggregate query, and
+  adding one would widen the store's trait for one screen line.)
+- **Words.** These answers carry the library's words (transcripts, notes, summaries, search
+  snippets). As with every event that does, they never reach a log.
+
 ## Testing
 
 - `cargo test --workspace` in `core/`. CI runs it with fmt, `clippy -D warnings` and `cargo deny` on

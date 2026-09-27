@@ -19,6 +19,8 @@ final class CoreController {
         send: { [weak self] in self?.send($0) },
         dataDirectory: try? DataLocation.dataDirectory(environment: ProcessInfo.processInfo.environment),
         modelsDirectory: try? DataLocation.modelsDirectory(environment: ProcessInfo.processInfo.environment))
+    /// What Today, the Library and a record show of the library, asked for by query.
+    private(set) lazy var library = LibraryModel(send: { [weak self] in self?.send($0) })
     /// Sees every batch after the store (the measurement marks), when set.
     var observer: ((_ batch: [InkEvent]) -> Void)?
 
@@ -140,10 +142,11 @@ final class CoreController {
     func received(_ batch: [InkEvent]) {
         store.apply(batch)
         screens.apply(batch)
+        library.apply(batch)
         for event in batch {
             // The core logged why; this says which command no screen will show failing. The
             // core's message and the command's fields are not repeated.
-            if case .commandFailed(let failed) = event, !screens.handles(failed) {
+            if case .commandFailed(let failed) = event, !screens.handles(failed), !library.handles(failed) {
                 commandLog.write("command.failed for a \(failed.command) command; no screen shows it")
             }
         }

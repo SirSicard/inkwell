@@ -115,6 +115,14 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case settingValue(SettingValue)
     /// `modes.listed`
     case modesListed(ModesListed)
+    /// `library.records`
+    case libraryRecords(LibraryRecords)
+    /// `library.search`
+    case librarySearch(LibrarySearch)
+    /// `library.record`
+    case libraryRecord(LibraryRecord)
+    /// `library.stats`
+    case libraryStats(LibraryStats)
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
@@ -191,6 +199,10 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
             case "modes.listed": self = .modesListed(try ModesListed(from: decoder))
+            case "library.records": self = .libraryRecords(try LibraryRecords(from: decoder))
+            case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
+            case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
+            case "library.stats": self = .libraryStats(try LibraryStats(from: decoder))
             default: self = .unknown(type: type)
             }
         } catch {
@@ -253,6 +265,10 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
         case .modesListed(let event): try event.encode(to: encoder)
+        case .libraryRecords(let event): try event.encode(to: encoder)
+        case .librarySearch(let event): try event.encode(to: encoder)
+        case .libraryRecord(let event): try event.encode(to: encoder)
+        case .libraryStats(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var keys = encoder.container(keyedBy: TypeKey.self)
             try keys.encode(type, forKey: .type)
@@ -261,6 +277,35 @@ public enum InkEvent: Codable, Sendable, Equatable {
             try keys.encode(type, forKey: .type)
             try keys.encodeIfPresent(record, forKey: .record)
         }
+    }
+}
+
+/// One chunk file of a record's audio: raw little-endian float samples, interleaved, after a
+/// header of data_offset bytes.
+public struct AudioChunk: Codable, Sendable, Equatable {
+    /// Which side.
+    public let channel: Channel
+    /// Interleaved channels per frame.
+    public let channels: Int64
+    /// Bytes before the first sample.
+    public let dataOffset: Int64
+    /// Whole frames in it.
+    public let frames: Int64
+    /// The file, absolute.
+    public let path: String
+    /// Frames per second.
+    public let sampleRate: Int64
+    /// Where its first frame falls on the record's timeline, ms (negative: before the start).
+    public let startMs: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case channels
+        case dataOffset = "data_offset"
+        case frames
+        case path
+        case sampleRate = "sample_rate"
+        case startMs = "start_ms"
     }
 }
 
@@ -278,6 +323,15 @@ public struct AudioDropped: Codable, Sendable, Equatable {
     public let samples: Int64
     /// Always `audio.dropped`.
     public let type: String
+}
+
+/// How a record's chunks were placed on its timeline: recorded (from the start the meeting
+/// wrote beside them) or estimated (from its earliest chunk, because that start is missing: an
+/// older record, or one whose write failed). Estimated: the two sides may be out of step, and
+/// the shell says so.
+public enum AudioTimeline: String, Codable, Sendable, Equatable, CaseIterable {
+    case recorded
+    case estimated
 }
 
 /// A model in the catalogue that runs on this OS.
@@ -379,6 +433,40 @@ public struct CommandFailed: Codable, Sendable, Equatable {
     public let message: String
     /// Always `command.failed`.
     public let type: String
+}
+
+/// A commitment: something promised in a record.
+public struct CommitmentRow: Codable, Sendable, Equatable {
+    /// Its id.
+    public let commitment: String
+    /// Whether it is done.
+    public let done: Bool
+    /// When, as said ("by Friday").
+    public let due: String?
+    /// When, resolved, Unix ms; absent when it could not be resolved.
+    public let dueAtUnixMs: Int64?
+    /// The commitment it was folded into ("said twice"), when it was.
+    public let mergedInto: String?
+    /// Who owes it, as said.
+    public let owner: String?
+    /// Where in the record it was said.
+    public let provenance: [Span]
+    /// The record it came from.
+    public let record: String
+    /// What was promised. The library's words: never log it.
+    public let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case commitment
+        case done
+        case due
+        case dueAtUnixMs = "due_at_unix_ms"
+        case mergedInto = "merged_into"
+        case owner
+        case provenance
+        case record
+        case text
+    }
 }
 
 /// A commitment was marked done, or open again.
@@ -719,6 +807,104 @@ public enum KeptLive: String, Codable, Sendable, Equatable, CaseIterable {
     case refused
     case incomplete
     case other
+}
+
+/// What the library holds of one kind since a moment.
+public struct KindStats: Codable, Sendable, Equatable {
+    /// Their total length, ms (records still live count nothing).
+    public let durationMs: Int64
+    /// The kind.
+    public let kind: RecordKind
+    /// Records that started since.
+    public let records: Int64
+    /// Words in their transcripts.
+    public let words: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case durationMs = "duration_ms"
+        case kind
+        case records
+        case words
+    }
+}
+
+/// One record whole, in answer to record.open. Carries the library's words: never log it.
+public struct LibraryRecord: Codable, Sendable, Equatable {
+    /// Its audio, when it kept some and the directory is there.
+    public let audio: RecordAudio?
+    /// Its commitments, in the order they were added, merged ones included.
+    public let commitments: [CommitmentRow]
+    /// The user's notes, by stamp.
+    public let notes: [RecordNote]
+    /// The record.
+    public let record: RecordRow
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// The current revision's transcript, by start time.
+    public let segments: [RecordSegment]
+    /// The speakers the user named.
+    public let speakers: [SpeakerName]
+    /// Its summary, when one was written.
+    public let summary: RecordSummary?
+    /// Always `library.record`.
+    public let type: String
+}
+
+/// Records, in answer to records.list: newest first (by start time, then id).
+public struct LibraryRecords: Codable, Sendable, Equatable {
+    /// The kind asked for; absent for every kind.
+    public let kind: RecordKind?
+    /// Whether more records follow the last one: ask again with it as "before".
+    public let more: Bool
+    /// The records, newest first.
+    public let records: [RecordRow]
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// Always `library.records`.
+    public let type: String
+}
+
+/// Full-text matches, in answer to records.search, best first.
+public struct LibrarySearch: Codable, Sendable, Equatable {
+    /// The matches.
+    public let hits: [SearchHit]
+    /// The query, as asked. The user's words: never log it.
+    public let query: String
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// Always `library.search`.
+    public let type: String
+}
+
+/// What the library holds since a moment, in answer to library.stats, and whether recent
+/// meetings kept no far end.
+public struct LibraryStats: Codable, Sendable, Equatable {
+    /// The newest finished meetings in a row (of the last 20) that kept the user's words and
+    /// none of the far end's: the sign that the other side was not heard.
+    public let farSilentMeetings: Int64
+    /// When the earliest of those started, Unix ms.
+    public let farSilentSinceUnixMs: Int64?
+    /// Per kind: dictation, meeting, file_import.
+    public let kinds: [KindStats]
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// The moment asked about, Unix ms.
+    public let sinceUnixMs: Int64
+    /// Always `library.stats`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case farSilentMeetings = "far_silent_meetings"
+        case farSilentSinceUnixMs = "far_silent_since_unix_ms"
+        case kinds
+        case ref
+        case sinceUnixMs = "since_unix_ms"
+        case type
+    }
 }
 
 /// Capture stopped because the core's pump failed (a bug in the core, contained). What reached
@@ -1390,6 +1576,124 @@ public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
     case `final`
 }
 
+/// Where a record's audio is: its chunks per side, placed on its timeline.
+public struct RecordAudio: Codable, Sendable, Equatable {
+    /// Readable chunks, mic first then far end, each in order. Unreadable ones are left out
+    /// (and logged).
+    public let chunks: [AudioChunk]
+    /// Chunk files left out of the player: unreadable, or whose format or place on the timeline
+    /// recovery could only guess. Nonzero: some of the audio cannot be played or placed, and
+    /// the shell says so.
+    public let leftOut: Int64
+    /// How the chunks were placed.
+    public let timeline: AudioTimeline
+
+    private enum CodingKeys: String, CodingKey {
+        case chunks
+        case leftOut = "left_out"
+        case timeline
+    }
+}
+
+/// What produced a record: one dictation, a meeting (mic and far end), or an imported audio or
+/// video file.
+public enum RecordKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case dictation
+    case meeting
+    case fileImport = "file_import"
+}
+
+/// A note the user typed, stamped with where in the record it was written.
+public struct RecordNote: Codable, Sendable, Equatable {
+    /// Where in the record, ms from its start: the timestamp chip.
+    public let atMs: Int64
+    /// Its id.
+    public let note: String
+    /// The note. The user's words: never log it.
+    public let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case atMs = "at_ms"
+        case note
+        case text
+    }
+}
+
+/// A record as a list shows it.
+public struct RecordRow: Codable, Sendable, Equatable {
+    /// When it ended, Unix ms; absent while it is live.
+    public let endedAtUnixMs: Int64?
+    /// Whether it kept audio (a meeting's chunks).
+    public let hasAudio: Bool
+    /// What produced it.
+    public let kind: RecordKind
+    /// The first words of an untitled record's transcript. Carries the user's words: never log
+    /// it.
+    public let preview: String?
+    /// Its id.
+    public let record: String
+    /// The transcript revision: 1 while live, 2 once the final pass replaced it.
+    public let revision: Int64
+    /// The application involved, when known.
+    public let sourceApp: String?
+    /// When it started, Unix ms.
+    public let startedAtUnixMs: Int64
+    /// Its title: a calendar event's, a file's name, or the summary's headline. Absent until
+    /// one is known.
+    public let title: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case endedAtUnixMs = "ended_at_unix_ms"
+        case hasAudio = "has_audio"
+        case kind
+        case preview
+        case record
+        case revision
+        case sourceApp = "source_app"
+        case startedAtUnixMs = "started_at_unix_ms"
+        case title
+    }
+}
+
+/// Settled transcript on a record's timeline. Carries the user's words: never log it.
+public struct RecordSegment: Codable, Sendable, Equatable {
+    /// Mic (you) or far end (them).
+    public let channel: Channel
+    /// End, ms from the record's start.
+    public let endMs: Int64
+    /// The diarized far-end speaker, when labels were kept.
+    public let speaker: String?
+    /// Start, ms from the record's start.
+    public let startMs: Int64
+    /// The words.
+    public let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case endMs = "end_ms"
+        case speaker
+        case startMs = "start_ms"
+        case text
+    }
+}
+
+/// A record's summary, as stored: markdown (a headline, then sections). Shells render it; it is
+/// never shown raw.
+public struct RecordSummary: Codable, Sendable, Equatable {
+    /// When it was written, Unix ms.
+    public let createdAtUnixMs: Int64
+    /// The model that wrote it.
+    public let model: String
+    /// The markdown. The library's words: never log it.
+    public let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case createdAtUnixMs = "created_at_unix_ms"
+        case model
+        case text
+    }
+}
+
 /// Why a job's model was refused.
 public enum Refusal: String, Codable, Sendable, Equatable, CaseIterable {
     case updating
@@ -1431,6 +1735,28 @@ public enum Risk: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
+/// A full-text match.
+public struct SearchHit: Codable, Sendable, Equatable {
+    /// The record.
+    public let record: String
+    /// The matching text. The library's words: never log it.
+    public let snippet: String
+    /// Where in the record the match is, ms.
+    public let startMs: Int64
+    /// When the record started, Unix ms.
+    public let startedAtUnixMs: Int64
+    /// The record's title, when it has one.
+    public let title: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case record
+        case snippet
+        case startMs = "start_ms"
+        case startedAtUnixMs = "started_at_unix_ms"
+        case title
+    }
+}
+
 /// A shell setting's value, in answer to setting.get or setting.set.
 public struct SettingValue: Codable, Sendable, Equatable {
     /// The setting.
@@ -1448,6 +1774,30 @@ public enum SideState: String, Codable, Sendable, Equatable, CaseIterable {
     case ok
     case stopped
     case zeros
+}
+
+/// A stretch of a record: where something was said.
+public struct Span: Codable, Sendable, Equatable {
+    /// Which side said it.
+    public let channel: Channel
+    /// End, ms from the record's start.
+    public let endMs: Int64
+    /// Start, ms from the record's start.
+    public let startMs: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case endMs = "end_ms"
+        case startMs = "start_ms"
+    }
+}
+
+/// A diarized speaker the user named in one record.
+public struct SpeakerName: Codable, Sendable, Equatable {
+    /// The name the user gave.
+    public let name: String
+    /// The diarizer's label.
+    public let speaker: String
 }
 
 /// Why no voice detection model is in use.

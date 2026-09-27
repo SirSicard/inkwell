@@ -10,7 +10,8 @@
 
   personal-information.calendars: the hardened runtime blocks EventKit without it, silently like
   the microphone. The "Know your meetings" permission (Settings, onboarding) reads the calendar to
-  name a meeting and who was in it; the prompt text is in Info.plist.
+  name a meeting and who was in it, and Today's "Up next" reads the next event; the prompt text is
+  in Info.plist.
 
   Add an entitlement only with the feature that needs it, and say why here.
 -->

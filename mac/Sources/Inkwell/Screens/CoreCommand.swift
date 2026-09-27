@@ -1,4 +1,4 @@
-// The commands the Live, Owed and Settings screens send (inkwell.h lists them). A view model sends
+// The commands the screens send (inkwell.h lists them). A view model sends
 // these through a closure, so a test can read what it sent and answer with events of its own.
 import Foundation
 import InkBridge
@@ -20,6 +20,19 @@ enum CoreCommand: Equatable, Sendable {
     case settingGet(ShellSetting)
     case settingSet(ShellSetting, String)
     case modesList
+    /// The library (Today, Library, a record). `ref` comes back as the answer's `ref`, or as the id
+    /// of a `command.failed`, so a model matches each answer to its question and can tell "could not
+    /// load" from "empty".
+    case recordsList(kind: RecordKind?, before: RecordCursor?, limit: Int, ref: String)
+    case recordsSearch(query: String, limit: Int, ref: String)
+    case recordOpen(record: String, ref: String)
+    case libraryStats(sinceUnixMs: Int64, ref: String)
+
+    /// Where a page of records continues: the last record of the previous page.
+    struct RecordCursor: Equatable, Sendable {
+        let startedAtUnixMs: Int64
+        let record: String
+    }
 
     /// Its JSON, as `ink_command` reads it.
     var json: String {
@@ -39,8 +52,15 @@ enum CoreCommand: Equatable, Sendable {
         case .settingSet(let key, let value):
             ["cmd": "setting.set", "key": key.rawValue, "value": value, "id": "setting:\(key.rawValue)"]
         case .modesList: ["cmd": "modes.list"]
+        case .recordsList(let kind, let before, let limit, let ref):
+            ["cmd": "records.list", "limit": limit, "id": ref]
+                .merging(kind.map { ["kind": $0.rawValue] } ?? [:]) { a, _ in a }
+                .merging(before.map { ["before": ["started_at_unix_ms": $0.startedAtUnixMs, "id": $0.record]] } ?? [:]) { a, _ in a }
+        case .recordsSearch(let query, let limit, let ref): ["cmd": "records.search", "query": query, "limit": limit, "id": ref]
+        case .recordOpen(let record, let ref): ["cmd": "record.open", "record": record, "id": ref]
+        case .libraryStats(let since, let ref): ["cmd": "library.stats", "since_unix_ms": since, "id": ref]
         }
-        // Strings, numbers and booleans only: serialisation cannot fail.
+        // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }
@@ -60,6 +80,10 @@ enum CoreCommand: Equatable, Sendable {
         case .settingGet: "setting.get"
         case .settingSet: "setting.set"
         case .modesList: "modes.list"
+        case .recordsList: "records.list"
+        case .recordsSearch: "records.search"
+        case .recordOpen: "record.open"
+        case .libraryStats: "library.stats"
         }
     }
 }

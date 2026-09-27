@@ -430,6 +430,12 @@ fn worker(
                     return;
                 }
             };
+        // Where the record's timeline starts, beside its chunks: the player places each chunk by
+        // its host time against it. Without it the player estimates from the first chunk, so a
+        // failure costs precision, not the meeting.
+        if let Err(e) = crate::library::write_timeline(chunks.dir(), chain.start_ns()) {
+            log::warn!("meeting: the timeline start could not be written: {e}");
+        }
         let _ = go.send(true);
         loop {
             let deadline = chain.deadline_ns().map(|d| {

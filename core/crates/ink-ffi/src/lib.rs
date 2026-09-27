@@ -14,6 +14,7 @@
 //! | [`meeting`] | a meeting run: capture, the pump, the meeting worker |
 //! | [`queries`] | the screens' commands (permissions, owed, notes, settings, modes, models), on their own thread |
 //! | [`dictation`] | the dictation worker |
+//! | [`library`] | the library as the screens read it (records, search, a record, counts), answered on `queries`' thread |
 //! | [`logging`] | the only logger and `tracing` subscriber, with both privacy filters |
 //!
 //! The threading contract is the header's (THREADS). In short: events reach the shell on one
@@ -33,6 +34,7 @@ pub mod events;
 pub mod external;
 pub mod gate;
 pub mod hub;
+pub mod library;
 pub mod llms;
 pub mod logging;
 pub mod mailbox;

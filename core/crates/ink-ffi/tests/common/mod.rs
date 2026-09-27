@@ -422,6 +422,11 @@ pub fn start(
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
     };
+    start_parts(parts)
+}
+
+/// A core over `parts`, started, with the bands writer lent and `core.ready` seen.
+pub fn start_parts(parts: Parts) -> (Core, Arc<Recorder>) {
     let recorder = Recorder::new();
     let (writer, _) = bands_channel();
     let core = Core::start(parts, recorder.out()).unwrap();

@@ -1,5 +1,5 @@
-//! The screens' commands: permissions, what is owed, a live meeting's notes, settings, modes and
-//! the model catalogue. They run on their own thread, `ink-queries`, in the order they were sent.
+//! The screens' commands: permissions, what is owed, a live meeting's notes, settings, modes, the
+//! model catalogue, and the library's records ([`library`](crate::library)). They run on their own thread, `ink-queries`, in the order they were sent.
 //!
 //! Apart from the command thread on purpose: a model update holds that thread for as long as its
 //! download takes, and a note typed during it, or a permission card the user is looking at, must
@@ -111,6 +111,8 @@ pub enum Query {
     },
     /// `modes.list`: the user's modes.
     ModesList,
+    /// The library's records, a search, one record, or counts ([`library`](crate::library)).
+    Library(crate::library::LibraryQuery),
 }
 
 /// A query with the command's name and id, for its events.
@@ -162,6 +164,9 @@ pub fn read(json: &str) -> Result<Option<Read>, String> {
 /// Reads `v` as the query named `name`: `None` when `name` is not one of these commands, else the
 /// query or why it cannot be read. Unknown fields are refused, as for every other command.
 pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
+    if let Some(query) = crate::library::parse(name, v) {
+        return Some(query.map(Query::Library));
+    }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
 }
@@ -466,6 +471,12 @@ impl Ctx<'_> {
                 Ok(e) => emit(e),
                 Err(e) => fail(e),
             },
+            Query::Library(query) => {
+                match crate::library::answer(self.shared, query, id.as_deref()) {
+                    Ok(e) => emit(e),
+                    Err(e) => fail(e),
+                }
+            }
         }
     }
 
