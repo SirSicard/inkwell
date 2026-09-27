@@ -68,7 +68,7 @@ fn migrations_from_empty_reach_the_current_version() {
     drop(db.open());
     let raw = db.raw();
     assert_eq!(user_version(&raw), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 1);
+    assert_eq!(SCHEMA_VERSION, 2);
 
     let mut stmt = raw
         .prepare(
@@ -90,6 +90,7 @@ fn migrations_from_empty_reach_the_current_version() {
             "commitment_span",
             "note",
             "record",
+            "removed_line",
             "segment",
             "setting",
             "speaker",
@@ -112,6 +113,32 @@ fn migrations_from_empty_reach_the_current_version() {
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
     assert_eq!(mode, "wal");
+}
+
+#[test]
+fn a_database_from_before_removed_lines_is_brought_up_to_date() {
+    let db = TempDb::new("migrate-v1");
+    let id = {
+        let store = db.open();
+        let id = meeting(&store, 1);
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "kept through the upgrade")])
+            .unwrap();
+        id
+    };
+    // As a build of schema 1 left it.
+    {
+        let raw = db.raw();
+        raw.execute_batch("DROP TABLE removed_line; PRAGMA user_version = 1;")
+            .unwrap();
+    }
+    let store = db.open();
+    assert_eq!(user_version(&db.raw()), SCHEMA_VERSION);
+    assert_eq!(store.segments(&id).unwrap().len(), 1);
+    store
+        .save_removed(&id, &[seg(Channel::Mic, 5, "an echo line")])
+        .unwrap();
+    assert_eq!(store.removed(&id).unwrap().len(), 1);
 }
 
 #[test]
@@ -618,6 +645,9 @@ fn deleting_a_record_removes_everything_it_owns() {
         store
             .set_speaker_name(id, &SpeakerId("spk0".into()), "Guest")
             .unwrap();
+        store
+            .save_removed(id, &[seg(Channel::Mic, 0, "a removed line")])
+            .unwrap();
     }
     let span = Span {
         channel: Channel::Mic,
@@ -641,6 +671,7 @@ fn deleting_a_record_removes_everything_it_owns() {
     let raw = db.raw();
     for (table, column) in [
         ("segment", "record_id"),
+        ("removed_line", "record_id"),
         ("note", "record_id"),
         ("summary", "record_id"),
         ("speaker", "record_id"),
@@ -673,17 +704,9 @@ fn deleting_a_record_removes_everything_it_owns() {
 }
 
 // --- Deleted means deleted ---------------------------------------------------------------------
-
-/// Moves everything from the WAL into the database file and truncates the WAL to nothing.
-fn checkpoint(db: &TempDb) {
-    let (busy, _, _): (i64, i64, i64) = db
-        .raw()
-        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })
-        .unwrap();
-    assert_eq!(busy, 0, "the checkpoint completed");
-}
+//
+// Nothing here checkpoints for the store: text a call deletes or replaces must be gone from the
+// database file **and** its write-ahead log when the call returns, by the store's own doing.
 
 /// How often `marker` appears in the raw bytes of the database file and its WAL.
 fn on_disk(db: &TempDb, marker: &str) -> usize {
@@ -738,6 +761,9 @@ fn a_deleted_record_leaves_no_text_on_disk() {
         .unwrap();
     store.add_note(&doomed, 10, "zqxnotemarker").unwrap();
     store
+        .save_removed(&doomed, &[seg(Channel::Mic, 20, "zqxremovedmarker")])
+        .unwrap();
+    store
         .save_summary(
             &doomed,
             &Summary {
@@ -766,21 +792,18 @@ fn a_deleted_record_leaves_no_text_on_disk() {
         "zqxtitlemarker",
         "zqxsegmentmarker",
         "zqxnotemarker",
+        "zqxremovedmarker",
         "zqxsummarymarker",
         "zqxspeakermarker",
         "zqxcommitmentmarker",
     ];
-    checkpoint(&db);
+    // Written, and not checkpointed: in the log (or the file, if SQLite checkpointed on its own).
     for marker in markers {
         assert!(on_disk(&db, marker) >= 1, "{marker} is written before");
     }
-    assert!(
-        on_disk(&db, "zqxsegmentmarker") >= 2,
-        "the segment text and its search index entry are both on disk"
-    );
 
     store.delete_record(&doomed).unwrap();
-    checkpoint(&db);
+    assert!(!store.unscrubbed());
     for marker in markers {
         assert_eq!(on_disk(&db, marker), 0, "{marker} is overwritten");
     }
@@ -794,37 +817,127 @@ fn superseded_and_replaced_text_leaves_no_trace_on_disk() {
     let store = db.open();
     neighbour(&store);
     let id = meeting(&store, 9);
-    store
-        .append_segments(
-            &id,
-            &[seg(Channel::Mic, 0, "alpha zqxlivemarker beta gamma")],
-        )
-        .unwrap();
-    let note = store.add_note(&id, 0, "zqxoldnotemarker").unwrap();
     let summary = |text: &str| Summary {
         text: text.into(),
         model: "m".into(),
         created_at_unix_ms: 1,
     };
-    store
-        .save_summary(&id, &summary("zqxoldsummarymarker"))
-        .unwrap();
-    checkpoint(&db);
-    assert!(on_disk(&db, "zqxlivemarker") >= 2);
-    assert!(on_disk(&db, "zqxoldnotemarker") >= 1);
-    assert!(on_disk(&db, "zqxoldsummarymarker") >= 1);
-
-    store
-        .supersede(&id, &[seg(Channel::Mic, 0, "alpha beta gamma delta")])
-        .unwrap();
-    store.update_note(&note, "new").unwrap();
-    store.save_summary(&id, &summary("new")).unwrap();
-    checkpoint(&db);
-    for marker in ["zqxlivemarker", "zqxoldnotemarker", "zqxoldsummarymarker"] {
+    // Each call that replaces or deletes user text, with the text it replaces.
+    type Step = Box<dyn Fn(&SqliteStore, &RecordId)>;
+    let steps: Vec<(&str, Step, Step)> = vec![
+        (
+            "zqxlivemarker",
+            Box::new(|s, id| {
+                s.append_segments(
+                    id,
+                    &[seg(Channel::Mic, 0, "alpha zqxlivemarker beta gamma")],
+                )
+                .unwrap()
+            }),
+            Box::new(|s, id| {
+                s.supersede(id, &[seg(Channel::Mic, 0, "alpha beta gamma delta")])
+                    .map(drop)
+                    .unwrap()
+            }),
+        ),
+        (
+            "zqxoldtitlemarker",
+            Box::new(|s, id| s.set_title(id, "zqxoldtitlemarker").unwrap()),
+            Box::new(|s, id| s.set_title(id, "a new title").unwrap()),
+        ),
+        (
+            "zqxoldsummarymarker",
+            Box::new(move |s, id| s.save_summary(id, &summary("zqxoldsummarymarker")).unwrap()),
+            Box::new(move |s, id| s.save_summary(id, &summary("new")).unwrap()),
+        ),
+        (
+            "zqxoldspeakermarker",
+            Box::new(|s, id| {
+                s.set_speaker_name(id, &SpeakerId("spk0".into()), "zqxoldspeakermarker")
+                    .unwrap()
+            }),
+            Box::new(|s, id| {
+                s.set_speaker_name(id, &SpeakerId("spk0".into()), "Guest")
+                    .unwrap()
+            }),
+        ),
+        (
+            "zqxoldremovedmarker",
+            Box::new(|s, id| {
+                s.save_removed(id, &[seg(Channel::Mic, 0, "zqxoldremovedmarker")])
+                    .unwrap()
+            }),
+            Box::new(|s, id| {
+                s.save_removed(id, &[seg(Channel::Mic, 0, "a later pass's line")])
+                    .unwrap()
+            }),
+        ),
+        (
+            "zqxoldsettingmarker",
+            Box::new(|s, _| s.set_setting("dictionary", "zqxoldsettingmarker").unwrap()),
+            Box::new(|s, _| s.set_setting("dictionary", "new").unwrap()),
+        ),
+    ];
+    for (marker, write, replace) in &steps {
+        write(&store, &id);
+        assert!(on_disk(&db, marker) >= 1, "{marker} is written before");
+        replace(&store, &id);
+        assert!(!store.unscrubbed());
         assert_eq!(on_disk(&db, marker), 0, "{marker} is overwritten");
     }
+    // A note changed, then one deleted.
+    let note = store.add_note(&id, 0, "zqxoldnotemarker").unwrap();
+    store.update_note(&note, "new").unwrap();
+    assert_eq!(on_disk(&db, "zqxoldnotemarker"), 0);
+    let gone = store.add_note(&id, 5, "zqxdeletednotemarker").unwrap();
+    assert!(on_disk(&db, "zqxdeletednotemarker") >= 1);
+    store.delete_note(&gone).unwrap();
+    assert_eq!(on_disk(&db, "zqxdeletednotemarker"), 0);
+
     assert_eq!(store.search("delta", 10).unwrap().len(), 1);
     fts_is_consistent(&db.raw());
+}
+
+/// Another process reading the database holds the log: the store tries a bounded number of
+/// times, then says so (`unscrubbed`), and catches up on its next call once the reader is done.
+#[test]
+fn a_reader_that_holds_the_log_delays_the_scrub_and_it_is_reported() {
+    let db = TempDb::new("scrub-busy");
+    let store = db.open();
+    neighbour(&store);
+    let doomed = meeting(&store, 9);
+    store
+        .append_segments(&doomed, &[seg(Channel::Mic, 0, "zqxheldmarker")])
+        .unwrap();
+
+    let reader = db.raw();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row("SELECT count(*) FROM segment", [], |r| r.get(0))
+        .unwrap();
+
+    assert_eq!(store.scrub_change(), None, "nothing to report yet");
+    store.delete_record(&doomed).unwrap();
+    assert!(
+        store.unscrubbed(),
+        "the scrub could not finish, and says so"
+    );
+    assert!(
+        on_disk(&db, "zqxheldmarker") >= 1,
+        "still in the log while it is read"
+    );
+    // The change is reported once, however often it is asked.
+    assert_eq!(store.scrub_change(), Some(true));
+    assert_eq!(store.scrub_change(), None);
+
+    reader.execute_batch("COMMIT").unwrap();
+    drop(reader);
+    // Any later call catches up.
+    assert_eq!(store.search("ordinary", 100).unwrap().len(), 40);
+    assert!(!store.unscrubbed());
+    assert_eq!(on_disk(&db, "zqxheldmarker"), 0);
+    assert_eq!(store.scrub_change(), Some(false), "the clear, once");
+    assert_eq!(store.scrub_change(), None);
 }
 
 // --- Threads -----------------------------------------------------------------------------------

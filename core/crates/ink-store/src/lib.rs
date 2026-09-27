@@ -12,7 +12,9 @@
 //! - live segments are stored with the times the engine gave them. Nothing here rewrites a
 //!   segment's `start_ms` or `end_ms`;
 //! - deleted means deleted: SQLite's `secure_delete` and the index's `secure-delete` option
-//!   overwrite the text of deleted and superseded rows instead of leaving it in free pages.
+//!   overwrite the text of deleted and superseded rows instead of leaving it in free pages, and
+//!   every call that deletes or replaces user text ends with a `TRUNCATE` checkpoint, so the old
+//!   pages leave the write-ahead log too (see [`SqliteStore`]).
 //!
 //! The [`import`] module brings an Inkwell 0.2 data directory in, read-only, in one transaction.
 
@@ -26,11 +28,13 @@ mod schema;
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ink_core::store::{
     Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
-    RecordQuery, SearchHit, Segment, Span, Store, Summary, check_supersede,
+    RecordQuery, SearchHit, Segment, Span, Store, Summary, SupersedeWith,
+    check_supersede_explained,
 };
 use ink_core::{SpeakerId, StoreError};
 use rusqlite::types::ValueRef;
@@ -64,9 +68,37 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// **A panic while the lock is held** poisons it. Every later call then returns
 /// [`StoreError::Backend`] instead of panicking in the caller, and the core should reopen the
 /// store.
+///
+/// **Deleted text leaves the log too.** `secure_delete` zeroes a deleted or replaced row in the
+/// page SQLite writes next, but with WAL that page goes to the log, and the log still holds the
+/// earlier frames with the text; the database file keeps its old page until a checkpoint. So
+/// every call that deletes or replaces user text (deleting a record or a note; a supersede;
+/// replacing a title, a note, a summary, a speaker's name, the removed lines or a setting) ends,
+/// after its commit, with `PRAGMA wal_checkpoint(TRUNCATE)`: the file gets the zeroed pages, and
+/// the log is cut to nothing. Another process reading the database (a backup tool, a second copy
+/// of the app) keeps the log from being cut: the checkpoint is tried [`SCRUB_ATTEMPTS`] times,
+/// waiting up to [`SCRUB_WAIT`] for readers each time, and if it still cannot finish the call
+/// succeeds anyway (its change is committed), [`Store::unscrubbed`] says so, a warning is logged
+/// (no text), and every later call tries again first until it succeeds. [`Store::scrub_change`]
+/// hands each change to the chains once, which tell the shell.
+///
+/// What this cannot promise: the store overwrites what the file system lets it overwrite. An SSD
+/// remaps written blocks (wear levelling), and copy-on-write file systems, snapshots and backups
+/// (APFS snapshots, Time Machine) can keep earlier blocks of the file; neither can be reached from
+/// here. Full-disk encryption (FileVault, BitLocker) is what protects those.
 pub struct SqliteStore {
     conn: Mutex<Connection>,
+    /// A scrub that could not finish, retried at the start of every call.
+    unscrubbed: AtomicBool,
+    /// What [`Store::scrub_change`] last reported.
+    reported: AtomicBool,
 }
+
+/// How many times a scrub's checkpoint is tried before the store reports it unfinished.
+pub const SCRUB_ATTEMPTS: u32 = 3;
+
+/// How long each try waits for another process's readers to leave the log.
+pub const SCRUB_WAIT: Duration = Duration::from_millis(200);
 
 impl SqliteStore {
     /// Opens (creating if needed) the database at `path` and migrates it to [`SCHEMA_VERSION`].
@@ -87,6 +119,8 @@ impl SqliteStore {
         configure(&mut conn, true).map_err(|e| e.into_store("open"))?;
         Ok(Self {
             conn: Mutex::new(conn),
+            unscrubbed: AtomicBool::new(false),
+            reported: AtomicBool::new(false),
         })
     }
 
@@ -97,10 +131,13 @@ impl SqliteStore {
         configure(&mut conn, false).map_err(|e| e.into_store("open"))?;
         Ok(Self {
             conn: Mutex::new(conn),
+            unscrubbed: AtomicBool::new(false),
+            reported: AtomicBool::new(false),
         })
     }
 
     /// Runs `f` with the connection. Only SQL and the row mapping it needs run under the lock.
+    /// A scrub an earlier call could not finish is tried first.
     fn with<T>(
         &self,
         op: &'static str,
@@ -111,7 +148,32 @@ impl SqliteStore {
                 "{op}: the store's lock was poisoned by an earlier panic"
             ))
         })?;
+        if self.unscrubbed.load(Ordering::Acquire) && scrub(&conn, 1) {
+            self.unscrubbed.store(false, Ordering::Release);
+            log::info!("{op}: deleted text left in the write-ahead log is now cleared");
+        }
         f(&mut conn).map_err(|e| e.into_store(op))
+    }
+
+    /// [`write`](Self::write) for a call that deletes or replaces user text: after the commit, a
+    /// scrub (see the type's docs). A scrub that cannot finish does not fail the call.
+    fn write_scrubbed<T>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce(&Transaction<'_>) -> Result<T, Fail>,
+    ) -> Result<T, StoreError> {
+        self.with(op, |conn| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let out = f(&tx)?;
+            tx.commit()?;
+            if !scrub(conn, SCRUB_ATTEMPTS) {
+                self.unscrubbed.store(true, Ordering::Release);
+                log::warn!(
+                    "{op}: saved, but the deleted text could not yet be cleared from the write-ahead log (another process is reading the database); retried on every later call"
+                );
+            }
+            Ok(out)
+        })
     }
 
     /// Runs `f` in an immediate (write) transaction: all of it commits, or none of it.
@@ -141,6 +203,38 @@ impl SqliteStore {
             Ok(out)
         })
     }
+}
+
+/// Checkpoints the whole log into the database file and truncates it to nothing, up to
+/// `attempts` times, each waiting [`SCRUB_WAIT`] for readers. Returns whether it finished. An
+/// in-memory database has no log, and is always finished. An error is logged (its kind only) and
+/// counts as unfinished: the call it follows has already committed.
+fn scrub(conn: &Connection, attempts: u32) -> bool {
+    let checkpoint = || -> rusqlite::Result<bool> {
+        // (busy, log frames, frames checkpointed): busy is 1 when a reader kept it from finishing.
+        let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        Ok(busy == 0)
+    };
+    if conn.busy_timeout(SCRUB_WAIT).is_err() {
+        return false;
+    }
+    let mut done = false;
+    for _ in 0..attempts {
+        match checkpoint() {
+            Ok(true) => {
+                done = true;
+                break;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("scrub: the checkpoint failed ({:?})", e.sqlite_error_code());
+                break;
+            }
+        }
+    }
+    // Back to the store's own wait for every other call.
+    let _ = conn.busy_timeout(BUSY_TIMEOUT);
+    done
 }
 
 /// Per-connection settings, then the migrations.
@@ -379,6 +473,27 @@ fn insert_segments(
     Ok(())
 }
 
+/// Replaces a record's removed lines. With `secure_delete`, the lines replaced are overwritten,
+/// not left in free pages.
+fn replace_removed(conn: &Connection, id: &RecordId, rows: &[SegmentRow<'_>]) -> Result<(), Fail> {
+    conn.execute("DELETE FROM removed_line WHERE record_id = ?1", [&id.0])?;
+    let mut insert = conn.prepare(
+        "INSERT INTO removed_line (record_id, channel, start_ms, end_ms, text, speaker)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    for row in rows {
+        insert.execute(params![
+            id.0,
+            row.channel,
+            row.start_ms,
+            row.end_ms,
+            row.text,
+            row.speaker
+        ])?;
+    }
+    Ok(())
+}
+
 /// One revision's segments by start time; at the same start the mic comes first, then the order
 /// they were written.
 fn segments_of(conn: &Connection, id: &RecordId, revision: u32) -> Result<Vec<Segment>, Fail> {
@@ -512,7 +627,7 @@ impl Store for SqliteStore {
     }
 
     fn set_title(&self, id: &RecordId, title: &str) -> Result<(), StoreError> {
-        self.with("set_title", |conn| {
+        self.write_scrubbed("set_title", |conn| {
             changed(conn.execute(
                 "UPDATE record SET title = ?2 WHERE id = ?1",
                 params![id.0, title],
@@ -527,10 +642,10 @@ impl Store for SqliteStore {
     }
 
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
-        // The foreign keys cascade to segments (and through a trigger, the search index), notes,
-        // the summary, speaker names and commitments with their spans. Commitments elsewhere
+        // The foreign keys cascade to segments (and through a trigger, the search index), removed
+        // lines, notes, the summary, speaker names and commitments with their spans. Commitments elsewhere
         // that were merged into this record's are un-merged, since they are still owed.
-        self.write("delete_record", |tx| {
+        self.write_scrubbed("delete_record", |tx| {
             changed(tx.execute("DELETE FROM record WHERE id = ?1", [&id.0])?)
         })
     }
@@ -550,15 +665,21 @@ impl Store for SqliteStore {
         })
     }
 
-    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+    fn supersede_with(
+        &self,
+        id: &RecordId,
+        segments: &[Segment],
+        with: SupersedeWith<'_>,
+    ) -> Result<u32, StoreError> {
         let rows = segment_rows(segments)?;
+        let removed = with.removed.map(segment_rows).transpose()?;
         // The guard has to see the rows this transaction replaces, so it runs under the lock.
-        self.write("supersede", |tx| {
+        self.write_scrubbed("supersede", |tx| {
             let current = revision(tx, id)?;
             let previous = segments_of(tx, id, current)?;
             // A refusal returns before anything is written, and dropping the transaction rolls
             // back regardless.
-            check_supersede(&previous, segments)?;
+            check_supersede_explained(&previous, segments, with.explained)?;
             let next = current
                 .checked_add(1)
                 .ok_or_else(|| Fail::backend("supersede: revision overflow".to_string()))?;
@@ -572,7 +693,41 @@ impl Store for SqliteStore {
                 "UPDATE record SET revision = ?2 WHERE id = ?1",
                 params![id.0, next],
             )?;
+            if let Some(lines) = &removed {
+                replace_removed(tx, id, lines)?;
+            }
             Ok(next)
+        })
+    }
+
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
+        let rows = segment_rows(lines)?;
+        self.write_scrubbed("save_removed", |tx| {
+            // The record must exist, empty list or not.
+            revision(tx, id)?;
+            replace_removed(tx, id, &rows)
+        })
+    }
+
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.read("removed", |tx| {
+            revision(tx, id)?;
+            let mut select = tx.prepare(
+                "SELECT channel, start_ms, end_ms, text, speaker FROM removed_line
+                 WHERE record_id = ?1 ORDER BY start_ms, seq",
+            )?;
+            let lines = select
+                .query_map([&id.0], |row| {
+                    Ok(Segment {
+                        channel: channel_at(row, 0)?,
+                        start_ms: ms_at(row, 1)?,
+                        end_ms: ms_at(row, 2)?,
+                        text: row.get(3)?,
+                        speaker: row.get::<_, Option<String>>(4)?.map(SpeakerId),
+                    })
+                })?
+                .collect::<Result<_, _>>()?;
+            Ok(lines)
         })
     }
 
@@ -625,7 +780,7 @@ impl Store for SqliteStore {
     }
 
     fn update_note(&self, id: &NoteId, text: &str) -> Result<(), StoreError> {
-        self.with("update_note", |conn| {
+        self.write_scrubbed("update_note", |conn| {
             changed(conn.execute(
                 "UPDATE note SET text = ?2 WHERE id = ?1",
                 params![id.0, text],
@@ -634,7 +789,7 @@ impl Store for SqliteStore {
     }
 
     fn delete_note(&self, id: &NoteId) -> Result<(), StoreError> {
-        self.with("delete_note", |conn| {
+        self.write_scrubbed("delete_note", |conn| {
             changed(conn.execute("DELETE FROM note WHERE id = ?1", [&id.0])?)
         })
     }
@@ -660,7 +815,7 @@ impl Store for SqliteStore {
     }
 
     fn save_summary(&self, id: &RecordId, summary: &Summary) -> Result<(), StoreError> {
-        self.write("save_summary", |tx| {
+        self.write_scrubbed("save_summary", |tx| {
             let current = revision(tx, id)?;
             tx.execute(
                 "INSERT INTO summary (record_id, text, model, created_at_unix_ms, transcript_revision)
@@ -707,7 +862,7 @@ impl Store for SqliteStore {
         speaker: &SpeakerId,
         name: &str,
     ) -> Result<(), StoreError> {
-        self.write("set_speaker_name", |tx| {
+        self.write_scrubbed("set_speaker_name", |tx| {
             revision(tx, id)?;
             tx.execute(
                 "INSERT INTO speaker (record_id, speaker, name) VALUES (?1, ?2, ?3)
@@ -868,7 +1023,17 @@ impl Store for SqliteStore {
     }
 
     fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
-        self.with("set_setting", |conn| put_setting(conn, key, value))
+        self.write_scrubbed("set_setting", |conn| put_setting(conn, key, value))
+    }
+
+    fn unscrubbed(&self) -> bool {
+        self.unscrubbed.load(Ordering::Acquire)
+    }
+
+    fn scrub_change(&self) -> Option<bool> {
+        let now = self.unscrubbed.load(Ordering::Acquire);
+        // The swap makes each change reported once, whichever thread asks.
+        (self.reported.swap(now, Ordering::AcqRel) != now).then_some(now)
     }
 }
 

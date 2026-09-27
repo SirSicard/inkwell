@@ -261,10 +261,11 @@ fn the_ami_fixture_gives_revision_2_correct_you_and_them_and_monotonic_times() {
         );
     }
     eprintln!(
-        "AMI fixture: mic {:?}; far {:?}; diarization {:?}; {} final segments",
+        "AMI fixture: mic {:?}; far {:?}; diarization {:?}; echo {:?}; {} final segments",
         outcome.mic,
         outcome.far,
         d,
+        outcome.echo,
         finals.len()
     );
 }
@@ -334,7 +335,19 @@ fn the_far_pass_matches_the_one_buffer_path_on_the_fixture() {
             )
         })
         .collect();
-    assert_eq!(finals, ONE_BUFFER_FINALS);
+    // The far end's lines are as the one-buffer path gave them. The mic's are not compared: the
+    // excerpt's headsets hear the other talkers across the room (crosstalk, some 20 dB down),
+    // which the echo path search finds as a path, so the mic is cancelled along it and its spans
+    // depend on AEC3's arithmetic, which differs in its last bits between machines.
+    let far = |lines: &[&str]| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|l| l.starts_with("Far "))
+            .map(|l| l.to_string())
+            .collect()
+    };
+    let got: Vec<&str> = finals.iter().map(String::as_str).collect();
+    assert_eq!(far(&got), far(&ONE_BUFFER_FINALS));
 }
 
 /// The final transcript the one-buffer path gave on the fixture with `Hearing` (recorded before it

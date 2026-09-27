@@ -22,7 +22,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::codec::Fail;
 
 /// Every migration, in order. The database's `user_version` counts how many have run.
-const MIGRATIONS: &[&str] = &[V1];
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// The schema version this build writes: the number of migrations. A database with a higher
 /// `user_version` came from a newer build and is refused rather than guessed at.
@@ -152,6 +152,24 @@ CREATE TABLE setting (
     key   TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 ) STRICT, WITHOUT ROWID;
+";
+
+/// Lines a pass removed from a record's transcript (the "you" lines a meeting's final pass took
+/// out as echo of the far end), whole, so they can be put back. They belong to the record, not to
+/// a revision, so a supersede leaves them; they are not indexed for search. The cascade deletes
+/// them with their record, and the connection's `secure_delete` overwrites their text then, and
+/// when a later save replaces them.
+const V2: &str = "
+CREATE TABLE removed_line (
+    seq       INTEGER PRIMARY KEY,
+    record_id TEXT NOT NULL REFERENCES record (id) ON DELETE CASCADE,
+    channel   TEXT NOT NULL CHECK (channel IN ('mic', 'far')),
+    start_ms  INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms    INTEGER NOT NULL CHECK (end_ms >= start_ms),
+    text      TEXT NOT NULL,
+    speaker   TEXT
+) STRICT;
+CREATE INDEX removed_line_by_record ON removed_line (record_id, start_ms, seq);
 ";
 
 /// Brings the database up to [`SCHEMA_VERSION`] in one immediate transaction.

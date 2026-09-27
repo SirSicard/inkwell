@@ -14,3 +14,9 @@ publish = false
 
 [workspace.dependencies]
 ink-core = { path = "crates/ink-core" }
+
+# AEC3 runs per 10 ms frame in the echo tests (a minute of audio several times over); unoptimised,
+# it dominated the debug test run. Only this crate is optimised: the workspace's own code keeps its
+# debug build.
+[profile.dev.package.aec3]
+opt-level = 2
