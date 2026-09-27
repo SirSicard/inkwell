@@ -7,8 +7,8 @@
 // while nothing could polish would promise what the app cannot do.
 //
 // It also tells "polish keeps timing out" from an ordinary failure: a take whose polish ran out of
-// its time budget arrives as the dictation warning polish_timed_out, which the core sends once the
-// pipeline tells a timeout from a cancel (until then a timeout reads as polish_failed).
+// its time budget arrives as the dictation warning polish_timed_out, while a polish cancelled for
+// another reason (the core shutting down) stays polish_failed.
 import AppleEngines
 import InkBridge
 import Observation

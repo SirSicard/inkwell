@@ -95,6 +95,11 @@ pub enum Warning {
     PolishUnavailable,
     /// Polish failed; the text went out unpolished.
     PolishFailed(LlmError),
+    /// Polish gave no answer within its budget ([`POLISH_BUDGET`](crate::chain::POLISH_BUDGET));
+    /// the text went out unpolished. Apart from [`PolishFailed`](Self::PolishFailed) with
+    /// `Cancelled`, which is a model stopped for its own reasons (the core shutting down), so a
+    /// shell can tell a polish that keeps timing out from an ordinary cancel.
+    PolishTimedOut,
     /// A style command named no mode.
     NoModeForStyle,
     /// The dictation was inserted (or insertion was attempted) but not saved to the library.

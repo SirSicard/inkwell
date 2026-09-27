@@ -633,3 +633,31 @@ final class LiveLayoutTests: XCTestCase {
         }
     }
 }
+
+/// The core's own timeout event, as ink-ffi's llm test shows it sent (`dictation.warning` with kind
+/// `polish_timed_out` and no text), reaches the toggle through the path CoreController uses.
+@MainActor
+final class PolishTimeoutPathTests: XCTestCase {
+    func testTheCoresTimeoutEventMakesTheToggleSayItKeepsTimingOut() throws {
+        let timedOut = try InkEvent.decode(Data(#"{"type":"dictation.warning","kind":"polish_timed_out"}"#.utf8))
+        guard case .dictationWarningEvent(let warning) = timedOut else {
+            return XCTFail("not a dictation warning: \(timedOut)")
+        }
+        XCTAssertEqual(warning.kind, .polishTimedOut)
+        XCTAssertNil(warning.message, "no text")
+
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.apply([
+            event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#),
+            event(#"{"type":"setting.value","key":"dictation.polish","value":"on"}"#),
+        ])
+        for _ in 0..<PolishModel.timeoutWarning {
+            screens.apply([
+                event(#"{"type":"dictation.started"}"#), timedOut,
+                event(#"{"type":"dictation.inserted","text":"x","outcome":"pasted"}"#),
+            ])
+        }
+        XCTAssertTrue(screens.polish.keepsTimingOut)
+        XCTAssertEqual(screens.polish.status, "Polish keeps timing out, so your words go in as you said them.")
+    }
+}
