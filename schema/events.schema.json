@@ -20,6 +20,9 @@
       "$ref": "#/$defs/EngineUnregistered"
     },
     {
+      "$ref": "#/$defs/EngineRouted"
+    },
+    {
       "$ref": "#/$defs/ModelWarmed"
     },
     {
@@ -138,6 +141,23 @@
       "enum": [
         "mic",
         "far"
+      ]
+    },
+    "EngineSource": {
+      "type": "string",
+      "description": "Where a routed engine comes from: registry (a model downloaded from the built-in registry) or shell (an engine the shell registered, such as FluidAudio's Parakeet on the Mac).",
+      "enum": [
+        "registry",
+        "shell"
+      ]
+    },
+    "EngineKind": {
+      "type": "string",
+      "description": "What kind of engine the shell registered: offline (finals), streaming (live partials) or llm (a language model, for dictation polish).",
+      "enum": [
+        "offline",
+        "streaming",
+        "llm"
       ]
     },
     "Job": {
@@ -474,7 +494,7 @@
     },
     "EngineRegistered": {
       "type": "object",
-      "description": "An engine the shell registered is in the router.",
+      "description": "An engine the shell registered is in use: an offline or streaming engine in the router, or a language model for polish.",
       "properties": {
         "type": {
           "const": "engine.registered"
@@ -483,9 +503,13 @@
           "type": "string",
           "description": "Its id."
         },
+        "kind": {
+          "$ref": "#/$defs/EngineKind",
+          "description": "What kind of engine it is."
+        },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills.",
+          "description": "The jobs it fills; empty for a language model.",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."
@@ -495,7 +519,34 @@
       "required": [
         "type",
         "id",
+        "kind",
         "jobs"
+      ],
+      "additionalProperties": false
+    },
+    "EngineRouted": {
+      "type": "object",
+      "description": "What serves a job now, in answer to engine.route: the router's choice among installed models and registered engines. Without id, nothing installed or registered fills the job.",
+      "properties": {
+        "type": {
+          "const": "engine.routed"
+        },
+        "job": {
+          "$ref": "#/$defs/Job",
+          "description": "The job asked about."
+        },
+        "id": {
+          "type": "string",
+          "description": "The engine that serves it: a registry model's id, or the id a shell engine registered under."
+        },
+        "source": {
+          "$ref": "#/$defs/EngineSource",
+          "description": "Where that engine comes from."
+        }
+      },
+      "required": [
+        "type",
+        "job"
       ],
       "additionalProperties": false
     },

@@ -52,6 +52,7 @@ fn table(engine: &Arc<Silent>, info: &CString) -> InkEngineVTable {
         transcribe: Some(silent_transcribe),
         cancel: Some(silent_cancel),
         release: Some(silent_release),
+        ..Default::default()
     }
 }
 
@@ -170,6 +171,7 @@ fn a_late_answer_after_shutdown_is_refused_harmlessly() {
         transcribe: Some(remember),
         cancel: None,
         release: None,
+        ..Default::default()
     };
     // SAFETY: a valid table; its functions never touch ctx.
     let engine =

@@ -182,6 +182,34 @@ Every trait method in `ink-core` names the thread it may run on
 The C ABI keeps the same shape: events reach the shell on one core thread (the shell hops to its
 main thread), and engines registered from Swift are called from worker threads.
 
+## Engines the shell registers (ABI 2)
+
+The Mac shell's Apple engines live in Swift (rule 2) and register into the core through
+`ink_register_engine` ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) has the contract).
+Each table is one kind:
+
+| Kind | Fills | The shell's functions | Deadline per call |
+|---|---|---|---|
+| `INK_ENGINE_OFFLINE` | dictation and meeting finals | `transcribe` | none: the job's cancel token and shutdown end the wait |
+| `INK_ENGINE_STREAMING` | live partials | `stream_open`, `stream_push`, `stream_finish`, `stream_close` | open 10 s, push 2 s, finish 30 s |
+| `INK_ENGINE_LLM` | dictation polish | `generate` | 120 s |
+
+- Every call is answered once through `ink_engine_complete`, from any thread; a live stream's
+  words come back through `ink_stream_event`, which only queues. A call past its deadline is given
+  up (the engine is told through `cancel`, and a late answer is refused): a stuck shell engine
+  costs its stream or its take, never the meeting's worker or shutdown. Every opened stream is
+  closed exactly once, and nothing is taken from it afterwards.
+- Errors are a kind and a code, never text (I5). `unavailable` is how an engine says it cannot run
+  on this Mac now; the core then goes on without it and never makes up a result.
+- The router treats registered engines like installed registry models: the lowest measured error
+  rate per job wins, at every call. So Parakeet, registered for the finals with rates worse than
+  Qwen3-ASR's, serves them only while Qwen3-ASR is not installed. `engine.route` tells the shell
+  what serves a job now.
+- Language models are kept by the core apart from the router (whose jobs are speech jobs); dictation
+  polish goes to the one registered. Foundation Models is registered only while Apple Intelligence
+  is available.
+- A table the size of ABI 1's still registers an offline engine; newer kinds need the full table.
+
 ## Testing
 
 - `cargo test --workspace` in `core/`. CI runs it with fmt, `clippy -D warnings` and `cargo deny` on

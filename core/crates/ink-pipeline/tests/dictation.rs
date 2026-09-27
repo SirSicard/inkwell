@@ -3,8 +3,9 @@
 
 mod common;
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use common::{Rig, VadKind, rms_dbfs, speech_48k, transcript};
 use ink_audio::gain::{TARGET_PEAK, robust_peak, to_dbfs};
@@ -553,6 +554,91 @@ fn a_blank_polish_answer_keeps_the_text_instead_of_emptying_it() {
         e,
         DictationEvent::Warning(Warning::PolishFailed(LlmError::BadResponse(_)))
     )));
+}
+
+/// Longer than any budget these tests set: a model still hanging this long was never cancelled,
+/// and fails its test instead of hanging it.
+const HANG_CAP: Duration = Duration::from_secs(10);
+
+/// A model that never answers the call after [`hang_next`](Self::hang_next) is set, until its
+/// token is cancelled, and answers every other call at once.
+#[derive(Default)]
+struct HangingLlm {
+    hang_next: AtomicBool,
+    /// How long the hung call waited before it saw its token cancelled.
+    hung_for: Mutex<Option<Duration>>,
+}
+
+impl Llm for HangingLlm {
+    fn info(&self) -> LlmInfo {
+        LlmInfo {
+            provider: "hanging".into(),
+            model: "hanging".into(),
+            endpoint: Endpoint::InProcess,
+        }
+    }
+
+    fn complete(&self, _: &LlmRequest, cancel: &CancelToken) -> Result<LlmResponse, LlmError> {
+        if !self.hang_next.swap(false, Ordering::SeqCst) {
+            return Ok(LlmResponse {
+                text: "Polished text.".into(),
+            });
+        }
+        let started = Instant::now();
+        while started.elapsed() < HANG_CAP {
+            if cancel.is_cancelled() {
+                *self.hung_for.lock().unwrap() = Some(started.elapsed());
+                return Err(LlmError::Cancelled);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Err(LlmError::Network("never cancelled".into()))
+    }
+}
+
+#[test]
+fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_polished() {
+    const BUDGET: Duration = Duration::from_millis(200);
+    let llm = Arc::new(HangingLlm::default());
+    let rig = Rig::builder()
+        .settings(|s| {
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_budget = BUDGET;
+        })
+        .llm(llm.clone())
+        .build();
+    let first = speech_48k(2.0, -30.0, 71);
+    let second = speech_48k(2.0, -30.0, 72);
+    rig.teach(&first, "first take");
+    rig.teach(&second, "second take");
+
+    llm.hang_next.store(true, Ordering::SeqCst);
+    rig.dictate(&first);
+    let hung_for = llm
+        .hung_for
+        .lock()
+        .unwrap()
+        .expect("the hung call saw its token cancelled");
+    assert!(
+        hung_for >= BUDGET && hung_for < BUDGET + Duration::from_secs(1),
+        "cancelled at the budget, not before or long after: {hung_for:?}"
+    );
+    assert_eq!(
+        rig.inserted(),
+        vec!["First take. ".to_owned()],
+        "as written"
+    );
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::Warning(Warning::PolishFailed(
+            LlmError::Cancelled
+        ))));
+
+    // The next take is not held up, and polish works again for it.
+    rig.dictate(&second);
+    assert_eq!(
+        rig.inserted(),
+        vec!["First take. ".to_owned(), "Polished text. ".to_owned()]
+    );
 }
 
 #[test]

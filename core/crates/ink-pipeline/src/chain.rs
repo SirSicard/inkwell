@@ -17,9 +17,9 @@
 //! **Worker**, every method: one thread owns the chain (see [`worker`](crate::worker)). Audio
 //! arrives from the pump already in the canonical format, and hotkey events from the platform's
 //! callback thread through a queue. The engine, the store, polish and insertion are called here
-//! and may block. Nothing here sleeps: every wait is for audio, and the only deadline (a tail
-//! whose audio stopped arriving) is checked by [`tick`](DictationChain::tick) when the owning
-//! thread wakes for it.
+//! and may block; polish no longer than its budget ([`POLISH_BUDGET`]). Nothing here sleeps: every
+//! wait is for audio, and the only deadline the chain wakes for (a tail whose audio stopped
+//! arriving) is checked by [`tick`](DictationChain::tick) when the owning thread wakes for it.
 //!
 //! # Time
 //!
@@ -28,7 +28,7 @@
 //! before or after the audio of its moment. The minimum hold is measured on the audio clock too.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ink_audio::take::{TAIL, Take};
 use ink_audio::{TakeRecorder, VadConfig};
@@ -58,6 +58,13 @@ pub const DEFAULT_MIN_HOLD: Duration = Duration::from_millis(200);
 /// The shortest take transcribed, measured between press and release (lead and tail excluded).
 /// 0.2's value.
 pub const DEFAULT_MIN_LIVE: Duration = Duration::from_millis(300);
+
+/// How long dictation polish may run, from the moment it starts, before the take goes out as
+/// written. On-device polish was measured at about 0.4 s prewarmed and 0.9–1.4 s cold, so this
+/// never cuts a working model short: it only stops a model that hangs from holding up this take
+/// and every take queued behind it (the chain has one worker). Other language-model jobs keep
+/// their own limits.
+pub const POLISH_BUDGET: Duration = Duration::from_secs(10);
 
 const NS_PER_SAMPLE: u64 = 1_000_000_000 / CANONICAL_RATE as u64;
 
@@ -100,6 +107,8 @@ pub struct DictationSettings {
     pub vad: VadConfig,
     /// The adaptive tail.
     pub tail: TailConfig,
+    /// How long polish may run ([`POLISH_BUDGET`]). Not a user preference: tests shorten it.
+    pub polish_budget: Duration,
 }
 
 impl Default for DictationSettings {
@@ -117,6 +126,7 @@ impl Default for DictationSettings {
             utc_offset_minutes: 0,
             vad: VadConfig::default(),
             tail: TailConfig::default(),
+            polish_budget: POLISH_BUDGET,
         }
     }
 }
@@ -629,6 +639,14 @@ impl DictationChain {
     /// Stage 9: polish when the mode (or a voice command) asks for it. Any failure keeps the text
     /// as written, and says so. A blank answer is a failure, never an empty dictation (ink-llm's
     /// task refuses one; this checks again rather than rely on it).
+    ///
+    /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out.
+    /// The budget is a deadline the token carries, so no thread or timer fires it: the model sees
+    /// it at its next check of the token (a shell engine's wait checks every 20 ms).
+    ///
+    /// The next take's press does not cancel it. The take behind it loses no audio (the owner's
+    /// queue holds tens of seconds of it) and at most starts later, while cancelling would cost a
+    /// working polish every time someone presses again quickly, which is how push-to-talk is used.
     fn polish(&self, written: String, mode: &Mode) -> String {
         if !self.polish_override.unwrap_or(mode.polish_enabled) {
             return written;
@@ -642,7 +660,10 @@ impl DictationChain {
         } else {
             &mode.polish_prompt
         };
-        match ink_llm::tasks::polish::polish(llm.as_ref(), prompt, &written, &CancelToken::new()) {
+        let budget = self.settings.polish_budget;
+        let deadline = Instant::now().checked_add(budget);
+        let token = deadline.map_or_else(CancelToken::new, CancelToken::with_deadline);
+        match ink_llm::tasks::polish::polish(llm.as_ref(), prompt, &written, &token) {
             Ok(polished) if !polished.trim().is_empty() => polished,
             Ok(_) => {
                 self.emit(DictationEvent::Warning(Warning::PolishFailed(
@@ -651,6 +672,17 @@ impl DictationChain {
                 written
             }
             Err(error) => {
+                if error == LlmError::Cancelled {
+                    if deadline.is_some_and(|d| Instant::now() >= d) {
+                        log::warn!(
+                            "dictation: polish gave no answer within its {budget:?} budget; the text goes out as written"
+                        );
+                    } else {
+                        // The model stopped for its own reasons (a shell engine when the core
+                        // stops).
+                        log::info!("dictation: polish was cancelled; the text goes out as written");
+                    }
+                }
                 self.emit(DictationEvent::Warning(Warning::PolishFailed(error)));
                 written
             }

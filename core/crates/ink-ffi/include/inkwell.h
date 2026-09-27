@@ -8,7 +8,9 @@
  * SHAPE
  *   Commands go in as JSON (ink_command). Events come out as JSON through one callback
  *   (ink_init). Engines the shell owns come in as a table of function pointers
- *   (ink_register_engine). The ink's audio bands are copied out on demand (ink_bands_read).
+ *   (ink_register_engine); their answers come back through ink_engine_complete, and a live
+ *   stream's words through ink_stream_event. The ink's audio bands are copied out on demand
+ *   (ink_bands_read).
  *   The event types are defined once, in schema/events.schema.json; the Swift types are generated
  *   from it (cargo run -p ink-ffi --bin ink-schema).
  *
@@ -30,11 +32,15 @@
  *   4. An engine's functions (InkEngineVTable) are called from core WORKER threads, never from the
  *      event thread and never from the thread that registered it. Several calls may be in flight
  *      at once, on different threads.
- *   5. Async engines answer through a completion call: the core hands every transcription a call
- *      id, and the engine answers it exactly once with ink_engine_complete, from any thread,
- *      either before its transcribe function returns (a synchronous engine) or later (an
- *      asynchronous one). The worker waits for that answer.
- *   6. The core never calls into the shell's main thread and never waits on it.
+ *   5. Async engines answer through a completion call: the core hands every call it makes (a
+ *      transcription, each step of a live stream, a generation) a call id, and the engine answers
+ *      it exactly once with ink_engine_complete, from any thread, either before its function
+ *      returns (a synchronous engine) or later (an asynchronous one). The worker waits for that
+ *      answer.
+ *   6. A live stream's events (ink_stream_event) may be sent from any thread, one at a time per
+ *      stream, in the order they happened. ink_stream_event only queues: it never waits on the
+ *      core's workers, so it may be called from inside the engine's own functions.
+ *   7. The core never calls into the shell's main thread and never waits on it.
  *
  * LOGGING
  *   The core installs the only logger for the core's code (a `log` logger and a `tracing`
@@ -62,8 +68,10 @@
 extern "C" {
 #endif
 
-/* The version of this header. core.ready reports the core's; they must match. */
-#define INK_ABI_VERSION 1
+/* The version of this header. core.ready reports the core's; they must match.
+ * 2: live-stream and language-model engines (INK_ENGINE_STREAMING, INK_ENGINE_LLM), the fields
+ *    appended to InkEngineVTable for them, ink_stream_event, and the "unavailable" error kind. */
+#define INK_ABI_VERSION 2
 
 /* The longest JSON string the core reads (config, command, engine info, engine answer), in bytes
  * without the NUL. A longer one is refused unread with INK_ERR_INVALID_ARGUMENT; an engine answer
@@ -77,7 +85,7 @@ extern "C" {
 #define INK_ERR_ALREADY_INITIALIZED (-2) /* ink_init twice without ink_shutdown between */
 #define INK_ERR_INVALID_ARGUMENT (-3)    /* a NULL pointer, bad UTF-8, JSON the call cannot read */
 #define INK_ERR_FAILED (-4)              /* the call was understood and could not be done */
-#define INK_ERR_UNKNOWN_CALL (-5)        /* ink_engine_complete for a call not waiting (see below) */
+#define INK_ERR_UNKNOWN_CALL (-5)        /* a call not waiting, or a stream not open (see below) */
 #define INK_ERR_PANIC (-6)               /* a bug in the core; it was contained at the boundary */
 
 /*
@@ -120,6 +128,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "model.refused", never served from files being replaced. "model.update_started", then
  *       "model.update_finished". While a job is using the model, or another update holds it,
  *       the update is "command.failed" and nothing changes: send it again later.
+ *   {"cmd":"engine.route","job":"dictation_final"}
+ *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
+ *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
+ *       or no id when nothing fills it. The router picks the lowest measured error rate among
+ *       installed models and registered engines, at every call: a shell engine registered as a
+ *       fallback serves until a better model finishes installing, then that model does.
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
@@ -144,45 +158,101 @@ typedef struct InkBands {
  */
 int32_t ink_bands_read(InkBands *out);
 
-/* Engine kinds. Only offline ASR engines (dictation and meeting finals) are registered today;
- * live partials and language models get their own kinds when the Mac engines need them. */
-#define INK_ENGINE_OFFLINE 1u
+/* Engine kinds. An engine is one kind; its table fills that kind's functions and leaves the
+ * others NULL. */
+#define INK_ENGINE_OFFLINE 1u   /* transcribes a whole buffer: dictation and meeting finals */
+#define INK_ENGINE_STREAMING 2u /* live partials: a stream per meeting side (ABI 2) */
+#define INK_ENGINE_LLM 3u       /* a language model: dictation polish (ABI 2) */
 
 /*
  * An engine the shell owns (Apple accelerators stay in Swift, architecture rule 2).
  *
  * `info_json` (read during ink_register_engine, never kept):
- *   {"id":"<unique id>","licence":"<weights licence>",
- *    "jobs":[{"job":"dictation_final","wer":5.1},{"job":"meeting_final","wer":9.8}]}
- * Offline engines may fill "dictation_final" and "meeting_final". "wer" is the engine's measured
- * word error rate on that job: the router picks the lowest.
+ *   offline and streaming engines:
+ *     {"id":"<unique id>","licence":"<weights licence>",
+ *      "jobs":[{"job":"dictation_final","wer":5.1},{"job":"meeting_final","wer":9.8}]}
+ *     Offline engines may fill "dictation_final" and "meeting_final"; streaming engines
+ *     "live_partials". "wer" is the engine's measured word error rate on that job: the router
+ *     picks the lowest.
+ *   language models:
+ *     {"id":"<unique id>","licence":"<weights licence>","model":"<model name>","local":true}
+ *     "local" says whether the text stays on this machine; local-only mode refuses a model that
+ *     says false. Registered language models do dictation polish.
+ * Ids are unique across every kind.
  *
+ * ANSWERS. Every call below that takes a `call` id is answered with ink_engine_complete(call,
+ * result) exactly once, now or later, from any thread:
+ *     {"segments":[{"start_ms":0,"end_ms":1200,"text":"..."}]}   transcribe
+ *     {"ok":true}                                                 stream_open, _push, _finish
+ *     {"text":"..."}                                              generate
+ *     {"error":{"kind":"failed","code":42}}                       any of them
+ *   "kind" is "failed", "cancelled", "model_missing", "unavailable" (the engine cannot run on this
+ *   Mac now: a system feature is off, unsupported or not ready), or "bad_request" (the engine
+ *   could not read the samples, options or request). "code" is optional: an integer of the
+ *   engine's own, shown in the core's error. No text of the engine's is read: an error never
+ *   carries free text into an event or a log, because an engine's words could quote what it
+ *   heard. An engine that cannot answer truthfully answers an error: never a made-up result.
+ *
+ * INK_ENGINE_OFFLINE
  * transcribe (required): 16 kHz mono float samples, gain already applied, and
  *   `options_json` ({"channel":"mic"|"far","context":"<words to favour>"}; context optional).
  *   Both pointers are valid only until transcribe returns: copy the samples to answer later.
- *   Answer with ink_engine_complete(call, result) exactly once:
- *     {"segments":[{"start_ms":0,"end_ms":1200,"text":"..."}]}
- *     {"error":{"kind":"failed","code":42}}
- *   "kind" is "failed", "cancelled", "model_missing", or "bad_request" (the engine could not
- *   read the samples or options_json). "code" is optional: an integer of the engine's own, shown
- *   in the core's error. No text of the engine's is read: an error never carries free text into
- *   an event or a log, because an engine's words could quote what it heard.
- * cancel (optional, may be NULL): the core no longer wants call `call`'s answer (the job was
- *   cancelled). Stop early if you can. Answer it anyway: the answer is then discarded.
+ *
+ * INK_ENGINE_STREAMING (the four functions are required; the table must be this header's size)
+ *   A stream's life is stream_open, stream_push any number of times, stream_finish (unless the
+ *   core abandons the stream), then stream_close. The core numbers streams; `stream` is that
+ *   number. Calls for one stream come from one worker thread at a time, in that order; different
+ *   streams may run at once on different threads.
+ * stream_open: a stream for one side, `options_json` {"channel":"mic"|"far"} (valid only during
+ *   the call). Answer {"ok":true} once events may be sent for it, or an error.
+ * stream_push: the stream's next 16 kHz mono samples, gain applied, valid only during the call:
+ *   copy them. Answer promptly, well before the audio would have finished playing (the core
+ *   gives up after 2 s and closes the stream): do the recognition elsewhere. An error answer
+ *   ends the stream.
+ * stream_finish: no more audio. Recognise what is left, send every trailing event, then answer.
+ *   (The core gives up after 30 s.)
+ * stream_close: the core is done with `stream`, after its finish was answered or instead of it
+ *   (an error, a timeout, shutdown). No answer. Called exactly once for every stream_open,
+ *   whatever it answered. Events sent for the stream after it are refused.
+ * Events go to ink_stream_event(stream, event_json) as they happen (see THREADS 6):
+ *     {"partial":"<text>"}  the not-yet-settled words; each partial replaces the last, and an
+ *                           empty one clears it. Partials are never stored.
+ *     {"final":{"start_ms":0,"end_ms":1200,"text":"..."}}  settled words, in ms from the stream's
+ *                           first sample. Each final carries only its own words, never the
+ *                           stream's text so far.
+ *     {"stalled":{"code":1}}  the engine has fallen behind real time ("code" optional).
+ *
+ * INK_ENGINE_LLM (generate is required; the table must be this header's size)
+ * generate: `request_json` (valid only during the call; it holds the user's words, never log it):
+ *     {"system":"...","user":"...","max_tokens":1024,"temperature":0.3,"json_schema":"..."}
+ *   "json_schema" is present only for structured answers. Answer {"text":"..."} or an error. The
+ *   core gives up after 120 s.
+ *
+ * cancel (optional, any kind; may be NULL): the core no longer wants call `call`'s answer (the
+ *   job was cancelled, the core gave up waiting, or it is shutting down). Stop early if you can.
+ *   Answer it anyway: the answer is then discarded.
  * release (optional, may be NULL): the core has let go of the engine (engine.unregister, or
- *   ink_shutdown). Called exactly once, after the last transcribe returned, on the thread that
- *   let go: the core's worker, or the thread calling ink_shutdown. It must not wait on the main
- *   thread. Nothing is called with `ctx` after it.
+ *   ink_shutdown). Called exactly once, after every call returned and every stream was closed,
+ *   on the thread that let go: the core's worker, or the thread calling ink_shutdown. It must not
+ *   wait on the main thread. Nothing is called with `ctx` after it.
  */
 typedef struct InkEngineVTable {
     uint32_t size; /* sizeof(InkEngineVTable): later versions append fields */
-    uint32_t kind; /* INK_ENGINE_OFFLINE */
+    uint32_t kind; /* INK_ENGINE_* */
     const char *info_json;
     void *ctx;
     void (*transcribe)(void *ctx, uint64_t call, const float *samples, size_t len,
                        const char *options_json);
     void (*cancel)(void *ctx, uint64_t call);
     void (*release)(void *ctx);
+    /* Appended in ABI 2. A table the size of ABI 1's (ending at release) still registers an
+     * offline engine. */
+    void (*stream_open)(void *ctx, uint64_t call, uint64_t stream, const char *options_json);
+    void (*stream_push)(void *ctx, uint64_t call, uint64_t stream, const float *samples,
+                        size_t len);
+    void (*stream_finish)(void *ctx, uint64_t call, uint64_t stream);
+    void (*stream_close)(void *ctx, uint64_t stream);
+    void (*generate)(void *ctx, uint64_t call, const char *request_json);
 } InkEngineVTable;
 
 /*
@@ -194,11 +264,19 @@ typedef struct InkEngineVTable {
 int32_t ink_register_engine(const InkEngineVTable *vtable);
 
 /*
- * Answers transcription `call` (see InkEngineVTable). Any thread. Returns INK_OK, or
- * INK_ERR_UNKNOWN_CALL when that call is not waiting: answered already, given up (cancelled or
- * shut down), or never issued. That is not an error the engine has to handle.
+ * Answers `call` (see ANSWERS above). Any thread. Returns INK_OK, or INK_ERR_UNKNOWN_CALL when
+ * that call is not waiting: answered already, given up (cancelled, timed out or shut down), or
+ * never issued. That is not an error the engine has to handle. An answer the core cannot read
+ * still answers the call, as a failure, and returns INK_ERR_INVALID_ARGUMENT.
  */
 int32_t ink_engine_complete(uint64_t call, const char *result_json);
+
+/*
+ * An event of live stream `stream` (see INK_ENGINE_STREAMING). Any thread (THREADS 6); it only
+ * queues. Returns INK_OK, INK_ERR_UNKNOWN_CALL when the stream is not open (never opened, or
+ * closed: a late event is dropped), or INK_ERR_INVALID_ARGUMENT for an event it cannot read.
+ */
+int32_t ink_stream_event(uint64_t stream, const char *event_json);
 
 /*
  * Stops the core (see SHUTDOWN). Returns INK_OK, or INK_ERR_NOT_INITIALIZED. ink_init may be
