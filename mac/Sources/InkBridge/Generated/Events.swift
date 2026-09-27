@@ -474,11 +474,13 @@ public enum Discard: String, Codable, Sendable, Equatable, CaseIterable {
 }
 
 /// Why echo cancellation stopped: backlog (one side ran more than 10 s ahead of the other;
-/// channel says which), bad_alignment (a path no canceller follows), internal (a bug inside the
-/// core, reported rather than hidden).
+/// channel says which), bad_alignment (a path no canceller follows), stalled (the canceller
+/// gave no answer in time; it is left behind), internal (a bug inside the core, reported rather
+/// than hidden).
 public enum EchoFailure: String, Codable, Sendable, Equatable, CaseIterable {
     case backlog
     case badAlignment = "bad_alignment"
+    case stalled
     case `internal`
 }
 

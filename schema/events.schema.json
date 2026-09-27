@@ -1238,10 +1238,11 @@
     },
     "EchoFailure": {
       "type": "string",
-      "description": "Why echo cancellation stopped: backlog (one side ran more than 10 s ahead of the other; channel says which), bad_alignment (a path no canceller follows), internal (a bug inside the core, reported rather than hidden).",
+      "description": "Why echo cancellation stopped: backlog (one side ran more than 10 s ahead of the other; channel says which), bad_alignment (a path no canceller follows), stalled (the canceller gave no answer in time; it is left behind), internal (a bug inside the core, reported rather than hidden).",
       "enum": [
         "backlog",
         "bad_alignment",
+        "stalled",
         "internal"
       ]
     },

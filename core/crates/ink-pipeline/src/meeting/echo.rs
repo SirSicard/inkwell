@@ -74,6 +74,7 @@ use ink_echo::{
 
 use std::sync::mpsc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use super::events::{EchoFailure, EchoSearch, EchoState, MeetingEvent, MeetingWarning};
 use super::timeline::ns_to_samples;
@@ -681,24 +682,83 @@ enum Request {
     Finish,
 }
 
+/// What the canceller's thread runs: AEC3 along a path ([`EchoCanceller`]); in a test, something
+/// that hangs. It is made on that thread and never leaves it.
+trait Cancel {
+    fn push(
+        &mut self,
+        mic: &[f32],
+        far: &[f32],
+        on_frame: &mut dyn FnMut(&EchoFrame),
+    ) -> Result<(), EchoError>;
+    fn finish(&mut self, on_frame: &mut dyn FnMut(&EchoFrame)) -> Result<(), EchoError>;
+}
+
+impl Cancel for EchoCanceller {
+    fn push(
+        &mut self,
+        mic: &[f32],
+        far: &[f32],
+        on_frame: &mut dyn FnMut(&EchoFrame),
+    ) -> Result<(), EchoError> {
+        EchoCanceller::push(self, mic, far, on_frame)
+    }
+
+    fn finish(&mut self, on_frame: &mut dyn FnMut(&EchoFrame)) -> Result<(), EchoError> {
+        EchoCanceller::finish(self, on_frame).map(drop)
+    }
+}
+
+/// The least a canceller's thread is given to answer, before the time its audio allows.
+const ANSWER_BASE: Duration = Duration::from_secs(2);
+
+/// Makes a canceller thread along a path: [`CancellerThread::spawn`], or a test's.
+type Spawn = fn(Alignment) -> Result<CancellerThread, EchoFailure>;
+
 /// AEC3 on a thread of its own. The `aec3` crate's canceller cannot move between threads (its
 /// backend is a boxed trait object without `Send`), and the meeting chain must be able to, so the
 /// canceller is made, fed and finished on a worker thread it owns. The chain waits for each
 /// answer, so the two stay in step, a block at a time.
+///
+/// **An answer is waited for, never forever:** [`ANSWER_BASE`] plus twice the audio's own length
+/// (AEC3 runs many times faster than real time, even unoptimised). Past that the canceller is
+/// [`EchoFailure::Stalled`]: it is not asked again, and dropping it does not wait for its thread,
+/// which is left to finish on its own.
+///
+/// The channels: requests are a rendezvous (`sync_channel(0)`): one is in flight at a time, since
+/// the chain waits for each answer, and a request is only handed to a thread that is ready for
+/// it. Answers have a buffer of one (`sync_channel(1)`), so a thread that answers after the chain
+/// stopped waiting does not block on it, and ends once its requests close.
 struct CancellerThread {
-    requests: Option<mpsc::Sender<Request>>,
+    requests: Option<mpsc::SyncSender<Request>>,
     replies: mpsc::Receiver<Result<Vec<EchoFrame>, EchoError>>,
     thread: Option<JoinHandle<()>>,
+    base: Duration,
+    stalled: bool,
 }
 
 impl CancellerThread {
     fn spawn(path: Alignment) -> Result<Self, EchoFailure> {
-        let (requests, inbox) = mpsc::channel::<Request>();
-        let (outbox, replies) = mpsc::channel();
+        Self::spawn_with(
+            move || {
+                EchoCanceller::new(path, CancellerConfig::default())
+                    .map(|c| Box::new(c) as Box<dyn Cancel>)
+            },
+            ANSWER_BASE,
+        )
+    }
+
+    /// A thread running what `make` makes, answering within `base` plus twice its audio.
+    fn spawn_with(
+        make: impl FnOnce() -> Result<Box<dyn Cancel>, EchoError> + Send + 'static,
+        base: Duration,
+    ) -> Result<Self, EchoFailure> {
+        let (requests, inbox) = mpsc::sync_channel::<Request>(0);
+        let (outbox, replies) = mpsc::sync_channel(1);
         let thread = std::thread::Builder::new()
             .name("ink-echo-live".into())
             .spawn(move || {
-                let mut canceller = match EchoCanceller::new(path, CancellerConfig::default()) {
+                let mut canceller = match make() {
                     Ok(c) => c,
                     Err(error) => {
                         let _ = outbox.send(Err(error));
@@ -710,11 +770,10 @@ impl CancellerThread {
                 }
                 while let Ok(request) = inbox.recv() {
                     let mut frames = Vec::new();
+                    let mut keep = |f: &EchoFrame| frames.push(f.clone());
                     let done = match request {
-                        Request::Push(mic, far) => {
-                            canceller.push(&mic, &far, |f| frames.push(f.clone()))
-                        }
-                        Request::Finish => canceller.finish(|f| frames.push(f.clone())).map(drop),
+                        Request::Push(mic, far) => canceller.push(&mic, &far, &mut keep),
+                        Request::Finish => canceller.finish(&mut keep),
                     };
                     if outbox.send(done.map(|()| frames)).is_err() {
                         return;
@@ -726,19 +785,35 @@ impl CancellerThread {
             requests: Some(requests),
             replies,
             thread: Some(thread),
+            base,
+            stalled: false,
         };
-        this.answer()?;
+        this.answer(0)?;
         Ok(this)
     }
 
-    fn answer(&mut self) -> Result<Vec<EchoFrame>, EchoFailure> {
-        match self.replies.recv() {
+    /// The answer to the request in flight, whose audio is `samples` long.
+    fn answer(&mut self, samples: usize) -> Result<Vec<EchoFrame>, EchoFailure> {
+        let budget = self.base + Duration::from_secs_f64(2.0 * samples as f64 / 16_000.0);
+        match self.replies.recv_timeout(budget) {
             Ok(reply) => reply.map_err(EchoFailure::from),
-            Err(_) => Err(EchoFailure::Internal),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.stalled = true;
+                log::warn!(
+                    "meeting: the live echo canceller gave no answer within {} ms",
+                    budget.as_millis()
+                );
+                Err(EchoFailure::Stalled)
+            }
+            // The thread ended without answering: it panicked (its payload is logged on drop).
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(EchoFailure::Internal),
         }
     }
 
-    fn ask(&mut self, request: Request) -> Result<Vec<EchoFrame>, EchoFailure> {
+    fn ask(&mut self, request: Request, samples: usize) -> Result<Vec<EchoFrame>, EchoFailure> {
+        if self.stalled {
+            return Err(EchoFailure::Stalled);
+        }
         let sent = self
             .requests
             .as_ref()
@@ -746,15 +821,16 @@ impl CancellerThread {
         if !sent {
             return Err(EchoFailure::Internal);
         }
-        self.answer()
+        self.answer(samples)
     }
 
     fn push(&mut self, mic: &[f32], far: &[f32]) -> Result<Vec<EchoFrame>, EchoFailure> {
-        self.ask(Request::Push(mic.to_vec(), far.to_vec()))
+        let samples = mic.len().max(far.len());
+        self.ask(Request::Push(mic.to_vec(), far.to_vec()), samples)
     }
 
     fn finish(&mut self) -> Result<Vec<EchoFrame>, EchoFailure> {
-        self.ask(Request::Finish)
+        self.ask(Request::Finish, 0)
     }
 }
 
@@ -762,8 +838,28 @@ impl Drop for CancellerThread {
     fn drop(&mut self) {
         // Closing the requests ends the thread's loop.
         self.requests = None;
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        if self.stalled {
+            // It may never return: left to end on its own, once it does.
+            log::warn!("meeting: a stalled live echo canceller's thread is left to finish");
+            return;
+        }
+        if let Err(payload) = thread.join() {
+            // Its kind and length only: a panic message is not ours to print.
+            let len = payload
+                .downcast_ref::<&str>()
+                .map(|m| m.len())
+                .or_else(|| payload.downcast_ref::<String>().map(String::len));
+            match len {
+                Some(n) => log::warn!(
+                    "meeting: the live echo canceller's thread panicked (a message of {n} bytes)"
+                ),
+                None => log::warn!(
+                    "meeting: the live echo canceller's thread panicked (a payload of another type)"
+                ),
+            }
         }
     }
 }
@@ -860,6 +956,8 @@ pub(crate) struct LiveEcho {
     released: Vec<(Segment, bool)>,
     /// Estimates run, for the throttle's test.
     estimates: u32,
+    /// Makes the canceller's thread (a test puts one that hangs here).
+    spawn: Spawn,
 }
 
 impl LiveEcho {
@@ -879,6 +977,7 @@ impl LiveEcho {
             held: VecDeque::new(),
             released: Vec::new(),
             estimates: 0,
+            spawn: CancellerThread::spawn,
         }
     }
 
@@ -1176,7 +1275,7 @@ impl LiveEcho {
             delay: self.search.lag(path, origin),
             drift: path.drift,
         };
-        let canceller = match CancellerThread::spawn(rebased) {
+        let canceller = match (self.spawn)(rebased) {
             Ok(c) => c,
             Err(failure) => {
                 log::warn!("meeting: the live echo canceller could not start: {failure:?}");
@@ -1535,6 +1634,125 @@ mod tests {
         // A mic that leads the far end (the far stream arrives late) is found too.
         let (_, follows) = measure(&audio(&envelope(3_000, 1)[4..], 6));
         assert!(follows > 0.8, "{follows}");
+    }
+
+    /// A canceller that never answers a push.
+    struct Hangs;
+
+    impl Cancel for Hangs {
+        fn push(
+            &mut self,
+            _: &[f32],
+            _: &[f32],
+            _: &mut dyn FnMut(&EchoFrame),
+        ) -> Result<(), EchoError> {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            Ok(())
+        }
+
+        fn finish(&mut self, _: &mut dyn FnMut(&EchoFrame)) -> Result<(), EchoError> {
+            Ok(())
+        }
+    }
+
+    fn hanging(_: Alignment) -> Result<CancellerThread, EchoFailure> {
+        CancellerThread::spawn_with(
+            || Ok(Box::new(Hangs) as Box<dyn Cancel>),
+            std::time::Duration::from_millis(50),
+        )
+    }
+
+    #[test]
+    fn a_canceller_that_hangs_is_a_stall_not_a_wait() {
+        let mut c = hanging(Alignment::from_ms_ppm(46.0, 0.0)).unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(c.push(&[0.0; 16_000], &[]), Err(EchoFailure::Stalled));
+        // The budget: 50 ms, and twice the piece's second of audio.
+        assert!(started.elapsed() < std::time::Duration::from_millis(2_500));
+        // Once stalled it is not asked again, and dropping it does not wait for the thread.
+        assert_eq!(c.push(&[0.0; 160], &[]), Err(EchoFailure::Stalled));
+        let dropped = std::time::Instant::now();
+        drop(c);
+        assert!(dropped.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    /// A canceller whose thread panics on a push.
+    struct Panics;
+
+    impl Cancel for Panics {
+        fn push(
+            &mut self,
+            _: &[f32],
+            _: &[f32],
+            _: &mut dyn FnMut(&EchoFrame),
+        ) -> Result<(), EchoError> {
+            panic!("scripted canceller panic");
+        }
+
+        fn finish(&mut self, _: &mut dyn FnMut(&EchoFrame)) -> Result<(), EchoError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_canceller_thread_that_panics_is_an_internal_failure_and_is_joined() {
+        let mut c = CancellerThread::spawn_with(
+            || Ok(Box::new(Panics) as Box<dyn Cancel>),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(c.push(&[0.0; 160], &[]), Err(EchoFailure::Internal));
+        assert!(!c.stalled);
+        // Joining it logs the panic's size, not its message, and does not panic here.
+        drop(c);
+    }
+
+    #[test]
+    fn a_stalled_live_canceller_is_a_visible_failure_and_the_search_restarts() {
+        // White noise at the far end, heard 50 ms late at half level: a path by 10 s.
+        let mut rng = ink_audio::synth::Lcg::new(7);
+        let far: Vec<f32> = (0..12 * 16_000)
+            .map(|_| (0.05 * rng.next_gaussian()) as f32)
+            .collect();
+        let mic: Vec<f32> = (0..far.len())
+            .map(|i| {
+                let echo = if i >= 800 { 0.5 * far[i - 800] } else { 0.0 };
+                echo + (1e-3 * rng.next_gaussian()) as f32
+            })
+            .collect();
+        let mut live = LiveEcho::new(
+            0,
+            VadSource::Unavailable(crate::events::VadUnavailable::ModelMissing),
+        );
+        live.spawn = hanging;
+        let states = std::sync::Mutex::new(Vec::new());
+        let emit = |e: MeetingEvent| {
+            if let MeetingEvent::Echo(s) = e {
+                states.lock().unwrap().push(s);
+            }
+        };
+        let mut out = Vec::new();
+        for k in 0..mic.len() / 1_600 {
+            let r = k * 1_600..(k + 1) * 1_600;
+            let host = r.start as u64 * NS_PER_SAMPLE;
+            live.push(Channel::Mic, &mic[r.clone()], host, false, &mut out, &emit);
+            live.push(Channel::Far, &far[r], host, false, &mut out, &emit);
+        }
+        let states = states.into_inner().unwrap();
+        let stalled = states
+            .iter()
+            .position(|s| *s == EchoState::Failed(EchoFailure::Stalled))
+            .unwrap_or_else(|| panic!("no stall: {states:?}"));
+        assert!(matches!(
+            states[stalled + 1],
+            EchoState::Searching {
+                why: EchoSearch::AfterFailure,
+                ..
+            }
+        ));
+        // The mic kept reaching its live channel, as captured.
+        let heard: usize = out.iter().map(|b| b.samples.len()).sum();
+        assert!(heard >= mic.len() - 16_000, "{heard}");
     }
 
     #[test]

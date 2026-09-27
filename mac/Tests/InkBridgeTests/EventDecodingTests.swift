@@ -60,6 +60,19 @@ final class EventDecodingTests: XCTestCase {
         }
         XCTAssertEqual(why.failure, .backlog)
         XCTAssertEqual(why.channel, .far)
+        let stalled = try decode(
+            #"{"type":"meeting.echo","record":"r1","state":"failed","failure":"stalled"}"#)
+        guard case .meetingEcho(let hung) = stalled else {
+            return XCTFail("\(stalled)")
+        }
+        XCTAssertEqual(hung.failure, .stalled)
+        let noPath = try decode(
+            #"{"type":"meeting.warning","record":"r1","kind":"echo_path_not_found","channel":"mic","phase":"final","audible_ms":12000}"#
+        )
+        guard case .meetingWarningEvent(let warning) = noPath else {
+            return XCTFail("\(noPath)")
+        }
+        XCTAssertEqual(warning.kind, .echoPathNotFound)
 
         let pass = try decode(
             #"{"type":"meeting.echo_pass","record":"r1","path":{"delay_ms":46.04,"drift_ppm":1.63,"inliers":64},"windows":81,"candidates":72,"cancelled":true,"erle_db":26,"removed":1,"kept_near_speech":0,"kept_no_evidence":0,"live_echo_finals":2}"#

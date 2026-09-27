@@ -278,6 +278,9 @@ pub enum EchoFailure {
     /// The path found is outside what the canceller follows (more than 10 s of delay, or 1 % of
     /// drift): no real echo path is.
     BadAlignment,
+    /// The canceller gave no answer in time (seconds beyond what its audio needs): it is left
+    /// behind, and the mic goes on as captured.
+    Stalled,
     /// The canceller stopped for a reason inside the pipeline (its thread ended, or it was used
     /// after it finished): a bug, reported rather than hidden.
     Internal,

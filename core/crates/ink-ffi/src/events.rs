@@ -280,6 +280,7 @@ fn echo_failure(f: EchoFailure) -> [(&'static str, Option<Value>); 2] {
             ("channel", some(channel(ahead))),
         ],
         EchoFailure::BadAlignment => [("failure", some("bad_alignment")), ("channel", None)],
+        EchoFailure::Stalled => [("failure", some("stalled")), ("channel", None)],
         EchoFailure::Internal => [("failure", some("internal")), ("channel", None)],
     }
 }
@@ -839,6 +840,7 @@ mod tests {
                 ahead: Channel::Mic,
             })),
             MeetingEvent::Echo(EchoState::Failed(EchoFailure::BadAlignment)),
+            MeetingEvent::Echo(EchoState::Failed(EchoFailure::Stalled)),
             MeetingEvent::Echo(EchoState::FoundAtEnd {
                 unprotected_ms: 45_000,
                 stable_from_ms: Some(9_000),
