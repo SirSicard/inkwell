@@ -24,7 +24,7 @@ jobs:
     name: licence audit and app bundle (macos-26)
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The pins against the vetted list, before anything builds: an unvetted dependency fails
       # in seconds.
       - name: Swift licence audit (pins)
@@ -32,6 +32,8 @@ jobs:
       # Installs the channel and components pinned in core/rust-toolchain.toml.
       - run: rustup toolchain install
         working-directory: core
+      # Still on its tag until the commit v2.9.1 points at is confirmed: a pin is read from the
+      # tag, never guessed.
       - uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: core
