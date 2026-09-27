@@ -32,6 +32,8 @@
   <string>Inkwell records your voice while you dictate or take meeting notes. It is transcribed on this Mac, and the recording never leaves it.</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>Inkwell records the other side of your meetings from your meeting app, so both sides are transcribed on this Mac. The recording never leaves it.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Inkwell reads your calendar to name each meeting and who was in it. Your calendar never leaves this Mac.</string>
   <!-- In-app updates (Sparkle 2): Sources/Inkwell/Updates.swift, docs/RELEASING.md. The feed is
        the appcast on the latest GitHub release. -->
   <key>SUFeedURL</key><string>https://github.com/SirSicard/inkwell/releases/latest/download/appcast.xml</string>

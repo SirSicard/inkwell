@@ -1,0 +1,202 @@
+// The view models of the Live, Owed and Settings screens and the first-run state, fed by the core's
+// events after the CoreStore (CoreController.received), and sending their commands through the
+// controller. One instance per app, in the window's environment.
+import AppKit
+import AppleEngines
+import Foundation
+import InkBridge
+
+/// The first-run state: shown until the user completes or skips it, remembered in the core's store.
+@MainActor
+@Observable
+final class OnboardingModel {
+    enum Step: Int, CaseIterable, Sendable {
+        case welcome
+        case permissions
+        case polish
+        case ready
+    }
+
+    /// nil until the store answers; then whether it was completed.
+    private(set) var completed: Bool?
+    var step: Step = .welcome
+
+    @ObservationIgnored private let send: SendCommand
+
+    init(send: @escaping SendCommand) {
+        self.send = send
+    }
+
+    /// Whether the window shows it.
+    var showing: Bool { completed == false }
+
+    func load() {
+        send(.settingGet(.onboardingDone))
+    }
+
+    func next() {
+        if let following = Step(rawValue: step.rawValue + 1) {
+            step = following
+        } else {
+            finish()
+        }
+    }
+
+    func back() {
+        if let previous = Step(rawValue: step.rawValue - 1) {
+            step = previous
+        }
+    }
+
+    /// Done or skipped: not shown again.
+    func finish() {
+        completed = true
+        send(.settingSet(.onboardingDone, "true"))
+    }
+
+    func apply(_ event: InkEvent) {
+        if case .settingValue(let value) = event, value.key == ShellSetting.onboardingDone.rawValue {
+            completed = value.value == "true"
+        }
+    }
+}
+
+/// Settings > Storage: where the library lives, and how much room each part takes.
+@MainActor
+@Observable
+final class StorageModel {
+    struct Sizes: Equatable, Sendable {
+        /// The library database (transcripts, notes, summaries).
+        var library: Int64 = 0
+        /// Meeting recordings.
+        var recordings: Int64 = 0
+        /// Speech models.
+        var models: Int64 = 0
+    }
+
+    let dataDirectory: URL?
+    let modelsDirectory: URL?
+    private(set) var sizes: Sizes?
+    @ObservationIgnored private var measuring = false
+
+    init(dataDirectory: URL?, modelsDirectory: URL?) {
+        self.dataDirectory = dataDirectory
+        self.modelsDirectory = modelsDirectory
+    }
+
+    /// Measures off the main thread.
+    func measure() {
+        guard !measuring, let data = dataDirectory else { return }
+        measuring = true
+        let models = modelsDirectory ?? data.appendingPathComponent("models", isDirectory: true)
+        Task.detached(priority: .utility) {
+            let sizes = Self.sizes(data: data, models: models)
+            await MainActor.run { [weak self] in
+                self?.sizes = sizes
+                self?.measuring = false
+            }
+        }
+    }
+
+    /// Sums the files under `data`: the library's database files, the models (under `models`,
+    /// which may be elsewhere), and everything else as recordings.
+    nonisolated static func sizes(data: URL, models: URL) -> Sizes {
+        var sizes = Sizes()
+        let modelsPath = models.standardizedFileURL.path + "/"
+        for (url, size) in files(under: data) {
+            let path = url.standardizedFileURL.path
+            if path.hasPrefix(modelsPath) {
+                continue
+            } else if url.lastPathComponent.hasPrefix("library.sqlite") {
+                sizes.library += size
+            } else if !["inkwell.lock", "inkwell.sock"].contains(url.lastPathComponent) {
+                sizes.recordings += size
+            }
+        }
+        sizes.models = files(under: models).reduce(0) { $0 + $1.1 }
+        return sizes
+    }
+
+    nonisolated private static func files(under root: URL) -> [(URL, Int64)] {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey]
+        guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys) else {
+            return []
+        }
+        var out: [(URL, Int64)] = []
+        for case let url as URL in walk {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else {
+                continue
+            }
+            out.append((url, Int64(values.totalFileAllocatedSize ?? values.fileSize ?? 0)))
+        }
+        return out
+    }
+
+    /// Opens the library's folder in the Finder.
+    func showInFinder() {
+        if let dataDirectory {
+            NSWorkspace.shared.activateFileViewerSelecting([dataDirectory])
+        }
+    }
+}
+
+@MainActor
+@Observable
+final class ScreenModels {
+    let permissions: PermissionsModel
+    let polish: PolishModel
+    let catalogue: CatalogueModel
+    let modes: ModesModel
+    let owed: OwedModel
+    let live: LiveModel
+    let onboarding: OnboardingModel
+    let storage: StorageModel
+
+    init(
+        send: @escaping SendCommand,
+        calendar: any CalendarAccess = EventKitCalendar(),
+        apps: any AppDirectory = WorkspaceApps(),
+        ask: any AskService = AskNotAvailable(),
+        dataDirectory: URL? = nil,
+        modelsDirectory: URL? = nil
+    ) {
+        permissions = PermissionsModel(send: send, calendar: calendar)
+        polish = PolishModel(send: send)
+        catalogue = CatalogueModel(send: send)
+        modes = ModesModel(send: send, apps: apps)
+        owed = OwedModel(send: send)
+        live = LiveModel(send: send, ask: ask)
+        onboarding = OnboardingModel(send: send)
+        storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
+    }
+
+    /// A batch of the core's events, after the CoreStore has applied it.
+    func apply(_ batch: [InkEvent]) {
+        for event in batch {
+            if case .coreReady = event {
+                coreReady()
+            }
+            permissions.apply(event)
+            polish.apply(event)
+            catalogue.apply(event)
+            modes.apply(event)
+            owed.apply(event)
+            live.apply(event)
+            onboarding.apply(event)
+        }
+    }
+
+    /// The core started: read what the first screens need. The permission check is the one after
+    /// each launch (the Today banner and the sidebar read it too).
+    private func coreReady() {
+        onboarding.load()
+        polish.load()
+        permissions.refresh()
+        catalogue.requery()
+    }
+
+    /// The app became active again.
+    func appBecameActive() {
+        permissions.appBecameActive()
+    }
+}

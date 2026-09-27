@@ -17,6 +17,7 @@ import SwiftUI
 struct ShellView: View {
     @Bindable var router: Router
     @Environment(CoreStore.self) private var store
+    @Environment(ScreenModels.self) private var screens
 
     private var meetingLive: Bool { store.meeting != nil }
 
@@ -36,6 +37,13 @@ struct ShellView: View {
         .tint(Theme.accent)
         .onChange(of: meetingLive) { _, live in
             router.reconcile(meetingLive: live)
+        }
+        // The first-run state, until it is completed or skipped (dismissing it counts as skipped).
+        .sheet(isPresented: Binding(
+            get: { screens.onboarding.showing },
+            set: { if !$0 && screens.onboarding.showing { screens.onboarding.finish() } }
+        )) {
+            OnboardingView()
         }
     }
 }

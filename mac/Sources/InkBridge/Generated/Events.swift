@@ -280,6 +280,28 @@ public struct AudioDropped: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A model in the catalogue that runs on this OS.
+public struct CatalogueEntry: Codable, Sendable, Equatable {
+    /// Its id.
+    public let id: String
+    /// Whether its files are installed and complete.
+    public let installed: Bool
+    /// The jobs it fills, each with its measured error rate.
+    public let jobs: [JobScore]
+    /// Its weights' licence.
+    public let licence: String
+    /// Its download size.
+    public let sizeBytes: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case installed
+        case jobs
+        case licence
+        case sizeBytes = "size_bytes"
+    }
+}
+
 /// Which chain a queue feeds.
 public enum Chain: String, Codable, Sendable, Equatable, CaseIterable {
     case dictation
@@ -1131,28 +1153,6 @@ public enum ModeStyle: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
-/// A model in the catalogue that runs on this OS.
-public struct ModelInfo: Codable, Sendable, Equatable {
-    /// Its id.
-    public let id: String
-    /// Whether its files are installed and complete.
-    public let installed: Bool
-    /// The jobs it fills, each with its measured error rate.
-    public let jobs: [JobScore]
-    /// Its weights' licence.
-    public let licence: String
-    /// Its download size.
-    public let sizeBytes: Int64
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case installed
-        case jobs
-        case licence
-        case sizeBytes = "size_bytes"
-    }
-}
-
 /// A job asked for a model that is held exclusively (being updated), and was refused. The job
 /// fails; nothing was loaded from files being replaced.
 public struct ModelRefused: Codable, Sendable, Equatable {
@@ -1227,7 +1227,7 @@ public struct ModelWarmed: Codable, Sendable, Equatable {
 /// engine.route's answer.
 public struct ModelsListed: Codable, Sendable, Equatable {
     /// The models, in the catalogue's order.
-    public let models: [ModelInfo]
+    public let models: [CatalogueEntry]
     /// Always `models.listed`.
     public let type: String
 }

@@ -8,10 +8,15 @@
   silently (no prompt, the grant simply reads as denied). System audio capture (process taps) is
   not a hardened-runtime resource and needs no entitlement; its prompt text is in Info.plist.
 
+  personal-information.calendars: the hardened runtime blocks EventKit without it, silently like
+  the microphone. The "Know your meetings" permission (Settings, onboarding) reads the calendar to
+  name a meeting and who was in it; the prompt text is in Info.plist.
+
   Add an entitlement only with the feature that needs it, and say why here.
 -->
 <plist version="1.0">
 <dict>
   <key>com.apple.security.device.audio-input</key><true/>
+  <key>com.apple.security.personal-information.calendars</key><true/>
 </dict>
 </plist>

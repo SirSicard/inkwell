@@ -1880,45 +1880,6 @@
       ],
       "additionalProperties": false
     },
-    "ModelInfo": {
-      "type": "object",
-      "description": "A model in the catalogue that runs on this OS.",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Its id."
-        },
-        "licence": {
-          "type": "string",
-          "description": "Its weights' licence."
-        },
-        "size_bytes": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Its download size."
-        },
-        "installed": {
-          "type": "boolean",
-          "description": "Whether its files are installed and complete."
-        },
-        "jobs": {
-          "type": "array",
-          "description": "The jobs it fills, each with its measured error rate.",
-          "items": {
-            "$ref": "#/$defs/JobScore",
-            "description": "A job and its error rate."
-          }
-        }
-      },
-      "required": [
-        "id",
-        "licence",
-        "size_bytes",
-        "installed",
-        "jobs"
-      ],
-      "additionalProperties": false
-    },
     "ModeInfo": {
       "type": "object",
       "description": "A mode: how dictation writes in the apps it names.",
@@ -2138,7 +2099,7 @@
           "type": "array",
           "description": "The models, in the catalogue's order.",
           "items": {
-            "$ref": "#/$defs/ModelInfo",
+            "$ref": "#/$defs/CatalogueEntry",
             "description": "A model."
           }
         }
@@ -2195,6 +2156,45 @@
         "type",
         "default_id",
         "modes"
+      ],
+      "additionalProperties": false
+    },
+    "CatalogueEntry": {
+      "type": "object",
+      "description": "A model in the catalogue that runs on this OS.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "licence": {
+          "type": "string",
+          "description": "Its weights' licence."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its download size."
+        },
+        "installed": {
+          "type": "boolean",
+          "description": "Whether its files are installed and complete."
+        },
+        "jobs": {
+          "type": "array",
+          "description": "The jobs it fills, each with its measured error rate.",
+          "items": {
+            "$ref": "#/$defs/JobScore",
+            "description": "A job and its error rate."
+          }
+        }
+      },
+      "required": [
+        "id",
+        "licence",
+        "size_bytes",
+        "installed",
+        "jobs"
       ],
       "additionalProperties": false
     }
