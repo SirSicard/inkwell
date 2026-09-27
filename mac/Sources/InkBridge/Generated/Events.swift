@@ -971,8 +971,9 @@ public struct LibraryStats: Codable, Sendable, Equatable {
     }
 }
 
-/// The retention setting deleted records older than it keeps (at launch, after a meeting, or
-/// when it changed). Their text is overwritten in the library's files, their audio removed.
+/// The retention setting deleted meetings and dictations older than it keeps (never imports),
+/// at launch, after a meeting, or when it changed. Their text is overwritten in the library's
+/// files, their audio removed.
 public struct LibrarySwept: Codable, Sendable, Equatable {
     /// Records that started before this moment were due, Unix ms.
     public let beforeUnixMs: Int64

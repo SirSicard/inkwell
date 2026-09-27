@@ -3126,7 +3126,7 @@
     },
     "LibrarySwept": {
       "type": "object",
-      "description": "The retention setting deleted records older than it keeps (at launch, after a meeting, or when it changed). Their text is overwritten in the library's files, their audio removed.",
+      "description": "The retention setting deleted meetings and dictations older than it keeps (never imports), at launch, after a meeting, or when it changed. Their text is overwritten in the library's files, their audio removed.",
       "properties": {
         "type": {
           "const": "library.swept"

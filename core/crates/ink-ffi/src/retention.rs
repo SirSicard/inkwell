@@ -14,16 +14,28 @@
 //! reused, which only disk encryption (FileVault) covers. The record goes first: if its audio
 //! then cannot be removed, the words are already gone and the failure is counted.
 //!
+//! **What.** Meetings and dictations. An imported file is never swept: the user brought it in on
+//! purpose, and the library may hold its only copy (the Settings copy says "meetings and
+//! dictations").
+//!
 //! **When.** Never on a timer (nothing ticks while idle): at launch, after each meeting's final
-//! pass, and when the setting changes. A record without an end (a meeting live now, or one a crash
-//! interrupted, which recovery finishes first) is never swept.
+//! pass (a recovered meeting's too), and when the setting changes. A record without an end (a
+//! meeting live now, or one a crash interrupted, which recovery finishes first) is never swept.
+//!
+//! **Where.** On its own thread, `ink-retention` ([`Sweeper`]), which sleeps until a sweep is
+//! asked for: never on a meeting's worker (a new meeting must be able to start the moment the last
+//! one's final pass is over) nor on the screens' thread. Asks that arrive during a sweep are one
+//! more sweep, not one each.
 
-use std::sync::Mutex;
+use std::io;
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 
-use ink_core::{RecordCursor, RecordId, RecordQuery, StoreError};
+use ink_core::{RecordCursor, RecordId, RecordKind, RecordQuery, StoreError};
 
 use crate::events::event;
-use crate::runtime::Shared;
+use crate::runtime::{Shared, lock};
 
 /// The setting: how long records are kept.
 pub const RETENTION_KEY: &str = "retention.days";
@@ -36,8 +48,77 @@ const PAGE: usize = 200;
 
 const DAY_MS: i64 = 86_400_000;
 
-/// One sweep at a time: the meeting worker, the screens' thread and the launch may each start one.
+/// One sweep at a time, in this process: the retention thread runs them, and a test may too.
 static SWEEPING: Mutex<()> = Mutex::new(());
+
+/// A message to the retention thread.
+pub(crate) enum Ask {
+    /// Sweep now (or once more, after the sweep running).
+    Sweep,
+    /// Stop the thread.
+    Quit,
+}
+
+/// The retention thread, `ink-retention`.
+pub struct Sweeper {
+    tx: Sender<Ask>,
+    thread: JoinHandle<()>,
+}
+
+impl Sweeper {
+    /// Starts `ink-retention`, idle until [`Shared::sweep_soon`] asks.
+    pub fn start(shared: Arc<Shared>) -> io::Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let thread = thread::Builder::new()
+            .name("ink-retention".into())
+            .spawn(move || {
+                while let Ok(Ask::Sweep) = rx.recv() {
+                    // What was asked meanwhile is covered by this sweep; a quit among it wins.
+                    if rx.try_iter().any(|ask| matches!(ask, Ask::Quit))
+                        || shared.shutdown.is_cancelled()
+                    {
+                        break;
+                    }
+                    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = sweep(&shared);
+                    }));
+                    if ran.is_err() {
+                        log::error!("the retention sweep panicked; the next one still runs");
+                    }
+                }
+            })?;
+        Ok(Self { tx, thread })
+    }
+
+    /// A sender for asks (the meetings' workers, recovery and the settings reach it through one).
+    pub(crate) fn sender(&self) -> Sender<Ask> {
+        self.tx.clone()
+    }
+
+    /// Stops the thread: a sweep in progress stops at its next record (the shutdown's cancel).
+    pub fn stop(self) {
+        let _ = self.tx.send(Ask::Quit);
+        if self.thread.join().is_err() {
+            log::error!("the retention thread panicked outside its boundary");
+        }
+    }
+}
+
+impl Shared {
+    /// **Any thread.** Asks the retention thread for a sweep and returns at once. Before the
+    /// thread has started, or after it has stopped (the core is shutting down), the ask is
+    /// dropped: the next launch sweeps anyway.
+    pub(crate) fn sweep_soon(&self) {
+        match self.sweeps.get() {
+            Some(tx) => {
+                if lock(tx).send(Ask::Sweep).is_err() && !self.shutdown.is_cancelled() {
+                    log::warn!("retention: the sweep thread has stopped; the next launch sweeps");
+                }
+            }
+            None => log::warn!("retention: no sweep thread yet; the next launch sweeps"),
+        }
+    }
+}
 
 /// What a sweep did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,9 +149,9 @@ fn days(shared: &Shared) -> Result<Option<i64>, StoreError> {
     })
 }
 
-/// **Worker.** Deletes every ended record that started before the setting's cut-off. `None` when
-/// the setting keeps everything; otherwise what it did, also sent as `library.swept` when it did
-/// anything.
+/// **Worker** (the retention thread's). Deletes every ended meeting and dictation that started
+/// before the setting's cut-off. `None` when the setting keeps everything; otherwise what it did,
+/// also sent as `library.swept` when it did anything. It stops early at shutdown.
 pub fn sweep(shared: &Shared) -> Option<Swept> {
     let _one = SWEEPING
         .lock()
@@ -96,7 +177,7 @@ pub fn sweep(shared: &Shared) -> Option<Swept> {
         started_at_unix_ms: before,
         id: RecordId(String::new()),
     };
-    loop {
+    'pages: loop {
         let page = match shared.store.records(&RecordQuery {
             kind: None,
             before: Some(cursor.clone()),
@@ -112,7 +193,10 @@ pub fn sweep(shared: &Shared) -> Option<Swept> {
         let Some(last) = page.last() else { break };
         cursor = RecordCursor::from(last);
         for record in page {
-            if record.ended_at_unix_ms.is_none() {
+            if shared.shutdown.is_cancelled() {
+                break 'pages;
+            }
+            if record.ended_at_unix_ms.is_none() || record.kind == RecordKind::FileImport {
                 continue;
             }
             match shared.store.delete_record(&record.id) {

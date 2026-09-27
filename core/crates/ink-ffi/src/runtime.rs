@@ -8,7 +8,8 @@
 //! | `ink-meeting`, `ink-pump` | a meeting ([`meeting`](crate::meeting)) |
 //! | `ink-meetings` | starting and stopping meetings, detection ([`control`](crate::control)) |
 //! | `ink-ask` | questions about the live meeting ([`asking`](crate::asking)) |
-//! | `ink-recovery`, `ink-retention` | a crashed meeting's final pass; the launch's retention sweep |
+//! | `ink-recovery` | a crashed meeting's final pass ([`recovery`](crate::recovery)) |
+//! | `ink-retention` | retention sweeps, when asked: at launch, after a final pass, on a setting change ([`retention`](crate::retention)) |
 //! | `ink-dictation` | the dictation chain ([`dictation`](crate::dictation)) |
 //! | `ink-queries` | the screens' commands, in order, apart from the command thread ([`queries`](crate::queries)) |
 //!
@@ -48,6 +49,7 @@ use crate::llms::{PolishModel, ShellLlms};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureEnded, CaptureSide, MeetingInfo, MeetingRun, Replay};
 use crate::queries::QueryWorker;
+use crate::retention::Sweeper;
 
 /// The model type residency holds: any offline engine an adapter loads.
 pub type Model = Box<dyn OfflineEngine>;
@@ -319,6 +321,8 @@ pub struct Shared {
     far_bands: Mutex<Option<BandsWriter>>,
     /// The meetings thread, once it has started (settings the screens change reach it here).
     pub(crate) control: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<Msg>>>,
+    /// The retention thread, once it has started ([`Shared::sweep_soon`]).
+    pub(crate) sweeps: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<crate::retention::Ask>>>,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -503,7 +507,7 @@ pub struct Core {
     queries: QueryWorker,
     control: Control,
     asking: Asking,
-    retention: Option<JoinHandle<()>>,
+    retention: Sweeper,
 }
 
 impl Core {
@@ -531,6 +535,7 @@ impl Core {
             bands: Mutex::new(None),
             far_bands: Mutex::new(None),
             control: std::sync::OnceLock::new(),
+            sweeps: std::sync::OnceLock::new(),
         });
         let runs = Arc::new(Mutex::new(Runs::default()));
         let (commands, rx) = mpsc::channel::<Envelope>();
@@ -567,15 +572,9 @@ impl Core {
             .send(Msg::Detect(detect))
             .map_err(io::Error::other)?;
         // The launch's retention sweep, off every thread a screen or a meeting waits on.
-        let retention = {
-            let shared = shared.clone();
-            thread::Builder::new()
-                .name("ink-retention".into())
-                .spawn(move || {
-                    let _ = crate::retention::sweep(&shared);
-                })
-                .ok()
-        };
+        let retention = Sweeper::start(shared.clone())?;
+        let _ = shared.sweeps.set(Mutex::new(retention.sender()));
+        shared.sweep_soon();
         Ok(Self {
             shared,
             hub,
@@ -768,11 +767,7 @@ impl Core {
         // its next region (its marker stays for the next launch).
         asking.stop();
         control.stop();
-        if let Some(retention) = retention
-            && retention.join().is_err()
-        {
-            log::error!("the retention sweep panicked");
-        }
+        retention.stop();
         let (meeting, dictation) = {
             let mut runs = lock(&runs);
             (runs.meeting.take(), runs.dictation.take())
@@ -843,7 +838,7 @@ pub(crate) fn start_meeting(
     ended: Option<CaptureEnded>,
 ) -> Result<(), String> {
     let mut runs = lock(runs);
-    if runs.meeting.as_ref().is_some_and(|m| !m.is_finished()) {
+    if runs.meeting.as_ref().is_some_and(|m| !m.is_over()) {
         return Err("a meeting is already running".into());
     }
     if let Some(done) = runs.meeting.take() {

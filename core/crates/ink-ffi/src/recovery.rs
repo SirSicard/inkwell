@@ -12,7 +12,7 @@
 //!    as the library already counts them);
 //! 3. marks the record ended where its audio ends, and runs the final pass over what is on disk
 //!    ([`EndedMeeting::interrupted`]), with the same engines a live meeting would get;
-//! 4. removes the marker.
+//! 4. removes the marker, and asks for a retention sweep, as a live meeting's pass does.
 //!
 //! The shell asks for it (`meetings.recover`) once its own engines are registered, so a
 //! recovered meeting gets the live partials' fallback and the language model a live one would.
@@ -219,7 +219,11 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
         },
     );
     match ended.finalize(&chunks, cancel) {
-        Ok(_) => clear_live(dir),
+        Ok(_) => {
+            clear_live(dir);
+            // As after a live meeting's pass: the library changed, and the setting applies now.
+            shared.sweep_soon();
+        }
         // The app is quitting: the marker stays for the next launch.
         Err(ink_pipeline::meeting::FinalizeError::Cancelled) => {}
         Err(e) => {

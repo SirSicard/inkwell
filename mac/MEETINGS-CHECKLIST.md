@@ -75,9 +75,9 @@ name or a meeting title into this file or a bug: the repository is public.
       meetings" and a call gets no Drop. Turn it on again.
 - [ ] "Use the headset's microphone" on, with Bluetooth headphones: the next meeting's header names
       the headset's mic. Turn it off again.
-- [ ] Settings > Storage > Keep records: choose 30 days on a library that has older records
-      (import some, or wait): they leave the Library at once, and Settings > Storage's sizes go
-      down after a relaunch. Set it back to Forever.
+- [ ] Settings > Storage > Keep records: choose 30 days on a library that has meetings or
+      dictations older than that (or wait): they leave the Library at once, imports stay, and
+      Settings > Storage's sizes go down after a relaunch. Set it back to Forever.
 
 ## 5. Consent and honesty (read, don't just click)
 

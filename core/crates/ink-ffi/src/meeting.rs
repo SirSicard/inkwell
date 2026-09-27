@@ -201,6 +201,10 @@ pub struct MeetingRun {
     worker: JoinHandle<()>,
     /// The meeting's record, once its chain has started.
     record: Arc<OnceLock<RecordId>>,
+    /// Set by the worker before the shell hears the meeting is over (`meeting.finished`, or a
+    /// failure): from then on the worker only tidies up (the crash marker, a sweep's ask), so a
+    /// new meeting may start and wait for it.
+    over: Arc<AtomicBool>,
 }
 
 impl MeetingRun {
@@ -250,12 +254,13 @@ impl MeetingRun {
         let record: Arc<OnceLock<RecordId>> = Arc::default();
         let abort = Arc::new(AtomicBool::new(false));
         let cancel = CancelToken::new();
+        let over = Arc::new(AtomicBool::new(false));
         // The worker's answer once the chain has started: the meeting's start (host time), or
         // `None` when it did not start.
         let (go_tx, go_rx) = mpsc::channel::<Option<u64>>();
         let worker = {
             let (shared, mailbox, cancel) = (shared.clone(), mailbox.clone(), cancel.clone());
-            let record = record.clone();
+            let (record, over) = (record.clone(), over.clone());
             let start = MeetingStart {
                 title: info.title.clone(),
                 source_app: info.app.as_ref().map(|(id, _)| id.clone()),
@@ -266,7 +271,7 @@ impl MeetingRun {
                 .name("ink-meeting".into())
                 .spawn(move || {
                     worker(
-                        &shared, &mailbox, &record, start, &info, chunks, &cancel, go_tx,
+                        &shared, &mailbox, &record, start, &info, chunks, &cancel, go_tx, &over,
                     );
                 })
                 .map_err(|e| format!("the meeting worker did not start: {e}"))?
@@ -294,6 +299,7 @@ impl MeetingRun {
             pump,
             worker,
             record,
+            over,
         })
     }
 
@@ -320,9 +326,17 @@ impl MeetingRun {
         !self.pump.is_finished() && !self.ending.load(Ordering::Acquire)
     }
 
-    /// Whether the meeting is over: its final pass has finished, or it failed.
+    /// Whether the meeting's worker has returned.
     pub fn is_finished(&self) -> bool {
         self.worker.is_finished()
+    }
+
+    /// Whether the meeting is over: its final pass has finished, or it failed. True from before
+    /// the shell hears so, so a start that answers `meeting.finished` is never refused as "a
+    /// meeting is already running"; [`join`](Self::join) then waits only for the worker's tidying
+    /// up.
+    pub fn is_over(&self) -> bool {
+        self.over.load(Ordering::Acquire) || self.is_finished()
     }
 
     /// Waits for the meeting to end by itself.
@@ -574,8 +588,18 @@ fn worker(
     chunks: ChunkStore,
     cancel: &CancelToken,
     go: mpsc::Sender<Option<u64>>,
+    over: &Arc<AtomicBool>,
 ) {
-    let sink = meeting_sink(shared, record, info);
+    let sink = {
+        let (inner, over) = (meeting_sink(shared, record, info), over.clone());
+        let sink: EventSink<MeetingEvent> = Arc::new(move |e: MeetingEvent| {
+            if matches!(e, MeetingEvent::Finished { .. }) {
+                over.store(true, Ordering::Release);
+            }
+            inner(e);
+        });
+        sink
+    };
     let (services, settings) = services(shared);
     let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let vad = crate::engines::vad_source(shared);
@@ -583,6 +607,7 @@ fn worker(
             Ok(chain) => chain,
             Err(e) => {
                 let _ = go.send(None);
+                over.store(true, Ordering::Release);
                 failed(shared, None, &format!("the meeting could not start: {e}"));
                 return;
             }
@@ -618,6 +643,7 @@ fn worker(
         let ended = chain.stop();
         let result = ended.finalize(&chunks, cancel);
         if let Err(e) = &result {
+            over.store(true, Ordering::Release);
             failed(shared, Some(ended.record()), &e.to_string());
         }
         // Cancelled (the app quitting mid-pass): the marker stays, and the next launch runs the
@@ -627,10 +653,12 @@ fn worker(
         }
         if result.is_ok() {
             // The library changed: a retention setting applies to it now, not at next launch.
-            crate::retention::sweep(shared);
+            // Asked of the retention thread: a sweep here would keep this meeting "running".
+            shared.sweep_soon();
         }
     }));
     if body.is_err() {
+        over.store(true, Ordering::Release);
         // The payload is not logged: it could quote what was said (I5).
         log::error!("the meeting worker panicked; the meeting stops here");
         mailbox.close();
@@ -700,7 +728,15 @@ mod tests {
             let info = MeetingInfo::default();
             thread::spawn(move || {
                 worker(
-                    &shared, &mailbox, &record, start, &info, chunks, &cancel, go_tx,
+                    &shared,
+                    &mailbox,
+                    &record,
+                    start,
+                    &info,
+                    chunks,
+                    &cancel,
+                    go_tx,
+                    &Arc::default(),
                 );
             })
         };

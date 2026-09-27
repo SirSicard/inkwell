@@ -286,10 +286,12 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   block by block with no buffer in between, so a killed process loses what was still in the
   capture ring: measured at 0.03 s by a test that kills a real child process mid-meeting; the
   limit is one chunk (10 s).
-- **Retention.** `retention.days` (forever by default, or 7, 30, 90, 365 days) deletes whole records
-  older than that, at launch, after each meeting and when it changes: the store's delete overwrites
-  the text in the database and checkpoints the write-ahead log with TRUNCATE, then the audio
-  directory is removed (a record without an end is never swept).
+- **Retention.** `retention.days` (forever by default, or 7, 30, 90, 365 days) deletes whole
+  meetings and dictations older than that (never an import: the user's own file, perhaps its only
+  copy), at launch, after each meeting's final pass (a recovered one's too) and when it changes, on
+  its own thread (a sweep never keeps a meeting "running"): the store's delete overwrites the text
+  in the database and checkpoints the write-ahead log with TRUNCATE, then the audio directory is
+  removed (a record without an end is never swept).
 - **Summaries keep their citations.** Each decision and action is saved with the span of the line
   it cites, so a record shows it; a promise names who it is owed to; a later meeting in which the
   user says an open promise is already done marks it "looks done" for the user to confirm.

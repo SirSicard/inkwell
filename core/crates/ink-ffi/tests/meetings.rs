@@ -519,10 +519,10 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
     let store = Arc::new(ink_store::SqliteStore::open(&path).unwrap());
     let clock = clock();
     let now = clock.unix_ms();
-    let record = |days_ago: i64, word: &str, ended: bool, audio: Option<&str>| {
+    let record_of = |kind, days_ago: i64, word: &str, ended: bool, audio: Option<&str>| {
         let id = store
             .create_record(NewRecord {
-                kind: RecordKind::Meeting,
+                kind,
                 title: Some(format!("{word} title")),
                 started_at_unix_ms: now - days_ago * DAY,
                 source_app: None,
@@ -556,9 +556,21 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
         }
         id
     };
+    let record = |days_ago, word: &str, ended, audio| {
+        record_of(RecordKind::Meeting, days_ago, word, ended, audio)
+    };
     let old = record(40, "zebrafinch", true, Some("meetings/old"));
     let old_live = record(50, "quokkabird", false, None);
     let recent = record(3, "marmosetfox", true, Some("meetings/recent"));
+    let old_dictation = record_of(RecordKind::Dictation, 45, "okapiwren", true, None);
+    // Review (S2.8): an import is the user's own file, perhaps its only copy: never swept.
+    let old_import = record_of(
+        RecordKind::FileImport,
+        60,
+        "narwhalbee",
+        true,
+        Some("imports/old"),
+    );
     let parts = Parts {
         store: store.clone(),
         clock,
@@ -581,9 +593,15 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
     core.command(r#"{"cmd":"setting.set","key":"retention.days","value":"30"}"#)
         .unwrap();
     let swept = events.wait_type("library.swept", WAIT);
-    assert_eq!(swept["deleted"], 1);
+    assert_eq!(swept["deleted"], 2, "the old meeting and the old dictation");
     assert_eq!(swept["failed"], 0);
     assert_eq!(store.record(&old).unwrap(), None);
+    assert_eq!(store.record(&old_dictation).unwrap(), None);
+    assert!(
+        store.record(&old_import).unwrap().is_some(),
+        "an import is never swept"
+    );
+    assert!(dir.path().join("imports/old").exists(), "nor its file");
     assert!(
         store.record(&old_live).unwrap().is_some(),
         "no end: never swept"
@@ -736,6 +754,145 @@ fn a_meeting_is_summarized_by_the_registered_model_and_titled_by_its_headline() 
         "the promise was judged"
     );
     drop(systems);
+    events.assert_valid();
+    core.shutdown();
+}
+
+// --- Retention after a final pass, off the meeting's worker ------------------------------------
+
+/// Review (S2.8): a start that answers `meeting.finished` is never refused. The retention sweep
+/// that follows a final pass runs on its own thread, so a slow one (a thousand old records to
+/// delete) never keeps the last meeting "running" (it did, on the meeting's worker).
+#[test]
+fn a_meeting_can_start_the_moment_the_last_one_finished() {
+    const DAY: i64 = 86_400_000;
+    let r = rig("back-to-back", 30.0, clock());
+    let store = r.core.shared().store.clone();
+    let now = r.core.shared().clock.unix_ms();
+    for i in 0..1_000 {
+        let started = now - 40 * DAY - i;
+        let id = store
+            .create_record(NewRecord {
+                kind: RecordKind::Dictation,
+                title: None,
+                started_at_unix_ms: started,
+                source_app: None,
+                audio_dir: None,
+            })
+            .unwrap();
+        store
+            .append_segments(
+                &id,
+                &[ink_core::Segment {
+                    channel: Channel::Mic,
+                    start_ms: 0,
+                    end_ms: 1_000,
+                    text: format!("an old dictation {i}"),
+                    speaker: None,
+                }],
+            )
+            .unwrap();
+        store.finish_record(&id, started + 1_000).unwrap();
+    }
+    // Set in the library, not by command: nothing is swept until the meeting's pass is over.
+    store.set_setting("retention.days", "30").unwrap();
+
+    r.core
+        .command(r#"{"cmd":"meeting.start","id":"first"}"#)
+        .unwrap();
+    r.events.wait_type("meeting.started", WAIT);
+    std::thread::sleep(Duration::from_millis(1_000));
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    let first = r.events.wait_type("meeting.finished", WAIT);
+    r.core
+        .command(r#"{"cmd":"meeting.start","id":"second"}"#)
+        .unwrap();
+    let second = r.events.wait_for(Duration::from_secs(10), |v| {
+        (v["type"] == "meeting.started" && v["record"] != first["record"])
+            || (v["type"] == "command.failed" && v["id"] == "second")
+    });
+    assert_eq!(
+        second.as_ref().map(|v| v["type"].clone()),
+        Some("meeting.started".into()),
+        "{second:?}"
+    );
+    let swept = r.events.wait_type("library.swept", WAIT);
+    assert_eq!(swept["deleted"], 1_000);
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    assert!(r.events.wait_count("meeting.finished", 2, WAIT));
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// Review (S2.8): a meeting recovered after a crash is followed by a retention sweep, as a live
+/// meeting's final pass is. Here the recovered meeting itself is past the setting's 30 days: it
+/// had no end until recovery gave it one, so the launch's sweep left it alone, and the sweep after
+/// its pass takes it.
+#[test]
+fn a_recovered_meeting_is_followed_by_a_retention_sweep() {
+    use ink_core::{AudioBlock, StreamFormat};
+
+    const DAY: i64 = 86_400_000;
+    let dir = TempDir::new("recover-sweep");
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    let clock = clock();
+    let now = clock.unix_ms();
+    let record = store
+        .create_record(NewRecord {
+            kind: RecordKind::Meeting,
+            title: Some("Interrupted".into()),
+            started_at_unix_ms: now - 40 * DAY,
+            source_app: None,
+            audio_dir: Some("meetings/crashed".into()),
+        })
+        .unwrap();
+    store.set_setting("retention.days", "30").unwrap();
+    // What a crash leaves: three seconds a side on disk, and the marker.
+    let audio = dir.path().join("meetings/crashed");
+    let chunks = ink_audio::ChunkStore::open(&audio).unwrap();
+    for (channel, seed) in [(Channel::Mic, 61), (Channel::Far, 62)] {
+        let samples = ink_audio::synth::speech_like(3.0, -30.0, seed);
+        let mut writer = chunks.writer(channel, StreamFormat::CANONICAL).unwrap();
+        writer
+            .write(
+                &AudioBlock {
+                    samples: &samples,
+                    format: StreamFormat::CANONICAL,
+                    host_time_ns: 1_000_000_000,
+                },
+                0,
+            )
+            .unwrap();
+        writer.finish().unwrap();
+    }
+    ink_ffi::recovery::mark_live(&audio, &record).unwrap();
+
+    let loader = MockLoader::new(Behaviour::Say("words from the final pass".into()));
+    let models = ModelDir::new(dir.path().join("models"));
+    let row = test_row(ROW_ID);
+    install(&models, &row);
+    let (core, events) = start_parts(Parts {
+        store: store.clone(),
+        clock,
+        registry: Registry::new(vec![row]).unwrap(),
+        models,
+        loader: loader.clone(),
+        installer: Arc::new(MockInstaller {
+            generation: loader.generation.clone(),
+            gate: None,
+            installs: AtomicUsize::new(0),
+        }),
+        data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: MeetingPlatform::default(),
+    });
+    core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
+    let finished = events.wait_type("meeting.finished", WAIT);
+    assert_eq!(finished["record"], record.0.as_str());
+    let swept = events.wait_type("library.swept", WAIT);
+    assert_eq!(swept["deleted"], 1);
+    assert_eq!(store.record(&record).unwrap(), None);
+    assert!(!audio.exists(), "its audio went too");
     events.assert_valid();
     core.shutdown();
 }

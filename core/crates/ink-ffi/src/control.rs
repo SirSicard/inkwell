@@ -353,7 +353,7 @@ impl State {
         if lock(&self.runs)
             .meeting
             .as_ref()
-            .is_some_and(|m| !m.is_finished())
+            .is_some_and(|m| !m.is_over())
         {
             return self.failed(NAME, id, "a meeting is already running");
         }

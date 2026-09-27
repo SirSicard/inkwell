@@ -503,7 +503,7 @@ impl Ctx<'_> {
                     let sweep = key == crate::retention::RETENTION_KEY;
                     emit(setting(&key, Some(value)));
                     if sweep {
-                        let _ = crate::retention::sweep(self.shared);
+                        self.shared.sweep_soon();
                     }
                 }
                 Err(e) => fail(e.to_string()),
