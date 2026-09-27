@@ -29,6 +29,9 @@ the real core.
 - [ ] Polish step: the switch is off and cannot be turned on if Apple Intelligence is off or not
       on this Mac, and the line under it says why.
 - [ ] Start (or Skip) closes it. Quit and start again on the same library: it does not come back.
+- [ ] On a fresh library, with the sheet up, press Command-Q (and, separately, choose Quit Inkwell
+      from the menu-bar item): Inkwell quits at once. Start it again on the same library: the
+      sheet shows again (quitting is not skipping).
 
 ## 2. Permissions (signed build; needs you)
 

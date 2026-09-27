@@ -560,6 +560,29 @@ final class LiveModelTests: XCTestCase {
 
 @MainActor
 final class OnboardingModelTests: XCTestCase {
+    /// Quitting ends the first-run sheet (AppKit will not quit while a window has a sheet), and a
+    /// sheet ended that way is neither completed nor skipped: the next launch shows it again.
+    func testASheetEndedByQuittingIsNotRecordedAsSkipped() {
+        let sent = Sent()
+        let onboarding = OnboardingModel(send: sent.send)
+        onboarding.load()
+        onboarding.apply(event(#"{"type":"setting.value","key":"onboarding.done"}"#))
+        XCTAssertTrue(onboarding.showing)
+        onboarding.appQuitting()
+        XCTAssertFalse(onboarding.showing, "the sheet goes, so AppKit can quit")
+        // SwiftUI reports the sheet dismissed: that is not the user skipping it.
+        onboarding.sheetDismissed()
+        XCTAssertEqual(sent.commands, [.settingGet(.onboardingDone)], "nothing recorded")
+        XCTAssertEqual(onboarding.completed, false, "still not completed: shown at the next launch")
+
+        // Dismissed by the user (Escape) while the app runs: skipped, as before.
+        let skipped = OnboardingModel(send: sent.send)
+        skipped.apply(event(#"{"type":"setting.value","key":"onboarding.done"}"#))
+        skipped.sheetDismissed()
+        XCTAssertEqual(sent.commands.last, .settingSet(.onboardingDone, "true"))
+        XCTAssertFalse(skipped.showing)
+    }
+
     func testAFirstRunStateThatCannotBeReadIsShownAndLogged() {
         let logged = Logged()
         let sent = Sent()

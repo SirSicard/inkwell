@@ -19,6 +19,8 @@ final class OnboardingModel {
 
     /// nil until the store answers; then whether it was completed.
     private(set) var completed: Bool?
+    /// The app is quitting: the sheet is ended so AppKit can quit, and nothing is recorded.
+    private(set) var quitting = false
     var step: Step = .welcome
 
     @ObservationIgnored private let send: SendCommand
@@ -30,7 +32,7 @@ final class OnboardingModel {
     }
 
     /// Whether the window shows it.
-    var showing: Bool { completed == false }
+    var showing: Bool { completed == false && !quitting }
 
     func load() {
         send(.settingGet(.onboardingDone))
@@ -47,6 +49,19 @@ final class OnboardingModel {
     func back() {
         if let previous = Step(rawValue: step.rawValue - 1) {
             step = previous
+        }
+    }
+
+    /// The app is quitting (AppKit does not quit while a window has a sheet): the sheet goes, and
+    /// the first run stays not completed, so the next launch shows it.
+    func appQuitting() {
+        quitting = true
+    }
+
+    /// The sheet went away without Start or Skip (Escape): skipped, unless the app is quitting.
+    func sheetDismissed() {
+        if showing {
+            finish()
         }
     }
 
