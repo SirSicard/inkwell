@@ -279,6 +279,31 @@ fn changing_the_key_setting_rebinds_it_at_once() {
     );
 }
 
+/// The shell's on/off switch is stored for the shell to read at launch; storing it rebinds
+/// nothing (the shell sends dictation.disable or dictation.enable itself).
+#[test]
+fn the_on_off_switch_is_stored_and_rebinds_nothing() {
+    let rig = VoiceRig::new("switch");
+    rig.enable();
+    let before = rig.events.count("dictation.ready");
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.enabled","value":"off"}"#);
+    let value = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "dictation.enabled"
+        })
+        .expect("stored");
+    assert_eq!(value["value"], "off");
+    // A rebind would have answered with dictation.ready; the key setting's would come after this.
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"right_shift"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["key"] == "right_shift"
+        })
+        .expect("the key setting rebinds");
+    assert_eq!(rig.events.count("dictation.ready"), before + 1);
+}
+
 #[test]
 fn the_edit_key_is_held_on_its_own_and_never_the_dictation_key() {
     let rig = VoiceRig::new("edit-key");

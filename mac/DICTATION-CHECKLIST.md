@@ -45,6 +45,9 @@ voice`), and the shell (`swift test --package-path mac --filter Dictation`).
       key. Leave it Off for now.
 - [ ] A quick tap of fn (as in a shortcut) shows nothing and types nothing. fn + arrow keys still
       work in TextEdit.
+- [ ] Settings > Voice > Dictation: switch it off. fn does what it did before Inkwell (the
+      microphone indicator, if on, goes off). Quit and start Inkwell: it stays off. Switch it on:
+      fn dictates again at once.
 
 ## 2. Dictating into TextEdit (TCC: Microphone)
 

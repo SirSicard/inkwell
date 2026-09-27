@@ -1,10 +1,13 @@
 // Dictation as the shell shows it: whether it is live and on which keys (Settings > Voice), the
 // choice of keys, and what the Drop says about a take that ended without its text going in.
 //
-// The core holds the keys and the mic (architecture rule 1). The shell sends dictation.enable once
-// the core is ready, and again when the app becomes active while dictation is off for a reason the
-// user fixes in System Settings (Accessibility); the keys go through setting.set, and the core
-// rebinds at once and answers dictation.ready or dictation.off. Nothing here polls.
+// The core holds the keys and the mic (architecture rule 1). Once the core is ready the shell reads
+// the user's switch (dictation.enabled, never set: on) and, unless it is off, sends
+// dictation.enable; again when the app becomes active while dictation is off for a reason the user
+// fixes in System Settings (Accessibility, a lost key). Turning the switch off sends
+// dictation.disable, which lets go of the keys and the mic (quitting needs nothing: the core lets go
+// of them when it stops). The keys go through setting.set, and the core rebinds at once and answers
+// dictation.ready or dictation.off. Nothing here polls.
 import Foundation
 import InkBridge
 import Observation
@@ -69,6 +72,16 @@ final class DictationModel {
     /// macOS stopped sending the dictation key (Accessibility revoked, say): not working until
     /// dictation is enabled again.
     private(set) var keyLost = false
+    /// The user's switch: nil until read, then whether dictation should be live.
+    private(set) var wantsOn: Bool?
+    /// A dictation.enable or dictation.disable that failed as a command (never ran, or a bug in the
+    /// core stopped it), until the core answers the next one.
+    private(set) var commandFailure: CommandFailure?
+
+    enum CommandFailure: Equatable, Sendable {
+        case enable
+        case disable
+    }
 
     static let keyLostText = "The dictation key stopped working: macOS stopped sending it to Inkwell. Check \u{201C}Type for you\u{201D}, then come back."
     static let editKeyLostText = "The edit key stopped working: macOS stopped sending it to Inkwell. Check \u{201C}Type for you\u{201D}, then come back."
@@ -92,6 +105,7 @@ final class DictationModel {
     static let refPrefix = "dictation:"
     static let keySettingID = "setting:\(ShellSetting.dictationKey.rawValue)"
     static let editKeySettingID = "setting:\(ShellSetting.dictationEditKey.rawValue)"
+    static let enabledSettingID = "setting:\(ShellSetting.dictationEnabled.rawValue)"
 
     /// Turns dictation on (or, when on, rebinds its keys).
     func enable() {
@@ -100,14 +114,46 @@ final class DictationModel {
         send(.dictationEnable(utcOffsetMinutes: minutes, ref: "\(Self.refPrefix)\(nextRef)"))
     }
 
-    /// Reads the key settings for Settings.
+    /// Lets go of the keys and the mic.
+    func disable() {
+        nextRef += 1
+        send(.dictationDisable(ref: "\(Self.refPrefix)\(nextRef)"))
+    }
+
+    /// Reads the switch (and, unless it is off, then turns dictation on) and the key settings.
     func load() {
+        send(.settingGet(.dictationEnabled))
         send(.settingGet(.dictationKey))
         send(.settingGet(.dictationEditKey))
     }
 
+    /// Whether the switch in Settings > Voice reads on.
+    var isOn: Bool { wantsOn != false }
+
+    /// The user turned dictation on or off: kept for the next launch, and done now.
+    func setOn(_ on: Bool) {
+        wantsOn = on
+        keyFailure = nil
+        send(.settingSet(.dictationEnabled, on ? "on" : "off"))
+        if on {
+            enable()
+        } else {
+            disable()
+        }
+    }
+
+    /// Tries again what failed: turning dictation off if that failed, else turning it on.
+    func retry() {
+        if commandFailure == .disable {
+            disable()
+        } else {
+            enable()
+        }
+    }
+
     /// Back from System Settings, perhaps with Accessibility granted: try again.
     func appBecameActive() {
+        guard wantsOn != false else { return }
         if case .off(let reason, _) = state, reason == .needsAccessibility || reason == .keyRefused {
             enable()
         } else if keyLost || editKeyProblem == Self.editKeyLostText {
@@ -143,15 +189,23 @@ final class DictationModel {
     /// Whether dictation is off for a reason turning it on again may fix (the Voice section offers
     /// that): not for Accessibility, which has its own Allow, nor for an unsupported build.
     var canRetry: Bool {
+        if commandFailure != nil { return true }
         if case .off(let reason, _) = state {
-            return [.workerStopped, .failed, .other, .disabled, .keyRefused].contains(reason)
+            // Off by the user's switch is the switch's to change.
+            return [.workerStopped, .failed, .other, .keyRefused].contains(reason)
         }
         return false
+    }
+
+    /// The retry button's words.
+    var retryTitle: String {
+        commandFailure == .disable ? "Try again" : "Turn dictation on"
     }
 
     /// The line under the keys in Settings.
     var status: String {
         if keyLost { return Self.keyLostText }
+        if commandFailure == .disable { return "Dictation couldn't be turned off." }
         switch state {
         case .starting:
             return "Starting…"
@@ -179,7 +233,7 @@ final class DictationModel {
     /// Whether the status is a problem to show in the alert colour.
     var isProblem: Bool {
         if case .off(let reason, _) = state { return reason != .disabled }
-        return keyFailure != nil || keyLost || editKeyProblem != nil
+        return keyFailure != nil || keyLost || editKeyProblem != nil || commandFailure != nil
     }
 
     private func show(_ text: DropText?) {
@@ -192,14 +246,44 @@ final class DictationModel {
         switch event {
         case .coreStopped:
             state = .starting
+            wantsOn = nil
         case .dictationReady(let ready):
             state = .live(key: ready.key, editKey: ready.editKey)
             keyLost = false
+            commandFailure = nil
             editKeyProblem = ready.editKeyError
             settingsProblem = ready.settingsError
         case .dictationOff(let off):
             state = .off(off.reason, message: off.message)
             keyLost = false
+            commandFailure = nil
+        case .settingValue(let value) where value.key == ShellSetting.dictationEnabled.rawValue:
+            let first = wantsOn == nil
+            wantsOn = value.value != "off"
+            if first {
+                if wantsOn == true {
+                    enable()
+                } else {
+                    state = .off(.disabled, message: nil)
+                }
+            }
+        case .commandFailed(let failed) where failed.id == Self.enabledSettingID:
+            if failed.command == "setting.get" {
+                keyFailure = "Couldn't read whether dictation is on, so it is on."
+                if wantsOn == nil {
+                    wantsOn = true
+                    enable()
+                }
+            } else {
+                keyFailure = "Couldn't save the switch, so the next launch keeps the one before."
+            }
+        case .commandFailed(let failed) where failed.id?.hasPrefix(Self.refPrefix) ?? false:
+            if failed.command == "dictation.disable" {
+                commandFailure = .disable
+            } else {
+                commandFailure = .enable
+                state = .off(.failed, message: nil)
+            }
         case .dictationHotkeyLost:
             keyLost = true
             show(DropText(title: "The dictation key stopped working", detail: "Check \u{201C}Type for you\u{201D} in Settings", tone: .alert))
@@ -221,7 +305,7 @@ final class DictationModel {
 
     /// Whether this model shows a failed command itself.
     func handles(_ failed: CommandFailed) -> Bool {
-        failed.id == Self.keySettingID || failed.id == Self.editKeySettingID
+        failed.id == Self.keySettingID || failed.id == Self.editKeySettingID || failed.id == Self.enabledSettingID
             || (failed.id?.hasPrefix(Self.refPrefix) ?? false)
     }
 

@@ -821,6 +821,9 @@ final class CoreControllerCommandTests: XCTestCase {
             "far": fixtures.appendingPathComponent("IS1009a-far.wav").path,
         ])
         try await until { core.screens.live.record != nil }
+        // Dictation's switch is read and answered at launch (dictation.ready or .off); a quit
+        // before that answer would log the enable it then sends as not sent.
+        try await until { core.screens.dictation.state != .starting }
         // Typed, the caret still in it: nothing has been handed to the core yet.
         core.screens.live.notesEdited("A line still being typed", caretParagraph: 0)
 

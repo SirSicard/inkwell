@@ -107,6 +107,8 @@ enum ShellSetting: String, Sendable {
     case dictationKey = "dictation.key"
     /// The voice-edit key, or "off".
     case dictationEditKey = "dictation.edit_key"
+    /// "on" or "off": whether dictation is live (Settings > Voice). Never set: on.
+    case dictationEnabled = "dictation.enabled"
 }
 
 /// Where the screens' commands go.

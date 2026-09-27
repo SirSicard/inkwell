@@ -65,6 +65,8 @@ pub const KEY_SETTING: &str = "dictation.key";
 pub const EDIT_KEY_SETTING: &str = "dictation.edit_key";
 /// The store setting holding the "Polish my words" switch (`on` or `off`).
 pub const POLISH_SETTING: &str = "dictation.polish";
+/// The settings a running dictation reads: a change to one reaches it at once.
+pub const DICTATION_SETTINGS: &[&str] = &[KEY_SETTING, EDIT_KEY_SETTING, POLISH_SETTING];
 /// The dictation key until the user picks another.
 pub const DEFAULT_KEY: &str = "fn";
 /// The keys a shell may offer (modifiers held on their own; see ink-platform-mac's bindings).

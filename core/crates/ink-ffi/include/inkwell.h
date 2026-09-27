@@ -169,9 +169,11 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
  *       "dictation.polish" (on|off), "dictation.key" (fn|right_option|right_command|
- *       right_control|right_shift) and "dictation.edit_key" (off or one of those). A change to a
- *       dictation.* setting reaches a running dictation at once (keys rebound): a new
- *       "dictation.ready" (or "dictation.off") follows the "setting.value".
+ *       right_control|right_shift), "dictation.edit_key" (off or one of those) and
+ *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
+ *       dictation.enable). A change to the keys or to dictation.polish reaches a running
+ *       dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off") follows
+ *       the "setting.value".
  *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
  *       Dictation live: the core holds the keys (the dictation key, and the edit key if one is
  *       set), opens the mic at the first press and lets it go after 3 minutes without a take.

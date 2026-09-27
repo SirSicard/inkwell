@@ -212,6 +212,17 @@ private struct VoiceSection: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Voice")
             HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Dictation").frame(width: 150, alignment: .leading)
+                Toggle("Dictation", isOn: Binding(get: { dictation.isOn }, set: { dictation.setOn($0) }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                Text(dictation.isOn ? "The keys below are Inkwell's" : "Off: the keys do what they did before")
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .font(Typography.body)
+            .padding(.vertical, 5)
+            .accessibilityElement(children: .contain)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Dictate").frame(width: 150, alignment: .leading)
                 Picker("Dictate", selection: Binding(get: { dictation.key }, set: { dictation.setKey($0) })) {
                     ForEach(DictationModel.keys) { key in
@@ -253,7 +264,7 @@ private struct VoiceSection: View {
                 if case .off(.needsAccessibility, _) = dictation.state {
                     Button("Allow \u{201C}Type for you\u{201D}") { permissions.request(.typeForYou) }
                 } else if dictation.canRetry {
-                    Button("Turn dictation on") { dictation.enable() }
+                    Button(dictation.retryTitle) { dictation.retry() }
                 }
                 if let problem = dictation.editKeyProblem {
                     Text(problem == DictationModel.editKeyLostText ? problem : "The edit key isn't held: \(problem)")

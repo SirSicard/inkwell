@@ -55,7 +55,7 @@ final class DictationModelTests: XCTestCase {
         let sent = Sent()
         let dictation = DictationModel(send: sent.send)
         dictation.load()
-        XCTAssertEqual(sent.commands, [.settingGet(.dictationKey), .settingGet(.dictationEditKey)])
+        XCTAssertEqual(sent.commands, [.settingGet(.dictationEnabled), .settingGet(.dictationKey), .settingGet(.dictationEditKey)])
         dictation.apply(event(#"{"type":"setting.value","key":"dictation.key"}"#))
         XCTAssertEqual(dictation.key, "fn", "never set: the core's default")
         XCTAssertNil(dictation.editKey)
@@ -134,6 +134,76 @@ final class DictationModelTests: XCTestCase {
         let kinds = store.notices.map(\.kind)
         XCTAssertEqual(kinds, [.editKeyLost])
         XCTAssertEqual(NeedsYou.describe(.editKeyLost)?.0, "The edit key stopped working")
+    }
+
+    /// A dictation command the core could not even queue or run reads as such, with a way to try
+    /// again: never "Starting…" forever.
+    func testADictationCommandThatFailedIsShownWithARetry() {
+        let sent = Sent()
+        let dictation = DictationModel(send: sent.send)
+        dictation.enable()
+        let failed = event(#"{"type":"command.failed","command":"dictation.enable","id":"dictation:1","message":"a bug in the core stopped this command"}"#)
+        dictation.apply(failed)
+        XCTAssertEqual(dictation.status, "Dictation couldn't start.")
+        XCTAssertTrue(dictation.isProblem)
+        XCTAssertTrue(dictation.canRetry)
+        guard case .commandFailed(let f) = failed else { return XCTFail() }
+        XCTAssertTrue(dictation.handles(f))
+        dictation.retry()
+        XCTAssertEqual(sent.commands.last, .dictationEnable(utcOffsetMinutes: TimeZone.current.secondsFromGMT() / 60, ref: "dictation:2"))
+        dictation.apply(event(#"{"type":"dictation.ready","key":"fn","ref":"dictation:2"}"#))
+        XCTAssertFalse(dictation.isProblem)
+
+        // Turning it off failed: it still reads as on, says so, and retrying turns it off again.
+        dictation.setOn(false)
+        XCTAssertEqual(sent.commands.suffix(2), [.settingSet(.dictationEnabled, "off"), .dictationDisable(ref: "dictation:3")])
+        dictation.apply(event(#"{"type":"command.failed","command":"dictation.disable","id":"dictation:3","message":"the queries thread has stopped"}"#))
+        XCTAssertEqual(dictation.status, "Dictation couldn't be turned off.")
+        XCTAssertTrue(dictation.isProblem)
+        dictation.retry()
+        XCTAssertEqual(sent.commands.last, .dictationDisable(ref: "dictation:4"))
+        dictation.apply(event(#"{"type":"dictation.off","reason":"disabled","ref":"dictation:4"}"#))
+        XCTAssertEqual(dictation.status, "Dictation is off.")
+        XCTAssertFalse(dictation.isProblem)
+    }
+
+    /// Settings > Voice turns dictation off and on; the choice is kept, and a launch with it off
+    /// holds no key.
+    func testDictationCanBeTurnedOffAndStaysOffAtTheNextLaunch() {
+        let sent = Sent()
+        let dictation = DictationModel(send: sent.send)
+        dictation.load()
+        XCTAssertTrue(sent.commands.contains(.settingGet(.dictationEnabled)))
+        XCTAssertFalse(sent.commands.contains { if case .dictationEnable = $0 { true } else { false } },
+                       "not before the switch is read")
+        dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"off"}"#))
+        XCTAssertFalse(sent.commands.contains { if case .dictationEnable = $0 { true } else { false } })
+        XCTAssertFalse(dictation.isOn)
+        XCTAssertEqual(dictation.status, "Dictation is off.")
+        dictation.setOn(true)
+        XCTAssertEqual(sent.commands.suffix(2).first, .settingSet(.dictationEnabled, "on"))
+        XCTAssertTrue(sent.commands.last.map { if case .dictationEnable = $0 { true } else { false } } ?? false)
+        XCTAssertTrue(dictation.isOn)
+
+        // Never set: on, as a fresh install is.
+        let fresh = Sent()
+        let first = DictationModel(send: fresh.send)
+        first.load()
+        first.apply(event(#"{"type":"setting.value","key":"dictation.enabled"}"#))
+        XCTAssertTrue(fresh.commands.contains { if case .dictationEnable = $0 { true } else { false } })
+        // A switch that cannot be read: dictation starts (the default), and Settings says so.
+        let unread = Sent()
+        let third = DictationModel(send: unread.send)
+        third.load()
+        third.apply(event(#"{"type":"command.failed","command":"setting.get","id":"setting:dictation.enabled","message":"x"}"#))
+        XCTAssertTrue(unread.commands.contains { if case .dictationEnable = $0 { true } else { false } })
+        XCTAssertEqual(third.keyFailure, "Couldn't read whether dictation is on, so it is on.")
+        // Coming back to the app never turns on a dictation the user turned off.
+        let before = sent.commands.count
+        dictation.setOn(false)
+        dictation.apply(event(#"{"type":"dictation.off","reason":"disabled"}"#))
+        dictation.appBecameActive()
+        XCTAssertEqual(sent.commands.count, before + 2)
     }
 
     /// A key setting that could not be saved or read reads "couldn't", never as the key changed.
@@ -294,6 +364,8 @@ final class DictationScreensTests: XCTestCase {
         let screens = ScreenModels(send: sent.send)
         screens.apply([event(#"{"type":"core.ready","abi":2,"version":"0.0.0"}"#)])
         XCTAssertTrue(sent.commands.contains(.settingGet(.dictationKey)))
+        XCTAssertTrue(sent.commands.contains(.settingGet(.dictationEnabled)))
+        screens.apply([event(#"{"type":"setting.value","key":"dictation.enabled"}"#)])
         XCTAssertTrue(sent.commands.contains { if case .dictationEnable = $0 { true } else { false } })
     }
 }
@@ -332,6 +404,8 @@ final class DictationCoreContractTests: XCTestCase {
         XCTAssertEqual(enabled, "dictation:1")
         let key = try answer(.settingSet(.dictationKey, "right_option")) { if case .settingValue(let v) = $0 { v } else { nil } }
         XCTAssertEqual(key?.value, "right_option")
+        let switched = try answer(.settingSet(.dictationEnabled, "off")) { if case .settingValue(let v) = $0 { v } else { nil } }
+        XCTAssertEqual(switched?.value, "off")
         let disabled = try answer(.dictationDisable(ref: "dictation:2")) { if case .dictationOff(let o) = $0, o.ref == "dictation:2" { o } else { nil } }
         XCTAssertEqual(disabled?.reason, .disabled)
         let undecodable = events.withLock { $0 }.filter { if case .undecodable = $0 { true } else { false } }

@@ -228,10 +228,9 @@ final class ScreenModels {
         polish.load()
         permissions.refresh()
         catalogue.requery()
+        // Reads the switch, then (unless it is off) the core holds the keys; without
+        // Accessibility it answers dictation.off, and coming back to the app tries again.
         dictation.load()
-        // The core holds the keys from here; without Accessibility it answers dictation.off, and
-        // coming back to the app tries again.
-        dictation.enable()
     }
 
     /// The app became active again.

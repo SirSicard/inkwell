@@ -49,6 +49,9 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // The dictation key and the voice-edit key (S2.7). A change rebinds them at once.
     (crate::voice::KEY_SETTING, crate::voice::KEYS),
     (crate::voice::EDIT_KEY_SETTING, crate::voice::EDIT_KEYS),
+    // Whether the shell turns dictation on at launch (Settings > Voice). The shell reads it and
+    // sends dictation.enable or not; the core does nothing with it itself.
+    ("dictation.enabled", &["on", "off"]),
 ];
 
 /// The most commitments `commitments.list` returns when the command names no limit.
@@ -491,7 +494,7 @@ impl Ctx<'_> {
             Query::SettingSet { key, value } => match store.set_setting(&key, &value) {
                 Ok(()) => {
                     emit(setting(&key, Some(value)));
-                    if key.starts_with("dictation.") {
+                    if crate::voice::DICTATION_SETTINGS.contains(&key.as_str()) {
                         crate::voice::settings_changed(self.shared);
                     }
                 }
