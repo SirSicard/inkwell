@@ -181,8 +181,17 @@ public final class FoundationModelsPolish: InkLanguageModel {
         func respond(_ request: InkLlmRequest) async throws -> String { try await respond(request) }
     }
 
-    /// The model's errors as codes: never its text, which can quote the request.
+    /// The model's errors as codes: never its text, which can quote the request. (Every payload
+    /// carries a debug description, and a parsing error the raw answer; none is read.)
+    ///
+    /// macOS 27 throws new types in place of the deprecated `GenerationError`. Measured on macOS
+    /// 27.2: a prompt past the context window threw `LanguageModelError.contextSizeExceeded`, and
+    /// two requests at once on one session `LanguageModelSession.Error`; neither matches
+    /// `GenerationError`, so both went out as code 1. Each type is mapped, to the same codes.
     static func engineError(_ error: any Error) -> InkEngineError {
+        #if canImport(FoundationModels, _version: 2.0)
+            if #available(macOS 27.0, *), let code = macOS27Error(error) { return code }
+        #endif
         #if canImport(FoundationModels)
             if let error = error as? LanguageModelSession.GenerationError {
                 switch error {
@@ -203,4 +212,48 @@ public final class FoundationModelsPolish: InkLanguageModel {
         #endif
         return .failed(code: 1)
     }
+
+    // Compiled only against an SDK that declares the macOS 27 types: its FoundationModels is
+    // module version 2 (the 26.x SDKs ship 1.5). CI builds with a 26 SDK, where `#available` alone
+    // could not hide a type the SDK lacks. The module's version is checked rather than the
+    // compiler's, since it is the SDK that has the types or not; both were verified to skip the
+    // block with Swift 6.3 and the 26.5 SDK, and to compile it with Swift 6.4 and the 27 SDK.
+    #if canImport(FoundationModels, _version: 2.0)
+        /// A macOS 27 error as a code, or nil for any other error.
+        @available(macOS 27.0, *)
+        static func macOS27Error(_ error: any Error) -> InkEngineError? {
+            switch error {
+            case let error as LanguageModelError:
+                switch error {
+                case .contextSizeExceeded: return .failed(code: 10)
+                case .guardrailViolation: return .failed(code: 11)
+                case .refusal: return .failed(code: 12)
+                case .unsupportedLanguageOrLocale: return .failed(code: 13)
+                case .rateLimited: return .failed(code: 14)
+                case .unsupportedGenerationGuide: return .failed(code: 17)
+                // Failures `GenerationError` had no case for.
+                case .timeout: return .failed(code: 20)
+                case .unsupportedCapability: return .failed(code: 21)
+                case .unsupportedTranscriptContent: return .failed(code: 22)
+                @unknown default: return .failed(code: 19)
+                }
+            case let error as SystemLanguageModel.Error:
+                switch error {
+                case .assetsUnavailable:
+                    return .unavailable(code: AppleIntelligence.Reason.modelNotReady.rawValue)
+                @unknown default: return .failed(code: 19)
+                }
+            case let error as LanguageModelSession.Error:
+                switch error {
+                case .concurrentRequests: return .failed(code: 15)
+                case .transcriptMutationWhileResponding: return .failed(code: 23)
+                @unknown default: return .failed(code: 19)
+                }
+            case is GeneratedContent.ParsingError:
+                return .failed(code: 16)
+            default:
+                return nil
+            }
+        }
+    #endif
 }

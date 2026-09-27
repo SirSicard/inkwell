@@ -79,6 +79,34 @@ final class FoundationModelsPolishTests: XCTestCase {
         #endif
     }
 
+    /// macOS 27 throws new types in place of the deprecated `GenerationError`: the same failures
+    /// get the same codes, and missing assets are still "unavailable". Only against an SDK that
+    /// declares them (27's FoundationModels is module version 2).
+    func testTheMacOS27ErrorsGetTheSameCodes() throws {
+        #if canImport(FoundationModels, _version: 2.0)
+            guard #available(macOS 27.0, *) else { throw XCTSkip("macOS 27 types") }
+            let words = "synthetic words"
+            let cases: [(any Error, InkEngineError)] = [
+                (LanguageModelError.contextSizeExceeded(.init(contextSize: 4_096, tokenCount: 9_000, debugDescription: words)), .failed(code: 10)),
+                (LanguageModelError.guardrailViolation(.init(debugDescription: words)), .failed(code: 11)),
+                (LanguageModelError.refusal(.init(explanation: words, debugDescription: words)), .failed(code: 12)),
+                (LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: words)), .failed(code: 14)),
+                (LanguageModelSession.Error.concurrentRequests, .failed(code: 15)),
+                (GeneratedContent.ParsingError(rawContent: words, debugDescription: words), .failed(code: 16)),
+                (LanguageModelError.unsupportedGenerationGuide(.init(schemaName: nil, debugDescription: words)), .failed(code: 17)),
+                (LanguageModelError.timeout(.init(debugDescription: words)), .failed(code: 20)),
+                (LanguageModelSession.Error.transcriptMutationWhileResponding, .failed(code: 23)),
+                (SystemLanguageModel.Error.assetsUnavailable(.init(debugDescription: words)),
+                 .unavailable(code: AppleIntelligence.Reason.modelNotReady.rawValue)),
+            ]
+            for (error, code) in cases {
+                XCTAssertEqual(FoundationModelsPolish.engineError(error), code, "\(type(of: error))")
+            }
+        #else
+            throw XCTSkip("this SDK has no macOS 27 Foundation Models types")
+        #endif
+    }
+
     /// A fake system model: what was prewarmed, and which requests found a prepared session.
     private final class Recorder: PolishBackend {
         let prewarmed = Mutex<[String?]>([])
@@ -163,6 +191,40 @@ final class FoundationModelsPolishTests: XCTestCase {
             took.append(ContinuousClock.now - started)
         }
         print("polish \(variant == "1" ? "prewarmed" : "cold"): first \(took[0]), second \(took[1])")
+    }
+
+    /// What the on-device model throws, on this OS, for a prompt past its context window: on
+    /// macOS 27 a `LanguageModelError`, which the deprecated `GenerationError` does not match;
+    /// before 27 a `GenerationError`. Either way it is code 10, through the engine too.
+    func testTheOnDeviceModelsContextOverflowIsCode10() async throws {
+        guard ProcessInfo.processInfo.environment["INK_APPLE_INTELLIGENCE"] == "1" else {
+            throw XCTSkip("set INK_APPLE_INTELLIGENCE=1 to call the on-device model")
+        }
+        guard case .available = AppleIntelligence.current() else { throw XCTSkip("Apple Intelligence is off") }
+        #if canImport(FoundationModels)
+            let long = String(repeating: "synthetic words about a weekly report ", count: 3_000)
+            do {
+                let session = LanguageModelSession(model: .default, instructions: "Repeat the text.")
+                _ = try await session.respond(to: long)
+                XCTFail("a prompt past the context window was answered")
+            } catch {
+                // The type only: an error's description can quote the prompt.
+                print("context overflow threw \(String(reflecting: type(of: error)))")
+                let isGenerationError = error is LanguageModelSession.GenerationError
+                if #available(macOS 27.0, *) {
+                    XCTAssertFalse(isGenerationError, "macOS 27 throws the new types")
+                    #if canImport(FoundationModels, _version: 2.0)
+                        XCTAssertTrue(error is LanguageModelError)
+                    #endif
+                } else {
+                    XCTAssertTrue(isGenerationError)
+                }
+                XCTAssertEqual(FoundationModelsPolish.engineError(error), .failed(code: 10))
+            }
+            let model = FoundationModelsPolish()
+            let overflowing = InkLlmRequest(system: "Repeat the text.", user: long, maxTokens: 256, temperature: 0.3)
+            XCTAssertEqual(generate(model, overflowing)?.failureValue, .failed(code: 10))
+        #endif
     }
 
     /// The real model, on this Mac. Reports the availability either way.
