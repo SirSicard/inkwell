@@ -1,0 +1,21 @@
+[package]
+name = "ink-shader"
+description = "Translates shaders/ink.wgsl into the shells' shading languages (MSL today) with naga."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+# Writes mac/Sources/InkRenderer/Resources/ink.msl from shaders/ink.wgsl (tests/msl.rs checks it
+# is current).
+name = "ink-shader"
+path = "src/bin/ink-shader.rs"
+
+[dependencies]
+# naga as a library, not its CLI: the CLI has no binding map, so its MSL leaves every resource on
+# a placeholder slot. Only the WGSL front end and the MSL back end (MIT OR Apache-2.0). The
+# Windows shell's HLSL back end joins in S3.4.
+naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "msl-out"] }

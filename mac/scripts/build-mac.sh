@@ -173,8 +173,11 @@ while IFS= read -r -d '' f; do
   esac
   is_macho "$f" && nested+=("$f")
 done < <(find "$app/Contents" -type f -print0)
+# Some SwiftPM versions lay a resource bundle out flat (its files at its root, no Info.plist),
+# which codesign cannot sign as a bundle. It holds no code (checked above), so the app's own
+# signature seals its files as resources, like any other file in Contents/Resources.
 for b in "$app/Contents/Resources/"*.bundle; do
-  [ -d "$b" ] && sign "$b"
+  [ -f "$b/Contents/Info.plist" ] && sign "$b"
 done
 for f in ${nested[@]+"${nested[@]}"}; do
   sign "$f"

@@ -62,6 +62,21 @@ status=0
 out="$(/bin/bash "$summary" "$work/skips-fail.log")" || status=$?
 assert_status "failures beside skips fail the summary" 1 "$status"
 assert_contains "and are counted" "$out" "3 failures"
+# A bundle with skipped tests says so in its count line ("with 3 tests skipped and 0 failures").
+sed -e 's/Executed 24 tests, with 0 failures (0 unexpected)/Executed 24 tests, with 3 tests skipped and 0 failures (0 unexpected)/' \
+  "$work/pass.log" >"$work/skipped.log"
+status=0
+out="$(/bin/bash "$summary" "$work/skipped.log")" || status=$?
+assert_status "skipped tests are not failures" 0 "$status"
+assert_contains "a bundle with skipped tests is still counted" "$out" "35 tests in 2 bundles"
+assert_contains "and named with its own count" "$out" "InkwellTests 11, InkBridgeTests 24"
+assert_contains "the skipped are reported" "$out" "0 failures, 3 skipped"
+sed -e 's/Executed 24 tests, with 0 failures (0 unexpected)/Executed 24 tests, with 1 test skipped and 2 failures (0 unexpected)/' \
+  "$work/pass.log" >"$work/skipfail.log"
+status=0
+out="$(/bin/bash "$summary" "$work/skipfail.log")" || status=$?
+assert_status "a failure beside a skip fails" 1 "$status"
+assert_contains "failures are read after the skips" "$out" "2 failures, 1 skipped"
 
 printf 'error: build failed\n' >"$work/none.log"
 status=0
