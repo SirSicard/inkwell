@@ -17,9 +17,9 @@
 //   with its own header and disclaimer, are kept whole).
 // - Silero VAD's weights: the standard MIT text with its copyright line.
 //
-// The three composed texts (protobuf-lite, Darts-clone, Silero VAD) are listed in
-// mac/composed-notices.txt with whether they have been compared with their upstream files yet; a
-// release tag waits until they have (mac/scripts/notices-verified.sh).
+// A composed text says so (`composed: true`), and mac/composed-notices.txt lists each with whether
+// it has been compared with its upstream file yet; a release tag waits until it has
+// (mac/scripts/notices-verified.sh). ComposedNoticesTests holds the list to the flags, both ways.
 //
 // Generated once from the upstream files; edit by hand from now on, keeping the texts verbatim.
 import Foundation
@@ -35,6 +35,9 @@ struct ThirdPartyNotice: Identifiable, Equatable, Sendable {
     let licence: String
     /// The notice and licence text.
     let text: String
+    /// Composed from a licence's standard text and the component's copyright line, because its own
+    /// licence file was not on hand: mac/composed-notices.txt must list it.
+    var composed = false
 }
 
 /// Model weights the app downloads, credited by name, author and licence.
@@ -46,6 +49,8 @@ struct ModelCredit: Identifiable, Equatable, Sendable {
     let use: String
     /// The licence notice to show, where the licence asks for one.
     let notice: String?
+    /// The notice is composed, as `ThirdPartyNotice.composed`.
+    var composed = false
 }
 
 /// A Rust crate linked into the core, with its licence files. The list, `RustNotices.crates`, is
@@ -591,7 +596,7 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-"""#),
+"""#, composed: true),
         ThirdPartyNotice(
             id: "darts-clone", name: "Darts-clone, inside SentencePiece",
             role: "Part of SentencePiece's library.",
@@ -624,7 +629,7 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-"""#),
+"""#, composed: true),
         ThirdPartyNotice(
             id: "abseil", name: "Abseil, by Google",
             role: "Loaded by NeMo-Speech.cpp and SentencePiece.",
@@ -926,6 +931,11 @@ POSSIBILITY OF SUCH DAMAGE.
 """#),
     ]
 
+    /// The ids of the composed notices (`composed: true`), which mac/composed-notices.txt lists.
+    static var composedIDs: Set<String> {
+        Set(components.filter(\.composed).map(\.id)).union(models.filter(\.composed).map(\.id))
+    }
+
     /// The weights, which are downloaded, never bundled.
     static let models: [ModelCredit] = [
         ModelCredit(
@@ -941,7 +951,7 @@ POSSIBILITY OF SUCH DAMAGE.
         ModelCredit(
             id: "silero-vad", name: "Silero VAD v6", author: "the Silero team", licence: "MIT",
             use: "Hears where speech starts and stops.",
-            notice: silero),
+            notice: silero, composed: true),
     ]
 
     /// The Apache License 2.0, shared by the components under it.

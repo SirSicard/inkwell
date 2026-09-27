@@ -671,29 +671,56 @@ final class NoticesTests: XCTestCase {
     }
 }
 
-/// The notices composed from a licence's standard text (their upstream file was not on hand) are
-/// the ones mac/composed-notices.txt lists, each with its upstream-check marker, which a release
-/// tag waits for (mac/scripts/notices-verified.sh).
+/// The notices composed from a licence's standard text (their upstream file was not on hand) say
+/// so in Notices.swift (`composed: true`), and mac/composed-notices.txt lists exactly those, each
+/// with its upstream-check marker, which a release tag waits for (mac/scripts/notices-verified.sh).
 final class ComposedNoticesTests: XCTestCase {
-    func testEveryComposedNoticeIsListedWithItsUpstreamCheck() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let list = try String(contentsOf: root.appendingPathComponent("mac/composed-notices.txt"), encoding: .utf8)
+    /// The list's lines, by notice id: `<id> verified=<no|YYYY-MM-DD> <what to compare with>`.
+    private func markers(_ list: String) -> [String: String] {
         var listed: [String: String] = [:]
         for line in list.split(separator: "\n") where !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
             let words = line.split(separator: " ", omittingEmptySubsequences: true)
-            XCTAssertGreaterThanOrEqual(words.count, 3, "<id> verified=<no|date> <what to compare with>: \(line)")
-            let marker = String(words[1])
-            XCTAssertTrue(marker == "verified=no" || marker.wholeMatch(of: /verified=\d{4}-\d{2}-\d{2}/) != nil, marker)
-            listed[String(words[0])] = marker
+            guard words.count >= 3 else { continue }
+            listed[String(words[0])] = String(words[1])
         }
-        // The notices Notices.swift composes: two BSD-3-Clause components inside SentencePiece, and
-        // Silero VAD's MIT notice.
-        XCTAssertEqual(Set(listed.keys), ["protobuf-lite", "darts-clone", "silero-vad"])
-        let ids = Set(Notices.components.map(\.id)).union(Notices.models.filter { $0.notice != nil }.map(\.id))
-        for id in listed.keys {
-            XCTAssertTrue(ids.contains(id), "\(id) is no notice About shows")
+        return listed
+    }
+
+    /// What is wrong between the composed notices and the list: one declared without a line, one
+    /// listed that is not declared, and a marker that is neither `verified=no` nor a date.
+    private func problems(declared: Set<String>, list: String) -> [String] {
+        let listed = markers(list)
+        var out = declared.subtracting(listed.keys).sorted().map { "\($0) is composed but has no line (no verified= marker)" }
+        out += Set(listed.keys).subtracting(declared).sorted().map { "\($0) is listed but not composed in Notices.swift" }
+        out += listed.sorted { $0.key < $1.key }.compactMap { id, marker in
+            marker == "verified=no" || marker.wholeMatch(of: /verified=\d{4}-\d{2}-\d{2}/) != nil ? nil : "\(id): \(marker)"
         }
+        return out
+    }
+
+    func testEveryComposedNoticeIsListedWithItsUpstreamCheckAndNothingElseIs() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let list = try String(contentsOf: root.appendingPathComponent("mac/composed-notices.txt"), encoding: .utf8)
+        let declared = Notices.composedIDs
+        XCTAssertFalse(declared.isEmpty, "Notices.swift declares its composed notices")
+        XCTAssertEqual(problems(declared: declared, list: list), [])
+        // Every line is well formed (a short line would drop out of the comparison above).
+        for line in list.split(separator: "\n") where !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            XCTAssertGreaterThanOrEqual(line.split(separator: " ").count, 3, "\(line)")
+        }
+    }
+
+    /// The check fails when a composed notice has no line, and when a line names no composed notice.
+    func testACheckThatCatchesAComposedNoticeWithoutItsMarker() {
+        let list = "# header\nprotobuf-lite  verified=no  its file\nsilero-vad verified=2026-10-04 its file\n"
+        XCTAssertEqual(problems(declared: ["protobuf-lite", "silero-vad"], list: list), [])
+        XCTAssertEqual(
+            problems(declared: ["protobuf-lite", "silero-vad", "new-one"], list: list),
+            ["new-one is composed but has no line (no verified= marker)"])
+        XCTAssertEqual(
+            problems(declared: ["protobuf-lite"], list: list), ["silero-vad is listed but not composed in Notices.swift"])
+        XCTAssertEqual(problems(declared: ["x"], list: "x verified=soon its file"), ["x: verified=soon"])
     }
 }
 
