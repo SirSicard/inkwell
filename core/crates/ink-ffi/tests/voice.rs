@@ -11,7 +11,11 @@ use std::time::{Duration, Instant};
 use common::*;
 use ink_audio::{BandsReader, bands_channel};
 use ink_core::mock::MockPlatform;
-use ink_core::{Channel, Clock, Permission, PermissionState};
+use ink_core::{
+    AudioBlock, AudioSink, AudioSource, CaptureControl, Channel, Clock, DeviceId, DeviceInfo,
+    FarEndTarget, Permission, PermissionState, PlatformError, SourceStats, StreamFormat,
+};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ink_engines::{ModelDir, Registry};
 use ink_ffi::runtime::{Core, Parts};
@@ -506,4 +510,134 @@ fn modes_listed_and_dictation_agree_on_the_default_mode_polishing() {
     let listed = rig.events.wait_type("modes.listed", WAIT);
     // With no modes stored, "Polish my words" alone decides: the default mode polishes.
     assert_eq!(listed["modes"][0]["polish"], true, "{listed}");
+}
+
+/// A mic that changes format mid-stream once `flip` is set (a USB mic unplugged and replaced by
+/// the built-in one, a Bluetooth headset switching profile): the mic path cannot go on with it.
+struct FlakyCapture {
+    inner: Arc<MockPlatform>,
+    flip: Arc<AtomicBool>,
+}
+
+struct FlakySource {
+    inner: Box<dyn AudioSource>,
+    flip: Arc<AtomicBool>,
+}
+
+struct FlakySink {
+    inner: Box<dyn AudioSink>,
+    flip: Arc<AtomicBool>,
+}
+
+impl AudioSink for FlakySink {
+    fn push(&mut self, block: &AudioBlock<'_>) {
+        if self.flip.load(Ordering::Acquire) {
+            self.inner.push(&AudioBlock {
+                format: StreamFormat {
+                    sample_rate: 44_100,
+                    channels: block.format.channels,
+                },
+                ..*block
+            });
+        } else {
+            self.inner.push(block);
+        }
+    }
+}
+
+impl AudioSource for FlakySource {
+    fn channel(&self) -> Channel {
+        self.inner.channel()
+    }
+    fn format(&self) -> StreamFormat {
+        self.inner.format()
+    }
+    fn start(&mut self, sink: Box<dyn AudioSink>) -> Result<(), PlatformError> {
+        self.inner.start(Box::new(FlakySink {
+            inner: sink,
+            flip: self.flip.clone(),
+        }))
+    }
+    fn stop(&mut self) -> Result<SourceStats, PlatformError> {
+        self.inner.stop()
+    }
+}
+
+impl CaptureControl for FlakyCapture {
+    fn input_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError> {
+        self.inner.input_devices()
+    }
+    fn default_output(&self) -> Result<Option<DeviceInfo>, PlatformError> {
+        self.inner.default_output()
+    }
+    fn open_mic(&self, device: Option<&DeviceId>) -> Result<Box<dyn AudioSource>, PlatformError> {
+        Ok(Box::new(FlakySource {
+            inner: self.inner.open_mic(device)?,
+            flip: self.flip.clone(),
+        }))
+    }
+    fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError> {
+        self.inner.open_far_end(target)
+    }
+}
+
+/// The mic failing in the middle of a take (its format changed under it) is said
+/// (dictation.mic_failed), the take ends with what it heard (never hangs "Listening"), the mic is
+/// let go of, and the next press opens it again.
+#[test]
+fn a_mic_that_fails_mid_take_says_so_ends_the_take_and_the_next_press_reopens_it() {
+    let flip = Arc::new(AtomicBool::new(false));
+    // Built without a platform, then given one whose capture wraps the rig's mock mic.
+    let rig = VoiceRig::build("mic-mid-take", false);
+    rig.core().set_voice_platform(VoicePlatform {
+        capture: Arc::new(FlakyCapture {
+            inner: rig.platform.clone(),
+            flip: flip.clone(),
+        }),
+        keys: rig.platform.clone(),
+        edit_keys: rig.edit.clone(),
+        inserter: rig.platform.clone(),
+        focus: rig.platform.clone(),
+    });
+    rig.enable();
+    assert!(rig.platform.press());
+    rig.feed(&VoiceRig::speech(1.0, 13));
+    flip.store(true, Ordering::Release);
+    // The next blocks arrive in another format: the pump gives up on this stream.
+    let clock = rig.platform.clock();
+    for _ in 0..5 {
+        rig.platform
+            .feed(Channel::Mic, &[0.0; BLOCK], clock.now_ns());
+        clock.advance_ns(10_000_000);
+    }
+    let failed = rig.events.wait_type("dictation.mic_failed", WAIT);
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("format")),
+        "{failed}"
+    );
+    // The take ended with what it had: processed (here, inserted), never left open.
+    let ended = rig
+        .events
+        .wait_for(WAIT, |v| {
+            [
+                "dictation.inserted",
+                "dictation.discarded",
+                "dictation.failed",
+            ]
+            .contains(&v["type"].as_str().unwrap_or(""))
+        })
+        .expect("the take ended");
+    assert_eq!(ended["type"], "dictation.inserted", "{ended}");
+    let until = Instant::now() + WAIT;
+    while rig.mic_open() {
+        assert!(Instant::now() < until, "the failed mic was never let go of");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(rig.platform.release());
+    // The next press opens the mic again and dictates.
+    flip.store(false, Ordering::Release);
+    rig.dictate(1.0, 14);
+    assert_eq!(rig.platform.inserted().len(), 2);
 }

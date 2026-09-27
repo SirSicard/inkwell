@@ -317,6 +317,25 @@ final class DictationDropTests: XCTestCase {
         XCTAssertEqual(ink.state, .idle, "a voice command ends the take (the Drop no longer hangs on Transcribing)")
     }
 
+    /// The mic failing mid-take: the Drop leaves "Listening" and says so, whatever comes after.
+    func testAMicThatFailsMidTakeEndsTheTakeAndTheDropSaysSo() async throws {
+        let store = CoreStore()
+        let ink = ShellInk(store: store)
+        let dictation = DictationModel(send: { _ in })
+        let drop = DropController(ink: ink, notes: dictation)
+        store.apply([event(#"{"type":"dictation.started","take":0,"edit":false}"#)])
+        drop.update()
+        XCTAssertEqual(drop.shownText?.detail, "Listening")
+        let failed = event(#"{"type":"dictation.mic_failed","message":"mic format changed from 48000 Hz x1 to 44100 Hz x1"}"#)
+        store.apply([failed])
+        dictation.apply(failed)
+        drop.update()
+        XCTAssertNil(store.liveDictation)
+        XCTAssertEqual(ink.state, .idle)
+        XCTAssertEqual(drop.shownText?.title, "Couldn't open the microphone")
+        XCTAssertEqual(drop.inkState, .idle)
+    }
+
     func testTheNewestWordsAreWet() {
         let words = "send the deck over before friday and"
         XCTAssertEqual(String(words[DropText.wetStart(words)...]), "friday and")

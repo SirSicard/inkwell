@@ -361,6 +361,8 @@ final class DictationModel {
                 return DropText(title: "The edit failed", detail: "The selection was left alone", tone: .alert)
             }
         case .dictationMicFailed:
+            // At a press (it would not open) or mid-take (it went away or changed under the take,
+            // which then ends with what it heard).
             return DropText(title: "Couldn't open the microphone", detail: "Check \u{201C}Hear you\u{201D} in Settings", tone: .alert)
         case .dictationWarningEvent(let warning):
             switch warning.kind {

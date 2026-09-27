@@ -97,6 +97,11 @@ voice`), and the shell (`swift test --package-path mac --filter Dictation`).
       input is on" and nothing is typed; the words are in the Library. Turn it off again.
 - [ ] System Settings: turn Inkwell's Microphone off. Hold fn: the Drop says "Couldn't open the
       microphone". Turn it back on: the next take works.
+- [ ] The mic going away mid-take: with a USB or Bluetooth mic as the input, hold fn and start
+      speaking, then unplug it (or switch the headset off) while still holding. The Drop says
+      "Couldn't open the microphone"; what was said before goes in (or "Too short"); it never
+      stays on "Listening". Let go, hold fn again: the next take works on the built-in mic. (With
+      only the built-in mic, revoke Microphone in System Settings while holding instead.)
 - [ ] System Settings: turn Inkwell's Accessibility off while it runs. Today says the dictation
       key stopped working; Settings > Voice says it needs "Type for you". Turn it back on, come
       back to Inkwell: dictation works again without a restart.
