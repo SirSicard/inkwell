@@ -146,6 +146,22 @@ final class LiveWindowTests: XCTestCase {
         XCTAssertEqual(live.buffer.count, live.config.maxBuffer)
     }
 
+    /// Audio let go of unheard is for the stream to log once per stretch, however many pushes the
+    /// stretch took, never per push.
+    func testAudioDroppedUnheardIsReportedOncePerStretch() {
+        var live = LiveWindow()
+        _ = live.takeWindow()
+        XCTAssertEqual(live.takeUnheardDrops(), 0)
+        for i in 0..<60 {  // a minute in one-second pushes, none of it decoded: 30 s past the cap
+            live.append(indexed(i * 16_000..<(i + 1) * 16_000))
+        }
+        XCTAssertEqual(live.takeUnheardDrops(), 60 * 16_000 - live.config.maxBuffer)
+        XCTAssertEqual(live.takeUnheardDrops(), 0, "reported once")
+        live.append(indexed(60 * 16_000..<61 * 16_000))
+        XCTAssertEqual(live.takeUnheardDrops(), 16_000, "a later stretch is its own report")
+        XCTAssertEqual(live.droppedUnheard, 61 * 16_000 - live.config.maxBuffer, "the total is kept")
+    }
+
     /// The newest words are the least settled: a word ending in the last 0.16 s of the decoded
     /// audio is not shown yet, and appears once audio after it has been decoded. Finals keep every
     /// word.

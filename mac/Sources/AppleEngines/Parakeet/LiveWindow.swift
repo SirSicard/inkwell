@@ -139,6 +139,16 @@ public struct LiveWindow: Sendable {
 
     /// Samples dropped unheard because the buffer outgrew `maxBuffer`.
     public private(set) var droppedUnheard = 0
+    /// `droppedUnheard` when `takeUnheardDrops` last reported it.
+    private var reportedUnheard = 0
+
+    /// Samples dropped unheard since the last call. Every push past the cap drops some, so the
+    /// stream asks once per decode (the one that fell that far behind) and logs one line for the
+    /// whole stretch, never one per push.
+    public mutating func takeUnheardDrops() -> Int {
+        defer { reportedUnheard = droppedUnheard }
+        return droppedUnheard - reportedUnheard
+    }
 
     /// Audio received since the last window was taken: what a partial does not show yet.
     public var backlog: Int { received - takenAt }

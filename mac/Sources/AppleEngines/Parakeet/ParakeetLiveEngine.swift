@@ -7,6 +7,8 @@
 // - Decoding runs in one task per stream at a time. When it finishes, it takes the newest window
 //   if a hop of audio has arrived meanwhile, so a slow decode skips hypotheses (partials are
 //   ephemeral) rather than queueing them. A backlog of `stallAfter` is reported as a stall once.
+//   A decode so slow that the buffer outgrew its cap (30 s) lets the oldest audio go unheard; that
+//   is logged once per such decode, with the seconds let go of, apart from the stall.
 // - Events leave through the stream's sink one at a time (its own lock), in the order they
 //   happened; after `close` none are sent.
 
@@ -173,13 +175,15 @@ public final class ParakeetLiveStream: InkLiveStream {
     }
 
     public func close() {
-        let waiting = state.withLock { s in
+        let (waiting, dropped) = state.withLock { s in
             s.closed = true
+            let dropped = s.window.takeUnheardDrops()
             // The audio is let go of now; a decode still running finds the stream closed.
             s.window = LiveWindow(config: config)
             defer { s.finishing = nil }
-            return s.finishing
+            return (s.finishing, dropped)
         }
+        Self.logUnheard(dropped)
         // A send under way finishes first; every later one sees the stream closed. So nothing is
         // sent once this returns.
         sending.withLock { _ in }
@@ -199,25 +203,27 @@ public final class ParakeetLiveStream: InkLiveStream {
                 result = .failure(error)
             }
             enum Next { case decode(Window), flush, stop }
-            let (outputs, next): ([LiveOutput], Next) = state.withLock { s in
+            let (outputs, next, dropped): ([LiveOutput], Next, Int) = state.withLock { s in
                 if s.closed {
                     s.decoding = false
-                    return ([], .stop)
+                    return ([], .stop, 0)
                 }
+                let dropped = s.window.takeUnheardDrops()
                 guard case .success(let decoded) = result else {
                     s.failure = Self.engineError(result)
                     // A finish waiting is answered by the flush, which reports the failure.
-                    if s.finishing != nil { return ([], .flush) }
+                    if s.finishing != nil { return ([], .flush, dropped) }
                     s.decoding = false
-                    return ([], .stop)
+                    return ([], .stop, dropped)
                 }
                 let out = s.window.apply(decoded, of: window)
                 if s.window.backlog < config.hop { s.stalled = false }
-                if s.finishing != nil { return (out, .flush) }
-                if s.window.wantsDecode { return (out, .decode(s.window.takeWindow())) }
+                if s.finishing != nil { return (out, .flush, dropped) }
+                if s.window.wantsDecode { return (out, .decode(s.window.takeWindow()), dropped) }
                 s.decoding = false
-                return (out, .stop)
+                return (out, .stop, dropped)
             }
+            Self.logUnheard(dropped)
             if case .success(let decoded) = result {
                 emit(outputs, decoded: decoded, window: window, started: started, isLast: false)
             } else {
@@ -284,6 +290,14 @@ public final class ParakeetLiveStream: InkLiveStream {
             guard !state.withLock({ $0.closed }) else { return }
             body(sink)
         }
+    }
+
+    /// Logs audio let go of unheard (see the file header), if any. Never on the realtime thread:
+    /// this runs after a decode, or at `close`, on a core worker thread.
+    private static func logUnheard(_ samples: Int) {
+        guard samples > 0 else { return }
+        let seconds = Double(samples) / Double(sampleRate)
+        Log.engine.notice("live partials: a decode fell behind and \(seconds, format: .fixed(precision: 1)) s of audio went unheard; the final pass still has it")
     }
 
     private static func engineError(_ result: Result<DecodedWindow, ParakeetError>) -> InkEngineError {
