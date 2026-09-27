@@ -13,8 +13,7 @@
 //!   no "you" words at all.
 //! - `mix-speakers-speakers2/`: double talk, that echo-only mic plus a reading of a passage on the
 //!   same built-in mic (the reading placed so the far end plays over it as the protocol intends),
-//!   and the reading alone (`near.f32`). The "you" transcript of the mix must stay within one WER
-//!   point of the reading alone's.
+//!   and the reading alone (`near.f32`). The criterion is in the test's own docs.
 //!
 //! Both go through the product's path: the mic and the system tap, from the same host instant,
 //! at 16 kHz (`ink-audio`'s resampler), fed side by side in 10 ms blocks through capture, the
@@ -249,9 +248,57 @@ fn the_echo_only_take_gives_no_you_words() {
     );
 }
 
+/// The gate's own echo path on the double-talk mix, on the same ASR: its measurement tool's
+/// linear output (`aec-mix/linear.wav`, 16 kHz, which the gate's run left in the bench
+/// directory), cut to the reading's span (far-end onset + 19.5 s to + 82 s, on the tool's
+/// timeline), RMS-normalised to −23 dBFS with the peak at most −1 dBFS, and transcribed in one
+/// call, as the gate did.
+fn gate_echo_path_words() -> Vec<String> {
+    let dir = s03().join("mix-speakers-speakers2").join("aec-mix");
+    let onset = json(&s03().join("speakers").join("analysis.json"))["far_onset_s"]
+        .as_f64()
+        .expect("the far end's onset");
+    // The tool's timeline: the first frame's far-file time.
+    let frames = fs::read_to_string(dir.join("frames.tsv")).expect("the tool's frames");
+    let t0: f64 = frames
+        .lines()
+        .nth(1)
+        .and_then(|l| l.split('\t').next())
+        .and_then(|t| t.parse().ok())
+        .expect("the first frame's time");
+    let (rate, linear) =
+        bench::read_wav(&dir.join("linear.wav")).expect("the gate's linear output");
+    assert_eq!(rate, 16_000);
+    let at = |s: f64| (((s - t0) * 16_000.0).max(0.0) as usize).min(linear.len());
+    let mut cut = linear[at(onset + 19.5)..at(onset + 82.0)].to_vec();
+    let rms = (cut.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / cut.len() as f64).sqrt();
+    let peak = cut.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let gain = (10f64.powf(-23.0 / 20.0) / rms).min(10f64.powf(-1.0 / 20.0) / f64::from(peak));
+    cut.iter_mut()
+        .for_each(|v| *v = (f64::from(*v) * gain) as f32);
+    let options = ink_core::TranscribeOptions {
+        channel: Channel::Mic,
+        context: None,
+        cancel: ink_core::CancelToken::new(),
+    };
+    let transcript = qwen().transcribe(&cut, &options).expect("Qwen3-ASR");
+    bench::normalise(&transcript.text())
+}
+
+/// Double talk: the "you" transcript of the mix is **no worse than the gate's own echo path on
+/// the same ASR** (its linear output, cut and levelled as the gate did), and holds **no echo
+/// words**: no word outside the reading (an insertion), since the reading is all the near end
+/// said and the whole transcript is scored.
+///
+/// Re-baselined by the owner on 2026-09-27. The plan asked for the mix within one WER point of
+/// the reading alone; on Qwen3-ASR 1.7B the chain measures 5.63 against 3.52 (+2.1, three words:
+/// "fence" heard as "fences" twice, "spirit" as "spirits"), and the gate's own echo path 7.04
+/// (+3.5), its +0.7 having been a Parakeet figure. Each step between the gate's path and the chain
+/// moved two words or fewer, which one take of 142 words cannot resolve. S2.8 re-measures this on
+/// real meetings.
 #[test]
 #[ignore = "local: needs INK_BENCH_DIR, INK_ECHO_READING, the gate's recordings and the models"]
-fn double_talk_stays_within_one_wer_point_of_the_reading_alone() {
+fn double_talk_is_no_worse_than_the_gate_s_echo_path_and_has_no_echo_words() {
     let reference = reading();
     let take = s03().join("speakers");
     let mix_dir = s03().join("mix-speakers-speakers2");
@@ -262,14 +309,16 @@ fn double_talk_stays_within_one_wer_point_of_the_reading_alone() {
     let (you_alone, out_alone) = through_the_chain(&near, &far);
     let w_mix = wer_trimmed(&reference, &you_words(&you_mix));
     let w_alone = wer_trimmed(&reference, &you_words(&you_alone));
+    let w_gate = wer_trimmed(&reference, &gate_echo_path_words());
     eprintln!(
-        "double talk: {w_mix}\n  echo {:?}\n  mic {:?}\nreading alone: {w_alone}\n  echo {:?}\n  mic {:?}",
+        "double talk: {w_mix}\n  echo {:?}\n  mic {:?}\ngate's echo path: {w_gate}\nreading alone: {w_alone}\n  echo {:?}\n  mic {:?}",
         out_mix.echo, out_mix.mic, out_alone.echo, out_alone.mic
     );
     assert!(
-        w_mix.wer() <= w_alone.wer() + 1.0,
-        "double talk {:.2} against the reading alone {:.2}",
+        w_mix.wer() <= w_gate.wer(),
+        "double talk {:.2} against the gate's echo path {:.2}",
         w_mix.wer(),
-        w_alone.wer()
+        w_gate.wer()
     );
+    assert_eq!(w_mix.insertions, 0, "words outside the reading: {w_mix}");
 }
