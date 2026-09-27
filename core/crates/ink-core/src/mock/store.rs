@@ -57,6 +57,7 @@ fn occurrences(term: &[String], text: &[String]) -> usize {
 struct RecordData {
     record: Record,
     segments: Vec<Segment>,
+    removed: Vec<Segment>,
     summary: Option<Summary>,
     speakers: BTreeMap<SpeakerId, String>,
 }
@@ -129,6 +130,7 @@ impl Store for MemStore {
             RecordData {
                 record,
                 segments: Vec::new(),
+                removed: Vec::new(),
                 summary: None,
                 speakers: BTreeMap::new(),
             },
@@ -216,6 +218,21 @@ impl Store for MemStore {
         data.segments = segments.to_vec();
         data.record.revision += 1;
         Ok(data.record.revision)
+    }
+
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
+        check_stretches(segment_stretches(lines))?;
+        let mut inner = lock(&self.inner);
+        let data = inner.data(id)?;
+        let mut lines = lines.to_vec();
+        // Stable: the same start keeps the order given.
+        lines.sort_by_key(|s| s.start_ms);
+        data.removed = lines;
+        Ok(())
+    }
+
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        Ok(lock(&self.inner).data(id)?.removed.clone())
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {

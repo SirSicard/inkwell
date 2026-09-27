@@ -29,6 +29,8 @@ struct Run {
     outcome: MeetingOutcome,
     events: Vec<MeetingEvent>,
     segments: Vec<Segment>,
+    /// The lines the store keeps as removed.
+    removed: Vec<Segment>,
     /// What the final-pass engine was given for the mic, in call order.
     mic_inputs: Vec<Vec<f32>>,
 }
@@ -46,6 +48,7 @@ fn run(scene: Scene, answer: Answer) -> Run {
     rig.feed(&scene.mic, &scene.far);
     let outcome = rig.finish().expect("the final pass");
     let segments = rig.store.segments(&record).unwrap();
+    let removed = rig.store.removed(&record).unwrap();
     let mic_inputs = rig
         .engine
         .inputs
@@ -60,6 +63,7 @@ fn run(scene: Scene, answer: Answer) -> Run {
         outcome,
         events: rig.events(),
         segments,
+        removed,
         mic_inputs,
     }
 }
@@ -288,6 +292,24 @@ fn a_you_line_that_is_the_far_end_s_echo_is_removed_and_handed_back() {
         .expect("a RemovedAsEcho event");
     assert_eq!(event, removed);
     assert!(!format!("{event:?}").contains("budget"));
+}
+
+#[test]
+fn lines_removed_as_echo_are_stored_with_the_record() {
+    let run = read_back();
+    let line = &run.outcome.removed_as_echo[0];
+    assert_eq!(
+        run.removed,
+        vec![Segment {
+            channel: Channel::Mic,
+            start_ms: line.start_ms,
+            end_ms: line.end_ms,
+            text: "the budget is due on friday".into(),
+            speaker: None,
+        }]
+    );
+    // With nothing removed, the store keeps nothing.
+    assert!(speakers().removed.is_empty());
 }
 
 // ---------------------------------------------------------------------------------------------

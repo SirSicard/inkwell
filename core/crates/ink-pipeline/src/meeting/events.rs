@@ -398,7 +398,8 @@ pub struct FarLine {
     pub end_ms: u64,
 }
 
-/// A "you" line the final pass removed as echo of the far end, whole, so it can be put back.
+/// A "you" line the final pass removed as echo of the far end, whole, so it can be put back
+/// (the store keeps it with the record: `Store::removed`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemovedEcho {
     /// Its start, ms into the meeting.
@@ -485,8 +486,9 @@ pub enum MeetingEvent {
     Echo(EchoState),
     /// What echo cancellation did in the final pass. Sent before the supersede.
     EchoPass(EchoPass),
-    /// "You" lines the final pass removed as echo, with their words (as [`Spoken`]), so they can
-    /// be stored and put back. Sent only when there are some.
+    /// "You" lines the final pass removed as echo, with their words (as [`Spoken`]). Sent only
+    /// when there are some, before the supersede; once the pass is saved the store keeps them
+    /// with the record, in the same order (by start time), so they can be put back.
     RemovedAsEcho(Vec<RemovedEcho>),
     /// The final pass replaced the live transcript.
     Superseded {

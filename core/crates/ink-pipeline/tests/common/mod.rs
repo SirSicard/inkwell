@@ -473,6 +473,12 @@ impl Store for FaultyStore {
     fn supersede(&self, id: &RecordId, s: &[Segment]) -> Result<u32, StoreError> {
         self.inner.supersede(id, s)
     }
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
+        self.inner.save_removed(id, lines)
+    }
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.inner.removed(id)
+    }
     fn search(&self, q: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
         self.inner.search(q, limit)
     }

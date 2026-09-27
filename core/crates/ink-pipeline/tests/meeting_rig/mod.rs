@@ -767,6 +767,14 @@ impl Store for FlakyStore {
         self.check("supersede")?;
         self.inner.supersede(id, segments)
     }
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
+        self.check("save_removed")?;
+        self.inner.save_removed(id, lines)
+    }
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.check("removed")?;
+        self.inner.removed(id)
+    }
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
         self.check("search")?;
         self.inner.search(query, limit)

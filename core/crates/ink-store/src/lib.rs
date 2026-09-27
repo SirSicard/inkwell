@@ -527,8 +527,8 @@ impl Store for SqliteStore {
     }
 
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
-        // The foreign keys cascade to segments (and through a trigger, the search index), notes,
-        // the summary, speaker names and commitments with their spans. Commitments elsewhere
+        // The foreign keys cascade to segments (and through a trigger, the search index), removed
+        // lines, notes, the summary, speaker names and commitments with their spans. Commitments elsewhere
         // that were merged into this record's are un-merged, since they are still owed.
         self.write("delete_record", |tx| {
             changed(tx.execute("DELETE FROM record WHERE id = ?1", [&id.0])?)
@@ -573,6 +573,53 @@ impl Store for SqliteStore {
                 params![id.0, next],
             )?;
             Ok(next)
+        })
+    }
+
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
+        let rows = segment_rows(lines)?;
+        self.write("save_removed", |tx| {
+            // The record must exist, empty list or not.
+            revision(tx, id)?;
+            // With `secure_delete`, the lines replaced are overwritten, not left in free pages.
+            tx.execute("DELETE FROM removed_line WHERE record_id = ?1", [&id.0])?;
+            let mut insert = tx.prepare(
+                "INSERT INTO removed_line (record_id, channel, start_ms, end_ms, text, speaker)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for row in &rows {
+                insert.execute(params![
+                    id.0,
+                    row.channel,
+                    row.start_ms,
+                    row.end_ms,
+                    row.text,
+                    row.speaker
+                ])?;
+            }
+            Ok(())
+        })
+    }
+
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.read("removed", |tx| {
+            revision(tx, id)?;
+            let mut select = tx.prepare(
+                "SELECT channel, start_ms, end_ms, text, speaker FROM removed_line
+                 WHERE record_id = ?1 ORDER BY start_ms, seq",
+            )?;
+            let lines = select
+                .query_map([&id.0], |row| {
+                    Ok(Segment {
+                        channel: channel_at(row, 0)?,
+                        start_ms: ms_at(row, 1)?,
+                        end_ms: ms_at(row, 2)?,
+                        text: row.get(3)?,
+                        speaker: row.get::<_, Option<String>>(4)?.map(SpeakerId),
+                    })
+                })?
+                .collect::<Result<_, _>>()?;
+            Ok(lines)
         })
     }
 

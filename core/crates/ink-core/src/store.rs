@@ -244,7 +244,8 @@ pub trait Store: Send + Sync {
     /// Marks a record as ended.
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError>;
 
-    /// Deletes a record with its transcript, notes, summary, speakers and commitments.
+    /// Deletes a record with its transcript, removed lines, notes, summary, speakers and
+    /// commitments.
     ///
     /// A commitment in another record that was merged into one of the deleted commitments is
     /// still owed: it is un-merged (`merged_into` cleared) and open again, not deleted with it.
@@ -259,6 +260,19 @@ pub trait Store: Send + Sync {
     /// Replaces the current revision with `segments` in one transaction and returns the new
     /// revision. Refuses what [`check_supersede`] refuses; a refused supersede changes nothing.
     fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError>;
+
+    /// Keeps lines a pass removed from a record's transcript, whole, so they can be put back: the
+    /// "you" lines a meeting's final pass takes out as echo of the far end. Replaces what the
+    /// record kept before (a pass that runs again keeps its own; an empty list clears them).
+    ///
+    /// They belong to the record, not to a revision: a later supersede leaves them. They are
+    /// never searched, and they are deleted with the record, as its transcript is. Times are
+    /// checked as [`append_segments`](Self::append_segments) checks them, the whole call refused.
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError>;
+
+    /// The lines kept by [`save_removed`](Self::save_removed), by start time, then in the order
+    /// they were given.
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError>;
 
     /// Full-text search across every record's current revision.
     ///

@@ -68,7 +68,7 @@ fn migrations_from_empty_reach_the_current_version() {
     drop(db.open());
     let raw = db.raw();
     assert_eq!(user_version(&raw), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 1);
+    assert_eq!(SCHEMA_VERSION, 2);
 
     let mut stmt = raw
         .prepare(
@@ -90,6 +90,7 @@ fn migrations_from_empty_reach_the_current_version() {
             "commitment_span",
             "note",
             "record",
+            "removed_line",
             "segment",
             "setting",
             "speaker",
@@ -112,6 +113,32 @@ fn migrations_from_empty_reach_the_current_version() {
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();
     assert_eq!(mode, "wal");
+}
+
+#[test]
+fn a_database_from_before_removed_lines_is_brought_up_to_date() {
+    let db = TempDb::new("migrate-v1");
+    let id = {
+        let store = db.open();
+        let id = meeting(&store, 1);
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "kept through the upgrade")])
+            .unwrap();
+        id
+    };
+    // As a build of schema 1 left it.
+    {
+        let raw = db.raw();
+        raw.execute_batch("DROP TABLE removed_line; PRAGMA user_version = 1;")
+            .unwrap();
+    }
+    let store = db.open();
+    assert_eq!(user_version(&db.raw()), SCHEMA_VERSION);
+    assert_eq!(store.segments(&id).unwrap().len(), 1);
+    store
+        .save_removed(&id, &[seg(Channel::Mic, 5, "an echo line")])
+        .unwrap();
+    assert_eq!(store.removed(&id).unwrap().len(), 1);
 }
 
 #[test]
@@ -618,6 +645,9 @@ fn deleting_a_record_removes_everything_it_owns() {
         store
             .set_speaker_name(id, &SpeakerId("spk0".into()), "Guest")
             .unwrap();
+        store
+            .save_removed(id, &[seg(Channel::Mic, 0, "a removed line")])
+            .unwrap();
     }
     let span = Span {
         channel: Channel::Mic,
@@ -641,6 +671,7 @@ fn deleting_a_record_removes_everything_it_owns() {
     let raw = db.raw();
     for (table, column) in [
         ("segment", "record_id"),
+        ("removed_line", "record_id"),
         ("note", "record_id"),
         ("summary", "record_id"),
         ("speaker", "record_id"),
@@ -738,6 +769,9 @@ fn a_deleted_record_leaves_no_text_on_disk() {
         .unwrap();
     store.add_note(&doomed, 10, "zqxnotemarker").unwrap();
     store
+        .save_removed(&doomed, &[seg(Channel::Mic, 20, "zqxremovedmarker")])
+        .unwrap();
+    store
         .save_summary(
             &doomed,
             &Summary {
@@ -766,6 +800,7 @@ fn a_deleted_record_leaves_no_text_on_disk() {
         "zqxtitlemarker",
         "zqxsegmentmarker",
         "zqxnotemarker",
+        "zqxremovedmarker",
         "zqxsummarymarker",
         "zqxspeakermarker",
         "zqxcommitmentmarker",
@@ -801,6 +836,9 @@ fn superseded_and_replaced_text_leaves_no_trace_on_disk() {
         )
         .unwrap();
     let note = store.add_note(&id, 0, "zqxoldnotemarker").unwrap();
+    store
+        .save_removed(&id, &[seg(Channel::Mic, 0, "zqxoldremovedmarker")])
+        .unwrap();
     let summary = |text: &str| Summary {
         text: text.into(),
         model: "m".into(),
@@ -813,14 +851,23 @@ fn superseded_and_replaced_text_leaves_no_trace_on_disk() {
     assert!(on_disk(&db, "zqxlivemarker") >= 2);
     assert!(on_disk(&db, "zqxoldnotemarker") >= 1);
     assert!(on_disk(&db, "zqxoldsummarymarker") >= 1);
+    assert!(on_disk(&db, "zqxoldremovedmarker") >= 1);
 
     store
         .supersede(&id, &[seg(Channel::Mic, 0, "alpha beta gamma delta")])
         .unwrap();
     store.update_note(&note, "new").unwrap();
     store.save_summary(&id, &summary("new")).unwrap();
+    store
+        .save_removed(&id, &[seg(Channel::Mic, 0, "a later pass's line")])
+        .unwrap();
     checkpoint(&db);
-    for marker in ["zqxlivemarker", "zqxoldnotemarker", "zqxoldsummarymarker"] {
+    for marker in [
+        "zqxlivemarker",
+        "zqxoldnotemarker",
+        "zqxoldsummarymarker",
+        "zqxoldremovedmarker",
+    ] {
         assert_eq!(on_disk(&db, marker), 0, "{marker} is overwritten");
     }
     assert_eq!(store.search("delta", 10).unwrap().len(), 1);
