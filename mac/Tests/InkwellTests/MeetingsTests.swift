@@ -348,4 +348,15 @@ final class RecoveryNoticeTests: XCTestCase {
             notices: store.notices, now: Date(), calendar: .current)
         XCTAssertEqual(items.map(\.title), ["Inkwell couldn't check for an unfinished meeting"])
     }
+
+    /// Review (S2.8): a meeting that runs without its crash marker says so on Today.
+    func testAMeetingWithoutItsCrashMarkerSaysItIsNotProtected() {
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meeting.started","record":"r1"}"#)])
+        store.apply([event(#"{"type":"meeting.warning","record":"r1","kind":"not_crash_protected","message":"Is a directory (os error 21)"}"#)])
+        let items = NeedsYou.items(
+            permission: { _ in .allowed }, farEnd: .unknown, meeting: store.meeting,
+            notices: store.notices, now: Date(), calendar: .current)
+        XCTAssertTrue(items.map(\.title).contains("This meeting isn't protected against a crash"))
+    }
 }

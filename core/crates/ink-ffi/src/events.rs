@@ -499,6 +499,9 @@ fn meeting_warning(w: &MeetingWarning) -> Vec<(&'static str, Option<Value>)> {
         ],
         MeetingWarning::DeletedTextNotScrubbed => vec![kind("deleted_text_not_scrubbed")],
         MeetingWarning::DeletedTextScrubbed => vec![kind("deleted_text_scrubbed")],
+        MeetingWarning::NotCrashProtected(why) => {
+            vec![kind("not_crash_protected"), msg(why.clone())]
+        }
         MeetingWarning::EchoPathNotFound { heard_ms } => vec![
             kind("echo_path_not_found"),
             ("channel", some("mic")),
@@ -782,6 +785,7 @@ mod tests {
             MeetingWarning::EchoPathNotFound { heard_ms: 12_000 },
             MeetingWarning::DeletedTextNotScrubbed,
             MeetingWarning::DeletedTextScrubbed,
+            MeetingWarning::NotCrashProtected("the marker could not be written".into()),
         ];
         let mut meeting_events = vec![
             MeetingEvent::Started {

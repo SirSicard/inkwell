@@ -1412,7 +1412,9 @@ public struct MeetingVoiceDetection: Codable, Sendable, Equatable {
 /// Something went wrong in a meeting, and it went on without it. deleted_text_not_scrubbed:
 /// text the library deleted or replaced could not yet be cleared from its files (another
 /// process is reading the database; the change is saved, and the store keeps trying);
-/// deleted_text_scrubbed: it now is. Each is sent once per change.
+/// deleted_text_scrubbed: it now is. Each is sent once per change. not_crash_protected: the
+/// crash-recovery marker could not be written when the meeting started, so if the app quits
+/// unexpectedly this meeting is not finished at the next launch (its audio is still saved).
 public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case capture
@@ -1443,6 +1445,7 @@ public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case echoPathNotFound = "echo_path_not_found"
     case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
     case deletedTextScrubbed = "deleted_text_scrubbed"
+    case notCrashProtected = "not_crash_protected"
     case other
 }
 

@@ -41,7 +41,7 @@ use ink_core::{
 };
 use ink_engines::{ExternalEngine, Route};
 use ink_pipeline::capture::{CanonicalBlock, CaptureIssue, SideCapture, SideSummary};
-use ink_pipeline::meeting::events::MeetingEvent;
+use ink_pipeline::meeting::events::{MeetingEvent, MeetingWarning};
 use ink_pipeline::meeting::watchdog::Routing;
 use ink_pipeline::meeting::{MeetingChain, MeetingServices, MeetingSettings, MeetingStart};
 
@@ -603,6 +603,7 @@ fn worker(
     let (services, settings) = services(shared);
     let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let vad = crate::engines::vad_source(shared);
+        let warn = sink.clone();
         let mut chain = match MeetingChain::start(services, settings, vad, sink, start) {
             Ok(chain) => chain,
             Err(e) => {
@@ -622,6 +623,10 @@ fn worker(
         let live = crate::recovery::mark_live(chunks.dir(), chain.record());
         if let Err(e) = &live {
             log::warn!("meeting: the crash-recovery marker could not be written: {e}");
+            // Said, not only logged: the user may want to know this one is not protected.
+            warn(MeetingEvent::Warning(MeetingWarning::NotCrashProtected(
+                e.to_string(),
+            )));
         }
         let _ = go.send(Some(chain.start_ns()));
         loop {
@@ -777,6 +782,59 @@ mod tests {
         }
         assert!(noticed, "{:?}", events.lock().unwrap());
 
+        let _ = mailbox.push(Input::Stop);
+        handle.join().unwrap();
+        core.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review (S2.8): a meeting whose crash-recovery marker cannot be written still records, and
+    /// says it is not protected (`meeting.warning`, not only a log line).
+    #[test]
+    fn a_meeting_without_its_crash_marker_says_it_is_not_protected() {
+        let dir = std::env::temp_dir().join(format!("ink-ffi-unprotected-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let clock = Arc::new(MockClock::new(5_000_000_000, 1_790_146_800_000));
+        let (core, events) = testing::core(clock.clone(), dir.clone());
+        let shared = core.shared().clone();
+        let mailbox: Arc<Box2> = Arc::new(Mailbox::new(16));
+        let chunks = ChunkStore::open(dir.join("meetings/unprotected")).unwrap();
+        // The marker's name is taken by a directory: its rename fails.
+        std::fs::create_dir_all(chunks.dir().join(crate::recovery::LIVE_FILE)).unwrap();
+        let (go_tx, go_rx) = mpsc::channel();
+        let handle = {
+            let (shared, mailbox) = (shared.clone(), mailbox.clone());
+            let start = MeetingStart {
+                title: None,
+                source_app: None,
+                audio_dir: Some("meetings/unprotected".into()),
+                routing: Default::default(),
+            };
+            thread::spawn(move || {
+                worker(
+                    &shared,
+                    &mailbox,
+                    &Arc::default(),
+                    start,
+                    &MeetingInfo::default(),
+                    chunks,
+                    &CancelToken::new(),
+                    go_tx,
+                    &Arc::default(),
+                );
+            })
+        };
+        assert!(matches!(go_rx.recv(), Ok(Some(_))), "it records anyway");
+        let warned = |v: &Value| {
+            v["type"] == "meeting.warning"
+                && v["kind"] == "not_crash_protected"
+                && v["record"].as_str().is_some_and(|r| !r.is_empty())
+        };
+        assert!(
+            wait(&events, warned, Duration::from_secs(5)),
+            "{:?}",
+            events.lock().unwrap()
+        );
         let _ = mailbox.push(Input::Stop);
         handle.join().unwrap();
         core.shutdown();

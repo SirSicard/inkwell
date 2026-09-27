@@ -194,6 +194,11 @@ pub enum MeetingWarning {
     DeletedTextNotScrubbed,
     /// Deleted text the library could not clear before is now cleared from its files.
     DeletedTextScrubbed,
+    /// The host could not leave its crash-recovery marker beside the meeting's chunks: if the
+    /// app quits unexpectedly, this meeting is not finished at the next launch (its audio is
+    /// still saved as it records). The chain never raises it; the host does, through the
+    /// meeting's event sink. The string names what failed, never the meeting's words.
+    NotCrashProtected(String),
     /// The diarizer failed: the far end keeps no speaker labels.
     DiarizationFailed(EngineError),
     /// The store failed: a live final, the final pass, the summary or commitments could not be

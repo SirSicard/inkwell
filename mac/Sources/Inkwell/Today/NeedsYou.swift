@@ -125,6 +125,8 @@ enum NeedsYou {
             ("Your headset's microphone sent only silence", "Bluetooth headset mics can go silent in calls. Inkwell records the built-in mic instead when it can.")
         case .meetingWarning(.nothingCaptured):
             ("The last meeting recorded nothing", "No audio reached Inkwell from either side.")
+        case .meetingWarning(.notCrashProtected):
+            ("This meeting isn't protected against a crash", "If Inkwell quits unexpectedly, it won't finish this meeting at the next launch. The recording is still being saved.")
         case .meetingWarning(.farEndQuietWhileYouSpeak):
             ("The other side went quiet while you spoke", "Their audio may not be reaching Inkwell.")
         case .meetingFailed, .meetingCaptureFailed, .meetingWorkerFailed:
