@@ -1,0 +1,43 @@
+name: Mac
+
+# The Mac app (mac/): the Swift licence audit, and the app bundle mac/scripts/build-mac.sh makes.
+# CI has no signing identity, so the bundle is signed ad-hoc: the check is that it assembles,
+# signs every Mach-O, and verifies with the hardened runtime and the audio-input entitlement.
+# The Swift tests run in core.yml, next to the core they drive.
+on:
+  push:
+    branches: [main]
+    paths: ['mac/**', 'core/**', 'schema/**', '.github/workflows/mac.yml']
+  pull_request:
+    paths: ['mac/**', 'core/**', 'schema/**', '.github/workflows/mac.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: licence audit and app bundle (macos-26)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      # The pins against the vetted list, before anything builds: an unvetted dependency fails
+      # in seconds.
+      - name: Swift licence audit (pins)
+        run: mac/scripts/licence-audit-swift.sh
+      # Installs the channel and components pinned in core/rust-toolchain.toml.
+      - run: rustup toolchain install
+        working-directory: core
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: core
+      # No INK_SIGN_IDENTITY here: ad-hoc.
+      - name: Build the app bundle
+        run: mac/scripts/build-mac.sh
+      # What the build fetched: every checkout's licence file, and every prebuilt binary.
+      - name: Swift licence audit (checkouts and binaries)
+        run: mac/scripts/licence-audit-swift.sh --checkouts
