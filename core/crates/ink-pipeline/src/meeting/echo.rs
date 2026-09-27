@@ -211,6 +211,33 @@ impl ErleMeter {
     }
 }
 
+/// The final pass's echo stage over a recording, frame by frame, for measuring it (the echo
+/// fixture, a bench): the path fitted over both sides' chunks in `audio` (host time `t0_ns` is
+/// sample 0), then, when there is one, AEC3 adapted on the recording's first 20 s and run along
+/// it from the start, every frame handed to `on_frame` (numbered from the meeting's start).
+/// Returns the search's report, or `None` when a side's chunks cannot be listed.
+///
+/// **Worker**, for as long as the recording takes; it checks `cancel` between seconds of audio.
+pub fn replay(
+    audio: &ink_audio::ChunkStore,
+    t0_ns: u64,
+    cancel: &ink_core::CancelToken,
+    mut on_frame: impl FnMut(&EchoFrame),
+) -> Result<Option<PathReport>, super::FinalizeError> {
+    let Some(report) = super::offline::fit_path(audio, t0_ns, cancel)? else {
+        return Ok(None);
+    };
+    if let Some(path) = report.path {
+        let mut cancelled = super::offline::Cancelled::open(audio, t0_ns, path)?;
+        while cancelled.step(&mut on_frame)? {
+            if cancel.is_cancelled() {
+                return Err(super::FinalizeError::Cancelled);
+            }
+        }
+    }
+    Ok(Some(report))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Live
 
