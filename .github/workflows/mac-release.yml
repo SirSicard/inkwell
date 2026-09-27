@@ -1,0 +1,330 @@
+name: Mac release
+
+# Releases the Mac app (docs/RELEASING.md). On a v1.X.Y tag: build, sign with the Developer ID,
+# notarize and staple the app and then the dmg, check both with Gatekeeper, sign Sparkle's appcast,
+# and draft a GitHub release holding the dmg and the appcast. A person publishes the draft; nothing
+# here does.
+#
+# A manual run is the dry run (RELEASING.md, step 0): the same build, signing, notarization and
+# Gatekeeper check, the notarized dmg kept as a run artifact, the appcast rehearsed with a throwaway
+# key, and nothing published.
+#
+# Secrets and privileges, by job:
+# - build: the APPLE_* secrets, and read access to the repository only.
+# - appcast-rehearsal (dry run): no secret, read access only.
+# - publish (tag only): the Sparkle EdDSA key and write access, in the `release` environment, whose
+#   deployment rule admits v1.* tags alone.
+# Neither trigger can come from a pull request, so no fork's code runs next to a secret; there is no
+# pull_request_target. Actions are pinned by commit (read from GitHub's API), and no step restores
+# a cache: what gets signed is built from the checkout alone.
+on:
+  push:
+    tags: ['v1.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to build the dry run as (X.Y.Z). Nothing is published.
+        required: true
+        default: '1.0.0'
+
+permissions: {}
+
+concurrency:
+  group: mac-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build, sign, notarize (macos-26)
+    runs-on: macos-26
+    permissions:
+      contents: read
+    # Two notarizations, each an unbounded queue (notarize.sh waits up to 2 h, three times).
+    timeout-minutes: 360
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      dmg: ${{ steps.version.outputs.dmg }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # From the tag (v1.X.Y exactly) or the dry run's input: passed through the environment and
+      # checked, never pasted into a script.
+      - name: Version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            mac/scripts/release-version.sh tag "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
+          else
+            mac/scripts/release-version.sh dry-run "$INPUT_VERSION" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+      # A release is cut from main: a tag on a commit main does not contain stops here. And an app
+      # published without the update key could never update itself, so that stops here too, before
+      # half an hour of building. (The dry run builds without the key, and says so at the end.)
+      - name: The tag is on main, and the update key is set
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)"
+          case "$status" in
+            identical | behind) echo "the tag's commit is on main" ;;
+            *)
+              echo "::error title=Not on main::$GITHUB_REF_NAME points at a commit main does not contain ($status)"
+              exit 1
+              ;;
+          esac
+          key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' mac/Info.plist 2>/dev/null || true)"
+          if [ "$(printf '%s' "$key" | base64 -D 2>/dev/null | wc -c | tr -d ' ')" != 32 ]; then
+            echo "::error title=No update key::mac/Info.plist has no SUPublicEDKey: generate the Sparkle key first (docs/RELEASING.md)"
+            exit 1
+          fi
+
+      # The redaction, the licence audit, the release scripts' refusals and the appcast checker, on
+      # fixtures; then the manifest against the vetted list, before anything is fetched or built.
+      - name: Script tests
+        run: mac/scripts/tests/run.sh
+      - name: Swift licence audit (manifest and pins)
+        run: mac/scripts/licence-audit-swift.sh
+
+      # Installs the channel and components pinned in core/rust-toolchain.toml.
+      - run: rustup toolchain install
+        working-directory: core
+
+      # The Developer ID certificate goes into a keychain made for this run, with a random password,
+      # and deleted at the end; only Apple's signing tools may use its key without asking. The
+      # notarization credentials are stored in it as a notarytool profile, so no later step passes
+      # the password on a command line. Nothing printed here names the identity.
+      - name: Signing keychain
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::$name is not set. A Mac release is signed and notarized, or it does not happen."
+              exit 1
+            fi
+          done
+          keychain="$RUNNER_TEMP/inkwell-signing.keychain-db"
+          password="$(openssl rand -base64 32)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          echo "SIGNING_KEYCHAIN=$keychain" >>"$GITHUB_ENV"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          (
+            umask 077
+            printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$RUNNER_TEMP/certificate.p12"
+          )
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -f pkcs12 \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          # Its output lists the key's label, which is the certificate's name.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          # First in the search list, the others kept after it.
+          others=()
+          while IFS= read -r line; do
+            line="${line//\"/}"
+            others+=("${line#"${line%%[![:space:]]*}"}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${others[@]}"
+          identities="$(security find-identity -v -p codesigning "$keychain")"
+          if ! grep -qF -- "$APPLE_SIGNING_IDENTITY" <<<"$identities"; then
+            echo "::error title=Identity not found::APPLE_SIGNING_IDENTITY names no signing identity in APPLE_CERTIFICATE"
+            exit 1
+          fi
+          xcrun notarytool store-credentials inkwell-notary --keychain "$keychain" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_PASSWORD" >/dev/null
+          echo "signing keychain ready"
+
+      # Release build, signed with the Developer ID and Apple's secure timestamp. build-mac.sh
+      # checks every Mach-O (Sparkle's helpers too) for the identity's team, the hardened runtime,
+      # the timestamp and no entitlements but the app's, and prints nothing that names the identity.
+      - name: Build and sign the app
+        env:
+          INK_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          INK_VERSION: ${{ steps.version.outputs.version }}
+          INK_BUILD_NUMBER: ${{ steps.version.outputs.version }}
+        run: mac/scripts/build-mac.sh --timestamp
+
+      # What the build fetched: Sparkle's archive, unpacked, and its licence file.
+      - name: Swift licence audit (checkouts and binaries)
+        run: mac/scripts/licence-audit-swift.sh --checkouts
+
+      # The app first, so its own ticket is stapled before it goes into the dmg: it then passes
+      # Gatekeeper offline wherever it is copied, and after Sparkle installs it.
+      - name: Notarize and staple the app
+        env:
+          NOTARY_PROFILE: inkwell-notary
+        run: NOTARY_KEYCHAIN="$SIGNING_KEYCHAIN" mac/scripts/notarize.sh mac/build/Inkwell.app
+
+      - name: Package and sign the dmg
+        env:
+          INK_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          DMG: ${{ steps.version.outputs.dmg }}
+        run: mac/scripts/package-dmg.sh mac/build/Inkwell.app "mac/build/$DMG" --timestamp
+
+      - name: Notarize and staple the dmg
+        env:
+          NOTARY_PROFILE: inkwell-notary
+          DMG: ${{ steps.version.outputs.dmg }}
+        run: NOTARY_KEYCHAIN="$SIGNING_KEYCHAIN" mac/scripts/notarize.sh "mac/build/$DMG"
+
+      # As a user's Mac will see it: a quarantined download, Gatekeeper on the dmg and on the app
+      # inside, both tickets stapled. A tag also requires the update key.
+      - name: Verify with Gatekeeper
+        env:
+          EVENT: ${{ github.event_name }}
+          DMG: ${{ steps.version.outputs.dmg }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            mac/scripts/verify-release.sh "mac/build/$DMG" --notarized --version "$VERSION" --update-key
+          else
+            mac/scripts/verify-release.sh "mac/build/$DMG" --notarized --version "$VERSION"
+          fi
+
+      - name: Keep the dmg
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: inkwell-dmg
+          path: mac/build/${{ steps.version.outputs.dmg }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Delete the signing keychain
+        if: always()
+        run: |
+          if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+  # The dry run's appcast: every tool the release uses, on the dmg just built, signed with a
+  # throwaway key that no installed app trusts. Nothing is published and no secret is reachable.
+  appcast-rehearsal:
+    name: appcast rehearsal (dry run)
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: inkwell-dmg
+          path: mac/build
+      - name: Sparkle's tools
+        run: mac/scripts/sparkle-tools.sh "$RUNNER_TEMP/sparkle"
+      - name: Rehearse the appcast
+        env:
+          DMG: ${{ needs.build.outputs.dmg }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          SPARKLE_BIN="$RUNNER_TEMP/sparkle/bin" mac/scripts/appcast.sh --rehearsal \
+            --dmg "mac/build/$DMG" --version "$VERSION" \
+            --download-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION/" \
+            --link "https://github.com/$GITHUB_REPOSITORY" --out "$RUNNER_TEMP/appcast" </dev/null
+
+  # A tag's release: the appcast signed with the maintainer's EdDSA key and checked against the key
+  # the app carries, then a draft release with the dmg and the appcast. Publishing the draft is a
+  # person's step (docs/RELEASING.md): until then no installed app can see it.
+  publish:
+    name: draft the release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v1.')
+    runs-on: macos-26
+    environment: release
+    permissions:
+      contents: write
+    timeout-minutes: 30
+    steps:
+      - name: The update key is here
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "::error title=No update key::SPARKLE_ED_PRIVATE_KEY is not set in the release environment (docs/RELEASING.md)"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: inkwell-dmg
+          path: mac/build
+      - name: Sparkle's tools
+        run: mac/scripts/sparkle-tools.sh "$RUNNER_TEMP/sparkle"
+
+      # The feed installed apps read now, so its items stay in the new one (appcast.sh checks it
+      # against the app's key first). None yet before the first 1.x release: that is not an error;
+      # any other failure is.
+      - name: The published appcast
+        run: |
+          code="$(curl --silent --show-error --location --proto '=https' --proto-redir '=https' --retry 3 \
+            --output "$RUNNER_TEMP/previous.xml" --write-out '%{http_code}' \
+            "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/appcast.xml")"
+          case "$code" in
+            200) echo "carrying over the published appcast" ;;
+            404) rm -f "$RUNNER_TEMP/previous.xml"; echo "no appcast published yet: this is the first" ;;
+            *) echo "::error title=Appcast unreadable::the published appcast answered HTTP $code"; exit 1 ;;
+          esac
+
+      # The key goes to Sparkle's tools on stdin only: never to disk, never to a command line.
+      - name: Sign the appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          DMG: ${{ needs.build.outputs.dmg }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          previous=()
+          if [ -f "$RUNNER_TEMP/previous.xml" ]; then previous=(--previous "$RUNNER_TEMP/previous.xml"); fi
+          printf '%s\n' "$SPARKLE_ED_PRIVATE_KEY" | SPARKLE_BIN="$RUNNER_TEMP/sparkle/bin" mac/scripts/appcast.sh \
+            --dmg "mac/build/$DMG" --version "$VERSION" \
+            --download-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
+            --link "https://github.com/$GITHUB_REPOSITORY" --out "$RUNNER_TEMP/appcast" "${previous[@]}"
+
+      # A draft: invisible to installed apps (the feed is the latest *published* release's) and to
+      # the Download button until a person checks it and publishes it. A re-run replaces a draft's
+      # files and never touches a published release.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DMG: ${{ needs.build.outputs.dmg }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          files=("mac/build/$DMG" "$RUNNER_TEMP/appcast/appcast.xml")
+          if draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$draft" != true ]; then
+              echo "::error title=Already published::$GITHUB_REF_NAME is a published release; it is never replaced"
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            echo "draft $GITHUB_REF_NAME: files replaced"
+          else
+            cat >"$RUNNER_TEMP/notes.md" <<EOF
+          **Download \`$DMG\`**: Inkwell for Macs with Apple silicon, on macOS 26 or later. It is signed with a Developer ID and notarized by Apple.
+
+          \`appcast.xml\` is the feed the app's updater reads; there is no need to download it.
+
+          See the [changelog](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md) for what changed.
+          EOF
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
+              --draft --verify-tag --title "Inkwell $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+            echo "drafted $GITHUB_REF_NAME"
+          fi

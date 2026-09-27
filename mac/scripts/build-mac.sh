@@ -9,6 +9,9 @@
 #   mac/scripts/build-mac.sh --same-requirement-as /Applications/Inkwell.app
 #                                               and fail unless the new app's designated
 #                                               requirement is that app's (grants carry over)
+#   mac/scripts/build-mac.sh --timestamp        sign with Apple's secure timestamp, which
+#                                               notarisation requires (the release; needs
+#                                               INK_SIGN_IDENTITY and the network)
 #
 # Environment:
 #   INK_SIGN_IDENTITY  the signing identity: a SHA-1 hash or a name from
@@ -28,6 +31,10 @@
 # - Signing the bundle does not sign a loose executable elsewhere in it (only nested bundles are
 #   walked), and `codesign --verify --deep --strict` still passes with that file ad-hoc. So every
 #   Mach-O is signed on its own, inside out, and each one's signature is checked afterwards.
+# - Frameworks (Sparkle) are re-signed with the app's identity, their own helpers first, because
+#   the hardened runtime's library validation loads only code signed by the app's team (or
+#   Apple), and notarisation accepts only code signed with the Developer ID. Only the app has
+#   entitlements; every other signature is checked to carry none.
 # - A verification that cannot fail the build is not one: every check below exits non-zero.
 set -euo pipefail
 
@@ -37,11 +44,13 @@ mac="$(cd "$(dirname "$0")/.." && pwd)"
 config=release
 skip_core=0
 same_as=""
+timestamp=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --debug) config=debug ;;
     --release) config=release ;;
     --skip-core) skip_core=1 ;;
+    --timestamp) timestamp=1 ;;
     --same-requirement-as)
       [ $# -ge 2 ] || { echo "--same-requirement-as needs an app path" >&2; exit 2; }
       same_as="$2"
@@ -59,10 +68,14 @@ fail() { echo "build-mac: $*" >&2; exit 1; }
 
 if [ -n "$identity" ]; then
   # Checked before building, so a typo fails in seconds. Listing identities reads certificates,
-  # not private keys: it never shows a keychain prompt. (The codesign calls below may.)
-  security find-identity -v -p codesigning | grep -qF -- "$identity" \
+  # not private keys: it never shows a keychain prompt. (The codesign calls below may.) Read whole
+  # before matching: grep -q closing the pipe early could fail `security` under pipefail, and
+  # with it a valid identity.
+  identities="$(security find-identity -v -p codesigning)"
+  grep -qF -- "$identity" <<<"$identities" \
     || fail "INK_SIGN_IDENTITY names no valid code-signing identity in the keychain"
 else
+  [ "$timestamp" = 0 ] || fail "--timestamp needs INK_SIGN_IDENTITY: an ad-hoc signature has no timestamp"
   echo "build-mac: INK_SIGN_IDENTITY is not set: signing ad-hoc. Fine for a build check; do not" >&2
   echo "           grant this build any permission (TCC forgets it at the next build)." >&2
 fi
@@ -75,7 +88,10 @@ else
 fi
 # Only the versions pinned in the committed Package.resolved: a build that re-resolved could ship
 # a dependency the licence audit never saw. A stale or missing Package.resolved fails here.
-swift build --package-path "$mac" -c "$config" --product Inkwell --only-use-versions-from-resolved-file
+# The rpath: the frameworks the app links (Sparkle) go in Contents/Frameworks, and SwiftPM's own
+# rpath is only @loader_path, which is Contents/MacOS in the bundle.
+swift build --package-path "$mac" -c "$config" --product Inkwell --only-use-versions-from-resolved-file \
+  -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 bin="$(swift build --package-path "$mac" -c "$config" --show-bin-path --only-use-versions-from-resolved-file)"
 
 # --- bundle -------------------------------------------------------------------------------------
@@ -89,28 +105,67 @@ printf 'APPL????' >"$app/Contents/PkgInfo"
 # SwiftPM resource bundles (a dependency's data files). Bundle.module looks in
 # Bundle.main.resourceURL first, which is Contents/Resources in an app.
 find "$bin" -maxdepth 1 -name '*.bundle' -type d -exec cp -R {} "$app/Contents/Resources/" \;
+# The frameworks the executable links through its rpath, as SwiftPM unpacked them from their
+# XCFrameworks next to it. Read from the executable, so a framework left in the build directory by
+# an earlier dependency is not shipped. ditto keeps the symlinks a framework's signature covers.
+# A plain dylib through the rpath has no place here yet: it stops the build.
+while IFS= read -r ref; do
+  case "$ref" in
+    @rpath/*.framework/*)
+      framework="${ref#@rpath/}"
+      framework="${framework%%.framework/*}.framework"
+      [ -d "$bin/$framework" ] || fail "the app links $framework, which the build did not produce"
+      [ -d "$app/Contents/Frameworks/$framework" ] || ditto "$bin/$framework" "$app/Contents/Frameworks/$framework"
+      ;;
+    @rpath/*) fail "the app links $ref through its rpath, and this script bundles only frameworks" ;;
+  esac
+done < <(otool -L "$bin/Inkwell" | sed -nE '2,$ s/^[[:space:]]+([^ ]+) \(.*/\1/p')
 
 # --- sign ---------------------------------------------------------------------------------------
 sign_as=("${identity:--}")
 # --timestamp=none: a local build does not ask Apple's timestamp server. The release pipeline
-# signs with a secure timestamp, which notarisation requires.
+# passes --timestamp: notarisation requires a secure timestamp on every signature.
+stamp=(--timestamp=none)
+[ "$timestamp" = 1 ] && stamp=(--timestamp)
 # codesign's own messages can name the identity and its certificate: they are redacted too
 # (pipefail keeps its exit status).
 sign() {
-  codesign --force --options runtime --timestamp=none --sign "${sign_as[0]}" "$@" 2>&1 \
+  codesign --force --options runtime "${stamp[@]}" --sign "${sign_as[0]}" "$@" 2>&1 \
     | redact_signing "$identity"
 }
 
 is_macho() { file -b "$1" | grep -q '^Mach-O'; }
 
+# A framework: its own code first, deepest first, then the framework. Sparkle's own code is two
+# XPC services, the Updater app and the Autoupdate tool, all signed without entitlements: the app
+# is not sandboxed, so Sparkle installs through Autoupdate and Updater.app as ordinary helpers and
+# never starts its XPC services (they serve sandboxed apps, which opt in through Info.plist).
+# Whatever in a framework this misses is still caught below, still signed by its vendor.
+sign_framework() {
+  local framework="$1" version code f
+  [ -L "$framework/Versions/Current" ] || fail "${framework#"$app/"} has no Versions/Current"
+  version="$framework/Versions/$(readlink "$framework/Versions/Current")"
+  for code in "$version/XPCServices/"*.xpc "$version/"*.app; do
+    [ -d "$code" ] && sign "$code"
+  done
+  for f in "$version/"*; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    [ "$(basename "$f")" = "$(basename "$framework" .framework)" ] && continue
+    is_macho "$f" && sign "$f"
+  done
+  sign "$framework"
+}
+
 # Inside out: resource bundles, then every loose Mach-O other than the main executable, then the
-# app itself with its entitlements. A Mach-O inside a nested bundle has to be signed as part of
-# that bundle; nothing produces one yet, so it stops the build rather than going out half signed.
+# frameworks, then the app itself with its entitlements. A Mach-O inside any other nested bundle
+# has to be signed as part of that bundle; nothing produces one yet, so it stops the build rather
+# than going out half signed.
 nested=()
 while IFS= read -r -d '' f; do
   # Matched on the path inside the bundle: the bundle's own path ends in .app too.
   case "${f#"$app/Contents/"}" in
     MacOS/Inkwell) continue ;;
+    Frameworks/*.framework/*) continue ;;
     *.bundle/* | *.framework/* | *.app/* | *.appex/* | *.xpc/*)
       is_macho "$f" && fail "executable code inside a nested bundle is not signed by this script yet: ${f#"$app/"}"
       continue
@@ -124,7 +179,23 @@ done
 for f in ${nested[@]+"${nested[@]}"}; do
   sign "$f"
 done
-sign --entitlements "$mac/Inkwell.entitlements" "$app"
+frameworks=0
+for framework in "$app/Contents/Frameworks/"*.framework; do
+  [ -d "$framework" ] || continue
+  sign_framework "$framework"
+  frameworks=$((frameworks + 1))
+done
+# Ad-hoc code has no team, and the hardened runtime's library validation loads a framework only
+# from the app's own team, so an ad-hoc app could not load its own ad-hoc Sparkle ("different Team
+# IDs"). An ad-hoc build is a local check that TCC forgets at the next build anyway: it alone turns
+# library validation off. A Developer ID build never does, and is checked for that below.
+entitlements="$mac/Inkwell.entitlements"
+if [ -z "$identity" ]; then
+  entitlements="$mac/build/adhoc-entitlements.plist"
+  cp "$mac/Inkwell.entitlements" "$entitlements"
+  /usr/libexec/PlistBuddy -c 'Add :com.apple.security.cs.disable-library-validation bool true' "$entitlements" >/dev/null
+fi
+sign --entitlements "$entitlements" "$app"
 
 # --- verify -------------------------------------------------------------------------------------
 codesign --verify --deep --strict "$app" 2>&1 | redact_signing "$identity" || fail "the signature does not verify"
@@ -138,18 +209,35 @@ codesign -d --entitlements - --xml "$app" >"$signed_ents" 2>/dev/null || fail "n
 # PlistBuddy, not plutil: plutil's key paths split on the dots in the key.
 [ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' "$signed_ents" 2>/dev/null)" = true ] \
   || fail "the audio-input entitlement is missing: the hardened runtime would deny the microphone silently"
+if [ -n "$identity" ] \
+  && /usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.disable-library-validation' "$signed_ents" >/dev/null 2>&1; then
+  fail "a Developer ID build carries disable-library-validation: only an ad-hoc build may"
+fi
 
-# Each Mach-O on its own: same kind of signature as the app (ad-hoc or not), same team.
+# Every Mach-O in the bundle, the frameworks' helpers included (for one inside a nested bundle,
+# codesign reads that bundle's signature): same kind of signature as the app (ad-hoc or not), same
+# team, the hardened runtime, a secure timestamp when asked for, and no entitlements but the app's.
 team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
 app_team="$(team_of "$app")"
-for f in "$app/Contents/MacOS/Inkwell" ${nested[@]+"${nested[@]}"}; do
+machos=0
+while IFS= read -r -d '' f; do
+  is_macho "$f" || continue
+  machos=$((machos + 1))
   details="$(codesign -dv "$f" 2>&1)" || fail "${f#"$app/"} is not signed"
   if [ -n "$identity" ]; then
     grep -q 'Signature=adhoc' <<<"$details" && fail "${f#"$app/"} is signed ad-hoc"
     [ "$(team_of "$f")" = "$app_team" ] || fail "${f#"$app/"} is signed by another team than the app"
   fi
   grep -Eq 'flags=0x[0-9a-f]+\([^)]*runtime' <<<"$details" || fail "${f#"$app/"} lacks the hardened runtime"
-done
+  if [ "$timestamp" = 1 ]; then
+    grep -q '^Timestamp=' <<<"$details" || fail "${f#"$app/"} has no secure timestamp"
+  fi
+  if [ "$f" != "$app/Contents/MacOS/Inkwell" ]; then
+    # Read whole before matching: grep -q closing a pipe early would fail codesign under pipefail.
+    helper_ents="$(codesign -d --entitlements - --xml "$f" 2>/dev/null)" || fail "${f#"$app/"}: no entitlements read"
+    grep -q '<key>' <<<"$helper_ents" && fail "${f#"$app/"} carries entitlements: only the app may"
+  fi
+done < <(find "$app/Contents" -type f -print0)
 
 if [ -n "$same_as" ]; then
   # Compared in full, printed only redacted: a Developer ID requirement names the team, and can
@@ -167,9 +255,10 @@ if [ -n "$same_as" ]; then
   echo "designated requirement: the same as $same_as"
 fi
 
+summary="$machos Mach-O file(s): ${#nested[@]} loose tool(s), $frameworks framework(s)"
 if [ -n "$identity" ]; then
-  echo "signed: INK_SIGN_IDENTITY, hardened runtime, audio-input; ${#nested[@]} loose tool(s) signed"
+  echo "signed: INK_SIGN_IDENTITY$([ "$timestamp" = 1 ] && echo ', secure timestamp'), hardened runtime, audio-input; $summary"
 else
-  echo "signed: ad-hoc (build check only), hardened runtime, audio-input"
+  echo "signed: ad-hoc (build check only), hardened runtime, audio-input, library validation off; $summary"
 fi
 echo "built: $app ($config)"
