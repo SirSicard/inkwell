@@ -8,14 +8,11 @@ import AppKit
 import InkBridge
 import os
 
-extension Notification.Name {
-    /// Posted by a second copy of Inkwell as it exits: the running one shows its window.
-    static let inkwellShowWindow = Notification.Name("com.inkwell.app.show-window")
-}
-
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let instanceLock: InstanceLock?
+    private let showChannel: ShowWindowChannel?
+    private let showRequests: ShowRequests
     private let core = CoreController()
     private let router = Router()
     private let measurement = Measurement.fromEnvironment(ProcessInfo.processInfo.environment)
@@ -24,9 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var signalSources: [DispatchSourceSignal] = []
     private var quitting = false
 
-    /// `instanceLock` is held for the life of the process (nil if it could not be taken).
-    init(instanceLock: InstanceLock?) {
+    /// `instanceLock` is held, and `showChannel` listens, for the life of the process (nil if
+    /// either could not be set up). `showRequests` carries the channel's requests to this
+    /// delegate, holding any that arrive before it has launched.
+    init(instanceLock: InstanceLock?, showChannel: ShowWindowChannel?, showRequests: ShowRequests) {
         self.instanceLock = instanceLock
+        self.showChannel = showChannel
+        self.showRequests = showRequests
         super.init()
     }
 
@@ -43,15 +44,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = StatusItemController(store: core.store) { [weak self] in
             self?.showMainWindow()
         }
-        DistributedNotificationCenter.default().addObserver(
-            forName: .inkwellShowWindow, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.showMainWindow() }
-        }
-
-        // Opened by the user: show the window. Opened at login: stay in the menu bar.
+        // Opened by the user: show the window. Opened at login: stay in the menu bar, unless a
+        // second copy asked for the window while this one was starting (served by attach).
         if !LoginItem.launchedAtLogin() {
             showMainWindow()
+        }
+        showRequests.attach { [weak self] in
+            self?.showMainWindow()
         }
     }
 
@@ -77,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showMainWindow() {
+        measurement?.windowShown()
         if mainWindow == nil {
             mainWindow = MainWindowController(router: router, store: core.store)
         }

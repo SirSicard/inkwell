@@ -61,6 +61,11 @@ final class Measurement {
         }
     }
 
+    /// The main window was asked to show (at launch, from the menu, or by a second copy).
+    func windowShown() {
+        mark("window shown")
+    }
+
     private func mark(_ line: String) {
         // Unbuffered, so the script sees each mark as it happens even with stdout on a file.
         FileHandle.standardOutput.write(Data("mark \(line)\n".utf8))

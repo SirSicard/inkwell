@@ -37,6 +37,12 @@ enum DataLocation {
         defaultDataDirectory().appendingPathComponent("inkwell.lock", isDirectory: false)
     }
 
+    /// Where a second copy asks the running one to show its window (ShowWindowChannel). Next to
+    /// the lock, for the same reason.
+    static func instanceSocketFile() -> URL {
+        defaultDataDirectory().appendingPathComponent("inkwell.sock", isDirectory: false)
+    }
+
     /// Creates `directory` (and its parents) if missing, readable by this user only.
     static func create(_ directory: URL) throws {
         try FileManager.default.createDirectory(
