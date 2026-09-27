@@ -429,7 +429,30 @@ impl State {
         let spawned = thread::Builder::new()
             .name("ink-recovery".into())
             .spawn(move || {
-                let found = crate::recovery::interrupted(&shared.data_dir);
+                let found = match crate::recovery::interrupted(&shared.data_dir) {
+                    Ok(found) => found,
+                    Err(e) => {
+                        // Said once, here: a meeting a crash interrupted may be waiting, and
+                        // the next launch looks again.
+                        log::warn!("meeting recovery: the meetings could not be listed: {e}");
+                        shared.events.emit(event(
+                            "meetings.recovered",
+                            &[
+                                ("meetings", Some(0.into())),
+                                (
+                                    "message",
+                                    Some(
+                                        format!(
+                                            "couldn't look for meetings a crash interrupted: {e}"
+                                        )
+                                        .into(),
+                                    ),
+                                ),
+                            ],
+                        ));
+                        return;
+                    }
+                };
                 let mut recovered = 0usize;
                 for (dir, record) in found {
                     if shared.shutdown.is_cancelled() {

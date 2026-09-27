@@ -124,6 +124,8 @@ public final class CoreStore {
             case meetingWorkerFailed
             /// A meeting a crash interrupted was finished at launch.
             case meetingRecovered
+            /// The meetings a crash may have interrupted could not be looked for.
+            case recoveryUnavailable
             /// Detection stopped on its own, or could not start.
             case detectionUnavailable
             /// The retention setting deleted records (a count).
@@ -299,6 +301,10 @@ public final class CoreStore {
             }
         case .meetingRecovered:
             notice(.meetingRecovered)
+        case .meetingsRecovered(let done):
+            if let message = done.message {
+                notice(.recoveryUnavailable, message)
+            }
         case .librarySwept(let swept):
             notice(.librarySwept(deleted: swept.deleted, failed: swept.failed))
         case .meetingSideState(let side):

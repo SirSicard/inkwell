@@ -714,6 +714,11 @@ impl FlakyStore {
         self.failing.lock().unwrap().extend_from_slice(methods);
     }
 
+    /// From now on, nothing fails.
+    pub fn heal(&self) {
+        self.failing.lock().unwrap().clear();
+    }
+
     fn check(&self, method: &'static str) -> Result<(), ink_core::StoreError> {
         if self.failing.lock().unwrap().contains(&method) {
             Err(ink_core::StoreError::Backend(format!(

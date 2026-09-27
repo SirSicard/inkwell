@@ -1771,3 +1771,58 @@ fn a_final_pass_that_runs_again_files_no_commitment_twice() {
         })
     );
 }
+
+/// Review (S2.8): whether the record was marked ended is known to whoever keeps the crash marker.
+/// When the store refuses, the record still reads as live, so the marker must stay and the next
+/// launch end it: on a stop, and when an interrupted meeting is taken up.
+#[test]
+fn a_record_the_store_could_not_end_is_reported_as_not_ended() {
+    use ink_core::mock::MockClock;
+    use ink_pipeline::meeting::{EndedMeeting, Interrupted, MeetingServices};
+
+    let flaky = Arc::new(FlakyStore::default());
+    let mut rig = RigBuilder {
+        store: Some(flaky.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    flaky.fail(&["finish_record"]);
+    let stopped = rig.stop();
+    assert!(!stopped.record_ended());
+    assert!(
+        rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::StoreFailed(_)))
+    );
+
+    let taken_up = |store: Arc<dyn Store>| {
+        let events = rig.events.clone();
+        let sink: ink_core::EventSink<MeetingEvent> =
+            Arc::new(move |e| events.lock().unwrap().push(e));
+        EndedMeeting::interrupted(
+            MeetingServices {
+                live: None,
+                offline: rig.engine.clone(),
+                diarizer: None,
+                store,
+                clock: Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)),
+                llm: None,
+            },
+            Default::default(),
+            energy_vad(),
+            sink,
+            Interrupted {
+                record: record.clone(),
+                started_unix_ms: T0_UNIX_MS,
+                t0_ns: T0_NS,
+                ended_unix_ms: T0_UNIX_MS + 8_000,
+            },
+        )
+    };
+    assert!(!taken_up(flaky.clone()).record_ended());
+    flaky.heal();
+    assert!(taken_up(flaky.clone()).record_ended());
+}

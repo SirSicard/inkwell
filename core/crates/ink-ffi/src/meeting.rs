@@ -647,8 +647,10 @@ fn worker(
             failed(shared, Some(ended.record()), &e.to_string());
         }
         // Cancelled (the app quitting mid-pass): the marker stays, and the next launch runs the
-        // pass again. Otherwise the meeting is done, well or not.
-        if live.is_ok() && !matches!(result, Err(ink_pipeline::meeting::FinalizeError::Cancelled)) {
+        // pass again; so it does when the store could not mark the record ended (the next launch
+        // ends it). Otherwise the meeting is done, well or not.
+        let cancelled = matches!(result, Err(ink_pipeline::meeting::FinalizeError::Cancelled));
+        if live.is_ok() && crate::recovery::marker_goes(ended.record_ended(), cancelled) {
             crate::recovery::clear_live(chunks.dir());
         }
         if result.is_ok() {

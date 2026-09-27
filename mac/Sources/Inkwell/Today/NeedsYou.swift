@@ -133,6 +133,8 @@ enum NeedsYou {
             ("The dictation key stopped working", "macOS stopped sending it to Inkwell. Check Accessibility in System Settings.")
         case .meetingRecovered:
             ("A meeting was finished after Inkwell quit unexpectedly", "It was recording when Inkwell stopped. What was recorded was kept and the record is complete.")
+        case .recoveryUnavailable:
+            ("Inkwell couldn't check for an unfinished meeting", "If a meeting was recording when Inkwell last quit, it may not be finished yet. Inkwell looks again at the next launch.")
         case .detectionUnavailable:
             ("Inkwell stopped listening for calls", "It can't tell when a call starts, so it won't offer to record one. Record now still works.")
         case .librarySwept(_, let failed) where failed > 0:

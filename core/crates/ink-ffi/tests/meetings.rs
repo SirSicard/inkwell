@@ -824,31 +824,27 @@ fn a_meeting_can_start_the_moment_the_last_one_finished() {
     r.core.shutdown();
 }
 
-/// Review (S2.8): a meeting recovered after a crash is followed by a retention sweep, as a live
-/// meeting's final pass is. Here the recovered meeting itself is past the setting's 30 days: it
-/// had no end until recovery gave it one, so the launch's sweep left it alone, and the sweep after
-/// its pass takes it.
-#[test]
-fn a_recovered_meeting_is_followed_by_a_retention_sweep() {
+/// What a crash leaves in `dir`: a meeting record that started `days_ago` and never ended, three
+/// seconds a side on disk, and the marker.
+fn interrupted_meeting(
+    dir: &Path,
+    store: &dyn Store,
+    clock: &dyn Clock,
+    days_ago: i64,
+) -> (ink_core::RecordId, PathBuf) {
     use ink_core::{AudioBlock, StreamFormat};
 
     const DAY: i64 = 86_400_000;
-    let dir = TempDir::new("recover-sweep");
-    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
-    let clock = clock();
-    let now = clock.unix_ms();
     let record = store
         .create_record(NewRecord {
             kind: RecordKind::Meeting,
             title: Some("Interrupted".into()),
-            started_at_unix_ms: now - 40 * DAY,
+            started_at_unix_ms: clock.unix_ms() - days_ago * DAY,
             source_app: None,
             audio_dir: Some("meetings/crashed".into()),
         })
         .unwrap();
-    store.set_setting("retention.days", "30").unwrap();
-    // What a crash leaves: three seconds a side on disk, and the marker.
-    let audio = dir.path().join("meetings/crashed");
+    let audio = dir.join("meetings/crashed");
     let chunks = ink_audio::ChunkStore::open(&audio).unwrap();
     for (channel, seed) in [(Channel::Mic, 61), (Channel::Far, 62)] {
         let samples = ink_audio::synth::speech_like(3.0, -30.0, seed);
@@ -866,13 +862,21 @@ fn a_recovered_meeting_is_followed_by_a_retention_sweep() {
         writer.finish().unwrap();
     }
     ink_ffi::recovery::mark_live(&audio, &record).unwrap();
+    (record, audio)
+}
 
+/// A core over `store` in `dir`, with a final-pass engine and no meeting devices.
+fn recovery_core(
+    dir: &Path,
+    store: Arc<dyn Store>,
+    clock: Arc<dyn Clock>,
+) -> (Core, Arc<Recorder>) {
     let loader = MockLoader::new(Behaviour::Say("words from the final pass".into()));
-    let models = ModelDir::new(dir.path().join("models"));
+    let models = ModelDir::new(dir.join("models"));
     let row = test_row(ROW_ID);
     install(&models, &row);
-    let (core, events) = start_parts(Parts {
-        store: store.clone(),
+    start_parts(Parts {
+        store,
         clock,
         registry: Registry::new(vec![row]).unwrap(),
         models,
@@ -882,10 +886,24 @@ fn a_recovered_meeting_is_followed_by_a_retention_sweep() {
             gate: None,
             installs: AtomicUsize::new(0),
         }),
-        data_dir: dir.path().to_owned(),
+        data_dir: dir.to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
         meetings: MeetingPlatform::default(),
-    });
+    })
+}
+
+/// Review (S2.8): a meeting recovered after a crash is followed by a retention sweep, as a live
+/// meeting's final pass is. Here the recovered meeting itself is past the setting's 30 days: it
+/// had no end until recovery gave it one, so the launch's sweep left it alone, and the sweep after
+/// its pass takes it.
+#[test]
+fn a_recovered_meeting_is_followed_by_a_retention_sweep() {
+    let dir = TempDir::new("recover-sweep");
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    let clock = clock();
+    let (record, audio) = interrupted_meeting(dir.path(), store.as_ref(), clock.as_ref(), 40);
+    store.set_setting("retention.days", "30").unwrap();
+    let (core, events) = recovery_core(dir.path(), store.clone(), clock);
     core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
     let finished = events.wait_type("meeting.finished", WAIT);
     assert_eq!(finished["record"], record.0.as_str());
@@ -893,6 +911,66 @@ fn a_recovered_meeting_is_followed_by_a_retention_sweep() {
     assert_eq!(swept["deleted"], 1);
     assert_eq!(store.record(&record).unwrap(), None);
     assert!(!audio.exists(), "its audio went too");
+    events.assert_valid();
+    core.shutdown();
+}
+
+/// Review (S2.8): when the store will not mark a recovered meeting ended, its pass still runs, but
+/// the marker stays (the record still reads as live, and is never swept): the next launch tries
+/// again, and once the record is ended, the marker goes.
+#[test]
+fn a_recovered_meeting_the_store_could_not_end_keeps_its_marker() {
+    let dir = TempDir::new("recover-unended");
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let clock = clock();
+    let (record, audio) = interrupted_meeting(dir.path(), store.as_ref(), clock.as_ref(), 0);
+    let marker = audio.join(ink_ffi::recovery::LIVE_FILE);
+    store.fail(&["finish_record"]);
+    let (core, events) = recovery_core(dir.path(), store.clone(), clock);
+    core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
+    let finished = events.wait_type("meeting.finished", WAIT);
+    assert_eq!(finished["record"], record.0.as_str());
+    events.wait_type("meetings.recovered", WAIT);
+    assert!(marker.is_file(), "kept for the next launch");
+    assert_eq!(
+        store.record(&record).unwrap().unwrap().ended_at_unix_ms,
+        None
+    );
+
+    // The next try, with a store that works.
+    store.heal();
+    core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
+    assert!(events.wait_count("meetings.recovered", 2, WAIT));
+    assert!(!marker.exists(), "ended, so done");
+    assert!(
+        store
+            .record(&record)
+            .unwrap()
+            .unwrap()
+            .ended_at_unix_ms
+            .is_some()
+    );
+    events.assert_valid();
+    core.shutdown();
+}
+
+/// Review (S2.8): when the meetings cannot even be looked for, recovery says so once
+/// (`meetings.recovered` with a message), instead of finding nothing without a word.
+#[test]
+fn recovery_says_when_it_could_not_look_for_interrupted_meetings() {
+    let dir = TempDir::new("recover-unlisted");
+    std::fs::write(dir.path().join("meetings"), "not a directory").unwrap();
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    let (core, events) = recovery_core(dir.path(), store, clock());
+    core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
+    let done = events.wait_type("meetings.recovered", WAIT);
+    assert_eq!(done["meetings"], 0);
+    assert!(
+        done["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("couldn't look for meetings a crash interrupted")
+    );
     events.assert_valid();
     core.shutdown();
 }

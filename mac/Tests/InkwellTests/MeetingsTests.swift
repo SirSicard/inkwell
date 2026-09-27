@@ -333,3 +333,19 @@ final class CitedDecisionTests: XCTestCase {
         XCTAssertEqual(document.summaryItems[1].citedLine?.text, "Let us start on the fourteenth.")
     }
 }
+
+@MainActor
+final class RecoveryNoticeTests: XCTestCase {
+    /// Review (S2.8): recovery that could not even look for interrupted meetings says so once on
+    /// Today; one that looked and found none says nothing.
+    func testRecoveryThatCouldNotLookIsSaidOnToday() {
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meetings.recovered","meetings":0}"#)])
+        XCTAssertTrue(store.notices.isEmpty)
+        store.apply([event(#"{"type":"meetings.recovered","meetings":0,"message":"couldn't look for meetings a crash interrupted: Not a directory (os error 20)"}"#)])
+        let items = NeedsYou.items(
+            permission: { _ in .allowed }, farEnd: .unknown, meeting: store.meeting,
+            notices: store.notices, now: Date(), calendar: .current)
+        XCTAssertEqual(items.map(\.title), ["Inkwell couldn't check for an unfinished meeting"])
+    }
+}

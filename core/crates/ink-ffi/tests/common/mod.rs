@@ -458,3 +458,98 @@ pub fn speech_wav(path: &Path, seconds: f64, seed: u64) {
     }
     w.finalize().unwrap();
 }
+
+/// A store that fails the methods a test names (a disk that refuses a write, a locked database),
+/// and otherwise is `inner`.
+pub struct FailingStore {
+    pub inner: Arc<dyn ink_core::Store>,
+    failing: Mutex<Vec<&'static str>>,
+}
+
+impl FailingStore {
+    pub fn new(inner: Arc<dyn ink_core::Store>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            failing: Mutex::default(),
+        })
+    }
+
+    /// From now on, the methods named fail.
+    pub fn fail(&self, methods: &[&'static str]) {
+        self.failing.lock().unwrap().extend_from_slice(methods);
+    }
+
+    /// From now on, nothing fails.
+    pub fn heal(&self) {
+        self.failing.lock().unwrap().clear();
+    }
+
+    fn check(&self, method: &'static str) -> Result<(), ink_core::StoreError> {
+        match self.failing.lock().unwrap().contains(&method) {
+            true => Err(ink_core::StoreError::Backend(format!(
+                "scripted {method} failure"
+            ))),
+            false => Ok(()),
+        }
+    }
+}
+
+/// Each method: checked, then passed on.
+macro_rules! failing {
+    ($($name:ident($($arg:ident: $ty:ty),*) -> $out:ty;)*) => {
+        $(fn $name(&self, $($arg: $ty),*) -> Result<$out, ink_core::StoreError> {
+            self.check(stringify!($name))?;
+            self.inner.$name($($arg),*)
+        })*
+    };
+}
+
+impl ink_core::Store for FailingStore {
+    failing! {
+        create_record(record: ink_core::NewRecord) -> ink_core::RecordId;
+        record(id: &ink_core::RecordId) -> Option<ink_core::Record>;
+        records(query: &ink_core::RecordQuery) -> Vec<ink_core::Record>;
+        set_title(id: &ink_core::RecordId, title: &str) -> ();
+        finish_record(id: &ink_core::RecordId, ended_at_unix_ms: i64) -> ();
+        delete_record(id: &ink_core::RecordId) -> ();
+        append_segments(id: &ink_core::RecordId, segments: &[ink_core::Segment]) -> ();
+        segments(id: &ink_core::RecordId) -> Vec<ink_core::Segment>;
+        save_removed(id: &ink_core::RecordId, lines: &[ink_core::Segment]) -> ();
+        removed(id: &ink_core::RecordId) -> Vec<ink_core::Segment>;
+        search(query: &str, limit: usize) -> Vec<ink_core::SearchHit>;
+        add_note(id: &ink_core::RecordId, at_ms: u64, text: &str) -> ink_core::NoteId;
+        update_note(id: &ink_core::NoteId, text: &str) -> ();
+        delete_note(id: &ink_core::NoteId) -> ();
+        notes(id: &ink_core::RecordId) -> Vec<ink_core::Note>;
+        save_summary(id: &ink_core::RecordId, summary: &ink_core::Summary) -> ();
+        summary(id: &ink_core::RecordId) -> Option<ink_core::Summary>;
+        set_speaker_name(id: &ink_core::RecordId, speaker: &ink_core::SpeakerId, name: &str) -> ();
+        speaker_names(id: &ink_core::RecordId) -> Vec<(ink_core::SpeakerId, String)>;
+        add_commitments(id: &ink_core::RecordId, items: &[ink_core::NewCommitment]) -> Vec<ink_core::CommitmentId>;
+        commitments(id: &ink_core::RecordId) -> Vec<ink_core::Commitment>;
+        open_commitments(limit: usize) -> Vec<ink_core::Commitment>;
+        set_commitment_done(id: &ink_core::CommitmentId, done: bool) -> ();
+        set_done_evidence(id: &ink_core::CommitmentId, evidence: Option<&ink_core::DoneEvidence>) -> ();
+        merge_commitment(id: &ink_core::CommitmentId, into: &ink_core::CommitmentId) -> ();
+        setting(key: &str) -> Option<String>;
+        set_setting(key: &str, value: &str) -> ();
+    }
+
+    fn supersede_with(
+        &self,
+        id: &ink_core::RecordId,
+        segments: &[ink_core::Segment],
+        with: ink_core::SupersedeWith<'_>,
+    ) -> Result<u32, ink_core::StoreError> {
+        self.check("supersede_with")?;
+        self.inner.supersede_with(id, segments, with)
+    }
+
+    fn unscrubbed(&self) -> bool {
+        self.inner.unscrubbed()
+    }
+
+    fn scrub_change(&self) -> Option<bool> {
+        self.inner.scrub_change()
+    }
+}

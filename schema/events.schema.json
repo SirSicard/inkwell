@@ -1221,6 +1221,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "Interrupted meetings it finished or tried to."
+        },
+        "message": {
+          "type": "string",
+          "description": "Present when the meetings could not even be looked for (the data directory could not be listed): an interrupted meeting may be waiting, and the next launch looks again. Names what failed, never a meeting's words."
         }
       },
       "required": [

@@ -1512,6 +1512,10 @@ public struct MeetingWorkerFailed: Codable, Sendable, Equatable {
 public struct MeetingsRecovered: Codable, Sendable, Equatable {
     /// Interrupted meetings it finished or tried to.
     public let meetings: Int64
+    /// Present when the meetings could not even be looked for (the data directory could not be
+    /// listed): an interrupted meeting may be waiting, and the next launch looks again. Names
+    /// what failed, never a meeting's words.
+    public let message: String?
     /// Always `meetings.recovered`.
     public let type: String
 }

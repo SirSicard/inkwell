@@ -500,22 +500,28 @@ impl MeetingChain {
             log::warn!("meeting: the wall clock went back during the meeting; end set to start");
             core.warn(MeetingWarning::ClockWentBack);
         }
-        if let Err(error) = core
+        let record_ended = match core
             .services
             .store
             .finish_record(&core.record, now.max(core.started_unix_ms))
         {
-            log::warn!("meeting: the record could not be marked ended: {error}");
-            core.warn(MeetingWarning::StoreFailed(error));
-        }
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("meeting: the record could not be marked ended: {error}");
+                core.warn(MeetingWarning::StoreFailed(error));
+                false
+            }
+        };
         core.emit(MeetingEvent::Stopped);
-        EndedMeeting { core }
+        EndedMeeting { core, record_ended }
     }
 }
 
 /// A meeting whose live phase is over, waiting for its final pass.
 pub struct EndedMeeting {
     core: Core,
+    /// Whether the record was marked ended ([`record_ended`](Self::record_ended)).
+    record_ended: bool,
 }
 
 /// A meeting whose live phase ended without [`MeetingChain::stop`]: the app was killed or crashed
@@ -625,16 +631,28 @@ impl EndedMeeting {
             late: Arc::default(),
         };
         let ended = meeting.ended_unix_ms.max(meeting.started_unix_ms);
-        if let Err(error) = core.services.store.finish_record(&core.record, ended) {
-            log::warn!("meeting recovery: the record could not be marked ended: {error}");
-            core.warn(MeetingWarning::StoreFailed(error));
-        }
-        Self { core }
+        let record_ended = match core.services.store.finish_record(&core.record, ended) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("meeting recovery: the record could not be marked ended: {error}");
+                core.warn(MeetingWarning::StoreFailed(error));
+                false
+            }
+        };
+        Self { core, record_ended }
     }
 
     /// The meeting's record.
     pub fn record(&self) -> &RecordId {
         &self.core.record
+    }
+
+    /// Whether the record was marked ended when the live phase ended (or, for an interrupted
+    /// meeting, when it was taken up). `false` when the store refused: the record still reads as
+    /// live, so whoever keeps a crash-recovery marker for it keeps it, and the next launch ends
+    /// it (a record without an end is also never swept).
+    pub fn record_ended(&self) -> bool {
+        self.record_ended
     }
 
     /// **Worker.** The final pass over the meeting's recorded chunks in `audio`, then the
