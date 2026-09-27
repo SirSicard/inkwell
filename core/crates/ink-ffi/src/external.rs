@@ -54,6 +54,8 @@ type Answer = Result<Transcript, EngineError>;
 struct Slot {
     answer: Mutex<Option<Answer>>,
     ready: Condvar,
+    /// The engine's registered id, to name it in errors.
+    engine: String,
 }
 
 #[derive(Default)]
@@ -65,10 +67,13 @@ struct Pending {
 static PENDING: LazyLock<Pending> = LazyLock::new(Pending::default);
 
 impl Pending {
-    fn open(&self) -> (u64, Arc<Slot>) {
+    fn open(&self, engine: &str) -> (u64, Arc<Slot>) {
         // Starts at 1, so a zeroed id is never a real call.
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
-        let slot = Arc::new(Slot::default());
+        let slot = Arc::new(Slot {
+            engine: engine.to_owned(),
+            ..Slot::default()
+        });
         self.lock().insert(id, slot.clone());
         (id, slot)
     }
@@ -102,12 +107,13 @@ pub fn complete(id: u64, result_json: &str) -> Result<(), CompleteError> {
     let Some(slot) = PENDING.lock().remove(&id) else {
         return Err(CompleteError::Unknown);
     };
-    let parsed = parse_answer(result_json);
+    let parsed = parse_answer(&slot.engine, result_json);
     let malformed = parsed.is_none();
     let answer = parsed.unwrap_or_else(|| {
-        Err(EngineError::Failed(
-            "the shell engine's answer could not be read".into(),
-        ))
+        Err(EngineError::Failed(format!(
+            "shell engine {}: its answer could not be read",
+            slot.engine
+        )))
     });
     *slot.answer.lock().unwrap_or_else(PoisonError::into_inner) = Some(answer);
     slot.ready.notify_all();
@@ -118,18 +124,29 @@ pub fn complete(id: u64, result_json: &str) -> Result<(), CompleteError> {
     }
 }
 
-fn parse_answer(json: &str) -> Option<Answer> {
+/// An answer from engine `engine`: segments, or an error.
+///
+/// An error is read as its kind and an optional integer code, and nothing else: an engine's own
+/// text could quote what it heard, nothing here could check it, and errors reach events and logs
+/// (I5). Any other field of the error, a `message` included, is ignored.
+fn parse_answer(engine: &str, json: &str) -> Option<Answer> {
     let v: Value = serde_json::from_str(json).ok()?;
     if let Some(error) = v.get("error") {
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+        let code = match error.get("code") {
+            None => None,
+            Some(c) => Some(c.as_i64()?),
+        };
         return Some(Err(match error.get("kind").and_then(Value::as_str)? {
             "cancelled" => EngineError::Cancelled,
-            "model_missing" => EngineError::ModelMissing(message),
-            _ => EngineError::Failed(format!("shell engine: {message}")),
+            "model_missing" => EngineError::ModelMissing(format!("shell engine {engine}")),
+            "bad_request" => {
+                EngineError::Failed(format!("shell engine {engine} could not read the request"))
+            }
+            // "failed", and any kind this core does not know, which is not echoed either.
+            _ => EngineError::Failed(match code {
+                Some(code) => format!("shell engine {engine} failed (code {code})"),
+                None => format!("shell engine {engine} failed"),
+            }),
         }));
     }
     let segments = v
@@ -278,7 +295,7 @@ impl OfflineEngine for ExternalOffline {
         }
         let o = CString::new(o.to_string())
             .map_err(|_| EngineError::Failed("the options held a NUL byte".into()))?;
-        let (id, slot) = PENDING.open();
+        let (id, slot) = PENDING.open(&self.info.id);
         // SAFETY: the function pointer came from the shell's table; `ctx` is the engine's own
         // and valid until `release`, which runs only after the last reference (this one
         // included) is dropped. The samples and options are valid until the call returns,
@@ -349,23 +366,51 @@ mod tests {
 
     #[test]
     fn answers_parse_to_transcripts_or_errors() {
-        let t = parse_answer(r#"{"segments":[{"start_ms":0,"end_ms":5,"text":"a"}]}"#);
+        let t = parse_answer(
+            "e",
+            r#"{"segments":[{"start_ms":0,"end_ms":5,"text":"a"}]}"#,
+        );
         assert_eq!(t.unwrap().unwrap().text(), "a");
         assert_eq!(
-            parse_answer(r#"{"error":{"kind":"cancelled","message":""}}"#).unwrap(),
+            parse_answer("e", r#"{"error":{"kind":"cancelled"}}"#).unwrap(),
             Err(EngineError::Cancelled)
         );
-        assert!(matches!(
-            parse_answer(r#"{"error":{"kind":"failed","message":"gpu"}}"#).unwrap(),
-            Err(EngineError::Failed(m)) if m.contains("gpu")
-        ));
-        assert!(parse_answer("{").is_none());
-        assert!(parse_answer(r#"{"segments":[{"text":"no times"}]}"#).is_none());
+        assert_eq!(
+            parse_answer("e", r#"{"error":{"kind":"failed","code":7}}"#).unwrap(),
+            Err(EngineError::Failed("shell engine e failed (code 7)".into()))
+        );
+        assert_eq!(
+            parse_answer("e", r#"{"error":{"kind":"model_missing"}}"#).unwrap(),
+            Err(EngineError::ModelMissing("shell engine e".into()))
+        );
+        assert_eq!(
+            parse_answer("e", r#"{"error":{"kind":"bad_request"}}"#).unwrap(),
+            Err(EngineError::Failed(
+                "shell engine e could not read the request".into()
+            ))
+        );
+        assert!(parse_answer("e", "{").is_none());
+        assert!(parse_answer("e", r#"{"segments":[{"text":"no times"}]}"#).is_none());
+        assert!(parse_answer("e", r#"{"error":{"kind":"failed","code":"7"}}"#).is_none());
+    }
+
+    /// I5: an engine's error text could quote what it heard, and nothing checks it. The core
+    /// never reads it: errors reach events and logs as a kind and a code.
+    #[test]
+    fn an_engine_s_free_text_never_reaches_an_error() {
+        for answer in [
+            r#"{"error":{"kind":"failed","code":3,"message":"heard: zebrafish"}}"#,
+            r#"{"error":{"kind":"model_missing","message":"zebrafish"}}"#,
+            r#"{"error":{"kind":"zebrafish"}}"#,
+        ] {
+            let error = parse_answer("e", answer).unwrap().unwrap_err();
+            assert!(!error.to_string().contains("zebrafish"), "{error}");
+        }
     }
 
     #[test]
     fn a_call_is_answered_once_and_unknown_ids_are_refused() {
-        let (id, slot) = PENDING.open();
+        let (id, slot) = PENDING.open("e");
         assert_eq!(complete(id, r#"{"segments":[]}"#), Ok(()));
         assert!(slot.answer.lock().unwrap().is_some());
         assert_eq!(
@@ -373,7 +418,7 @@ mod tests {
             Err(CompleteError::Unknown)
         );
         assert_eq!(complete(0, "{}"), Err(CompleteError::Unknown));
-        let (id, slot) = PENDING.open();
+        let (id, slot) = PENDING.open("e");
         assert_eq!(complete(id, "not json"), Err(CompleteError::Malformed));
         assert!(matches!(
             *slot.answer.lock().unwrap(),
@@ -385,7 +430,7 @@ mod tests {
     /// the worker decides to cancel. The answer is real and on its way: it must be kept.
     #[test]
     fn an_answer_taken_before_the_cancel_is_kept() {
-        let (id, slot) = PENDING.open();
+        let (id, slot) = PENDING.open("e");
         // complete()'s first half: the call leaves the table.
         let taken = PENDING.lock().remove(&id).expect("the call was pending");
         let waiter = std::thread::spawn(move || {
@@ -395,8 +440,10 @@ mod tests {
         });
         std::thread::sleep(Duration::from_millis(50));
         // complete()'s second half: the answer is written.
-        *slot.answer.lock().unwrap() =
-            parse_answer(r#"{"segments":[{"start_ms":0,"end_ms":1,"text":"kept"}]}"#);
+        *slot.answer.lock().unwrap() = parse_answer(
+            "e",
+            r#"{"segments":[{"start_ms":0,"end_ms":1,"text":"kept"}]}"#,
+        );
         slot.ready.notify_all();
         let (answer, cancelled) = waiter.join().unwrap();
         assert_eq!(answer.unwrap().text(), "kept");
@@ -408,7 +455,7 @@ mod tests {
 
     #[test]
     fn a_cancel_before_any_answer_forgets_the_call() {
-        let (id, slot) = PENDING.open();
+        let (id, slot) = PENDING.open("e");
         let mut asked = false;
         assert_eq!(
             await_answer(id, &slot, || true, || asked = true),

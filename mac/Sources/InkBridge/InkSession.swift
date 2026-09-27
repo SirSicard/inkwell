@@ -153,11 +153,15 @@ public struct InkSegment: Sendable, Equatable {
     }
 }
 
-/// Why an engine did not answer with segments. Messages must never contain what was said.
+/// Why an engine did not answer with segments. There is no free text: the core reads a kind and
+/// an optional code, so nothing an engine says can carry what it heard into a log or an event.
 public enum InkEngineError: Error, Sendable, Equatable {
-    case failed(String)
+    /// It failed; `code` is the engine's own, shown in the core's error.
+    case failed(code: Int)
     case cancelled
-    case modelMissing(String)
+    case modelMissing
+    /// The request could not be read (its samples or options).
+    case badRequest
 }
 
 /// An offline engine the shell owns (dictation and meeting finals).
@@ -254,12 +258,13 @@ private enum InkEngineTable {
                 ["start_ms": $0.startMs, "end_ms": $0.endMs, "text": $0.text] as [String: Any]
             }]
         case .failure(let error):
-            let (kind, message): (String, String) = switch error {
-            case .failed(let m): ("failed", m)
-            case .cancelled: ("cancelled", "")
-            case .modelMissing(let m): ("model_missing", m)
+            let fields: [String: Any] = switch error {
+            case .failed(let code): ["kind": "failed", "code": code]
+            case .cancelled: ["kind": "cancelled"]
+            case .modelMissing: ["kind": "model_missing"]
+            case .badRequest: ["kind": "bad_request"]
             }
-            object = ["error": ["kind": kind, "message": message]]
+            object = ["error": fields]
         }
         let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
         // INK_ERR_UNKNOWN_CALL means the core gave up on this call (cancelled, shut down): fine.

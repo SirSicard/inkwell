@@ -157,8 +157,11 @@ int32_t ink_bands_read(InkBands *out);
  *   Both pointers are valid only until transcribe returns: copy the samples to answer later.
  *   Answer with ink_engine_complete(call, result) exactly once:
  *     {"segments":[{"start_ms":0,"end_ms":1200,"text":"..."}]}
- *     {"error":{"kind":"failed"|"cancelled"|"model_missing","message":"..."}}
- *   An error message must never contain what was said.
+ *     {"error":{"kind":"failed","code":42}}
+ *   "kind" is "failed", "cancelled", "model_missing", or "bad_request" (the engine could not
+ *   read the samples or options_json). "code" is optional: an integer of the engine's own, shown
+ *   in the core's error. No text of the engine's is read: an error never carries free text into
+ *   an event or a log, because an engine's words could quote what it heard.
  * cancel (optional, may be NULL): the core no longer wants call `call`'s answer (the job was
  *   cancelled). Stop early if you can. Answer it anyway: the answer is then discarded.
  * release (optional, may be NULL): the core has let go of the engine (engine.unregister, or
