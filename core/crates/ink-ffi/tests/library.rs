@@ -9,11 +9,14 @@ use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 use common::*;
+use std::sync::atomic::Ordering;
+
 use ink_core::{
-    Channel, NewCommitment, NewRecord, RecordId, RecordKind, Segment, Span, SpeakerId, Store,
-    Summary,
+    Channel, Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordQuery,
+    SearchHit, Segment, Span, SpeakerId, Store, StoreError, Summary, SupersedeWith,
 };
-use ink_ffi::runtime::Core;
+use ink_core::{RecordId, RecordKind};
+use ink_ffi::runtime::{Core, Parts};
 use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -433,7 +436,7 @@ fn library_queries_answer_while_the_command_thread_is_busy() {
     let stats = ask(
         &core,
         &events,
-        serde_json::json!({"cmd": "library.stats", "since_unix_ms": 0}),
+        serde_json::json!({"cmd": "library.stats", "since_unix_ms": core.shared().clock.unix_ms() - 86_400_000}),
         "stats",
     );
     assert_eq!(stats["type"], "library.stats");
@@ -441,6 +444,214 @@ fn library_queries_answer_while_the_command_thread_is_busy() {
 
     gate.open();
     events.wait_type("model.update_finished", WAIT);
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// A store that counts `segments()` calls, over SQLite.
+struct Counting {
+    inner: ink_store::SqliteStore,
+    segment_reads: AtomicUsize,
+}
+
+impl Store for Counting {
+    fn create_record(&self, r: NewRecord) -> Result<RecordId, StoreError> {
+        self.inner.create_record(r)
+    }
+    fn record(&self, id: &RecordId) -> Result<Option<Record>, StoreError> {
+        self.inner.record(id)
+    }
+    fn records(&self, q: &RecordQuery) -> Result<Vec<Record>, StoreError> {
+        self.inner.records(q)
+    }
+    fn set_title(&self, id: &RecordId, t: &str) -> Result<(), StoreError> {
+        self.inner.set_title(id, t)
+    }
+    fn finish_record(&self, id: &RecordId, at: i64) -> Result<(), StoreError> {
+        self.inner.finish_record(id, at)
+    }
+    fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.inner.delete_record(id)
+    }
+    fn append_segments(&self, id: &RecordId, s: &[Segment]) -> Result<(), StoreError> {
+        self.inner.append_segments(id, s)
+    }
+    fn segments(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.segment_reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.segments(id)
+    }
+    fn supersede_with(
+        &self,
+        id: &RecordId,
+        s: &[Segment],
+        w: SupersedeWith<'_>,
+    ) -> Result<u32, StoreError> {
+        self.inner.supersede_with(id, s, w)
+    }
+    fn save_removed(&self, id: &RecordId, l: &[Segment]) -> Result<(), StoreError> {
+        self.inner.save_removed(id, l)
+    }
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.inner.removed(id)
+    }
+    fn search(&self, q: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
+        self.inner.search(q, limit)
+    }
+    fn add_note(&self, id: &RecordId, at: u64, t: &str) -> Result<NoteId, StoreError> {
+        self.inner.add_note(id, at, t)
+    }
+    fn update_note(&self, id: &NoteId, t: &str) -> Result<(), StoreError> {
+        self.inner.update_note(id, t)
+    }
+    fn delete_note(&self, id: &NoteId) -> Result<(), StoreError> {
+        self.inner.delete_note(id)
+    }
+    fn notes(&self, id: &RecordId) -> Result<Vec<Note>, StoreError> {
+        self.inner.notes(id)
+    }
+    fn save_summary(&self, id: &RecordId, s: &Summary) -> Result<(), StoreError> {
+        self.inner.save_summary(id, s)
+    }
+    fn summary(&self, id: &RecordId) -> Result<Option<Summary>, StoreError> {
+        self.inner.summary(id)
+    }
+    fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, n: &str) -> Result<(), StoreError> {
+        self.inner.set_speaker_name(id, s, n)
+    }
+    fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
+        self.inner.speaker_names(id)
+    }
+    fn add_commitments(
+        &self,
+        id: &RecordId,
+        i: &[NewCommitment],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        self.inner.add_commitments(id, i)
+    }
+    fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
+        self.inner.commitments(id)
+    }
+    fn open_commitments(&self, limit: usize) -> Result<Vec<Commitment>, StoreError> {
+        self.inner.open_commitments(limit)
+    }
+    fn set_commitment_done(&self, id: &CommitmentId, d: bool) -> Result<(), StoreError> {
+        self.inner.set_commitment_done(id, d)
+    }
+    fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError> {
+        self.inner.merge_commitment(id, into)
+    }
+    fn setting(&self, k: &str) -> Result<Option<String>, StoreError> {
+        self.inner.setting(k)
+    }
+    fn set_setting(&self, k: &str, v: &str) -> Result<(), StoreError> {
+        self.inner.set_setting(k, v)
+    }
+}
+
+/// Review fix: `record.open` read an untitled record's transcript twice (once for the record,
+/// once more for its row's preview). It reads it once, and the preview is still there.
+#[test]
+fn opening_an_untitled_record_reads_its_transcript_once() {
+    let dir = TempDir::new("library-once");
+    let store = Arc::new(Counting {
+        inner: ink_store::SqliteStore::open_in_memory().unwrap(),
+        segment_reads: AtomicUsize::new(0),
+    });
+    let loader = MockLoader::new(Behaviour::Say("x".into()));
+    let installer = Arc::new(MockInstaller {
+        generation: loader.generation.clone(),
+        gate: None,
+        installs: AtomicUsize::new(0),
+    });
+    let (core, events) = start_parts(Parts {
+        store: store.clone(),
+        clock: clock(),
+        registry: ink_engines::Registry::new(Vec::new()).unwrap(),
+        models: ink_engines::ModelDir::new(dir.path().join("models")),
+        loader,
+        installer,
+        data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+    });
+    let untitled = record(store.as_ref(), RecordKind::Dictation, None, NOON);
+    store
+        .append_segments(&untitled, &[seg(Channel::Mic, 0, "a note to self")])
+        .unwrap();
+    let before = store.segment_reads.load(Ordering::SeqCst);
+    let open = ask(
+        &core,
+        &events,
+        serde_json::json!({"cmd": "record.open", "record": untitled.0}),
+        "open",
+    );
+    assert_eq!(open["record"]["preview"], "a note to self");
+    assert_eq!(open["segments"][0]["text"], "a note to self");
+    assert_eq!(store.segment_reads.load(Ordering::SeqCst) - before, 1);
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// Review fix: a record whose audio directory points out of the library (`..`, an absolute
+/// path) is refused, loudly, never read.
+#[test]
+fn a_record_whose_audio_is_outside_the_library_is_refused() {
+    let dir = TempDir::new("library-escape");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    for (n, escape) in ["../outside", "/tmp"].iter().enumerate() {
+        let id = store
+            .create_record(NewRecord {
+                kind: RecordKind::Meeting,
+                title: Some("Escape".into()),
+                started_at_unix_ms: NOON,
+                source_app: None,
+                audio_dir: Some((*escape).into()),
+            })
+            .unwrap();
+        let failed = ask(
+            &core,
+            &events,
+            serde_json::json!({"cmd": "record.open", "record": id.0}),
+            &format!("escape{n}"),
+        );
+        assert_eq!(failed["type"], "command.failed", "{escape}");
+        assert!(
+            failed["message"]
+                .as_str()
+                .unwrap()
+                .contains("outside the library"),
+            "{failed}"
+        );
+    }
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// Review fix: `library.stats` reads every transcript in its window, so the window is bounded in
+/// the core: a moment more than 31 days back is refused with a clear error, not cut short.
+#[test]
+fn library_stats_refuses_a_window_longer_than_a_month() {
+    let dir = TempDir::new("library-window");
+    let (core, events) = core(&dir);
+    let now = core.shared().clock.unix_ms();
+    let ok = ask(
+        &core,
+        &events,
+        serde_json::json!({"cmd": "library.stats", "since_unix_ms": now - 7 * 24 * 3_600_000}),
+        "week",
+    );
+    assert_eq!(ok["type"], "library.stats");
+    let refused = ask(
+        &core,
+        &events,
+        serde_json::json!({"cmd": "library.stats", "since_unix_ms": now - 32 * 24 * 3_600_000}),
+        "year",
+    );
+    assert_eq!(refused["type"], "command.failed");
+    assert!(
+        refused["message"].as_str().unwrap().contains("31 days"),
+        "{refused}"
+    );
     core.shutdown();
     events.assert_valid();
 }

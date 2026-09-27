@@ -179,10 +179,13 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "library.search": full-text matches across every record's current transcript, best first.
  *   {"cmd":"record.open","record":"<record id>"}
  *       "library.record": the record whole: transcript, notes, summary (markdown, to be rendered),
- *       commitments, named speakers, and its audio chunks placed on its timeline.
+ *       commitments, named speakers, and its audio chunks placed on its timeline ("estimated"
+ *       when the meeting's start was not written; "left_out" counts chunks that cannot be
+ *       played or placed). An audio directory outside the library is refused: command.failed.
  *   {"cmd":"library.stats","since_unix_ms":0}
- *       "library.stats": per kind, records, time and words since the moment; and how many of the
- *       newest meetings in a row kept the user's words and none of the far end's.
+ *       "library.stats": per kind, records, time and words since the moment (at most 31 days
+ *       back: it reads each transcript to count words; an older moment is refused); and how many
+ *       of the newest meetings in a row kept the user's words and none of the far end's.
  *       These four answer with the command's "id" as "ref"; a failure is "command.failed" with
  *       that "id", so a screen can tell "could not load" from "empty".
  *

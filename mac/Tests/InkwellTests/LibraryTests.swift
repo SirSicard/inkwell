@@ -267,7 +267,7 @@ private let recordAnswer = #"""
    {"commitment":"c2","record":"r1","text":"Send the revised plan","due":"Friday","provenance":[{"channel":"mic","start_ms":2822,"end_ms":3546}],"done":false},
    {"commitment":"c3","record":"r1","text":"Share the budget","provenance":[{"channel":"far","start_ms":10000,"end_ms":13466}],"done":true}],
  "speakers":[{"speaker":"spk0","name":"Alex"}],
- "audio":{"timeline":"recorded","chunks":[
+ "audio":{"timeline":"recorded","left_out":0,"chunks":[
    {"channel":"mic","path":"/nonexistent/mic-000000-16000x1.pcm","start_ms":3,"frames":480000,"sample_rate":16000,"channels":1,"data_offset":64},
    {"channel":"far","path":"/nonexistent/far-000000-16000x1.pcm","start_ms":3,"frames":480000,"sample_rate":16000,"channels":1,"data_offset":64}]}}
 """#

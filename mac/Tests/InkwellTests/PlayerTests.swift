@@ -76,7 +76,7 @@ final class RecordPlayerTests: XCTestCase {
                      {"channel":"far","start_ms":20100,"end_ms":21000,"text":"a tone from them"}],
          "notes":[{"note":"n1","at_ms":12400,"text":"you spoke here"}],
          "commitments":[],"speakers":[],
-         "audio":{"timeline":"recorded","chunks":[
+         "audio":{"timeline":"recorded","left_out":0,"chunks":[
            {"channel":"mic","path":"\#(mic)","start_ms":0,"frames":480000,"sample_rate":16000,"channels":1,"data_offset":64},
            {"channel":"far","path":"\#(far)","start_ms":2000,"frames":448000,"sample_rate":16000,"channels":1,"data_offset":64}]}}
         """#

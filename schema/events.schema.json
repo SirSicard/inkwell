@@ -2229,7 +2229,7 @@
     },
     "AudioTimeline": {
       "type": "string",
-      "description": "How a record's chunks were placed on its timeline: recorded (from the start the meeting wrote beside them) or estimated (from its earliest chunk: a record from before that was written).",
+      "description": "How a record's chunks were placed on its timeline: recorded (from the start the meeting wrote beside them) or estimated (from its earliest chunk, because that start is missing: an older record, or one whose write failed). Estimated: the two sides may be out of step, and the shell says so.",
       "enum": [
         "recorded",
         "estimated"
@@ -2532,11 +2532,17 @@
             "$ref": "#/$defs/AudioChunk",
             "description": "A chunk."
           }
+        },
+        "left_out": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Chunk files left out of the player: unreadable, or whose format or place on the timeline recovery could only guess. Nonzero: some of the audio cannot be played or placed, and the shell says so."
         }
       },
       "required": [
         "timeline",
-        "chunks"
+        "chunks",
+        "left_out"
       ],
       "additionalProperties": false
     },

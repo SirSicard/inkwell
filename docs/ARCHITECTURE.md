@@ -242,8 +242,14 @@ show an empty library.
 - **Audio.** `record.open` lists a meeting's chunk files, each placed on the record's timeline:
   the meeting worker writes the host time of the timeline's zero beside the chunks
   (`timeline.json`), and a chunk's place is its first frame's host time minus that. A record
-  without the file (older ones) is placed from its earliest chunk and says so. The shell plays the
-  chunks from disk a few seconds at a time; a meeting is never read into memory whole.
+  without the file (older ones) is placed from its earliest chunk and says so. A chunk whose format
+  or host time only recovery could guess is left out and counted, never placed on a guess. The
+  audio directory must stay inside the library (no `..`, no absolute path, links resolved). The
+  shell plays the chunks from disk a few seconds at a time; a meeting is never read into memory
+  whole.
+- **Counts.** `library.stats` reads every transcript in its window to count words, so the core
+  bounds the window at 31 days and refuses an older moment. (The store has no aggregate query, and
+  adding one would widen the store's trait for one screen line.)
 - **Words.** These answers carry the library's words (transcripts, notes, summaries, search
   snippets). As with every event that does, they never reach a log.
 

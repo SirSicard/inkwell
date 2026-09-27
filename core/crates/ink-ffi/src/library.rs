@@ -26,7 +26,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use ink_audio::ChunkStore;
+use ink_audio::{ChunkInfo, ChunkStore};
 use ink_core::store::word_count;
 use ink_core::{
     Channel, Commitment, Record, RecordCursor, RecordId, RecordKind, RecordQuery, Segment, Span,
@@ -45,6 +45,10 @@ pub const DEFAULT_LIMIT: usize = 50;
 pub const MAX_LIMIT: usize = 500;
 /// How many of the newest meetings `library.stats` looks at for a far end that kept nothing.
 pub const FAR_SILENT_WINDOW: usize = 20;
+/// The furthest back `library.stats` counts: it reads every transcript in its window to count
+/// words, so the window is bounded here rather than by what a shell happens to ask (Today asks for
+/// the day and the week). An older moment is refused, never quietly cut.
+pub const STATS_MAX_DAYS: i64 = 31;
 /// The longest preview of an untitled record's words.
 pub const PREVIEW_CHARS: usize = 140;
 
@@ -211,7 +215,7 @@ pub fn answer(shared: &Shared, query: LibraryQuery, id: Option<&str>) -> Result<
             records.truncate(limit);
             let rows = records
                 .iter()
-                .map(|r| record_row(shared, r))
+                .map(|r| record_row(shared, r, None))
                 .collect::<Result<Vec<_>, _>>()?;
             event(
                 "library.records",
@@ -267,11 +271,17 @@ fn event_object(fields: &[(&str, Option<Value>)]) -> Value {
     Value::Object(map)
 }
 
-/// A record as the list shows it. An untitled record carries the start of its words instead.
-fn record_row(shared: &Shared, r: &Record) -> Result<Value, String> {
-    let preview = match &r.title {
-        Some(_) => None,
-        None => {
+/// A record as the list shows it. An untitled record carries the start of its words instead:
+/// from `segments` when the caller already read them (`record.open`), else read here.
+///
+/// For a list that is one `segments()` per untitled row, at most a page (`MAX_LIMIT`, 500) of
+/// them. The store has no "first segments" query, and a dictation (the usual untitled record) is
+/// a segment or two; an untitled meeting is rare, since its summary's headline names it.
+fn record_row(shared: &Shared, r: &Record, segments: Option<&[Segment]>) -> Result<Value, String> {
+    let preview = match (&r.title, segments) {
+        (Some(_), _) => None,
+        (None, Some(segments)) => preview(segments).map(Value::from),
+        (None, None) => {
             let segments = shared.store.segments(&r.id).map_err(|e| e.to_string())?;
             preview(&segments).map(Value::from)
         }
@@ -333,8 +343,8 @@ fn commitment(c: &Commitment) -> Value {
 fn open(shared: &Shared, ref_field: (&str, Option<Value>), r: &Record) -> Result<Value, String> {
     let store = shared.store.as_ref();
     let e = |err: ink_core::StoreError| err.to_string();
-    let segments = store.segments(&r.id).map_err(e)?;
-    let segments: Vec<Value> = segments
+    let read = store.segments(&r.id).map_err(e)?;
+    let segments: Vec<Value> = read
         .iter()
         .map(|s| {
             event_object(&[
@@ -375,7 +385,8 @@ fn open(shared: &Shared, ref_field: (&str, Option<Value>), r: &Record) -> Result
         "library.record",
         &[
             ref_field,
-            ("record", Some(record_row(shared, r)?)),
+            // The segments just read give an untitled record's preview: one read, not two.
+            ("record", Some(record_row(shared, r, Some(&read))?)),
             ("segments", Some(Value::Array(segments))),
             ("notes", Some(Value::Array(notes))),
             ("summary", summary),
@@ -387,11 +398,37 @@ fn open(shared: &Shared, ref_field: (&str, Option<Value>), r: &Record) -> Result
 }
 
 /// Writes where a meeting's timeline starts (the host time of its sample 0) beside its chunks.
-/// Written to a temporary name and renamed, so a reader never sees half of it.
+/// Written to a temporary name, synced, and renamed, then the directory synced (as ink-engines
+/// writes its revision marker): after a power cut the file is there whole, or not at all, and
+/// never a torn one that would place the chunks wrongly.
 pub fn write_timeline(dir: &Path, start_host_ns: u64) -> io::Result<()> {
+    use std::io::Write;
     let tmp = dir.join(format!("{TIMELINE_FILE}.tmp"));
-    std::fs::write(&tmp, json!({"start_host_ns": start_host_ns}).to_string())?;
-    std::fs::rename(&tmp, dir.join(TIMELINE_FILE))
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(
+        json!({"start_host_ns": start_host_ns})
+            .to_string()
+            .as_bytes(),
+    )?;
+    file.sync_all()?;
+    // Closed before the rename: Windows refuses to rename an open file.
+    drop(file);
+    std::fs::rename(&tmp, dir.join(TIMELINE_FILE))?;
+    sync_dir(dir)
+}
+
+/// Syncs a directory's entries, so a rename in it survives a power cut. On Windows std cannot
+/// open a directory, and NTFS journals the entry.
+fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
 }
 
 /// Where the timeline starts, as [`write_timeline`] wrote it; `None` when it did not.
@@ -401,35 +438,87 @@ pub fn read_timeline(dir: &Path) -> Option<u64> {
     v.get("start_host_ns").and_then(Value::as_u64)
 }
 
-/// A record's chunks on its timeline. `None` when its directory is gone (a record whose audio was
-/// removed): the record stands without a player.
-fn audio(data_dir: &Path, relative: &str) -> Result<Option<Value>, String> {
-    let dir: PathBuf = data_dir.join(relative);
+/// The record's audio directory, `relative` under `data_dir`, or why it is refused: it must be a
+/// plain relative path (no root, no `..`), and once links are resolved it must still be inside the
+/// library. `Ok(None)` when it does not exist (a record whose audio was removed).
+pub fn audio_dir(data_dir: &Path, relative: &str) -> Result<Option<PathBuf>, String> {
+    const OUTSIDE: &str = "the record's audio directory is outside the library";
+    let rel = Path::new(relative);
+    if relative.is_empty()
+        || rel
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err(OUTSIDE.into());
+    }
+    let dir = data_dir.join(rel);
     // Never created here: a query only reads.
     if !dir.is_dir() {
         return Ok(None);
     }
+    let root = data_dir
+        .canonicalize()
+        .map_err(|e| format!("the library's directory: {e}"))?;
+    let resolved = dir
+        .canonicalize()
+        .map_err(|e| format!("the record's audio: {e}"))?;
+    if !resolved.starts_with(&root) {
+        return Err(OUTSIDE.into());
+    }
+    Ok(Some(resolved))
+}
+
+/// Where the chunks go on the timeline, and how many are left out of the player: unreadable ones
+/// (counted by the caller), a format recovery could only guess (their bytes cannot be read as
+/// frames), and a host time recovery could only guess (0 or extrapolated: their place is not
+/// known, and a wrong one would put speech against the wrong lines). The start is the recorded
+/// one, else the earliest chunk whose host time is real.
+fn place(chunks: Vec<ChunkInfo>, recorded: Option<u64>) -> (Option<u64>, Vec<ChunkInfo>, usize) {
+    let total = chunks.len();
+    let kept: Vec<ChunkInfo> = chunks
+        .into_iter()
+        .filter(|c| !c.format_estimated && !c.host_time_estimated)
+        .collect();
+    let left_out = total - kept.len();
+    let start = recorded.or_else(|| kept.iter().map(|c| c.host_time_ns).min());
+    (start, kept, left_out)
+}
+
+/// A record's chunks on its timeline. `None` when its directory is gone (a record whose audio was
+/// removed): the record stands without a player.
+fn audio(data_dir: &Path, relative: &str) -> Result<Option<Value>, String> {
+    let Some(dir) = audio_dir(data_dir, relative)? else {
+        return Ok(None);
+    };
     let store = ChunkStore::open(&dir).map_err(|e| format!("the record's audio: {e}"))?;
     let mut chunks = Vec::new();
+    let mut unreadable = 0;
     for channel in [Channel::Mic, Channel::Far] {
         let list = store
             .chunks(channel)
             .map_err(|e| format!("the record's audio: {e}"))?;
-        if !list.unreadable.is_empty() {
-            log::warn!(
-                "record audio: {} unreadable {} chunk(s) left out of the player",
-                list.unreadable.len(),
-                events::channel(channel)
-            );
-        }
-        // A chunk whose format recovery could only guess cannot be played as frames.
-        chunks.extend(list.chunks.into_iter().filter(|c| !c.format_estimated));
+        unreadable += list.unreadable.len();
+        chunks.extend(list.chunks);
     }
     let recorded = read_timeline(&dir);
-    let Some(start) = recorded.or_else(|| chunks.iter().map(|c| c.host_time_ns).min()) else {
-        return Ok(Some(json!({"timeline": "estimated", "chunks": []})));
+    let (start, kept, guessed) = place(chunks, recorded);
+    let left_out = unreadable + guessed;
+    if left_out > 0 {
+        log::warn!(
+            "record audio: {left_out} chunk(s) left out of the player ({unreadable} unreadable, {guessed} of unknown format or place)"
+        );
+    }
+    let timeline = if recorded.is_some() {
+        "recorded"
+    } else {
+        "estimated"
     };
-    let chunks: Vec<Value> = chunks
+    let Some(start) = start else {
+        return Ok(Some(
+            json!({"timeline": timeline, "chunks": [], "left_out": left_out}),
+        ));
+    };
+    let chunks: Vec<Value> = kept
         .iter()
         .map(|c| {
             let offset_ns = i128::from(c.host_time_ns) - i128::from(start);
@@ -445,12 +534,9 @@ fn audio(data_dir: &Path, relative: &str) -> Result<Option<Value>, String> {
             })
         })
         .collect();
-    let timeline = if recorded.is_some() {
-        "recorded"
-    } else {
-        "estimated"
-    };
-    Ok(Some(json!({"timeline": timeline, "chunks": chunks})))
+    Ok(Some(
+        json!({"timeline": timeline, "chunks": chunks, "left_out": left_out}),
+    ))
 }
 
 fn duration_ms(r: &Record) -> u64 {
@@ -466,6 +552,15 @@ fn stats(
 ) -> Result<Value, String> {
     let store = shared.store.as_ref();
     let e = |err: ink_core::StoreError| err.to_string();
+    let oldest = shared
+        .clock
+        .unix_ms()
+        .saturating_sub(STATS_MAX_DAYS * 24 * 3_600_000);
+    if since_unix_ms < oldest {
+        return Err(format!(
+            "library.stats counts at most the last {STATS_MAX_DAYS} days"
+        ));
+    }
     let mut kinds = Vec::new();
     for kind in [
         RecordKind::Dictation,
@@ -612,6 +707,92 @@ mod tests {
         let p = preview(&[seg(&long)]).unwrap();
         assert!(p.ends_with("word…"), "{p}");
         assert!(p.chars().count() <= PREVIEW_CHARS + 1, "{}", p.len());
+    }
+
+    fn chunk(channel: Channel, host_time_ns: u64) -> ChunkInfo {
+        ChunkInfo {
+            channel,
+            index: 0,
+            format: ink_core::StreamFormat::CANONICAL,
+            host_time_ns,
+            frames: 16_000,
+            after_gap: false,
+            host_time_estimated: false,
+            format_estimated: false,
+            path: PathBuf::from("c.pcm"),
+        }
+    }
+
+    /// A chunk whose host time recovery could only guess (0, or extrapolated) is left out and
+    /// counted, like one whose format it guessed: its place on the timeline is not known, and a
+    /// 0 would otherwise become the timeline's start and push every real chunk minutes late.
+    #[test]
+    fn chunks_of_unknown_place_or_format_are_left_out_and_counted() {
+        let guessed_time = ChunkInfo {
+            host_time_estimated: true,
+            ..chunk(Channel::Mic, 0)
+        };
+        let guessed_format = ChunkInfo {
+            format_estimated: true,
+            ..chunk(Channel::Far, 7_000_000_000)
+        };
+        let chunks = vec![
+            guessed_time,
+            chunk(Channel::Mic, 5_000_000_000),
+            guessed_format,
+            chunk(Channel::Far, 6_000_000_000),
+        ];
+        let (start, kept, left_out) = place(chunks.clone(), None);
+        assert_eq!(start, Some(5_000_000_000), "the earliest real host time");
+        assert_eq!(left_out, 2);
+        assert!(
+            kept.iter()
+                .all(|c| !c.host_time_estimated && !c.format_estimated)
+        );
+        let (start, _, _) = place(chunks, Some(4_900_000_000));
+        assert_eq!(start, Some(4_900_000_000), "the recorded start wins");
+        let (start, kept, left_out) = place(
+            vec![ChunkInfo {
+                host_time_estimated: true,
+                ..chunk(Channel::Mic, 0)
+            }],
+            None,
+        );
+        assert_eq!((start, kept.len(), left_out), (None, 0, 1));
+    }
+
+    /// The audio directory is a plain relative path inside the library, links resolved.
+    #[test]
+    fn an_audio_directory_outside_the_library_is_refused() {
+        let root = std::env::temp_dir().join(format!("ink-ffi-audio-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let data = root.join("data");
+        std::fs::create_dir_all(data.join("meetings/m1")).unwrap();
+        std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+        assert_eq!(
+            audio_dir(&data, "meetings/m1").unwrap(),
+            Some(data.join("meetings/m1").canonicalize().unwrap())
+        );
+        assert_eq!(audio_dir(&data, "meetings/gone").unwrap(), None);
+        for bad in [
+            "../elsewhere",
+            "meetings/../../elsewhere",
+            "/tmp",
+            "",
+            "./meetings/m1",
+        ] {
+            let refused = audio_dir(&data, bad).unwrap_err();
+            assert!(refused.contains("outside the library"), "{bad}: {refused}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("elsewhere"), data.join("meetings/link")).unwrap();
+            assert!(
+                audio_dir(&data, "meetings/link").is_err(),
+                "a link out of the library"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

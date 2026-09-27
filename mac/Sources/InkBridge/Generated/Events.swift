@@ -326,8 +326,9 @@ public struct AudioDropped: Codable, Sendable, Equatable {
 }
 
 /// How a record's chunks were placed on its timeline: recorded (from the start the meeting
-/// wrote beside them) or estimated (from its earliest chunk: a record from before that was
-/// written).
+/// wrote beside them) or estimated (from its earliest chunk, because that start is missing: an
+/// older record, or one whose write failed). Estimated: the two sides may be out of step, and
+/// the shell says so.
 public enum AudioTimeline: String, Codable, Sendable, Equatable, CaseIterable {
     case recorded
     case estimated
@@ -1580,8 +1581,18 @@ public struct RecordAudio: Codable, Sendable, Equatable {
     /// Readable chunks, mic first then far end, each in order. Unreadable ones are left out
     /// (and logged).
     public let chunks: [AudioChunk]
+    /// Chunk files left out of the player: unreadable, or whose format or place on the timeline
+    /// recovery could only guess. Nonzero: some of the audio cannot be played or placed, and
+    /// the shell says so.
+    public let leftOut: Int64
     /// How the chunks were placed.
     public let timeline: AudioTimeline
+
+    private enum CodingKeys: String, CodingKey {
+        case chunks
+        case leftOut = "left_out"
+        case timeline
+    }
 }
 
 /// What produced a record: one dictation, a meeting (mic and far end), or an imported audio or
