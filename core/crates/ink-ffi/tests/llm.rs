@@ -1,14 +1,14 @@
 //! A language model the shell registers (`INK_ENGINE_LLM`, Foundation Models on the Mac) and the
 //! dictation polish that goes to it: used while registered, an "unavailable" answer kept as a
-//! failure (the dictation goes out as written, never with made-up text), and nothing used once it
-//! is let go of.
+//! failure (the dictation goes out as written, never with made-up text), nothing used once it is
+//! let go of, and a model that never answers cut off at polish's budget or at the next press.
 
 mod common;
 
 use std::ffi::{CString, c_char, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::*;
 use ink_core::mock::MockPlatform;
@@ -26,12 +26,27 @@ use ink_pipeline::gain_stage::Vad;
 enum Says {
     Polished,
     Unavailable,
+    /// Nothing, ever: a hung model.
+    Never,
 }
 
 struct Model {
     says: Mutex<Says>,
     requests: Mutex<Vec<serde_json::Value>>,
     released: AtomicUsize,
+    /// Calls the core told the model it gave up on.
+    cancels: AtomicUsize,
+}
+
+impl Model {
+    fn new(says: Says) -> Self {
+        Self {
+            says: Mutex::new(says),
+            requests: Mutex::default(),
+            released: AtomicUsize::new(0),
+            cancels: AtomicUsize::new(0),
+        }
+    }
 }
 
 unsafe extern "C" fn generate(ctx: *mut c_void, call: u64, request: *const c_char) {
@@ -50,6 +65,7 @@ unsafe extern "C" fn generate(ctx: *mut c_void, call: u64, request: *const c_cha
         .unwrap()
         .push(serde_json::from_str(&request).unwrap());
     let answer = match *me.says.lock().unwrap() {
+        Says::Never => return,
         Says::Polished => r#"{"text":"Polished synthetic words."}"#,
         // A message is ignored by the core: only the kind and code are read (I5).
         Says::Unavailable => {
@@ -64,6 +80,12 @@ unsafe extern "C" fn generate(ctx: *mut c_void, call: u64, request: *const c_cha
     });
 }
 
+unsafe extern "C" fn cancel(ctx: *mut c_void, _call: u64) {
+    // SAFETY: as above.
+    let me = unsafe { &*(ctx as *const Model) };
+    me.cancels.fetch_add(1, Ordering::SeqCst);
+}
+
 unsafe extern "C" fn release(ctx: *mut c_void) {
     // SAFETY: as above.
     let me = unsafe { &*(ctx as *const Model) };
@@ -75,6 +97,7 @@ fn model_table(me: &Model, info: &CString) -> InkEngineVTable {
         kind: KIND_LLM,
         info_json: info.as_ptr(),
         ctx: me as *const Model as *mut c_void,
+        cancel: Some(cancel),
         release: Some(release),
         generate: Some(generate),
         ..Default::default()
@@ -124,11 +147,7 @@ fn dictation_polish_goes_to_the_registered_model_and_never_fakes_an_answer() {
     });
     let (core, events) = start(&dir, &[test_row(ROW_ID)], loader, installer);
 
-    let model = Model {
-        says: Mutex::new(Says::Polished),
-        requests: Mutex::default(),
-        released: AtomicUsize::new(0),
-    };
+    let model = Model::new(Says::Polished);
     let info = CString::new(
         r#"{"id":"apple-foundation-models","licence":"Apple","model":"system","local":true}"#,
     )
@@ -239,11 +258,7 @@ fn a_model_still_registered_at_shutdown_is_released_before_it_returns() {
         installs: AtomicUsize::new(0),
     });
     let (core, _events) = start(&dir, &[], loader, installer);
-    let model = Model {
-        says: Mutex::new(Says::Polished),
-        requests: Mutex::default(),
-        released: AtomicUsize::new(0),
-    };
+    let model = Model::new(Says::Polished);
     let info =
         CString::new(r#"{"id":"m","licence":"Apple","model":"system","local":false}"#).unwrap();
     register(&core, &model, &info).unwrap();
@@ -254,4 +269,125 @@ fn a_model_still_registered_at_shutdown_is_released_before_it_returns() {
     let stopped = core.shutdown();
     assert_eq!(stopped.engines_released, 1);
     assert_eq!(model.released.load(Ordering::SeqCst), 1);
+}
+
+/// A core with a model registered as `apple-foundation-models` and dictation started with polish
+/// on and `budget` for it.
+fn polishing(
+    dir: &TempDir,
+    model: &Model,
+    budget: Duration,
+) -> (Core, Arc<Recorder>, Arc<MockPlatform>, DictationInbox) {
+    let loader = MockLoader::new(Behaviour::Say("synthetic words".into()));
+    let installer = Arc::new(MockInstaller {
+        generation: loader.generation.clone(),
+        gate: None,
+        installs: AtomicUsize::new(0),
+    });
+    let (core, events) = start(dir, &[test_row(ROW_ID)], loader, installer);
+    let info = CString::new(
+        r#"{"id":"apple-foundation-models","licence":"Apple","model":"system","local":true}"#,
+    )
+    .unwrap();
+    register(&core, model, &info).unwrap();
+    events.wait_type("engine.registered", Duration::from_secs(5));
+    let platform = Arc::new(MockPlatform::new());
+    let mut settings = DictationSettings::default();
+    settings.modes.modes[0].polish_enabled = true;
+    settings.polish_budget = budget;
+    let inbox = core
+        .start_dictation(DictationParts {
+            inserter: platform.clone(),
+            focus: platform.clone(),
+            llm: None,
+            settings,
+            vad: Vad::Unavailable(VadUnavailable::ModelMissing),
+        })
+        .unwrap();
+    (core, events, platform, inbox)
+}
+
+/// The take went out as written, and the warning says polish was cancelled, without the words.
+fn assert_unpolished_and_warned(events: &Recorder, platform: &MockPlatform) {
+    let inserted = platform.inserted();
+    let last = inserted.last().unwrap();
+    assert!(
+        last.contains("ynthetic words") && !last.contains("Polished"),
+        "{inserted:?}"
+    );
+    let warning = events
+        .wait_for(Duration::from_secs(5), |v| {
+            v["type"] == "dictation.warning" && v["kind"] == "polish_failed"
+        })
+        .expect("polish_failed");
+    assert_eq!(warning["message"], "cancelled");
+}
+
+#[test]
+fn a_model_that_never_answers_costs_a_take_its_polish_budget_not_the_generate_timeout() {
+    let dir = TempDir::new("llm-hang");
+    let model = Model::new(Says::Never);
+    let (core, events, platform, inbox) = polishing(&dir, &model, Duration::from_millis(300));
+
+    let started = Instant::now();
+    take(&core, &inbox, 1);
+    assert!(
+        events.wait_count("dictation.inserted", 1, Duration::from_secs(10)),
+        "the take waited on the model past its budget"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_unpolished_and_warned(&events, &platform);
+    assert_eq!(
+        model.cancels.load(Ordering::SeqCst),
+        1,
+        "the model is told the call was given up"
+    );
+
+    // The next take is processed as usual, and polished once the model answers again.
+    *model.says.lock().unwrap() = Says::Polished;
+    take(&core, &inbox, 2);
+    assert!(events.wait_count("dictation.inserted", 2, Duration::from_secs(20)));
+    assert_eq!(
+        platform.inserted().last().map(|s| s.trim().to_owned()),
+        Some("Polished synthetic words.".into())
+    );
+    core.shutdown();
+    events.assert_valid();
+}
+
+#[test]
+fn the_next_press_cuts_a_polish_in_flight_short() {
+    let dir = TempDir::new("llm-press");
+    let model = Model::new(Says::Never);
+    // A budget far past the test: only the press can end the wait in time.
+    let (core, events, platform, inbox) = polishing(&dir, &model, Duration::from_secs(600));
+
+    take(&core, &inbox, 1);
+    let until = Instant::now() + Duration::from_secs(20);
+    while model.requests.lock().unwrap().is_empty() {
+        assert!(Instant::now() < until, "polish never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let now = core.shared().clock.now_ns();
+    let hotkey = inbox.hotkey_sink();
+    hotkey(HotkeyEvent::Pressed { at_ns: now });
+    assert!(
+        events.wait_count("dictation.inserted", 1, Duration::from_secs(5)),
+        "the press did not cut the polish short"
+    );
+    assert_unpolished_and_warned(&events, &platform);
+    // The press itself was too short to be a take.
+    hotkey(HotkeyEvent::Released {
+        at_ns: now + 10_000_000,
+    });
+
+    *model.says.lock().unwrap() = Says::Polished;
+    take(&core, &inbox, 2);
+    assert!(events.wait_count("dictation.inserted", 2, Duration::from_secs(20)));
+    assert_eq!(
+        platform.inserted().last().map(|s| s.trim().to_owned()),
+        Some("Polished synthetic words.".into())
+    );
+    core.shutdown();
+    events.assert_valid();
 }

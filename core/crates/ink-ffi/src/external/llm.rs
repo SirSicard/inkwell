@@ -17,8 +17,9 @@ use serde_json::{Value, json};
 
 use super::{Answer, Call, Expect, GaveUp, GenerateFn, Shell, ShellError};
 
-/// How long a generation may take. Dictation polish is short; this only stops an engine that
-/// never answers from holding a take forever.
+/// How long a generation may take: this only stops an engine that never answers from holding a
+/// job forever. Dictation polish cancels its call much sooner (`ink_pipeline::chain::POLISH_BUDGET`),
+/// since a take waits on it.
 pub const GENERATE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A language model's `info_json`, read.
