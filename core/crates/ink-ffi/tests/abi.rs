@@ -135,6 +135,15 @@ fn every_function_in_the_header_works_through_the_c_abi() {
             ),
             INK_ERR_INVALID_ARGUMENT
         );
+        let huge = c(&format!(
+            r#"{{"data_dir":"/{}"}}"#,
+            "d".repeat(INK_MAX_JSON)
+        ));
+        assert_eq!(
+            ink_init(huge.as_ptr(), Some(on_event), ctx),
+            INK_ERR_INVALID_ARGUMENT,
+            "a config over the cap is refused"
+        );
         assert_eq!(ink_init(config.as_ptr(), Some(on_event), ctx), INK_OK);
         assert_eq!(
             ink_init(config.as_ptr(), Some(on_event), ctx),
@@ -195,6 +204,25 @@ fn every_function_in_the_header_works_through_the_c_abi() {
         );
         assert_eq!(
             ink_command(c(r#"{"cmd":"fly"}"#).as_ptr()),
+            INK_ERR_INVALID_ARGUMENT
+        );
+        // Every JSON string the core reads is capped: past INK_MAX_JSON bytes it is refused
+        // unread, whatever it holds.
+        let padded = |len: usize| {
+            let head = r#"{"cmd":"model.warm","job":"dictation_final","id":""#;
+            let pad = len - head.len() - 2;
+            c(&format!("{head}{}\"}}", "x".repeat(pad)))
+        };
+        let at_cap = padded(INK_MAX_JSON);
+        assert_eq!(at_cap.as_bytes().len(), INK_MAX_JSON);
+        assert_eq!(
+            ink_command(at_cap.as_ptr()),
+            INK_OK,
+            "exactly the cap is read"
+        );
+        recorder.wait_type("model.warm_failed", Duration::from_secs(5));
+        assert_eq!(
+            ink_command(padded(INK_MAX_JSON + 1).as_ptr()),
             INK_ERR_INVALID_ARGUMENT
         );
         let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));

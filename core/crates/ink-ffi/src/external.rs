@@ -11,7 +11,7 @@
 //! twice, or after the core shut down, gets an error code instead of undefined behaviour.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CString, c_char, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
@@ -221,9 +221,8 @@ impl ExternalOffline {
             return Err(bad("info_json is NULL"));
         }
         // SAFETY: non-null, and the caller guarantees a NUL-terminated string.
-        let info = unsafe { CStr::from_ptr(t.info_json) }
-            .to_str()
-            .map_err(|_| bad("info_json is not UTF-8"))?;
+        let info = unsafe { crate::bounded_str(t.info_json, crate::INK_MAX_JSON) }
+            .ok_or_else(|| bad("info_json is not UTF-8, or longer than INK_MAX_JSON"))?;
         let (info, scores) = parse_info(info).ok_or_else(|| {
             bad("info_json must be {\"id\",\"licence\",\"jobs\":[{\"job\",\"wer\"}]}")
         })?;

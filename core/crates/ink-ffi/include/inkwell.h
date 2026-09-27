@@ -13,7 +13,7 @@
  *   from it (cargo run -p ink-ffi --bin ink-schema).
  *
  * STRINGS
- *   Every string crossing this ABI is NUL-terminated UTF-8. A string passed in is read during the
+ *   Every string crossing this ABI is NUL-terminated UTF-8, and at most INK_MAX_JSON bytes. A string passed in is read during the
  *   call and never kept: the core copies what it needs. A string passed out is valid only for the
  *   duration of the callback that receives it: copy it to keep it.
  *
@@ -64,6 +64,11 @@ extern "C" {
 
 /* The version of this header. core.ready reports the core's; they must match. */
 #define INK_ABI_VERSION 1
+
+/* The longest JSON string the core reads (config, command, engine info, engine answer), in bytes
+ * without the NUL. A longer one is refused unread with INK_ERR_INVALID_ARGUMENT; an engine answer
+ * that long still answers its call, as a failure. */
+#define INK_MAX_JSON (1u << 20)
 
 /* Status codes. Zero is success; every failure is negative. Where a call fails for a reason a
  * user could act on, an event says why as well. */

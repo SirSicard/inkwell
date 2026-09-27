@@ -37,7 +37,7 @@ pub mod meeting;
 pub mod runtime;
 pub mod schema;
 
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{c_char, c_void};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 
@@ -96,18 +96,47 @@ fn guard(f: impl FnOnce() -> i32) -> i32 {
     })
 }
 
-/// A string argument: `None` for NULL or bad UTF-8.
+/// `INK_MAX_JSON`: the longest JSON string the core reads, in bytes without the NUL.
+pub const INK_MAX_JSON: usize = 1 << 20;
+
+/// A string argument: `None` for NULL, bad UTF-8, or longer than [`INK_MAX_JSON`].
 ///
 /// # Safety
 ///
 /// `s` is NULL or a NUL-terminated string valid for this call.
 #[allow(unsafe_code)]
 unsafe fn arg<'a>(s: *const c_char) -> Option<&'a str> {
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { bounded_str(s, INK_MAX_JSON) }
+}
+
+/// Reads a NUL-terminated string of at most `max` bytes: `None` for NULL, a longer string, or bad
+/// UTF-8. It looks for the NUL within `max + 1` bytes instead of scanning the whole string, so an
+/// oversized argument is refused without being read to its end.
+///
+/// # Safety
+///
+/// `s` is NULL or a NUL-terminated string valid for this call.
+#[allow(unsafe_code)]
+pub(crate) unsafe fn bounded_str<'a>(s: *const c_char, max: usize) -> Option<&'a str> {
     if s.is_null() {
         return None;
     }
-    // SAFETY: non-null, and the caller guarantees a NUL-terminated string for this call.
-    unsafe { CStr::from_ptr(s) }.to_str().ok()
+    let mut len = 0;
+    loop {
+        // SAFETY: every byte up to and including the NUL belongs to the string, and this stops
+        // at the first NUL, so it never reads past it.
+        if unsafe { *s.add(len) } == 0 {
+            break;
+        }
+        if len == max {
+            return None;
+        }
+        len += 1;
+    }
+    // SAFETY: the `len` bytes before the NUL, just scanned, valid for this call.
+    let bytes = unsafe { std::slice::from_raw_parts(s.cast::<u8>(), len) };
+    std::str::from_utf8(bytes).ok()
 }
 
 /// The shell's callback and context, moved to the event thread.
@@ -305,6 +334,8 @@ pub unsafe extern "C" fn ink_register_engine(vtable: *const InkEngineVTable) -> 
 pub unsafe extern "C" fn ink_engine_complete(call: u64, result_json: *const c_char) -> i32 {
     // SAFETY: forwarded from this function's own contract.
     let json = unsafe { arg(result_json) };
+    // A missing, unreadable or oversized answer still answers the call, as a failure, so the
+    // worker waiting on it is released; the engine is told its answer was refused.
     guard(|| match external::complete(call, json.unwrap_or("")) {
         Ok(()) => INK_OK,
         Err(CompleteError::Unknown) => INK_ERR_UNKNOWN_CALL,
@@ -330,4 +361,27 @@ pub extern "C" fn ink_shutdown() -> i32 {
         }
         INK_OK
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+
+    use super::*;
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn strings_are_read_up_to_the_cap_and_no_further() {
+        let at = CString::new("a".repeat(16)).unwrap();
+        let over = CString::new("a".repeat(17)).unwrap();
+        let bad = CString::new(vec![0xff, 0xfe]).unwrap();
+        // SAFETY: valid NUL-terminated strings, and NULL.
+        unsafe {
+            assert_eq!(bounded_str(at.as_ptr(), 16).map(str::len), Some(16));
+            assert_eq!(bounded_str(over.as_ptr(), 16), None);
+            assert_eq!(bounded_str(bad.as_ptr(), 16), None);
+            assert_eq!(bounded_str(std::ptr::null(), 16), None);
+            assert_eq!(bounded_str(c"".as_ptr(), 0), Some(""));
+        }
+    }
 }
