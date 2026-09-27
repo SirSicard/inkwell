@@ -19,7 +19,8 @@ pub struct MicInfo {
     /// How it connects.
     pub transport: Transport,
     /// Why it was chosen: a schema word (`default_input`, `built_in_for_bluetooth_output`,
-    /// `headset_mic_setting`, `no_built_in_mic`, `first_input`, `requested`).
+    /// `headset_mic_setting`, `no_built_in_mic`, `first_input`, `requested`, or `unknown` for a
+    /// reason this build does not name).
     pub reason: &'static str,
 }
 
@@ -92,7 +93,9 @@ mod mac {
             MicRouteReason::HeadsetMicSetting => "headset_mic_setting",
             MicRouteReason::NoBuiltInMic => "no_built_in_mic",
             MicRouteReason::FirstInput => "first_input",
-            _ => "default_input",
+            // The platform's enum is non-exhaustive: a reason added there is said to be unknown,
+            // never passed off as another one.
+            _ => "unknown",
         }
     }
 
@@ -144,6 +147,39 @@ mod mac {
                     reason: reason(why),
                 }),
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Review (S2.8): each reason the platform names has its own schema word, none of them
+        /// "unknown", and every word (with "unknown") is one the event schema allows.
+        #[test]
+        fn each_mic_reason_is_its_own_schema_word() {
+            let words: Vec<&str> = [
+                MicRouteReason::Requested,
+                MicRouteReason::DefaultInput,
+                MicRouteReason::BuiltInForBluetoothOutput,
+                MicRouteReason::HeadsetMicSetting,
+                MicRouteReason::NoBuiltInMic,
+                MicRouteReason::FirstInput,
+            ]
+            .into_iter()
+            .map(reason)
+            .collect();
+            let mut distinct = words.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            assert_eq!(distinct.len(), words.len(), "{words:?}");
+            assert!(!words.contains(&"unknown"));
+            let schema: serde_json::Value =
+                serde_json::from_str(crate::schema::EVENTS_SCHEMA).unwrap();
+            let allowed = schema["$defs"]["MicReason"]["enum"].as_array().unwrap();
+            for word in words.iter().chain(&["unknown"]) {
+                assert!(allowed.iter().any(|a| a == word), "{word}");
+            }
         }
     }
 }

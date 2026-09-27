@@ -1242,14 +1242,15 @@
     },
     "MicReason": {
       "type": "string",
-      "description": "Why a meeting records this microphone: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because the user's setting says so; the default because this Mac has no built-in mic; the first input because no default is set; or it was named.",
+      "description": "Why a meeting records this microphone: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because the user's setting says so; the default because this Mac has no built-in mic; the first input because no default is set; it was named; or a reason this build of the core does not name (unknown).",
       "enum": [
         "default_input",
         "built_in_for_bluetooth_output",
         "headset_mic_setting",
         "no_built_in_mic",
         "first_input",
-        "requested"
+        "requested",
+        "unknown"
       ]
     },
     "MeetingVoiceDetection": {

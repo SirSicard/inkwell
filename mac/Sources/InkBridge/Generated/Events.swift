@@ -1519,7 +1519,8 @@ public struct MeetingsRecovered: Codable, Sendable, Equatable {
 /// Why a meeting records this microphone: the system default input; the built-in mic because
 /// the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because
 /// the user's setting says so; the default because this Mac has no built-in mic; the first
-/// input because no default is set; or it was named.
+/// input because no default is set; it was named; or a reason this build of the core does not
+/// name (unknown).
 public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
     case defaultInput = "default_input"
     case builtInForBluetoothOutput = "built_in_for_bluetooth_output"
@@ -1527,6 +1528,7 @@ public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
     case noBuiltInMic = "no_built_in_mic"
     case firstInput = "first_input"
     case requested
+    case unknown
 }
 
 /// How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user
