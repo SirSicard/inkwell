@@ -446,7 +446,10 @@ private struct MeetingsSection: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title).frame(width: 150, alignment: .leading)
             VStack(alignment: .leading, spacing: 4) {
-                Toggle(title, isOn: Binding(get: { isOn }, set: set))
+                // A closure literal, not `set` itself: handing the main-actor closure straight to
+                // Binding's generic setter makes Swift 6.3 (the CI runner's Xcode 26.6) crash
+                // emitting the isolation thunk ("SmallVector unable to grow").
+                Toggle(title, isOn: Binding(get: { isOn }, set: { set($0) }))
                     .toggleStyle(.switch)
                     .labelsHidden()
                     .accessibilityHint(detail)
