@@ -339,3 +339,36 @@ fn real_time_pacing_takes_as_long_as_the_audio() {
         started.elapsed()
     );
 }
+
+/// A meeting sets the replay's start to its own (S2.8): the first block is stamped with it,
+/// whatever the clock reads when the replay's thread starts. Unset, the clock's time is used.
+#[test]
+fn a_replay_started_at_a_set_time_stamps_its_first_frame_with_it() {
+    struct First(Arc<Mutex<Option<u64>>>);
+    impl AudioSink for First {
+        fn push(&mut self, block: &AudioBlock<'_>) {
+            let mut first = self.0.lock().unwrap();
+            if first.is_none() {
+                *first = Some(block.host_time_ns);
+            }
+        }
+    }
+    let samples: Vec<f32> = signal(3_200, MONO_16K, 3);
+    let run = |start: Option<u64>| {
+        let seen = Arc::new(Mutex::new(None));
+        let at = ink_audio::StartAt::new();
+        if let Some(ns) = start {
+            at.set(ns);
+        }
+        let mut source =
+            FileReplaySource::from_samples(samples.clone(), MONO_16K, Channel::Mic, clock_at(T0))
+                .unwrap()
+                .starting_at(at);
+        source.start(Box::new(First(seen.clone()))).unwrap();
+        source.wait().unwrap();
+        *seen.lock().unwrap()
+    };
+    assert_eq!(run(Some(7_000_000_000)), Some(7_000_000_000));
+    assert_eq!(run(Some(0)), Some(0), "host time 0 is a real start");
+    assert_eq!(run(None), Some(T0), "unset: the clock's time at start");
+}

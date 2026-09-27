@@ -179,6 +179,7 @@ final class ScreenModels {
     let modes: ModesModel
     let owed: OwedModel
     let live: LiveModel
+    let meetings: MeetingModel
     let onboarding: OnboardingModel
     let storage: StorageModel
     let dictation: DictationModel
@@ -187,7 +188,7 @@ final class ScreenModels {
         send: @escaping SendCommand,
         calendar: any CalendarAccess = EventKitCalendar(),
         apps: any AppDirectory = WorkspaceApps(),
-        ask: any AskService = AskNotAvailable(),
+        callTitles: any CallTitles = EventKitCallTitles(),
         dataDirectory: URL? = nil,
         modelsDirectory: URL? = nil,
         log: ScreenLog = .system
@@ -197,7 +198,8 @@ final class ScreenModels {
         catalogue = CatalogueModel(send: send)
         modes = ModesModel(send: send, apps: apps)
         owed = OwedModel(send: send)
-        live = LiveModel(send: send, ask: ask)
+        live = LiveModel(send: send)
+        meetings = MeetingModel(send: send, titles: callTitles)
         onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
         dictation = DictationModel(send: send)
@@ -216,6 +218,7 @@ final class ScreenModels {
             modes.apply(event)
             owed.apply(event)
             live.apply(event)
+            meetings.apply(event)
             onboarding.apply(event)
             dictation.apply(event)
         }
@@ -226,6 +229,7 @@ final class ScreenModels {
     private func coreReady() {
         onboarding.load()
         polish.load()
+        meetings.load()
         permissions.refresh()
         catalogue.requery()
         // Reads the switch, then (unless it is off) the core holds the keys; without
@@ -248,14 +252,16 @@ final class ScreenModels {
     func handles(_ failed: CommandFailed) -> Bool {
         switch failed.command {
         case "permissions.check", "models.list", "modes.list", "commitment.set_done",
-             "note.add", "note.update", "note.delete":
+             "commitment.not_yet", "note.add", "note.update", "note.delete",
+             "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
             true
         case "setting.get":
             failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
-                || dictation.handles(failed)
+                || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
-            failed.id == PolishModel.settingID || dictation.handles(failed)
+            failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
+                || dictation.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
         default:

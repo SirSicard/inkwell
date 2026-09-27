@@ -542,6 +542,9 @@ fn meeting_warning(w: &MeetingWarning) -> Vec<(&'static str, Option<Value>)> {
         ],
         MeetingWarning::DeletedTextNotScrubbed => vec![kind("deleted_text_not_scrubbed")],
         MeetingWarning::DeletedTextScrubbed => vec![kind("deleted_text_scrubbed")],
+        MeetingWarning::NotCrashProtected(why) => {
+            vec![kind("not_crash_protected"), msg(why.clone())]
+        }
         MeetingWarning::EchoPathNotFound { heard_ms } => vec![
             kind("echo_path_not_found"),
             ("channel", some("mic")),
@@ -664,6 +667,10 @@ pub fn meeting(record: &RecordId, e: &MeetingEvent) -> Value {
         MeetingEvent::Commitments { filed, merged } => event(
             "meeting.commitments",
             &[rec, ("filed", some(*filed)), ("merged", some(*merged))],
+        ),
+        MeetingEvent::LooksDone { suggested } => event(
+            "meeting.looks_done",
+            &[rec, ("suggested", some(*suggested))],
         ),
         MeetingEvent::Finished { revision } => event(
             "meeting.finished",
@@ -851,6 +858,7 @@ mod tests {
             MeetingWarning::EchoPathNotFound { heard_ms: 12_000 },
             MeetingWarning::DeletedTextNotScrubbed,
             MeetingWarning::DeletedTextScrubbed,
+            MeetingWarning::NotCrashProtected("the marker could not be written".into()),
         ];
         let mut meeting_events = vec![
             MeetingEvent::Started {
@@ -890,6 +898,7 @@ mod tests {
                 filed: 3,
                 merged: 1,
             },
+            MeetingEvent::LooksDone { suggested: 2 },
             MeetingEvent::Finished { revision: Some(2) },
             MeetingEvent::Finished { revision: None },
             MeetingEvent::Echo(EchoState::Searching {

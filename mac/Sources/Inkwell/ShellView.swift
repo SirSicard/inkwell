@@ -94,5 +94,62 @@ struct InkRail: View {
             .frame(maxHeight: .infinity)
             .background(Theme.inkZone)
             .accessibilityHidden(true)
+            .overlay(alignment: .bottom) {
+                if wide {
+                    RecordControls().padding(22)
+                }
+            }
+    }
+}
+
+/// Today's foot of the ink zone (the canvas): whether Inkwell listens for calls, and Record now.
+struct RecordControls: View {
+    @Environment(CoreStore.self) private var store
+    @Environment(ScreenModels.self) private var screens
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(listening)
+                Text("Hold fn to dictate").foregroundStyle(Theme.secondaryText)
+            }
+            .font(Typography.timestamp)
+            .foregroundStyle(PaperPalette.quiet)
+            if store.meeting == nil {
+                Button {
+                    screens.meetings.recordNow()
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle().fill(PaperPalette.recording).frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text("Record now")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PaperButtonStyle(prominent: true))
+                .accessibilityHint("Records the mic and everything this Mac plays, until you stop it")
+                if let failure = screens.meetings.failure(on: .recordNow) {
+                    Text(failure)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var listening: String {
+        Self.listeningText(recording: store.meeting != nil, listening: store.listening)
+    }
+
+    /// What the foot of Today says: the core's state (`meeting.detection`), never the setting, so
+    /// a setting the core could not read or a detector that stopped reads as not listening.
+    static func listeningText(recording: Bool, listening: Bool?) -> String {
+        if recording { return "Recording" }
+        switch listening {
+        case true?: return "Listening for meetings"
+        case false?: return "Not listening for meetings"
+        case nil: return " "
+        }
     }
 }

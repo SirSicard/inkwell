@@ -52,9 +52,11 @@ struct SettingsScreen: View {
                             .id(SettingsSection.voice)
                         ModesSection(modes: screens.modes).id(SettingsSection.modes)
                         AISection(polish: screens.polish).id(SettingsSection.ai)
-                        MeetingsSection(permissions: screens.permissions).id(SettingsSection.meetings)
+                        MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
+                            .id(SettingsSection.meetings)
                         ModelsSection(catalogue: screens.catalogue).id(SettingsSection.models)
-                        StorageSection(storage: screens.storage).id(SettingsSection.storage)
+                        StorageSection(storage: screens.storage, meetings: screens.meetings)
+                            .id(SettingsSection.storage)
                         AboutSection().id(SettingsSection.about)
                     }
                     .frame(maxWidth: 760, alignment: .leading)
@@ -405,13 +407,28 @@ private struct AISection: View {
 
 private struct MeetingsSection: View {
     let permissions: PermissionsModel
+    let meetings: MeetingModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Meetings")
+            toggle(
+                "Offer to record calls",
+                detail: "When an app opens the microphone for a call, Inkwell asks whether to record it. It never records without you saying so.",
+                isOn: meetings.detect, set: { meetings.setDetect($0) })
+            toggle(
+                "Use the headset's microphone",
+                detail: "With Bluetooth headphones, record their own microphone instead of the Mac's. It carries only call-quality sound.",
+                isOn: meetings.headsetMic, set: { meetings.setHeadsetMic($0) })
+            if meetings.settingsFailed {
+                Text("Couldn't read or save a meeting setting. It may not be what it shows.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.alert)
+            }
             VStack(alignment: .leading, spacing: 8) {
+                fact("Consent", "Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does.")
                 fact("You", "Your microphone, as \u{201C}Hear you\u{201D} allows.")
-                fact("Them", "The sound of the call from this Mac, as \u{201C}Hear the others\u{201D} allows.")
+                fact("Them", "For a call you record when Inkwell offers, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this Mac plays, and Inkwell says so. As \u{201C}Hear the others\u{201D} allows.")
                 fact("Headphones", "With Bluetooth headphones, Inkwell records the Mac's own microphone: a headset microphone carries only call-quality sound.")
                 fact("Where", "Recordings and transcripts stay on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
             }
@@ -421,6 +438,29 @@ private struct MeetingsSection: View {
                     .foregroundStyle(Theme.alert)
             }
         }
+    }
+
+    private func toggle(
+        _ title: String, detail: String, isOn: Bool, set: @escaping @MainActor @Sendable (Bool) -> Void
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title).frame(width: 150, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                // A closure literal, not `set` itself: handing the main-actor closure straight to
+                // Binding's generic setter makes Swift 6.3 (the CI runner's Xcode 26.6) crash
+                // emitting the isolation thunk ("SmallVector unable to grow").
+                Toggle(title, isOn: Binding(get: { isOn }, set: { set($0) }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .accessibilityHint(detail)
+                Text(detail)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(Typography.body)
     }
 
     private func fact(_ label: String, _ text: String) -> some View {
@@ -485,10 +525,29 @@ private struct ModelsSection: View {
 
 private struct StorageSection: View {
     let storage: StorageModel
+    let meetings: MeetingModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Storage")
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Keep records").frame(width: 150, alignment: .leading)
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Keep records", selection: Binding(
+                        get: { meetings.retention ?? .forever }, set: { meetings.setRetention($0) }
+                    )) {
+                        ForEach(Retention.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .disabled(meetings.retention == nil)
+                    Text("Older meetings and dictations are deleted with their recordings: their words are overwritten in the library's files, not only hidden. Nothing is deleted while it is forever.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(Typography.body)
             if let dir = storage.dataDirectory {
                 HStack(spacing: 12) {
                     Text((dir.path as NSString).abbreviatingWithTildeInPath)

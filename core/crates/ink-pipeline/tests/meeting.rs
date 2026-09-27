@@ -1458,3 +1458,435 @@ fn no_live_engine_still_gives_a_final_transcript() {
     assert_eq!(outcome.revision, Some(2));
     assert_eq!(store.segments(&record).unwrap().len(), 2);
 }
+
+/// Carried into S2.8 from S2.1a: the Bluetooth-mic flag was sticky. A meeting whose mic changed
+/// route is judged by every mic it had: the softer warning holds only when the mic was a
+/// Bluetooth headset throughout, because zeros from any other mic mean no data at all.
+#[test]
+fn the_bluetooth_mic_flag_clears_when_the_route_changes() {
+    use ink_pipeline::meeting::watchdog::Routing;
+    let bluetooth = Routing {
+        mic: ink_core::Transport::Bluetooth,
+        ..Default::default()
+    };
+    let far = || join(&[silence(1.0), speech(3.0, -30.0, 154), silence(4.0)]);
+    let zeros_in_two = |rig: &mut Rig, then: Routing| {
+        let far = far();
+        rig.feed(&silence(4.0), &far[..4 * 16_000]);
+        rig.chain().set_routing(then);
+        rig.feed(&silence(4.0), &far[4 * 16_000..]);
+        rig.finish().unwrap();
+        rig.warnings()
+    };
+    let only_zeros = |w: &[MeetingWarning]| {
+        w.contains(&MeetingWarning::CapturedOnlyZeros {
+            channel: Channel::Mic,
+        })
+    };
+
+    // A headset, then the built-in mic (the headset disconnected): zeros are a failure.
+    let mut rig = RigBuilder {
+        routing: bluetooth,
+        ..RigBuilder::default()
+    }
+    .build();
+    let w = zeros_in_two(&mut rig, Routing::default());
+    assert!(only_zeros(&w), "{w:?}");
+    assert!(!w.contains(&MeetingWarning::BluetoothMicOnlyZeros), "{w:?}");
+
+    // The built-in mic, then a headset: the built-in stretch of zeros is a failure too.
+    let mut rig = RigBuilder::default().build();
+    let w = zeros_in_two(&mut rig, bluetooth);
+    assert!(only_zeros(&w), "{w:?}");
+    assert!(!w.contains(&MeetingWarning::BluetoothMicOnlyZeros), "{w:?}");
+
+    // A headset throughout (a route change to the same headset): the softer warning.
+    let mut rig = RigBuilder {
+        routing: bluetooth,
+        ..RigBuilder::default()
+    }
+    .build();
+    let w = zeros_in_two(&mut rig, bluetooth);
+    assert!(w.contains(&MeetingWarning::BluetoothMicOnlyZeros), "{w:?}");
+    assert!(!only_zeros(&w), "{w:?}");
+}
+
+/// Crash recovery (S2.8): a meeting whose app was killed mid-meeting leaves its chunks on disk and
+/// its live finals in the store. After the chunks are recovered, the interrupted meeting's final
+/// pass runs as any other: the record is marked ended and the pass supersedes the live transcript
+/// from the recorded audio.
+#[test]
+fn an_interrupted_meeting_is_ended_and_finalized_from_its_recovered_chunks() {
+    use ink_core::mock::MockClock;
+    use ink_pipeline::meeting::{EndedMeeting, Interrupted, MeetingServices};
+
+    let mut rig = RigBuilder::default().build();
+    let record = rig.chain().record().clone();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    // The crash: the chain and the pump's writers go without a stop or a finish, and the last
+    // mic chunk ends in a torn frame.
+    drop(rig.chain.take());
+    drop(rig.mic.take());
+    drop(rig.far.take());
+    let last = rig
+        .chunks
+        .chunks(Channel::Mic)
+        .unwrap()
+        .chunks
+        .last()
+        .unwrap()
+        .path
+        .clone();
+    let mut torn = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&last)
+        .unwrap();
+    std::io::Write::write_all(&mut torn, &[1, 2]).unwrap();
+    drop(torn);
+    let live = rig.store.segments(&record).unwrap();
+    assert!(
+        !live.is_empty(),
+        "the live finals were saved before the crash"
+    );
+    assert_eq!(
+        rig.store.record(&record).unwrap().unwrap().ended_at_unix_ms,
+        None
+    );
+
+    let report = rig.chunks.recover().unwrap();
+    assert!(!report.is_clean(), "the torn frame was trimmed");
+    let events = rig.events.clone();
+    let sink: ink_core::EventSink<MeetingEvent> = Arc::new(move |e| events.lock().unwrap().push(e));
+    let services = MeetingServices {
+        live: None,
+        offline: rig.engine.clone(),
+        diarizer: None,
+        store: rig.store.clone(),
+        clock: Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)),
+        llm: None,
+    };
+    let ended = EndedMeeting::interrupted(
+        services,
+        Default::default(),
+        energy_vad(),
+        sink,
+        Interrupted {
+            record: record.clone(),
+            started_unix_ms: T0_UNIX_MS,
+            t0_ns: T0_NS,
+            ended_unix_ms: T0_UNIX_MS + 8_000,
+        },
+    );
+    assert_eq!(
+        rig.store.record(&record).unwrap().unwrap().ended_at_unix_ms,
+        Some(T0_UNIX_MS + 8_000)
+    );
+    let outcome = ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
+    assert!(outcome.superseded, "{:?}", rig.warnings());
+    assert_eq!(outcome.revision, Some(2));
+    assert!(outcome.mic.chunks >= 1 && outcome.far.chunks >= 1);
+    assert_eq!(outcome.mic.chunks_written, None, "unknown after a crash");
+    let segments = rig.store.segments(&record).unwrap();
+    assert!(segments.iter().any(|s| s.channel == Channel::Mic));
+    assert!(segments.iter().any(|s| s.channel == Channel::Far));
+    assert_monotonic(&segments);
+}
+
+/// S2.8: the final pass saves the summary's actions with their cited line (the record shows it),
+/// and a meeting in which the user says an earlier promise is done marks that promise "looks
+/// done", with this meeting as the evidence.
+#[test]
+fn the_summary_keeps_cited_items_and_an_earlier_promise_looks_done() {
+    struct DoneLlm;
+    impl ink_core::Llm for DoneLlm {
+        fn info(&self) -> ink_core::LlmInfo {
+            ink_core::LlmInfo {
+                provider: "scripted".into(),
+                model: "test".into(),
+                endpoint: ink_core::Endpoint::InProcess,
+            }
+        }
+        fn complete(
+            &self,
+            request: &LlmRequest,
+            _: &CancelToken,
+        ) -> Result<ink_core::LlmResponse, LlmError> {
+            let text = if request.system.contains("meeting record") {
+                r#"{"headline": "The report went out.", "body": "Done.", "decisions": [{"text": "The report is finished", "line": 0, "quote": "already sent the quarterly report"}], "actions": []}"#
+            } else {
+                r#"{"class": "already_done", "confidence": 0.9, "task": null, "due": null, "quote": "I already sent the quarterly report"}"#
+            };
+            Ok(ink_core::LlmResponse { text: text.into() })
+        }
+    }
+    let answer: Answer = Arc::new(|channel, n, audio| match channel {
+        Channel::Mic => Ok(words(
+            "I already sent the quarterly report to the team",
+            audio.len(),
+        )),
+        Channel::Far => Ok(words(&format!("Thanks for that {n}"), audio.len())),
+    });
+    let mut rig = RigBuilder {
+        answer,
+        llm: Some(Arc::new(DoneLlm)),
+        ..RigBuilder::default()
+    }
+    .build();
+    // An earlier meeting's open promise, in the same library.
+    let earlier = rig
+        .store
+        .create_record(ink_core::NewRecord {
+            kind: ink_core::RecordKind::Meeting,
+            title: Some("Last week".into()),
+            started_at_unix_ms: T0_UNIX_MS - 7 * 86_400_000,
+            source_app: None,
+            audio_dir: None,
+        })
+        .unwrap();
+    let promised = rig
+        .store
+        .add_commitments(
+            &earlier,
+            &[ink_core::NewCommitment {
+                text: "Send the quarterly report to the team".into(),
+                owner: None,
+                recipient: Some("the team".into()),
+                due: None,
+                due_at_unix_ms: None,
+                provenance: vec![],
+            }],
+        )
+        .unwrap();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(0.5), speech(2.0, -30.0, 81), silence(4.0)]);
+    let far = join(&[silence(3.0), speech(2.0, -30.0, 82), silence(1.5)]);
+    rig.feed(&mic, &far);
+    rig.finish().unwrap();
+
+    let summary = rig.store.summary(&record).unwrap().expect("saved");
+    assert_eq!(summary.items.len(), 1);
+    assert_eq!(summary.items[0].kind, ink_core::SummaryItemKind::Decision);
+    assert_eq!(summary.items[0].span.channel, Channel::Mic);
+    let earlier_now = rig.store.commitments(&earlier).unwrap();
+    let evidence = earlier_now
+        .iter()
+        .find(|c| c.id == promised[0])
+        .and_then(|c| c.looks_done.clone())
+        .expect("the earlier promise looks done");
+    assert_eq!(evidence.record, record);
+    assert_eq!(evidence.span.channel, Channel::Mic);
+    assert!(
+        rig.events()
+            .contains(&MeetingEvent::LooksDone { suggested: 1 })
+    );
+}
+
+/// Review (S2.8, HIGH): a second crash during recovery runs the final pass again on a meeting whose
+/// first pass already filed its commitments. Filing is once per record: the rerun files nothing,
+/// and what the user did with the first filing (a promise marked done) is kept.
+#[test]
+fn a_final_pass_that_runs_again_files_no_commitment_twice() {
+    use ink_core::mock::MockClock;
+    use ink_pipeline::meeting::{EndedMeeting, Interrupted, MeetingServices};
+
+    let llm = Arc::new(Scripted {
+        calls: AtomicUsize::new(0),
+    });
+    let mut rig = RigBuilder {
+        answer: promise(),
+        llm: Some(llm.clone()),
+        title: None,
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(0.5), speech(2.0, -30.0, 71), silence(4.0)]);
+    let far = join(&[silence(3.0), speech(2.0, -30.0, 72), silence(1.5)]);
+    rig.feed(&mic, &far);
+    drop(rig.chain.take());
+    drop(rig.mic.take());
+    drop(rig.far.take());
+    rig.chunks.recover().unwrap();
+
+    let pass = |rig: &Rig| {
+        let events = rig.events.clone();
+        let sink: ink_core::EventSink<MeetingEvent> =
+            Arc::new(move |e| events.lock().unwrap().push(e));
+        EndedMeeting::interrupted(
+            MeetingServices {
+                live: None,
+                offline: rig.engine.clone(),
+                diarizer: None,
+                store: rig.store.clone(),
+                clock: Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)),
+                llm: Some(llm.clone()),
+            },
+            Default::default(),
+            energy_vad(),
+            sink,
+            Interrupted {
+                record: record.clone(),
+                started_unix_ms: T0_UNIX_MS,
+                t0_ns: T0_NS,
+                ended_unix_ms: T0_UNIX_MS + 7_000,
+            },
+        )
+        .finalize(&rig.chunks, &CancelToken::new())
+        .unwrap()
+    };
+
+    assert!(pass(&rig).superseded, "{:?}", rig.warnings());
+    let first = rig.store.commitments(&record).unwrap();
+    assert_eq!(first.len(), 2, "the summary's action and the promise");
+    let open = first.iter().find(|c| c.merged_into.is_none()).unwrap();
+    rig.store.set_commitment_done(&open.id, true).unwrap();
+    let calls = llm.calls.load(Ordering::SeqCst);
+
+    // The second crash came after the filing: the pass runs again from the chunks.
+    let again = pass(&rig);
+    assert!(again.superseded, "{:?}", rig.warnings());
+    let second = rig.store.commitments(&record).unwrap();
+    assert_eq!(
+        second.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        first.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        "the same rows, none added"
+    );
+    assert!(
+        second.iter().find(|c| c.id == open.id).unwrap().done,
+        "the user's done is kept"
+    );
+    assert_eq!(
+        llm.calls.load(Ordering::SeqCst),
+        calls + 1,
+        "the rerun writes the summary again and asks nothing about commitments"
+    );
+    assert_eq!(
+        rig.events()
+            .iter()
+            .rfind(|e| matches!(e, MeetingEvent::Commitments { .. })),
+        Some(&MeetingEvent::Commitments {
+            filed: 0,
+            merged: 0
+        })
+    );
+}
+
+/// Review (S2.8): whether the record was marked ended is known to whoever keeps the crash marker.
+/// When the store refuses, the record still reads as live, so the marker must stay and the next
+/// launch end it: on a stop, and when an interrupted meeting is taken up.
+#[test]
+fn a_record_the_store_could_not_end_is_reported_as_not_ended() {
+    use ink_core::mock::MockClock;
+    use ink_pipeline::meeting::{EndedMeeting, Interrupted, MeetingServices};
+
+    let flaky = Arc::new(FlakyStore::default());
+    let mut rig = RigBuilder {
+        store: Some(flaky.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    flaky.fail(&["finish_record"]);
+    let stopped = rig.stop();
+    assert!(!stopped.record_ended());
+    assert!(
+        rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::StoreFailed(_)))
+    );
+
+    let taken_up = |store: Arc<dyn Store>| {
+        let events = rig.events.clone();
+        let sink: ink_core::EventSink<MeetingEvent> =
+            Arc::new(move |e| events.lock().unwrap().push(e));
+        EndedMeeting::interrupted(
+            MeetingServices {
+                live: None,
+                offline: rig.engine.clone(),
+                diarizer: None,
+                store,
+                clock: Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)),
+                llm: None,
+            },
+            Default::default(),
+            energy_vad(),
+            sink,
+            Interrupted {
+                record: record.clone(),
+                started_unix_ms: T0_UNIX_MS,
+                t0_ns: T0_NS,
+                ended_unix_ms: T0_UNIX_MS + 8_000,
+            },
+        )
+    };
+    assert!(!taken_up(flaky.clone()).record_ended());
+    flaky.heal();
+    assert!(taken_up(flaky.clone()).record_ended());
+}
+
+/// Review (S2.8): a meeting's commitments are filed with their same-batch merges in one store
+/// call. A store that would fail a separate merge (a crash between filing and merging, as it
+/// was) cannot leave the pair filed apart: the rows and the merge are saved together.
+#[test]
+fn commitments_and_their_merges_are_filed_together() {
+    let llm = Arc::new(Scripted {
+        calls: AtomicUsize::new(0),
+    });
+    let flaky = Arc::new(FlakyStore::default());
+    let mut rig = RigBuilder {
+        answer: promise(),
+        llm: Some(llm),
+        title: None,
+        store: Some(flaky.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(0.5), speech(2.0, -30.0, 71), silence(4.0)]);
+    let far = join(&[silence(3.0), speech(2.0, -30.0, 72), silence(1.5)]);
+    rig.feed(&mic, &far);
+    // The old second step: it is never called now.
+    flaky.fail(&["merge_commitment"]);
+    let outcome = rig.finish().unwrap();
+    assert!(outcome.superseded);
+    let commitments = rig.store.commitments(&record).unwrap();
+    assert_eq!(commitments.len(), 2);
+    assert_eq!(
+        commitments
+            .iter()
+            .filter(|c| c.merged_into.is_some())
+            .count(),
+        1,
+        "filed with its merge"
+    );
+    assert!(rig.events().contains(&MeetingEvent::Commitments {
+        filed: 2,
+        merged: 1
+    }));
+
+    // And when the one call fails, nothing is filed: no row without its merge.
+    let flaky2 = Arc::new(FlakyStore::default());
+    let mut rig = RigBuilder {
+        answer: promise(),
+        llm: Some(Arc::new(Scripted {
+            calls: AtomicUsize::new(0),
+        })),
+        title: None,
+        store: Some(flaky2.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    rig.feed(&mic, &far);
+    flaky2.fail(&["add_commitments_merged"]);
+    rig.finish().unwrap();
+    assert!(rig.store.commitments(&record).unwrap().is_empty());
+    assert!(
+        rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::StoreFailed(_)))
+    );
+}

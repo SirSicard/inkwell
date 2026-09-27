@@ -125,12 +125,22 @@ enum NeedsYou {
             ("Your headset's microphone sent only silence", "Bluetooth headset mics can go silent in calls. Inkwell records the built-in mic instead when it can.")
         case .meetingWarning(.nothingCaptured):
             ("The last meeting recorded nothing", "No audio reached Inkwell from either side.")
+        case .meetingWarning(.notCrashProtected):
+            ("This meeting isn't protected against a crash", "If Inkwell quits unexpectedly, it won't finish this meeting at the next launch. The recording is still being saved.")
         case .meetingWarning(.farEndQuietWhileYouSpeak):
             ("The other side went quiet while you spoke", "Their audio may not be reaching Inkwell.")
         case .meetingFailed, .meetingCaptureFailed, .meetingWorkerFailed:
             ("The last meeting stopped early", "What was recorded up to then is kept.")
         case .hotkeyLost:
             ("The dictation key stopped working", "macOS stopped sending it to Inkwell. Check Accessibility in System Settings.")
+        case .meetingRecovered:
+            ("A meeting was finished after Inkwell quit unexpectedly", "It was recording when Inkwell stopped. What was recorded was kept and the record is complete.")
+        case .recoveryUnavailable:
+            ("Inkwell couldn't check for an unfinished meeting", "If a meeting was recording when Inkwell last quit, it may not be finished yet. Inkwell looks again at the next launch.")
+        case .detectionUnavailable:
+            ("Inkwell stopped listening for calls", "It can't tell when a call starts, so it won't offer to record one. Record now still works.")
+        case .librarySwept(_, let failed) where failed > 0:
+            ("Some old records couldn't be removed", "Your storage setting deletes old records, and some of them, or their recordings, are still on this Mac.")
         case .editKeyLost:
             ("The edit key stopped working", "macOS stopped sending it to Inkwell, so editing a selection by voice is off. Check Accessibility in System Settings.")
         default:

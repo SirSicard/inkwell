@@ -211,6 +211,7 @@ fn records_segments_search_speakers_and_settings(store: &dyn Store) {
     );
 
     let summary = Summary {
+        items: Vec::new(),
         text: "short".into(),
         model: "mock".into(),
         created_at_unix_ms: 5,
@@ -227,6 +228,7 @@ fn records_segments_search_speakers_and_settings(store: &dyn Store) {
 fn commitments_merge_complete_and_go_with_their_record(store: &dyn Store) {
     let id = meeting(store, 1);
     let said = |text: &str, at: u64| NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: Some("Guest".into()),
         due: None,
@@ -276,6 +278,7 @@ fn open_commitments_span_records_and_skip_done_and_merged(store: &dyn Store) {
     let a = meeting(store, 1);
     let b = meeting(store, 2);
     let owe = |text: &str, due_at: Option<i64>| NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: Some("Guest".into()),
         due: due_at.map(|_| "as said".into()),
@@ -369,6 +372,7 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record(store: &dyn Sto
     let a = meeting(store, 1);
     let b = meeting(store, 2);
     let owe = |text: &str| NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: None,
         due: None,
@@ -529,6 +533,7 @@ fn out_of_range_or_reversed_times_are_invalid_and_change_nothing(store: &dyn Sto
     );
 
     let said = |start_ms: u64| NewCommitment {
+        recipient: None,
         text: "t".into(),
         owner: None,
         due: None,
@@ -568,6 +573,7 @@ fn out_of_range_or_reversed_times_are_invalid_and_change_nothing(store: &dyn Sto
     );
     assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
     let reversed = NewCommitment {
+        recipient: None,
         provenance: vec![Span {
             channel: Channel::Mic,
             start_ms: 10,
@@ -609,6 +615,7 @@ fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store)
     assert_eq!(store.append_segments(&ghost, &[]), nf);
     assert_eq!(store.notes(&ghost), Err(StoreError::NotFound));
     let summary = Summary {
+        items: Vec::new(),
         text: "s".into(),
         model: "m".into(),
         created_at_unix_ms: 1,
@@ -640,6 +647,7 @@ fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store)
         .add_commitments(
             &real,
             &[NewCommitment {
+                recipient: None,
                 text: "t".into(),
                 owner: None,
                 due: None,
@@ -686,6 +694,7 @@ fn open_commitment_ties_keep_the_order_they_were_added(store: &dyn Store) {
     let a = meeting(store, 1);
     let b = meeting(store, 2);
     let owe = |text: String, due_at: Option<i64>| NewCommitment {
+        recipient: None,
         text,
         owner: None,
         due: None,
@@ -798,11 +807,13 @@ fn upserts_replace_the_previous_value(store: &dyn Store) {
     );
 
     let first = Summary {
+        items: Vec::new(),
         text: "first".into(),
         model: "a".into(),
         created_at_unix_ms: 1,
     };
     let second = Summary {
+        items: Vec::new(),
         text: "second".into(),
         model: "b".into(),
         created_at_unix_ms: 2,
@@ -1049,6 +1060,7 @@ fn fields_round_trip(store: &dyn Store) {
         .add_commitments(
             &id,
             &[NewCommitment {
+                recipient: None,
                 text: "draft the plan".into(),
                 owner: Some("Host".into()),
                 due: Some("next Tuesday".into()),
@@ -1060,6 +1072,8 @@ fn fields_round_trip(store: &dyn Store) {
     assert_eq!(
         store.commitments(&id).unwrap(),
         vec![Commitment {
+            recipient: None,
+            looks_done: None,
             id: ids[0].clone(),
             record: id.clone(),
             text: "draft the plan".into(),
@@ -1076,6 +1090,208 @@ fn fields_round_trip(store: &dyn Store) {
     assert!(store.open_commitments(10).unwrap().is_empty());
     store.set_commitment_done(&ids[0], false).unwrap();
     assert_eq!(store.open_commitments(10).unwrap().len(), 1);
+}
+
+/// S2.8: a summary keeps its items with their spans, replaced with it and gone with its record.
+fn summary_items_round_trip_and_are_replaced_with_their_summary(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let span = |start_ms| Span {
+        channel: Channel::Far,
+        start_ms,
+        end_ms: start_ms + 1_500,
+    };
+    let item = |kind, text: &str, start_ms| SummaryItem {
+        kind,
+        text: text.into(),
+        span: span(start_ms),
+    };
+    let first = Summary {
+        text: "Agreed the plan.\n\n## Decisions\n- Ship on Friday".into(),
+        model: "scripted/test".into(),
+        created_at_unix_ms: 1_700_000_000_000,
+        items: vec![
+            item(SummaryItemKind::Decision, "Ship on Friday", 12_000),
+            item(SummaryItemKind::Action, "Send the notes", 30_000),
+        ],
+    };
+    store.save_summary(&id, &first).unwrap();
+    assert_eq!(store.summary(&id).unwrap(), Some(first.clone()));
+    let second = Summary {
+        items: vec![item(SummaryItemKind::Action, "Book the room", 5_000)],
+        ..first.clone()
+    };
+    store.save_summary(&id, &second).unwrap();
+    assert_eq!(store.summary(&id).unwrap().unwrap().items, second.items);
+    // A bad span refuses the whole save.
+    let reversed = Summary {
+        items: vec![SummaryItem {
+            span: Span {
+                channel: Channel::Mic,
+                start_ms: 9,
+                end_ms: 1,
+            },
+            ..second.items[0].clone()
+        }],
+        ..first.clone()
+    };
+    assert!(matches!(
+        store.save_summary(&id, &reversed),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(store.summary(&id).unwrap(), Some(second));
+    store.delete_record(&id).unwrap();
+    assert_eq!(store.summary(&id), Err(StoreError::NotFound));
+}
+
+/// S2.8: a commitment keeps who it is owed to; a "looks done" suggestion names the record it was
+/// said in, is cleared by "not yet" and settled by marking the commitment done or open, and goes
+/// with the record it was said in.
+fn recipients_and_looks_done_round_trip_and_settle(store: &dyn Store) {
+    let older = meeting(store, 1);
+    let later = meeting(store, 2);
+    let ids = store
+        .add_commitments(
+            &older,
+            &[
+                NewCommitment {
+                    text: "send the deck".into(),
+                    owner: None,
+                    recipient: Some("Dana".into()),
+                    due: None,
+                    due_at_unix_ms: None,
+                    provenance: vec![],
+                },
+                NewCommitment {
+                    text: "book the room".into(),
+                    owner: None,
+                    recipient: None,
+                    due: None,
+                    due_at_unix_ms: None,
+                    provenance: vec![],
+                },
+            ],
+        )
+        .unwrap();
+    let open = store.open_commitments(10).unwrap();
+    assert_eq!(open[0].recipient.as_deref(), Some("Dana"));
+    assert_eq!(open[1].recipient, None);
+    assert!(open.iter().all(|c| c.looks_done.is_none()));
+
+    let evidence = DoneEvidence {
+        record: later.clone(),
+        span: Span {
+            channel: Channel::Mic,
+            start_ms: 4_000,
+            end_ms: 6_000,
+        },
+    };
+    store.set_done_evidence(&ids[0], Some(&evidence)).unwrap();
+    store.set_done_evidence(&ids[1], Some(&evidence)).unwrap();
+    let with = store.commitments(&older).unwrap();
+    assert_eq!(with[0].looks_done.as_ref(), Some(&evidence));
+    assert_eq!(
+        store.open_commitments(10).unwrap()[0].looks_done.as_ref(),
+        Some(&evidence)
+    );
+    // "Not yet" clears it; the commitment stays open.
+    store.set_done_evidence(&ids[1], None).unwrap();
+    assert_eq!(store.commitments(&older).unwrap()[1].looks_done, None);
+    // Marking it done settles the suggestion.
+    store.set_commitment_done(&ids[0], true).unwrap();
+    store.set_commitment_done(&ids[0], false).unwrap();
+    assert_eq!(store.commitments(&older).unwrap()[0].looks_done, None);
+    // Unknown commitment, unknown record, bad span: refused, nothing changed.
+    assert_eq!(
+        store.set_done_evidence(&CommitmentId("nope".into()), Some(&evidence)),
+        Err(StoreError::NotFound)
+    );
+    let elsewhere = DoneEvidence {
+        record: RecordId("no-such-record".into()),
+        ..evidence.clone()
+    };
+    assert_eq!(
+        store.set_done_evidence(&ids[0], Some(&elsewhere)),
+        Err(StoreError::NotFound)
+    );
+    let reversed = DoneEvidence {
+        span: Span {
+            channel: Channel::Mic,
+            start_ms: 9,
+            end_ms: 1,
+        },
+        ..evidence.clone()
+    };
+    assert!(matches!(
+        store.set_done_evidence(&ids[0], Some(&reversed)),
+        Err(StoreError::Invalid(_))
+    ));
+    // The suggestion goes with the record it was said in.
+    store.set_done_evidence(&ids[1], Some(&evidence)).unwrap();
+    store.delete_record(&later).unwrap();
+    assert_eq!(store.commitments(&older).unwrap()[1].looks_done, None);
+}
+
+/// S2.8 review: a final pass files its commitments and folds the batch's own duplicates in one
+/// transaction. A merge that cannot be applied (here the second, into an item the first folded
+/// away) fails the whole call: no row is added and no merge half-applied, so a pass that runs
+/// again never finds a batch filed without its merges.
+fn a_batch_of_commitments_and_its_merges_is_saved_whole_or_not_at_all(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let said = |text: &str, at: u64| NewCommitment {
+        recipient: None,
+        text: text.into(),
+        owner: None,
+        due: None,
+        due_at_unix_ms: None,
+        provenance: vec![Span {
+            channel: Channel::Mic,
+            start_ms: at,
+            end_ms: at + 500,
+        }],
+    };
+    let batch = [
+        said("send the deck", 1_000),
+        said("send over the deck", 5_000),
+        said("book the room", 9_000),
+    ];
+    for bad in [vec![(1, 0), (2, 1)], vec![(0, 3)], vec![(1, 1)]] {
+        assert!(
+            matches!(
+                store.add_commitments_merged(&id, &batch, &bad),
+                Err(StoreError::Invalid(_))
+            ),
+            "{bad:?}"
+        );
+        assert!(
+            store.commitments(&id).unwrap().is_empty(),
+            "{bad:?}: nothing saved"
+        );
+    }
+    assert_eq!(
+        store.add_commitments_merged(&RecordId("gone".into()), &batch, &[]),
+        Err(StoreError::NotFound)
+    );
+
+    // Folded both ways in one batch, flattened as merge_commitment flattens.
+    let ids = store
+        .add_commitments_merged(&id, &batch, &[(1, 0), (0, 2)])
+        .unwrap();
+    assert_eq!(ids.len(), 3);
+    let all = store.commitments(&id).unwrap();
+    assert_eq!(
+        all.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        ids.iter().collect::<Vec<_>>()
+    );
+    assert_eq!(all[0].merged_into.as_ref(), Some(&ids[2]));
+    assert_eq!(
+        all[1].merged_into.as_ref(),
+        Some(&ids[2]),
+        "re-pointed, no chain"
+    );
+    assert_eq!(all[2].merged_into, None);
+    assert_eq!(all[1].provenance[0].start_ms, 5_000);
+    let open = store.open_commitments(10).unwrap();
+    assert_eq!(open.iter().map(|c| &c.id).collect::<Vec<_>>(), [&ids[2]]);
 }
 
 macro_rules! contract {
@@ -1103,6 +1319,9 @@ macro_rules! contract {
 }
 
 contract!(
+    a_batch_of_commitments_and_its_merges_is_saved_whole_or_not_at_all,
+    summary_items_round_trip_and_are_replaced_with_their_summary,
+    recipients_and_looks_done_round_trip_and_settle,
     supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one,
     one_channel_collapsing_is_refused_even_when_the_total_passes,
     unknown_records_are_not_found,

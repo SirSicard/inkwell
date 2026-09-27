@@ -2,13 +2,19 @@
 //!
 //! It plays a WAV fixture into any [`AudioSink`] the way a capture device does: fixed-size blocks,
 //! from its own thread, each stamped with a host time. The stamps are synthetic and exact (the
-//! clock's time at [`start`](AudioSource::start) plus the frames delivered so far at the file's
-//! rate), so the same fixture and the same start time give the same blocks with the same stamps,
-//! on any machine and any OS, however the threads are scheduled.
+//! start time plus the frames delivered so far at the file's rate), so the same fixture and the
+//! same start time give the same blocks with the same stamps, on any machine and any OS, however
+//! the threads are scheduled.
+//!
+//! **The start time.** By default it is the clock's time at [`start`](AudioSource::start). A
+//! meeting replay sets it to the meeting's own start instead ([`FileReplaySource::starting_at`]):
+//! the final pass places audio by host time against the meeting's start, so a replay stamped from
+//! the moment its thread happened to start would hand the final pass audio shifted by however long
+//! that took (tens of samples, different on every run).
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -30,6 +36,37 @@ pub enum Pacing {
     RealTime,
 }
 
+/// Where a replay's host times start, set by its owner before the replay starts: a meeting sets
+/// it to the meeting's start, so the first frame of the file is the first frame of the meeting.
+///
+/// Cheap to clone; every clone is the same value. Unset, the replay starts at the clock's time.
+#[derive(Clone, Debug, Default)]
+pub struct StartAt(Arc<AtomicU64>);
+
+/// [`StartAt`]'s "not set". Host time 0 is a real value on a mock clock, so the sentinel is the
+/// one time no replay could start at.
+const UNSET: u64 = u64::MAX;
+
+impl StartAt {
+    /// A start not set yet.
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicU64::new(UNSET)))
+    }
+
+    /// Sets the host time, ns, of the replay's first frame. Takes effect at the next start.
+    pub fn set(&self, host_time_ns: u64) {
+        self.0.store(host_time_ns.min(UNSET - 1), Ordering::Release);
+    }
+
+    /// The start set, if any.
+    pub fn get(&self) -> Option<u64> {
+        match self.0.load(Ordering::Acquire) {
+            UNSET => None,
+            ns => Some(ns),
+        }
+    }
+}
+
 /// A capture source that plays a WAV file (or samples in memory).
 ///
 /// The whole file is loaded when it is opened: replay is for fixtures and bench clips, and a
@@ -43,6 +80,7 @@ pub struct FileReplaySource {
     clock: Arc<dyn Clock>,
     pacing: Pacing,
     guard: RealtimeGuard,
+    start_at: Option<StartAt>,
     running: Option<Running>,
 }
 
@@ -125,6 +163,7 @@ impl FileReplaySource {
             clock,
             pacing: Pacing::default(),
             guard: unguarded(),
+            start_at: None,
             running: None,
         })
     }
@@ -147,6 +186,13 @@ impl FileReplaySource {
     /// callback; tests pass a no-alloc guard (I4).
     pub fn with_realtime_guard(mut self, guard: RealtimeGuard) -> Self {
         self.guard = guard;
+        self
+    }
+
+    /// Host times start at `start` when it is set by then (see the module docs), else at the
+    /// clock's time at [`start`](AudioSource::start).
+    pub fn starting_at(mut self, start: StartAt) -> Self {
+        self.start_at = Some(start);
         self
     }
 
@@ -264,7 +310,11 @@ impl AudioSource for FileReplaySource {
             format: self.format,
             true_rate: self.true_rate,
             block_frames: self.block_frames as u64,
-            start_ns: self.clock.now_ns(),
+            start_ns: self
+                .start_at
+                .as_ref()
+                .and_then(StartAt::get)
+                .unwrap_or_else(|| self.clock.now_ns()),
             pacing: self.pacing,
             guard: self.guard.clone(),
             stop: stop.clone(),

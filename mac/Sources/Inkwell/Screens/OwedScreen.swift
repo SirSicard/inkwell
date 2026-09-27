@@ -11,6 +11,11 @@ struct OwedScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Paper.Header(title: "Owed", subtitle: owed.loaded ? owed.summary(now: Date()) : nil)
+                if let failure = owed.failure {
+                    Text(failure)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                }
                 ForEach(owed.suggestions) { suggestion in
                     LooksDoneCard(suggestion: suggestion, owed: owed)
                 }
@@ -48,7 +53,8 @@ private struct LooksDoneCard: View {
                 .foregroundStyle(Theme.accent)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Looks done: \(suggestion.text)")
+                // What was said, verbatim: never read as markdown.
+                Text(verbatim: "Looks done: " + suggestion.text)
                     .font(Typography.body)
                     .foregroundStyle(Theme.text)
                 Text(suggestion.source)

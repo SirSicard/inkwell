@@ -589,7 +589,11 @@ impl Voice {
                 inserter: platform.inserter.clone(),
                 focus: platform.focus.clone(),
                 clock: shared.clock.clone(),
-                llm: Some(Arc::new(PolishModel::new(shared.llms.clone())) as Arc<dyn Llm>),
+                // Polish and voice edit both call through it, behind the local-only switch.
+                llm: Some(Arc::new(PolishModel::new(
+                    shared.llms.clone(),
+                    shared.local_only.clone(),
+                )) as Arc<dyn Llm>),
             },
             loaded.settings,
             crate::vad::installed(shared, models),

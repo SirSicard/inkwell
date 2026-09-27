@@ -48,12 +48,12 @@ use std::sync::mpsc::{self, Receiver};
 use ink_audio::{ChunkError, ChunkStore, VadConfig, WindowError};
 use ink_core::store::check_supersede_explained;
 use ink_core::{
-    AsrEvent, CancelToken, Channel, Clock, Diarizer, EngineError, EventSink, Explained, Llm,
-    LlmError, NewCommitment, NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment,
-    Store, StoreError, StreamingEngine, SupersedeWith,
+    AsrEvent, CancelToken, Channel, Clock, Diarizer, DoneEvidence, EngineError, EventSink,
+    Explained, Llm, LlmError, NewCommitment, NewRecord, OfflineEngine, Record, RecordId,
+    RecordKind, Segment, Store, StoreError, StreamingEngine, SupersedeWith,
 };
-use ink_llm::tasks::commitments::{RecordContext, harvest};
-use ink_llm::tasks::dedup::{apply_merges, dedup};
+use ink_llm::tasks::commitments::{RecordContext, harvest, looks_done};
+use ink_llm::tasks::dedup::dedup;
 use ink_llm::tasks::due::RecordTime;
 use ink_llm::tasks::summary::{SummaryOptions, summarize};
 
@@ -141,8 +141,11 @@ struct Core {
     written: [Option<SideSummary>; 2],
     /// Live finals each side saved unchecked (mic, far).
     backlogged: [u64; 2],
-    /// Whether the mic was a Bluetooth headset mic at any point: its zeros can be its user's
-    /// silence.
+    /// Whether the mic has been a Bluetooth headset mic for the whole meeting so far: then a
+    /// meeting of its zeros can be its user's silence. Cleared for good by the first route that is
+    /// not Bluetooth, because zeros from any other mic are no data at all (S2.8: the flag used to
+    /// stick once set, so a built-in mic that captured only zeros after a headset disconnected got
+    /// the softer warning).
     mic_bluetooth: bool,
     /// Live events that arrived after the meeting stopped.
     late: Arc<Late>,
@@ -343,7 +346,7 @@ impl MeetingChain {
     /// is a new echo path: live cancellation stops and the search starts again
     /// ([`EchoSearch::DeviceSwitch`]).
     pub fn set_routing(&mut self, routing: Routing) {
-        self.core.mic_bluetooth |= routing.mic == ink_core::Transport::Bluetooth;
+        self.core.mic_bluetooth &= routing.mic == ink_core::Transport::Bluetooth;
         self.watchdog.set_routing(routing);
         let events = self.core.events.clone();
         let mut mic = Vec::new();
@@ -497,22 +500,44 @@ impl MeetingChain {
             log::warn!("meeting: the wall clock went back during the meeting; end set to start");
             core.warn(MeetingWarning::ClockWentBack);
         }
-        if let Err(error) = core
+        let record_ended = match core
             .services
             .store
             .finish_record(&core.record, now.max(core.started_unix_ms))
         {
-            log::warn!("meeting: the record could not be marked ended: {error}");
-            core.warn(MeetingWarning::StoreFailed(error));
-        }
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("meeting: the record could not be marked ended: {error}");
+                core.warn(MeetingWarning::StoreFailed(error));
+                false
+            }
+        };
         core.emit(MeetingEvent::Stopped);
-        EndedMeeting { core }
+        EndedMeeting { core, record_ended }
     }
 }
 
 /// A meeting whose live phase is over, waiting for its final pass.
 pub struct EndedMeeting {
     core: Core,
+    /// Whether the record was marked ended ([`record_ended`](Self::record_ended)).
+    record_ended: bool,
+}
+
+/// A meeting whose live phase ended without [`MeetingChain::stop`]: the app was killed or crashed
+/// while it recorded. What the final pass needs is read back from the record and from beside its
+/// chunks by the caller, who has already run [`ChunkStore::recover`] over them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Interrupted {
+    /// The meeting's record: still revision 1, with the live finals saved before the crash.
+    pub record: RecordId,
+    /// When it started, Unix ms (the record's start).
+    pub started_unix_ms: i64,
+    /// The host time of its timeline's start, as written beside its chunks.
+    pub t0_ns: u64,
+    /// When it ended, Unix ms: the end of its last recorded audio, as the caller works it out.
+    /// Never recorded before the start.
+    pub ended_unix_ms: i64,
 }
 
 /// What a meeting's final pass came to.
@@ -580,9 +605,54 @@ impl From<Stop> for FinalizeError {
 }
 
 impl EndedMeeting {
+    /// **Worker.** An interrupted meeting ([`Interrupted`]), ready for its final pass: the record is
+    /// marked ended now, as [`MeetingChain::stop`] would have. What the live phase knew and a crash
+    /// lost is taken at its most cautious: how many chunks the pump wrote is unknown (the pass
+    /// counts what is on disk), and the mic is not taken for a Bluetooth headset, so a meeting of
+    /// its zeros is reported as no data, never as a silent listener.
+    pub fn interrupted(
+        services: MeetingServices,
+        settings: MeetingSettings,
+        vad: VadSource,
+        events: EventSink<MeetingEvent>,
+        meeting: Interrupted,
+    ) -> Self {
+        let core = Core {
+            services,
+            settings,
+            vad,
+            events,
+            record: meeting.record,
+            started_unix_ms: meeting.started_unix_ms,
+            t0_ns: meeting.t0_ns,
+            written: [None, None],
+            backlogged: [0, 0],
+            mic_bluetooth: false,
+            late: Arc::default(),
+        };
+        let ended = meeting.ended_unix_ms.max(meeting.started_unix_ms);
+        let record_ended = match core.services.store.finish_record(&core.record, ended) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("meeting recovery: the record could not be marked ended: {error}");
+                core.warn(MeetingWarning::StoreFailed(error));
+                false
+            }
+        };
+        Self { core, record_ended }
+    }
+
     /// The meeting's record.
     pub fn record(&self) -> &RecordId {
         &self.core.record
+    }
+
+    /// Whether the record was marked ended when the live phase ended (or, for an interrupted
+    /// meeting, when it was taken up). `false` when the store refused: the record still reads as
+    /// live, so whoever keeps a crash-recovery marker for it keeps it, and the next launch ends
+    /// it (a record without an end is also never swept).
+    pub fn record_ended(&self) -> bool {
+        self.record_ended
     }
 
     /// **Worker.** The final pass over the meeting's recorded chunks in `audio`, then the
@@ -1114,8 +1184,39 @@ impl EndedMeeting {
             }
         }
 
+        // Filing is once per record. A pass that runs again (a second crash during recovery,
+        // after the first pass filed) hears the same audio, and its promises are already in Owed,
+        // where the user may have settled some: those rows stay as they are, and nothing is
+        // harvested, suggested or filed again. Chosen over replacing the rows because a rerun's
+        // model may word a promise differently, so matching old rows to new ones (to carry done
+        // and not-yet over) would guess; and the first filing is whole, rows and merges, since
+        // `add_commitments_merged` is one transaction. The summary above is replaced, which is
+        // idempotent.
+        match store.commitments(&core.record) {
+            Ok(existing) if !existing.is_empty() => {
+                log::info!(
+                    "meeting: an earlier pass filed {} commitments; kept, none filed again",
+                    existing.len()
+                );
+                core.emit(MeetingEvent::Commitments {
+                    filed: 0,
+                    merged: 0,
+                });
+                return;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                // Filed anyway, as with a failed dedup: a promise listed twice beats one lost.
+                log::warn!("meeting: the record's commitments could not be read: {error}");
+                core.warn(MeetingWarning::StoreFailed(error));
+            }
+        }
+
         match harvest(segments, &ctx, llm.as_ref(), cancel) {
-            Ok(h) => filed.extend(h.commitments),
+            Ok(h) => {
+                filed.extend(h.commitments);
+                self.suggest_done(&h.already_done);
+            }
             Err(error) => {
                 log::warn!("meeting commitments failed: {error}");
                 let cancelled = error == LlmError::Cancelled;
@@ -1142,11 +1243,11 @@ impl EndedMeeting {
                 Vec::new()
             }
         };
-        let saved = store
-            .add_commitments(&core.record, &filed)
-            .and_then(|ids| apply_merges(store.as_ref(), &ids, &merges));
-        match saved {
-            Ok(()) => core.emit(MeetingEvent::Commitments {
+        // The rows and their merges in one transaction: a crash between them would leave a pair
+        // filed apart for good (the once-per-record gate above never files again).
+        let pairs: Vec<(usize, usize)> = merges.iter().map(|m| (m.from, m.into)).collect();
+        match store.add_commitments_merged(&core.record, &filed, &pairs) {
+            Ok(_) => core.emit(MeetingEvent::Commitments {
                 filed: filed.len(),
                 merged: merges.len(),
             }),
@@ -1154,6 +1255,50 @@ impl EndedMeeting {
         }
     }
 }
+
+impl EndedMeeting {
+    /// "Looks done": marks the open commitments of other meetings that what the user said here
+    /// suggests are finished ([`looks_done`]). Before this meeting's own are filed, which are
+    /// skipped anyway. A store failure is a warning; the pass goes on.
+    fn suggest_done(&self, already_done: &[ink_llm::tasks::commitments::Candidate]) {
+        if already_done.is_empty() {
+            return;
+        }
+        let core = &self.core;
+        let store = &core.services.store;
+        let open = match store.open_commitments(LOOKS_DONE_OPEN_LIMIT) {
+            Ok(open) => open,
+            Err(error) => {
+                log::warn!(
+                    "meeting: the open commitments could not be read for looks-done: {error}"
+                );
+                core.warn(MeetingWarning::StoreFailed(error));
+                return;
+            }
+        };
+        let mut suggested = 0;
+        for (id, span) in looks_done(already_done, &open, Some(&core.record)) {
+            let evidence = DoneEvidence {
+                record: core.record.clone(),
+                span,
+            };
+            match store.set_done_evidence(&id, Some(&evidence)) {
+                Ok(()) => suggested += 1,
+                Err(error) => {
+                    log::warn!("meeting: a looks-done suggestion could not be saved: {error}");
+                    core.warn(MeetingWarning::StoreFailed(error));
+                }
+            }
+        }
+        if suggested > 0 {
+            log::info!("meeting: {suggested} earlier commitments look done");
+            core.emit(MeetingEvent::LooksDone { suggested });
+        }
+    }
+}
+
+/// How many open commitments "looks done" reads to match against: Owed's own page size.
+pub const LOOKS_DONE_OPEN_LIMIT: usize = 1_000;
 
 /// The report of a path search, before the mic is cancelled.
 fn echo_pass(fit: Option<&PathReport>) -> EchoPass {

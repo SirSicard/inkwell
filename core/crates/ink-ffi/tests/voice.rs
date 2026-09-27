@@ -64,6 +64,7 @@ impl VoiceRig {
             }),
             data_dir: dir.path().to_owned(),
             permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+            meetings: Default::default(),
         };
         let events = Recorder::new();
         let (writer, bands) = bands_channel();
@@ -640,4 +641,130 @@ fn a_mic_that_fails_mid_take_says_so_ends_the_take_and_the_next_press_reopens_it
     flip.store(false, Ordering::Release);
     rig.dictate(1.0, 14);
     assert_eq!(rig.platform.inserted().len(), 2);
+}
+
+// --- Local-only mode (S2.8 review) ------------------------------------------------------------
+
+/// A registered language model that says it is not on this machine, counting its calls.
+struct RemoteModel {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+unsafe extern "C" fn remote_generate(
+    ctx: *mut std::ffi::c_void,
+    call: u64,
+    _request: *const std::ffi::c_char,
+) {
+    // SAFETY: ctx is the test's leaked model, alive for the process.
+    let me = unsafe { &*(ctx as *const RemoteModel) };
+    me.calls.fetch_add(1, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let answer = std::ffi::CString::new(r#"{"text":"Rewritten by a remote model."}"#).unwrap();
+        // SAFETY: a NUL-terminated string valid for the call.
+        unsafe { ink_ffi::ink_engine_complete(call, answer.as_ptr()) };
+    });
+}
+
+unsafe extern "C" fn remote_release(_: *mut std::ffi::c_void) {}
+
+impl VoiceRig {
+    /// Registers a model whose info says `"local": false`.
+    fn register_remote(&self) -> &'static RemoteModel {
+        use ink_ffi::external::{InkEngineVTable, KIND_LLM, Registration};
+        let model: &'static RemoteModel = Box::leak(Box::new(RemoteModel {
+            calls: Default::default(),
+        }));
+        let info = std::ffi::CString::new(
+            r#"{"id":"remote-llm","licence":"MIT","model":"remote","local":false}"#,
+        )
+        .unwrap();
+        let table = InkEngineVTable {
+            kind: KIND_LLM,
+            info_json: info.as_ptr(),
+            ctx: model as *const RemoteModel as *mut std::ffi::c_void,
+            release: Some(remote_release),
+            generate: Some(remote_generate),
+            ..Default::default()
+        };
+        // SAFETY: a valid table whose ctx outlives the core.
+        let registration =
+            unsafe { Registration::from_table(&table, self.core().shared().shutdown.clone()) }
+                .unwrap();
+        self.core().register(registration).unwrap();
+        self.events.wait_type("engine.registered", WAIT);
+        model
+    }
+}
+
+/// While local-only is on (the default), dictation's polish never calls a model that is not
+/// local: the take goes in as said, and the refusal is said.
+#[test]
+fn dictation_polish_refuses_a_model_that_is_not_local() {
+    let rig = VoiceRig::new("local-only-polish");
+    let remote = rig.register_remote();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "dictation.polish"
+        })
+        .unwrap();
+    rig.enable();
+    rig.dictate(1.0, 11);
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "never called");
+    assert!(
+        rig.platform
+            .inserted()
+            .last()
+            .is_some_and(|s| !s.contains("Rewritten")),
+        "{:?}",
+        rig.platform.inserted()
+    );
+    let warning = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.warning" && v["kind"] == "polish_failed"
+        })
+        .expect("the refusal is said");
+    assert!(
+        warning["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("local-only")),
+        "{warning}"
+    );
+}
+
+/// While local-only is on, a voice edit never sends the selection to a model that is not local:
+/// the selection is left alone, and the refusal is said.
+#[test]
+fn a_voice_edit_refuses_a_model_that_is_not_local() {
+    let rig = VoiceRig::new("local-only-edit");
+    let remote = rig.register_remote();
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"right_command"}"#);
+    rig.events
+        .wait_for(WAIT, |v| v["edit_key"] == "right_command")
+        .expect("bound");
+    rig.platform.set_selection(Some("teh cat"));
+    rig.sync_edit_clock();
+    assert!(rig.edit.press());
+    rig.feed(&VoiceRig::speech(1.0, 12));
+    rig.sync_edit_clock();
+    assert!(rig.edit.release());
+    rig.silence(0.6);
+    let failed = rig
+        .events
+        .wait_for(WAIT, |v| v["type"] == "dictation.edit_failed")
+        .expect("edit failed");
+    assert_eq!(failed["reason"], "model", "{failed}");
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("local-only")),
+        "{failed}"
+    );
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "never called");
+    assert!(
+        rig.platform.inserted().is_empty(),
+        "the selection is left alone"
+    );
 }

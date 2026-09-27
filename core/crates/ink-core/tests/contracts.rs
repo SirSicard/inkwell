@@ -253,6 +253,7 @@ fn records_segments_search_speakers_and_settings() {
     );
 
     let summary = Summary {
+        items: Vec::new(),
         text: "short".into(),
         model: "mock".into(),
         created_at_unix_ms: 5,
@@ -271,6 +272,7 @@ fn commitments_merge_complete_and_go_with_their_record() {
     let store = MemStore::new();
     let id = meeting(&store, 1);
     let said = |text: &str, at: u64| NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: Some("Guest".into()),
         due: None,
@@ -323,6 +325,7 @@ fn open_commitments_span_records_and_skip_done_and_merged() {
     let a = meeting(&store, 1);
     let b = meeting(&store, 2);
     let owe = |text: &str, due_at: Option<i64>| NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: Some("Guest".into()),
         due: due_at.map(|_| "as said".into()),
@@ -427,6 +430,7 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
     let a = meeting(&store, 1);
     let b = meeting(&store, 2);
     let owe = |text: &str| NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: None,
         due: None,
@@ -618,6 +622,7 @@ fn out_of_range_or_reversed_times_are_invalid_and_change_nothing() {
     assert!(store.notes(&id).unwrap().is_empty());
 
     let said = |start_ms: u64| NewCommitment {
+        recipient: None,
         text: "t".into(),
         owner: None,
         due: None,
@@ -657,6 +662,7 @@ fn out_of_range_or_reversed_times_are_invalid_and_change_nothing() {
     );
     assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
     let reversed = NewCommitment {
+        recipient: None,
         provenance: vec![Span {
             channel: Channel::Mic,
             start_ms: 10,

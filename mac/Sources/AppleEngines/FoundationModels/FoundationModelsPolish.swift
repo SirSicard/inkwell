@@ -1,5 +1,7 @@
 // Dictation polish on Apple's on-device model (Foundation Models), registered with the core as a
-// language model.
+// language model. Since S2.8 it also writes a meeting's summary, judges its commitments and
+// answers Ask: those ask for structured answers (StructuredAnswer.swift), generated to the
+// request's schema, and the core sizes them to the context this model reports.
 //
 // Apple Intelligence may be off, still downloading its model, or not supported on this Mac (Intel
 // Macs, among others). That is a state the app shows, never something papered over: while it is
@@ -66,6 +68,15 @@ public protocol PolishBackend: Sendable {
     func prewarm(instructions: String?)
     /// One answer. Uses the prepared session when its instructions are the request's.
     func respond(_ request: InkLlmRequest) async throws -> String
+    /// One answer generated to `schema` (the request's JSON Schema, read), as JSON text.
+    func respond(_ request: InkLlmRequest, schema: SchemaNode) async throws -> String
+}
+
+extension PolishBackend {
+    /// A backend that cannot generate to a schema refuses the request, never answers loosely.
+    public func respond(_ request: InkLlmRequest, schema: SchemaNode) async throws -> String {
+        throw InkEngineError.badRequest
+    }
 }
 
 /// Polish on the on-device model.
@@ -79,6 +90,25 @@ public final class FoundationModelsPolish: InkLanguageModel {
     public let model = "SystemLanguageModel.default"
     /// It runs on this Mac: nothing leaves it.
     public let isLocal = true
+
+    /// How many tokens the on-device model's context holds (4,096 on macOS 26): the core sizes a
+    /// meeting's summary and Ask to fit.
+    ///
+    /// `SystemLanguageModel.contextSize` exists from the 26.4 SDK (FoundationModels module 1.5.x;
+    /// back-deployed to macOS 26.0, so no runtime check is needed where it compiles). No version
+    /// check can safely admit the 26.x SDKs that have it: the macos-26 runner's SDK reports no
+    /// module version at all, so `canImport(_version:)` is ignored there, and that SDK may predate
+    /// the property. So it sits behind the macOS 27 code's gate, and a build with a pre-6.4
+    /// toolchain (today's release runner too) falls back to nil: the model is registered without
+    /// `context_tokens`, and the core sizes for 4,096 tokens, macOS 26's context. Built with Swift
+    /// 6.4 and the 27 SDK, the real size is read.
+    public var contextTokens: Int? {
+        #if compiler(>=6.4) && canImport(FoundationModels, _version: 2.0)
+            SystemLanguageModel.default.contextSize
+        #else
+            nil
+        #endif
+    }
 
     private let availability: @Sendable () -> AppleIntelligence
     private let backend: any PolishBackend
@@ -118,16 +148,26 @@ public final class FoundationModelsPolish: InkLanguageModel {
         if case .unavailable(let reason) = availability() {
             return completion(.failure(.unavailable(code: reason.rawValue)))
         }
-        // Polish asks for plain text. A structured request would need a generation schema,
-        // which this engine does not build: refused, never answered loosely.
-        guard request.jsonSchema == nil else {
-            return completion(.failure(.badRequest))
+        // A structured request (a summary, a judgement) is generated to its schema; a schema
+        // outside the subset this engine reads is refused, never answered loosely.
+        var schema: SchemaNode?
+        if let json = request.jsonSchema {
+            guard let parsed = try? SchemaNode.parse(json) else {
+                return completion(.failure(.badRequest))
+            }
+            schema = parsed
+        } else {
+            // Only plain-text requests are polish: a prewarm prepares a session for those.
+            lastInstructions.withLock { $0 = request.system }
         }
-        lastInstructions.withLock { $0 = request.system }
         let backend = self.backend
         let task = Task {
             do {
-                let text = try await backend.respond(request)
+                let text = if let schema {
+                    schema.completed(try await backend.respond(request, schema: schema))
+                } else {
+                    try await backend.respond(request)
+                }
                 completion(.success(text))
             } catch is CancellationError {
                 completion(.failure(.cancelled))
@@ -156,6 +196,19 @@ public final class FoundationModelsPolish: InkLanguageModel {
                 // Returns at once; the model loads in the background.
                 session.prewarm()
                 prepared.withLock { $0 = (instructions, session) }
+            #endif
+        }
+
+        public func respond(_ request: InkLlmRequest, schema: SchemaNode) async throws -> String {
+            #if canImport(FoundationModels)
+                let session = LanguageModelSession(model: .default, instructions: request.system)
+                let options = GenerationOptions(
+                    temperature: request.temperature, maximumResponseTokens: request.maxTokens)
+                let generation = try schema.generationSchema()
+                return try await session.respond(to: request.user, schema: generation, options: options)
+                    .content.jsonString
+            #else
+                throw InkEngineError.unavailable(code: AppleIntelligence.Reason.unsupported.rawValue)
             #endif
         }
 

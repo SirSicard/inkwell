@@ -5,8 +5,8 @@ use super::lock;
 use crate::engine::SpeakerId;
 use crate::error::StoreError;
 use crate::store::{
-    Commitment, CommitmentId, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId, Record,
-    RecordId, RecordQuery, SearchHit, Segment, Store, Summary, SupersedeWith,
+    Commitment, CommitmentId, DoneEvidence, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId,
+    Record, RecordId, RecordQuery, SearchHit, Segment, Store, Summary, SupersedeWith,
     check_supersede_explained,
 };
 
@@ -198,6 +198,10 @@ impl Store for MemStore {
             if c.merged_into.as_ref().is_some_and(|m| removed.contains(m)) {
                 c.merged_into = None;
             }
+            // The evidence went with its record.
+            if c.looks_done.as_ref().is_some_and(|e| &e.record == id) {
+                c.looks_done = None;
+            }
         }
         Ok(())
     }
@@ -332,6 +336,12 @@ impl Store for MemStore {
     }
 
     fn save_summary(&self, id: &RecordId, summary: &Summary) -> Result<(), StoreError> {
+        check_stretches(
+            summary
+                .items
+                .iter()
+                .map(|i| (i.span.start_ms, i.span.end_ms)),
+        )?;
         lock(&self.inner).data(id)?.summary = Some(summary.clone());
         Ok(())
     }
@@ -384,13 +394,53 @@ impl Store for MemStore {
                 record: id.clone(),
                 text: item.text.clone(),
                 owner: item.owner.clone(),
+                recipient: item.recipient.clone(),
                 due: item.due.clone(),
                 due_at_unix_ms: item.due_at_unix_ms,
                 provenance: item.provenance.clone(),
                 merged_into: None,
                 done: false,
+                looks_done: None,
             });
             ids.push(cid);
+        }
+        Ok(ids)
+    }
+
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+        merges: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        // Planned and checked before anything changes, then applied under one lock: all or none.
+        let plan = crate::store::batch_merges(items.len(), merges)?;
+        check_stretches(
+            items
+                .iter()
+                .flat_map(|i| &i.provenance)
+                .map(|s| (s.start_ms, s.end_ms)),
+        )?;
+        let mut inner = lock(&self.inner);
+        inner.data(id)?;
+        let ids: Vec<CommitmentId> = items
+            .iter()
+            .map(|_| CommitmentId(inner.next("com")))
+            .collect();
+        for (item, (cid, into)) in items.iter().zip(ids.iter().zip(&plan)) {
+            inner.commitments.push(Commitment {
+                id: cid.clone(),
+                record: id.clone(),
+                text: item.text.clone(),
+                owner: item.owner.clone(),
+                recipient: item.recipient.clone(),
+                due: item.due.clone(),
+                due_at_unix_ms: item.due_at_unix_ms,
+                provenance: item.provenance.clone(),
+                merged_into: into.map(|i| ids[i].clone()),
+                done: false,
+                looks_done: None,
+            });
         }
         Ok(ids)
     }
@@ -422,7 +472,26 @@ impl Store for MemStore {
     }
 
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {
-        lock(&self.inner).commitment(id)?.done = done;
+        let mut inner = lock(&self.inner);
+        let c = inner.commitment(id)?;
+        c.done = done;
+        c.looks_done = None;
+        Ok(())
+    }
+
+    fn set_done_evidence(
+        &self,
+        id: &CommitmentId,
+        evidence: Option<&DoneEvidence>,
+    ) -> Result<(), StoreError> {
+        if let Some(e) = evidence {
+            check_stretches([(e.span.start_ms, e.span.end_ms)])?;
+        }
+        let mut inner = lock(&self.inner);
+        if let Some(e) = evidence {
+            inner.data(&e.record)?;
+        }
+        inner.commitment(id)?.looks_done = evidence.cloned();
         Ok(())
     }
 

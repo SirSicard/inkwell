@@ -194,6 +194,11 @@ pub enum MeetingWarning {
     DeletedTextNotScrubbed,
     /// Deleted text the library could not clear before is now cleared from its files.
     DeletedTextScrubbed,
+    /// The host could not leave its crash-recovery marker beside the meeting's chunks: if the
+    /// app quits unexpectedly, this meeting is not finished at the next launch (its audio is
+    /// still saved as it records). The chain never raises it; the host does, through the
+    /// meeting's event sink. The string names what failed, never the meeting's words.
+    NotCrashProtected(String),
     /// The diarizer failed: the far end keeps no speaker labels.
     DiarizationFailed(EngineError),
     /// The store failed: a live final, the final pass, the summary or commitments could not be
@@ -532,6 +537,13 @@ pub enum MeetingEvent {
         filed: usize,
         /// Of those, folded into another ("said twice").
         merged: usize,
+    },
+    /// The user said in this meeting that work was already done which earlier meetings' open
+    /// commitments promise: each such commitment now carries a "looks done" suggestion for the
+    /// user to confirm or dismiss. Sent only when there is at least one.
+    LooksDone {
+        /// Commitments given a suggestion.
+        suggested: usize,
     },
     /// Everything is done. Sent by every final pass that got as far as the supersede.
     Finished {

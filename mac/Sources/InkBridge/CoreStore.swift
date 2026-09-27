@@ -68,18 +68,69 @@ public final class CoreStore {
     public struct LiveMeeting: Equatable, Sendable {
         /// The record it is written to.
         public let record: String
+        /// Its title, when the core knew one at the start (a calendar event, a replay's name).
+        public var title: String?
+        /// The app it records, by id, and that app's name, when it was started for one.
+        public var app: String?
+        public var appName: String?
+        /// The microphone it records, and why that one.
+        public var micName: String?
+        public var micReason: MicReason?
+        /// What it records as the other side: the app alone, or everything this Mac plays.
+        public var farEnd: FarEnd?
+        /// It was started for an app whose sound could not be recorded alone, so it records
+        /// everything this Mac plays instead (`meeting.far_end_fallback`).
+        public var farEndFallback = false
         /// `meeting.stopped` arrived: capture ended and the final pass is running.
         public var stopping = false
         /// The latest state of each side's capture.
         public var sides: [Channel: SideState] = [:]
         /// Each channel's current partial: replaced by the next one, cleared by its final.
         public var partials: [Channel: String] = [:]
-        /// The live finals so far, oldest first. The record in the store is the lasting copy.
-        public var finals: [MeetingFinal] = []
+        /// The newest live finals, oldest first: at most `finalsKept` of them. The record in the
+        /// store is the lasting copy of all of them (RAM holds a window, never the session).
+        public private(set) var finals: [MeetingFinal] = []
+        /// What the ledger holds and has let go of, for the dogfood week's measurement.
+        public private(set) var ledger = LedgerStats()
+
+        /// The most finals kept in memory: an hour's meeting has about 600 to 1,000.
+        public static let finalsKept = 500
 
         public init(record: String) {
             self.record = record
         }
+
+        /// Adds a final, letting go of the oldest past `finalsKept`.
+        mutating func append(_ final: MeetingFinal) {
+            finals.append(final)
+            ledger.seen += 1
+            ledger.bytes += final.text.utf8.count
+            if finals.count > Self.finalsKept {
+                let gone = finals.removeFirst()
+                ledger.dropped += 1
+                ledger.bytes -= gone.text.utf8.count
+            }
+            ledger.peakBytes = max(ledger.peakBytes, ledger.bytes)
+        }
+    }
+
+    /// The live ledger's size (counts and bytes only, never text): what the shell's RAM holds of
+    /// a meeting's words, logged when the meeting ends.
+    public struct LedgerStats: Equatable, Sendable {
+        /// Finals received.
+        public var seen = 0
+        /// Finals let go of (older than the window).
+        public var dropped = 0
+        /// UTF-8 bytes of the finals held now.
+        public var bytes = 0
+        /// The most bytes held at once.
+        public var peakBytes = 0
+    }
+
+    /// An app the core offers to record (the consent Drop).
+    public struct Offer: Equatable, Sendable {
+        public let app: String
+        public let appName: String
     }
 
     /// Something the user may need to know or act on (the needs-you banner reads these).
@@ -100,6 +151,14 @@ public final class CoreStore {
             case meetingFailed
             case meetingCaptureFailed
             case meetingWorkerFailed
+            /// A meeting a crash interrupted was finished at launch.
+            case meetingRecovered
+            /// The meetings a crash may have interrupted could not be looked for.
+            case recoveryUnavailable
+            /// Detection stopped on its own, or could not start.
+            case detectionUnavailable
+            /// The retention setting deleted records (a count).
+            case librarySwept(deleted: Int64, failed: Int64)
             /// An event this shell cannot read: the core and the shell come from different builds.
             case mismatchedBuild(type: String)
         }
@@ -124,6 +183,13 @@ public final class CoreStore {
     public private(set) var meeting: LiveMeeting?
     /// The record of the last meeting that finished.
     public private(set) var lastRecord: String?
+    /// The app the core offers to record now, if any (the consent Drop).
+    public private(set) var offer: Offer?
+    /// Whether the core listens for calls: nil until it says.
+    public private(set) var listening: Bool?
+    /// The ledger of the meeting that ended last, and its record (the dogfood measurement reads
+    /// it).
+    public private(set) var lastLedger: (record: String, stats: LedgerStats)?
     public private(set) var dictation: DictationPhase = .idle
     /// The take in progress, while there is one.
     public private(set) var liveDictation: LiveDictation?
@@ -177,6 +243,8 @@ public final class CoreStore {
         case .coreStopped:
             status = .stopped
             meeting = nil
+            offer = nil
+            listening = nil
             dictation = .idle
             liveDictation = nil
         case .commandFailed(let failed):
@@ -254,7 +322,42 @@ public final class CoreStore {
 
         // Meetings
         case .meetingStarted(let started):
-            meeting = LiveMeeting(record: started.record)
+            var live = LiveMeeting(record: started.record)
+            live.title = started.title
+            live.app = started.app
+            live.appName = started.appName
+            live.micName = started.micName
+            live.micReason = started.micReason
+            live.farEnd = started.farEnd
+            meeting = live
+            offer = nil
+        case .meetingDetected(let detected):
+            // Only while nothing is recorded: the core never offers during a meeting.
+            if meeting == nil {
+                offer = Offer(app: detected.app, appName: detected.appName)
+            }
+        case .meetingDetectionEnded(let ended):
+            if offer?.app == ended.app {
+                offer = nil
+            }
+        case .meetingDetection(let detection):
+            listening = detection.listening
+            if !detection.listening {
+                offer = nil
+                if let message = detection.message {
+                    notice(.detectionUnavailable, message)
+                }
+            }
+        case .meetingFarEndFallback(let fallback):
+            updateMeeting(fallback.record) { $0.farEndFallback = true }
+        case .meetingRecovered:
+            notice(.meetingRecovered)
+        case .meetingsRecovered(let done):
+            if let message = done.message {
+                notice(.recoveryUnavailable, message)
+            }
+        case .librarySwept(let swept):
+            notice(.librarySwept(deleted: swept.deleted, failed: swept.failed))
         case .meetingSideState(let side):
             updateMeeting(side.record) { $0.sides[side.channel] = side.state }
         case .meetingPartial(let partial):
@@ -262,7 +365,7 @@ public final class CoreStore {
         case .meetingFinal(let final):
             updateMeeting(final.record) {
                 $0.partials[final.channel] = nil
-                $0.finals.append(final)
+                $0.append(final)
             }
         case .meetingStopped(let stopped):
             updateMeeting(stopped.record) {
@@ -316,7 +419,8 @@ public final class CoreStore {
     }
 
     private func endMeeting(_ record: String) {
-        if meeting?.record == record {
+        if let live = meeting, live.record == record {
+            lastLedger = (record, live.ledger)
             meeting = nil
         }
     }

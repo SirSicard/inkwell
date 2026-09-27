@@ -714,6 +714,11 @@ impl FlakyStore {
         self.failing.lock().unwrap().extend_from_slice(methods);
     }
 
+    /// From now on, nothing fails.
+    pub fn heal(&self) {
+        self.failing.lock().unwrap().clear();
+    }
+
     fn check(&self, method: &'static str) -> Result<(), ink_core::StoreError> {
         if self.failing.lock().unwrap().contains(&method) {
             Err(ink_core::StoreError::Backend(format!(
@@ -824,6 +829,15 @@ impl Store for FlakyStore {
         self.check("add_commitments")?;
         self.inner.add_commitments(id, items)
     }
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+        merges: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        self.check("add_commitments_merged")?;
+        self.inner.add_commitments_merged(id, items, merges)
+    }
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
         self.check("commitments")?;
         self.inner.commitments(id)
@@ -835,6 +849,14 @@ impl Store for FlakyStore {
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {
         self.check("set_commitment_done")?;
         self.inner.set_commitment_done(id, done)
+    }
+    fn set_done_evidence(
+        &self,
+        id: &CommitmentId,
+        evidence: Option<&ink_core::DoneEvidence>,
+    ) -> Result<(), StoreError> {
+        self.check("set_done_evidence")?;
+        self.inner.set_done_evidence(id, evidence)
     }
     fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError> {
         self.check("merge_commitment")?;

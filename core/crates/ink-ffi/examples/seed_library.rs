@@ -575,6 +575,7 @@ fn dictations(dir: &Path) {
         installer,
         data_dir: dir.to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: Default::default(),
     });
     let platform = Arc::new(MockPlatform::new());
     let inbox = core

@@ -54,6 +54,7 @@ fn rig(label: &str) -> Rig {
         }),
         data_dir: dir.path().to_owned(),
         permissions: probe.clone() as Arc<dyn PermissionProbe>,
+        meetings: Default::default(),
     };
     let events = Recorder::new();
     let core = Core::start(parts, events.out()).unwrap();
@@ -210,6 +211,7 @@ fn meeting(store: &dyn Store, title: Option<&str>, started: i64) -> ink_core::Re
 
 fn promise(text: &str, owner: Option<&str>, due_at: Option<i64>, at_ms: u64) -> NewCommitment {
     NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: owner.map(Into::into),
         due: due_at.map(|_| "by Friday".into()),

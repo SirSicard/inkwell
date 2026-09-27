@@ -14,13 +14,20 @@ struct LiveScreen: View {
 
     var body: some View {
         if let meeting = store.meeting {
-            LiveMeetingView(meeting: meeting, live: screens.live)
+            LiveMeetingView(meeting: meeting, live: screens.live, meetings: screens.meetings)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 Paper.Header(title: "Live", subtitle: nil)
                 Text("No meeting is being recorded.")
                     .font(Typography.body)
                     .foregroundStyle(Theme.secondaryText)
+                Button("Record now") { screens.meetings.recordNow() }
+                    .buttonStyle(PaperButtonStyle(prominent: true))
+                if let failure = screens.meetings.failure(on: .recordNow) {
+                    Text(failure)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                }
                 Spacer()
             }
             .padding(32)
@@ -32,6 +39,7 @@ struct LiveScreen: View {
 struct LiveMeetingView: View {
     let meeting: CoreStore.LiveMeeting
     @Bindable var live: LiveModel
+    let meetings: MeetingModel
 
     var body: some View {
         let lines = LiveLine.ledger(meeting)
@@ -45,7 +53,7 @@ struct LiveMeetingView: View {
                     .padding(.trailing, 26)
                 Rectangle().fill(PaperPalette.border).frame(width: 1)
                     .accessibilityHidden(true)
-                LedgerView(lines: lines)
+                LedgerView(lines: lines, earlierInRecord: meeting.ledger.dropped > 0)
                     .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .layoutPriority(1.25)
                     .padding(.leading, 26)
@@ -65,14 +73,20 @@ struct LiveMeetingView: View {
     private var header: some View {
         HStack(alignment: .lastTextBaseline, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Live meeting")
+                Text(meeting.title ?? meeting.appName.map { "\($0) call" } ?? "Live meeting")
                     .font(.system(.title, design: .serif, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .accessibilityAddTraits(.isHeader)
                 HStack(spacing: 10) {
                     status
+                    if let app = meeting.appName, meeting.title != nil {
+                        Text(app)
+                    }
                     if let started = live.startedAt {
                         Text("started \(started.formatted(date: .omitted, time: .shortened))")
+                    }
+                    if let mic = micLine {
+                        Text(mic)
                     }
                     ForEach(sideWarnings, id: \.self) { warning in
                         Text(warning).foregroundStyle(Theme.alert)
@@ -80,9 +94,50 @@ struct LiveMeetingView: View {
                 }
                 .font(Typography.timestamp)
                 .foregroundStyle(Theme.secondaryText)
+                if let far = Self.farEndLine(meeting) {
+                    Text(far.text)
+                        .font(Typography.caption)
+                        .foregroundStyle(far.alert ? Theme.alert : Theme.secondaryText)
+                }
             }
             Spacer(minLength: 0)
-            legend
+            VStack(alignment: .trailing, spacing: 8) {
+                if !meeting.stopping {
+                    Button("Stop") { meetings.stop() }
+                        .keyboardShortcut(".", modifiers: .command)
+                        .accessibilityHint("Stops recording; the final pass then writes the record")
+                }
+                if let failure = meetings.failure(on: .liveStop) {
+                    Text(failure)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                }
+                legend
+            }
+        }
+    }
+
+    /// What the other side is, when it is more than the call's app: everything this Mac plays,
+    /// for Record now, or because the call's app could not be heard alone (said as a warning:
+    /// other apps' sound is in the recording).
+    static func farEndLine(_ meeting: CoreStore.LiveMeeting) -> (text: String, alert: Bool)? {
+        if meeting.farEndFallback {
+            let app = meeting.appName ?? "the call"
+            return ("Inkwell couldn't hear \(app) alone, so it is recording everything this Mac plays.", true)
+        }
+        if meeting.farEnd == .everything {
+            return ("Recording everything this Mac plays, as well as your microphone.", false)
+        }
+        return nil
+    }
+
+    /// Which mic, when the reason is worth saying ("why is it using the laptop mic?").
+    private var micLine: String? {
+        guard let name = meeting.micName else { return nil }
+        switch meeting.micReason {
+        case .builtInForBluetoothOutput?: return "\(name), because your headphones are Bluetooth"
+        case .headsetMicSetting?: return "\(name), the headset's own mic"
+        default: return nil
         }
     }
 
@@ -160,6 +215,8 @@ struct LiveMeetingView: View {
 /// What is being said: dry lines are settled, the wet line at the end is still settling.
 struct LedgerView: View {
     let lines: [LiveLine]
+    /// The oldest lines were let go of in memory (the record keeps every one).
+    var earlierInRecord = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -173,6 +230,12 @@ struct LedgerView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if earlierInRecord {
+                            Text("Earlier lines are in the record.")
+                                .font(Typography.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                                .padding(.bottom, 6)
+                        }
                         ForEach(lines) { line in
                             LedgerRow(line: line).id(line.id)
                         }
@@ -288,7 +351,10 @@ struct AskPanel: View {
                     case nil:
                         Text("Thinking…").foregroundStyle(Theme.secondaryText)
                     case .answer(let text):
-                        Text(text).foregroundStyle(Theme.text).textSelection(.enabled)
+                        // Model text: a verbatim Text (never parsed as markdown), and no link in
+                        // it may open anything.
+                        Text(verbatim: text).foregroundStyle(Theme.text).textSelection(.enabled)
+                            .refusingLinks()
                     case .unavailable(let why):
                         Text(why).foregroundStyle(Theme.secondaryText)
                     }

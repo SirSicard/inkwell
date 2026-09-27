@@ -158,6 +158,17 @@ final class CoreController {
             send(["cmd": "model.warm", "job": Job.dictationFinal.rawValue])
             if registersAppleEngines {
                 registerAppleEngines()
+            } else {
+                send(.meetingsRecover)
+            }
+        }
+        for event in batch {
+            // The ledger's size when a meeting ends: counts and bytes only, never its words (the
+            // dogfood week reads these to see what a meeting holds in memory).
+            if case .meetingFinished(let finished) = event, let (record, ledger) = store.lastLedger,
+               record == finished.record
+            {
+                log.notice("meeting ledger: \(ledger.seen, privacy: .public) finals, \(ledger.dropped, privacy: .public) let go of, \(ledger.bytes, privacy: .public) bytes held at the end, \(ledger.peakBytes, privacy: .public) at most")
             }
         }
         if batch.contains(where: { if case .dictationStarted = $0 { true } else { false } }) {
@@ -190,6 +201,8 @@ final class CoreController {
         Task {
             let report = await engines.register()
             polish.appleEnginesReported(report.polish)
+            // Meetings a crash interrupted are finished now, with the engines a live one gets.
+            self.send(.meetingsRecover)
             #if DEBUG
                 // After the engines, so a replayed meeting has its live words.
                 if let replay = ReplayOnLaunch.command(from: ProcessInfo.processInfo.environment) {
