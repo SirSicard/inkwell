@@ -1,0 +1,37 @@
+# Licence texts for crates in the release whose published package carries no text of any licence
+# it offers. ink-notices (core/crates/ink-ffi/src/bin/ink-notices) uses a line only for the crate
+# version it names, and only while that package still lacks the text; a line no crate needs is an
+# error, so a version bump means reading the new package again.
+#
+#   <crate> <version> <text file in texts/> <reason: shown in the app beside the text>
+#
+# The texts, each copied from a package in the release, never typed:
+# - Apache-2.0.txt: the Apache License 2.0 as the Apache Software Foundation publishes it, byte for
+#   byte (sha256 cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30), from zeroize
+#   1.9.0's LICENSE-APACHE. For crates that offer Apache-2.0 and name no author for MIT's notice.
+# - MIT.txt: the MIT licence without a copyright line, byte for byte as serde, anyhow and the tract
+#   crates ship it, from tract-core 0.23.8's LICENSE-MIT. ink-notices puts the crate's authors from
+#   its manifest above it, marked as such, as for any MIT file that names no holder.
+# - MIT-objc2.txt: MIT.txt under the author objc2, block2 and objc2-encode name in their manifests,
+#   for objc2-foundation, from the same repository, whose manifest names none.
+# - nom-8.0.0-LICENSE.txt: nom 8.0.0's LICENSE; nom-language lives in nom's repository.
+#
+# Written offline: none of these has been compared with its project's repository yet. Before a
+# release, confirm each against the licence file in the crate's repository (its manifest's
+# `repository`), and replace a text that differs (docs/RELEASING.md, "Release day").
+
+anymap3                 1.1.0    MIT.txt                its COPYING names the copyright holder and offers BlueOak-1.0.0, MIT or Apache-2.0; this is the MIT licence's text
+block2                  0.6.2    MIT.txt                the MIT licence's text; the crate is MIT
+llama-cpp-2             0.1.157  Apache-2.0.txt         the Apache License 2.0, which the crate offers beside MIT
+llama-cpp-sys-2         0.1.157  Apache-2.0.txt         the Apache License 2.0, which the crate offers beside MIT
+nom-language            0.1.0    nom-8.0.0-LICENSE.txt  the licence of nom (nom 8.0.0's LICENSE), from the same repository; the crate is MIT
+objc2                   0.6.4    MIT.txt                the MIT licence's text; the crate is MIT
+objc2-app-kit           0.3.2    Apache-2.0.txt         the Apache License 2.0, which the crate offers beside Zlib and MIT
+objc2-core-audio        0.3.2    Apache-2.0.txt         the Apache License 2.0, which the crate offers beside Zlib and MIT
+objc2-core-audio-types  0.3.2    Apache-2.0.txt         the Apache License 2.0, which the crate offers beside Zlib and MIT
+objc2-core-foundation   0.3.2    Apache-2.0.txt         the Apache License 2.0, which the crate offers beside Zlib and MIT
+objc2-core-graphics     0.3.2    Apache-2.0.txt         the Apache License 2.0, which the crate offers beside Zlib and MIT
+objc2-encode            4.1.0    MIT.txt                the MIT licence's text; the crate is MIT
+objc2-foundation        0.3.2    MIT-objc2.txt          the MIT licence's text, under the author the other objc2 crates name; the crate is MIT and names none
+realfft                 3.5.0    MIT.txt                the MIT licence's text; the crate is MIT
+tract-extra             0.23.8   MIT.txt                the MIT licence's text as the other tract crates ship it; the crate offers MIT or Apache-2.0

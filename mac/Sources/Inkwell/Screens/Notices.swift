@@ -40,6 +40,33 @@ struct ModelCredit: Identifiable, Equatable, Sendable {
     let notice: String?
 }
 
+/// A Rust crate linked into the core, with its licence files. The list, `RustNotices.crates`, is
+/// generated (Generated/RustNotices.swift, by `cargo run -p ink-ffi --bin ink-notices`) from
+/// cargo's resolution of the release build, so it follows Cargo.lock; the core's tests and
+/// RustNoticesTests fail while it was made from another lock.
+struct RustCrateNotice: Identifiable, Equatable, Sendable {
+    var id: String { "\(name) \(version)" }
+    let name: String
+    let version: String
+    /// Its licence as it publishes it (an SPDX expression, such as "MIT OR Apache-2.0").
+    let licence: String
+    /// The licence its texts below are, where it offers a choice ("MIT").
+    let shown: String
+    /// Its licence files, each under a "--- name ---" line, with a bracketed note where Inkwell
+    /// supplied a text or a copyright line the package lacks.
+    let text: String
+
+    /// About's row: the crate and its version.
+    var title: String { "\(name) \(version)" }
+    /// About's row: its licence, and which one the text is where it offers a choice.
+    var detail: String { shown == licence ? licence : "\(licence); used under \(shown)" }
+}
+
+extension RustNotices {
+    /// About's disclosure for the whole list.
+    static var heading: String { "Rust libraries (\(crates.count))" }
+}
+
 enum Notices {
     /// The code, in the order About lists it.
     static let components: [ThirdPartyNotice] = [

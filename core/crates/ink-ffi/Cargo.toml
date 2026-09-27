@@ -19,6 +19,13 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 name = "ink-schema"
 path = "src/bin/ink-schema.rs"
 
+[[bin]]
+# Writes the licence notices of the Rust crates the release links into the core
+# (mac/Sources/Inkwell/Generated/RustNotices.swift) from cargo's resolution and the local registry,
+# offline; its tests fail while they were made from another Cargo.lock.
+name = "ink-notices"
+path = "src/bin/ink-notices/main.rs"
+
 [features]
 # Qwen3-ASR through llama.cpp as the registry models' loader, and llama.cpp's own log filter in
 # the core's subscriber. Off in CI's library builds; on for the local shutdown test.
