@@ -4,10 +4,15 @@
 // survives into what is drawn.
 //
 // Blocks are read line by line (headings, bullet and numbered lists, quotes, rules, code fences,
-// paragraphs); inline markup (bold, italic, code, links, strikethrough) is Foundation's markdown
+// paragraphs); inline markup (bold, italic, code, strikethrough) is Foundation's markdown
 // parser's, inline only. Whatever the parser refuses is stripped of its markers instead: the
 // reader sees the words, never the syntax.
+//
+// Links are words only. A summary is written by a language model from what the far end said, so
+// a link in it is untrusted: its text stays, its destination is dropped (no run carries a link),
+// and the views that show a summary refuse to open one anyway (SummaryLinks).
 import Foundation
+import SwiftUI
 
 /// One block of a rendered summary.
 enum SummaryBlock: Equatable, Sendable {
@@ -169,9 +174,13 @@ struct SummaryDocument: Equatable, Sendable {
             allowsExtendedAttributes: false,
             interpretedSyntax: .inlineOnlyPreservingWhitespace,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        if let parsed = try? AttributedString(markdown: text, options: options),
+        if var parsed = try? AttributedString(markdown: text, options: options),
             !containsMarkup(String(parsed.characters))
         {
+            // The words of a link stay; where it goes does not.
+            for run in parsed.runs where run.link != nil {
+                parsed[run.range].link = nil
+            }
             return parsed
         }
         return AttributedString(stripped(text))
@@ -192,5 +201,32 @@ struct SummaryDocument: Equatable, Sendable {
         // Single * or _ around a word (italic), not an apostrophe or a snake_case name.
         out = out.replacingOccurrences(of: #"(?<![\w*])[*_](\S(?:.*?\S)?)[*_](?![\w*])"#, with: "$1", options: .regularExpression)
         return out
+    }
+}
+
+/// What the views showing a summary do with a link: refuse it. The summary's runs carry none, so
+/// this is the second line: nothing a summary holds opens a URL.
+enum SummaryLinks {
+    enum Decision: Equatable {
+        case refused
+    }
+
+    static func decide(_ url: URL) -> Decision {
+        .refused
+    }
+
+    /// The openURL action for those views.
+    @MainActor static var action: OpenURLAction {
+        OpenURLAction { url in
+            _ = decide(url)
+            return .discarded
+        }
+    }
+}
+
+extension View {
+    /// Refuses to open any link from within: for views that show a summary's words.
+    func refusingLinks() -> some View {
+        environment(\.openURL, SummaryLinks.action)
     }
 }

@@ -248,6 +248,54 @@ final class SummaryRenderingTests: XCTestCase {
     }
 }
 
+// MARK: - Links in summaries
+
+/// Review fix (security): a summary is written by a language model from what the far end said, so
+/// a link in it is untrusted. The rendered summary keeps a link's words and drops where it goes:
+/// no run anywhere carries a link.
+final class SummaryLinkTests: XCTestCase {
+    private func links(_ text: AttributedString?) -> [URL] {
+        guard let text else { return [] }
+        return text.runs.compactMap(\.link)
+    }
+
+    private func allRuns(_ doc: SummaryDocument) -> [AttributedString] {
+        var out: [AttributedString] = []
+        if let headline = doc.headline { out.append(headline) }
+        for block in doc.blocks {
+            switch block {
+            case .heading(_, let t), .paragraph(let t), .item(_, let t): out.append(t)
+            }
+        }
+        return out
+    }
+
+    func testNoRenderedRunCarriesALinkAndTheWordsStay() {
+        let markdown = """
+        Call [the vendor](https://evil.example/pay) today, see <https://evil.example/auto>.
+
+        ## Actions
+        - Read [**the brief**](http://evil.example/x "title") first
+        - Mail [me](mailto:someone@example.com)
+        """
+        let doc = SummaryDocument(markdown: markdown)
+        for run in allRuns(doc) {
+            XCTAssertEqual(links(run), [], String(run.characters))
+        }
+        let text = doc.plainText
+        for words in ["Call the vendor today", "Read the brief first", "Mail me"] {
+            XCTAssertTrue(text.contains(words), "“\(words)” missing from:\n\(text)")
+        }
+        XCTAssertFalse(text.contains("evil.example/pay"), "a hidden destination never shows as text either")
+        XCTAssertEqual(links(doc.lede), [])
+    }
+
+    func testTheViewsThatShowASummaryRefuseToOpenLinks() {
+        XCTAssertEqual(SummaryLinks.decide(URL(string: "https://evil.example")!), .refused)
+        XCTAssertEqual(SummaryLinks.decide(URL(string: "mailto:a@b.example")!), .refused)
+    }
+}
+
 // MARK: - Record document
 
 private let recordAnswer = #"""

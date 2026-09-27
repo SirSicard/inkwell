@@ -390,6 +390,7 @@ struct SummaryTab: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let summary = document.summary {
                     SummaryView(summary: summary)
+                        .refusingLinks()
                 } else {
                     Text("No summary yet")
                         .font(.headline)

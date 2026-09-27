@@ -121,6 +121,8 @@ Not in this step, by design (so not a failure here):
 - [ ] Summary: the headline, then "Launch date", "Beta", Decisions, Actions, Open questions as
       headings; bullets and "1." "2." as list markers; bold and italic as type. No markdown
       token anywhere on the tab.
+- [ ] A link in a summary shows as plain words: not coloured, not clickable, and nothing opens
+      (the summary is written from what the other side said, so its links are not trusted).
 - [ ] Below the summary, "Where it was said": each promise with the line it came from and its
       chip. (Decisions have no line yet: see the report.)
 - [ ] Owed: each promise with a circle (done / not done), its owner and due, and its chip.

@@ -172,6 +172,7 @@ struct TodayScreen: View {
                 // The summary's first paragraph; its headline is already the title above.
                 if let lede = meeting.summary?.lede {
                     Text(lede)
+                        .refusingLinks()
                         .font(PaperType.lede)
                         .lineSpacing(3)
                         .foregroundStyle(Theme.text)
