@@ -2,12 +2,12 @@ name: Mac release
 
 # Releases the Mac app (docs/RELEASING.md). On a v1.X.Y tag: build, sign with the Developer ID,
 # notarize and staple the app and then the dmg, check both with Gatekeeper, sign Sparkle's appcast,
-# and draft a GitHub release holding the dmg and the appcast. A person publishes the draft; nothing
-# here does.
+# and draft a GitHub release holding the dmg, the appcast and the build manifest (what the app
+# bundles, and from which Homebrew versions). A person publishes the draft; nothing here does.
 #
 # A manual run is the dry run (RELEASING.md, step 0): the same build, signing, notarization and
-# Gatekeeper check, the notarized dmg kept as a run artifact, the appcast rehearsed with a throwaway
-# key, and nothing published.
+# Gatekeeper check, the notarized dmg and the build manifest kept as run artifacts, the appcast
+# rehearsed with a throwaway key, and nothing published.
 #
 # Secrets and privileges, by job:
 # - build: the APPLE_* secrets, and read access to the repository only.
@@ -44,6 +44,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       dmg: ${{ steps.version.outputs.dmg }}
+      manifest: ${{ steps.version.outputs.manifest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,13 +105,16 @@ jobs:
       # (Apache-2.0). It is a build-time source only: build-nemo-speech.sh copies both libraries
       # into its prefix and loads them by @rpath, and build-mac.sh fails if anything in the app
       # still loads a path outside the bundle and the OS. Their versions are whatever Homebrew
-      # serves today; printed here for the record (THIRD_PARTY.md).
+      # serves today: kept for the build manifest the release carries (build-manifest.sh), which
+      # outlives this log.
       - name: Engine build tools and libraries (Homebrew)
         env:
           HOMEBREW_NO_ANALYTICS: '1'
         run: |
           brew install cmake ninja sentencepiece abseil
-          brew list --versions cmake ninja sentencepiece abseil
+          # To a file, not through a pipe: the default shell has no pipefail.
+          brew list --versions cmake ninja sentencepiece abseil >"$RUNNER_TEMP/homebrew-versions.txt"
+          cat "$RUNNER_TEMP/homebrew-versions.txt"
 
       # NeMo-Speech.cpp (the diarizer) at the commit the adapter is written against, read from the
       # build script, with only the ggml submodule. build-nemo-speech.sh checks both commits.
@@ -242,11 +246,34 @@ jobs:
             mac/scripts/verify-release.sh "mac/build/$DMG" --notarized --version "$VERSION"
           fi
 
+      # The record a release keeps of what it bundles: NeMo-Speech.cpp's commit and each library's
+      # Homebrew formula and version, the Homebrew versions above, the dmg's SHA-256. A log expires;
+      # this goes into the release beside the dmg (a dry run keeps it as an artifact). It names no
+      # path on this machine, and refuses a library that came from anywhere but a Homebrew keg.
+      - name: The build manifest
+        env:
+          DMG: ${{ steps.version.outputs.dmg }}
+          MANIFEST: ${{ steps.version.outputs.manifest }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mac/scripts/build-manifest.sh --version "$VERSION" --commit "$GITHUB_SHA" --dmg "mac/build/$DMG" \
+            --nemo "$NEMO_SPEECH_DIR/share/inkwell/nemo-speech.manifest" \
+            --homebrew "$RUNNER_TEMP/homebrew-versions.txt" --out "mac/build/$MANIFEST"
+          cat "mac/build/$MANIFEST"
+
       - name: Keep the dmg
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: inkwell-dmg
           path: mac/build/${{ steps.version.outputs.dmg }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Keep the build manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: inkwell-build-manifest
+          path: mac/build/${{ steps.version.outputs.manifest }}
           if-no-files-found: error
           retention-days: 14
 
@@ -289,8 +316,9 @@ jobs:
             --link "https://github.com/$GITHUB_REPOSITORY" --out "$RUNNER_TEMP/appcast" </dev/null
 
   # A tag's release: the appcast signed with the maintainer's EdDSA key and checked against the key
-  # the app carries, then a draft release with the dmg and the appcast. Publishing the draft is a
-  # person's step (docs/RELEASING.md): until then no installed app can see it.
+  # the app carries, then a draft release with the dmg, the appcast and the build manifest.
+  # Publishing the draft is a person's step (docs/RELEASING.md): until then no installed app can
+  # see it.
   publish:
     name: draft the release
     needs: build
@@ -315,6 +343,10 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: inkwell-dmg
+          path: mac/build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: inkwell-build-manifest
           path: mac/build
       - name: Sparkle's tools
         run: mac/scripts/sparkle-tools.sh "$RUNNER_TEMP/sparkle"
@@ -354,9 +386,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DMG: ${{ needs.build.outputs.dmg }}
+          MANIFEST: ${{ needs.build.outputs.manifest }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          files=("mac/build/$DMG" "$RUNNER_TEMP/appcast/appcast.xml")
+          files=("mac/build/$DMG" "$RUNNER_TEMP/appcast/appcast.xml" "mac/build/$MANIFEST")
           if draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
             if [ "$draft" != true ]; then
               echo "::error title=Already published::$GITHUB_REF_NAME is a published release; it is never replaced"
@@ -368,7 +401,7 @@ jobs:
             cat >"$RUNNER_TEMP/notes.md" <<EOF
           **Download \`$DMG\`**: Inkwell for Macs with Apple silicon, on macOS 26 or later. It is signed with a Developer ID and notarized by Apple.
 
-          \`appcast.xml\` is the feed the app's updater reads; there is no need to download it.
+          \`appcast.xml\` is the feed the app's updater reads; there is no need to download it. \`$MANIFEST\` records the libraries the app bundles and the versions it was built with.
 
           See the [changelog](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md) for what changed.
           EOF

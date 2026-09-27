@@ -11,20 +11,22 @@ Two release chains share this repository until the 0.2 app retires:
 
 On a `v1.X.Y` tag the workflow builds the app, signs it with the Developer ID, notarizes and staples
 the app and then the dmg, asks Gatekeeper about both the way a user's Mac will, signs the Sparkle
-appcast, and **drafts** a GitHub release holding the dmg and `appcast.xml`. Nothing is public until
-a person publishes the draft. Installed apps read the feed of the latest published release:
+appcast, and **drafts** a GitHub release holding the dmg, `appcast.xml` and the build manifest.
+Nothing is public until a person publishes the draft. Installed apps read the feed of the latest
+published release:
 
     https://github.com/SirSicard/inkwell/releases/latest/download/appcast.xml
 
 | Job | Runs on | Holds | Does |
 |---|---|---|---|
-| `build` | tag and dry run | the `APPLE_*` secrets; read access | build the engines, then the app; sign, notarize, staple, Gatekeeper check, the dmg as a run artifact |
+| `build` | tag and dry run | the `APPLE_*` secrets; read access | build the engines, then the app; sign, notarize, staple, Gatekeeper check, the build manifest; the dmg and the manifest as run artifacts |
 | `appcast-rehearsal` | dry run only | nothing secret; read access | the appcast signed with a throwaway key, and checked |
-| `publish` | tag only | `SPARKLE_ED_PRIVATE_KEY` (environment `release`); write access | the appcast signed and checked against the app's key; the draft release |
+| `publish` | tag only | `SPARKLE_ED_PRIVATE_KEY` (environment `release`); write access | the appcast signed and checked against the app's key; the draft release with the dmg, the appcast and the build manifest |
 
 Everything a step does lives in a script under `mac/scripts/` that runs the same on a Mac:
 `build-core.sh`, `build-mac.sh --timestamp --engines`, `notarize.sh`, `package-dmg.sh`,
-`verify-release.sh`, `sparkle-tools.sh` and `appcast.sh` (with `appcast-check.swift`), and
+`verify-release.sh`, `build-manifest.sh`, `sparkle-tools.sh` and `appcast.sh` (with
+`appcast-check.swift`), and
 `core/crates/ink-engines/native/build-nemo-speech.sh`. Each prints nothing that names the signing
 identity (`lib/redact-signing.sh`).
 
@@ -45,8 +47,14 @@ weights are never in the app: it downloads them when they are first needed
   from Homebrew. `build-nemo-speech.sh` copies the two libraries into its prefix and loads them by
   `@rpath`, and `build-mac.sh` fails if any Mach-O in the app loads a path outside the bundle and
   the OS, has an absolute rpath, or loads a library it cannot find inside the bundle. Their
-  versions are Homebrew's of the day; the workflow prints them, and the prefix's manifest names
-  each copy's source.
+  versions are Homebrew's of the day, and the build manifest records them.
+- **The build manifest.** `Inkwell_X.Y.Z_build-manifest.txt` is an asset of every release, beside
+  the dmg (a dry run keeps it as the artifact `inkwell-build-manifest`), so what a shipped dmg
+  contains outlives the run's log: the source commit and the dmg's SHA-256; NeMo-Speech.cpp's
+  commit, its `GGML_NATIVE` and each prefix library's SHA-256; each library bundled from Homebrew,
+  by formula, version and file in its keg; and `brew list --versions` of the four packages.
+  `build-manifest.sh` writes no path of the build machine: it refuses a library copied from
+  anywhere but a Homebrew keg, and a keg version Homebrew did not list.
 - **Every Apple silicon Mac on macOS 26.** Both ggml copies are built with `GGML_NATIVE=OFF` and no
   `-march`, the M1's instruction set: `build-core.sh` reads llama.cpp's value back from its CMake
   cache, and ink-engines' `build.rs` refuses a NeMo prefix whose manifest does not record it.
@@ -130,16 +138,17 @@ Developer ID Application certificate and key, a base64 .p12), `APPLE_CERTIFICATE
 
 ### Step 0: the dry run
 
-A manual run builds, signs and notarizes exactly as a tag does, keeps the notarized dmg as a run
-artifact for 14 days, rehearses the appcast with a throwaway key, and publishes nothing. Run it
-before touching a version number; a failure here costs a re-run, the same failure after tagging a
-deleted tag.
+A manual run builds, signs and notarizes exactly as a tag does, keeps the notarized dmg and the
+build manifest as run artifacts for 14 days, rehearses the appcast with a throwaway key, and
+publishes nothing. Run it before touching a version number; a failure here costs a re-run, the
+same failure after tagging a deleted tag.
 
 ```bash
 gh workflow run mac-release.yml --repo SirSicard/inkwell --ref main -f version=1.0.0
 run="$(gh run list --repo SirSicard/inkwell --workflow mac-release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 gh run watch "$run" --repo SirSicard/inkwell
 gh run download "$run" --repo SirSicard/inkwell --name inkwell-dmg --dir ~/Downloads/inkwell-dry-run
+gh run download "$run" --repo SirSicard/inkwell --name inkwell-build-manifest --dir ~/Downloads/inkwell-dry-run
 mac/scripts/verify-release.sh ~/Downloads/inkwell-dry-run/Inkwell_1.0.0_aarch64.dmg --notarized --version 1.0.0
 spctl -a -vv -t open --context context:primary-signature ~/Downloads/inkwell-dry-run/Inkwell_1.0.0_aarch64.dmg
 ```
@@ -191,8 +200,8 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
 - **Pinned inputs.** Actions by commit; Sparkle's framework by URL and SHA-256 in `mac/Package.swift`
   (and in the Swift licence audit's vetted list); Sparkle's tools by size and SHA-256 in
   `sparkle-tools.sh`; llama.cpp by the exact `llama-cpp-2` version in `Cargo.lock`; NeMo-Speech.cpp
-  and its ggml by commit. Not pinned: SentencePiece and Abseil, Homebrew's current builds (printed
-  in the log). The release build restores no cache.
+  and its ggml by commit. Not pinned: SentencePiece and Abseil, Homebrew's current builds
+  (recorded in the release's build manifest). The release build restores no cache.
 - **Third-party build code runs before the key is there.** The engines (NeMo-Speech.cpp's CMake
   build, the core's cargo build scripts) are built before the signing keychain is created, so no
   build script ever runs next to an unlocked Developer ID key.
