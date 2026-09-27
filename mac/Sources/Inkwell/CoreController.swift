@@ -31,6 +31,16 @@ final class CoreController {
     private var intelligence: AppleIntelligenceWatch?
     private var activation: NSObjectProtocol?
     private let log = Logger(subsystem: "com.inkwell.app", category: "core")
+    /// Where commands that went nowhere, and failures no screen shows, are logged: by name only.
+    private let commandLog: ScreenLog
+    /// Whether the Apple engines are registered when the core is ready (tests leave them out: they
+    /// load Parakeet).
+    private let registersAppleEngines: Bool
+
+    init(registersAppleEngines: Bool = true, commandLog: ScreenLog = .system) {
+        self.registersAppleEngines = registersAppleEngines
+        self.commandLog = commandLog
+    }
 
     /// Whether the core is running (started, and not yet told to stop).
     var isRunning: Bool { session != nil }
@@ -65,7 +75,10 @@ final class CoreController {
     /// Queues a command (inkwell.h lists them); its outcome arrives as events. A command the core
     /// refuses to queue (unreadable, or the core is stopping) never ran, and is logged by name.
     func send(_ fields: [String: String]) {
-        guard let session else { return }
+        guard let session else {
+            commandLog.write("no core is running: a \(fields["cmd"] ?? "?") command was not sent")
+            return
+        }
         do {
             try session.command(fields)
         } catch {
@@ -75,7 +88,10 @@ final class CoreController {
 
     /// Queues one of the screens' commands (see `CoreCommand`).
     func send(_ command: CoreCommand) {
-        guard let session else { return }
+        guard let session else {
+            commandLog.write("no core is running: a \(command.name) command was not sent")
+            return
+        }
         do {
             try session.command(command.json)
         } catch {
@@ -90,11 +106,17 @@ final class CoreController {
     /// AppKit's nested run loop (terminateLater), and when Quit itself was called from a
     /// main-queue block, that loop cannot run another main-queue block until the first returns.
     /// A run-loop block runs in the nested loop either way.
+    ///
+    /// Every stop path (Quit, logout, SIGTERM and SIGINT, which all become Quit) comes here, and
+    /// what the screens have not handed to the core yet (the notes line under the caret) is sent
+    /// first, while the session can still take it: the core runs queued commands before its
+    /// shutdown returns.
     func stop(then done: @escaping @MainActor @Sendable () -> Void) {
         guard let session else {
             done()
             return
         }
+        screens.flushBeforeStop()
         self.session = nil
         stopping = true
         intelligence?.stop()
@@ -114,16 +136,26 @@ final class CoreController {
         }
     }
 
-    private func received(_ batch: [InkEvent]) {
+    /// A batch of the core's events, on the main actor (the relay's hand-over; tests call it).
+    func received(_ batch: [InkEvent]) {
         store.apply(batch)
         screens.apply(batch)
+        for event in batch {
+            // The core logged why; this says which command no screen will show failing. The
+            // core's message and the command's fields are not repeated.
+            if case .commandFailed(let failed) = event, !screens.handles(failed) {
+                commandLog.write("command.failed for a \(failed.command) command; no screen shows it")
+            }
+        }
         // Keep the dictation model warm from the start: the first dictation of the day is as quick
         // as any other (the shell budget, I7, is measured with it warm).
         if batch.contains(where: { if case .coreReady = $0 { true } else { false } }),
             case .ready = store.status
         {
             send(["cmd": "model.warm", "job": Job.dictationFinal.rawValue])
-            registerAppleEngines()
+            if registersAppleEngines {
+                registerAppleEngines()
+            }
         }
         if batch.contains(where: { if case .dictationStarted = $0 { true } else { false } }) {
             // A take is a moment Apple Intelligence may have changed since the last look.

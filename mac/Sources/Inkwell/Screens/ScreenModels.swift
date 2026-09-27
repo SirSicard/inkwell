@@ -215,4 +215,22 @@ final class ScreenModels {
     func appBecameActive() {
         permissions.appBecameActive()
     }
+
+    /// The core is about to stop: hand it what the screens hold unsaved.
+    func flushBeforeStop() {
+        live.notesLeft()
+    }
+
+    /// Whether a screen shows this failure itself (the rest the controller logs).
+    func handles(_ failed: CommandFailed) -> Bool {
+        switch failed.command {
+        case "permissions.check", "models.list", "modes.list", "commitment.set_done",
+             "note.add", "note.update", "note.delete":
+            true
+        case "setting.get":
+            failed.id == OnboardingModel.settingID
+        default:
+            false
+        }
+    }
 }

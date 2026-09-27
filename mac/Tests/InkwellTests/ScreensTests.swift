@@ -3,6 +3,7 @@
 import AppKit
 import AppleEngines
 import Foundation
+import SQLite3
 import Synchronization
 import InkBridge
 import SwiftUI
@@ -772,5 +773,96 @@ final class PolishTimeoutPathTests: XCTestCase {
         }
         XCTAssertTrue(screens.polish.keepsTimingOut)
         XCTAssertEqual(screens.polish.status, "Polish keeps timing out, so your words go in as you said them.")
+    }
+}
+
+// MARK: - The controller
+
+@MainActor
+final class CoreControllerCommandTests: XCTestCase {
+    /// A line still under the caret when the app quits reaches the core before it stops: the
+    /// flush runs while the session can still send, and the core runs queued commands before its
+    /// shutdown returns.
+    func testANoteStillUnderTheCaretIsSavedWhenTheAppQuits() async throws {
+        let data = FileManager.default.temporaryDirectory.appendingPathComponent("inkwell-quit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: data) }
+        let logged = Logged()
+        let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
+        core.start(environment: ["INK_DATA_DIR": data.path])
+        try await until { if case .ready = core.store.status { true } else { false } }
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("fixtures/ami")
+        core.send([
+            "cmd": "replay_meeting", "mic": fixtures.appendingPathComponent("IS1009a-mic.wav").path,
+            "far": fixtures.appendingPathComponent("IS1009a-far.wav").path,
+        ])
+        try await until { core.screens.live.record != nil }
+        // Typed, the caret still in it: nothing has been handed to the core yet.
+        core.screens.live.notesEdited("A line still being typed", caretParagraph: 0)
+
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            core.stop { done.resume() }
+        }
+        XCTAssertEqual(try Self.notes(in: data), ["A line still being typed"])
+        XCTAssertEqual(logged.messages, [], "nothing was dropped")
+
+        // After the stop, a command has nowhere to go: said, never silently dropped.
+        core.send(.modesList)
+        XCTAssertEqual(logged.messages.count, 1)
+        XCTAssertTrue(logged.messages[0].contains("modes.list"), logged.messages[0])
+    }
+
+    /// A screen command whose failure no screen handles is logged, by name only.
+    func testAFailureNoScreenHandlesIsLoggedByNameOnly() throws {
+        let logged = Logged()
+        let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
+        core.received([event(#"{"type":"command.failed","command":"setting.set","id":"setting:dictation.polish","message":"the library could not be written: zebra"}"#)])
+        XCTAssertEqual(logged.messages.count, 1)
+        XCTAssertTrue(logged.messages[0].contains("setting.set"), logged.messages[0])
+        XCTAssertFalse(logged.messages[0].contains("zebra"), "never the core's message or a field")
+        XCTAssertFalse(logged.messages[0].contains("dictation.polish"))
+        // Handled ones are the screens' to show.
+        for handled in ["permissions.check", "models.list", "modes.list", "commitment.set_done", "note.add", "note.update", "note.delete"] {
+            core.received([event(#"{"type":"command.failed","command":"\#(handled)","message":"x"}"#)])
+        }
+        // (Owed lists again after a failed set_done; with no core running that is logged as not sent.)
+        func failures() -> [String] { logged.messages.filter { $0.hasPrefix("command.failed") } }
+        XCTAssertEqual(failures().count, 1)
+        core.received([event(#"{"type":"command.failed","command":"setting.get","id":"setting:dictation.polish","message":"x"}"#)])
+        XCTAssertEqual(failures().count, 2, "a setting only onboarding reads is handled only for onboarding")
+    }
+
+    private func until(_ timeout: Duration = .seconds(20), _ done: () -> Bool) async throws {
+        let start = ContinuousClock.now
+        while !done() {
+            if ContinuousClock.now - start > timeout {
+                throw Timeout()
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    private struct Timeout: Error {}
+    private struct Unreadable: Error {}
+
+    /// The notes in the library at `data`, read-only.
+    private static func notes(in data: URL) throws -> [String] {
+        var db: OpaquePointer?
+        let path = data.appendingPathComponent("library.sqlite").path
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            throw Unreadable()
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT text FROM note ORDER BY seq", -1, &statement, nil) == SQLITE_OK else {
+            throw Unreadable()
+        }
+        defer { sqlite3_finalize(statement) }
+        var out: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            out.append(String(cString: sqlite3_column_text(statement, 0)))
+        }
+        return out
     }
 }
