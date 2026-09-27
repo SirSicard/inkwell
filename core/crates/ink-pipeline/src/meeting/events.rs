@@ -388,8 +388,9 @@ pub struct EchoPass {
     /// Lines whose words repeated the far end's but were kept for want of acoustic evidence.
     pub kept_no_evidence: usize,
     /// Live "you" finals this pass judged to be echo (the echo gate's rule, or dedup's, on its
-    /// own evidence): mostly those from before the live search found the path. The supersede
-    /// guard does not count them, so a transcript that loses them is still saved.
+    /// own evidence), with far-end speech under them by the far end's own VAD: mostly those from
+    /// before the live search found the path. The supersede guard does not count them, so a
+    /// transcript that loses them is still saved.
     pub live_echo_finals: usize,
 }
 

@@ -455,7 +455,7 @@ pub(crate) struct HeardSpeech {
 }
 
 impl HeardSpeech {
-    fn add(&mut self, start: u64, len: u64, probabilities: Option<Vec<f32>>) {
+    pub(crate) fn add(&mut self, start: u64, len: u64, probabilities: Option<Vec<f32>>) {
         self.spans.push((start, len, probabilities));
         self.end = self.end.max(start + len);
     }

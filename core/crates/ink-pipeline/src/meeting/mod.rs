@@ -670,8 +670,11 @@ impl EndedMeeting {
             };
         }
         let labels = decided.as_ref().and_then(|r| r.turns.as_deref());
+        // Where the far end's own VAD heard speech: the regions it gave the engine.
+        let mut far_speech = Vec::new();
         let (mut reader, opened) = self.open_reader(audio, Channel::Far)?;
         while let Some(region) = reader.next_region()? {
+            far_speech.push((region.start_ms(), region.end_ms()));
             far.extend(offline::transcribe_region(
                 &ctx,
                 Channel::Far,
@@ -724,7 +727,7 @@ impl EndedMeeting {
         // The live "you" finals this pass judges to be echo (the unprotected ones from before the
         // live search found the path, mostly): the supersede guard does not count them.
         let explained = match (&evidence, &previous) {
-            (Some(evidence), Some(previous)) => live_echo(previous, &far, evidence),
+            (Some(evidence), Some(previous)) => live_echo(previous, &far, &far_speech, evidence),
             _ => Vec::new(),
         };
         echo.live_echo_finals = explained.len();
@@ -1143,7 +1146,24 @@ fn echo_pass(fit: Option<&PathReport>) -> EchoPass {
 /// The live "you" finals in `previous` this pass judges to be echo: the echo gate's verdict on
 /// each over the pass's evidence, or a line that repeats one of the pass's far-end lines where
 /// nobody on the near end spoke (dedup's rule, as the pass's own lines are judged).
-fn live_echo(previous: &[Segment], far: &[Segment], evidence: &EchoEvidence) -> Vec<Explained> {
+///
+/// Both of those read the same evidence as the pass's own removals, so a fault in it would both
+/// remove the user's words and waive the guard that should notice. So a final also needs
+/// evidence that does not come from the mic's side at all: speech in the far end's own regions
+/// (its VAD, on its own audio) overlapping it, or ending within the room's tail (the echo gate's
+/// 300 ms) before it began. Echo is the far end's speech; with none, there was none to hear.
+fn live_echo(
+    previous: &[Segment],
+    far: &[Segment],
+    far_speech: &[(u64, u64)],
+    evidence: &EchoEvidence,
+) -> Vec<Explained> {
+    let tail = ink_echo::GateConfig::default().tail_ms;
+    let far_spoke = |s: &Segment| {
+        far_speech
+            .iter()
+            .any(|&(a, b)| a < s.end_ms.max(s.start_ms + 1) && b + tail >= s.start_ms)
+    };
     let mic: Vec<&Segment> = previous
         .iter()
         .filter(|s| s.channel == Channel::Mic)
@@ -1169,7 +1189,8 @@ fn live_echo(previous: &[Segment], far: &[Segment], evidence: &EchoEvidence) -> 
     mic.iter()
         .enumerate()
         .filter(|(k, s)| {
-            repeated.iter().any(|d| d.you == *k) || evidence.echo_only(s.start_ms, s.end_ms)
+            (repeated.iter().any(|d| d.you == *k) || evidence.echo_only(s.start_ms, s.end_ms))
+                && far_spoke(s)
         })
         .map(|(_, s)| Explained {
             channel: Channel::Mic,
@@ -1230,4 +1251,79 @@ fn remove_echo(
         !drop[k - 1]
     });
     removed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::speech::HeardSpeech;
+
+    fn mic(start_ms: u64, end_ms: u64, text: &str) -> Segment {
+        Segment {
+            channel: Channel::Mic,
+            start_ms,
+            end_ms,
+            text: text.into(),
+            speaker: None,
+        }
+    }
+
+    /// Evidence for 20 s: the far end's reference playing throughout, and the full output's VAD
+    /// hearing nobody on the near end anywhere. The gate calls every line in it echo.
+    fn all_echo() -> EchoEvidence {
+        let mut heard = HeardSpeech::default();
+        heard.add(
+            0,
+            20 * 16_000,
+            Some(vec![0.0; (20 * 16_000usize).div_ceil(512)]),
+        );
+        EchoEvidence::new(heard, vec![true; 2_000])
+    }
+
+    #[test]
+    fn a_live_final_is_explained_only_where_the_far_end_s_own_vad_heard_speech() {
+        let evidence = all_echo();
+        let previous = [
+            mic(5_000, 7_000, "echo words from the far end"),
+            mic(12_000, 14_000, "yes that works for me"),
+            Segment {
+                channel: Channel::Far,
+                start_ms: 4_800,
+                end_ms: 7_400,
+                text: "echo words from the far end".into(),
+                speaker: None,
+            },
+        ];
+        assert!(evidence.echo_only(5_000, 7_000) && evidence.echo_only(12_000, 14_000));
+        // The far end's regions: speech 4.8–7.4 s only. The first final is explained; the second
+        // has no far-end speech under it, so the gate's verdict alone does not waive the guard.
+        let far_speech = [(4_800, 7_400)];
+        let explained = live_echo(&previous, &[], &far_speech, &evidence);
+        assert_eq!(
+            explained,
+            vec![Explained {
+                channel: Channel::Mic,
+                start_ms: 5_000,
+                end_ms: 7_000
+            }]
+        );
+        // With no far-end speech at all, nothing is explained, and a pass that drops the "you"
+        // finals is refused.
+        let explained = live_echo(&previous, &[], &[], &evidence);
+        assert!(explained.is_empty());
+        let new = [previous[2].clone()];
+        assert!(matches!(
+            check_supersede_explained(&previous, &new, &explained),
+            Err(StoreError::SuspiciousSupersede {
+                channel: Channel::Mic,
+                ..
+            })
+        ));
+        // Echo arrives after the far end said it: speech that ended within the room's tail
+        // before the final began still counts.
+        let explained = live_echo(&previous, &[], &[(3_000, 4_800)], &evidence);
+        assert_eq!(explained.len(), 1);
+        let explained = live_echo(&previous, &[], &[(3_000, 4_600)], &evidence);
+        assert!(explained.is_empty());
+    }
 }
