@@ -7,6 +7,7 @@
 //! | `ink-commands` | commands, one at a time, in order: warming, model updates, starting a meeting, unregistering |
 //! | `ink-meeting`, `ink-pump` | a meeting ([`meeting`](crate::meeting)) |
 //! | `ink-dictation` | the dictation chain ([`dictation`](crate::dictation)) |
+//! | `ink-library` | the screens' queries on the library, in order ([`library`](crate::library)) |
 //!
 //! **Shutdown** ([`Core::shutdown`]) goes in an order that leaves nothing loaded behind it:
 //! cancel what waits (shell engines, installs, the final pass), stop and join every thread that
@@ -23,7 +24,8 @@ use std::thread::{self, JoinHandle};
 
 use ink_audio::BandsWriter;
 use ink_core::{
-    CancelToken, Clock, EngineError, FocusReader, Job, Llm, OfflineEngine, Store, TextInserter,
+    CancelToken, Clock, EngineError, FocusReader, Job, Llm, OfflineEngine, PermissionProbe, Store,
+    TextInserter,
 };
 use ink_engines::{EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
@@ -36,6 +38,7 @@ use crate::events::{self, event};
 use crate::external::Registration;
 use crate::gate::{ModelGate, Routed, refused_event};
 use crate::hub::{EventOut, Events, Hub};
+use crate::library::{self, Library};
 use crate::llms::{PolishModel, ShellLlms};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureSide, MeetingRun, Replay};
@@ -113,6 +116,8 @@ pub struct Parts {
     pub installer: Arc<dyn ModelInstaller>,
     /// Where meetings' recordings go.
     pub data_dir: PathBuf,
+    /// Checks permissions without prompting (`permissions.check`); `None` answers "unknown".
+    pub permissions: Option<Arc<dyn PermissionProbe>>,
 }
 
 impl Parts {
@@ -125,6 +130,7 @@ impl Parts {
             .map_err(|e| format!("the library: {e}"))?;
         let models = ModelDir::new(&config.models_dir);
         let fetch = ink_engines::HttpFetch::new().map_err(|e| format!("HTTP: {e}"))?;
+        let permissions = platform_permissions(&store);
         Ok(Self {
             store: Arc::new(store),
             clock: platform_clock()?,
@@ -136,8 +142,34 @@ impl Parts {
             )),
             models,
             data_dir: config.data_dir.clone(),
+            permissions,
         })
     }
+}
+
+/// The platform's permission probe. System Audio is probed only once the app has asked for it
+/// (the setting [`library::SYSTEM_AUDIO_ASKED`]): the probe before that would make macOS prompt.
+#[cfg(target_os = "macos")]
+fn platform_permissions(store: &dyn Store) -> Option<Arc<dyn PermissionProbe>> {
+    let asked = matches!(
+        store
+            .setting(library::SYSTEM_AUDIO_ASKED)
+            .as_ref()
+            .map(|v| v.as_deref()),
+        Ok(Some("true"))
+    );
+    let clock = ink_platform_mac::MacClock::new()
+        .map_err(|e| log::warn!("permissions: no clock for the System Audio probe: {e}"))
+        .ok()?;
+    Some(Arc::new(
+        ink_platform_mac::MacPermissionProbe::new(clock).with_system_audio_asked(asked),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_permissions(_: &dyn Store) -> Option<Arc<dyn PermissionProbe>> {
+    // Until ink-platform-win's probe (S3.1): every permission reads "unknown".
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -230,6 +262,8 @@ pub struct Shared {
     pub data_dir: PathBuf,
     /// Language models the shell registered (dictation polish).
     pub llms: Arc<ShellLlms>,
+    /// Checks permissions without prompting.
+    pub permissions: Option<Arc<dyn PermissionProbe>>,
     /// Ids of the engines the shell registered, of every kind: one id space.
     externals: Mutex<Vec<String>>,
     /// The ink's bands writer, lent by the C ABI; the pump publishes through it.
@@ -283,7 +317,7 @@ fn object<'a>(v: &'a Value, what: &str) -> Result<&'a serde_json::Map<String, Va
 
 /// Refuses a field outside `allowed`, as the config and every command do: a misspelt field must
 /// not be ignored silently (the shell would think it had asked for something it had not).
-fn only_fields(
+pub(crate) fn only_fields(
     obj: &serde_json::Map<String, Value>,
     allowed: &[&str],
     what: &str,
@@ -395,6 +429,7 @@ pub struct Core {
     hub: Hub,
     commands: Sender<Envelope>,
     command_thread: JoinHandle<()>,
+    library: Library,
     runs: Arc<Mutex<Runs>>,
 }
 
@@ -416,6 +451,7 @@ impl Core {
             shutdown: CancelToken::new(),
             data_dir: parts.data_dir,
             llms: Arc::default(),
+            permissions: parts.permissions,
             externals: Mutex::default(),
             bands: Mutex::new(None),
         });
@@ -431,12 +467,14 @@ impl Core {
                     }
                 })?
         };
+        let library = Library::start(shared.clone())?;
         shared.events.emit(events::ready());
         Ok(Self {
             shared,
             hub,
             commands,
             command_thread,
+            library,
             runs,
         })
     }
@@ -447,8 +485,12 @@ impl Core {
         self.shared.return_bands(writer);
     }
 
-    /// Reads a command and queues it. Errors mean nothing was queued.
+    /// Reads a command and queues it: a library query on the library thread, anything else on the
+    /// command thread. Errors mean nothing was queued.
     pub fn command(&self, json: &str) -> Result<(), String> {
+        if let Some(request) = library::parse(json)? {
+            return self.library.send(request);
+        }
         let envelope = parse_command(json)?;
         self.commands
             .send(envelope)
@@ -585,6 +627,7 @@ impl Core {
             hub,
             commands,
             command_thread,
+            library,
             runs,
         } = self;
         shared.shutdown.cancel();
@@ -592,6 +635,9 @@ impl Core {
         if command_thread.join().is_err() {
             log::error!("the command thread panicked");
         }
+        // Its queries only read the store (and mark commitments done): answered, then joined, so
+        // nothing holds the store when it drops below.
+        library.stop();
         let (meeting, dictation) = {
             let mut runs = lock(&runs);
             (runs.meeting.take(), runs.dictation.take())
@@ -873,6 +919,7 @@ pub(crate) mod testing {
             loader: Arc::new(NoModels),
             installer: Arc::new(NoModels),
             data_dir,
+            permissions: None,
         };
         let core = Core::start(
             parts,

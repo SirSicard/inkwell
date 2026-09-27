@@ -13,6 +13,7 @@
 //! | [`mailbox`] | the bounded queue from the pump to a chain's worker |
 //! | [`meeting`] | a meeting run: capture, the pump, the meeting worker |
 //! | [`dictation`] | the dictation worker |
+//! | [`library`] | the screens' queries on the library, on their own thread |
 //! | [`logging`] | the only logger and `tracing` subscriber, with both privacy filters |
 //!
 //! The threading contract is the header's (THREADS). In short: events reach the shell on one
@@ -32,6 +33,7 @@ pub mod events;
 pub mod external;
 pub mod gate;
 pub mod hub;
+pub mod library;
 pub mod llms;
 pub mod logging;
 pub mod mailbox;

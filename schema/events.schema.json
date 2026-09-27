@@ -132,6 +132,27 @@
     },
     {
       "$ref": "#/$defs/MeetingWorkerFailed"
+    },
+    {
+      "$ref": "#/$defs/LibraryRecords"
+    },
+    {
+      "$ref": "#/$defs/LibrarySearch"
+    },
+    {
+      "$ref": "#/$defs/LibraryRecord"
+    },
+    {
+      "$ref": "#/$defs/LibraryOwed"
+    },
+    {
+      "$ref": "#/$defs/LibraryCommitmentDone"
+    },
+    {
+      "$ref": "#/$defs/LibraryStats"
+    },
+    {
+      "$ref": "#/$defs/PermissionsChecked"
     }
   ],
   "$defs": {
@@ -1756,6 +1777,695 @@
       "required": [
         "type",
         "record"
+      ],
+      "additionalProperties": false
+    },
+    "RecordKind": {
+      "type": "string",
+      "description": "What produced a record: one dictation, a meeting (mic and far end), or an imported audio or video file.",
+      "enum": [
+        "dictation",
+        "meeting",
+        "file_import"
+      ]
+    },
+    "PermissionState": {
+      "type": "string",
+      "description": "A permission's state, read without prompting: granted (and verified where the OS allows), denied, not_determined (never asked, from the app's side), or unknown (the OS gives no reliable answer).",
+      "enum": [
+        "granted",
+        "denied",
+        "not_determined",
+        "unknown"
+      ]
+    },
+    "AudioTimeline": {
+      "type": "string",
+      "description": "How a record's chunks were placed on its timeline: recorded (from the start the meeting wrote beside them) or estimated (from its earliest chunk: a record from before that was written).",
+      "enum": [
+        "recorded",
+        "estimated"
+      ]
+    },
+    "RecordRow": {
+      "type": "object",
+      "description": "A record as a list shows it.",
+      "properties": {
+        "record": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "kind": {
+          "$ref": "#/$defs/RecordKind",
+          "description": "What produced it."
+        },
+        "title": {
+          "type": "string",
+          "description": "Its title: a calendar event's, a file's name, or the summary's headline. Absent until one is known."
+        },
+        "started_at_unix_ms": {
+          "type": "integer",
+          "description": "When it started, Unix ms."
+        },
+        "ended_at_unix_ms": {
+          "type": "integer",
+          "description": "When it ended, Unix ms; absent while it is live."
+        },
+        "source_app": {
+          "type": "string",
+          "description": "The application involved, when known."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The transcript revision: 1 while live, 2 once the final pass replaced it."
+        },
+        "has_audio": {
+          "type": "boolean",
+          "description": "Whether it kept audio (a meeting's chunks)."
+        },
+        "preview": {
+          "type": "string",
+          "description": "The first words of an untitled record's transcript. Carries the user's words: never log it."
+        }
+      },
+      "required": [
+        "record",
+        "kind",
+        "started_at_unix_ms",
+        "revision",
+        "has_audio"
+      ],
+      "additionalProperties": false
+    },
+    "RecordSegment": {
+      "type": "object",
+      "description": "Settled transcript on a record's timeline. Carries the user's words: never log it.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Mic (you) or far end (them)."
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start, ms from the record's start."
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End, ms from the record's start."
+        },
+        "text": {
+          "type": "string",
+          "description": "The words."
+        },
+        "speaker": {
+          "type": "string",
+          "description": "The diarized far-end speaker, when labels were kept."
+        }
+      },
+      "required": [
+        "channel",
+        "start_ms",
+        "end_ms",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "RecordNote": {
+      "type": "object",
+      "description": "A note the user typed, stamped with where in the record it was written.",
+      "properties": {
+        "note": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where in the record, ms from its start: the timestamp chip."
+        },
+        "text": {
+          "type": "string",
+          "description": "The note. The user's words: never log it."
+        }
+      },
+      "required": [
+        "note",
+        "at_ms",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "RecordSummary": {
+      "type": "object",
+      "description": "A record's summary, as stored: markdown (a headline, then sections). Shells render it; it is never shown raw.",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The markdown. The library's words: never log it."
+        },
+        "model": {
+          "type": "string",
+          "description": "The model that wrote it."
+        },
+        "created_at_unix_ms": {
+          "type": "integer",
+          "description": "When it was written, Unix ms."
+        }
+      },
+      "required": [
+        "text",
+        "model",
+        "created_at_unix_ms"
+      ],
+      "additionalProperties": false
+    },
+    "Span": {
+      "type": "object",
+      "description": "A stretch of a record: where something was said.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side said it."
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start, ms from the record's start."
+        },
+        "end_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "End, ms from the record's start."
+        }
+      },
+      "required": [
+        "channel",
+        "start_ms",
+        "end_ms"
+      ],
+      "additionalProperties": false
+    },
+    "CommitmentRow": {
+      "type": "object",
+      "description": "A commitment: something promised in a record.",
+      "properties": {
+        "commitment": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "record": {
+          "type": "string",
+          "description": "The record it came from."
+        },
+        "text": {
+          "type": "string",
+          "description": "What was promised. The library's words: never log it."
+        },
+        "owner": {
+          "type": "string",
+          "description": "Who owes it, as said."
+        },
+        "due": {
+          "type": "string",
+          "description": "When, as said (\"by Friday\")."
+        },
+        "due_at_unix_ms": {
+          "type": "integer",
+          "description": "When, resolved, Unix ms; absent when it could not be resolved."
+        },
+        "provenance": {
+          "type": "array",
+          "description": "Where in the record it was said.",
+          "items": {
+            "$ref": "#/$defs/Span",
+            "description": "A stretch."
+          }
+        },
+        "merged_into": {
+          "type": "string",
+          "description": "The commitment it was folded into (\"said twice\"), when it was."
+        },
+        "done": {
+          "type": "boolean",
+          "description": "Whether it is done."
+        }
+      },
+      "required": [
+        "commitment",
+        "record",
+        "text",
+        "provenance",
+        "done"
+      ],
+      "additionalProperties": false
+    },
+    "OwedItem": {
+      "type": "object",
+      "description": "An open commitment with the record it came from.",
+      "properties": {
+        "commitment": {
+          "$ref": "#/$defs/CommitmentRow",
+          "description": "The commitment."
+        },
+        "record_title": {
+          "type": "string",
+          "description": "Its record's title, when it has one."
+        },
+        "record_started_at_unix_ms": {
+          "type": "integer",
+          "description": "When its record started, Unix ms; absent if the record is gone."
+        }
+      },
+      "required": [
+        "commitment"
+      ],
+      "additionalProperties": false
+    },
+    "SpeakerName": {
+      "type": "object",
+      "description": "A diarized speaker the user named in one record.",
+      "properties": {
+        "speaker": {
+          "type": "string",
+          "description": "The diarizer's label."
+        },
+        "name": {
+          "type": "string",
+          "description": "The name the user gave."
+        }
+      },
+      "required": [
+        "speaker",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "AudioChunk": {
+      "type": "object",
+      "description": "One chunk file of a record's audio: raw little-endian float samples, interleaved, after a header of data_offset bytes.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side."
+        },
+        "path": {
+          "type": "string",
+          "description": "The file, absolute."
+        },
+        "start_ms": {
+          "type": "integer",
+          "description": "Where its first frame falls on the record's timeline, ms (negative: before the start)."
+        },
+        "frames": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Whole frames in it."
+        },
+        "sample_rate": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Frames per second."
+        },
+        "channels": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Interleaved channels per frame."
+        },
+        "data_offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes before the first sample."
+        }
+      },
+      "required": [
+        "channel",
+        "path",
+        "start_ms",
+        "frames",
+        "sample_rate",
+        "channels",
+        "data_offset"
+      ],
+      "additionalProperties": false
+    },
+    "RecordAudio": {
+      "type": "object",
+      "description": "Where a record's audio is: its chunks per side, placed on its timeline.",
+      "properties": {
+        "timeline": {
+          "$ref": "#/$defs/AudioTimeline",
+          "description": "How the chunks were placed."
+        },
+        "chunks": {
+          "type": "array",
+          "description": "Readable chunks, mic first then far end, each in order. Unreadable ones are left out (and logged).",
+          "items": {
+            "$ref": "#/$defs/AudioChunk",
+            "description": "A chunk."
+          }
+        }
+      },
+      "required": [
+        "timeline",
+        "chunks"
+      ],
+      "additionalProperties": false
+    },
+    "SearchHit": {
+      "type": "object",
+      "description": "A full-text match.",
+      "properties": {
+        "record": {
+          "type": "string",
+          "description": "The record."
+        },
+        "title": {
+          "type": "string",
+          "description": "The record's title, when it has one."
+        },
+        "started_at_unix_ms": {
+          "type": "integer",
+          "description": "When the record started, Unix ms."
+        },
+        "start_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where in the record the match is, ms."
+        },
+        "snippet": {
+          "type": "string",
+          "description": "The matching text. The library's words: never log it."
+        }
+      },
+      "required": [
+        "record",
+        "started_at_unix_ms",
+        "start_ms",
+        "snippet"
+      ],
+      "additionalProperties": false
+    },
+    "KindStats": {
+      "type": "object",
+      "description": "What the library holds of one kind since a moment.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RecordKind",
+          "description": "The kind."
+        },
+        "records": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Records that started since."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Their total length, ms (records still live count nothing)."
+        },
+        "words": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words in their transcripts."
+        }
+      },
+      "required": [
+        "kind",
+        "records",
+        "duration_ms",
+        "words"
+      ],
+      "additionalProperties": false
+    },
+    "LibraryRecords": {
+      "type": "object",
+      "description": "Records, in answer to records.list: newest first (by start time, then id).",
+      "properties": {
+        "type": {
+          "const": "library.records"
+        },
+        "request": {
+          "type": "string",
+          "description": "The id the command carried, echoed so the shell can match the answer to its question."
+        },
+        "kind": {
+          "$ref": "#/$defs/RecordKind",
+          "description": "The kind asked for; absent for every kind."
+        },
+        "records": {
+          "type": "array",
+          "description": "The records, newest first.",
+          "items": {
+            "$ref": "#/$defs/RecordRow",
+            "description": "A record."
+          }
+        },
+        "more": {
+          "type": "boolean",
+          "description": "Whether more records follow the last one: ask again with it as \"before\"."
+        }
+      },
+      "required": [
+        "type",
+        "records",
+        "more"
+      ],
+      "additionalProperties": false
+    },
+    "LibrarySearch": {
+      "type": "object",
+      "description": "Full-text matches, in answer to records.search, best first.",
+      "properties": {
+        "type": {
+          "const": "library.search"
+        },
+        "request": {
+          "type": "string",
+          "description": "The id the command carried, echoed so the shell can match the answer to its question."
+        },
+        "query": {
+          "type": "string",
+          "description": "The query, as asked. The user's words: never log it."
+        },
+        "hits": {
+          "type": "array",
+          "description": "The matches.",
+          "items": {
+            "$ref": "#/$defs/SearchHit",
+            "description": "A match."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "query",
+        "hits"
+      ],
+      "additionalProperties": false
+    },
+    "LibraryRecord": {
+      "type": "object",
+      "description": "One record whole, in answer to record.open. Carries the library's words: never log it.",
+      "properties": {
+        "type": {
+          "const": "library.record"
+        },
+        "request": {
+          "type": "string",
+          "description": "The id the command carried, echoed so the shell can match the answer to its question."
+        },
+        "record": {
+          "$ref": "#/$defs/RecordRow",
+          "description": "The record."
+        },
+        "segments": {
+          "type": "array",
+          "description": "The current revision's transcript, by start time.",
+          "items": {
+            "$ref": "#/$defs/RecordSegment",
+            "description": "A segment."
+          }
+        },
+        "notes": {
+          "type": "array",
+          "description": "The user's notes, by stamp.",
+          "items": {
+            "$ref": "#/$defs/RecordNote",
+            "description": "A note."
+          }
+        },
+        "summary": {
+          "$ref": "#/$defs/RecordSummary",
+          "description": "Its summary, when one was written."
+        },
+        "commitments": {
+          "type": "array",
+          "description": "Its commitments, in the order they were added, merged ones included.",
+          "items": {
+            "$ref": "#/$defs/CommitmentRow",
+            "description": "A commitment."
+          }
+        },
+        "speakers": {
+          "type": "array",
+          "description": "The speakers the user named.",
+          "items": {
+            "$ref": "#/$defs/SpeakerName",
+            "description": "A named speaker."
+          }
+        },
+        "audio": {
+          "$ref": "#/$defs/RecordAudio",
+          "description": "Its audio, when it kept some and the directory is there."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "segments",
+        "notes",
+        "commitments",
+        "speakers"
+      ],
+      "additionalProperties": false
+    },
+    "LibraryOwed": {
+      "type": "object",
+      "description": "Open commitments across every record, in answer to commitments.open: the soonest resolved due time first, undated ones last.",
+      "properties": {
+        "type": {
+          "const": "library.owed"
+        },
+        "request": {
+          "type": "string",
+          "description": "The id the command carried, echoed so the shell can match the answer to its question."
+        },
+        "commitments": {
+          "type": "array",
+          "description": "The first of them, as many as asked.",
+          "items": {
+            "$ref": "#/$defs/OwedItem",
+            "description": "A commitment."
+          }
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many are open in all."
+        }
+      },
+      "required": [
+        "type",
+        "commitments",
+        "total"
+      ],
+      "additionalProperties": false
+    },
+    "LibraryCommitmentDone": {
+      "type": "object",
+      "description": "A commitment was marked done or not done (commitment.set_done).",
+      "properties": {
+        "type": {
+          "const": "library.commitment_done"
+        },
+        "request": {
+          "type": "string",
+          "description": "The id the command carried, echoed so the shell can match the answer to its question."
+        },
+        "commitment": {
+          "type": "string",
+          "description": "The commitment."
+        },
+        "done": {
+          "type": "boolean",
+          "description": "Whether it is done now."
+        }
+      },
+      "required": [
+        "type",
+        "commitment",
+        "done"
+      ],
+      "additionalProperties": false
+    },
+    "LibraryStats": {
+      "type": "object",
+      "description": "What the library holds since a moment, in answer to library.stats, and whether recent meetings kept no far end.",
+      "properties": {
+        "type": {
+          "const": "library.stats"
+        },
+        "request": {
+          "type": "string",
+          "description": "The id the command carried, echoed so the shell can match the answer to its question."
+        },
+        "since_unix_ms": {
+          "type": "integer",
+          "description": "The moment asked about, Unix ms."
+        },
+        "kinds": {
+          "type": "array",
+          "description": "Per kind: dictation, meeting, file_import.",
+          "items": {
+            "$ref": "#/$defs/KindStats",
+            "description": "One kind."
+          }
+        },
+        "far_silent_meetings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The newest finished meetings in a row (of the last 20) that kept the user's words and none of the far end's: the sign that the other side was not heard."
+        },
+        "far_silent_since_unix_ms": {
+          "type": "integer",
+          "description": "When the earliest of those started, Unix ms."
+        }
+      },
+      "required": [
+        "type",
+        "since_unix_ms",
+        "kinds",
+        "far_silent_meetings"
+      ],
+      "additionalProperties": false
+    },
+    "PermissionsChecked": {
+      "type": "object",
+      "description": "Each permission's state, in answer to permissions.check. Never prompts. System audio reads not_determined until the app has asked for it (the setting permissions.system_audio_asked); after that its check plays a muted tone and takes about a second.",
+      "properties": {
+        "type": {
+          "const": "permissions.checked"
+        },
+        "request": {
+          "type": "string",
+          "description": "The id the command carried, echoed so the shell can match the answer to its question."
+        },
+        "microphone": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "Microphone."
+        },
+        "system_audio": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "System audio (the other side of a call)."
+        },
+        "accessibility": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "Accessibility (typing for you, and the dictation key)."
+        },
+        "input_monitoring": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "Input Monitoring."
+        }
+      },
+      "required": [
+        "type",
+        "microphone",
+        "system_audio",
+        "accessibility",
+        "input_monitoring"
       ],
       "additionalProperties": false
     }

@@ -210,6 +210,27 @@ Each table is one kind:
   is available.
 - A table the size of ABI 1's still registers an offline engine; newer kinds need the full table.
 
+## The library's queries
+
+The screens read the library through commands answered by events, like everything else across the
+C ABI ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): `records.list`,
+`records.search`, `record.open`, `commitments.open`, `commitment.set_done`, `library.stats` and
+`permissions.check`. They run on their own core thread, so a query never waits behind a model
+download on the command thread, and each answer echoes the command's id.
+
+- **Order.** Records list newest first, by start time and then id, with a keyset cursor for the
+  next page. The shell never re-sorts by anything else.
+- **Summaries are stored as markdown** (a headline, then sections). The shells render them; raw
+  markdown never reaches the screen. A meeting's title is its summary's headline unless the
+  meeting had one.
+- **Audio.** `record.open` lists a meeting's chunk files, each placed on the record's timeline:
+  the meeting worker writes the host time of the timeline's zero beside the chunks
+  (`timeline.json`), and a chunk's place is its first frame's host time minus that. A record
+  without the file (older ones) is placed from its earliest chunk and says so. The shell plays the
+  chunks from disk a few seconds at a time; a meeting is never read into memory whole.
+- **Words.** These answers carry the library's words (transcripts, notes, summaries, search
+  snippets). As with every event that does, they never reach a log.
+
 ## Testing
 
 - `cargo test --workspace` in `core/`. CI runs it with fmt, `clippy -D warnings` and `cargo deny` on
