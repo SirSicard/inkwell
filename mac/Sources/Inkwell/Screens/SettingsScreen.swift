@@ -490,6 +490,7 @@ private struct AboutSection: View {
             ForEach(Notices.components) { notice in
                 NoticeRow(title: "\(notice.name) (\(notice.licence))", detail: notice.role, text: notice.text)
             }
+            RustLibrariesRow()
         }
     }
 
@@ -503,6 +504,29 @@ private struct AboutSection: View {
             }
         case .off(let reason):
             Text(reason.explanation).font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        }
+    }
+}
+
+/// The Rust crates linked into the core: one disclosure for all of them, and inside it a row per
+/// crate that opens onto its licence text, like the rows above. Lazy, so a closed list, or the
+/// part scrolled past, builds no rows.
+private struct RustLibrariesRow: View {
+    var body: some View {
+        DisclosureGroup {
+            LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach(RustNotices.crates) { notice in
+                    NoticeRow(title: notice.title, detail: notice.detail, text: notice.text)
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(RustNotices.heading).font(.system(.callout, weight: .medium)).foregroundStyle(Theme.text)
+                Text("The open-source crates compiled into Inkwell's core, each with its licence.")
+                    .font(Typography.caption).foregroundStyle(Theme.secondaryText)
+            }
+            .accessibilityElement(children: .combine)
         }
     }
 }

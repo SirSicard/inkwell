@@ -1,6 +1,10 @@
 // The notices of everything the app ships that is not Inkwell's own: the code compiled into it or
 // bundled beside it, and the model weights it downloads. Settings > About shows them.
 //
+// The third-party Rust crates linked into the core are not here: their list is generated from
+// cargo's resolution of the release build (RustNotices, Generated/RustNotices.swift), and About
+// shows it after these.
+//
 // Each text is the component's own licence file, copied verbatim, except where the list below
 // says otherwise. THIRD_PARTY.md is the list of what ships; NoticesTests checks every row of it
 // that reaches the Mac app has an entry here.
