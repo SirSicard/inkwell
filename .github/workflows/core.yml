@@ -4,9 +4,9 @@ name: Core
 on:
   push:
     branches: [main]
-    paths: ['core/**', '.github/workflows/core.yml']
+    paths: ['core/**', 'mac/**', 'schema/**', '.github/workflows/core.yml']
   pull_request:
-    paths: ['core/**', '.github/workflows/core.yml']
+    paths: ['core/**', 'mac/**', 'schema/**', '.github/workflows/core.yml']
   workflow_dispatch:
 
 permissions:
@@ -39,6 +39,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The C ABI's libraries with the engine features off, as the shells link them: the
+      # staticlib (the Mac XCFramework) and the cdylib (the Windows shell). No engine runtime DLLs.
+      - run: cargo build -p ink-ffi --lib --locked
       # The engine adapters sit behind features the workspace build leaves off.
       # Silero VAD: the model its tests run on, from the commit tag v6.2.3 points at, checked
       # against the hash the registry row pins. A mismatch fails the job.
@@ -76,6 +79,39 @@ jobs:
         run: cargo clippy -p ink-engines --all-targets --locked --features engine-llama -- -D warnings
       - if: runner.os == 'macOS'
         run: cargo test -p ink-engines --locked --features engine-llama
+      # The core's one logger with llama.cpp's own log filter in it: a planted transcript word at
+      # debug must not reach the sink (reuses the engine-llama build above).
+      - if: runner.os == 'macOS'
+        run: cargo test -p ink-ffi --locked --features engine-llama --test logging
+      # The C ABI from Swift: the core as an XCFramework (engine features off), the mac/ package
+      # with every target, and its XCTests. Thread Sanitizer runs in its own job below.
+      - if: runner.os == 'macOS'
+        name: Swift smoke test (mac/)
+        working-directory: .
+        run: |
+          mac/scripts/build-core.sh
+          swift build --package-path mac
+          swift test --package-path mac
+
+  # The Swift tests under Thread Sanitizer, in a job of their own so a slow run does not hold up
+  # the test matrix. Only the Swift code is instrumented: the Rust static library (the core) is
+  # built without it, so a race inside the core is not seen here, only races in the bridge and in
+  # how it is called (events, engine callbacks, shutdown).
+  swift-tsan:
+    name: Swift tests under Thread Sanitizer (macos-26)
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+        working-directory: core
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: core
+      - run: mac/scripts/build-core.sh
+      - run: swift test --package-path mac --sanitize=thread
 
   deny:
     name: licences, advisories, sources

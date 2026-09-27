@@ -1,0 +1,4 @@
+# SwiftPM's build products, and the core's XCFramework (scripts/build-core.sh makes it).
+/.build/
+/build/
+/.swiftpm/

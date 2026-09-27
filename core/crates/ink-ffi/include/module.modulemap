@@ -1,0 +1,4 @@
+module InkCore {
+    header "inkwell.h"
+    export *
+}
