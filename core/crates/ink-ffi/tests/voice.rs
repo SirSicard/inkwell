@@ -311,6 +311,31 @@ fn the_edit_key_is_held_on_its_own_and_never_the_dictation_key() {
     assert!(rig.edit.hotkey_binding().is_none());
 }
 
+/// Taking the edit key as the dictation key lets go of the edit key first: one key, one tap.
+#[test]
+fn the_edit_keys_key_taken_for_dictation_is_let_go_of_as_the_edit_key() {
+    let rig = VoiceRig::new("swap-keys");
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"right_command"}"#);
+    rig.events
+        .wait_for(WAIT, |v| v["edit_key"] == "right_command")
+        .expect("edit key bound");
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"right_command"}"#);
+    let ready = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["key"] == "right_command"
+        })
+        .expect("rebound");
+    assert!(ready.get("edit_key").is_none(), "{ready}");
+    assert!(ready.get("edit_key_error").is_some(), "{ready}");
+    assert!(rig.edit.hotkey_binding().is_none());
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_command")
+    );
+}
+
 /// A voice edit through the core, with no language model registered: the selection is left
 /// alone and the shell hears why.
 #[test]

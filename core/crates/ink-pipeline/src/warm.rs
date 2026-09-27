@@ -19,7 +19,9 @@
 //!   or a warm-up's).
 //!
 //! **Threads.** One thread, `ink-warm`, waits on a channel and exists while the warmer does:
-//! nothing ticks. [`key_down`](EngineWarmer::key_down) only sends (any thread but realtime).
+//! nothing ticks. [`key_down`](EngineWarmer::key_down) only sends (any thread but realtime). The
+//! channel is unbounded on purpose: its messages come at the pace of key presses, and requests that
+//! queue up are coalesced into one warm-up.
 
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,14 +54,22 @@ struct Shared {
     /// Host time a decode last started (a take's) or ended (a warm-up's); [`NEVER`] before the
     /// first. Read and written under `running`'s lock where it decides anything.
     last_decode_ns: AtomicU64,
-    /// The warm-up in progress, to cancel.
-    running: Mutex<Option<CancelToken>>,
+    /// The warm-up in progress, to cancel, and whether the warmer is stopping.
+    running: Mutex<Running>,
     warmups: AtomicU64,
     yielded: AtomicU64,
 }
 
+/// What the lock guards: the warm-up to cancel, and the stop, set under the same lock the thread
+/// checks before it starts a decode (so a stop can never slip in between that check and the start).
+#[derive(Default)]
+struct Running {
+    token: Option<CancelToken>,
+    stopping: bool,
+}
+
 impl Shared {
-    fn lock(&self) -> MutexGuard<'_, Option<CancelToken>> {
+    fn lock(&self) -> MutexGuard<'_, Running> {
         // A token swap: consistent at every step.
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -125,7 +135,7 @@ impl EngineWarmer {
             clock,
             after_idle,
             last_decode_ns: AtomicU64::new(NEVER),
-            running: Mutex::new(None),
+            running: Mutex::default(),
             warmups: AtomicU64::new(0),
             yielded: AtomicU64::new(0),
         });
@@ -182,8 +192,12 @@ impl EngineWarmer {
     }
 
     fn shut(&mut self) {
-        if let Some(token) = self.shared.lock().as_ref() {
-            token.cancel();
+        {
+            let mut running = self.shared.lock();
+            running.stopping = true;
+            if let Some(token) = running.token.as_ref() {
+                token.cancel();
+            }
         }
         let _ = self.tx.send(Msg::Stop);
         if let Some(thread) = self.thread.take()
@@ -212,6 +226,9 @@ fn run(shared: &Shared, rx: &Receiver<Msg>) {
         }
         let token = {
             let mut running = shared.lock();
+            if running.stopping {
+                return;
+            }
             if !shared.idle(shared.clock.now_ns()) {
                 // A take's decode began (or a warm-up just ran): the engine is warm, or busy.
                 continue;
@@ -219,7 +236,7 @@ fn run(shared: &Shared, rx: &Receiver<Msg>) {
             let token = Instant::now()
                 .checked_add(WARM_BUDGET)
                 .map_or_else(CancelToken::new, CancelToken::with_deadline);
-            *running = Some(token.clone());
+            running.token = Some(token.clone());
             token
         };
         let started = Instant::now();
@@ -236,7 +253,7 @@ fn run(shared: &Shared, rx: &Receiver<Msg>) {
         }));
         {
             let mut running = shared.lock();
-            *running = None;
+            running.token = None;
             shared.mark();
         }
         shared.warmups.fetch_add(1, Ordering::AcqRel);
@@ -271,7 +288,7 @@ impl OfflineEngine for TakesFirst {
         {
             let running = self.shared.lock();
             self.shared.mark();
-            if let Some(token) = running.as_ref() {
+            if let Some(token) = running.token.as_ref() {
                 token.cancel();
                 self.shared.yielded.fetch_add(1, Ordering::AcqRel);
             }

@@ -12,8 +12,9 @@ use ink_pipeline::gain_stage::Vad;
 
 use crate::runtime::Shared;
 
-/// **Worker.** Silero, loaded from `models`, or why there is none. The chain says so to the shell
-/// (`dictation.voice_detection`), and levels takes with the fallback meanwhile.
+/// **Queries thread** (at `dictation.enable`; any worker would do). Silero, loaded from `models`,
+/// or why there is none: a read of its 1.3 MB model file, once per enable. The chain says so to
+/// the shell (`dictation.voice_detection`), and levels takes with the fallback meanwhile.
 pub fn installed(shared: &Shared, models: &ModelDir) -> Vad {
     #[cfg(ink_silero)]
     {

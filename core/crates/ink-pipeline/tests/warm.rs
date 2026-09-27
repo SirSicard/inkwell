@@ -265,3 +265,23 @@ fn stopping_ends_the_thread_while_a_handle_is_still_held() {
     assert!(!handle.key_down(), "nothing is listening");
     assert!(engine.calls().is_empty());
 }
+
+/// A stop that races a warm-up request never waits out a whole warm-up: the thread checks the
+/// stop under the same lock it starts a decode under. Repeated, since the race is a timing one.
+#[test]
+fn a_stop_racing_a_warm_up_request_returns_at_once() {
+    for _ in 0..50 {
+        let clock = Arc::new(MockClock::new(1_000_000_000, 0));
+        let engine = Engine::new(true);
+        let warmer =
+            EngineWarmer::start(engine.clone(), clock.clone(), Duration::from_secs(30)).unwrap();
+        warmer.key_down();
+        let started = Instant::now();
+        warmer.stop();
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+}

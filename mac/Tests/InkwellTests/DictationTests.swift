@@ -77,6 +77,32 @@ final class DictationModelTests: XCTestCase {
         XCTAssertEqual(dictation.state, .live(key: "right_option", editKey: nil))
     }
 
+    /// The edit picker offers every key but the dictation key, so its selection must never be
+    /// that key, even when the stored settings collide before the core has answered.
+    func testTheEditKeyIsNeverTheDictationKeyEvenBeforeTheCoreAnswers() {
+        let dictation = DictationModel(send: { _ in })
+        dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"right_option"}"#))
+        dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_option"}"#))
+        XCTAssertEqual(dictation.state, .starting)
+        XCTAssertNil(dictation.editKey)
+        dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))
+        XCTAssertEqual(dictation.editKey, "right_command")
+    }
+
+    /// Stopped after repeated failures: Settings offers to turn it on again, which asks the core.
+    func testDictationThatStoppedCanBeTurnedOnAgain() {
+        let sent = Sent()
+        let dictation = DictationModel(send: sent.send)
+        dictation.apply(event(#"{"type":"dictation.off","reason":"worker_stopped","message":"dictation stopped after repeated failures; turn it on again"}"#))
+        XCTAssertTrue(dictation.canRetry)
+        dictation.enable()
+        XCTAssertTrue(sent.commands.contains { if case .dictationEnable = $0 { true } else { false } })
+        dictation.apply(event(#"{"type":"dictation.off","reason":"needs_accessibility"}"#))
+        XCTAssertFalse(dictation.canRetry, "Accessibility has its own Allow")
+        dictation.apply(event(#"{"type":"dictation.off","reason":"unsupported"}"#))
+        XCTAssertFalse(dictation.canRetry)
+    }
+
     /// A key setting that could not be saved or read reads "couldn't", never as the key changed.
     func testAKeySettingThatCouldNotBeSavedSaysSo() {
         let dictation = DictationModel(send: { _ in })

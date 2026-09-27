@@ -473,7 +473,8 @@ impl Activity {
     }
 }
 
-/// Messages for `ink-voice`.
+/// Messages for `ink-voice`. Its channel is unbounded on purpose: the messages come at the pace
+/// of key presses (a press wakes the mic) and control (stop), never of audio.
 enum Ctl {
     /// A press: open the mic if it is closed.
     Wake,
@@ -642,6 +643,12 @@ impl Voice {
         force: bool,
     ) -> Result<Ready, (OffReason, String)> {
         if force || self.key.as_deref() != Some(key) {
+            // The edit key taking the dictation key's place is let go of first, so two taps never
+            // hold one key.
+            if self.edit_key.as_deref() == Some(key) {
+                self.platform.edit_keys.stop();
+                self.edit_key = None;
+            }
             self.key = None;
             let sink = key_sink(
                 self.inbox.clone(),

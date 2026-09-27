@@ -124,10 +124,21 @@ final class DictationModel {
         return keySetting ?? "fn"
     }
 
-    /// The edit key chosen (nil: off).
+    /// The edit key chosen (nil: off). Never the dictation key, as the core refuses it: so the
+    /// edit picker's selection is always one of its own options (it offers every key but that one).
     var editKey: String? {
-        if case .live(_, let edit) = state, let edit { return edit }
-        return editKeySetting.flatMap { $0 == "off" ? nil : $0 }
+        if case .live(_, let edit) = state, let edit { return edit == key ? nil : edit }
+        guard let edit = editKeySetting, edit != "off", edit != key else { return nil }
+        return edit
+    }
+
+    /// Whether dictation is off for a reason turning it on again may fix (the Voice section offers
+    /// that): not for Accessibility, which has its own Allow, nor for an unsupported build.
+    var canRetry: Bool {
+        if case .off(let reason, _) = state {
+            return [.workerStopped, .failed, .other, .disabled, .keyRefused].contains(reason)
+        }
+        return false
     }
 
     /// The line under the keys in Settings.
@@ -147,7 +158,7 @@ final class DictationModel {
             case .unsupported:
                 return "Dictation isn't available in this build."
             case .workerStopped:
-                return "Dictation stopped after repeated failures. Turn it on again."
+                return "Dictation stopped after repeated failures."
             case .disabled:
                 return "Dictation is off."
             case .failed, .other:
@@ -254,7 +265,10 @@ final class DictationModel {
                 return DropText(title: "Polish took too long", detail: "Typed as you said it")
             case .releaseMissed:
                 return DropText(title: "Stopped after 3 minutes", detail: "The key's release never arrived")
-            default:
+            // Shown elsewhere (Today's notices, Settings) or nothing the user acts on at once.
+            case .vadFailed, .audioLost, .tailCutShort, .focusUnreadable, .polishUnavailable,
+                 .polishFailed, .noModeForStyle, .saveFailed, .deletedTextNotScrubbed,
+                 .deletedTextScrubbed, .other:
                 return nil
             }
         default:

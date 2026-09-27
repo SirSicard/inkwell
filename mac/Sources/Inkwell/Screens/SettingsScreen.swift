@@ -252,6 +252,8 @@ private struct VoiceSection: View {
                     .foregroundStyle(dictation.isProblem ? Theme.alert : Theme.secondaryText)
                 if case .off(.needsAccessibility, _) = dictation.state {
                     Button("Allow \u{201C}Type for you\u{201D}") { permissions.request(.typeForYou) }
+                } else if dictation.canRetry {
+                    Button("Turn dictation on") { dictation.enable() }
                 }
                 if let problem = dictation.editKeyProblem {
                     Text("The edit key isn't held: \(problem)").foregroundStyle(Theme.alert)
