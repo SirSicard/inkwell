@@ -59,13 +59,12 @@ impl Config {
     /// Reads the JSON `ink_init` receives (see `inkwell.h`).
     pub fn parse(json: &str) -> Result<Self, String> {
         let v: Value = serde_json::from_str(json).map_err(|e| format!("config: {e}"))?;
-        let obj = v.as_object().ok_or("config: not an object")?;
-        if let Some(k) = obj
-            .keys()
-            .find(|k| !["data_dir", "models_dir", "log_level", "log_stderr"].contains(&k.as_str()))
-        {
-            return Err(format!("config: unknown field \"{k}\""));
-        }
+        let obj = object(&v, "config")?;
+        only_fields(
+            obj,
+            &["data_dir", "models_dir", "log_level", "log_stderr"],
+            "config",
+        )?;
         let path = |k: &str| -> Result<Option<PathBuf>, String> {
             match obj.get(k) {
                 None => Ok(None),
@@ -272,8 +271,28 @@ struct Envelope {
     command: Command,
 }
 
+/// `v` as a JSON object, or why not.
+fn object<'a>(v: &'a Value, what: &str) -> Result<&'a serde_json::Map<String, Value>, String> {
+    v.as_object()
+        .ok_or_else(|| format!("{what}: not an object"))
+}
+
+/// Refuses a field outside `allowed`, as the config and every command do: a misspelt field must
+/// not be ignored silently (the shell would think it had asked for something it had not).
+fn only_fields(
+    obj: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    what: &str,
+) -> Result<(), String> {
+    match obj.keys().find(|k| !allowed.contains(&k.as_str())) {
+        Some(k) => Err(format!("{what}: unknown field \"{k}\"")),
+        None => Ok(()),
+    }
+}
+
 fn parse_command(json: &str) -> Result<Envelope, String> {
     let v: Value = serde_json::from_str(json).map_err(|e| format!("command: {e}"))?;
+    let obj = object(&v, "command")?;
     let name = v
         .get("cmd")
         .and_then(Value::as_str)
@@ -297,6 +316,15 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
             Some(_) => Err(format!("{name}: \"{k}\" must be a string")),
         }
     };
+    let fields: &[&str] = match name.as_str() {
+        "replay_meeting" => &["mic", "far", "title", "pacing"],
+        "model.warm" => &["job"],
+        "model.update" => &["model", "next"],
+        "engine.unregister" => &["engine"],
+        other => return Err(format!("unknown command \"{other}\"")),
+    };
+    let allowed: Vec<&str> = ["cmd", "id"].iter().chain(fields).copied().collect();
+    only_fields(obj, &allowed, &name)?;
     let command = match name.as_str() {
         "replay_meeting" => Command::ReplayMeeting(Replay {
             mic: text("mic")?.into(),
@@ -820,7 +848,13 @@ mod tests {
         ));
         for bad in [
             "not json",
+            // A stray field is refused, as in the config: a typo must not be silently ignored.
+            r#"{"cmd":"model.update","model":"a","next":"b","path":"/tmp/x"}"#,
+            r#"{"cmd":"model.warm","job":"dictation_final","jobs":"meeting_final"}"#,
+            r#"{"cmd":"replay_meeting","mic":"/m.wav","speed":"fast"}"#,
+            r#"{"cmd":"engine.unregister","engine":"e","force":true}"#,
             r#"{"cmd":"launch"}"#,
+            r#"{"cmd":"launch","x":1}"#,
             r#"{"cmd":"model.warm","job":"typing"}"#,
             r#"{"cmd":"replay_meeting"}"#,
             r#"{"cmd":"replay_meeting","mic":"/m.wav","pacing":"slow"}"#,
