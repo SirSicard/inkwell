@@ -12,7 +12,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Open at Login", action: nil, keyEquivalent: "")
 
-    init(store: CoreStore, openWindow: @escaping @MainActor () -> Void) {
+    /// `checkForUpdates`: the updater's item, nil when this build does not update itself.
+    init(store: CoreStore, checkForUpdates: NSMenuItem?, openWindow: @escaping @MainActor () -> Void) {
         self.store = store
         self.openWindow = openWindow
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -37,6 +38,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         loginItem.target = self
         loginItem.action = #selector(toggleLoginItem)
         menu.addItem(loginItem)
+        if let checkForUpdates {
+            menu.addItem(checkForUpdates)
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Inkwell", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu

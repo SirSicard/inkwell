@@ -1,3 +1,16 @@
+//! Importing into the 1.0 store: an Inkwell 0.2 data directory, and whole records from any other
+//! source.
+//!
+//! [`SqliteStore::import_records`] takes records another tool has already read and converted
+//! ([`RecordImport`]: the record, its end, its revision, its transcript, summary, speaker names
+//! and commitments) and writes them in one transaction behind a marker setting. It knows nothing
+//! about where they came from; that tool does the reading, the checking of its own format and
+//! the audio. The rest of this module is the Inkwell 0.2 importer, which stays on its own write
+//! path: 0.2 also brings settings documents in the same transaction, which `import_records` has
+//! no place for, and its write is already a few lines over the same inserts.
+//!
+//! # Inkwell 0.2
+//!
 //! Importing an Inkwell 0.2 data directory (`~/Library/Application Support/com.inkwell.app/` on
 //! a Mac) into the 1.0 store.
 //!
@@ -91,6 +104,10 @@ use crate::{
     SqliteStore, get_setting, insert_record, insert_segments, new_id, put_setting, segment_rows,
     set_ended,
 };
+
+mod records;
+
+pub use records::{ImportedCommitment, RecordImport};
 
 /// The keychain service 0.2 stored every API key under (`llm.rs`), with the provider's id as
 /// the account. ink-llm uses the same pair.
@@ -316,6 +333,8 @@ pub enum ImportError {
     },
     /// The store already holds an Inkwell 0.2 import.
     AlreadyImported,
+    /// [`SqliteStore::import_records`]: the store already holds an import under this marker.
+    MarkerPresent,
     /// The store failed; the import's transaction was rolled back.
     Store(StoreError),
 }
@@ -344,6 +363,10 @@ impl fmt::Display for ImportError {
             Self::AlreadyImported => {
                 f.write_str("this store already holds an Inkwell 0.2 import; a second is refused")
             }
+            Self::MarkerPresent => f.write_str(
+                "this store already holds an import from this source (its marker is set); a \
+                 second is refused",
+            ),
             Self::Store(e) => write!(f, "the store refused the import: {e}"),
         }
     }

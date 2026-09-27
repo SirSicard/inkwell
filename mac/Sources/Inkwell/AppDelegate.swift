@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let core = CoreController()
     private let router = Router()
     private let measurement = Measurement.fromEnvironment(ProcessInfo.processInfo.environment)
+    /// Created on first use, in applicationDidFinishLaunching: a second copy that exits early
+    /// never starts an updater.
+    private lazy var updates = Updates()
     private var statusItem: StatusItemController?
     private var mainWindow: MainWindowController?
     private var signalSources: [DispatchSourceSignal] = []
@@ -32,7 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.mainMenu = MainMenu.make()
+        // With updates off (no release key in this build) there is no updater and no menu item.
+        NSApp.mainMenu = MainMenu.make(checkForUpdates: updates.makeMenuItem())
         turnSignalsIntoQuit()
 
         if let measurement {
@@ -41,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         core.start()
 
-        statusItem = StatusItemController(store: core.store) { [weak self] in
+        statusItem = StatusItemController(store: core.store, checkForUpdates: updates.makeMenuItem()) { [weak self] in
             self?.showMainWindow()
         }
         // Opened by the user: show the window. Opened at login: stay in the menu bar, unless a
@@ -78,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMainWindow() {
         measurement?.windowShown()
         if mainWindow == nil {
-            mainWindow = MainWindowController(router: router, store: core.store)
+            mainWindow = MainWindowController(router: router, store: core.store, updates: updates)
         }
         mainWindow?.present()
     }
