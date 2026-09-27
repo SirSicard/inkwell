@@ -301,6 +301,7 @@ extension ParakeetError {
         case .unsupported: .unavailable(code: 1)
         case .loadFailed(let code): .failed(code: 100 + code)
         case .decodeFailed(let code): .failed(code: 200 + code)
+        case .decodeTimedOut: .failed(code: 203)
         }
     }
 }

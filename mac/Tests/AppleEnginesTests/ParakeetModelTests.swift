@@ -17,6 +17,33 @@ private final class Overlap: ParakeetBackend {
     }
 }
 
+/// A backend whose first decode never returns, cancelled or not, as a wedged Core ML call would,
+/// until the test lets it go; every later decode answers at once.
+private final class Wedged: ParakeetBackend {
+    private let state = Mutex<(calls: Int, parked: CheckedContinuation<Void, Never>?)>((0, nil))
+    var calls: Int { state.withLock { $0.calls } }
+
+    func transcribe(_ samples: [Float]) async throws(ParakeetError) -> Transcribed {
+        let first = state.withLock { s in
+            s.calls += 1
+            return s.calls == 1
+        }
+        if first {
+            await withCheckedContinuation { c in state.withLock { $0.parked = c } }
+            return Transcribed(text: "late", words: [], reportedDuration: 0)
+        }
+        return Transcribed(text: "answered", words: [], reportedDuration: 0)
+    }
+
+    /// Lets the wedged decode return at last.
+    func release() {
+        state.withLock { s in
+            defer { s.parked = nil }
+            return s.parked
+        }?.resume()
+    }
+}
+
 final class ParakeetModelTests: XCTestCase {
     /// The earlier engine reloaded the models per file, which made a 330-file run unusable: Core
     /// ML compiles for seconds. Here every caller shares one load, including callers that arrive
@@ -52,6 +79,43 @@ final class ParakeetModelTests: XCTestCase {
             }
         }
         XCTAssertEqual(backend.most, 1, "the Neural Engine takes one decode at a time")
+    }
+
+    /// One decode that never returned used to keep the Neural Engine's turn forever: every stream
+    /// and the offline fallback waited behind it, while every call into the engine still answered.
+    func testAHungDecodeTimesOutAndTheNextCallerStillDecodes() async throws {
+        let backend = Wedged()
+        let model = ParakeetModel(loader: { backend }, decodeLimit: { _ in .milliseconds(200) })
+        let audio = [Float](repeating: 0, count: 8_000)
+        let hung = Task { () -> ParakeetError? in
+            do throws(ParakeetError) {
+                _ = try await model.transcribe(audio)
+                return nil
+            } catch {
+                return error
+            }
+        }
+        let until = Date().addingTimeInterval(5)
+        while backend.calls == 0 {
+            XCTAssertLessThan(Date(), until, "the first decode never started")
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let started = ContinuousClock.now
+        let second = try await model.transcribe(audio)
+        XCTAssertEqual(second.text, "answered", "the second caller got the turn and its decode")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))
+        let failure = await hung.value
+        XCTAssertEqual(failure, .decodeTimedOut, "the hung decode reports a failure, not text")
+        XCTAssertEqual(ParakeetError.decodeTimedOut.engineError, .failed(code: 203))
+        backend.release()
+    }
+
+    /// The limit grows with the audio from a floor: a live window of at most 30 s gets under 30 s,
+    /// and a long offline take gets time in proportion.
+    func testTheDecodeLimitGrowsWithTheAudioFromAFloor() {
+        XCTAssertEqual(ParakeetModel.decodeLimit(samples: 0), .seconds(20))
+        XCTAssertEqual(ParakeetModel.decodeLimit(samples: LiveWindowConfig().maxBuffer), .seconds(27.5))
+        XCTAssertEqual(ParakeetModel.decodeLimit(samples: 3_600 * 16_000), .seconds(920))
     }
 
     func testAFailedLoadIsReportedAndCanBeRetried() async throws {
