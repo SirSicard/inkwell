@@ -36,7 +36,8 @@ final class ShutdownTests: XCTestCase {
         return (session, data)
     }
 
-    private func stopped(_ events: Events) -> Bool {
+    // Static, so closures on other threads call it without capturing the (non-Sendable) test case.
+    private static func stopped(_ events: Events) -> Bool {
         if case .coreStopped = events.all.last { true } else { false }
     }
 
@@ -47,7 +48,7 @@ final class ShutdownTests: XCTestCase {
         let sawStopped = Mutex<[Bool]>([])
         DispatchQueue.concurrentPerform(iterations: 6) { _ in
             session.shutdown()
-            let done = stopped(events)
+            let done = Self.stopped(events)
             sawStopped.withLock { $0.append(done) }
         }
         XCTAssertEqual(sawStopped.withLock { $0 }, Array(repeating: true, count: 6))
@@ -66,13 +67,13 @@ final class ShutdownTests: XCTestCase {
             let done = DispatchSemaphore(value: 0)
             DispatchQueue.global().async {
                 other.shutdown()
-                sawStopped.withLock { $0 = self.stopped(events) }
+                sawStopped.withLock { $0 = Self.stopped(events) }
                 done.signal()
             }
             done.wait()
             XCTAssertEqual(sawStopped.withLock { $0 }, true)
         }
-        XCTAssertTrue(stopped(events))
+        XCTAssertTrue(Self.stopped(events))
         if let data { try? FileManager.default.removeItem(at: data) }
 
         // No explicit shutdown at all: the last release does it, before it returns.
@@ -83,7 +84,7 @@ final class ShutdownTests: XCTestCase {
             dir2 = dir
             _ = session
         }
-        XCTAssertTrue(stopped(quiet), "deinit returned before the core stopped")
+        XCTAssertTrue(Self.stopped(quiet), "deinit returned before the core stopped")
         if let dir2 { try? FileManager.default.removeItem(at: dir2) }
     }
 }
