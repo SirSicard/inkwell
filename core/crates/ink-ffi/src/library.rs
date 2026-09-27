@@ -323,15 +323,22 @@ pub(crate) fn span(s: &Span) -> Value {
 
 /// A looks-done suggestion as the screens show it: the record it was said in (its title and
 /// start), where, and the line said there when it is still in that record's transcript. A read
-/// that fails leaves out what it could not read; the suggestion still shows.
+/// that fails leaves out what it could not read, and is logged; the suggestion still shows.
 pub(crate) fn done_evidence(store: &dyn ink_core::Store, e: &DoneEvidence) -> Value {
-    let record = store.record(&e.record).ok().flatten();
-    let line = store.segments(&e.record).ok().and_then(|segments| {
-        segments
+    let record = store.record(&e.record).unwrap_or_else(|err| {
+        log::warn!("owed: the meeting a looks-done suggestion cites could not be read: {err}");
+        None
+    });
+    let line = match store.segments(&e.record) {
+        Ok(segments) => segments
             .into_iter()
             .find(|s| s.channel == e.span.channel && s.start_ms == e.span.start_ms)
-            .map(|s| s.text)
-    });
+            .map(|s| s.text),
+        Err(err) => {
+            log::warn!("owed: the line a looks-done suggestion cites could not be read: {err}");
+            None
+        }
+    };
     event_object(&[
         ("record", Some(e.record.0.as_str().into())),
         (
