@@ -146,7 +146,9 @@ struct RGBImage {
         else { throw InkRendererError.resource("reference image format \(url.lastPathComponent)") }
         let w = image.width, h = image.height, stride = image.bytesPerRow
         var rgb = [UInt8](repeating: 0, count: w * h * 3)
-        data.withUnsafeBytes { raw in
+        // Typed: the macos-26 runner's Swift cannot choose between the raw-buffer and the
+        // typed-pointer overloads on its own.
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             for y in 0..<h {
                 for x in 0..<w {
                     let s = y * stride + x * bytesPerPixel, d = (y * w + x) * 3
