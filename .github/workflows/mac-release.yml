@@ -54,6 +54,9 @@ jobs:
       # checked, never pasted into a script.
       - name: Version
         id: version
+        # bash, for pipefail: a refusal from release-version.sh (a malformed tag, a notice not yet
+        # checked upstream) must fail this step, not vanish into the pipe to tee.
+        shell: bash
         env:
           EVENT: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
