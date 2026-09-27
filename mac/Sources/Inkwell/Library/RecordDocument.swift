@@ -81,12 +81,25 @@ struct TimelineChunk: Equatable, Sendable {
     var endMs: Int64 { startMs + durationMs }
 }
 
+/// A summary's decision or action with the transcript line it cites (S2.8: the core keeps each
+/// item's span with the summary).
+struct SummaryCitation: Equatable, Sendable, Identifiable {
+    let id: Int
+    let kind: SummaryItemKind
+    let text: String
+    let atMs: Int64
+    /// The line at that moment on that side: the item's source, shown beside it.
+    let citedLine: LedgerLine?
+}
+
 struct RecordDocument: Equatable, Sendable {
     let record: RecordRow
     let ledger: [LedgerLine]
     let merged: [MergedEntry]
     let summary: SummaryDocument?
     let summaryWrittenAt: Int64?
+    /// The summary's decisions and actions, each with its cited line, in the summary's order.
+    let summaryItems: [SummaryCitation]
     /// The record's own commitments that stand (not folded into another), in the order said.
     let owed: [OwedEntry]
     /// The people on the far end, as named or numbered.
@@ -156,6 +169,11 @@ struct RecordDocument: Equatable, Sendable {
 
         summary = answer.summary.map { SummaryDocument(markdown: $0.text) }
         summaryWrittenAt = answer.summary?.createdAtUnixMs
+        summaryItems = (answer.summary?.items ?? []).enumerated().map { index, item in
+            SummaryCitation(
+                id: index, kind: item.kind, text: item.text, atMs: item.span.startMs,
+                citedLine: Self.line(at: item.span.startMs, in: ledger, channel: item.span.channel))
+        }
 
         let standing = answer.commitments.filter { $0.mergedInto == nil }
         owed = standing.map { c in

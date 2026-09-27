@@ -309,7 +309,7 @@ private let recordAnswer = #"""
    {"channel":"far","start_ms":18278,"end_ms":19258,"text":"Agreed, the fourteenth works.","speaker":"spk2"},
    {"channel":"far","start_ms":20000,"end_ms":21000,"text":"Thanks, all."}],
  "notes":[{"note":"n2","at_ms":15000,"text":"Beta: small group"},{"note":"n1","at_ms":2000,"text":"Launch date"}],
- "summary":{"text":"Launch moves to the 14th\n\nThe review needs **another week**.","model":"scripted/seed","created_at_unix_ms":1790250031000},
+ "summary":{"text":"Launch moves to the 14th\n\nThe review needs **another week**.","model":"scripted/seed","created_at_unix_ms":1790250031000,"items":[]},
  "commitments":[
    {"commitment":"c1","record":"r1","text":"Send the revised plan","owner":"You","due":"Friday","provenance":[{"channel":"mic","start_ms":2822,"end_ms":3546}],"merged_into":"c2","done":false},
    {"commitment":"c2","record":"r1","text":"Send the revised plan","due":"Friday","provenance":[{"channel":"mic","start_ms":2822,"end_ms":3546}],"done":false},

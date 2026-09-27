@@ -395,11 +395,18 @@ struct SummaryTab: View {
                         .font(.callout)
                         .foregroundStyle(Theme.secondaryText)
                 }
+                let decisions = document.summaryItems.filter { $0.kind == .decision }
+                if !decisions.isEmpty {
+                    Paper.Eyebrow(text: "Decided, and where").padding(.top, 14)
+                    ForEach(decisions) { item in
+                        CitedItem(text: item.text, citedLine: item.citedLine) { ms in library.playFrom(ms) }
+                    }
+                }
                 let cited = document.owed.filter { $0.citedLine != nil }
                 if !cited.isEmpty {
                     Paper.Eyebrow(text: "Where it was said").padding(.top, 14)
                     ForEach(cited) { item in
-                        CitedItem(item: item) { ms in library.playFrom(ms) }
+                        CitedItem(text: item.text, citedLine: item.citedLine) { ms in library.playFrom(ms) }
                     }
                 }
             }
@@ -458,15 +465,17 @@ struct SummaryView: View {
 
 /// A promise from the summary with the line it came from, so a mismatch shows at a glance.
 struct CitedItem: View {
-    let item: OwedEntry
+    let text: String
+    let citedLine: LedgerLine?
     let play: (Int64) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(item.text)
+            // Model text (a decision, an action): words only.
+            Text(verbatim: text)
                 .font(.body.weight(.medium))
                 .foregroundStyle(Theme.text)
-            if let line = item.citedLine {
+            if let line = citedLine {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("\(line.speaker.label): “\(line.text)”")
                         .font(.system(.callout, design: .serif))

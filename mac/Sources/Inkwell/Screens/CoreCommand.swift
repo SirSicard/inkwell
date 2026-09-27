@@ -27,6 +27,16 @@ enum CoreCommand: Equatable, Sendable {
     case recordsSearch(query: String, limit: Int, ref: String)
     case recordOpen(record: String, ref: String)
     case libraryStats(sinceUnixMs: Int64, ref: String)
+    /// Meetings (S2.8). A start names the app when it answers the Drop's offer, and a title when
+    /// the calendar has the call.
+    case meetingStart(app: String?, title: String?)
+    case meetingStop
+    case meetingDismiss(app: String)
+    /// `ref` comes back in `meeting.answered`, or as the id of a `command.failed`.
+    case meetingAsk(question: String, ref: String)
+    case meetingsRecover
+    /// "Not yet": a looks-done suggestion is dismissed.
+    case commitmentNotYet(id: String)
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -59,6 +69,15 @@ enum CoreCommand: Equatable, Sendable {
         case .recordsSearch(let query, let limit, let ref): ["cmd": "records.search", "query": query, "limit": limit, "id": ref]
         case .recordOpen(let record, let ref): ["cmd": "record.open", "record": record, "id": ref]
         case .libraryStats(let since, let ref): ["cmd": "library.stats", "since_unix_ms": since, "id": ref]
+        case .meetingStart(let app, let title):
+            ["cmd": "meeting.start", "id": "meeting.start"]
+                .merging(app.map { ["app": $0] } ?? [:]) { a, _ in a }
+                .merging(title.map { ["title": $0] } ?? [:]) { a, _ in a }
+        case .meetingStop: ["cmd": "meeting.stop", "id": "meeting.stop"]
+        case .meetingDismiss(let app): ["cmd": "meeting.dismiss", "app": app, "id": "meeting.dismiss"]
+        case .meetingAsk(let question, let ref): ["cmd": "meeting.ask", "question": question, "id": ref]
+        case .meetingsRecover: ["cmd": "meetings.recover"]
+        case .commitmentNotYet(let id): ["cmd": "commitment.not_yet", "commitment": id]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -84,6 +103,12 @@ enum CoreCommand: Equatable, Sendable {
         case .recordsSearch: "records.search"
         case .recordOpen: "record.open"
         case .libraryStats: "library.stats"
+        case .meetingStart: "meeting.start"
+        case .meetingStop: "meeting.stop"
+        case .meetingDismiss: "meeting.dismiss"
+        case .meetingAsk: "meeting.ask"
+        case .meetingsRecover: "meetings.recover"
+        case .commitmentNotYet: "commitment.not_yet"
         }
     }
 }
@@ -94,6 +119,12 @@ enum ShellSetting: String, Sendable {
     case onboardingDone = "onboarding.done"
     /// "on" or "off": the user's wish for dictation polish.
     case dictationPolish = "dictation.polish"
+    /// "on" (the default) or "off": listen for calls and offer to record them.
+    case meetingsDetect = "meetings.detect"
+    /// "on" or "off" (the default): with Bluetooth output, record the headset's own mic.
+    case meetingsHeadsetMic = "meetings.headset_mic"
+    /// "forever" (the default), or days: how long the library keeps records.
+    case retentionDays = "retention.days"
 }
 
 /// Where the screens' commands go.

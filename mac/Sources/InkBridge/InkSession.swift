@@ -135,10 +135,18 @@ public final class InkSession: Sendable {
         try command(["cmd": "engine.unregister", "engine": id])
     }
 
-    /// The latest bands of the live audio, copied out. Any thread, any rate: it never blocks.
+    /// The latest bands of the live audio (your mic), copied out. Any thread, any rate: it never
+    /// blocks.
     public static func bands() -> InkBands {
         var out = InkBands()
         _ = ink_bands_read(&out)
+        return out
+    }
+
+    /// The far end's latest bands during a meeting, as `bands()` gives the mic's.
+    public static func farBands() -> InkBands {
+        var out = InkBands()
+        _ = ink_far_bands_read(&out)
         return out
     }
 

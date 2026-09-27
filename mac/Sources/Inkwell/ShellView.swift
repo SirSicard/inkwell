@@ -94,5 +94,51 @@ struct InkRail: View {
             .frame(maxHeight: .infinity)
             .background(Theme.inkZone)
             .accessibilityHidden(true)
+            .overlay(alignment: .bottom) {
+                if wide {
+                    RecordControls().padding(22)
+                }
+            }
+    }
+}
+
+/// Today's foot of the ink zone (the canvas): whether Inkwell listens for calls, and Record now.
+struct RecordControls: View {
+    @Environment(CoreStore.self) private var store
+    @Environment(ScreenModels.self) private var screens
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(listening)
+                Text("Hold fn to dictate").foregroundStyle(Theme.secondaryText)
+            }
+            .font(Typography.timestamp)
+            .foregroundStyle(PaperPalette.quiet)
+            if store.meeting == nil {
+                Button {
+                    screens.meetings.recordNow()
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle().fill(PaperPalette.recording).frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text("Record now")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PaperButtonStyle(prominent: true))
+                .accessibilityHint("Records the mic and everything this Mac plays, until you stop it")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var listening: String {
+        if store.meeting != nil { return "Recording" }
+        switch store.listening {
+        case true?: return screens.meetings.detect ? "Listening for meetings" : "Not listening for meetings"
+        case false?: return "Not listening for meetings"
+        case nil: return " "
+        }
     }
 }

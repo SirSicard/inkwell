@@ -13,7 +13,14 @@ final class LevelsTests: XCTestCase {
         XCTAssertEqual(InkLevels.level(low: 0, mid: 0, high: 0), 0)
         XCTAssertEqual(InkLevels.level(low: rms(-70), mid: 0, high: 0), 0, "below the floor")
         XCTAssertEqual(InkLevels.level(low: 0, mid: rms(-10), high: 0), 1, "above the ceiling")
-        XCTAssertEqual(InkLevels.level(low: 0, mid: rms(-40), high: 0), 0.5, accuracy: 1e-6, "halfway in dB")
+        XCTAssertEqual(InkLevels.level(low: 0, mid: rms(-37.5), high: 0), 0.5, accuracy: 1e-6, "halfway in dB")
+        // S2.8's tuning (the core's test the_ink_level_map_rests_on_the_measured_fixture_levels):
+        // the room between words (-57 dBFS on the AMI fixture) is still, the built-in mic's room
+        // floor (-50.6 dB) barely moves it.
+        XCTAssertEqual(InkLevels.floorDB, -55)
+        XCTAssertEqual(InkLevels.ceilingDB, -20)
+        XCTAssertEqual(InkLevels.level(low: rms(-57), mid: 0, high: 0), 0)
+        XCTAssertLessThan(InkLevels.level(low: rms(-50.6), mid: 0, high: 0), 0.15)
     }
 
     func testTheBandsPowersAdd() {

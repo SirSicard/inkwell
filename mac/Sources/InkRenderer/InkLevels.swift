@@ -20,11 +20,17 @@ public struct InkLevels: Equatable, Sendable {
 
     /// The level of one stream's bands, on a decibel scale: `floorDB` and below reads 0 (room
     /// noise and silence), `ceilingDB` and above reads 1. The ink's envelope follower does the
-    /// smoothing, so this is a plain map.
+    /// smoothing, so this is a plain map. The same map serves your mic and the far end.
     ///
-    /// The scale is the one the prototype's stand-in voice implies: ordinary speech into a laptop
-    /// mic (about -35 to -20 dBFS RMS) swings across the 0.5 at which the ink throws a droplet,
-    /// and a quiet room (below -60) stays still. S2.7 and S2.8 check it against real takes.
+    /// Tuned in S2.8 on measured levels (the core's test
+    /// `the_ink_level_map_rests_on_the_measured_fixture_levels` keeps the numbers true): the public
+    /// AMI fixture's hops, as the core publishes them, sit at -59 to -57 dBFS in the room between
+    /// words (p10, p25), and its speech at -41 (p75) to -25 (p90) for one talker, -35 to -29 for
+    /// three mixed; the loudest (p99) reaches -19. So the floor moved from -60 to -55: the room
+    /// between words reads 0, and the built-in mic's measured room floor (-50.6 dB, S0.3) about
+    /// 0.1, a breath rather than a pulse. The ceiling stays at -20, so only the loudest speech
+    /// saturates, and the droplet threshold (0.5) falls at -37.5 dBFS. Real meetings in the
+    /// dogfood week check it on this Mac's own mic and on call audio (MEETINGS-CHECKLIST.md).
     public static func level(low: Float, mid: Float, high: Float) -> Double {
         // The bands do not overlap, so their powers add.
         let power = Double(low) * Double(low) + Double(mid) * Double(mid) + Double(high) * Double(high)
@@ -34,7 +40,7 @@ public struct InkLevels: Equatable, Sendable {
     }
 
     /// Reads 0 at and below this RMS level (dBFS).
-    public static let floorDB = -60.0
+    public static let floorDB = -55.0
     /// Reads 1 at and above this RMS level (dBFS).
     public static let ceilingDB = -20.0
 }

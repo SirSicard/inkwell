@@ -429,16 +429,16 @@ final class LiveModelTests: XCTestCase {
         ])
     }
 
-    func testAskingSaysPlainlyWhenNothingCanAnswer() async throws {
+    func testAskingSaysPlainlyWhenNothingCanAnswer() {
         let live = LiveModel(send: { _ in })
         meeting(live)
         live.askText = "  What do I owe so far? "
         live.submitAsk(context: [])
         XCTAssertEqual(live.askText, "")
         XCTAssertEqual(live.asked.first?.question, "What do I owe so far?")
-        for _ in 0..<100 where live.asked.first?.answer == nil {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        XCTAssertNil(live.asked.first?.answer, "waiting for the core")
+        // The core has no model to answer with: said in words, never a made-up answer.
+        live.apply(event(#"{"type":"command.failed","command":"meeting.ask","id":"ask:0","message":"no language model is available to answer on this Mac"}"#))
         guard case .unavailable = live.asked.first?.answer else {
             return XCTFail("no made-up answer: \(String(describing: live.asked.first?.answer))")
         }
@@ -750,7 +750,8 @@ final class LiveLayoutTests: XCTestCase {
         live.apply(batch[0])
         live.notesEdited(Array(repeating: "A note line", count: 60).joined(separator: "\n"), caretParagraph: 59)
         let meeting = try XCTUnwrap(store.meeting)
-        let hosting = NSHostingController(rootView: LiveMeetingView(meeting: meeting, live: live))
+        let hosting = NSHostingController(rootView: LiveMeetingView(
+            meeting: meeting, live: live, meetings: MeetingModel(send: { _ in })))
         let minimum = hosting.sizeThatFits(in: .zero)
         XCTAssertLessThan(minimum.height, 460, "the window's minimum content height is 460")
         XCTAssertLessThan(minimum.width, 720)

@@ -246,6 +246,9 @@ public protocol InkLanguageModel: AnyObject, Sendable {
     var model: String { get }
     /// Whether the text stays on this Mac. Local-only mode refuses a model that says false.
     var isLocal: Bool { get }
+    /// How many tokens its context holds, prompt and answer together, when it knows (the core
+    /// sizes a meeting's summary and Ask to fit). Nil by default: the core then assumes 4,096.
+    var contextTokens: Int? { get }
 
     /// Core worker thread. Generates an answer and calls `completion` once, from any thread. A
     /// model that cannot run now answers `.unavailable`, never made-up text.
@@ -254,6 +257,10 @@ public protocol InkLanguageModel: AnyObject, Sendable {
         cancellation: InkCancellation,
         completion: @escaping @Sendable (Result<String, InkEngineError>) -> Void
     )
+}
+
+extension InkLanguageModel {
+    public var contextTokens: Int? { nil }
 }
 
 /// The model behind a language model's table `ctx`, and its calls in flight.
@@ -275,11 +282,21 @@ private struct ModelInfo: Encodable {
     let licence: String
     let model: String
     let local: Bool
+    /// Left out when nil (the core refuses a null).
+    let contextTokens: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id, licence, model, local
+        case contextTokens = "context_tokens"
+    }
 }
 
 enum ModelTable {
     static func register(_ model: any InkLanguageModel) throws {
-        let info = ModelInfo(id: model.id, licence: model.licence, model: model.model, local: model.isLocal)
+        let info = ModelInfo(
+            id: model.id, licence: model.licence, model: model.model, local: model.isLocal,
+            // The core takes 256 tokens or more; a smaller answer is a model that does not know.
+            contextTokens: model.contextTokens.flatMap { $0 >= 256 ? $0 : nil })
         let infoJSON = String(decoding: try JSONEncoder().encode(info), as: UTF8.self)
         let ctx = Unmanaged.passRetained(ModelBox(model)).toOpaque()
         let status = infoJSON.withCString { infoPtr in

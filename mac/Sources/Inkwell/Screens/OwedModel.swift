@@ -1,12 +1,13 @@
 // Owed: what was promised in meetings and is still open, grouped, with what is overdue.
 //
 // The core lists the open commitments (not done, and not merged into another: a promise said twice
-// is one row with "Said twice"), soonest due first. Grouping: a commitment with a named owner goes
-// under that person; the user's own promises (the core leaves their owner unnamed) go under the
-// meeting they were made in, because the core does not record who they were made to.
+// is one row with "Said twice"), soonest due first. Grouping: by the person a promise is owed to
+// ("To Dana") when the meeting said; else, a commitment with a named owner under that person; the
+// rest under the meeting they were made in.
 //
-// "Looks done" suggestions (a later meeting where the user said it was done) show above the list
-// when there are any. The core does not produce them yet.
+// "Looks done" suggestions show above the list: a later meeting in which the user said the work
+// was already done (the core matches what was said to the open promises). "Mark done" closes the
+// promise; "Not yet" dismisses the suggestion, and the promise stays.
 import Foundation
 import InkBridge
 import Observation
@@ -135,6 +136,27 @@ final class OwedModel {
     /// The user says a suggestion is wrong: it goes, the promise stays.
     func notYet(_ suggestion: LooksDone) {
         suggestions.removeAll { $0.id == suggestion.id }
+        send(.commitmentNotYet(id: suggestion.commitment))
+    }
+
+    /// The suggestions in the core's list: each open promise a later meeting says looks done.
+    static func suggestions(_ items: [OwedItem]) -> [LooksDone] {
+        items.compactMap { item in
+            guard let evidence = item.looksDone else { return nil }
+            let meeting = evidence.recordTitle?.trimmingCharacters(in: .whitespaces).nilIfEmpty
+                ?? evidence.recordStartedAtUnixMs.map {
+                    "a meeting on " + Date(timeIntervalSince1970: Double($0) / 1_000)
+                        .formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+                }
+                ?? "a later meeting"
+            let said = evidence.text?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            let text = said.map { "in \(meeting) you said \u{201C}\($0)\u{201D}" }
+                ?? "\(meeting) suggests \u{201C}\(item.text)\u{201D} is done"
+            let title = evidence.recordTitle?.trimmingCharacters(in: .whitespaces).nilIfEmpty ?? "That meeting"
+            return LooksDone(
+                id: "looks-done:\(item.id)", commitment: item.id, text: text,
+                source: "\(title) ▸ \(liveClock(ms: evidence.span.startMs))")
+        }
     }
 
     /// "5 open · 2 due this week · 1 overdue".
@@ -161,8 +183,12 @@ final class OwedModel {
         var rows: [String: [OwedRow]] = [:]
         for item in items {
             let owner = item.owner?.trimmingCharacters(in: .whitespaces)
+            let recipient = item.recipient?.trimmingCharacters(in: .whitespaces)
             let key: String
-            if let owner, !owner.isEmpty {
+            if let recipient, !recipient.isEmpty {
+                key = "to:" + recipient.lowercased()
+                titles[key] = titles[key] ?? ("To " + recipient, nil)
+            } else if let owner, !owner.isEmpty {
                 key = "owner:" + owner.lowercased()
                 titles[key] = titles[key] ?? (owner, nil)
             } else {
@@ -175,7 +201,7 @@ final class OwedModel {
             rows[key, default: []].append(OwedRow(
                 id: item.id, text: item.text, due: due(item, now: now), merged: Int(item.merged),
                 record: item.record, saidAtMs: item.saidAtMs,
-                meeting: key.hasPrefix("owner:") ? meetingTitle(item) : nil))
+                meeting: key.hasPrefix("record:") ? nil : meetingTitle(item)))
         }
         return order.map { key in
             OwedGroup(id: key, title: titles[key]?.0 ?? "", subtitle: titles[key]?.1, rows: rows[key] ?? [])
@@ -206,15 +232,21 @@ final class OwedModel {
         switch event {
         case .commitmentsListed(let listed):
             items = listed.items
+            suggestions = Self.suggestions(listed.items)
             loaded = true
-        case .commitmentUpdated, .meetingCommitments:
-            // A promise changed, or a meeting filed new ones: list again.
+        case .commitmentUpdated, .meetingCommitments, .meetingLooksDone, .librarySwept:
+            // A promise changed, a meeting filed new ones or found some done, or old ones went:
+            // list again.
             load()
-        case .commandFailed(let failure) where failure.command == "commitment.set_done":
+        case .commandFailed(let failure) where ["commitment.set_done", "commitment.not_yet"].contains(failure.command):
             // Put it back as the core has it.
             load()
         default:
             break
         }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

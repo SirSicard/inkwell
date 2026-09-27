@@ -9,7 +9,9 @@
 //   another line, the editor losing focus, or the meeting ending. Edits to a saved line update it;
 //   emptying one deletes it. Nothing is saved on a timer.
 // - Ask, with the question stack: the far end's questions (up to four, newest first) are stacked
-//   so one can be answered with a key press, and anything else can be asked.
+//   so one can be answered with a key press, and anything else can be asked. The core answers
+//   (meeting.ask) from the transcript so far, with the language model the shell registered; the
+//   answer is the model's words, shown as plain text only, and a failure says so in words.
 import Foundation
 import InkBridge
 import Observation
@@ -312,19 +314,19 @@ struct QuestionStack: Equatable {
 /// What Ask answered.
 enum AskAnswer: Equatable, Sendable {
     case answer(String)
-    /// Nothing can answer; why, in the user's words.
+    /// Nothing answered; why, in the user's words.
     case unavailable(String)
-}
 
-/// Answers a question about the meeting so far.
-protocol AskService: Sendable {
-    func answer(_ question: String, context: [LiveLine]) async -> AskAnswer
-}
-
-/// Until the core can answer questions about a meeting, Ask says so rather than guessing.
-struct AskNotAvailable: AskService {
-    func answer(_ question: String, context: [LiveLine]) async -> AskAnswer {
-        .unavailable("Answers about a call aren't available in this version yet.")
+    /// What the core's failure means for the user. Its message names what failed (never the
+    /// question); only the case without a model gets its own words.
+    static func failed(_ message: String) -> AskAnswer {
+        if message.contains("no language model") {
+            return .unavailable("Answers need Apple Intelligence, which is off or not ready on this Mac.")
+        }
+        if message.contains("no meeting") {
+            return .unavailable("Couldn't answer: the meeting has ended.")
+        }
+        return .unavailable("Couldn't answer that. Try asking again.")
     }
 }
 
@@ -353,12 +355,10 @@ final class LiveModel {
     @ObservationIgnored private var draft: LiveNotesDraft?
     @ObservationIgnored private var nextAsk = 0
     @ObservationIgnored private let send: SendCommand
-    @ObservationIgnored private let askService: any AskService
     @ObservationIgnored private let now: () -> Date
 
-    init(send: @escaping SendCommand, ask: any AskService = AskNotAvailable(), now: @escaping () -> Date = Date.init) {
+    init(send: @escaping SendCommand, now: @escaping () -> Date = Date.init) {
         self.send = send
-        askService = ask
         self.now = now
     }
 
@@ -403,21 +403,20 @@ final class LiveModel {
         send(question: stack.questions[slot].text, context: context)
     }
 
+    /// Asks the core. `context` (the settled lines on screen) is not sent: the core answers from
+    /// the record, which holds every final, not only the ones the ledger keeps in memory.
     private func send(question: String, context: [LiveLine]) {
         let id = nextAsk
         nextAsk += 1
         asked.insert(AskedQuestion(id: id, question: question), at: 0)
-        let service = askService
-        Task { [weak self] in
-            let answer = await service.answer(question, context: context)
-            self?.answered(id, answer)
-        }
+        send(.meetingAsk(question: question, ref: Self.askRef(id)))
     }
 
-    private func answered(_ id: Int, _ answer: AskAnswer) {
-        if let i = asked.firstIndex(where: { $0.id == id }) {
-            asked[i].answer = answer
-        }
+    static func askRef(_ id: Int) -> String { "ask:\(id)" }
+
+    private func answered(ref: String?, _ answer: AskAnswer) {
+        guard let ref, let i = asked.firstIndex(where: { Self.askRef($0.id) == ref }) else { return }
+        asked[i].answer = answer
     }
 
     func apply(_ event: InkEvent) {
@@ -431,6 +430,11 @@ final class LiveModel {
             draft = LiveNotesDraft(record: started.record)
         case .meetingFinal(let final) where final.record == record:
             stack.heard(final)
+        case .meetingAnswered(let answered):
+            // Model text: shown as words only (the Ask panel renders it as plain Text).
+            self.answered(ref: answered.ref, .answer(answered.text))
+        case .commandFailed(let failed) where failed.command == "meeting.ask":
+            answered(ref: failed.id, .failed(failed.message))
         case .meetingStopped(let stopped) where stopped.record == record:
             // Capture ended: whatever is typed is saved now.
             notesLeft()

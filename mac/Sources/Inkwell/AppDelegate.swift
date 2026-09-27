@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
     private var mainWindow: MainWindowController?
     /// The ink every surface shows, and the Drop that shows it while something is live.
-    private lazy var ink = ShellInk(store: core.store)
+    private lazy var ink = ShellInk(store: core.store, permissions: core.screens.permissions)
     private var drop: DropController?
     private var dropDemo: DropDemo?
     private var signalSources: [DispatchSourceSignal] = []
@@ -65,7 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self?.measurement?.inkReady(outcome, took: took)
         }
-        drop = DropController(ink: ink)
+        let drop = DropController(ink: ink)
+        let screens = core.screens
+        drop.onAction = { action in screens.meetings.perform(action, permissions: screens.permissions) }
+        self.drop = drop
         if let interval = DropDemo.interval(from: ProcessInfo.processInfo.environment) {
             dropDemo = DropDemo(ink: ink, interval: interval)
         }

@@ -44,6 +44,8 @@ final class DropPanel: NSPanel {
 /// on the left at the panel's full height.
 enum DropLayout {
     static let size = NSSize(width: 320, height: 84)
+    /// With buttons (the consent offer, the watchdog's "Allow system audio"): wider and taller.
+    static let sizeWithActions = NSSize(width: 380, height: 112)
     static let inkWidth: CGFloat = 96
     static let cornerRadius: CGFloat = 16
     /// Above the bottom of the visible screen (the Dock's top when it shows).
@@ -57,6 +59,8 @@ final class DropController {
     private let panel = DropPanel()
     private let content = DropContentView()
     private(set) var isShown = false
+    /// What the Drop's buttons do (the controller's meeting commands).
+    var onAction: (DropText.Action) -> Void = { _ in }
 
     /// The state the Drop's ink shows.
     var inkState: InkState { content.inkView.state }
@@ -66,16 +70,26 @@ final class DropController {
     init(ink: ShellInk) {
         self.ink = ink
         panel.contentView = content
+        content.onAction = { [weak self] action in self?.onAction(action) }
         update()
         observe()
     }
 
+    /// The text the Drop shows now (tests).
+    var shownText: DropText? { isShown ? content.shown : nil }
+
     /// Brings the Drop in line with the ink's state.
     func update() {
         let state = ink.state
-        if state.isLive {
-            content.show(ink.dropText)
+        if ink.dropShows {
+            let text = ink.dropText
+            let size = text.actions.isEmpty ? DropLayout.size : DropLayout.sizeWithActions
+            content.show(text)
             content.inkView.state = state
+            if panel.frame.size != size {
+                panel.setContentSize(size)
+                if isShown { place() }
+            }
             if !isShown {
                 place()
                 panel.orderFrontRegardless()
@@ -97,6 +111,7 @@ final class DropController {
         withObservationTracking {
             _ = ink.state
             _ = ink.dropText
+            _ = ink.dropShows
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -111,17 +126,28 @@ final class DropController {
     private func place() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let visible = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: (visible.midX - DropLayout.size.width / 2).rounded(),
+        panel.setFrameOrigin(NSPoint(x: (visible.midX - panel.frame.width / 2).rounded(),
                                      y: visible.minY + DropLayout.bottomMargin))
     }
 }
 
-/// The Drop's content: paper, the ink, two lines.
+/// A button that takes the first click on a panel of an app that is not active (the Drop never
+/// activates Inkwell, so every click on it is a first click).
+final class DropButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// The Drop's content: paper, the ink, two lines, and buttons when it offers something.
 final class DropContentView: NSView {
     let inkView = InkView(frame: NSRect(x: 0, y: 0, width: DropLayout.inkWidth, height: DropLayout.size.height))
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
+    private let buttons = NSStackView()
     private let inkHolder = NSView()
+    /// What it shows now.
+    private(set) var shown: DropText?
+    /// A button was clicked.
+    var onAction: (DropText.Action) -> Void = { _ in }
 
     private static let paper = Palette.paper.nsColor
     private static let rule = Palette.ink.nsColor.withAlphaComponent(0.12)
@@ -157,7 +183,13 @@ final class DropContentView: NSView {
         detail.font = .systemFont(ofSize: 14)
         detail.textColor = Palette.ink.nsColor
         detail.lineBreakMode = .byTruncatingTail
-        let lines = NSStackView(views: [title, detail])
+        detail.maximumNumberOfLines = 2
+        detail.cell?.wraps = true
+        detail.preferredMaxLayoutWidth = DropLayout.sizeWithActions.width - DropLayout.inkWidth - 20
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+        buttons.isHidden = true
+        let lines = NSStackView(views: [title, detail, buttons])
         lines.orientation = .vertical
         lines.alignment = .leading
         lines.spacing = 3
@@ -172,6 +204,8 @@ final class DropContentView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         inkView.setAccessibilityElement(false)
+        // The ink stays its size, centred on the panel's height, whichever size the panel takes.
+        inkHolder.autoresizingMask = [.minYMargin, .maxYMargin]
     }
 
     @available(*, unavailable)
@@ -180,11 +214,38 @@ final class DropContentView: NSView {
     }
 
     func show(_ text: DropText) {
+        if text.actions != shown?.actions {
+            buttons.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            for (index, action) in text.actions.enumerated() {
+                let button = DropButton(title: action.title, target: self, action: #selector(clicked(_:)))
+                button.tag = index
+                button.bezelStyle = .push
+                button.controlSize = .regular
+                // The first is the offer's answer, in ink; the others are plain.
+                if index == 0 {
+                    button.bezelColor = Palette.ink.nsColor
+                }
+                buttons.addArrangedSubview(button)
+            }
+            buttons.isHidden = text.actions.isEmpty
+        }
+        shown = text
         title.stringValue = text.title
         detail.stringValue = text.detail
         title.textColor = text.tone == .plain ? Palette.muted.nsColor : Palette.seal.nsColor
         layer?.borderColor = text.tone == .alert ? Palette.seal.nsColor.cgColor : Self.rule.cgColor
         layer?.borderWidth = text.tone == .alert ? 1.5 : 1
         setAccessibilityLabel("Inkwell: \(text.title), \(text.detail)")
+    }
+
+    @objc private func clicked(_ sender: NSButton) {
+        guard let actions = shown?.actions, actions.indices.contains(sender.tag) else { return }
+        onAction(actions[sender.tag])
+    }
+
+    /// Clicks a button as the user would (tests).
+    func press(_ action: DropText.Action) {
+        guard let index = shown?.actions.firstIndex(of: action) else { return }
+        onAction(shown!.actions[index])
     }
 }

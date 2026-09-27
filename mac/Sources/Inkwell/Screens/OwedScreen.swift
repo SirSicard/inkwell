@@ -48,7 +48,8 @@ private struct LooksDoneCard: View {
                 .foregroundStyle(Theme.accent)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Looks done: \(suggestion.text)")
+                // What was said, verbatim: never read as markdown.
+                Text(verbatim: "Looks done: " + suggestion.text)
                     .font(Typography.body)
                     .foregroundStyle(Theme.text)
                 Text(suggestion.source)

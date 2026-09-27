@@ -131,6 +131,12 @@ enum NeedsYou {
             ("The last meeting stopped early", "What was recorded up to then is kept.")
         case .hotkeyLost:
             ("The dictation key stopped working", "macOS stopped sending it to Inkwell. Check Accessibility in System Settings.")
+        case .meetingRecovered:
+            ("A meeting was finished after Inkwell quit unexpectedly", "It was recording when Inkwell stopped. What was recorded was kept and the record is complete.")
+        case .detectionUnavailable:
+            ("Inkwell stopped listening for calls", "It can't tell when a call starts, so it won't offer to record one. Record now still works.")
+        case .librarySwept(_, let failed) where failed > 0:
+            ("Some old records couldn't be removed", "Your storage setting deletes old records, and some of them, or their recordings, are still on this Mac.")
         default:
             nil
         }
