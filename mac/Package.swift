@@ -82,6 +82,7 @@ let package = Package(
             dependencies: ["InkBridge", "AppleEngines", "InkRenderer", "Sparkle"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
+                .linkedFramework("EventKit"),
                 .linkedFramework("ServiceManagement"),
                 .linkedFramework("SwiftUI"),
             ]
