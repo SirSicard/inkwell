@@ -1681,3 +1681,93 @@ fn the_summary_keeps_cited_items_and_an_earlier_promise_looks_done() {
             .contains(&MeetingEvent::LooksDone { suggested: 1 })
     );
 }
+
+/// Review (S2.8, HIGH): a second crash during recovery runs the final pass again on a meeting whose
+/// first pass already filed its commitments. Filing is once per record: the rerun files nothing,
+/// and what the user did with the first filing (a promise marked done) is kept.
+#[test]
+fn a_final_pass_that_runs_again_files_no_commitment_twice() {
+    use ink_core::mock::MockClock;
+    use ink_pipeline::meeting::{EndedMeeting, Interrupted, MeetingServices};
+
+    let llm = Arc::new(Scripted {
+        calls: AtomicUsize::new(0),
+    });
+    let mut rig = RigBuilder {
+        answer: promise(),
+        llm: Some(llm.clone()),
+        title: None,
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(0.5), speech(2.0, -30.0, 71), silence(4.0)]);
+    let far = join(&[silence(3.0), speech(2.0, -30.0, 72), silence(1.5)]);
+    rig.feed(&mic, &far);
+    drop(rig.chain.take());
+    drop(rig.mic.take());
+    drop(rig.far.take());
+    rig.chunks.recover().unwrap();
+
+    let pass = |rig: &Rig| {
+        let events = rig.events.clone();
+        let sink: ink_core::EventSink<MeetingEvent> =
+            Arc::new(move |e| events.lock().unwrap().push(e));
+        EndedMeeting::interrupted(
+            MeetingServices {
+                live: None,
+                offline: rig.engine.clone(),
+                diarizer: None,
+                store: rig.store.clone(),
+                clock: Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)),
+                llm: Some(llm.clone()),
+            },
+            Default::default(),
+            energy_vad(),
+            sink,
+            Interrupted {
+                record: record.clone(),
+                started_unix_ms: T0_UNIX_MS,
+                t0_ns: T0_NS,
+                ended_unix_ms: T0_UNIX_MS + 7_000,
+            },
+        )
+        .finalize(&rig.chunks, &CancelToken::new())
+        .unwrap()
+    };
+
+    assert!(pass(&rig).superseded, "{:?}", rig.warnings());
+    let first = rig.store.commitments(&record).unwrap();
+    assert_eq!(first.len(), 2, "the summary's action and the promise");
+    let open = first.iter().find(|c| c.merged_into.is_none()).unwrap();
+    rig.store.set_commitment_done(&open.id, true).unwrap();
+    let calls = llm.calls.load(Ordering::SeqCst);
+
+    // The second crash came after the filing: the pass runs again from the chunks.
+    let again = pass(&rig);
+    assert!(again.superseded, "{:?}", rig.warnings());
+    let second = rig.store.commitments(&record).unwrap();
+    assert_eq!(
+        second.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        first.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        "the same rows, none added"
+    );
+    assert!(
+        second.iter().find(|c| c.id == open.id).unwrap().done,
+        "the user's done is kept"
+    );
+    assert_eq!(
+        llm.calls.load(Ordering::SeqCst),
+        calls + 1,
+        "the rerun writes the summary again and asks nothing about commitments"
+    );
+    assert_eq!(
+        rig.events()
+            .iter()
+            .rfind(|e| matches!(e, MeetingEvent::Commitments { .. })),
+        Some(&MeetingEvent::Commitments {
+            filed: 0,
+            merged: 0
+        })
+    );
+}

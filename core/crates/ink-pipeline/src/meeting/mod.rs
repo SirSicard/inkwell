@@ -1166,6 +1166,33 @@ impl EndedMeeting {
             }
         }
 
+        // Filing is once per record. A pass that runs again (a second crash during recovery,
+        // after the first pass filed) hears the same audio, and its promises are already in Owed,
+        // where the user may have settled some: those rows stay as they are, and nothing is
+        // harvested, suggested or filed again. Chosen over replacing the rows because a rerun's
+        // model may word a promise differently, so matching old rows to new ones (to carry done
+        // and not-yet over) would guess; and the first filing is whole, since `add_commitments`
+        // is one transaction. The summary above is replaced, which is idempotent.
+        match store.commitments(&core.record) {
+            Ok(existing) if !existing.is_empty() => {
+                log::info!(
+                    "meeting: an earlier pass filed {} commitments; kept, none filed again",
+                    existing.len()
+                );
+                core.emit(MeetingEvent::Commitments {
+                    filed: 0,
+                    merged: 0,
+                });
+                return;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                // Filed anyway, as with a failed dedup: a promise listed twice beats one lost.
+                log::warn!("meeting: the record's commitments could not be read: {error}");
+                core.warn(MeetingWarning::StoreFailed(error));
+            }
+        }
+
         match harvest(segments, &ctx, llm.as_ref(), cancel) {
             Ok(h) => {
                 filed.extend(h.commitments);
