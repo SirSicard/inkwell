@@ -202,7 +202,10 @@ model_mib=""
 
 # One run: launch in `state`, wait for the model, sample, read the marks, quit cleanly.
 run() {
-  local state=$1 log="$out/$state.log" pid i m0 m1 f0 f1 v0 v1 c0 c1 t0 t1 w0 w1 stats p50 p95 mean fps fp rss slept status marks_ok
+  # Two statements: bash expands every word of one `local` before assigning any, so `$state`
+  # in the same line would still be unset.
+  local state=$1
+  local log="$out/$state.log" pid i m0 m1 f0 f1 v0 v1 c0 c1 t0 t1 w0 w1 stats p50 p95 mean fps fp rss slept status marks_ok
   preflight "$state"
   INK_MEASURE="$state" INK_DATA_DIR="$out/data-$state" INK_MODELS_DIR="$models" "$exe" >"$log" 2>&1 &
   pid=$!
