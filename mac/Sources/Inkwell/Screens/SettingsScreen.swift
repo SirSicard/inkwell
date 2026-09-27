@@ -490,6 +490,7 @@ private struct AboutSection: View {
             ForEach(Notices.components) { notice in
                 NoticeRow(title: "\(notice.name) (\(notice.licence))", detail: notice.role, text: notice.text)
             }
+            RustLibrariesRow()
         }
     }
 
@@ -503,6 +504,33 @@ private struct AboutSection: View {
             }
         case .off(let reason):
             Text(reason.explanation).font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        }
+    }
+}
+
+/// The Rust crates linked into the core: one disclosure for all of them, and inside it a row per
+/// crate that opens onto its licence text, like the rows above. The list scrolls in its own
+/// bounded view, as each licence text does, so its rows are built lazily whatever holds the
+/// section, and an open list does not stretch the Settings page by a hundred rows.
+private struct RustLibrariesRow: View {
+    var body: some View {
+        DisclosureGroup {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(RustNotices.crates) { notice in
+                        NoticeRow(title: notice.title, detail: notice.detail, text: notice.text)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            .frame(maxHeight: 420)
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(RustNotices.heading).font(.system(.callout, weight: .medium)).foregroundStyle(Theme.text)
+                Text("The open-source crates compiled into Inkwell's core, each with its licence.")
+                    .font(Typography.caption).foregroundStyle(Theme.secondaryText)
+            }
+            .accessibilityElement(children: .combine)
         }
     }
 }

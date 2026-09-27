@@ -5,6 +5,14 @@ here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/assert.sh"
 script="$here/../release-version.sh"
 
+work="$(mktemp -d "${TMPDIR:-/tmp}/ink-release-version.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+# The notices a release waits for (notices-verified.sh): all compared with upstream here, so the
+# version rules are tested on their own; the gate has its own cases below.
+printf 'foo 1.0.0 MIT.txt verified=2026-10-04 why\n' >"$work/done.txt"
+printf 'foo 1.0.0 MIT.txt verified=no why\n' >"$work/open.txt"
+export INK_NOTICES_FILES="$work/done.txt"
+
 # run <label> <expected status> <expected text> <arguments...>
 run() {
   local label=$1 want=$2 text=$3 out status=0
@@ -27,5 +35,15 @@ for bad in 1.2 v1.2.3 1.2.3-beta 01.2.3 "1.2.3\$(id)" ""; do
   run "dry-run version '$bad' is refused" 1 "a dry run's version is X.Y.Z" dry-run "$bad"
 done
 run "an unknown kind" 1 "unknown kind" nightly 1.2.3
+
+# A release tag waits for every notice to be compared with its upstream file; a dry run reports.
+INK_NOTICES_FILES="$work/open.txt"
+run "a tag while a notice is unchecked" 1 "every licence notice compared with its upstream file" tag v1.0.0
+run "... names it" 1 "foo 1.0.0" tag v1.0.0
+run "a dry run while a notice is unchecked" 0 "version=1.0.0" dry-run 1.0.0
+run "... says so" 0 "not yet compared with its upstream file" dry-run 1.0.0
+out="$(/bin/bash "$script" dry-run 1.0.0 2>/dev/null)"
+assert_absent "the dry run's report stays off stdout (the workflow's outputs)" "$out" "foo 1.0.0"
+INK_NOTICES_FILES="$work/done.txt"
 
 finish

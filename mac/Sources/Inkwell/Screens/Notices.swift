@@ -1,6 +1,10 @@
 // The notices of everything the app ships that is not Inkwell's own: the code compiled into it or
 // bundled beside it, and the model weights it downloads. Settings > About shows them.
 //
+// The third-party Rust crates linked into the core are not here: their list is generated from
+// cargo's resolution of the release build (RustNotices, Generated/RustNotices.swift), and About
+// shows it after these.
+//
 // Each text is the component's own licence file, copied verbatim, except where the list below
 // says otherwise. THIRD_PARTY.md is the list of what ships; NoticesTests checks every row of it
 // that reaches the Mac app has an entry here.
@@ -12,6 +16,10 @@
 // - Apache-2.0 components share one copy of the licence (the ones that differ, NeMo-Speech.cpp's
 //   with its own header and disclaimer, are kept whole).
 // - Silero VAD's weights: the standard MIT text with its copyright line.
+//
+// A composed text says so (`composed: true`), and mac/composed-notices.txt lists each with whether
+// it has been compared with its upstream file yet; a release tag waits until it has
+// (mac/scripts/notices-verified.sh). ComposedNoticesTests holds the list to the flags, both ways.
 //
 // Generated once from the upstream files; edit by hand from now on, keeping the texts verbatim.
 import Foundation
@@ -27,6 +35,9 @@ struct ThirdPartyNotice: Identifiable, Equatable, Sendable {
     let licence: String
     /// The notice and licence text.
     let text: String
+    /// Composed from a licence's standard text and the component's copyright line, because its own
+    /// licence file was not on hand: mac/composed-notices.txt must list it.
+    var composed = false
 }
 
 /// Model weights the app downloads, credited by name, author and licence.
@@ -38,6 +49,35 @@ struct ModelCredit: Identifiable, Equatable, Sendable {
     let use: String
     /// The licence notice to show, where the licence asks for one.
     let notice: String?
+    /// The notice is composed, as `ThirdPartyNotice.composed`.
+    var composed = false
+}
+
+/// A Rust crate linked into the core, with its licence files. The list, `RustNotices.crates`, is
+/// generated (Generated/RustNotices.swift, by `cargo run -p ink-ffi --bin ink-notices`) from
+/// cargo's resolution of the release build, so it follows Cargo.lock; the core's tests and
+/// RustNoticesTests fail while it was made from another lock.
+struct RustCrateNotice: Identifiable, Equatable, Sendable {
+    var id: String { "\(name) \(version)" }
+    let name: String
+    let version: String
+    /// Its licence as it publishes it (an SPDX expression, such as "MIT OR Apache-2.0").
+    let licence: String
+    /// The licence its texts below are, where it offers a choice ("MIT").
+    let shown: String
+    /// Its licence files, each under a "--- name ---" line, with a bracketed note where Inkwell
+    /// supplied a text or a copyright line the package lacks.
+    let text: String
+
+    /// About's row: the crate and its version.
+    var title: String { "\(name) \(version)" }
+    /// About's row: its licence, and which one the text is where it offers a choice.
+    var detail: String { shown == licence ? licence : "\(licence); used under \(shown)" }
+}
+
+extension RustNotices {
+    /// About's disclosure for the whole list.
+    static var heading: String { "Rust libraries (\(crates.count))" }
 }
 
 enum Notices {
@@ -556,7 +596,7 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-"""#),
+"""#, composed: true),
         ThirdPartyNotice(
             id: "darts-clone", name: "Darts-clone, inside SentencePiece",
             role: "Part of SentencePiece's library.",
@@ -589,7 +629,7 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-"""#),
+"""#, composed: true),
         ThirdPartyNotice(
             id: "abseil", name: "Abseil, by Google",
             role: "Loaded by NeMo-Speech.cpp and SentencePiece.",
@@ -891,6 +931,11 @@ POSSIBILITY OF SUCH DAMAGE.
 """#),
     ]
 
+    /// The ids of the composed notices (`composed: true`), which mac/composed-notices.txt lists.
+    static var composedIDs: Set<String> {
+        Set(components.filter(\.composed).map(\.id)).union(models.filter(\.composed).map(\.id))
+    }
+
     /// The weights, which are downloaded, never bundled.
     static let models: [ModelCredit] = [
         ModelCredit(
@@ -906,7 +951,7 @@ POSSIBILITY OF SUCH DAMAGE.
         ModelCredit(
             id: "silero-vad", name: "Silero VAD v6", author: "the Silero team", licence: "MIT",
             use: "Hears where speech starts and stops.",
-            notice: silero),
+            notice: silero, composed: true),
     ]
 
     /// The Apache License 2.0, shared by the components under it.
