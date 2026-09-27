@@ -17,10 +17,9 @@
 //! **Worker**, every method: one thread owns the chain (see [`worker`](crate::worker)). Audio
 //! arrives from the pump already in the canonical format, and hotkey events from the platform's
 //! callback thread through a queue. The engine, the store, polish and insertion are called here
-//! and may block; polish no longer than its budget ([`POLISH_BUDGET`]), or until the next take's
-//! press cancels it ([`PolishInterrupt`]). Nothing here sleeps: every wait is for audio, and the
-//! only deadline the chain wakes for (a tail whose audio stopped arriving) is checked by
-//! [`tick`](DictationChain::tick) when the owning thread wakes for it.
+//! and may block; polish no longer than its budget ([`POLISH_BUDGET`]). Nothing here sleeps: every
+//! wait is for audio, and the only deadline the chain wakes for (a tail whose audio stopped
+//! arriving) is checked by [`tick`](DictationChain::tick) when the owning thread wakes for it.
 //!
 //! # Time
 //!
@@ -28,7 +27,7 @@
 //! recorder's sample timeline through the host time of the latest audio block, so it may arrive
 //! before or after the audio of its moment. The minimum hold is measured on the audio clock too.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ink_audio::take::{TAIL, Take};
@@ -132,36 +131,6 @@ impl Default for DictationSettings {
     }
 }
 
-/// Cancels the chain's polish call in flight, from another thread: whoever owns the chain's queue
-/// calls it when the next take starts (a hotkey press), so the take being polished does not hold
-/// that one up. It goes out as written. With no polish in flight it does nothing. Cheap to clone.
-#[derive(Clone, Debug, Default)]
-pub struct PolishInterrupt(Arc<Mutex<Option<CancelToken>>>);
-
-impl PolishInterrupt {
-    /// **Any thread but realtime**, the hotkey's callback thread included: the lock is held only
-    /// to swap a token in or out, never across a call, so this does not wait on the model.
-    pub fn interrupt(&self) {
-        if let Some(token) = self.slot().as_ref() {
-            token.cancel();
-        }
-    }
-
-    /// `token` is the polish call's now. A stage that panics leaves it here, which is harmless: it
-    /// is replaced at the next polish, and cancelling a finished call's token does nothing.
-    fn arm(&self, token: CancelToken) {
-        *self.slot() = Some(token);
-    }
-
-    fn disarm(&self) {
-        *self.slot() = None;
-    }
-
-    fn slot(&self) -> std::sync::MutexGuard<'_, Option<CancelToken>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
 /// What the chain calls.
 #[derive(Clone)]
 pub struct Services {
@@ -257,8 +226,6 @@ pub struct DictationChain {
     completed_takes: u64,
     /// Polish turned on or off by voice command, overriding the mode.
     polish_override: Option<bool>,
-    /// The polish call in flight, for [`PolishInterrupt`].
-    polish_in_flight: PolishInterrupt,
 }
 
 fn detection(vad: &Vad) -> VoiceDetection {
@@ -290,14 +257,7 @@ impl DictationChain {
             pinned_mode: None,
             polish_override: None,
             completed_takes: 0,
-            polish_in_flight: PolishInterrupt::default(),
         }
-    }
-
-    /// A handle that cancels the polish in flight, for the owner of the chain's queue to fire
-    /// when the next take starts.
-    pub fn polish_interrupt(&self) -> PolishInterrupt {
-        self.polish_in_flight.clone()
     }
 
     fn emit(&self, event: DictationEvent) {
@@ -680,10 +640,13 @@ impl DictationChain {
     /// as written, and says so. A blank answer is a failure, never an empty dictation (ink-llm's
     /// task refuses one; this checks again rather than rely on it).
     ///
-    /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out
-    /// or the next take starts ([`PolishInterrupt`]). The budget is a deadline the token carries,
-    /// so no thread or timer fires it: the model sees it at its next check of the token (a shell
-    /// engine's wait checks every 20 ms).
+    /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out.
+    /// The budget is a deadline the token carries, so no thread or timer fires it: the model sees
+    /// it at its next check of the token (a shell engine's wait checks every 20 ms).
+    ///
+    /// The next take's press does not cancel it. The take behind it loses no audio (the owner's
+    /// queue holds tens of seconds of it) and at most starts later, while cancelling would cost a
+    /// working polish every time someone presses again quickly, which is how push-to-talk is used.
     fn polish(&self, written: String, mode: &Mode) -> String {
         if !self.polish_override.unwrap_or(mode.polish_enabled) {
             return written;
@@ -700,10 +663,7 @@ impl DictationChain {
         let budget = self.settings.polish_budget;
         let deadline = Instant::now().checked_add(budget);
         let token = deadline.map_or_else(CancelToken::new, CancelToken::with_deadline);
-        self.polish_in_flight.arm(token.clone());
-        let polished = ink_llm::tasks::polish::polish(llm.as_ref(), prompt, &written, &token);
-        self.polish_in_flight.disarm();
-        match polished {
+        match ink_llm::tasks::polish::polish(llm.as_ref(), prompt, &written, &token) {
             Ok(polished) if !polished.trim().is_empty() => polished,
             Ok(_) => {
                 self.emit(DictationEvent::Warning(Warning::PolishFailed(
@@ -718,8 +678,8 @@ impl DictationChain {
                             "dictation: polish gave no answer within its {budget:?} budget; the text goes out as written"
                         );
                     } else {
-                        // The next take started, or the model stopped for its own reasons (a
-                        // shell engine when the core stops): the token cannot say which.
+                        // The model stopped for its own reasons (a shell engine when the core
+                        // stops).
                         log::info!("dictation: polish was cancelled; the text goes out as written");
                     }
                 }

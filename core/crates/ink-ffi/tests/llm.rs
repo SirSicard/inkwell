@@ -1,7 +1,8 @@
 //! A language model the shell registers (`INK_ENGINE_LLM`, Foundation Models on the Mac) and the
 //! dictation polish that goes to it: used while registered, an "unavailable" answer kept as a
 //! failure (the dictation goes out as written, never with made-up text), nothing used once it is
-//! let go of, and a model that never answers cut off at polish's budget or at the next press.
+//! let go of, a model that never answers cut off at polish's budget, and a working polish never cut
+//! short by the next take's press.
 
 mod common;
 
@@ -28,7 +29,12 @@ enum Says {
     Unavailable,
     /// Nothing, ever: a hung model.
     Never,
+    /// "Polished take N." for its Nth request, after `SLOW`: a cold but working model.
+    Slow,
 }
+
+/// How long a `Says::Slow` model takes: longer than a cold on-device polish (about 1.4 s).
+const SLOW: Duration = Duration::from_millis(1_500);
 
 struct Model {
     says: Mutex<Says>,
@@ -60,20 +66,26 @@ unsafe extern "C" fn generate(ctx: *mut c_void, call: u64, request: *const c_cha
                 .to_owned(),
         )
     };
-    me.requests
-        .lock()
-        .unwrap()
-        .push(serde_json::from_str(&request).unwrap());
-    let answer = match *me.says.lock().unwrap() {
+    let n = {
+        let mut requests = me.requests.lock().unwrap();
+        requests.push(serde_json::from_str(&request).unwrap());
+        requests.len()
+    };
+    let (answer, delay) = match *me.says.lock().unwrap() {
         Says::Never => return,
-        Says::Polished => r#"{"text":"Polished synthetic words."}"#,
+        Says::Polished => (r#"{"text":"Polished synthetic words."}"#.to_owned(), None),
         // A message is ignored by the core: only the kind and code are read (I5).
-        Says::Unavailable => {
-            r#"{"error":{"kind":"unavailable","code":2,"message":"synthetic words"}}"#
-        }
+        Says::Unavailable => (
+            r#"{"error":{"kind":"unavailable","code":2,"message":"synthetic words"}}"#.to_owned(),
+            None,
+        ),
+        Says::Slow => (format!(r#"{{"text":"Polished take {n}."}}"#), Some(SLOW)),
     };
     // Answered from a thread of the engine's own, as a Swift Task would.
     std::thread::spawn(move || {
+        if let Some(delay) = delay {
+            std::thread::sleep(delay);
+        }
         let answer = CString::new(answer).unwrap();
         // SAFETY: a NUL-terminated string valid for the call.
         unsafe { ink_ffi::ink_engine_complete(call, answer.as_ptr()) };
@@ -355,12 +367,15 @@ fn a_model_that_never_answers_costs_a_take_its_polish_budget_not_the_generate_ti
     events.assert_valid();
 }
 
+/// A press while a working polish runs does not cancel it: that take keeps its polish, and the
+/// pressed take is processed after it. Its audio waits in the queue meanwhile (tens of seconds of
+/// room), so nothing is lost by waiting.
 #[test]
-fn the_next_press_cuts_a_polish_in_flight_short() {
+fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it() {
     let dir = TempDir::new("llm-press");
-    let model = Model::new(Says::Never);
-    // A budget far past the test: only the press can end the wait in time.
-    let (core, events, platform, inbox) = polishing(&dir, &model, Duration::from_secs(600));
+    let model = Model::new(Says::Slow);
+    let (core, events, platform, inbox) =
+        polishing(&dir, &model, ink_pipeline::chain::POLISH_BUDGET);
 
     take(&core, &inbox, 1);
     let until = Instant::now() + Duration::from_secs(20);
@@ -368,25 +383,29 @@ fn the_next_press_cuts_a_polish_in_flight_short() {
         assert!(Instant::now() < until, "polish never started");
         std::thread::sleep(Duration::from_millis(5));
     }
-    let now = core.shared().clock.now_ns();
-    let hotkey = inbox.hotkey_sink();
-    hotkey(HotkeyEvent::Pressed { at_ns: now });
-    assert!(
-        events.wait_count("dictation.inserted", 1, Duration::from_secs(5)),
-        "the press did not cut the polish short"
-    );
-    assert_unpolished_and_warned(&events, &platform);
-    // The press itself was too short to be a take.
-    hotkey(HotkeyEvent::Released {
-        at_ns: now + 10_000_000,
-    });
-
-    *model.says.lock().unwrap() = Says::Polished;
+    // The next take, press included, while the first take's polish is still being written.
     take(&core, &inbox, 2);
+    assert!(
+        platform.inserted().is_empty(),
+        "the second take was queued while the first was being polished"
+    );
     assert!(events.wait_count("dictation.inserted", 2, Duration::from_secs(20)));
+    let inserted: Vec<String> = platform
+        .inserted()
+        .iter()
+        .map(|s| s.trim().to_owned())
+        .collect();
+    assert_eq!(inserted, ["Polished take 1.", "Polished take 2."]);
     assert_eq!(
-        platform.inserted().last().map(|s| s.trim().to_owned()),
-        Some("Polished synthetic words.".into())
+        model.cancels.load(Ordering::SeqCst),
+        0,
+        "nothing was cancelled"
+    );
+    assert!(
+        !events
+            .all()
+            .iter()
+            .any(|v| v["type"] == "dictation.warning" && v["kind"] == "polish_failed")
     );
     core.shutdown();
     events.assert_valid();

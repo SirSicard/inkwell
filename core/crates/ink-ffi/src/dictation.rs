@@ -5,9 +5,6 @@
 //! reported audio (`audio.dropped`), never unbounded memory or a stalled pump. Hotkey events and
 //! everything else stay unbounded and in order with the audio.
 //!
-//! A hotkey press also cancels a polish in flight ([`PolishInterrupt`]) as it is queued: the take
-//! being polished goes out as written, and the press's take is not held up behind it.
-//!
 //! The thread waits on the queue and has no timer: the chain's one deadline (a tail whose audio
 //! stopped arriving, [`DictationChain::deadline_ns`]) becomes the wait's timeout, and
 //! [`DictationChain::tick`] runs when it passes.
@@ -26,7 +23,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use ink_core::{Clock, EventSink, HotkeyEvent};
-use ink_pipeline::chain::{DictationChain, DictationSettings, PolishInterrupt};
+use ink_pipeline::chain::{DictationChain, DictationSettings};
 use ink_pipeline::gain_stage::Vad;
 use ink_pipeline::worker::MAX_PANICS_WITHOUT_A_TAKE;
 
@@ -71,7 +68,6 @@ pub struct WorkerGone;
 pub struct DictationInbox {
     mailbox: Arc<Mailbox<Block, Input>>,
     events: Events,
-    polish: PolishInterrupt,
 }
 
 impl DictationInbox {
@@ -91,22 +87,14 @@ impl DictationInbox {
 
     /// Queues anything but audio. [`WorkerGone`] once the worker has stopped.
     pub fn send(&self, input: Input) -> Result<(), WorkerGone> {
-        if let Input::Hotkey(HotkeyEvent::Pressed { .. }) = input {
-            self.polish.interrupt();
-        }
         self.mailbox.push(input).map_err(|_| WorkerGone)
     }
 
-    /// The sink for the platform's hotkey source. **Callback thread:** it only enqueues (and
-    /// cancels a polish in flight at a press, which takes a lock never held across a call) and
-    /// never logs. After the worker stops, events are refused (the shell was told to unbind the
-    /// key).
+    /// The sink for the platform's hotkey source. **Callback thread:** it only enqueues and never
+    /// logs. After the worker stops, events are refused (the shell was told to unbind the key).
     pub fn hotkey_sink(&self) -> EventSink<HotkeyEvent> {
-        let (mailbox, polish) = (self.mailbox.clone(), self.polish.clone());
+        let mailbox = self.mailbox.clone();
         Arc::new(move |event| {
-            if let HotkeyEvent::Pressed { .. } = event {
-                polish.interrupt();
-            }
             let _ = mailbox.push(Input::Hotkey(event));
         })
     }
@@ -140,7 +128,6 @@ impl DictationWorker {
         let mailbox = Arc::new(Mailbox::new(capacity));
         let inbox = mailbox.clone();
         let out = events.clone();
-        let polish = chain.polish_interrupt();
         let thread = thread::Builder::new()
             .name("ink-dictation".into())
             .spawn(move || {
@@ -150,11 +137,7 @@ impl DictationWorker {
                 chain
             })?;
         Ok(Self {
-            inbox: DictationInbox {
-                mailbox,
-                events,
-                polish,
-            },
+            inbox: DictationInbox { mailbox, events },
             thread,
         })
     }

@@ -2,15 +2,17 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use ink_audio::synth::speech_like;
 use ink_core::mock::{MemStore, MockEngine, MockPlatform};
 use ink_core::{
-    EngineError, EngineInfo, EventSink, HotkeyEvent, InsertOutcome, Job, OfflineEngine,
-    PlatformError, TextInserter, TimedText, TranscribeOptions, Transcript,
+    CancelToken, Endpoint, EngineError, EngineInfo, EventSink, HotkeyEvent, InsertOutcome, Job,
+    Llm, LlmError, LlmInfo, LlmRequest, LlmResponse, OfflineEngine, PlatformError, TextInserter,
+    TimedText, TranscribeOptions, Transcript,
 };
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
-use ink_pipeline::events::{DictationEvent, VadUnavailable};
+use ink_pipeline::events::{DictationEvent, VadUnavailable, Warning};
 use ink_pipeline::gain_stage::Vad;
 use ink_pipeline::worker::{DictationWorker, Input, MAX_PANICS_WITHOUT_A_TAKE};
 
@@ -451,4 +453,112 @@ fn a_sink_that_panics_while_reporting_a_failure_is_logged_before_the_worker_stop
         "{lines:#?}"
     );
     worker.stop().unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Polish and the next take
+// ---------------------------------------------------------------------------------------------
+
+/// How long [`SlowLlm`] takes: longer than a cold on-device polish (about 1.4 s).
+const SLOW: Duration = Duration::from_millis(1_500);
+
+/// Answers "Polished take N." to its Nth call after [`SLOW`], watching its token meanwhile.
+#[derive(Default)]
+struct SlowLlm {
+    calls: AtomicUsize,
+    cancelled: AtomicUsize,
+}
+
+impl Llm for SlowLlm {
+    fn info(&self) -> LlmInfo {
+        LlmInfo {
+            provider: "slow".into(),
+            model: "slow".into(),
+            endpoint: Endpoint::InProcess,
+        }
+    }
+
+    fn complete(&self, _: &LlmRequest, cancel: &CancelToken) -> Result<LlmResponse, LlmError> {
+        let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let started = Instant::now();
+        while started.elapsed() < SLOW {
+            if cancel.is_cancelled() {
+                self.cancelled.fetch_add(1, Ordering::SeqCst);
+                return Err(LlmError::Cancelled);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(LlmResponse {
+            text: format!("Polished take {n}."),
+        })
+    }
+}
+
+/// A press while a working polish runs does not cancel it: that take keeps its polish, and the
+/// pressed take, queued with its audio meanwhile, is processed after it.
+#[test]
+fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let platform = Arc::new(MockPlatform::new());
+    let llm = Arc::new(SlowLlm::default());
+    let mut settings = DictationSettings::default();
+    settings.modes.modes[0].polish_enabled = true;
+    let sink_events = events.clone();
+    let chain = DictationChain::new(
+        Services {
+            engine: Arc::new(answering("sent from the worker")),
+            store: Arc::new(MemStore::new()),
+            inserter: platform.clone(),
+            focus: platform.clone(),
+            clock: platform.clock(),
+            llm: Some(llm.clone()),
+        },
+        settings,
+        Vad::Unavailable(VadUnavailable::ModelMissing),
+        Arc::new(move |e| sink_events.lock().unwrap().push(e)),
+    );
+    let worker = DictationWorker::spawn(chain, platform.clock()).unwrap();
+    let hotkeys = worker.hotkey_sink();
+    let send = |inputs: Vec<Input>| {
+        for input in inputs {
+            match input {
+                Input::Hotkey(e) => hotkeys(e),
+                other => worker.send(other).unwrap(),
+            }
+        }
+    };
+    let mut t = 1_000_000_000;
+    send(take_script(&mut t));
+    let until = Instant::now() + Duration::from_secs(20);
+    while llm.calls.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < until, "polish never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The next take, press included, while the first take's polish is still being written.
+    send(take_script(&mut t));
+    assert!(
+        platform.inserted().is_empty(),
+        "the second take was queued while the first was being polished"
+    );
+    worker.stop().unwrap();
+
+    assert_eq!(
+        platform.inserted(),
+        vec![
+            "Polished take 1. ".to_owned(),
+            "Polished take 2. ".to_owned()
+        ]
+    );
+    assert_eq!(
+        llm.cancelled.load(Ordering::SeqCst),
+        0,
+        "nothing was cancelled"
+    );
+    let events = events.lock().unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, DictationEvent::Warning(Warning::PolishFailed(_)))),
+        "{events:?}"
+    );
 }

@@ -4,7 +4,7 @@
 mod common;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::{Rig, VadKind, rms_dbfs, speech_48k, transcript};
@@ -567,8 +567,6 @@ struct HangingLlm {
     hang_next: AtomicBool,
     /// How long the hung call waited before it saw its token cancelled.
     hung_for: Mutex<Option<Duration>>,
-    /// Fired from another thread once the call hangs: the next take's press, in the app.
-    interrupt: OnceLock<ink_pipeline::chain::PolishInterrupt>,
 }
 
 impl Llm for HangingLlm {
@@ -584,12 +582,6 @@ impl Llm for HangingLlm {
         if !self.hang_next.swap(false, Ordering::SeqCst) {
             return Ok(LlmResponse {
                 text: "Polished text.".into(),
-            });
-        }
-        if let Some(interrupt) = self.interrupt.get().cloned() {
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(50));
-                interrupt.interrupt();
             });
         }
         let started = Instant::now();
@@ -647,45 +639,6 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
         rig.inserted(),
         vec!["First take. ".to_owned(), "Polished text. ".to_owned()]
     );
-}
-
-#[test]
-fn the_next_take_starting_cancels_a_polish_in_flight() {
-    let llm = Arc::new(HangingLlm::default());
-    let rig = Rig::builder()
-        // A budget far past the test: only the interrupt can end the hang in time.
-        .settings(|s| {
-            s.modes.modes[0].polish_enabled = true;
-            s.polish_budget = HANG_CAP * 2;
-        })
-        .llm(llm.clone())
-        .build();
-    let speech = speech_48k(2.0, -30.0, 73);
-    rig.teach(&speech, "cut short");
-    assert!(
-        llm.interrupt
-            .set(rig.chain.borrow().polish_interrupt())
-            .is_ok()
-    );
-
-    llm.hang_next.store(true, Ordering::SeqCst);
-    rig.dictate(&speech);
-    let hung_for = llm
-        .hung_for
-        .lock()
-        .unwrap()
-        .expect("the hung call saw its token cancelled");
-    assert!(hung_for < Duration::from_secs(2), "{hung_for:?}");
-    assert_eq!(rig.inserted(), vec!["Cut short. ".to_owned()]);
-    assert!(has(&rig.events(), |e| *e
-        == DictationEvent::Warning(Warning::PolishFailed(
-            LlmError::Cancelled
-        ))));
-
-    // An interrupt with no polish in flight cancels nothing later.
-    rig.chain.borrow().polish_interrupt().interrupt();
-    rig.dictate(&speech);
-    assert_eq!(rig.inserted().last().unwrap(), "Polished text. ");
 }
 
 #[test]
