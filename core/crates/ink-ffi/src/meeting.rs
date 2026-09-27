@@ -369,10 +369,24 @@ fn file_name(path: &Path) -> String {
 
 type Box2 = Mailbox<CanonicalBlock, Input>;
 
-/// Where a side's capture issues go: to the worker, in order with its audio.
-fn issues(mailbox: &Box2, channel: Channel) -> impl FnMut(CaptureIssue) + '_ {
+/// Where a side's capture issues go: to the worker, in order with its audio. When the worker
+/// can no longer take one (it failed, and its mailbox is closed), the issue is told straight to the
+/// shell, as the chain would have told it: never dropped.
+fn issues<'a>(
+    shared: &'a Shared,
+    mailbox: &'a Box2,
+    record: &'a OnceLock<RecordId>,
+    channel: Channel,
+) -> impl FnMut(CaptureIssue) + 'a {
     move |issue| {
-        let _ = mailbox.push(Input::Issue(channel, issue));
+        if let Err(Input::Issue(channel, issue)) = mailbox.push(Input::Issue(channel, issue)) {
+            log::warn!("meeting: {issue} (after the meeting's worker stopped)");
+            let r = record.get().cloned().unwrap_or(RecordId(String::new()));
+            shared.events.emit(events::meeting(
+                &r,
+                &MeetingEvent::Warning(MeetingWarning::Capture { channel, issue }),
+            ));
+        }
     }
 }
 
@@ -388,7 +402,7 @@ fn pump(
     go: &mpsc::Receiver<Option<u64>>,
 ) {
     let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        capture(shared, mailbox, sources, captures, abort, go);
+        capture(shared, mailbox, record, sources, captures, abort, go);
     }));
     if captured.is_err() {
         // The payload is not logged: it could quote what was said (I5). The sources and the
@@ -416,6 +430,7 @@ fn pump(
 fn capture(
     shared: &Shared,
     mailbox: &Box2,
+    record: &OnceLock<RecordId>,
     mut sources: Vec<Source>,
     captures: Vec<(SideCapture, Delivered)>,
     abort: &AtomicBool,
@@ -434,7 +449,7 @@ fn capture(
             start_at.set(t0);
         }
         if let Err(e) = source.source.start(Box::new(sink)) {
-            let _ = mailbox.push(Input::Issue(channel, CaptureIssue::Convert(e.to_string())));
+            issues(shared, mailbox, record, channel)(CaptureIssue::Convert(e.to_string()));
             source.done.store(true, Ordering::Release);
         }
         sides.push((channel, side));
@@ -474,7 +489,7 @@ fn capture(
             }
         }
         for (channel, side) in &mut sides {
-            side.drain(&mut feed, &mut issues(mailbox, *channel));
+            side.drain(&mut feed, &mut issues(shared, mailbox, record, *channel));
         }
         if finished || aborting {
             break;
@@ -482,7 +497,8 @@ fn capture(
         thread::sleep(PUMP_INTERVAL);
     }
     for (channel, side) in sides {
-        let summary = side.finish(&mut feed, &mut issues(mailbox, channel));
+        let summary = side.finish(&mut feed, &mut issues(shared, mailbox, record, channel));
+        // Refused only when the worker failed: then no final pass reads the summary.
         let _ = mailbox.push(Input::Ended(summary));
     }
 }
@@ -837,6 +853,35 @@ mod tests {
         );
         let _ = mailbox.push(Input::Stop);
         handle.join().unwrap();
+        core.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review (S2.8): a capture issue the worker can no longer take (it failed and closed its
+    /// mailbox) is told straight to the shell, as the chain would have, never dropped.
+    #[test]
+    fn a_capture_issue_the_worker_cannot_take_still_reaches_the_shell() {
+        let dir = std::env::temp_dir().join(format!("ink-ffi-issue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let clock = Arc::new(MockClock::new(5_000_000_000, 1_790_146_800_000));
+        let (core, events) = testing::core(clock, dir.clone());
+        let mailbox: Box2 = Mailbox::new(4);
+        let record = OnceLock::from(RecordId("rec-issue".into()));
+        mailbox.close();
+        issues(core.shared(), &mailbox, &record, Channel::Far)(CaptureIssue::ChunkWrite(
+            "no space left on device".into(),
+        ));
+        let told = |v: &Value| {
+            v["type"] == "meeting.warning"
+                && v["kind"] == "capture"
+                && v["record"] == "rec-issue"
+                && v["channel"] == "far"
+        };
+        assert!(
+            wait(&events, told, Duration::from_secs(5)),
+            "{:?}",
+            events.lock().unwrap()
+        );
         core.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
     }
