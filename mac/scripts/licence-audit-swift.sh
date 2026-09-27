@@ -19,6 +19,9 @@
 #                                                   require every pin's checkout and audit it, and
 #                                                   every downloaded binary artifact (CI)
 #
+# A prebuilt binary the package itself declares (`.binaryTarget(url:checksum:)`, Sparkle) is vetted
+# by its URL and checksum, before anything downloads it, and its unpacked licence file afterwards.
+#
 # Allowed: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib.
 set -euo pipefail
 
@@ -45,6 +48,14 @@ vetted=(
 # Prebuilt binaries a package downloads (remote binaryTarget): "identity/target|SPDX|why". A
 # binary brings its own dependencies, so it is vetted on its own, never through its package.
 vetted_binaries=(
+)
+
+# Prebuilt binaries this package itself declares (`.binaryTarget(url:checksum:)`):
+# "target|SPDX|url|checksum|why". The URL names the release, and SwiftPM refuses an archive whose
+# SHA-256 is not the checksum, so the two pin exactly the bytes that were vetted: a manifest that
+# changes either fails here until this entry is changed too, deliberately.
+vetted_own_binaries=(
+  "Sparkle|MIT|https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-for-Swift-Package-Manager.zip|17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959|in-app updates (Inkwell), Sparkle 2.10.0; its LICENSE also covers bsdiff (BSD-2-Clause), sais-lite (MIT), ed25519 (Zlib) and SUSignatureVerifier (BSD-2-Clause), all allowed; the BSD notices ship in About (THIRD_PARTY.md)"
 )
 
 # Licence files inside a package that may mention a copyleft licence without being one:
@@ -140,6 +151,15 @@ for dep in json.load(sys.stdin)["dependencies"]:
             where = spec.get("identity", "")
         print(kind + "\t" + spec.get("identity", "?").lower() + "\t" + where)' <<<"$dump")"
 
+# name<TAB>url<TAB>checksum for every remote binary target the manifest itself declares (a path
+# binary target, the core's InkCore, is built here from source).
+own_binaries="$(python3 -c 'import json, sys
+for target in json.load(sys.stdin)["targets"]:
+    if target.get("type") == "binary" and target.get("url"):
+        print(target["name"] + "\t" + target["url"] + "\t" + (target.get("checksum") or ""))' <<<"$dump")"
+# SwiftPM files the root package's artifacts under its identity: the directory's name, lowercased.
+root_identity="$(basename "$mac" | tr '[:upper:]' '[:lower:]')"
+
 # identity<TAB>location, one per pin (Package.resolved v2 and v3).
 pins=""
 if [ -f "$resolved" ]; then
@@ -150,6 +170,35 @@ fi
 if [ -z "$pins" ] && [ -z "$declared" ]; then
   echo "PASS  no Swift package dependencies"
 fi
+
+# --- the package's own prebuilt binaries -------------------------------------------------------------
+while IFS=$'\t' read -r name url checksum; do
+  [ -n "$name" ] || continue
+  entry="$(lookup "$name" ${vetted_own_binaries[@]+"${vetted_own_binaries[@]}"})"
+  if [ -z "$entry" ]; then
+    flag "binary target $name is not on the vetted list ($url)"
+    note "a prebuilt binary brings its own dependencies: read its licence, then pin its URL and"
+    note "checksum in vetted_own_binaries and add it to THIRD_PARTY.md"
+    continue
+  fi
+  spdx="$(field "$entry" 2)"
+  case "$allowed" in
+    *" $spdx "*) ;;
+    *) flag "binary target $name is vetted as $spdx, which is not allowed"; continue ;;
+  esac
+  if [ "$url" != "$(field "$entry" 3)" ]; then
+    flag "binary target $name: the URL is not the vetted one ($url)"
+    continue
+  fi
+  if [ "$checksum" != "$(field "$entry" 4)" ]; then
+    flag "binary target $name: the checksum is not the vetted one"
+    continue
+  fi
+  pass "binary target $name ($spdx, vetted by URL and checksum)"
+  if [ "$require_checkouts" = 1 ] && [ ! -d "$artifacts/$root_identity/$name" ]; then
+    flag "binary target $name was not downloaded (no .build/artifacts/$root_identity/$name): resolve or build first"
+  fi
+done <<<"$own_binaries"
 if [ -n "$declared" ] && grep -qv '^fileSystem' <<<"$declared" && [ ! -f "$resolved" ]; then
   flag "Package.swift declares dependencies but mac/Package.resolved is missing: resolve and commit it,"
   note "so what CI audits is exactly what ships"
@@ -253,7 +302,38 @@ done <<<"$pins"
 if [ -d "$artifacts" ]; then
   for target in "$artifacts"/*/*; do
     [ -d "$target" ] || continue
-    key="$(basename "$(dirname "$target")")/$(basename "$target")"
+    package="$(basename "$(dirname "$target")")"
+    # SwiftPM's scratch space for unpacking archives: empty directories, not artifacts.
+    [ "$package" = extract ] && continue
+    key="$package/$(basename "$target")"
+    if [ "$package" = "$root_identity" ]; then
+      # One of our own: vetted above by URL and checksum; here its unpacked licence file, when it
+      # ships one, must still read as vetted, and nothing inside may carry a copyleft text.
+      entry="$(lookup "$(basename "$target")" ${vetted_own_binaries[@]+"${vetted_own_binaries[@]}"})"
+      if [ -z "$entry" ]; then
+        flag "binary artifact $key is not on the vetted list"
+        continue
+      fi
+      spdx="$(field "$entry" 2)"
+      lic="$(licence_file "$target")"
+      read_note="no licence file inside"
+      if [ -n "$lic" ]; then
+        found="$(classify "$lic")"
+        if [ "$found" != "$spdx" ]; then
+          flag "binary artifact $key: ${lic#"$target/"} reads as $found, vetted as $spdx"
+          continue
+        fi
+        read_note="${lic#"$target/"} read"
+      fi
+      clean=1
+      while IFS= read -r hit; do
+        [ -n "$hit" ] || continue
+        flag "binary artifact $key: ${hit#"$target/"} carries a copyleft licence text"
+        clean=0
+      done <<<"$(copyleft_texts "$target")"
+      [ "$clean" = 1 ] && pass "binary artifact $key ($spdx, vetted, $read_note)"
+      continue
+    fi
     entry="$(lookup "$key" ${vetted_binaries[@]+"${vetted_binaries[@]}"})"
     if [ -z "$entry" ]; then
       flag "binary artifact $key is not on the vetted list"

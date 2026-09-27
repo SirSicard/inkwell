@@ -19,8 +19,8 @@ mit="MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software"
 
-# fixture <name> <dependencies (Swift)> <target dependencies (Swift)>: a package at
-# $work/<name>/mac with the audit script copied in, and $pkg set to it.
+# fixture <name> <dependencies (Swift)> <target dependencies (Swift)> [more targets (Swift)]: a
+# package at $work/<name>/mac with the audit script copied in, and $pkg set to it.
 fixture() {
   pkg="$work/$1/mac"
   mkdir -p "$pkg/scripts" "$pkg/Sources/App"
@@ -31,7 +31,7 @@ fixture() {
 import PackageDescription
 let package = Package(name: "Fixture", platforms: [.macOS(.v26)],
   dependencies: [$2],
-  targets: [.executableTarget(name: "App", dependencies: [$3])])
+  targets: [.executableTarget(name: "App", dependencies: [$3])${4:+, $4}])
 SWIFT
 }
 
@@ -132,5 +132,49 @@ pins "fluidaudio|$fluid_url"
 checkout "$apache"
 mkdir -p "$pkg/.build/artifacts/fluidaudio/NemoTextProcessing"
 run "an unvetted prebuilt binary" 1 "binary artifact fluidaudio/NemoTextProcessing is not on the vetted list" --checkouts
+
+# --- the package's own prebuilt binaries (Sparkle) ------------------------------------------------
+# The vetted URL and checksum, read from the audit's own entry rather than typed here.
+sparkle_entry="$(grep -m1 '^  "Sparkle|' "$audit" || true)"
+sparkle_url="$(cut -d'|' -f3 <<<"$sparkle_entry")"
+sparkle_sum="$(cut -d'|' -f4 <<<"$sparkle_entry")"
+assert_contains "the audit vets Sparkle 2.10.0 by URL" "$sparkle_url" "/download/2.10.0/"
+own_binary() { # url checksum [name]
+  printf '.binaryTarget(name: "%s", url: "%s", checksum: "%s")' "${3:-Sparkle}" "$1" "$2"
+}
+# An artifact as SwiftPM leaves it: the archive unpacked under the root package's identity, and
+# its (empty) extraction directory.
+own_artifact() { # licence text
+  mkdir -p "$pkg/.build/artifacts/mac/Sparkle/Sparkle.xcframework" "$pkg/.build/artifacts/extract/mac/Sparkle"
+  printf '%s\n' "$1" >"$pkg/.build/artifacts/mac/Sparkle/LICENSE"
+}
+
+fixture own-binary "" '"Sparkle"' "$(own_binary "$sparkle_url" "$sparkle_sum")"
+run "our own prebuilt binary, vetted by URL and checksum" 0 "PASS  binary target Sparkle"
+own_artifact "$mit"
+run "... and its artifact, with its licence read" 0 "binary artifact mac/Sparkle (MIT, vetted, LICENSE read)" --checkouts
+
+fixture own-binary-missing "" '"Sparkle"' "$(own_binary "$sparkle_url" "$sparkle_sum")"
+mkdir -p "$pkg/.build/artifacts"
+run "our own prebuilt binary, not downloaded" 1 "binary target Sparkle was not downloaded" --checkouts
+
+fixture own-binary-unvetted "" '"Other"' "$(own_binary "$sparkle_url" "$sparkle_sum" Other)"
+run "our own prebuilt binary nobody vetted" 1 "binary target Other is not on the vetted list"
+
+fixture own-binary-checksum "" '"Sparkle"' \
+  "$(own_binary "$sparkle_url" "0000000000000000000000000000000000000000000000000000000000000000")"
+run "our own prebuilt binary with another checksum" 1 "binary target Sparkle: the checksum is not the vetted one"
+
+fixture own-binary-version "" '"Sparkle"' "$(own_binary "${sparkle_url/2.10.0/2.10.1}" "$sparkle_sum")"
+run "our own prebuilt binary from another release" 1 "binary target Sparkle: the URL is not the vetted one"
+
+fixture own-binary-relicensed "" '"Sparkle"' "$(own_binary "$sparkle_url" "$sparkle_sum")"
+own_artifact "$gpl"
+run "our own prebuilt binary whose licence changed" 1 "reads as copyleft, vetted as MIT" --checkouts
+
+fixture own-binary-gpl-inside "" '"Sparkle"' "$(own_binary "$sparkle_url" "$sparkle_sum")"
+own_artifact "$mit"
+printf '%s\n' "$gpl" >"$pkg/.build/artifacts/mac/Sparkle/COPYING"
+run "a copyleft text inside our own prebuilt binary" 1 "COPYING carries a copyleft licence text" --checkouts
 
 finish
