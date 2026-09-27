@@ -723,6 +723,7 @@ dependencies = [
  "ink-core",
  "ink-llm",
  "keyring-core",
+ "log",
  "rusqlite",
  "serde_json",
  "sha2",

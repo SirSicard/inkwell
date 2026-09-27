@@ -289,6 +289,15 @@ pub trait Store: Send + Sync {
     /// they were given.
     fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError>;
 
+    /// Whether text a call deleted or replaced may still be on disk: the store could not clear it
+    /// out after that call (another process was reading the database), and has not caught up
+    /// since. The call itself succeeded. The store tries again on every later call, so this
+    /// clears on its own; while it is set, a shell can say that deleted text is still on disk.
+    /// A store with nothing on disk never sets it.
+    fn unscrubbed(&self) -> bool {
+        false
+    }
+
     /// Full-text search across every record's current revision.
     ///
     /// The query is split into words on whitespace. Each word matches as a case-insensitive
