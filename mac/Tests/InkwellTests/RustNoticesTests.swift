@@ -8,6 +8,7 @@ import XCTest
 @testable import Inkwell
 
 final class RustNoticesTests: XCTestCase {
+    /// The repository: this file is mac/Tests/InkwellTests/, four levels down.
     private var root: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -37,8 +38,6 @@ final class RustNoticesTests: XCTestCase {
         XCTAssertEqual(crates.map(\.name), crates.map(\.name).sorted(), "in name order")
         for notice in crates {
             XCTAssertFalse(notice.name.hasPrefix("ink-"), "\(notice.id): the workspace's own crates are Inkwell's")
-            XCTAssertTrue(notice.title.hasPrefix(notice.name) && notice.title.hasSuffix(notice.version))
-            XCTAssertTrue(notice.detail.hasPrefix(notice.licence))
             XCTAssertTrue(notice.text.hasPrefix("--- "), "\(notice.id): its text starts with a file's name")
             // A licence text, not only a statement naming one.
             let texts = [

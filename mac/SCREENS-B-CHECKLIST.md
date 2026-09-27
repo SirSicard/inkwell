@@ -96,8 +96,9 @@ the real core.
 - [ ] Meetings and Storage read true for this Mac; "Show in Finder" opens the library's folder.
 - [ ] About: the version, update settings, the model credits (Parakeet under CC-BY 4.0 with its
       attribution), and every component's notice, each opening to its full licence text.
-- [ ] About, last: "Rust libraries (N)" opens onto one row per crate, each opening to its licence
-      text, which scrolls and can be selected. Opening and scrolling the whole list stays smooth.
+- [ ] About, last: "Rust libraries (N)" opens onto a list of its own that scrolls, one row per
+      crate, each opening to its licence text, which scrolls and can be selected. Opening the list
+      and scrolling it to the end stays smooth, and the Settings page does not grow by its length.
       With VoiceOver, the disclosure is announced with its name and its state (collapsed or
       expanded), and each row with its crate, version and licence.
 
