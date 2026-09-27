@@ -73,8 +73,10 @@ impl Pending {
         (id, slot)
     }
 
-    fn forget(&self, id: u64) {
-        self.lock().remove(&id);
+    /// Takes call `id` out of the table. `false` when [`complete`] already took it: its answer
+    /// is being written.
+    fn forget(&self, id: u64) -> bool {
+        self.lock().remove(&id).is_some()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Arc<Slot>>> {
@@ -282,26 +284,50 @@ impl OfflineEngine for ExternalOffline {
         // included) is dropped. The samples and options are valid until the call returns,
         // which is all the header promises.
         unsafe { (self.transcribe)(self.ctx, id, audio.as_ptr(), audio.len(), o.as_ptr()) };
-        let mut answer = slot.answer.lock().unwrap_or_else(PoisonError::into_inner);
-        loop {
-            if let Some(a) = answer.take() {
-                return a;
+        let cancelled = || options.cancel.is_cancelled() || self.shutdown.is_cancelled();
+        let on_cancel = || {
+            if let Some(cancel) = self.cancel {
+                // SAFETY: as above; `cancel` is the shell's optional function.
+                unsafe { cancel(self.ctx, id) };
             }
-            if options.cancel.is_cancelled() || self.shutdown.is_cancelled() {
-                drop(answer);
-                PENDING.forget(id);
-                if let Some(cancel) = self.cancel {
-                    // SAFETY: as above; `cancel` is the shell's optional function.
-                    unsafe { cancel(self.ctx, id) };
-                }
+        };
+        await_answer(id, &slot, cancelled, on_cancel)
+    }
+}
+
+/// **Worker.** Waits for call `id`'s answer, or gives up once `cancelled` says so, calling
+/// `on_cancel` then.
+///
+/// Giving up is committed by taking the call out of the table. If [`complete`] took it first, the
+/// engine's answer is real and already on its way (complete writes it next, without waiting on
+/// anything), so it is waited for and kept rather than lost to the cancel.
+fn await_answer(
+    id: u64,
+    slot: &Slot,
+    cancelled: impl Fn() -> bool,
+    on_cancel: impl FnOnce(),
+) -> Answer {
+    let mut answer = slot.answer.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut answered = false;
+    loop {
+        if let Some(a) = answer.take() {
+            return a;
+        }
+        if !answered && cancelled() {
+            drop(answer);
+            if PENDING.forget(id) {
+                on_cancel();
                 return Err(EngineError::Cancelled);
             }
-            answer = slot
-                .ready
-                .wait_timeout(answer, CANCEL_POLL)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
+            answered = true;
+            answer = slot.answer.lock().unwrap_or_else(PoisonError::into_inner);
+            continue;
         }
+        answer = slot
+            .ready
+            .wait_timeout(answer, CANCEL_POLL)
+            .unwrap_or_else(PoisonError::into_inner)
+            .0;
     }
 }
 
@@ -353,6 +379,46 @@ mod tests {
             *slot.answer.lock().unwrap(),
             Some(Err(EngineError::Failed(_)))
         ));
+    }
+
+    /// The race: `complete` has taken the call from the table and not yet written its answer when
+    /// the worker decides to cancel. The answer is real and on its way: it must be kept.
+    #[test]
+    fn an_answer_taken_before_the_cancel_is_kept() {
+        let (id, slot) = PENDING.open();
+        // complete()'s first half: the call leaves the table.
+        let taken = PENDING.lock().remove(&id).expect("the call was pending");
+        let waiter = std::thread::spawn(move || {
+            let mut cancelled_by_us = false;
+            let answer = await_answer(id, &taken, || true, || cancelled_by_us = true);
+            (answer, cancelled_by_us)
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        // complete()'s second half: the answer is written.
+        *slot.answer.lock().unwrap() =
+            parse_answer(r#"{"segments":[{"start_ms":0,"end_ms":1,"text":"kept"}]}"#);
+        slot.ready.notify_all();
+        let (answer, cancelled) = waiter.join().unwrap();
+        assert_eq!(answer.unwrap().text(), "kept");
+        assert!(
+            !cancelled,
+            "the engine is not asked to cancel a call it answered"
+        );
+    }
+
+    #[test]
+    fn a_cancel_before_any_answer_forgets_the_call() {
+        let (id, slot) = PENDING.open();
+        let mut asked = false;
+        assert_eq!(
+            await_answer(id, &slot, || true, || asked = true),
+            Err(EngineError::Cancelled)
+        );
+        assert!(asked);
+        assert_eq!(
+            complete(id, r#"{"segments":[]}"#),
+            Err(CompleteError::Unknown)
+        );
     }
 
     #[test]
