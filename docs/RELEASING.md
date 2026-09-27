@@ -77,6 +77,23 @@ core/crates/ink-engines/native/build-nemo-speech.sh ~/src/NeMo-Speech.cpp ~/nemo
 NEMO_SPEECH_DIR=~/nemo-speech mac/scripts/build-mac.sh --engines
 ```
 
+### The licence notices
+
+Settings > About carries the notice of everything the app ships that is not Inkwell's own. Two
+lists, kept in two ways:
+
+- **By hand:** `mac/Sources/Inkwell/Screens/Notices.swift`, for the C and C++ code, the Swift
+  packages, the engines' libraries and the model weights. Each needs a row in
+  [THIRD_PARTY.md](../THIRD_PARTY.md), and `NoticesTests` fails on a row without its notice.
+- **Generated:** `mac/Sources/Inkwell/Generated/RustNotices.swift`, the licence files of every
+  third-party Rust crate the release links into the core, from cargo's resolution of the release
+  build (`cargo run -p ink-ffi --bin ink-notices`, offline). The core's tests and the Swift tests
+  fail while it was generated from another `core/Cargo.lock`, and `mac/scripts/rust-notices.sh
+  --check` (the Mac CI job's step, and release day's) fails on any difference from a fresh run.
+  After a dependency change, `mac/scripts/rust-notices.sh` regenerates it (it fetches the crates
+  first). A crate whose package carries no text of its licence stops the generator until
+  `core/crates/ink-ffi/notices/overrides.txt` supplies one for that version.
+
 ### Once: the update key (the maintainer, by hand)
 
 Sparkle refuses any update whose archive is not signed with the EdDSA key whose public half the
@@ -159,6 +176,10 @@ spctl -a -vv -t open --context context:primary-signature ~/Downloads/inkwell-dry
 ### Cut it
 
 ```bash
+# 0. On an up-to-date main: the Rust notices match its Cargo.lock and a fresh run, so the release
+#    ships what About lists. Fetches the crates it has not got; fails naming any crate whose
+#    notice is missing or stale.
+mac/scripts/rust-notices.sh --check
 # 1. The CHANGELOG heading: ## [Unreleased] -> ## [X.Y.Z] - date, merged to main. The version
 #    itself comes from the tag: build-mac.sh writes it into the bundle.
 # 2. Tag main and push the tag. Only v1.X.Y exactly (no suffix: it is also CFBundleVersion, which
@@ -213,6 +234,50 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
   keeps only `audio-input`.
 - **Asked, not assumed.** Sparkle asks the user before its first automatic check, and a check sends
   no system profile (`SUEnableSystemProfiling` off).
+
+### Release day: 1.0.0 (once)
+
+What the first 1.x release needs beyond the chain above, in order. The 0.2 app stays on `main`
+until this day and is not touched before it (invariant I6 in [ARCHITECTURE.md](ARCHITECTURE.md)).
+
+Before the tag:
+
+- [ ] **The maintainer:** the update key, the `release` environment and its secret, the public
+      key in `mac/Info.plist`, and the tag ruleset (the steps under "Once: the update key").
+- [ ] The Mac CI job runs `mac/scripts/rust-notices.sh --check`, as a step after the Rust
+      toolchain is installed; add the step if it is not there yet.
+- [ ] Every notice written without its upstream file checked against that project's repository,
+      and replaced where it differs: the texts in `core/crates/ink-ffi/notices/overrides.txt`
+      (then `mac/scripts/rust-notices.sh`), and in `Notices.swift` those its header lists as
+      composed from standard licence text (protobuf-lite, Darts-clone, Silero VAD).
+- [ ] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
+      `src-tauri/`, `public/`, `index.html`, `package.json`, `package-lock.json`,
+      `vite.config.ts`, `eslint.config.js` and the three `tsconfig*.json`. With them, what points
+      at them: `.github/dependabot.yml`'s npm entry for `/` and cargo entry for `/src-tauri`;
+      `.gitignore`'s `src-tauri` lines; `build.yml` (a `v0.*` tag builds from `legacy/0.2`'s own
+      copy); `CLAUDE.md` and `CONTRIBUTING.md`; invariant I6 in `ARCHITECTURE.md`, which ends here;
+      the rows of `THIRD_PARTY.md` that point into `src/` or `src-tauri/`, and the matching
+      exception in `NoticesTests`; the scripts only 0.2 uses (`scripts/download-models.*`,
+      `scripts/gen-model-chart.py`); and `TODO.md`, the 0.2 work list. `docs/legacy/` stays.
+- [ ] The README rewritten for 1.0.
+- [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
+
+After CI goes green:
+
+- [ ] Steps 3 to 5 above: the draft checked with `--update-key`, published as latest, the feed
+      read back.
+- [ ] **The maintainer:** the downloaded dmg installed on a fresh macOS user account (onboarding,
+      one dictation, one meeting), and on the everyday account over the installed 0.2: it
+      replaces it in place, and the microphone and Accessibility grants carry over (same bundle
+      id and team; compare `codesign -d -r-` of both apps).
+- [ ] 0.2.11 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
+      install 1.0): the 0.2 chain below, published with `--latest=false` so that 1.0 stays the
+      release the feed follows, then `inkwell-updater/publish-latest.sh`.
+- [ ] `inkwell-updater/` decided: kept while 0.2 installs still check it, or retired after 0.2.11.
+- [ ] The cask: `packaging/homebrew/inkwell.rb` for 1.0 (macOS 26 or later; 1.0's data folder,
+      `~/Library/Application Support/Inkwell`, in `zap`), then `bin/update-cask.sh 1.0.0`.
+- [ ] The homepage's `APP_VERSION` and release snapshot, only once 1.0.0 is published (step 8 of
+      the 0.2 chain), in a commit authored as SirSicard: Vercel builds no other author's commits.
 
 ## Inkwell 0.2, the Tauri app
 
