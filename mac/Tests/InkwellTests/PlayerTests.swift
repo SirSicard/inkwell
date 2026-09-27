@@ -299,6 +299,26 @@ final class RecordPlayerTests: XCTestCase {
         player.stop()
     }
 
+    /// Re-check fix: AVAudioEngine stops itself before it posts the configuration change, and a
+    /// stopped engine's nodes have no render time. The player keeps its own clock of the run (host
+    /// time on a device; frames rendered offline), so it resumes from where the listener was, not
+    /// from the last play or seek.
+    func testAnOutputChangeAfterTheEngineStoppedResumesWhereItWasNotAtTheAnchor() async throws {
+        let library = try openRecord()
+        let player = try XCTUnwrap(library.player)
+        library.playFrom(5_000)
+        for _ in 0..<4 { _ = try await player.renderOffline(frames: 48_000) }  // 4 s
+        let before = player.positionMs()
+        XCTAssertGreaterThan(before, 8_500, "well past the anchor")
+        let engine = try XCTUnwrap(player.engineForTests)
+        engine.stop()  // as AVAudioEngine does before posting
+        XCTAssertEqual(player.positionMs(), before, "a stopped engine does not lose the position")
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        XCTAssertEqual(player.state, .playing)
+        XCTAssertLessThanOrEqual(abs(player.anchorMs - before), 500, "resumed at \(player.anchorMs), was at \(before)")
+        player.stop()
+    }
+
     /// Item 7: when playback cannot start again after an output change, it says so (.failed with
     /// its words), never plays nothing as if all were well.
     func testAnOutputChangeThatCannotRestartFailsVisibly() async throws {

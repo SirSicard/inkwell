@@ -64,6 +64,20 @@ final class RecordPlayer {
     @ObservationIgnored private var engine: AVAudioEngine?
     /// The engine's configuration-change observer. Main actor; removed with the engine.
     @ObservationIgnored private var configurationObserver: NSObjectProtocol?
+
+    /// The run's own clock, which a stopped engine does not take away: AVAudioEngine stops itself
+    /// before it posts a configuration change, and a stopped engine's nodes have no render time.
+    /// On a device, the host time both nodes start at; offline, the frames rendered so far.
+    private enum RunClock {
+        case host(start: UInt64)
+        case offline(framesAtStart: Int64, rate: Double)
+    }
+
+    @ObservationIgnored private var runClock: RunClock?
+    /// Frames `renderOffline` has rendered (the offline clock).
+    @ObservationIgnored private var offlineFrames: Int64 = 0
+    /// The furthest point on the timeline queued so far: the run's clock never reads past it.
+    @ObservationIgnored private var scheduledEndMs: Int64 = 0
     @ObservationIgnored private var nodes: [Channel: AVAudioPlayerNode] = [:]
     @ObservationIgnored private var formats: [Channel: AVAudioFormat] = [:]
     @ObservationIgnored private var cursors: [Channel: SliceCursor] = [:]
@@ -174,15 +188,29 @@ final class RecordPlayer {
     var engineForTests: AVAudioEngine? { engine }
 
     /// Where the playhead is now, ms on the record's timeline. Read while drawing (the view
-    /// redraws only while playing); not observed.
+    /// redraws only while playing); not observed. From the node's render time while the engine
+    /// runs, else from the run's own clock (the engine stopped under it: an output change).
     func positionMs() -> Int64 {
-        guard state == .playing,
-            let node = sides.lazy.compactMap({ self.nodes[$0] }).first,
+        guard state == .playing else { return anchorMs }
+        if let node = sides.lazy.compactMap({ self.nodes[$0] }).first,
             let nodeTime = node.lastRenderTime,
             let playerTime = node.playerTime(forNodeTime: nodeTime)
-        else { return anchorMs }
-        let played = Double(max(playerTime.sampleTime, 0)) / playerTime.sampleRate
-        return min(anchorMs + Int64(played * 1000), durationMs)
+        {
+            let played = Double(max(playerTime.sampleTime, 0)) / playerTime.sampleRate
+            return min(anchorMs + Int64(played * 1000), durationMs)
+        }
+        let elapsed: Double
+        switch runClock {
+        case .host(let start)?:
+            let now = mach_absolute_time()
+            elapsed = now > start ? AVAudioTime.seconds(forHostTime: now - start) : 0
+        case .offline(let framesAtStart, let rate)?:
+            elapsed = Double(offlineFrames - framesAtStart) / rate
+        case nil:
+            return anchorMs
+        }
+        let reached = min(max(scheduledEndMs, anchorMs), durationMs)
+        return min(anchorMs + Int64(elapsed * 1000), reached)
     }
 
     // MARK: The engine
@@ -222,6 +250,7 @@ final class RecordPlayer {
     private func startRun() throws {
         run += 1
         exhausted = []
+        scheduledEndMs = anchorMs
         for side in sides {
             cursors[side] = SliceCursor(chunks: chunks[side] ?? [], fromMs: anchorMs)
             queued[side] = 0
@@ -229,11 +258,14 @@ final class RecordPlayer {
         }
         if case .device = output {
             // One host time for both, a moment ahead: sample-aligned whatever the render cycle.
-            let at = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.05))
+            let start = mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.05)
+            let at = AVAudioTime(hostTime: start)
             for side in sides { nodes[side]?.play(at: at) }
+            runClock = .host(start: start)
         } else {
             // Offline, nothing renders between these calls: both start on the next frame.
             for side in sides { nodes[side]?.play() }
+            runClock = engine.map { .offline(framesAtStart: offlineFrames, rate: $0.manualRenderingFormat.sampleRate) }
         }
     }
 
@@ -249,6 +281,8 @@ final class RecordPlayer {
             guard let buffer = ChunkAudio.convert(read, to: format) else { throw PlayerError.format }
             // Its place on the node's timeline, which starts at the anchor.
             let seconds = max(slice.startSeconds - Double(anchorMs) / 1000, 0)
+            let sliceEndMs = Int64((slice.startSeconds + Double(slice.frameCount) / Double(max(slice.chunk.sampleRate, 1))) * 1000)
+            scheduledEndMs = max(scheduledEndMs, sliceEndMs)
             let at = AVAudioTime(sampleTime: AVAudioFramePosition((seconds * format.sampleRate).rounded()), atRate: format.sampleRate)
             let run = self.run
             queued[side, default: 0] += 1
@@ -282,6 +316,7 @@ final class RecordPlayer {
         run += 1
         for node in nodes.values { node.stop() }
         queued = [:]
+        runClock = nil
     }
 
     private func fail(_ error: Error) {
@@ -318,6 +353,7 @@ final class RecordPlayer {
                 }
             }
             rendered += buffer.frameLength
+            offlineFrames += Int64(buffer.frameLength)
             whole.frameLength = rendered
             // Completions hop to the main actor: let them run so the next slices get queued.
             await Task.yield()
