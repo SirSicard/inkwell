@@ -36,12 +36,17 @@ final class InkViewTests: XCTestCase {
         XCTAssertEqual(view.framesDrawn, 1, "and nothing after it")
 
         let before = InkRenderer.frames.count
+        // The rate over the time that really passed: on a slow GPU (a CI virtual machine) the
+        // frames keep the main actor busy and the sleep below resumes seconds late.
+        let clock = ContinuousClock()
+        let start = clock.now
         view.state = .meeting
         XCTAssertTrue(view.isAnimating)
         try await spin(1.0)
         let live = view.framesDrawn - 1
-        XCTAssertGreaterThan(live, 30, "live: about 60 frames a second")
-        XCTAssertLessThan(live, 75, "no faster than 60")
+        let rate = Double(live) / ((clock.now - start) / .seconds(1))
+        XCTAssertGreaterThan(rate, 30, "live: about 60 frames a second")
+        XCTAssertLessThan(rate, 75, "no faster than 60")
         XCTAssertEqual(InkRenderer.frames.count - before, UInt64(live), "every frame is counted")
 
         view.state = .idle
