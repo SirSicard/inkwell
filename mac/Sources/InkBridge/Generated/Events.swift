@@ -83,6 +83,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case meetingFinished(MeetingFinished)
     /// `meeting.failed`
     case meetingFailed(MeetingFailed)
+    /// `meeting.capture_failed`
+    case meetingCaptureFailed(MeetingCaptureFailed)
     /// `meeting.worker_failed`
     case meetingWorkerFailed(MeetingWorkerFailed)
     /// An event this build does not know. The core and the shell ship together, so this
@@ -138,6 +140,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case "meeting.commitments": self = .meetingCommitments(try MeetingCommitments(from: decoder))
         case "meeting.finished": self = .meetingFinished(try MeetingFinished(from: decoder))
         case "meeting.failed": self = .meetingFailed(try MeetingFailed(from: decoder))
+        case "meeting.capture_failed": self = .meetingCaptureFailed(try MeetingCaptureFailed(from: decoder))
         case "meeting.worker_failed": self = .meetingWorkerFailed(try MeetingWorkerFailed(from: decoder))
         default: self = .unknown(type: type)
         }
@@ -182,6 +185,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .meetingCommitments(let event): try event.encode(to: encoder)
         case .meetingFinished(let event): try event.encode(to: encoder)
         case .meetingFailed(let event): try event.encode(to: encoder)
+        case .meetingCaptureFailed(let event): try event.encode(to: encoder)
         case .meetingWorkerFailed(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var c = encoder.container(keyedBy: TypeKey.self)
@@ -503,6 +507,15 @@ public enum KeptLive: String, Codable, Sendable, Equatable, CaseIterable {
     case refused
     case incomplete
     case other
+}
+
+/// Capture stopped because the core's pump failed (a bug in the core, contained). What reached
+/// disk is kept: the meeting ends as if capture had stopped, and its final pass runs over it.
+public struct MeetingCaptureFailed: Codable, Sendable, Equatable {
+    /// The meeting's record, when it had one.
+    public let record: String?
+    /// Always `meeting.capture_failed`.
+    public let type: String
 }
 
 /// Commitments are saved.

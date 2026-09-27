@@ -16,8 +16,9 @@
 //!   the chain, wakes at [`MeetingChain::deadline_ns`] for the silent-channel watchdog's
 //!   [`tick`](MeetingChain::tick), and at the end stops the chain and runs the final pass.
 //!   The meeting chain has no thread of its own; this is it.
-//! - **Capture** is a [`FileReplaySource`] per side here (architecture rule 7). Its end is seen
-//!   through the sink it drops when it has delivered everything.
+//! - **Capture** is any [`AudioSource`] per side ([`CaptureSide`]): a [`FileReplaySource`] for a
+//!   replay (architecture rule 7), a device in S2.8. A side has ended when its source drops the
+//!   sink it was given, which a replay does after its last block.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -61,6 +62,56 @@ pub struct Replay {
     pub fast: bool,
 }
 
+/// One side of a meeting's capture.
+pub struct CaptureSide {
+    /// Where the audio comes from; its channel is the side.
+    pub source: Box<dyn AudioSource>,
+    /// How much audio its ring holds before it drops some ([`DEFAULT_RING_DURATION`]).
+    ///
+    /// [`DEFAULT_RING_DURATION`]: ink_audio::DEFAULT_RING_DURATION
+    pub ring: Duration,
+}
+
+impl Replay {
+    /// Opens the files as capture sides. Errors name the file, never audio.
+    pub fn open(&self, shared: &Shared) -> Result<Vec<CaptureSide>, String> {
+        let mut paths = vec![(Channel::Mic, self.mic.clone())];
+        if let Some(far) = &self.far {
+            paths.push((Channel::Far, far.clone()));
+        }
+        let pacing = if self.fast {
+            Pacing::Unpaced
+        } else {
+            Pacing::RealTime
+        };
+        let mut sides = Vec::new();
+        for (channel, path) in paths {
+            let source = FileReplaySource::open(&path, channel, shared.clock.clone())
+                .map_err(|e| e.to_string())?
+                .with_pacing(pacing);
+            let format = source.format();
+            let seconds = source.total_frames() as f64 / f64::from(format.sample_rate.max(1));
+            let ring = if self.fast {
+                if seconds > FAST_REPLAY_MAX.as_secs_f64() {
+                    return Err(format!(
+                        "{}: {seconds:.0} s is too long for a fast replay (at most {} s)",
+                        file_name(&path),
+                        FAST_REPLAY_MAX.as_secs()
+                    ));
+                }
+                Duration::from_secs_f64(seconds) + Duration::from_secs(5)
+            } else {
+                ink_audio::DEFAULT_RING_DURATION
+            };
+            sides.push(CaptureSide {
+                source: Box::new(source),
+                ring,
+            });
+        }
+        Ok(sides)
+    }
+}
+
 /// Anything but audio, for the meeting worker.
 enum Input {
     Issue(Channel, CaptureIssue),
@@ -70,7 +121,7 @@ enum Input {
 
 /// A side's source, and whether it has delivered everything.
 struct Source {
-    source: FileReplaySource,
+    source: Box<dyn AudioSource>,
     done: Arc<AtomicBool>,
 }
 
@@ -97,23 +148,20 @@ impl Drop for Delivered {
 pub struct MeetingRun {
     abort: Arc<AtomicBool>,
     cancel: CancelToken,
+    mailbox: Arc<Box2>,
     pump: JoinHandle<()>,
     worker: JoinHandle<()>,
 }
 
 impl MeetingRun {
-    /// Opens the files, then starts the worker and the pump. Errors name the file, never audio.
-    pub fn start(shared: &Arc<Shared>, replay: Replay) -> Result<Self, String> {
+    /// Starts the worker, which starts the chain, and the pump, which starts capture once the
+    /// chain has. Errors name what failed, never audio.
+    pub fn start(
+        shared: &Arc<Shared>,
+        capture: Vec<CaptureSide>,
+        title: Option<String>,
+    ) -> Result<Self, String> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let mut sides = vec![(Channel::Mic, replay.mic.clone())];
-        if let Some(far) = &replay.far {
-            sides.push((Channel::Far, far.clone()));
-        }
-        let pacing = if replay.fast {
-            Pacing::Unpaced
-        } else {
-            Pacing::RealTime
-        };
         let dir_name = format!(
             "{}-{}",
             shared.clock.unix_ms(),
@@ -123,25 +171,10 @@ impl MeetingRun {
             .map_err(|e| format!("the meeting's audio directory: {e}"))?;
         let mut sources = Vec::new();
         let mut captures = Vec::new();
-        for (channel, path) in sides {
-            let source = FileReplaySource::open(&path, channel, shared.clock.clone())
-                .map_err(|e| e.to_string())?
-                .with_pacing(pacing);
-            let format = source.format();
-            let seconds = source.total_frames() as f64 / f64::from(format.sample_rate.max(1));
-            let ring = if replay.fast {
-                if seconds > FAST_REPLAY_MAX.as_secs_f64() {
-                    return Err(format!(
-                        "{}: {seconds:.0} s is too long for a fast replay (at most {} s)",
-                        file_name(&path),
-                        FAST_REPLAY_MAX.as_secs()
-                    ));
-                }
-                Duration::from_secs_f64(seconds) + Duration::from_secs(5)
-            } else {
-                ink_audio::DEFAULT_RING_DURATION
-            };
-            let (producer, consumer) = capture_ring(format, ring).map_err(|e| e.to_string())?;
+        for CaptureSide { source, ring } in capture {
+            let channel = source.channel();
+            let (producer, consumer) =
+                capture_ring(source.format(), ring).map_err(|e| e.to_string())?;
             let done = Arc::new(AtomicBool::new(false));
             captures.push((
                 SideCapture::new(channel, consumer, chunks.clone()),
@@ -154,32 +187,39 @@ impl MeetingRun {
         }
 
         let mailbox = Arc::new(Mailbox::new(DEFAULT_AUDIO_CAPACITY));
+        let record: Arc<OnceLock<RecordId>> = Arc::default();
         let abort = Arc::new(AtomicBool::new(false));
         let cancel = CancelToken::new();
         let (go_tx, go_rx) = mpsc::channel::<bool>();
         let worker = {
             let (shared, mailbox, cancel) = (shared.clone(), mailbox.clone(), cancel.clone());
+            let record = record.clone();
             let start = MeetingStart {
-                title: replay.title,
+                title,
                 source_app: None,
                 audio_dir: Some(format!("meetings/{dir_name}")),
                 routing: Default::default(),
             };
             thread::Builder::new()
                 .name("ink-meeting".into())
-                .spawn(move || worker(&shared, &mailbox, start, chunks, &cancel, go_tx))
+                .spawn(move || worker(&shared, &mailbox, &record, start, chunks, &cancel, go_tx))
                 .map_err(|e| format!("the meeting worker did not start: {e}"))?
         };
         let pump = {
-            let (shared, abort) = (shared.clone(), abort.clone());
+            let (shared, mailbox, abort) = (shared.clone(), mailbox.clone(), abort.clone());
             thread::Builder::new()
                 .name("ink-pump".into())
-                .spawn(move || pump(&shared, &mailbox, sources, captures, &abort, &go_rx))
+                .spawn(move || {
+                    pump(
+                        &shared, &mailbox, &record, sources, captures, &abort, &go_rx,
+                    );
+                })
                 .map_err(|e| format!("the pump did not start: {e}"))?
         };
         Ok(Self {
             abort,
             cancel,
+            mailbox,
             pump,
             worker,
         })
@@ -193,8 +233,11 @@ impl MeetingRun {
     /// Waits for the meeting to end by itself.
     pub fn join(self) {
         if self.pump.join().is_err() {
-            log::error!("the pump panicked");
+            log::error!("the pump panicked outside its boundary");
         }
+        // The pump closes the mailbox however it ends; closed again here, so that even a pump
+        // that could not, the worker sees the end instead of ticking forever.
+        self.mailbox.close();
         if self.worker.join().is_err() {
             log::error!("the meeting worker panicked outside its boundary");
         }
@@ -224,7 +267,43 @@ fn issues(mailbox: &Box2, channel: Channel) -> impl FnMut(CaptureIssue) + '_ {
     }
 }
 
+/// The pump thread: [`capture`] behind a panic boundary, then the ending the worker waits for,
+/// however capture ended.
 fn pump(
+    shared: &Shared,
+    mailbox: &Box2,
+    record: &OnceLock<RecordId>,
+    sources: Vec<Source>,
+    captures: Vec<(SideCapture, Delivered)>,
+    abort: &AtomicBool,
+    go: &mpsc::Receiver<bool>,
+) {
+    let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture(shared, mailbox, sources, captures, abort, go);
+    }));
+    if captured.is_err() {
+        // The payload is not logged: it could quote what was said (I5). The sources and the
+        // chunk writers were dropped on the way out, which stops the sources and leaves what was
+        // written on disk for the final pass.
+        log::error!("the pump panicked; capture stops here and the meeting ends");
+        shared.events.emit(event(
+            "meeting.capture_failed",
+            &[("record", record.get().map(|r| r.0.as_str().into()))],
+        ));
+    }
+    // Only the pump tells the worker that capture ended: done on every path, or the worker
+    // would tick forever and shutdown would wait on it.
+    let _ = mailbox.push(Input::Stop);
+    if let Some(o) = mailbox.close() {
+        shared.events.emit(dropped_event("meeting", None, o));
+    }
+    // Idle is a still frame (architecture rule 9): the last thing drawn is silence.
+    shared.publish_bands(Bands::default());
+}
+
+/// Starts the sources once the chain has started, and drains them until they end or the meeting
+/// is stopped.
+fn capture(
     shared: &Shared,
     mailbox: &Box2,
     mut sources: Vec<Source>,
@@ -283,23 +362,17 @@ fn pump(
         let summary = side.finish(&mut feed, &mut issues(mailbox, channel));
         let _ = mailbox.push(Input::Ended(summary));
     }
-    let _ = mailbox.push(Input::Stop);
-    if let Some(o) = mailbox.close() {
-        shared.events.emit(dropped_event("meeting", None, o));
-    }
-    // Idle is a still frame (architecture rule 9): the last thing drawn is silence.
-    shared.publish_bands(Bands::default());
 }
 
 fn worker(
     shared: &Arc<Shared>,
     mailbox: &Box2,
+    record: &Arc<OnceLock<RecordId>>,
     start: MeetingStart,
     chunks: ChunkStore,
     cancel: &CancelToken,
     go: mpsc::Sender<bool>,
 ) {
-    let record: Arc<OnceLock<RecordId>> = Arc::default();
     let sink: EventSink<MeetingEvent> = {
         let (events, record) = (shared.events.clone(), record.clone());
         Arc::new(move |e| {
@@ -418,7 +491,8 @@ mod tests {
                 audio_dir: Some("meetings/tick".into()),
                 routing: Default::default(),
             };
-            thread::spawn(move || worker(&shared, &mailbox, start, chunks, &cancel, go_tx))
+            let record = Arc::default();
+            thread::spawn(move || worker(&shared, &mailbox, &record, start, chunks, &cancel, go_tx))
         };
         assert_eq!(go_rx.recv(), Ok(true));
 

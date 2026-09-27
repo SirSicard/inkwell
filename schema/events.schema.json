@@ -116,6 +116,9 @@
       "$ref": "#/$defs/MeetingFailed"
     },
     {
+      "$ref": "#/$defs/MeetingCaptureFailed"
+    },
+    {
       "$ref": "#/$defs/MeetingWorkerFailed"
     }
   ],
@@ -1348,6 +1351,23 @@
       "required": [
         "type",
         "message"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingCaptureFailed": {
+      "type": "object",
+      "description": "Capture stopped because the core's pump failed (a bug in the core, contained). What reached disk is kept: the meeting ends as if capture had stopped, and its final pass runs over it.",
+      "properties": {
+        "type": {
+          "const": "meeting.capture_failed"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record, when it had one."
+        }
+      },
+      "required": [
+        "type"
       ],
       "additionalProperties": false
     },

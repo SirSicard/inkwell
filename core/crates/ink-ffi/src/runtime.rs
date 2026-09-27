@@ -37,7 +37,7 @@ use crate::external::ExternalOffline;
 use crate::gate::{ModelGate, Routed, refused_event};
 use crate::hub::{EventOut, Events, Hub};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
-use crate::meeting::{MeetingRun, Replay};
+use crate::meeting::{CaptureSide, MeetingRun, Replay};
 
 /// The model type residency holds: any offline engine an adapter loads.
 pub type Model = Box<dyn OfflineEngine>;
@@ -447,6 +447,17 @@ impl Core {
         Ok(id)
     }
 
+    /// **Worker.** Starts a meeting captured from `capture` (one source per side), unless one is
+    /// running. It ends when every source has delivered everything (dropped the sink it was
+    /// given), then runs its final pass; its events say how it went.
+    pub fn start_meeting(
+        &self,
+        capture: Vec<CaptureSide>,
+        title: Option<String>,
+    ) -> Result<(), String> {
+        start_meeting(&self.shared, &self.runs, capture, title)
+    }
+
     /// The shared state, for tests and the C ABI.
     pub fn shared(&self) -> &Arc<Shared> {
         &self.shared
@@ -554,6 +565,24 @@ fn stop_dictation(worker: DictationWorker) {
     }
 }
 
+/// Starts a meeting on `capture`, unless one is running; collects one that has finished.
+fn start_meeting(
+    shared: &Arc<Shared>,
+    runs: &Mutex<Runs>,
+    capture: Vec<CaptureSide>,
+    title: Option<String>,
+) -> Result<(), String> {
+    let mut runs = lock(runs);
+    if runs.meeting.as_ref().is_some_and(|m| !m.is_finished()) {
+        return Err("a meeting is already running".into());
+    }
+    if let Some(done) = runs.meeting.take() {
+        done.join();
+    }
+    runs.meeting = Some(MeetingRun::start(shared, capture, title)?);
+    Ok(())
+}
+
 fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
     let Envelope { name, id, command } = envelope;
     let fail = |message: String| {
@@ -564,16 +593,11 @@ fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
     };
     match command {
         Command::ReplayMeeting(replay) => {
-            let mut runs = lock(runs);
-            if runs.meeting.as_ref().is_some_and(|m| !m.is_finished()) {
-                return fail("a meeting is already running".into());
-            }
-            if let Some(done) = runs.meeting.take() {
-                done.join();
-            }
-            match MeetingRun::start(shared, replay) {
-                Ok(run) => runs.meeting = Some(run),
-                Err(e) => fail(e),
+            let started = replay
+                .open(shared)
+                .and_then(|capture| start_meeting(shared, runs, capture, replay.title.clone()));
+            if let Err(e) = started {
+                fail(e);
             }
         }
         Command::ModelWarm { job } => warm(shared, job),
