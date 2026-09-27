@@ -93,7 +93,6 @@ public final class InkView: NSView {
         // The prototype starts each ink at a random point in its slow motion.
         simulation.t = Double.random(in: 0..<30)
         simulation.cy = inkCentreHeight
-        schedule = InkSchedule()
         _ = schedule.set(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(displayOptionsChanged(_:)),
@@ -165,6 +164,13 @@ public final class InkView: NSView {
     private var isOnScreen: Bool {
         guard let window, window.isVisible, window.occlusionState.contains(.visible) else { return false }
         return !isHiddenOrHasHiddenAncestor && bounds.width >= 1 && bounds.height >= 1
+    }
+
+    /// Re-checks whether the view is on screen. Call it right after ordering its window in or
+    /// out: the window server's occlusion notice comes a moment later, and until then a view in a
+    /// window just ordered out would keep drawing.
+    public func updateVisibility() {
+        visibilityChanged()
     }
 
     private func visibilityChanged() {

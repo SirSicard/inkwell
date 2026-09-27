@@ -11,8 +11,8 @@ import SwiftUI
 
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
-    init(router: Router, store: CoreStore) {
-        let root = ShellView(router: router).environment(store)
+    init(router: Router, store: CoreStore, ink: ShellInk) {
+        let root = ShellView(router: router).environment(store).environment(ink)
         let hosting = NSHostingController(rootView: root)
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]

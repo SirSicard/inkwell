@@ -6,6 +6,7 @@
 // and SIGTERM/SIGINT (kill, launchd, Ctrl-C in a terminal), which are turned into the same Quit.
 import AppKit
 import InkBridge
+import InkRenderer
 import os
 
 @MainActor
@@ -18,6 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let measurement = Measurement.fromEnvironment(ProcessInfo.processInfo.environment)
     private var statusItem: StatusItemController?
     private var mainWindow: MainWindowController?
+    /// The ink every surface shows, and the Drop that shows it while something is live.
+    private lazy var ink = ShellInk(store: core.store)
+    private var drop: DropController?
+    private var dropDemo: DropDemo?
     private var signalSources: [DispatchSourceSignal] = []
     private var quitting = false
 
@@ -40,6 +45,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             measurement.start { [weak self] in self?.mainWindow?.isVisible ?? false }
         }
         core.start()
+
+        // The shell budget's live phase holds the ink live with no audio; the focus check cycles
+        // the Drop through its states. Neither is set in ordinary use.
+        ink.held = measurement?.heldInk
+        if case .failure(let failure) = InkPipeline.shared {
+            // The app runs on without the ink: every ink zone shows plain paper.
+            Logger(subsystem: "com.inkwell.app", category: "ink")
+                .error("the ink cannot draw: \(failure.description, privacy: .public)")
+        }
+        drop = DropController(ink: ink)
+        if let interval = DropDemo.interval(from: ProcessInfo.processInfo.environment) {
+            dropDemo = DropDemo(ink: ink, interval: interval)
+        }
 
         statusItem = StatusItemController(store: core.store) { [weak self] in
             self?.showMainWindow()
@@ -78,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMainWindow() {
         measurement?.windowShown()
         if mainWindow == nil {
-            mainWindow = MainWindowController(router: router, store: core.store)
+            mainWindow = MainWindowController(router: router, store: core.store, ink: ink)
         }
         mainWindow?.present()
     }
