@@ -634,3 +634,108 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
 fn clock_fn() -> Arc<dyn Clock> {
     clock()
 }
+
+// --- The meeting's language model ------------------------------------------------------------
+
+struct Summarizer {
+    systems: Mutex<Vec<String>>,
+}
+
+unsafe extern "C" fn summarize(ctx: *mut c_void, call: u64, request: *const c_char) {
+    // SAFETY: ctx is the test's model, alive past its release; the request is valid for the call.
+    let (me, request) = unsafe {
+        (
+            &*(ctx as *const Summarizer),
+            std::ffi::CStr::from_ptr(request)
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        )
+    };
+    let request: Value = serde_json::from_str(&request).unwrap();
+    let system = request["system"].as_str().unwrap().to_owned();
+    let answer = if system.contains("meeting record") {
+        assert!(
+            request["json_schema"].is_string(),
+            "a summary asks for its shape"
+        );
+        r#"{"headline":"The report goes out on Friday.","body":"Status.","decisions":[],"actions":[]}"#
+    } else {
+        r#"{"class":"hypothetical","confidence":0.9,"task":null,"due":null,"quote":"words"}"#
+    };
+    me.systems.lock().unwrap().push(system);
+    let answer = CString::new(serde_json::json!({ "text": answer }).to_string()).unwrap();
+    std::thread::spawn(move || {
+        // SAFETY: a NUL-terminated string valid for the call.
+        unsafe { ink_ffi::ink_engine_complete(call, answer.as_ptr()) };
+    });
+}
+
+/// S2.8, carried item 1: a meeting's final pass writes its summary with the language model the
+/// shell registered (Foundation Models on the Mac, a script here), and an untitled meeting takes
+/// the headline as its title.
+#[test]
+fn a_meeting_is_summarized_by_the_registered_model_and_titled_by_its_headline() {
+    let dir = TempDir::new("summary");
+    let loader = MockLoader::new(Behaviour::Say("I'll send the report on Friday".into()));
+    let installer = Arc::new(MockInstaller {
+        generation: loader.generation.clone(),
+        gate: None,
+        installs: AtomicUsize::new(0),
+    });
+    let (core, events) = start(&dir, &[test_row(ROW_ID)], loader, installer);
+    let model = Box::leak(Box::new(Summarizer {
+        systems: Mutex::default(),
+    }));
+    let info = CString::new(
+        r#"{"id":"test-llm","licence":"MIT","model":"t","local":true,"context_tokens":4096}"#,
+    )
+    .unwrap();
+    let table = InkEngineVTable {
+        kind: KIND_LLM,
+        info_json: info.as_ptr(),
+        ctx: model as *const Summarizer as *mut c_void,
+        release: Some(release),
+        generate: Some(summarize),
+        ..Default::default()
+    };
+    // SAFETY: a valid table whose ctx outlives the core.
+    let registration =
+        unsafe { Registration::from_table(&table, core.shared().shutdown.clone()) }.unwrap();
+    core.register(registration).unwrap();
+    let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));
+    speech_wav(&mic, 3.0, 51);
+    speech_wav(&far, 2.0, 52);
+    core.command(&format!(
+        r#"{{"cmd":"replay_meeting","mic":{:?},"far":{:?},"pacing":"fast"}}"#,
+        mic.to_str().unwrap(),
+        far.to_str().unwrap()
+    ))
+    .unwrap();
+    let summarized = events.wait_type("meeting.summarized", WAIT);
+    let finished = events.wait_type("meeting.finished", WAIT);
+    assert_eq!(summarized["record"], finished["record"]);
+    let record = ink_core::RecordId(finished["record"].as_str().unwrap().to_owned());
+    let store = &core.shared().store;
+    assert_eq!(
+        store.record(&record).unwrap().unwrap().title.as_deref(),
+        Some("The report goes out on Friday.")
+    );
+    assert!(
+        store
+            .summary(&record)
+            .unwrap()
+            .unwrap()
+            .text
+            .starts_with("The report goes out on Friday.")
+    );
+    let systems = model.systems.lock().unwrap();
+    assert!(systems.iter().any(|s| s.contains("meeting record")));
+    assert!(
+        systems.iter().any(|s| s.contains("classify ONE sentence")),
+        "the promise was judged"
+    );
+    drop(systems);
+    events.assert_valid();
+    core.shutdown();
+}
