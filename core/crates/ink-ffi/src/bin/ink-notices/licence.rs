@@ -374,6 +374,59 @@ impl std::fmt::Display for Expr {
     }
 }
 
+/// The licence a file's name says it holds (`LICENSE-APACHE`, `LICENSE_MIT.txt`, `UNLICENSE`), as
+/// the ids its text may carry; `None` for any other name (`LICENSE`, `COPYING`,
+/// `LICENSE-THIRD-PARTY`).
+pub fn named_for(file_name: &str) -> Option<&'static [&'static str]> {
+    let lower = file_name.to_ascii_lowercase();
+    let stem = lower
+        .strip_suffix(".txt")
+        .or_else(|| lower.strip_suffix(".md"))
+        .unwrap_or(&lower);
+    let stem = stem.replace(['_', '.'], "-");
+    if stem == "unlicense" {
+        return Some(&["Unlicense"]);
+    }
+    let rest = ["license-", "licence-", "copying-"]
+        .iter()
+        .find_map(|p| stem.strip_prefix(p))?;
+    Some(match rest {
+        r if r.starts_with("apache") && r.contains("llvm") => &["Apache-2.0", "LLVM-exception"],
+        r if r.starts_with("apache") => &["Apache-2.0"],
+        "mit" => &["MIT"],
+        r if r.starts_with("bsd") => &["BSD-2-Clause", "BSD-3-Clause"],
+        "zlib" => &["Zlib"],
+        "isc" => &["ISC"],
+        "unlicense" => &["Unlicense"],
+        r if r.starts_with("blueoak") => &["BlueOak-1.0.0"],
+        _ => return None,
+    })
+}
+
+/// Whether `file` is the crate's own copy of an alternative its licence offers that was not taken,
+/// the only kind of file left out. It must say so twice: its name is that licence's
+/// ([`named_for`]), and its text holds that licence and nothing else. A file that fails either
+/// test ships: a licence of vendored code can be the same licence as an alternative not taken,
+/// and shipping a text too many costs nothing.
+fn is_alternative_not_taken(
+    file: &LicenceFile,
+    ids: &BTreeSet<&str>,
+    named: &BTreeSet<String>,
+    chosen: &BTreeSet<&str>,
+) -> bool {
+    if ids.is_empty()
+        || file.supplied.is_some()
+        || file.name.to_ascii_uppercase().starts_with("NOTICE")
+    {
+        return false;
+    }
+    let Some(for_licence) = named_for(&file.name) else {
+        return false;
+    };
+    ids.iter()
+        .all(|id| for_licence.contains(id) && named.contains(*id) && !chosen.contains(id))
+}
+
 /// Picks what ships for a crate licensed as `expr`, from its licence `files` (sorted by name),
 /// whose manifest names `authors`. An error says which licence text is missing.
 pub fn select(expr: &Expr, files: &[LicenceFile], authors: &[String]) -> Result<Selection, String> {
@@ -415,14 +468,7 @@ pub fn select(expr: &Expr, files: &[LicenceFile], authors: &[String]) -> Result<
     let mut included = Vec::new();
     for file in files {
         let ids = classify(&file.text);
-        let is_notice = file.name.to_ascii_uppercase().starts_with("NOTICE");
-        let takes_chosen = ids.iter().any(|id| chosen.contains(id));
-        // A file holding only licences the expression offers that were not taken.
-        let alternative_not_taken = !ids.is_empty()
-            && ids
-                .iter()
-                .all(|id| named.contains(*id) && !chosen.contains(id));
-        if alternative_not_taken && !is_notice && !takes_chosen {
+        if is_alternative_not_taken(file, &ids, &named, &chosen) {
             continue;
         }
         let holder_from_manifest = (ids.contains("MIT")
@@ -642,6 +688,70 @@ mod tests {
             names(&s),
             ["COPYING", "LICENSE-MIT", "LICENSE-THIRD-PARTY", "NOTICE"]
         );
+    }
+
+    #[test]
+    fn a_vendored_licence_that_is_also_an_alternative_not_taken_still_ships() {
+        // An MIT OR Apache-2.0 crate that also carries the Apache-2.0 licence of code it vendors:
+        // only the file named for the alternative not taken is left out.
+        let files = [
+            file("LICENSE", APACHE),
+            file("LICENSE-APACHE", APACHE),
+            file("LICENSE-MIT", &mit("2015 Someone")),
+            file("LICENSE-THIRD-PARTY", APACHE),
+        ];
+        let s = select(&parse("MIT OR Apache-2.0").unwrap(), &files, &[]).unwrap();
+        assert_eq!(s.shown, "MIT");
+        assert_eq!(names(&s), ["LICENSE", "LICENSE-MIT", "LICENSE-THIRD-PARTY"]);
+        // A file named for the alternative but holding more than its text ships too.
+        let files = [
+            file("LICENSE-APACHE", &format!("{APACHE}\n{BSD3}")),
+            file("LICENSE-MIT", &mit("2015 Someone")),
+        ];
+        let s = select(&parse("MIT OR Apache-2.0").unwrap(), &files, &[]).unwrap();
+        assert_eq!(names(&s), ["LICENSE-APACHE", "LICENSE-MIT"]);
+    }
+
+    #[test]
+    fn a_file_name_names_the_licence_it_is_for() {
+        let named = |n: &str| named_for(n).map(|ids| ids.to_vec());
+        for apache in [
+            "LICENSE-APACHE",
+            "LICENSE_APACHE-2.0",
+            "LICENSE.apache",
+            "LICENSE-Apache",
+            "license-apache.md",
+            "LICENSE-APACHE2",
+        ] {
+            assert_eq!(named(apache), Some(vec!["Apache-2.0"]), "{apache}");
+        }
+        assert_eq!(
+            named("LICENSE-Apache-2.0_WITH_LLVM-exception"),
+            Some(vec!["Apache-2.0", "LLVM-exception"])
+        );
+        assert_eq!(named("LICENSE-MIT.txt"), Some(vec!["MIT"]));
+        assert_eq!(named("UNLICENSE"), Some(vec!["Unlicense"]));
+        assert_eq!(
+            named("LICENSE-BSD"),
+            Some(vec!["BSD-2-Clause", "BSD-3-Clause"])
+        );
+        assert_eq!(
+            named("LICENSE.BSD-3-Clause"),
+            Some(vec!["BSD-2-Clause", "BSD-3-Clause"])
+        );
+        assert_eq!(named("LICENSE-ZLIB.md"), Some(vec!["Zlib"]));
+        for other in [
+            "LICENSE",
+            "LICENSE.txt",
+            "COPYING",
+            "COPYRIGHT",
+            "LICENSE-THIRD-PARTY",
+            "LICENSE-WHATWG",
+            "NOTICE",
+            "LICENSE-libm-MIT",
+        ] {
+            assert_eq!(named(other), None, "{other}");
+        }
     }
 
     #[test]
