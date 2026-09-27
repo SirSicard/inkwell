@@ -616,10 +616,22 @@ impl EndedMeeting {
             }
             stop => Err(stop),
         })?;
-        let mut echo = echo_pass(fit.as_ref());
+        let mut echo = echo_pass(fit.as_ref().map(|(r, _)| r));
+        if let Some((report, following)) = &fit
+            && report.path.is_none()
+        {
+            // No path, so no cancellation: said aloud when the mic followed the far end anyway.
+            let (heard_ms, follows) = following.report();
+            if heard_ms >= echo::FOLLOW_MIN_HEARD_MS && follows >= echo::FOLLOWS {
+                log::warn!(
+                    "meeting final pass: no echo path, yet the mic followed the far end (correlation {follows:.2} over {heard_ms} ms); the mic is transcribed as captured"
+                );
+                core.warn(MeetingWarning::EchoPathNotFound { heard_ms });
+            }
+        }
 
         // The mic: each region transcribed as it is read; along the echo path, if there is one.
-        let path = fit.and_then(|r| r.path);
+        let path = fit.and_then(|(r, _)| r.path);
         let mut evidence = None;
         let (mut mic, mic_report) = match path {
             Some(path) => match self.mic_pass_cancelled(audio, path, &ctx) {

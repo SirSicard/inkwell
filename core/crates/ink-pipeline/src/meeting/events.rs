@@ -178,6 +178,14 @@ pub enum MeetingWarning {
     /// Echo cancellation failed in the final pass: the mic was transcribed as captured instead,
     /// with no echo removed.
     EchoFailed(EchoFailure),
+    /// The final pass found no echo path, yet the mic's level followed the far end's while it
+    /// played (a path the search could not fit: clocks drifting apart faster than it accepts, a
+    /// path that changed mid-meeting). Echo is possible, and the mic was transcribed as captured:
+    /// "you" lines may hold the far end's words. Headphones, with nothing leaking, stay quiet.
+    EchoPathNotFound {
+        /// How long the mic was audible while the far end played, ms.
+        heard_ms: u64,
+    },
     /// The diarizer failed: the far end keeps no speaker labels.
     DiarizationFailed(EngineError),
     /// The store failed: a live final, the final pass, the summary or commitments could not be

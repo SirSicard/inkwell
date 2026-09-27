@@ -125,6 +125,146 @@ pub(crate) fn far_playing(frame: &EchoFrame) -> bool {
     level_db(&frame.reference[..n]) > GateConfig::default().far_floor_db
 }
 
+/// The lags [`Following`] tries either way, in 10 ms frames: 500 ms, the path search's range.
+const FOLLOW_LAGS: usize = 50;
+
+/// Frame levels are floored here, dBFS, so digital silence does not dominate a correlation.
+const FOLLOW_FLOOR_DB: f32 = -90.0;
+
+/// Pairs a correlation needs before it counts: 5 s of far-end audio at that lag.
+const FOLLOW_MIN_PAIRS: u64 = 500;
+
+/// Far-end audio the mic must have been audible over (above the audible floor, −40 dBFS) before a
+/// missing path is worth a warning, ms: 5 s. Echo at laptop-speaker level is audible for a good
+/// part of the time the far end plays, and the correlation is what tells it from a user talking.
+pub(crate) const FOLLOW_MIN_HEARD_MS: u64 = 5_000;
+
+/// A correlation of the two sides' levels at or above this says the mic follows the far end.
+/// Echo on the gate's real take gave 0.86 (envelopes); independent talkers give about 0, and
+/// taking turns less.
+pub(crate) const FOLLOWS: f64 = 0.5;
+
+/// Whether the mic follows the far end, measured without a path: the correlation of the two
+/// sides' levels (dB per 10 ms frame) over the frames where the far end plays, at the best lag
+/// within ±500 ms, and how long the mic was audible while it played. An echo path the search
+/// could not fit (clocks drifting faster than it accepts, a path that changed mid-meeting) still
+/// shows here; earbuds, with the user talking on their own schedule, do not.
+///
+/// It keeps a frame's partial samples and the last half second of levels per side: a few kB.
+#[derive(Default)]
+pub(crate) struct Following {
+    mic: Vec<f32>,
+    far: Vec<f32>,
+    /// Levels of complete frames not yet paired with the other side's.
+    mic_levels: VecDeque<f32>,
+    far_levels: VecDeque<f32>,
+    /// The last [`FOLLOW_LAGS`] + 1 paired levels, oldest first.
+    mic_hist: VecDeque<f32>,
+    far_hist: VecDeque<f32>,
+    /// Per lag (index `FOLLOW_LAGS` is 0; above it the mic lags the far end): n, Σx, Σy, Σxy,
+    /// Σx², Σy² with x the far end's level and y the mic's.
+    sums: Vec<[f64; 6]>,
+    heard_frames: u64,
+}
+
+impl Following {
+    /// The next mic samples, on the far end's timeline.
+    pub(crate) fn push_mic(&mut self, samples: &[f32]) {
+        frame_levels(&mut self.mic, samples, &mut self.mic_levels);
+        self.pair();
+    }
+
+    /// The next far-end samples.
+    pub(crate) fn push_far(&mut self, samples: &[f32]) {
+        frame_levels(&mut self.far, samples, &mut self.far_levels);
+        self.pair();
+    }
+
+    fn pair(&mut self) {
+        if self.sums.is_empty() {
+            self.sums = vec![[0.0; 6]; 2 * FOLLOW_LAGS + 1];
+        }
+        let floor = GateConfig::default().far_floor_db;
+        let audible = crate::speech::AUDIBLE_FLOOR_DBFS;
+        // Only when both sides have a frame: popping one without the other would lose it.
+        while !self.mic_levels.is_empty() && !self.far_levels.is_empty() {
+            let (Some(m), Some(f)) = (self.mic_levels.pop_front(), self.far_levels.pop_front())
+            else {
+                break;
+            };
+            for (hist, v) in [(&mut self.mic_hist, m), (&mut self.far_hist, f)] {
+                if hist.len() == FOLLOW_LAGS + 1 {
+                    hist.pop_front();
+                }
+                hist.push_back(v);
+            }
+            if f > floor && m > audible {
+                self.heard_frames += 1;
+            }
+            let n = self.far_hist.len();
+            // The mic now against the far end `lag` frames ago (the mic hears it late), and the
+            // far end now against the mic `lag` frames ago (the far stream is the late one).
+            for lag in 0..n {
+                let (x, y) = (self.far_hist[n - 1 - lag], m);
+                add(&mut self.sums[FOLLOW_LAGS + lag], x, y, floor);
+                if lag > 0 {
+                    let (x, y) = (f, self.mic_hist[n - 1 - lag]);
+                    add(&mut self.sums[FOLLOW_LAGS - lag], x, y, floor);
+                }
+            }
+        }
+    }
+
+    /// How long the mic was audible while the far end played, ms, and the best correlation of
+    /// their levels (0 when too little far-end audio was heard to tell).
+    pub(crate) fn report(&self) -> (u64, f64) {
+        let best = self
+            .sums
+            .iter()
+            .filter(|s| s[0] as u64 >= FOLLOW_MIN_PAIRS)
+            .map(|s| {
+                let (n, sx, sy, sxy, sxx, syy) = (s[0], s[1], s[2], s[3], s[4], s[5]);
+                let cov = sxy - sx * sy / n;
+                let (vx, vy) = (sxx - sx * sx / n, syy - sy * sy / n);
+                if vx <= 0.0 || vy <= 0.0 {
+                    0.0
+                } else {
+                    cov / (vx * vy).sqrt()
+                }
+            })
+            .fold(0.0, f64::max);
+        (self.heard_frames * 10, best)
+    }
+}
+
+/// Adds one pair to a lag's sums when the far end played in it.
+fn add(sums: &mut [f64; 6], x: f32, y: f32, floor: f32) {
+    if x <= floor {
+        return;
+    }
+    let (x, y) = (f64::from(x), f64::from(y.max(FOLLOW_FLOOR_DB)));
+    sums[0] += 1.0;
+    sums[1] += x;
+    sums[2] += y;
+    sums[3] += x * y;
+    sums[4] += x * x;
+    sums[5] += y * y;
+}
+
+/// Cuts `samples` (after what `partial` holds) into 10 ms frames' levels.
+fn frame_levels(partial: &mut Vec<f32>, samples: &[f32], out: &mut VecDeque<f32>) {
+    let mut rest = samples;
+    while !rest.is_empty() {
+        let take = (FRAME - partial.len()).min(rest.len());
+        partial.extend_from_slice(&rest[..take]);
+        rest = &rest[take..];
+        if partial.len() == FRAME {
+            out.push_back(level_db(partial).max(FOLLOW_FLOOR_DB));
+            partial.clear();
+        }
+    }
+}
+
 /// Far-end audio AEC3 is given to converge before its ERLE counts, in 10 ms frames: 10 s, as the
 /// gate measured it (11–12 dB in the first 10 s of a real take, 24 dB after).
 const CONVERGE_FRAMES: u64 = 1_000;
@@ -269,7 +409,7 @@ pub fn replay(
     cancel: &ink_core::CancelToken,
     mut on_frame: impl FnMut(&EchoFrame),
 ) -> Result<Option<PathReport>, super::FinalizeError> {
-    let Some(report) = super::offline::fit_path(audio, t0_ns, cancel)? else {
+    let Some((report, _)) = super::offline::fit_path(audio, t0_ns, cancel)? else {
         return Ok(None);
     };
     if let Some(path) = report.path {
@@ -1333,6 +1473,68 @@ mod tests {
         let p = lane.place(0, 24_000 * NS_PER_SAMPLE, 160, true, true);
         assert_eq!((p.zeros, p.drop), (0, 160), "the far end realigns");
         assert_eq!(lane.history.len(), 24_480);
+    }
+
+    /// Speech-like levels: 200 ms syllables at varying loudness with pauses, per 10 ms frame.
+    fn envelope(frames: usize, seed: u64) -> Vec<f32> {
+        let mut rng = ink_audio::synth::Lcg::new(seed);
+        let mut out = Vec::with_capacity(frames);
+        while out.len() < frames {
+            let loud = rng.next_f64() < 0.7;
+            let amp = if loud {
+                0.02 + 0.1 * rng.next_f64()
+            } else {
+                0.0
+            };
+            out.extend(std::iter::repeat_n(amp as f32, 20));
+        }
+        out.truncate(frames);
+        out
+    }
+
+    /// 16 kHz audio with those frame levels (noise at each level, plus a floor).
+    fn audio(levels: &[f32], seed: u64) -> Vec<f32> {
+        let mut rng = ink_audio::synth::Lcg::new(seed);
+        levels
+            .iter()
+            .flat_map(|&a| std::iter::repeat_n(a, FRAME))
+            .map(|a| (f64::from(a) * rng.next_gaussian() + 1e-4 * rng.next_gaussian()) as f32)
+            .collect()
+    }
+
+    #[test]
+    fn a_mic_that_follows_the_far_end_is_told_from_one_that_does_not() {
+        let far_levels = envelope(3_000, 1);
+        let far = audio(&far_levels, 2);
+        // Echo: the far end 60 ms later, 6 dB down, over a quiet room.
+        let mut echo_levels = vec![0.0; 6];
+        echo_levels.extend(far_levels.iter().map(|a| a * 0.5));
+        echo_levels.truncate(3_000);
+        let echo = audio(&echo_levels, 3);
+        // Earbuds: the user talking on their own schedule.
+        let own = audio(&envelope(3_000, 4), 5);
+        let measure = |mic: &[f32]| {
+            let mut f = Following::default();
+            // Uneven pieces on both sides, as the fit feeds them.
+            for (k, (m, fa)) in mic.chunks(4_000).zip(far.chunks(4_000)).enumerate() {
+                if k % 2 == 0 {
+                    f.push_mic(m);
+                    f.push_far(fa);
+                } else {
+                    f.push_far(fa);
+                    f.push_mic(m);
+                }
+            }
+            f.report()
+        };
+        let (heard, follows) = measure(&echo);
+        assert!(heard >= 10_000, "{heard}");
+        assert!(follows > 0.8, "{follows}");
+        let (_, follows) = measure(&own);
+        assert!(follows < 0.3, "{follows}");
+        // A mic that leads the far end (the far stream arrives late) is found too.
+        let (_, follows) = measure(&audio(&envelope(3_000, 1)[4..], 6));
+        assert!(follows > 0.8, "{follows}");
     }
 
     #[test]

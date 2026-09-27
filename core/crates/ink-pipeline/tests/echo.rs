@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use echo_rig::{Scene, Spec, echo_to_near_db};
 use ink_core::{Channel, Segment, TimedText, Transcript};
 use ink_pipeline::meeting::MeetingOutcome;
-use ink_pipeline::meeting::events::MeetingEvent;
+use ink_pipeline::meeting::events::{MeetingEvent, MeetingWarning};
 use meeting_rig::*;
 
 const VAD_DB: f32 = -40.0;
@@ -206,6 +206,45 @@ fn a_mic_that_hears_only_echo_gives_no_you_words() {
     assert!(run.outcome.far.word_count > 0);
 }
 
+#[test]
+fn an_echo_the_search_cannot_fit_is_a_warning() {
+    // Speakers, but the two clocks drift apart faster than any path the search accepts
+    // (1,500 ppm): no path, so the mic is transcribed as captured, echo and all.
+    let run = run(
+        echo_rig::echo_only(
+            30.0,
+            Spec {
+                drift_ppm: 1_500.0,
+                ..Spec::speakers()
+            },
+        ),
+        numbered(),
+    );
+    assert!(run.outcome.echo.path.is_none(), "{:?}", run.outcome.echo);
+    let warned = run.events.iter().find_map(|e| match e {
+        MeetingEvent::Warning(MeetingWarning::EchoPathNotFound { heard_ms }) => Some(*heard_ms),
+        _ => None,
+    });
+    let heard_ms = warned.expect("an EchoPathNotFound warning");
+    assert!(heard_ms >= 5_000, "{heard_ms}");
+}
+
+#[test]
+fn headphones_with_no_echo_raise_no_path_warning() {
+    // The earbuds scene: the far end plays while the user talks (double talk, 27–40 s), and the
+    // mic never hears it.
+    let run = earbuds();
+    assert!(run.outcome.echo.path.is_none());
+    assert!(
+        !run.events.iter().any(|e| matches!(
+            e,
+            MeetingEvent::Warning(MeetingWarning::EchoPathNotFound { .. })
+        )),
+        "{:?}",
+        run.outcome.echo
+    );
+}
+
 /// The far end says two lines; the user reads the first back over their own speech, and the
 /// second reaches the mic only as echo, inside a region of the user's talk. The engine (scripted)
 /// writes the echo into the "you" transcript there.
@@ -315,7 +354,7 @@ fn lines_removed_as_echo_are_stored_with_the_record() {
 // ---------------------------------------------------------------------------------------------
 // Live
 
-use ink_pipeline::meeting::events::{EchoFailure, EchoSearch, EchoState, MeetingWarning};
+use ink_pipeline::meeting::events::{EchoFailure, EchoSearch, EchoState};
 
 /// A scene through the chain with the rig's live engine on, fed in `parts`: each a range of the
 /// scene in seconds and what to feed there (both sides, or the far end only), with an action

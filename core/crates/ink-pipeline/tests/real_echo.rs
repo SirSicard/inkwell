@@ -125,8 +125,13 @@ fn qwen() -> Arc<dyn OfflineEngine> {
 }
 
 /// Both sides through the chain, no live engine; the final transcript's "you" lines and the
-/// outcome.
+/// outcome (with whether it warned that no echo path was found where echo was possible).
 fn through_the_chain(mic: &[f32], far: &[f32]) -> (Vec<Segment>, MeetingOutcome) {
+    let (you, outcome, _) = through_the_chain_warned(mic, far);
+    (you, outcome)
+}
+
+fn through_the_chain_warned(mic: &[f32], far: &[f32]) -> (Vec<Segment>, MeetingOutcome, bool) {
     let mut rig = RigBuilder {
         vad: silero(),
         offline: Some(qwen()),
@@ -137,6 +142,14 @@ fn through_the_chain(mic: &[f32], far: &[f32]) -> (Vec<Segment>, MeetingOutcome)
     let record = rig.chain().record().clone();
     rig.feed(mic, far);
     let outcome = rig.finish().expect("the final pass");
+    let warned = rig.events().iter().any(|e| {
+        matches!(
+            e,
+            ink_pipeline::meeting::events::MeetingEvent::Warning(
+                ink_pipeline::meeting::events::MeetingWarning::EchoPathNotFound { .. }
+            )
+        )
+    });
     let you = rig
         .store
         .segments(&record)
@@ -144,7 +157,7 @@ fn through_the_chain(mic: &[f32], far: &[f32]) -> (Vec<Segment>, MeetingOutcome)
         .into_iter()
         .filter(|s| s.channel == Channel::Mic)
         .collect();
-    (you, outcome)
+    (you, outcome, warned)
 }
 
 /// The reference passage's words, normalised: `INK_ECHO_READING`'s lines, `#` lines left out.
@@ -306,7 +319,13 @@ fn double_talk_is_no_worse_than_the_gate_s_echo_path_and_has_no_echo_words() {
     let (near, _) = load(&take, Some(&mix_dir.join("near.f32")));
 
     let (you_mix, out_mix) = through_the_chain(&mix, &far);
-    let (you_alone, out_alone) = through_the_chain(&near, &far);
+    let (you_alone, out_alone, warned) = through_the_chain_warned(&near, &far);
+    // The reading alone, the far end in earbuds: no path, and nothing leaked, so no warning.
+    assert!(
+        out_alone.echo.path.is_none() && !warned,
+        "{:?}",
+        out_alone.echo
+    );
     let w_mix = wer_trimmed(&reference, &you_words(&you_mix));
     let w_alone = wer_trimmed(&reference, &you_words(&you_alone));
     let w_gate = wer_trimmed(&reference, &gate_echo_path_words());

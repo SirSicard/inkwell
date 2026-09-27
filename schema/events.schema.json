@@ -298,6 +298,7 @@
         "echo_only_final",
         "echo_gate_vad_failed",
         "echo_failed",
+        "echo_path_not_found",
         "other"
       ]
     },
@@ -1105,7 +1106,7 @@
         "audible_ms": {
           "type": "integer",
           "minimum": 0,
-          "description": "Time above the audible floor, ms."
+          "description": "Time above the audible floor, ms; for echo_path_not_found, while the far end played."
         },
         "speech_ms": {
           "type": "integer",

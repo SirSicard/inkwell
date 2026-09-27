@@ -925,13 +925,14 @@ public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case echoOnlyFinal = "echo_only_final"
     case echoGateVadFailed = "echo_gate_vad_failed"
     case echoFailed = "echo_failed"
+    case echoPathNotFound = "echo_path_not_found"
     case other
 }
 
 /// Something went wrong in a meeting, and it went on without it. Which fields are present
 /// depends on kind.
 public struct MeetingWarningEvent: Codable, Sendable, Equatable {
-    /// Time above the audible floor, ms.
+    /// Time above the audible floor, ms; for echo_path_not_found, while the far end played.
     public let audibleMs: Int64?
     /// Which side.
     public let channel: Channel?

@@ -39,7 +39,7 @@ use ink_core::{
 use ink_echo::{Alignment, CancellerConfig, EchoCanceller, EchoError, PathFinder, PathReport};
 
 use super::diarize::{speaker_changes, speaker_of};
-use super::echo::{EchoEvidence, ErleMeter, far_playing};
+use super::echo::{EchoEvidence, ErleMeter, Following, far_playing};
 use super::events::{ChannelPass, MeetingEvent, MeetingWarning};
 use super::timeline::ns_to_samples;
 use crate::speech::{Region, SpeechPass, samples_to_ms};
@@ -413,7 +413,7 @@ pub(crate) fn fit_path(
     audio: &ChunkStore,
     t0_ns: u64,
     cancel: &CancelToken,
-) -> Result<Option<PathReport>, Stop> {
+) -> Result<Option<(PathReport, Following)>, Stop> {
     let (Ok(mic), Ok(far)) = (
         SideSamples::open(audio, Channel::Mic, t0_ns),
         SideSamples::open(audio, Channel::Far, t0_ns),
@@ -422,6 +422,8 @@ pub(crate) fn fit_path(
     };
     let (mut mic, mut far) = (Feed::new(mic), Feed::new(far));
     let mut finder = PathFinder::new();
+    // Whether the mic follows the far end, for a path the search cannot fit.
+    let mut following = Following::default();
     loop {
         if cancel.is_cancelled() {
             return Err(Stop::Cancelled);
@@ -431,18 +433,20 @@ pub(crate) fn fit_path(
             break;
         }
         finder.push(m, &[]).map_err(Stop::Echo)?;
+        following.push_mic(m);
         // The far end up to where the mic is: past the end of either side there is nothing to
         // compare.
         while far.fed < mic.fed {
             let want = (mic.fed - far.fed) as usize;
             let f = far.take(want.min(PIECE))?;
             if f.is_empty() {
-                return Ok(Some(finder.estimate()));
+                return Ok(Some((finder.estimate(), following)));
             }
             finder.push(&[], f).map_err(Stop::Echo)?;
+            following.push_far(f);
         }
     }
-    Ok(Some(finder.estimate()))
+    Ok(Some((finder.estimate(), following)))
 }
 
 /// Recorded audio AEC3 is run through once before the pass, its output discarded, samples: 20 s.

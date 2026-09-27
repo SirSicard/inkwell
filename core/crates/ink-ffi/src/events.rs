@@ -493,6 +493,12 @@ fn meeting_warning(w: &MeetingWarning) -> Vec<(&'static str, Option<Value>)> {
             ("phase", some("live")),
             msg(e.to_string()),
         ],
+        MeetingWarning::EchoPathNotFound { heard_ms } => vec![
+            kind("echo_path_not_found"),
+            ("channel", some("mic")),
+            ("phase", some("final")),
+            ("audible_ms", some(*heard_ms)),
+        ],
         MeetingWarning::EchoFailed(f) => {
             let mut fields = vec![kind("echo_failed"), ("phase", some("final"))];
             fields.extend(echo_failure(*f));
@@ -760,6 +766,7 @@ mod tests {
                 ahead: Channel::Far,
             }),
             MeetingWarning::EchoFailed(EchoFailure::Internal),
+            MeetingWarning::EchoPathNotFound { heard_ms: 12_000 },
         ];
         let mut meeting_events = vec![
             MeetingEvent::Started {
