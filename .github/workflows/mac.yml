@@ -7,9 +7,9 @@ name: Mac
 on:
   push:
     branches: [main]
-    paths: ['mac/**', 'core/**', 'schema/**', '.github/workflows/mac.yml']
+    paths: ['mac/**', 'core/**', 'schema/**', 'shaders/**', '.github/workflows/mac.yml']
   pull_request:
-    paths: ['mac/**', 'core/**', 'schema/**', '.github/workflows/mac.yml']
+    paths: ['mac/**', 'core/**', 'schema/**', 'shaders/**', '.github/workflows/mac.yml']
   workflow_dispatch:
 
 permissions:

@@ -4,9 +4,9 @@ name: Core
 on:
   push:
     branches: [main]
-    paths: ['core/**', 'mac/**', 'schema/**', '.github/workflows/core.yml']
+    paths: ['core/**', 'mac/**', 'schema/**', 'shaders/**', '.github/workflows/core.yml']
   pull_request:
-    paths: ['core/**', 'mac/**', 'schema/**', '.github/workflows/core.yml']
+    paths: ['core/**', 'mac/**', 'schema/**', 'shaders/**', '.github/workflows/core.yml']
   workflow_dispatch:
 
 permissions:

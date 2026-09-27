@@ -92,4 +92,7 @@ enum Typography {
 enum Layout {
     /// The ink rail beside the content, outside Today (the design's 56 px rail).
     static let railWidth: CGFloat = 56
+    /// Today's ink zone, with the wordmark: about a third of the default window's content (S2.5
+    /// lays out the rest of Today).
+    static let inkZoneWidth: CGFloat = 300
 }
