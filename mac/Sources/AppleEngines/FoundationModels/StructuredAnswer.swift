@@ -142,6 +142,13 @@ public indirect enum SchemaNode: Equatable, Sendable {
     }
 }
 
+// Availability, checked against the macOS 27 SDK's FoundationModels interface: every API below
+// (GenerationSchema(root:dependencies:), DynamicGenerationSchema's name/properties, anyOf strings,
+// arrayOf and type initializers, DynamicGenerationSchema.Property) and the session's
+// respond(to:schema:includeSchemaInPrompt:options:) with GeneratedContent.jsonString (in
+// FoundationModelsPolish) are macOS 26.0 API, in the 26.0 SDK, so `canImport` is their only gate.
+// The 26.4 additions (DynamicGenerationSchema.null, representNilExplicitlyInGeneratedContent) and
+// the macOS 27 respond overload (contextOptions, metadata) are not used.
 #if canImport(FoundationModels)
     extension SchemaNode {
         /// The schema Foundation Models generates to.

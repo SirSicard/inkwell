@@ -93,8 +93,14 @@ public final class FoundationModelsPolish: InkLanguageModel {
 
     /// How many tokens the on-device model's context holds (4,096 on macOS 26): the core sizes a
     /// meeting's summary and Ask to fit.
+    ///
+    /// `SystemLanguageModel.contextSize` first appears in the 26.4 SDK (back-deployed to macOS
+    /// 26.0, so no runtime check is needed where it compiles). The macos-26 runner's SDK may be
+    /// older, and says no module version, so the same compile gate as the macOS 27 code hides it
+    /// there. The fallback, nil: the model is registered without `context_tokens`, and the core
+    /// sizes for 4,096 tokens, which is what the on-device model holds on macOS 26.
     public var contextTokens: Int? {
-        #if canImport(FoundationModels)
+        #if compiler(>=6.4) && canImport(FoundationModels, _version: 2.0)
             SystemLanguageModel.default.contextSize
         #else
             nil
