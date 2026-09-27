@@ -7,7 +7,9 @@
 //! device or the app, never audio.
 
 use ink_core::{AppRef, Transport};
-use ink_pipeline::meeting::watchdog::{FarDelivery, Routing};
+#[cfg(target_os = "macos")]
+use ink_pipeline::meeting::watchdog::FarDelivery;
+use ink_pipeline::meeting::watchdog::Routing;
 
 use crate::meeting::CaptureSide;
 
