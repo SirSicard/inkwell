@@ -22,7 +22,7 @@ final class ShellInkTests: XCTestCase {
         let store = CoreStore()
         let ink = ShellInk(store: store)
         XCTAssertEqual(ink.state, .idle)
-        store.apply([event(#"{"type":"dictation.started"}"#)])
+        store.apply([event(#"{"type":"dictation.started","take":0,"edit":false}"#)])
         XCTAssertEqual(ink.state, .dictating)
         store.apply([event(#"{"type":"dictation.stopped"}"#)])
         XCTAssertEqual(ink.state, .dictating, "still wet while the take is transcribed")
@@ -52,7 +52,7 @@ final class ShellInkTests: XCTestCase {
     func testAMeetingOutranksADictation() {
         let store = CoreStore()
         let ink = ShellInk(store: store)
-        store.apply([event(#"{"type":"meeting.started","record":"r1"}"#), event(#"{"type":"dictation.started"}"#)])
+        store.apply([event(#"{"type":"meeting.started","record":"r1"}"#), event(#"{"type":"dictation.started","take":0,"edit":false}"#)])
         XCTAssertEqual(ink.state, .meeting)
     }
 
@@ -60,7 +60,7 @@ final class ShellInkTests: XCTestCase {
         let store = CoreStore()
         let ink = ShellInk(store: store)
         ink.held = .blotting
-        store.apply([event(#"{"type":"dictation.started"}"#)])
+        store.apply([event(#"{"type":"dictation.started","take":0,"edit":false}"#)])
         XCTAssertEqual(ink.state, .blotting)
         ink.held = nil
         XCTAssertEqual(ink.state, .dictating)
@@ -69,7 +69,7 @@ final class ShellInkTests: XCTestCase {
     func testTheDropSaysWhatIsLive() {
         let store = CoreStore()
         let ink = ShellInk(store: store)
-        store.apply([event(#"{"type":"dictation.started"}"#)])
+        store.apply([event(#"{"type":"dictation.started","take":0,"edit":false}"#)])
         XCTAssertEqual(ink.dropText, DropText(title: "Dictating", detail: "Listening"))
         store.apply([event(#"{"type":"dictation.stopped"}"#)])
         XCTAssertEqual(ink.dropText.detail, "Transcribing")

@@ -74,6 +74,27 @@
       "$ref": "#/$defs/DictationWorkerFailed"
     },
     {
+      "$ref": "#/$defs/DictationPartial"
+    },
+    {
+      "$ref": "#/$defs/DictationEdited"
+    },
+    {
+      "$ref": "#/$defs/DictationEditFailed"
+    },
+    {
+      "$ref": "#/$defs/DictationEditHotkeyLost"
+    },
+    {
+      "$ref": "#/$defs/DictationReady"
+    },
+    {
+      "$ref": "#/$defs/DictationOff"
+    },
+    {
+      "$ref": "#/$defs/DictationMicFailed"
+    },
+    {
       "$ref": "#/$defs/MeetingStarted"
     },
     {
@@ -300,7 +321,7 @@
     },
     "DictationWarning": {
       "type": "string",
-      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings.",
+      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed.",
       "enum": [
         "vad_failed",
         "audio_lost",
@@ -313,6 +334,7 @@
         "save_failed",
         "deleted_text_not_scrubbed",
         "deleted_text_scrubbed",
+        "release_missed",
         "other"
       ]
     },
@@ -807,14 +829,33 @@
     },
     "DictationStarted": {
       "type": "object",
-      "description": "A hold passed the minimum and is now a take: show that it is listening.",
+      "description": "A hold passed the minimum and is now a take: show that it is listening (or, with edit, that it is taking an instruction for the selection).",
       "properties": {
         "type": {
           "const": "dictation.started"
+        },
+        "take": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "This take's number within the session: partials carry it, so a late one is never shown under the next take."
+        },
+        "edit": {
+          "type": "boolean",
+          "description": "A voice edit (the edit key) rather than a dictation."
+        },
+        "mode": {
+          "type": "string",
+          "description": "For a dictation: the mode it is expected to write in, by its name, from the app in front (the text is written in the mode of the app that receives it)."
+        },
+        "app": {
+          "type": "string",
+          "description": "For a dictation: the name of the app in front, when the OS reported one."
         }
       },
       "required": [
-        "type"
+        "type",
+        "take",
+        "edit"
       ],
       "additionalProperties": false
     },
@@ -1004,6 +1045,189 @@
         "type",
         "recovered",
         "unbind_hotkey"
+      ],
+      "additionalProperties": false
+    },
+    "EditFailure": {
+      "type": "string",
+      "description": "Why a voice edit left the selection alone. None of these changed the user's text. secure_input: Secure Input was on, so the selection was never read.",
+      "enum": [
+        "no_selection",
+        "secure_input",
+        "selection_unreadable",
+        "transcription",
+        "no_model",
+        "timed_out",
+        "model",
+        "insert",
+        "other"
+      ]
+    },
+    "DictationPartial": {
+      "type": "object",
+      "description": "What the live engine hears while the key is held: settled words, then the current hypothesis. Each replaces the last; none is saved, and none arrives for a take after its dictation.stopped. Carries the user's words: never log it.",
+      "properties": {
+        "type": {
+          "const": "dictation.partial"
+        },
+        "take": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The take, as dictation.started numbered it."
+        },
+        "text": {
+          "type": "string",
+          "description": "The words so far."
+        }
+      },
+      "required": [
+        "type",
+        "take",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "DictationEdited": {
+      "type": "object",
+      "description": "A voice edit replaced the selection with its rewrite. The rewrite is not saved to the library.",
+      "properties": {
+        "type": {
+          "const": "dictation.edited"
+        },
+        "outcome": {
+          "$ref": "#/$defs/InsertOutcome",
+          "description": "How it went in."
+        }
+      },
+      "required": [
+        "type",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "DictationEditFailed": {
+      "type": "object",
+      "description": "A voice edit ended without touching the selection.",
+      "properties": {
+        "type": {
+          "const": "dictation.edit_failed"
+        },
+        "reason": {
+          "$ref": "#/$defs/EditFailure",
+          "description": "Why. no_selection: ask the user to select text first. no_model: editing needs a language model."
+        },
+        "message": {
+          "type": "string",
+          "description": "The error, where there was one. Never the user's words."
+        }
+      },
+      "required": [
+        "type",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "DictationEditHotkeyLost": {
+      "type": "object",
+      "description": "The OS removed the voice-edit key. Nothing more arrives from it until dictation is enabled again.",
+      "properties": {
+        "type": {
+          "const": "dictation.edit_hotkey_lost"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "DictationOffReason": {
+      "type": "string",
+      "description": "Why dictation is not live.",
+      "enum": [
+        "disabled",
+        "needs_accessibility",
+        "key_refused",
+        "unsupported",
+        "worker_stopped",
+        "failed",
+        "other"
+      ]
+    },
+    "DictationReady": {
+      "type": "object",
+      "description": "Dictation is live: the core holds the keys named here, and a hold of the key is a dictation. Sent in answer to dictation.enable, and again after a key setting changes.",
+      "properties": {
+        "type": {
+          "const": "dictation.ready"
+        },
+        "key": {
+          "type": "string",
+          "description": "The dictation key's token (for example fn or right_option)."
+        },
+        "edit_key": {
+          "type": "string",
+          "description": "The voice-edit key's token, when one is set and bound."
+        },
+        "edit_key_error": {
+          "type": "string",
+          "description": "Why the voice-edit key set in the settings could not be bound; dictation works without it. Never the user's words."
+        },
+        "settings_error": {
+          "type": "string",
+          "description": "Which of dictation's settings could not be read (it runs with their defaults), as a sentence: \"couldn't read the modes\". Never the user's words."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "DictationOff": {
+      "type": "object",
+      "description": "Dictation is not live: key presses reach nothing and no key is held. Sent in answer to dictation.enable and dictation.disable, and when dictation stops on its own (the worker stopped, Accessibility was revoked).",
+      "properties": {
+        "type": {
+          "const": "dictation.off"
+        },
+        "reason": {
+          "$ref": "#/$defs/DictationOffReason",
+          "description": "Why."
+        },
+        "message": {
+          "type": "string",
+          "description": "The error, where there was one. Never the user's words."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "DictationMicFailed": {
+      "type": "object",
+      "description": "The microphone could not be opened for a take; the take was dropped. The next press tries again.",
+      "properties": {
+        "type": {
+          "const": "dictation.mic_failed"
+        },
+        "message": {
+          "type": "string",
+          "description": "Why. Never the user's words."
+        }
+      },
+      "required": [
+        "type",
+        "message"
       ],
       "additionalProperties": false
     },

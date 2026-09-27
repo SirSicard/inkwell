@@ -183,6 +183,19 @@ impl TakeRecorder {
         self.complete_if_heard()
     }
 
+    /// The open take's audio so far (lead included), or `None` with no take open. For live words
+    /// while the key is held: they must describe the same audio the final will.
+    pub fn open_audio(&self) -> Option<&[f32]> {
+        self.open.as_ref().map(|o| o.samples.as_slice())
+    }
+
+    /// The stream stopped and will start again later (the mic was let go of while idle): what was
+    /// heard so far is older than any press to come, so none of it may become a lead. An open take
+    /// keeps what it already holds.
+    pub fn claim_heard(&mut self) {
+        self.claimed = self.claimed.max(self.written);
+    }
+
     /// Discards the open take. Its audio is not reused as the next take's lead.
     pub fn cancel(&mut self) {
         if self.open.take().is_some() {

@@ -14,6 +14,7 @@
 //! | [`meeting`] | a meeting run: capture, the pump, the meeting worker |
 //! | [`queries`] | the screens' commands (permissions, owed, notes, settings, modes, models), on their own thread |
 //! | [`dictation`] | the dictation worker |
+//! | [`voice`] | dictation, live: the keys, the mic, the worker and the engine's warm-up |
 //! | [`library`] | the library as the screens read it (records, search, a record, counts), answered on `queries`' thread |
 //! | [`logging`] | the only logger and `tracing` subscriber, with both privacy filters |
 //!
@@ -42,6 +43,8 @@ pub mod meeting;
 pub mod queries;
 pub mod runtime;
 pub mod schema;
+mod vad;
+pub mod voice;
 
 use std::ffi::{c_char, c_void};
 use std::panic::{self, AssertUnwindSafe};
@@ -231,6 +234,12 @@ pub unsafe extern "C" fn ink_init(
                 });
                 drop(slot);
                 core.lend_bands(writer);
+                // Dictation's platform; `dictation.enable` answers `dictation.off` without it.
+                #[cfg(target_os = "macos")]
+                match voice::VoicePlatform::mac() {
+                    Ok(platform) => core.set_voice_platform(platform),
+                    Err(e) => log::error!("ink_init: dictation has no platform: {e}"),
+                }
                 *CORE.write().unwrap_or_else(PoisonError::into_inner) = Some(core);
                 INK_OK
             }

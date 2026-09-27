@@ -18,6 +18,7 @@
 //! | [`events`] | Everything the chain reports. |
 //! | [`worker`] | The thread that owns a chain. |
 //! | [`update`] | Replacing a model's files only after it is unloaded. |
+//! | [`warm`] | Warming the dictation engine when a take starts, after a quiet spell. |
 //! | [`export`] | Dictations as text, SRT, JSON or CSV. |
 //!
 //! # Meetings and file import
@@ -60,4 +61,5 @@ pub mod text;
 pub mod transition;
 pub mod update;
 pub mod voicecommand;
+pub mod warm;
 pub mod worker;

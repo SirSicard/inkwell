@@ -7,6 +7,7 @@
 //! | `ink-commands` | commands, one at a time, in order: warming, model updates, starting a meeting, unregistering |
 //! | `ink-meeting`, `ink-pump` | a meeting ([`meeting`](crate::meeting)) |
 //! | `ink-dictation` | the dictation chain ([`dictation`](crate::dictation)) |
+//! | `ink-voice`, `ink-warm` | dictation's mic and the engine's warm-up ([`voice`](crate::voice)) |
 //! | `ink-queries` | the screens' commands, in order, apart from the command thread ([`queries`](crate::queries)) |
 //!
 //! **Shutdown** ([`Core::shutdown`]) goes in an order that leaves nothing loaded behind it:
@@ -265,6 +266,8 @@ pub struct Shared {
     externals: Mutex<Vec<String>>,
     /// The ink's bands writer, lent by the C ABI; the pump publishes through it.
     bands: Mutex<Option<BandsWriter>>,
+    /// Dictation, live ([`voice`](crate::voice)): the platform it may use and what runs.
+    pub(crate) voice: Mutex<crate::voice::VoiceSlot>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -451,6 +454,7 @@ impl Core {
             llms: Arc::default(),
             externals: Mutex::default(),
             bands: Mutex::new(None),
+            voice: Mutex::default(),
         });
         let runs = Arc::new(Mutex::new(Runs::default()));
         let (commands, rx) = mpsc::channel::<Envelope>();
@@ -578,6 +582,12 @@ impl Core {
         &self.shared
     }
 
+    /// Gives dictation its platform (keys, mic, insertion, focus): `dictation.enable` refuses
+    /// until this is set. The C ABI sets the Mac's at `ink_init`; tests set mocks.
+    pub fn set_voice_platform(&self, platform: crate::voice::VoicePlatform) {
+        lock(&self.shared.voice).set_platform(platform);
+    }
+
     /// Starts the dictation worker with the shell's platform pieces, replacing one already
     /// running. Its engine is whatever the router picks for the dictation job at each take. With
     /// no polish model in `parts`, polish goes to a registered language model, whichever is
@@ -634,6 +644,8 @@ impl Core {
         }
         // It holds `shared`, and its events go out before `core.stopped`.
         queries.stop();
+        // Dictation's keys, mic, worker and warm-up: every thread that can hold an engine.
+        crate::voice::shutdown(&shared);
         let (meeting, dictation) = {
             let mut runs = lock(&runs);
             (runs.meeting.take(), runs.dictation.take())

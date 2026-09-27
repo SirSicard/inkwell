@@ -206,7 +206,7 @@ final class PolishModelTests: XCTestCase {
         polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
         polish.apply(event(#"{"type":"setting.value","key":"dictation.polish","value":"on"}"#))
         func take(_ warning: String?) {
-            polish.apply(event(#"{"type":"dictation.started"}"#))
+            polish.apply(event(#"{"type":"dictation.started","take":0,"edit":false}"#))
             if let warning { polish.apply(event(warning)) }
             polish.apply(event(#"{"type":"dictation.inserted","text":"x","outcome":"pasted"}"#))
         }
@@ -843,7 +843,7 @@ final class PolishTimeoutPathTests: XCTestCase {
         ])
         for _ in 0..<PolishModel.timeoutWarning {
             screens.apply([
-                event(#"{"type":"dictation.started"}"#), timedOut,
+                event(#"{"type":"dictation.started","take":0,"edit":false}"#), timedOut,
                 event(#"{"type":"dictation.inserted","text":"x","outcome":"pasted"}"#),
             ])
         }
@@ -874,6 +874,9 @@ final class CoreControllerCommandTests: XCTestCase {
             "far": fixtures.appendingPathComponent("IS1009a-far.wav").path,
         ])
         try await until { core.screens.live.record != nil }
+        // Dictation's switch is read and answered at launch (dictation.ready or .off); a quit
+        // before that answer would log the enable it then sends as not sent.
+        try await until { core.screens.dictation.state != .starting }
         // Typed, the caret still in it: nothing has been handed to the core yet.
         core.screens.live.notesEdited("A line still being typed", caretParagraph: 0)
 
@@ -893,11 +896,11 @@ final class CoreControllerCommandTests: XCTestCase {
     func testAFailureNoScreenHandlesIsLoggedByNameOnly() throws {
         let logged = Logged()
         let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
-        core.received([event(#"{"type":"command.failed","command":"setting.set","id":"setting:dictation.polish","message":"the library could not be written: zebra"}"#)])
+        core.received([event(#"{"type":"command.failed","command":"setting.set","id":"setting:onboarding.done","message":"the library could not be written: zebra"}"#)])
         XCTAssertEqual(logged.messages.count, 1)
         XCTAssertTrue(logged.messages[0].contains("setting.set"), logged.messages[0])
         XCTAssertFalse(logged.messages[0].contains("zebra"), "never the core's message or a field")
-        XCTAssertFalse(logged.messages[0].contains("dictation.polish"))
+        XCTAssertFalse(logged.messages[0].contains("onboarding.done"))
         // Handled ones are the screens' to show.
         for handled in ["permissions.check", "models.list", "modes.list", "commitment.set_done", "note.add", "note.update", "note.delete"] {
             core.received([event(#"{"type":"command.failed","command":"\#(handled)","message":"x"}"#)])
@@ -905,8 +908,12 @@ final class CoreControllerCommandTests: XCTestCase {
         // (Owed lists again after a failed set_done; with no core running that is logged as not sent.)
         func failures() -> [String] { logged.messages.filter { $0.hasPrefix("command.failed") } }
         XCTAssertEqual(failures().count, 1)
+        // Polish and the dictation keys show their own setting failures (S2.7).
         core.received([event(#"{"type":"command.failed","command":"setting.get","id":"setting:dictation.polish","message":"x"}"#)])
-        XCTAssertEqual(failures().count, 2, "a setting only onboarding reads is handled only for onboarding")
+        core.received([event(#"{"type":"command.failed","command":"setting.set","id":"setting:dictation.key","message":"x"}"#)])
+        XCTAssertEqual(failures().count, 1)
+        core.received([event(#"{"type":"command.failed","command":"setting.get","id":"setting:somebody.else","message":"x"}"#)])
+        XCTAssertEqual(failures().count, 2, "a setting no screen reads is logged")
     }
 
     private func until(_ timeout: Duration = .seconds(20), _ done: () -> Bool) async throws {

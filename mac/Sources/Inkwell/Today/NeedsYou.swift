@@ -131,6 +131,8 @@ enum NeedsYou {
             ("The last meeting stopped early", "What was recorded up to then is kept.")
         case .hotkeyLost:
             ("The dictation key stopped working", "macOS stopped sending it to Inkwell. Check Accessibility in System Settings.")
+        case .editKeyLost:
+            ("The edit key stopped working", "macOS stopped sending it to Inkwell, so editing a selection by voice is off. Check Accessibility in System Settings.")
         default:
             nil
         }

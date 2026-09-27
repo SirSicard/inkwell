@@ -1,6 +1,7 @@
 // The Drop: the surface for everything live. A small paper panel near the bottom of the screen,
 // with the ink on its left and two lines beside it, shown while something is live and hidden when
-// idle. It never takes focus: while it shows, keystrokes and clicks elsewhere go where the user
+// idle. After a take that did not go in as it should (too short, no microphone, nothing selected
+// for an edit...) it shows a note for a few seconds, the ink still (DictationModel.note). It never takes focus: while it shows, keystrokes and clicks elsewhere go where the user
 // put them, and a click on the Drop itself does not activate Inkwell (mac/DROP-FOCUS-CHECKLIST.md
 // is the check by hand).
 //
@@ -50,38 +51,63 @@ enum DropLayout {
     static let bottomMargin: CGFloat = 28
 }
 
-/// Shows and hides the Drop as the ink's state changes.
+/// Shows and hides the Drop as the ink's state changes, and shows dictation's notes.
 @MainActor
 final class DropController {
     private let ink: ShellInk
+    private let notes: DictationModel?
     private let panel = DropPanel()
     private let content = DropContentView()
     private(set) var isShown = false
+    /// The note shown now (the ink still), until its time is up or something goes live.
+    private(set) var noteShowing: DictationModel.Note?
+    /// A note that came while something was live: shown when it ends.
+    private var noteWaiting: DictationModel.Note?
+    private var lastNoteSerial = 0
+    private var wasLive = false
+
+    /// How long a note stays up. One delayed call per note, not a timer: nothing ticks.
+    static let noteDuration: Duration = .milliseconds(2_500)
 
     /// The state the Drop's ink shows.
     var inkState: InkState { content.inkView.state }
     /// Whether the Drop is the key window (never, by design).
     var panelIsKey: Bool { panel.isKeyWindow }
+    /// What the Drop's lines say now.
+    var shownText: DropText? { isShown ? content.text : nil }
 
-    init(ink: ShellInk) {
+    init(ink: ShellInk, notes: DictationModel? = nil) {
         self.ink = ink
+        self.notes = notes
         panel.contentView = content
+        lastNoteSerial = notes?.note?.serial ?? 0
         update()
         observe()
     }
 
-    /// Brings the Drop in line with the ink's state.
+    /// Brings the Drop in line with the ink's state and dictation's notes.
     func update() {
         let state = ink.state
+        takeNewNote(live: state.isLive)
         if state.isLive {
+            noteShowing = nil
+            wasLive = true
             content.show(ink.dropText)
             content.inkView.state = state
-            if !isShown {
-                place()
-                panel.orderFrontRegardless()
-                isShown = true
-                content.inkView.updateVisibility()
+            present()
+            return
+        }
+        if wasLive {
+            wasLive = false
+            if let waiting = noteWaiting {
+                noteWaiting = nil
+                showNote(waiting)
             }
+        }
+        if let note = noteShowing {
+            content.show(note.text)
+            content.inkView.state = .idle
+            present()
         } else if isShown {
             // Out first: the ink stops without drawing a last frame nobody would see.
             panel.orderOut(nil)
@@ -91,12 +117,44 @@ final class DropController {
         }
     }
 
+    /// A note dictation has not shown yet: now, or when what is live ends.
+    private func takeNewNote(live: Bool) {
+        guard let note = notes?.note, note.serial != lastNoteSerial else { return }
+        lastNoteSerial = note.serial
+        if live {
+            noteWaiting = note
+        } else {
+            noteWaiting = nil
+            showNote(note)
+        }
+    }
+
+    private func showNote(_ note: DictationModel.Note) {
+        noteShowing = note
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.noteDuration)
+            guard let self, self.noteShowing?.serial == note.serial else { return }
+            self.noteShowing = nil
+            self.update()
+        }
+    }
+
+    private func present() {
+        if !isShown {
+            place()
+            panel.orderFrontRegardless()
+            isShown = true
+            content.inkView.updateVisibility()
+        }
+    }
+
     /// Re-reads the state after every change the store or a held state makes: the change is
     /// handed to the next turn of the main queue, once the store has finished applying it.
     private func observe() {
         withObservationTracking {
             _ = ink.state
             _ = ink.dropText
+            _ = notes?.note
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -179,12 +237,39 @@ final class DropContentView: NSView {
         fatalError("not built from a nib")
     }
 
+    /// What the lines say now.
+    private(set) var text = DropText(title: "", detail: "")
+
     func show(_ text: DropText) {
+        self.text = text
         title.stringValue = text.title
-        detail.stringValue = text.detail
+        if text.liveWords {
+            // The newest words matter: cut the head, and show the last ones wet (the canvas).
+            detail.lineBreakMode = .byTruncatingHead
+            detail.attributedStringValue = Self.liveWords(text.detail)
+        } else {
+            detail.lineBreakMode = .byTruncatingTail
+            detail.stringValue = text.detail
+            detail.textColor = Palette.ink.nsColor
+        }
         title.textColor = text.tone == .plain ? Palette.muted.nsColor : Palette.seal.nsColor
         layer?.borderColor = text.tone == .alert ? Palette.seal.nsColor.cgColor : Self.rule.cgColor
         layer?.borderWidth = text.tone == .alert ? 1.5 : 1
+        // The live words are the user's: VoiceOver reads them (they are on screen), no log does.
         setAccessibilityLabel("Inkwell: \(text.title), \(text.detail)")
+    }
+
+    /// Live words: dry in ink, the newest wet (italic, muted).
+    static func liveWords(_ words: String) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: 14)
+        let italic = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+        let wet = DropText.wetStart(words)
+        let out = NSMutableAttributedString(
+            string: String(words[..<wet]),
+            attributes: [.font: font, .foregroundColor: Palette.ink.nsColor])
+        out.append(NSAttributedString(
+            string: String(words[wet...]),
+            attributes: [.font: italic, .foregroundColor: Palette.muted.nsColor]))
+        return out
     }
 }

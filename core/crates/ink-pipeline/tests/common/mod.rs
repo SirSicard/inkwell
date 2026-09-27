@@ -144,10 +144,12 @@ impl VadKind {
     }
 }
 
-/// An engine that keeps every input it receives, then answers through the mock engine.
+/// An engine that keeps every input it receives, then answers through the mock engine, or with
+/// `fallback` for audio the mock has no fixture for (when set).
 pub struct Tap {
     pub inner: MockEngine,
     pub inputs: Mutex<Vec<Vec<f32>>>,
+    pub fallback: Mutex<Option<String>>,
 }
 
 impl OfflineEngine for Tap {
@@ -161,7 +163,11 @@ impl OfflineEngine for Tap {
         options: &TranscribeOptions,
     ) -> Result<Transcript, EngineError> {
         self.inputs.lock().unwrap().push(audio.to_vec());
-        self.inner.transcribe(audio, options)
+        let answer = self.inner.transcribe(audio, options);
+        match (answer, self.fallback.lock().unwrap().clone()) {
+            (Err(_), Some(text)) => Ok(transcript(&text)),
+            (answer, _) => answer,
+        }
     }
 }
 
@@ -172,6 +178,7 @@ pub struct RigBuilder {
     settings: DictationSettings,
     llm: Option<Arc<dyn Llm>>,
     store: Option<Arc<dyn Store>>,
+    focus: Option<Arc<dyn ink_core::FocusReader>>,
 }
 
 impl RigBuilder {
@@ -190,6 +197,12 @@ impl RigBuilder {
         self
     }
 
+    /// A focus reader other than the mock platform's.
+    pub fn focus(mut self, focus: Arc<dyn ink_core::FocusReader>) -> Self {
+        self.focus = Some(focus);
+        self
+    }
+
     /// A store other than the rig's own `MemStore` (which is then unused).
     pub fn store(mut self, store: Arc<dyn Store>) -> Self {
         self.store = Some(store);
@@ -202,6 +215,7 @@ impl RigBuilder {
         let tap = Arc::new(Tap {
             inner: engine.clone(),
             inputs: Mutex::default(),
+            fallback: Mutex::default(),
         });
         let mem = Arc::new(MemStore::new());
         let store: Arc<dyn Store> = self.store.clone().unwrap_or_else(|| mem.clone());
@@ -213,7 +227,10 @@ impl RigBuilder {
             engine: tap.clone(),
             store: store.clone(),
             inserter: platform.clone(),
-            focus: platform.clone(),
+            focus: self
+                .focus
+                .clone()
+                .unwrap_or_else(|| platform.clone() as Arc<dyn ink_core::FocusReader>),
             clock: platform.clock(),
             llm: self.llm.clone(),
         };
@@ -277,6 +294,7 @@ impl Rig {
             settings: DictationSettings::default(),
             llm: None,
             store: None,
+            focus: None,
         }
     }
 
@@ -345,6 +363,28 @@ impl Rig {
     pub fn release(&self) {
         assert!(self.platform.release());
         self.deliver_hotkeys();
+    }
+
+    /// Presses the voice-edit key now (the mock platform has one hotkey; the edit key's events
+    /// go to the chain directly, as the core's second source delivers them).
+    pub fn edit_press(&self) {
+        let at_ns = self.platform.clock().now_ns();
+        self.chain
+            .borrow_mut()
+            .edit_hotkey(HotkeyEvent::Pressed { at_ns });
+    }
+
+    /// Releases the voice-edit key now.
+    pub fn edit_release(&self) {
+        let at_ns = self.platform.clock().now_ns();
+        self.chain
+            .borrow_mut()
+            .edit_hotkey(HotkeyEvent::Released { at_ns });
+    }
+
+    /// Answers `text` for any take the engine has no fixture for.
+    pub fn answer_anything(&self, text: &str) {
+        *self.tap.fallback.lock().unwrap() = Some(text.to_owned());
     }
 
     /// Half a second of room, press, `speech`, release, and enough room for the tail.

@@ -634,7 +634,12 @@ dependencies = [
 name = "ink-bench"
 version = "0.0.0"
 dependencies = [
+ "hound",
+ "ink-audio",
  "ink-core",
+ "ink-engines",
+ "ink-pipeline",
+ "ink-store",
 ]
 
 [[package]]

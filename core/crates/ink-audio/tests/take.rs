@@ -200,3 +200,31 @@ fn a_cancelled_take_is_not_reused_as_the_next_lead() {
     let take = push_until(&mut rec, 3 * SR, 4 * SR).expect("take");
     assert_eq!(take.start, 2 * SR, "nothing of the cancelled take");
 }
+
+#[test]
+fn audio_heard_before_the_mic_was_let_go_of_is_never_a_later_lead() {
+    // The mic is closed while idle and opened again at the next press: the history still holds
+    // the room from minutes before, which must not be prepended to the new take.
+    let mut rec = TakeRecorder::new();
+    push_until(&mut rec, 0, SR);
+    rec.claim_heard();
+    assert!(rec.press(SR));
+    let _ = push_until(&mut rec, SR, 2 * SR);
+    assert!(rec.release(2 * SR).is_none());
+    let take = push_until(&mut rec, 2 * SR, 3 * SR).expect("take");
+    assert_eq!(take.lead(), 0, "no stale lead");
+    assert_holds(&take, SR, 2 * SR + 4_800);
+}
+
+#[test]
+fn claiming_what_was_heard_keeps_an_open_take_whole() {
+    let mut rec = TakeRecorder::new();
+    push_until(&mut rec, 0, SR);
+    assert!(rec.press(SR));
+    push_until(&mut rec, SR, 2 * SR);
+    rec.claim_heard();
+    push_until(&mut rec, 2 * SR, 3 * SR);
+    assert!(rec.release(3 * SR).is_none());
+    let take = push_until(&mut rec, 3 * SR, 4 * SR).expect("take");
+    assert_holds(&take, SR - 4_800, 3 * SR + 4_800);
+}

@@ -1,5 +1,6 @@
 //! Links NeMo-Speech.cpp's diarization library for `engine-nemo`. Without that feature it does
-//! nothing.
+//! nothing, but for one line of metadata: whether `engine-silero` is on (for ink-ffi's build
+//! script, which loads Silero for dictation when it is).
 //!
 //! The library is built outside cargo (`native/build-nemo-speech.sh`) and found through
 //! `NEMO_SPEECH_DIR`, its install prefix. Before linking, this checks:
@@ -52,6 +53,11 @@ const LIBRARY: [&str; 3] = [
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    // Tells dependents' build scripts (through `links`) that Silero is in this build, so ink-ffi
+    // loads it for dictation without a feature of its own (its `src/vad.rs`).
+    if env::var_os("CARGO_FEATURE_ENGINE_SILERO").is_some() {
+        println!("cargo:silero=1");
+    }
     if env::var_os("CARGO_FEATURE_ENGINE_NEMO").is_none() {
         return;
     }

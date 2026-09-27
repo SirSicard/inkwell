@@ -8,5 +8,18 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# The real engines, for local measurement (scripts/dictation-latency.sh). Off in every default and
+# CI build: CI runs the harness on its mock engine.
+engine-llama = ["ink-engines/engine-llama", "ink-pipeline/engine-llama"]
+engine-silero = ["ink-engines/engine-silero", "ink-pipeline/engine-silero"]
+
 [dependencies]
 ink-core.workspace = true
+ink-audio = { path = "../ink-audio" }
+ink-engines = { path = "../ink-engines" }
+ink-pipeline = { path = "../ink-pipeline" }
+# The dictation chain saves each take, as in the app: SQLite in memory.
+ink-store = { path = "../ink-store" }
+# Clips are WAV files (Apache-2.0; already in the tree through ink-audio).
+hound = "3.5.1"
