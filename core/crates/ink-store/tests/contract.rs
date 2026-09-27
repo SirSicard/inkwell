@@ -837,6 +837,51 @@ fn search_follows_supersede_and_delete(store: &dyn Store) {
     assert!(store.search("echo", 10).unwrap().is_empty());
 }
 
+/// A supersede may drop the previous segments the pass explained (exactly those), and nothing
+/// else; the guard runs on the rows the transaction replaces.
+fn a_supersede_may_drop_only_what_the_pass_explained(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let ten = "w w w w w w w w w w";
+    store
+        .append_segments(
+            &id,
+            &[
+                seg(Channel::Mic, 0, ten),
+                seg(Channel::Mic, 5_000, "yes that works"),
+                seg(Channel::Far, 0, ten),
+            ],
+        )
+        .unwrap();
+    let echo = Explained {
+        channel: Channel::Mic,
+        start_ms: 0,
+        end_ms: 1_000,
+    };
+    let new = [
+        seg(Channel::Far, 0, ten),
+        seg(Channel::Mic, 5_000, "yes that works"),
+    ];
+    assert!(matches!(
+        store.supersede(&id, &new),
+        Err(StoreError::SuspiciousSupersede {
+            channel: Channel::Mic,
+            ..
+        })
+    ));
+    // Dropping the user's own line too is still refused, explained echo or not.
+    assert!(matches!(
+        store.supersede_explained(&id, &new[..1], &[echo]),
+        Err(StoreError::SuspiciousSupersede {
+            channel: Channel::Mic,
+            previous_words: 3,
+            new_words: 0
+        })
+    ));
+    assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
+    assert_eq!(store.supersede_explained(&id, &new, &[echo]), Ok(2));
+    assert_eq!(store.segments(&id).unwrap(), new.to_vec());
+}
+
 /// Lines a pass removed are kept per record, apart from the transcript: in start order, replaced
 /// by the next save, left by a supersede, never searched, and deleted with their record.
 fn removed_lines_are_kept_apart_from_the_transcript(store: &dyn Store) {
@@ -1010,5 +1055,6 @@ contract!(
     upserts_replace_the_previous_value,
     search_follows_supersede_and_delete,
     removed_lines_are_kept_apart_from_the_transcript,
+    a_supersede_may_drop_only_what_the_pass_explained,
     fields_round_trip,
 );

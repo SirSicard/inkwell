@@ -69,7 +69,7 @@ use ink_audio::vad::VAD_WINDOW;
 use ink_core::{Channel, EngineError, Segment};
 use ink_echo::{
     Alignment, CancellerConfig, EchoCanceller, EchoError, EchoFrame, EchoGate, FRAME, GateConfig,
-    PathFinder, PathReport, level_db,
+    NearSpeech, PathFinder, PathReport, level_db,
 };
 
 use std::sync::mpsc;
@@ -79,6 +79,51 @@ use super::events::{EchoFailure, EchoSearch, EchoState, MeetingEvent, MeetingWar
 use super::timeline::ns_to_samples;
 use crate::gain_stage::Vad;
 use crate::speech::VadSource;
+
+/// What the final pass's echo stage heard, to judge lines by: the VAD's verdicts over AEC3's full
+/// output, and where the far end played (one flag per 10 ms frame from the meeting's start: the
+/// reference above the gate's floor).
+pub(crate) struct EchoEvidence {
+    heard: crate::speech::HeardSpeech,
+    far: Vec<bool>,
+}
+
+impl EchoEvidence {
+    pub(crate) fn new(heard: crate::speech::HeardSpeech, far: Vec<bool>) -> Self {
+        Self { heard, far }
+    }
+
+    /// The echo gate's verdict on a line (`ink_echo::gate`'s rule, on this evidence): echo was
+    /// possible (the far end played within the room's tail) over at least half its frames, and
+    /// the full output heard nobody on the near end over it. A line the evidence does not cover
+    /// is not echo.
+    pub(crate) fn echo_only(&self, start_ms: u64, end_ms: u64) -> bool {
+        let gate = GateConfig::default();
+        let end_ms = end_ms.max(start_ms + 1);
+        let (f0, f1) = ((start_ms / 10) as usize, end_ms.div_ceil(10) as usize);
+        if f1 > self.far.len() {
+            return false;
+        }
+        let tail = (gate.tail_ms / 10) as usize;
+        let possible = (f0..f1)
+            .filter(|&f| self.far[f.saturating_sub(tail)..=f].iter().any(|p| *p))
+            .count();
+        (possible as f64) >= gate.min_echo_share * (f1 - f0) as f64
+            && self.heard.near_speech(start_ms, end_ms) == Some(false)
+    }
+}
+
+impl NearSpeech for EchoEvidence {
+    fn near_speech(&self, start_ms: u64, end_ms: u64) -> Option<bool> {
+        self.heard.near_speech(start_ms, end_ms)
+    }
+}
+
+/// Whether the far end played in a frame, as the gate judges it.
+pub(crate) fn far_playing(frame: &EchoFrame) -> bool {
+    let n = frame.len.clamp(1, FRAME);
+    level_db(&frame.reference[..n]) > GateConfig::default().far_floor_db
+}
 
 /// Far-end audio AEC3 is given to converge before its ERLE counts, in 10 ms frames: 10 s, as the
 /// gate measured it (11–12 dB in the first 10 s of a real take, 24 dB after).

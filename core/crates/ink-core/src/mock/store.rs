@@ -5,8 +5,8 @@ use super::lock;
 use crate::engine::SpeakerId;
 use crate::error::StoreError;
 use crate::store::{
-    Commitment, CommitmentId, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId, Record,
-    RecordId, RecordQuery, SearchHit, Segment, Store, Summary, check_supersede,
+    Commitment, CommitmentId, Explained, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId,
+    Record, RecordId, RecordQuery, SearchHit, Segment, Store, Summary, check_supersede_explained,
 };
 
 /// Refuses times a SQLite store could not hold, before anything changes.
@@ -210,11 +210,16 @@ impl Store for MemStore {
         Ok(segments)
     }
 
-    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+    fn supersede_explained(
+        &self,
+        id: &RecordId,
+        segments: &[Segment],
+        explained: &[Explained],
+    ) -> Result<u32, StoreError> {
         check_stretches(segment_stretches(segments))?;
         let mut inner = lock(&self.inner);
         let data = inner.data(id)?;
-        check_supersede(&data.segments, segments)?;
+        check_supersede_explained(&data.segments, segments, explained)?;
         data.segments = segments.to_vec();
         data.record.revision += 1;
         Ok(data.record.revision)

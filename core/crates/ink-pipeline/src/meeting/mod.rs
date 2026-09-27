@@ -17,7 +17,7 @@
 //! | Final pass, per side | `offline`: the chunks read back, VAD-gated gain, one engine call per speech region, empty regions reported |
 //! | Echo | [`echo`]: live, the mic cancelled along an echo path once one is found, "you" finals behind the echo gate; at the end, a path fitted over the whole recording, the linear output transcribed where the full output holds speech, "you" lines that repeat the far end removed (and handed back) |
 //! | Diarization | [`diarize`]: the far end only, its speech streamed from disk into the diarizer a window at a time; labels kept with at least two substantial clusters |
-//! | Supersede | the final pass replaces the live transcript in one transaction, as revision 2, unless the guard ([`check_supersede`]) refuses it or a region failed |
+//! | Supersede | the final pass replaces the live transcript in one transaction, as revision 2, unless the guard ([`check_supersede_explained`]: live "you" finals the pass judged to be echo do not count) refuses it or a region failed |
 //! | Summary, commitments | `ink-llm`: a summary (in overlapping windows when long), commitments from it and from the mic, deduplicated |
 //!
 //! **Me versus them is stream identity** (architecture rule 5): every segment keeps the side it was
@@ -46,11 +46,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 
 use ink_audio::{ChunkError, ChunkStore, VadConfig, WindowError};
-use ink_core::store::check_supersede;
+use ink_core::store::check_supersede_explained;
 use ink_core::{
-    AsrEvent, CancelToken, Channel, Clock, Diarizer, EngineError, EventSink, Llm, LlmError,
-    NewCommitment, NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment, Store,
-    StoreError, StreamingEngine,
+    AsrEvent, CancelToken, Channel, Clock, Diarizer, EngineError, EventSink, Explained, Llm,
+    LlmError, NewCommitment, NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment,
+    Store, StoreError, StreamingEngine,
 };
 use ink_llm::tasks::commitments::{RecordContext, harvest};
 use ink_llm::tasks::dedup::{apply_merges, dedup};
@@ -60,7 +60,7 @@ use ink_llm::tasks::summary::{SummaryOptions, summarize};
 use ink_echo::{DedupConfig, EchoError, PathReport, echo_duplicates};
 
 use self::diarize::{rule5, to_meeting};
-use self::echo::{LiveEcho, MicBlock};
+use self::echo::{EchoEvidence, LiveEcho, MicBlock};
 use self::events::{
     EchoPass, EchoPath, EchoSearch, EchoState, FarLine, KeptLive, MeetingEvent, MeetingWarning,
     Phase, RemovedEcho,
@@ -711,13 +711,6 @@ impl EndedMeeting {
                 removed_as_echo.len()
             );
         }
-        core.emit(MeetingEvent::EchoPass(echo));
-        if !removed_as_echo.is_empty() {
-            core.emit(MeetingEvent::RemovedAsEcho(removed_as_echo.clone()));
-        }
-
-        let mut new: Vec<Segment> = mic.into_iter().chain(far).collect();
-        new.sort_by_key(|s| (s.start_ms, s.channel));
 
         // Read before anything is written: a failure here is reported and the pass goes on
         // without what it could not read.
@@ -728,8 +721,23 @@ impl EndedMeeting {
             .unwrap_or_default();
         let previous = core.read(store.segments(&core.record));
 
+        // The live "you" finals this pass judges to be echo (the unprotected ones from before the
+        // live search found the path, mostly): the supersede guard does not count them.
+        let explained = match (&evidence, &previous) {
+            (Some(evidence), Some(previous)) => live_echo(previous, &far, evidence),
+            _ => Vec::new(),
+        };
+        echo.live_echo_finals = explained.len();
+        core.emit(MeetingEvent::EchoPass(echo));
+        if !removed_as_echo.is_empty() {
+            core.emit(MeetingEvent::RemovedAsEcho(removed_as_echo.clone()));
+        }
+
+        let mut new: Vec<Segment> = mic.into_iter().chain(far).collect();
+        new.sort_by_key(|s| (s.start_ms, s.channel));
+
         let failed = mic_report.failed_regions + far_report.failed_regions;
-        let saved = self.supersede(&new, failed, previous.as_deref());
+        let saved = self.supersede(&new, failed, previous.as_deref(), &explained);
         if saved.is_some() {
             // The lines this pass removed as echo, kept with the record so they can be put back
             // (an empty list clears what an earlier pass kept). After the supersede, so a refused
@@ -823,7 +831,7 @@ impl EndedMeeting {
         (
             Vec<Segment>,
             events::ChannelPass,
-            crate::speech::HeardSpeech,
+            echo::EchoEvidence,
             echo::ErleMeter,
         ),
         Stop,
@@ -970,12 +978,14 @@ impl EndedMeeting {
     /// Replaces the live transcript with `new`, unless a region failed or the guard refuses.
     /// Returns the new revision when it did. `previous` is the live transcript, when it could be
     /// read: the guard is checked against it first, so a refusal is an outcome of the pass; without
-    /// it, the store's own check (inside its transaction) decides.
+    /// it, the store's own check (inside its transaction) decides. `explained`: live finals the
+    /// pass judged to be echo, which the guard does not count.
     fn supersede(
         &self,
         new: &[Segment],
         failed_regions: usize,
         previous: Option<&[Segment]>,
+        explained: &[Explained],
     ) -> Option<u32> {
         let core = &self.core;
         if failed_regions > 0 {
@@ -987,9 +997,15 @@ impl EndedMeeting {
             }));
             return None;
         }
-        let checked = previous.map_or(Ok(()), |previous| check_supersede(previous, new));
-        let refused = match checked.and_then(|()| core.services.store.supersede(&core.record, new))
-        {
+        let checked = previous.map_or(Ok(()), |previous| {
+            check_supersede_explained(previous, new, explained)
+        });
+        let saved = checked.and_then(|()| {
+            core.services
+                .store
+                .supersede_explained(&core.record, new, explained)
+        });
+        let refused = match saved {
             Ok(revision) => {
                 core.emit(MeetingEvent::Superseded { revision });
                 return Some(revision);
@@ -1126,12 +1142,51 @@ fn echo_pass(fit: Option<&PathReport>) -> EchoPass {
     }
 }
 
+/// The live "you" finals in `previous` this pass judges to be echo: the echo gate's verdict on
+/// each over the pass's evidence, or a line that repeats one of the pass's far-end lines where
+/// nobody on the near end spoke (dedup's rule, as the pass's own lines are judged).
+fn live_echo(previous: &[Segment], far: &[Segment], evidence: &EchoEvidence) -> Vec<Explained> {
+    let mic: Vec<&Segment> = previous
+        .iter()
+        .filter(|s| s.channel == Channel::Mic)
+        .collect();
+    let lines = |segments: &[&Segment]| -> Vec<ink_core::TimedText> {
+        segments
+            .iter()
+            .map(|s| ink_core::TimedText {
+                start_ms: s.start_ms,
+                end_ms: s.end_ms,
+                text: s.text.clone(),
+            })
+            .collect()
+    };
+    let far: Vec<&Segment> = far.iter().collect();
+    let repeated = echo_duplicates(
+        &lines(&mic),
+        &lines(&far),
+        evidence,
+        &DedupConfig::default(),
+    )
+    .removed;
+    mic.iter()
+        .enumerate()
+        .filter(|(k, s)| {
+            repeated.iter().any(|d| d.you == *k) || evidence.echo_only(s.start_ms, s.end_ms)
+        })
+        .map(|(_, s)| Explained {
+            channel: Channel::Mic,
+            start_ms: s.start_ms,
+            end_ms: s.end_ms,
+        })
+        .collect()
+}
+
 /// Removes from `mic` the lines that repeat `far` where `heard` says nobody on the near end spoke
 /// (`ink_echo::dedup`'s rule), counting into `echo`, and returns them whole.
 fn remove_echo(
     mic: &mut Vec<Segment>,
     far: &[Segment],
-    heard: &crate::speech::HeardSpeech,
+    heard: &EchoEvidence,
     echo: &mut EchoPass,
 ) -> Vec<RemovedEcho> {
     let lines = |segments: &[Segment]| -> Vec<ink_core::TimedText> {

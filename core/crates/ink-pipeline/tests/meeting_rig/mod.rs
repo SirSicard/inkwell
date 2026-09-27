@@ -763,9 +763,14 @@ impl Store for FlakyStore {
         self.check("segments")?;
         self.inner.segments(id)
     }
-    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+    fn supersede_explained(
+        &self,
+        id: &RecordId,
+        segments: &[Segment],
+        explained: &[ink_core::Explained],
+    ) -> Result<u32, StoreError> {
         self.check("supersede")?;
-        self.inner.supersede(id, segments)
+        self.inner.supersede_explained(id, segments, explained)
     }
     fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
         self.check("save_removed")?;

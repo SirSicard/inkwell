@@ -29,8 +29,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use ink_core::store::{
-    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
-    RecordQuery, SearchHit, Segment, Span, Store, Summary, check_supersede,
+    Commitment, CommitmentId, Explained, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
+    RecordQuery, SearchHit, Segment, Span, Store, Summary, check_supersede_explained,
 };
 use ink_core::{SpeakerId, StoreError};
 use rusqlite::types::ValueRef;
@@ -550,7 +550,12 @@ impl Store for SqliteStore {
         })
     }
 
-    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+    fn supersede_explained(
+        &self,
+        id: &RecordId,
+        segments: &[Segment],
+        explained: &[Explained],
+    ) -> Result<u32, StoreError> {
         let rows = segment_rows(segments)?;
         // The guard has to see the rows this transaction replaces, so it runs under the lock.
         self.write("supersede", |tx| {
@@ -558,7 +563,7 @@ impl Store for SqliteStore {
             let previous = segments_of(tx, id, current)?;
             // A refusal returns before anything is written, and dropping the transaction rolls
             // back regardless.
-            check_supersede(&previous, segments)?;
+            check_supersede_explained(&previous, segments, explained)?;
             let next = current
                 .checked_add(1)
                 .ok_or_else(|| Fail::backend("supersede: revision overflow".to_string()))?;

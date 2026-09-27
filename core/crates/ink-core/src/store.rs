@@ -4,8 +4,9 @@
 //! - **Partials are never stored.** Live finals are appended as the current revision; the offline
 //!   pass replaces them with [`Store::supersede`] in one transaction (architecture rule 4).
 //! - **Supersede refuses** an empty result, and any channel that falls below half its previous
-//!   words: both are far more likely an engine failure than a correction. [`check_supersede`] is
-//!   the one definition every implementation calls.
+//!   words: both are far more likely an engine failure than a correction. The one exception is a
+//!   drop the pass accounts for ([`Explained`]: live "you" finals it judged to be echo of the far
+//!   end). [`check_supersede_explained`] is the one definition every implementation calls.
 //! - **Times fit SQLite's integers, and stretches run forward.** A `u64` time or position above
 //!   [`MAX_TIME_MS`], or a [`Segment`] or [`Span`] whose `end_ms` is before its `start_ms`, is
 //!   refused with [`StoreError::Invalid`] before anything is written, and the whole call with it,
@@ -259,7 +260,19 @@ pub trait Store: Send + Sync {
 
     /// Replaces the current revision with `segments` in one transaction and returns the new
     /// revision. Refuses what [`check_supersede`] refuses; a refused supersede changes nothing.
-    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError>;
+    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+        self.supersede_explained(id, segments, &[])
+    }
+
+    /// [`supersede`](Self::supersede), where the segments of the current revision that
+    /// `explained` names do not count against the guard ([`check_supersede_explained`], run on
+    /// the rows the transaction replaces).
+    fn supersede_explained(
+        &self,
+        id: &RecordId,
+        segments: &[Segment],
+        explained: &[Explained],
+    ) -> Result<u32, StoreError>;
 
     /// Keeps lines a pass removed from a record's transcript, whole, so they can be put back: the
     /// "you" lines a meeting's final pass takes out as echo of the far end. Replaces what the
@@ -364,6 +377,37 @@ fn words_per_channel(segments: &[Segment]) -> BTreeMap<Channel, usize> {
     words
 }
 
+/// A segment of the revision being replaced that the new revision may drop without the guard
+/// counting it: the pass that made the new revision judged it not to be speech of its side. The
+/// meeting's final pass names the live "you" finals it judged to be echo of the far end (the far
+/// end playing, and nobody on the near end heard over it once the echo was cancelled).
+///
+/// It is matched against the previous revision by channel and exact span, so it can only excuse
+/// the segment it was judged on; one that matches nothing excuses nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Explained {
+    /// The segment's side.
+    pub channel: Channel,
+    /// Its start, ms from the start of the record.
+    pub start_ms: u64,
+    /// Its end.
+    pub end_ms: u64,
+}
+
+impl Explained {
+    fn names(&self, segment: &Segment) -> bool {
+        self.channel == segment.channel
+            && self.start_ms == segment.start_ms
+            && self.end_ms == segment.end_ms
+    }
+}
+
+/// The supersede guard (architecture rule 4), shared by every [`Store`]: the guard with nothing
+/// explained ([`check_supersede_explained`]).
+pub fn check_supersede(previous: &[Segment], new: &[Segment]) -> Result<(), StoreError> {
+    check_supersede_explained(previous, new, &[])
+}
+
 /// The supersede guard (architecture rule 4), shared by every [`Store`].
 ///
 /// Refuses a revision with no words at all, and one where **any channel** falls below half the
@@ -372,15 +416,29 @@ fn words_per_channel(segments: &[Segment]) -> BTreeMap<Channel, usize> {
 /// behind a healthy far end in the total. A channel the previous revision did not have is
 /// always allowed.
 ///
+/// Previous segments that `explained` names do not count: the pass accounted for them (see
+/// [`Explained`]). Every other drop is judged as before, so a pass that loses the user's words
+/// for any other reason is still refused. `previous_words` in the error counts only what was
+/// judged.
+///
 /// An earlier implementation only applied the ratio above 200 previous words, so a short record's
 /// offline pass could legitimately drop filler; whether that floor comes back is S1.3's call, made
 /// here so every store agrees.
-pub fn check_supersede(previous: &[Segment], new: &[Segment]) -> Result<(), StoreError> {
+pub fn check_supersede_explained(
+    previous: &[Segment],
+    new: &[Segment],
+    explained: &[Explained],
+) -> Result<(), StoreError> {
     if word_count(new) == 0 {
         return Err(StoreError::EmptySupersede);
     }
     let now = words_per_channel(new);
-    for (channel, previous_words) in words_per_channel(previous) {
+    let counted: Vec<Segment> = previous
+        .iter()
+        .filter(|s| !explained.iter().any(|e| e.names(s)))
+        .cloned()
+        .collect();
+    for (channel, previous_words) in words_per_channel(&counted) {
         let new_words = now.get(&channel).copied().unwrap_or(0);
         if new_words.saturating_mul(2) < previous_words {
             return Err(StoreError::SuspiciousSupersede {
@@ -463,6 +521,82 @@ mod tests {
         assert_eq!(
             check_supersede(&[mic(ten)], &[mic(ten), far("new side")]),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn explained_segments_do_not_count_and_nothing_else_is_excused() {
+        let at = |channel: Channel, start_ms: u64, text: &str| Segment {
+            channel,
+            start_ms,
+            end_ms: start_ms + 1_000,
+            text: text.into(),
+            speaker: None,
+        };
+        let ten = "a b c d e f g h i j";
+        // Live: two "you" finals that were echo, one that was the user; the far end.
+        let previous = [
+            at(Channel::Mic, 0, ten),
+            at(Channel::Mic, 5_000, ten),
+            at(Channel::Mic, 9_000, "yes that works"),
+            at(Channel::Far, 0, ten),
+        ];
+        let echo = |start_ms: u64| Explained {
+            channel: Channel::Mic,
+            start_ms,
+            end_ms: start_ms + 1_000,
+        };
+        let new = [
+            at(Channel::Mic, 9_000, "yes that works"),
+            at(Channel::Far, 0, ten),
+        ];
+        assert_eq!(
+            check_supersede(&previous, &new),
+            Err(StoreError::SuspiciousSupersede {
+                channel: Channel::Mic,
+                previous_words: 23,
+                new_words: 3
+            })
+        );
+        assert_eq!(
+            check_supersede_explained(&previous, &new, &[echo(0), echo(5_000)]),
+            Ok(())
+        );
+        // One echo final explained is not enough: 13 words judged, 3 left.
+        assert_eq!(
+            check_supersede_explained(&previous, &new, &[echo(0)]),
+            Err(StoreError::SuspiciousSupersede {
+                channel: Channel::Mic,
+                previous_words: 13,
+                new_words: 3
+            })
+        );
+        // The user's own words are still guarded: dropping them is refused.
+        assert_eq!(
+            check_supersede_explained(&previous, &new[1..], &[echo(0), echo(5_000)]),
+            Err(StoreError::SuspiciousSupersede {
+                channel: Channel::Mic,
+                previous_words: 3,
+                new_words: 0
+            })
+        );
+        // An explanation that names no segment exactly (another span, the other side) excuses
+        // nothing.
+        let off = Explained {
+            channel: Channel::Mic,
+            start_ms: 0,
+            end_ms: 999,
+        };
+        let far_side = Explained {
+            channel: Channel::Far,
+            start_ms: 5_000,
+            end_ms: 6_000,
+        };
+        assert!(check_supersede_explained(&previous, &new, &[off, far_side, echo(5_000)]).is_err());
+        // Nothing left at all is still empty.
+        assert_eq!(
+            check_supersede_explained(&previous, &[], &[echo(0), echo(5_000)]),
+            Err(StoreError::EmptySupersede)
         );
     }
 }

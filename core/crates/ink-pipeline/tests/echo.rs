@@ -685,3 +685,95 @@ fn live_a_gate_vad_that_cannot_load_is_reported() {
     };
     assert!(LIVE_FINALS.iter().all(|(start, _, _)| saved(*start)));
 }
+
+// ---------------------------------------------------------------------------------------------
+// The supersede guard
+
+/// A scene through the chain with the live engine on (scripted "you" finals too) and the final
+/// pass answering `answer`; the record's transcript after it.
+fn guarded_run(
+    scene: Scene,
+    answer: Answer,
+    extra: &[(u64, u64, &str)],
+) -> (MeetingOutcome, Vec<MeetingEvent>, Vec<Segment>) {
+    let mut rig = RigBuilder {
+        vad: echo_vad(),
+        answer,
+        ..Default::default()
+    }
+    .build();
+    rig.live.extra.lock().unwrap().extend(
+        extra
+            .iter()
+            .map(|&(a, b, t)| (Channel::Mic, a, b, t.to_string())),
+    );
+    let record = rig.chain().record().clone();
+    rig.feed(&scene.mic, &scene.far);
+    let outcome = rig.finish().expect("the final pass");
+    let segments = rig.store.segments(&record).unwrap();
+    (outcome, rig.events(), segments)
+}
+
+#[test]
+fn a_meeting_where_the_user_never_speaks_does_not_keep_its_echo() {
+    // Laptop speakers, and the user silent throughout. Before the search finds the path (10 s)
+    // the live "you" finals are echo; the final pass cancels it and finds nothing of the user's.
+    // The far end's final pass says as much as its live finals did (the rig's live engine
+    // writes a final per burst of sound).
+    let wordy_far: Answer = std::sync::Arc::new(|channel, n, audio| match channel {
+        Channel::Far => Ok(words(&["far"; 60].join(" "), audio.len())),
+        Channel::Mic => numbered()(channel, n, audio),
+    });
+    let (outcome, events, segments) = guarded_run(
+        echo_rig::echo_only(30.0, Spec::speakers()),
+        wordy_far,
+        &[
+            (2_000, 4_000, "echo words from the far end"),
+            (6_000, 8_000, "more of the far end"),
+        ],
+    );
+    let refused = events.iter().find_map(|e| match e {
+        MeetingEvent::KeptLive(k) => Some(k.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        refused, None,
+        "the live transcript was kept: {:?}",
+        outcome.echo
+    );
+    assert!(outcome.superseded);
+    assert!(
+        segments.iter().all(|s| s.channel == Channel::Far),
+        "echo left in the you transcript: {segments:?}"
+    );
+    assert!(outcome.echo.live_echo_finals >= 2, "{:?}", outcome.echo);
+}
+
+#[test]
+fn a_you_side_that_collapses_for_any_other_reason_is_still_refused() {
+    // The user talks (21–40 s); the final-pass engine returns nothing for the mic. Their live
+    // finals over their own speech explain nothing, so the guard keeps revision 1.
+    let silent_mic: Answer = std::sync::Arc::new(|channel, _, audio| match channel {
+        Channel::Mic => Ok(Transcript { segments: vec![] }),
+        Channel::Far => Ok(words(&["far"; 60].join(" "), audio.len())),
+    });
+    let (outcome, events, _) = guarded_run(
+        echo_rig::protocol(Spec::speakers()),
+        silent_mic,
+        &LIVE_FINALS,
+    );
+    assert!(!outcome.superseded);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            MeetingEvent::KeptLive(ink_pipeline::meeting::events::KeptLive::Refused(
+                ink_core::StoreError::SuspiciousSupersede {
+                    channel: Channel::Mic,
+                    ..
+                }
+            ))
+        )),
+        "{:?}",
+        outcome.echo
+    );
+}

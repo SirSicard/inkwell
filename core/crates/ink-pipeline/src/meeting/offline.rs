@@ -39,10 +39,10 @@ use ink_core::{
 use ink_echo::{Alignment, CancellerConfig, EchoCanceller, EchoError, PathFinder, PathReport};
 
 use super::diarize::{speaker_changes, speaker_of};
-use super::echo::ErleMeter;
+use super::echo::{EchoEvidence, ErleMeter, far_playing};
 use super::events::{ChannelPass, MeetingEvent, MeetingWarning};
 use super::timeline::ns_to_samples;
-use crate::speech::{HeardSpeech, Region, SpeechPass, samples_to_ms};
+use crate::speech::{Region, SpeechPass, samples_to_ms};
 
 /// Why a pass stopped before the end.
 #[derive(Debug)]
@@ -547,6 +547,8 @@ pub(crate) struct EchoReader<'a> {
     cancelled: Cancelled<'a>,
     pass: SpeechPass,
     erle: ErleMeter,
+    /// Per frame from the meeting's start: whether the far end played.
+    far: Vec<bool>,
     full: Vec<f32>,
     linear: Vec<f32>,
     mic: Vec<f32>,
@@ -568,6 +570,7 @@ impl<'a> EchoReader<'a> {
             cancelled: Cancelled::open(audio, t0_ns, path)?,
             pass,
             erle: ErleMeter::default(),
+            far: Vec::new(),
             full: Vec::new(),
             linear: Vec::new(),
             mic: Vec::new(),
@@ -586,14 +589,16 @@ impl<'a> EchoReader<'a> {
             if self.done {
                 return Ok(None);
             }
-            let (full, linear, mic, erle) = (
+            let (full, linear, mic, erle, far) = (
                 &mut self.full,
                 &mut self.linear,
                 &mut self.mic,
                 &mut self.erle,
+                &mut self.far,
             );
             let more = self.cancelled.step(|f| {
                 erle.observe(f);
+                far.push(far_playing(f));
                 full.extend_from_slice(&f.full[..f.len]);
                 linear.extend_from_slice(&f.linear[..f.len]);
                 mic.extend_from_slice(&f.mic[..f.len]);
@@ -628,8 +633,9 @@ impl<'a> EchoReader<'a> {
 
     /// The VAD's verdicts over the full output, and the ERLE measured: what the duplicate-line
     /// check and the report need once the mic is read.
-    pub(crate) fn into_evidence(mut self) -> (HeardSpeech, ErleMeter) {
-        (self.pass.take_evidence(), self.erle)
+    pub(crate) fn into_evidence(mut self) -> (EchoEvidence, ErleMeter) {
+        let heard = self.pass.take_evidence();
+        (EchoEvidence::new(heard, self.far), self.erle)
     }
 }
 
