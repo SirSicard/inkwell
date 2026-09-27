@@ -76,12 +76,20 @@ public final class AppleEngines: Sendable {
             try await parakeet.load()
             live = Self.state { try session.register(ParakeetLiveEngine(decoder: parakeet)) }
             finals = Self.state { try session.register(ParakeetOfflineEngine.fallback(model: parakeet)) }
-        } catch .modelMissing, .downloadRefused {
+        } catch .modelMissing {
+            // Expected until the user agrees to the download: nothing is fetched here.
+            Log.engine.notice("parakeet: its models are not on this Mac; no live partials or finals fallback")
+            (live, finals) = (.modelMissing, .modelMissing)
+        } catch .downloadRefused {
+            Log.engine.notice("parakeet: a model file was missing and offline mode refused to fetch it; no live partials or finals fallback")
             (live, finals) = (.modelMissing, .modelMissing)
         } catch .unsupported {
+            Log.engine.notice("parakeet: this Mac has no Apple Silicon; no live partials or finals fallback")
             (live, finals) = (.unavailable(code: 1), .unavailable(code: 1))
         } catch {
-            (live, finals) = (.failed(code: error.engineError.code), .failed(code: error.engineError.code))
+            let code = error.engineError.code
+            Log.engine.error("parakeet: loading failed (code \(code)); no live partials or finals fallback")
+            (live, finals) = (.failed(code: code), .failed(code: code))
         }
         return AppleEnginesReport(livePartials: live, finals: finals, polish: syncPolish())
     }
