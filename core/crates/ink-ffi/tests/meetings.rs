@@ -114,6 +114,12 @@ struct Rig {
 /// A core over an in-memory library whose meetings replay `seconds` of speech per side, with the
 /// fake detector, on `clock`.
 fn rig(label: &str, seconds: f64, clock: Arc<dyn Clock>) -> Rig {
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    rig_with(label, seconds, clock, store)
+}
+
+/// [`rig`] over `store`.
+fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Store>) -> Rig {
     let dir = TempDir::new(label);
     let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));
     speech_wav(&mic, seconds, 31);
@@ -130,7 +136,7 @@ fn rig(label: &str, seconds: f64, clock: Arc<dyn Clock>) -> Rig {
     });
     let detector = Arc::new(FakeDetector::default());
     let parts = Parts {
-        store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+        store,
         clock,
         registry: Registry::new(vec![row]).unwrap(),
         models,
@@ -347,6 +353,57 @@ fn the_detection_setting_starts_and_stops_listening() {
         .unwrap();
     assert!(r.events.wait_count("meeting.detection", 3, WAIT));
     assert!(r.detector.sink.lock().unwrap().is_some());
+    r.core.shutdown();
+}
+
+/// Review (S2.8): the shell hears from the start whether the core listens, whatever the setting
+/// says. Off by the setting is announced (it used to be silent, and the shell showed nothing).
+#[test]
+fn detection_announces_its_state_at_start_even_when_off() {
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    store.set_setting("meetings.detect", "off").unwrap();
+    let r = rig_with("detect-off", 5.0, clock(), store);
+    let said = r
+        .events
+        .wait_for(WAIT, |v| v["type"] == "meeting.detection")
+        .expect("announced");
+    assert_eq!(said["listening"], false);
+    assert!(said.get("message").is_none(), "{said}");
+    assert!(r.detector.sink.lock().unwrap().is_none());
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// Review (S2.8): a detection setting the core cannot read leaves detection off, and the shell
+/// hears so, with why (it was only logged, while the shell could show "Listening"). Turning it on
+/// once the library answers starts it.
+#[test]
+fn a_detection_setting_the_core_cannot_read_is_announced_as_not_listening() {
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    store.fail(&["setting"]);
+    let r = rig_with("detect-unread", 5.0, clock(), store.clone());
+    let said = r
+        .events
+        .wait_for(WAIT, |v| v["type"] == "meeting.detection")
+        .expect("announced");
+    assert_eq!(said["listening"], false);
+    assert!(
+        said["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("couldn't read the detection setting"),
+        "{said}"
+    );
+    store.heal();
+    r.core
+        .command(r#"{"cmd":"setting.set","key":"meetings.detect","value":"on"}"#)
+        .unwrap();
+    r.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "meeting.detection" && v["listening"] == true
+        })
+        .expect("on");
+    r.events.assert_valid();
     r.core.shutdown();
 }
 

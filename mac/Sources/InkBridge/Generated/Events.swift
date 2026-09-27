@@ -1045,9 +1045,10 @@ public struct MeetingDetected: Codable, Sendable, Equatable {
     }
 }
 
-/// Whether the core is listening for calls now: sent when detection starts, stops (the
-/// meetings.detect setting), fails to start, or stops on its own (the platform stopped
-/// answering).
+/// Whether the core is listening for calls now: sent once at start whatever the state (off
+/// included, with a message when the setting could not be read), then when detection starts,
+/// stops (the meetings.detect setting), fails to start, or stops on its own (the platform
+/// stopped answering). The shell shows this state, not the setting.
 public struct MeetingDetection: Codable, Sendable, Equatable {
     /// Whether apps taking the microphone are being watched.
     public let listening: Bool

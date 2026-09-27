@@ -134,9 +134,15 @@ struct RecordControls: View {
     }
 
     private var listening: String {
-        if store.meeting != nil { return "Recording" }
-        switch store.listening {
-        case true?: return screens.meetings.detect ? "Listening for meetings" : "Not listening for meetings"
+        Self.listeningText(recording: store.meeting != nil, listening: store.listening)
+    }
+
+    /// What the foot of Today says: the core's state (`meeting.detection`), never the setting, so
+    /// a setting the core could not read or a detector that stopped reads as not listening.
+    static func listeningText(recording: Bool, listening: Bool?) -> String {
+        if recording { return "Recording" }
+        switch listening {
+        case true?: return "Listening for meetings"
         case false?: return "Not listening for meetings"
         case nil: return " "
         }

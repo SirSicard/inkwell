@@ -497,8 +497,10 @@ impl Ctx<'_> {
             Query::SettingSet { key, value } => match store.set_setting(&key, &value) {
                 Ok(()) => {
                     if key == crate::control::DETECT_KEY {
-                        self.shared
-                            .tell_meetings(crate::control::Msg::Detect(value == "on"));
+                        self.shared.tell_meetings(crate::control::Msg::Detect {
+                            on: value == "on",
+                            why_off: None,
+                        });
                     }
                     let sweep = key == crate::retention::RETENTION_KEY;
                     emit(setting(&key, Some(value)));

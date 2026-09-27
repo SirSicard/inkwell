@@ -335,6 +335,23 @@ final class CitedDecisionTests: XCTestCase {
 }
 
 @MainActor
+final class DetectionStateTests: XCTestCase {
+    /// Review (S2.8): Today follows the core's detection state: a setting the core could not read
+    /// is announced as not listening, with why, and Today says so however the setting reads.
+    func testTodayFollowsTheCoresDetectionStateNotTheSetting() {
+        let store = CoreStore()
+        XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), " ")
+        store.apply([event(#"{"type":"meeting.detection","listening":false,"message":"couldn't read the detection setting: database is locked"}"#)])
+        XCTAssertEqual(store.listening, false)
+        XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), "Not listening for meetings")
+        XCTAssertEqual(store.notices.last?.kind, .detectionUnavailable)
+        store.apply([event(#"{"type":"meeting.detection","listening":true}"#)])
+        XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), "Listening for meetings")
+        XCTAssertEqual(RecordControls.listeningText(recording: true, listening: true), "Recording")
+    }
+}
+
+@MainActor
 final class RecoveryNoticeTests: XCTestCase {
     /// Review (S2.8): recovery that could not even look for interrupted meetings says so once on
     /// Today; one that looked and found none says nothing.

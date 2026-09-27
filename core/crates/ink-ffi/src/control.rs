@@ -13,7 +13,7 @@
 //! | `meeting.dismiss {app}` | "Not this one": the offer goes, and that app is not offered again until it releases the mic |
 //! | `meetings.recover` | finishes the meetings a crash interrupted ([`recovery`](crate::recovery)) |
 //! | a platform signal | [`Detection`] decides: `meeting.detected` (the consent Drop), `meeting.detection_ended`, or the recorded app's meeting ends |
-//! | the `meetings.detect` setting | starts or stops detection: `meeting.detection {listening}` |
+//! | the `meetings.detect` setting | starts or stops detection: `meeting.detection {listening}`; the first state is always said, off included, and a setting that could not be read is off with a message |
 //!
 //! It sleeps until a message arrives, or until [`Detection::deadline_ns`] while something is
 //! pending (an offer waiting out its hold, a recorded app's grace); idle, nothing ticks. The
@@ -69,8 +69,14 @@ pub enum Msg {
         /// The command's id.
         id: Option<String>,
     },
-    /// The detection setting changed (or the core started): on or off.
-    Detect(bool),
+    /// The detection setting changed (or the core started): on or off. `why_off`: why it is off
+    /// against the user's wish (the setting could not be read), said with the state.
+    Detect {
+        /// Listen, or not.
+        on: bool,
+        /// Why detection is off when the user did not turn it off.
+        why_off: Option<String>,
+    },
     /// A platform signal, from its callback thread.
     Signal(MeetingSignal),
     /// A meeting's capture ended.
@@ -97,6 +103,9 @@ struct State {
     detector: Option<Arc<dyn MeetingDetector>>,
     detection: Detection,
     listening: bool,
+    /// Whether the shell has been told if detection listens: the first state is always said,
+    /// off included, so the shell never guesses.
+    announced: bool,
     /// Whether the current meeting is being ended by the user rather than its app.
     by_hand: bool,
     tx: Sender<Msg>,
@@ -120,6 +129,7 @@ impl Control {
             detector,
             detection: Detection::new(),
             listening: false,
+            announced: false,
             by_hand: false,
             tx: tx.clone(),
             recovery: recovery.clone(),
@@ -199,7 +209,7 @@ impl State {
     }
 
     fn quit(mut self) {
-        self.listen(false);
+        self.listen(false, None);
     }
 
     fn failed(&self, command: &str, id: Option<&str>, message: &str) {
@@ -230,7 +240,7 @@ impl State {
                 }
             }
             Msg::Recover { id } => self.recover(id.as_deref()),
-            Msg::Detect(on) => self.listen(on),
+            Msg::Detect { on, why_off } => self.listen(on, why_off),
             Msg::Signal(signal) => {
                 let now = self.shared.clock.now_ns();
                 let actions = self.detection.signal(signal, now);
@@ -294,27 +304,33 @@ impl State {
         }
     }
 
-    /// Starts or stops detection, and says so.
-    fn listen(&mut self, on: bool) {
+    /// Starts or stops detection, and says so: every change, the first state (off included), and
+    /// an off with a reason.
+    fn listen(&mut self, on: bool, why_off: Option<String>) {
+        let first = !std::mem::replace(&mut self.announced, true);
         let Some(detector) = self.detector.clone() else {
-            if on {
+            let message = match on {
+                true => Some("this platform cannot detect meetings yet".to_owned()),
+                false => why_off,
+            };
+            if (on || first || message.is_some()) && !self.shared.shutdown.is_cancelled() {
                 self.shared.events.emit(event(
                     "meeting.detection",
                     &[
                         ("listening", Some(false.into())),
-                        (
-                            "message",
-                            Some("this platform cannot detect meetings yet".into()),
-                        ),
+                        ("message", message.map(Into::into)),
                     ],
                 ));
             }
             return;
         };
-        if on == self.listening {
+        if on == self.listening && !first && why_off.is_none() {
             return;
         }
-        let message: Option<Value> = if on {
+        let message: Option<Value> = if on == self.listening {
+            // Nothing to start or stop: the state is said (the first time, or with its reason).
+            why_off.map(Into::into)
+        } else if on {
             let tx = Mutex::new(self.tx.clone());
             // Callback thread: it only enqueues.
             let sink: EventSink<MeetingSignal> = Arc::new(move |signal| {
@@ -334,7 +350,7 @@ impl State {
             detector.stop();
             self.listening = false;
             self.detection.reset();
-            None
+            why_off.map(Into::into)
         };
         if self.shared.shutdown.is_cancelled() {
             return;

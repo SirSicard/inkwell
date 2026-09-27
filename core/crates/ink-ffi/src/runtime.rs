@@ -561,16 +561,22 @@ impl Core {
         shared.events.emit(events::ready());
         // Detection follows the user's setting (on unless turned off); what it finds is offered
         // only once the shell is listening, after `core.ready`.
+        // Its first state is always said (`meeting.detection`), so the shell follows the core's
+        // state, never the setting it shows.
         let detect = match shared.store.setting(crate::control::DETECT_KEY) {
-            Ok(v) => v.as_deref() != Some("off"),
+            Ok(v) => Msg::Detect {
+                on: v.as_deref() != Some("off"),
+                why_off: None,
+            },
             Err(e) => {
                 log::warn!("the detection setting could not be read ({e}); detection stays off");
-                false
+                Msg::Detect {
+                    on: false,
+                    why_off: Some(format!("couldn't read the detection setting: {e}")),
+                }
             }
         };
-        control
-            .send(Msg::Detect(detect))
-            .map_err(io::Error::other)?;
+        control.send(detect).map_err(io::Error::other)?;
         // The launch's retention sweep, off every thread a screen or a meeting waits on.
         let retention = Sweeper::start(shared.clone())?;
         let _ = shared.sweeps.set(Mutex::new(retention.sender()));
