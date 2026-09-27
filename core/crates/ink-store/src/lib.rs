@@ -176,6 +176,33 @@ impl SqliteStore {
         })
     }
 
+    /// [`write`](Self::write) for a call that writes a lot of user text at once (an import): when
+    /// it fails, the transaction is rolled back, and then the log is scrubbed as after a delete,
+    /// because pages SQLite spilled to the log before the failure still hold the text. A scrub
+    /// that cannot finish is reported as [`write_scrubbed`](Self::write_scrubbed) reports one. A
+    /// success scrubs nothing: it only added rows.
+    fn write_scrubbing_failure<T>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce(&Transaction<'_>) -> Result<T, Fail>,
+    ) -> Result<T, StoreError> {
+        self.with(op, |conn| {
+            let result = (|| {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let out = f(&tx)?;
+                tx.commit()?;
+                Ok(out)
+            })();
+            if result.is_err() && !scrub(conn, SCRUB_ATTEMPTS) {
+                self.unscrubbed.store(true, Ordering::Release);
+                log::warn!(
+                    "{op}: rolled back, but its text could not yet be cleared from the write-ahead log (another process is reading the database); retried on every later call"
+                );
+            }
+            result
+        })
+    }
+
     /// Runs `f` in an immediate (write) transaction: all of it commits, or none of it.
     fn write<T>(
         &self,
@@ -362,18 +389,30 @@ fn revision(conn: &Connection, id: &RecordId) -> Result<u32, Fail> {
     .ok_or_else(|| StoreError::NotFound.into())
 }
 
-/// Inserts a record at revision 1 under `id`. [`Store::create_record`] and the importer share it.
+/// Inserts a record at revision 1 under `id`. [`Store::create_record`] and the importers share it.
 fn insert_record(conn: &Connection, id: &str, record: &NewRecord) -> Result<(), Fail> {
+    insert_record_at(conn, id, record, 1)
+}
+
+/// Inserts a record at `revision` under `id`: an imported record arrives with the passes it has
+/// already had.
+fn insert_record_at(
+    conn: &Connection,
+    id: &str,
+    record: &NewRecord,
+    revision: u32,
+) -> Result<(), Fail> {
     conn.execute(
-        "INSERT INTO record (id, kind, title, started_at_unix_ms, source_app, audio_dir)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO record (id, kind, title, started_at_unix_ms, source_app, audio_dir, revision)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             id,
             kind_text(record.kind),
             record.title,
             record.started_at_unix_ms,
             record.source_app,
-            record.audio_dir
+            record.audio_dir,
+            revision
         ],
     )?;
     Ok(())
@@ -521,6 +560,104 @@ struct CommitmentRow<'a> {
     id: String,
     item: &'a NewCommitment,
     spans: Vec<(&'static str, i64, i64)>,
+    done: bool,
+}
+
+/// Converts commitments for binding, with new ids and checked spans. [`Store::add_commitments`]
+/// and the importer share it.
+fn commitment_rows<'a>(
+    items: impl IntoIterator<Item = (&'a NewCommitment, bool)>,
+) -> Result<Vec<CommitmentRow<'a>>, StoreError> {
+    items
+        .into_iter()
+        .map(|(item, done)| {
+            Ok(CommitmentRow {
+                id: new_id()?,
+                item,
+                spans: item
+                    .provenance
+                    .iter()
+                    .map(|s| {
+                        let (start, end) = stretch(s.start_ms, s.end_ms)?;
+                        Ok((channel_text(s.channel), start, end))
+                    })
+                    .collect::<Result<_, StoreError>>()?,
+                done,
+            })
+        })
+        .collect()
+}
+
+fn insert_commitments(
+    conn: &Connection,
+    id: &RecordId,
+    rows: &[CommitmentRow<'_>],
+) -> Result<(), Fail> {
+    let mut insert = conn.prepare(
+        "INSERT INTO commitment (id, record_id, text, owner, due, due_at_unix_ms, done)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    let mut insert_span = conn.prepare(
+        "INSERT INTO commitment_span (commitment_id, ord, channel, start_ms, end_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for row in rows {
+        insert.execute(params![
+            row.id,
+            id.0,
+            row.item.text,
+            row.item.owner,
+            row.item.due,
+            row.item.due_at_unix_ms,
+            row.done
+        ])?;
+        for (ord, (channel, start, end)) in (0_i64..).zip(&row.spans) {
+            insert_span.execute(params![row.id, ord, channel, start, end])?;
+        }
+    }
+    Ok(())
+}
+
+/// Saves or replaces a record's summary, stamped with the transcript `revision` it is of.
+/// [`Store::save_summary`] and the importer share it.
+fn upsert_summary(
+    conn: &Connection,
+    id: &RecordId,
+    summary: &Summary,
+    revision: u32,
+) -> Result<(), Fail> {
+    conn.execute(
+        "INSERT INTO summary (record_id, text, model, created_at_unix_ms, transcript_revision)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (record_id) DO UPDATE SET
+             text = excluded.text,
+             model = excluded.model,
+             created_at_unix_ms = excluded.created_at_unix_ms,
+             transcript_revision = excluded.transcript_revision",
+        params![
+            id.0,
+            summary.text,
+            summary.model,
+            summary.created_at_unix_ms,
+            revision
+        ],
+    )?;
+    Ok(())
+}
+
+/// Names or renames a speaker in one record. [`Store::set_speaker_name`] and the importer share it.
+fn upsert_speaker(
+    conn: &Connection,
+    id: &RecordId,
+    speaker: &SpeakerId,
+    name: &str,
+) -> Result<(), Fail> {
+    conn.execute(
+        "INSERT INTO speaker (record_id, speaker, name) VALUES (?1, ?2, ?3)
+         ON CONFLICT (record_id, speaker) DO UPDATE SET name = excluded.name",
+        params![id.0, speaker.0, name],
+    )?;
+    Ok(())
 }
 
 /// The columns [`commitments_from`] reads: a commitment joined with its spans. Queries order by
@@ -817,23 +954,7 @@ impl Store for SqliteStore {
     fn save_summary(&self, id: &RecordId, summary: &Summary) -> Result<(), StoreError> {
         self.write_scrubbed("save_summary", |tx| {
             let current = revision(tx, id)?;
-            tx.execute(
-                "INSERT INTO summary (record_id, text, model, created_at_unix_ms, transcript_revision)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT (record_id) DO UPDATE SET
-                     text = excluded.text,
-                     model = excluded.model,
-                     created_at_unix_ms = excluded.created_at_unix_ms,
-                     transcript_revision = excluded.transcript_revision",
-                params![
-                    id.0,
-                    summary.text,
-                    summary.model,
-                    summary.created_at_unix_ms,
-                    current
-                ],
-            )?;
-            Ok(())
+            upsert_summary(tx, id, summary, current)
         })
     }
 
@@ -864,12 +985,7 @@ impl Store for SqliteStore {
     ) -> Result<(), StoreError> {
         self.write_scrubbed("set_speaker_name", |tx| {
             revision(tx, id)?;
-            tx.execute(
-                "INSERT INTO speaker (record_id, speaker, name) VALUES (?1, ?2, ?3)
-                 ON CONFLICT (record_id, speaker) DO UPDATE SET name = excluded.name",
-                params![id.0, speaker.0, name],
-            )?;
-            Ok(())
+            upsert_speaker(tx, id, speaker, name)
         })
     }
 
@@ -892,47 +1008,10 @@ impl Store for SqliteStore {
         id: &RecordId,
         items: &[NewCommitment],
     ) -> Result<Vec<CommitmentId>, StoreError> {
-        let rows = items
-            .iter()
-            .map(|item| {
-                Ok(CommitmentRow {
-                    id: new_id()?,
-                    item,
-                    spans: item
-                        .provenance
-                        .iter()
-                        .map(|s| {
-                            let (start, end) = stretch(s.start_ms, s.end_ms)?;
-                            Ok((channel_text(s.channel), start, end))
-                        })
-                        .collect::<Result<_, StoreError>>()?,
-                })
-            })
-            .collect::<Result<Vec<_>, StoreError>>()?;
+        let rows = commitment_rows(items.iter().map(|item| (item, false)))?;
         self.write("add_commitments", |tx| {
             revision(tx, id)?;
-            let mut insert = tx.prepare(
-                "INSERT INTO commitment (id, record_id, text, owner, due, due_at_unix_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )?;
-            let mut insert_span = tx.prepare(
-                "INSERT INTO commitment_span (commitment_id, ord, channel, start_ms, end_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-            )?;
-            for row in &rows {
-                insert.execute(params![
-                    row.id,
-                    id.0,
-                    row.item.text,
-                    row.item.owner,
-                    row.item.due,
-                    row.item.due_at_unix_ms
-                ])?;
-                for (ord, (channel, start, end)) in (0_i64..).zip(&row.spans) {
-                    insert_span.execute(params![row.id, ord, channel, start, end])?;
-                }
-            }
-            Ok(())
+            insert_commitments(tx, id, &rows)
         })?;
         Ok(rows.into_iter().map(|r| CommitmentId(r.id)).collect())
     }
