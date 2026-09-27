@@ -13,6 +13,8 @@ import os
 enum InkwellMain {
     @MainActor
     static func main() {
+        // First, before anything can start a thread (see MetalResidency).
+        MetalResidency.configure()
         let log = Logger(subsystem: "com.inkwell.app", category: "shell")
         let lockFile = DataLocation.instanceLockFile()
         let socketPath = DataLocation.instanceSocketFile().path
