@@ -55,6 +55,20 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case dictationHotkeyLost(DictationHotkeyLost)
     /// `dictation.worker_failed`
     case dictationWorkerFailed(DictationWorkerFailed)
+    /// `dictation.partial`
+    case dictationPartial(DictationPartial)
+    /// `dictation.edited`
+    case dictationEdited(DictationEdited)
+    /// `dictation.edit_failed`
+    case dictationEditFailed(DictationEditFailed)
+    /// `dictation.edit_hotkey_lost`
+    case dictationEditHotkeyLost(DictationEditHotkeyLost)
+    /// `dictation.ready`
+    case dictationReady(DictationReady)
+    /// `dictation.off`
+    case dictationOff(DictationOff)
+    /// `dictation.mic_failed`
+    case dictationMicFailed(DictationMicFailed)
     /// `meeting.started`
     case meetingStarted(MeetingStarted)
     /// `meeting.voice_detection`
@@ -169,6 +183,13 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "dictation.warning": self = .dictationWarningEvent(try DictationWarningEvent(from: decoder))
             case "dictation.hotkey_lost": self = .dictationHotkeyLost(try DictationHotkeyLost(from: decoder))
             case "dictation.worker_failed": self = .dictationWorkerFailed(try DictationWorkerFailed(from: decoder))
+            case "dictation.partial": self = .dictationPartial(try DictationPartial(from: decoder))
+            case "dictation.edited": self = .dictationEdited(try DictationEdited(from: decoder))
+            case "dictation.edit_failed": self = .dictationEditFailed(try DictationEditFailed(from: decoder))
+            case "dictation.edit_hotkey_lost": self = .dictationEditHotkeyLost(try DictationEditHotkeyLost(from: decoder))
+            case "dictation.ready": self = .dictationReady(try DictationReady(from: decoder))
+            case "dictation.off": self = .dictationOff(try DictationOff(from: decoder))
+            case "dictation.mic_failed": self = .dictationMicFailed(try DictationMicFailed(from: decoder))
             case "meeting.started": self = .meetingStarted(try MeetingStarted(from: decoder))
             case "meeting.voice_detection": self = .meetingVoiceDetection(try MeetingVoiceDetection(from: decoder))
             case "meeting.side_state": self = .meetingSideState(try MeetingSideState(from: decoder))
@@ -235,6 +256,13 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .dictationWarningEvent(let event): try event.encode(to: encoder)
         case .dictationHotkeyLost(let event): try event.encode(to: encoder)
         case .dictationWorkerFailed(let event): try event.encode(to: encoder)
+        case .dictationPartial(let event): try event.encode(to: encoder)
+        case .dictationEdited(let event): try event.encode(to: encoder)
+        case .dictationEditFailed(let event): try event.encode(to: encoder)
+        case .dictationEditHotkeyLost(let event): try event.encode(to: encoder)
+        case .dictationReady(let event): try event.encode(to: encoder)
+        case .dictationOff(let event): try event.encode(to: encoder)
+        case .dictationMicFailed(let event): try event.encode(to: encoder)
         case .meetingStarted(let event): try event.encode(to: encoder)
         case .meetingVoiceDetection(let event): try event.encode(to: encoder)
         case .meetingSideState(let event): try event.encode(to: encoder)
@@ -532,6 +560,33 @@ public struct DictationDiscarded: Codable, Sendable, Equatable {
     }
 }
 
+/// A voice edit ended without touching the selection.
+public struct DictationEditFailed: Codable, Sendable, Equatable {
+    /// The error, where there was one. Never the user's words.
+    public let message: String?
+    /// Why. no_selection: ask the user to select text first. no_model: editing needs a language
+    /// model.
+    public let reason: EditFailure
+    /// Always `dictation.edit_failed`.
+    public let type: String
+}
+
+/// The OS removed the voice-edit key. Nothing more arrives from it until dictation is enabled
+/// again.
+public struct DictationEditHotkeyLost: Codable, Sendable, Equatable {
+    /// Always `dictation.edit_hotkey_lost`.
+    public let type: String
+}
+
+/// A voice edit replaced the selection with its rewrite. The rewrite is not saved to the
+/// library.
+public struct DictationEdited: Codable, Sendable, Equatable {
+    /// How it went in.
+    public let outcome: InsertOutcome
+    /// Always `dictation.edited`.
+    public let type: String
+}
+
 /// A take failed. Nothing was inserted for a transcription failure.
 public struct DictationFailed: Codable, Sendable, Equatable {
     /// Why. Never the user's words.
@@ -560,6 +615,76 @@ public struct DictationInserted: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// The microphone could not be opened for a take; the take was dropped. The next press tries
+/// again.
+public struct DictationMicFailed: Codable, Sendable, Equatable {
+    /// Why. Never the user's words.
+    public let message: String
+    /// Always `dictation.mic_failed`.
+    public let type: String
+}
+
+/// Dictation is not live: key presses reach nothing and no key is held. Sent in answer to
+/// dictation.enable and dictation.disable, and when dictation stops on its own (the worker
+/// stopped, Accessibility was revoked).
+public struct DictationOff: Codable, Sendable, Equatable {
+    /// The error, where there was one. Never the user's words.
+    public let message: String?
+    /// Why.
+    public let reason: DictationOffReason
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Always `dictation.off`.
+    public let type: String
+}
+
+/// Why dictation is not live.
+public enum DictationOffReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case disabled
+    case needsAccessibility = "needs_accessibility"
+    case keyRefused = "key_refused"
+    case unsupported
+    case workerStopped = "worker_stopped"
+    case failed
+    case other
+}
+
+/// What the live engine hears while the key is held: settled words, then the current
+/// hypothesis. Each replaces the last; none is saved, and none arrives for a take after its
+/// dictation.stopped. Carries the user's words: never log it.
+public struct DictationPartial: Codable, Sendable, Equatable {
+    /// The take, as dictation.started numbered it.
+    public let take: Int64
+    /// The words so far.
+    public let text: String
+    /// Always `dictation.partial`.
+    public let type: String
+}
+
+/// Dictation is live: the core holds the keys named here, and a hold of the key is a dictation.
+/// Sent in answer to dictation.enable, and again after a key setting changes.
+public struct DictationReady: Codable, Sendable, Equatable {
+    /// The voice-edit key's token, when one is set and bound.
+    public let editKey: String?
+    /// Why the voice-edit key set in the settings could not be bound; dictation works without
+    /// it. Never the user's words.
+    public let editKeyError: String?
+    /// The dictation key's token (for example fn or right_option).
+    public let key: String
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Always `dictation.ready`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case editKey = "edit_key"
+        case editKeyError = "edit_key_error"
+        case key
+        case ref
+        case type
+    }
+}
+
 /// A press shorter than the minimum hold (a modifier used in a shortcut). Nothing was shown or
 /// transcribed.
 public struct DictationShortPressIgnored: Codable, Sendable, Equatable {
@@ -567,8 +692,19 @@ public struct DictationShortPressIgnored: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// A hold passed the minimum and is now a take: show that it is listening.
+/// A hold passed the minimum and is now a take: show that it is listening (or, with edit, that
+/// it is taking an instruction for the selection).
 public struct DictationStarted: Codable, Sendable, Equatable {
+    /// For a dictation: the name of the app in front, when the OS reported one.
+    public let app: String?
+    /// A voice edit (the edit key) rather than a dictation.
+    public let edit: Bool
+    /// For a dictation: the mode it is expected to write in, by its name, from the app in front
+    /// (the text is written in the mode of the app that receives it).
+    public let mode: String?
+    /// This take's number within the session: partials carry it, so a late one is never shown
+    /// under the next take.
+    public let take: Int64
     /// Always `dictation.started`.
     public let type: String
 }
@@ -591,7 +727,9 @@ public struct DictationVoiceDetection: Codable, Sendable, Equatable {
 }
 
 /// Something went wrong during a dictation, and it went on without it.
-/// deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings.
+/// deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a
+/// push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped
+/// there and processed.
 public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case audioLost = "audio_lost"
@@ -604,6 +742,7 @@ public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable
     case saveFailed = "save_failed"
     case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
     case deletedTextScrubbed = "deleted_text_scrubbed"
+    case releaseMissed = "release_missed"
     case other
 }
 
@@ -713,6 +852,18 @@ public enum EchoState: String, Codable, Sendable, Equatable, CaseIterable {
     case degraded
     case failed
     case foundAtEnd = "found_at_end"
+}
+
+/// Why a voice edit left the selection alone. None of these changed the user's text.
+public enum EditFailure: String, Codable, Sendable, Equatable, CaseIterable {
+    case noSelection = "no_selection"
+    case selectionUnreadable = "selection_unreadable"
+    case transcription
+    case noModel = "no_model"
+    case timedOut = "timed_out"
+    case model
+    case insert
+    case other
 }
 
 /// What kind of engine the shell registered: offline (finals), streaming (live partials) or llm

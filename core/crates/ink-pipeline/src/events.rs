@@ -1,10 +1,11 @@
 //! What the dictation chain tells the shell.
 //!
 //! Every outcome of a take is an event: nothing is dropped quietly, and nothing that went wrong is
-//! only logged. The one variant that carries the user's words, [`DictationEvent::Inserted`], holds
-//! them as [`Spoken`], which prints as a length, so logging an event cannot leak a transcript
-//! (I5). Every other variant carries no text at all: errors from engines, the store, the platform
-//! and language models name what failed, never what was said (`ink-core`'s error contract).
+//! only logged. The variants that carry the user's words, [`DictationEvent::Inserted`] and
+//! [`DictationEvent::Partial`], hold them as [`Spoken`], which prints as a length, so logging an
+//! event cannot leak a transcript (I5). Every other variant carries no text of theirs: errors from
+//! engines, the store, the platform and language models name what failed, never what was said
+//! (`ink-core`'s error contract). A voice edit's selection never leaves the chain.
 
 use ink_core::{EngineError, InsertOutcome, LlmError, PlatformError, RecordId, StoreError};
 
@@ -111,6 +112,31 @@ pub enum Warning {
     DeletedTextNotScrubbed,
     /// Deleted text the library could not clear before is now cleared from its files.
     DeletedTextScrubbed,
+    /// A push-to-talk key (or the edit key) was held for longer than anyone dictates
+    /// ([`DEFAULT_STUCK_AFTER`](crate::chain::DEFAULT_STUCK_AFTER), 180 s): its release was most
+    /// likely lost. The take was stopped there and processed, never discarded: the user did speak.
+    ReleaseMissed,
+}
+
+/// Why a voice edit ended without replacing the selection. None of these touched the user's text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EditFailure {
+    /// Nothing was selected in the focused app when the key was held.
+    NoSelection,
+    /// The selection could not be read (Accessibility is off, or the app does not expose it).
+    SelectionUnreadable(PlatformError),
+    /// The instruction could not be transcribed.
+    Transcription(EngineError),
+    /// No language model is set up to rewrite the selection.
+    NoModel,
+    /// The language model gave no answer within the edit's budget
+    /// ([`EDIT_BUDGET`](crate::chain::EDIT_BUDGET)).
+    TimedOut,
+    /// The language model failed, or answered with nothing.
+    Model(LlmError),
+    /// The rewrite could not be inserted.
+    Insert(PlatformError),
 }
 
 /// An event from the dictation chain, in order for one chain.
@@ -121,7 +147,28 @@ pub enum DictationEvent {
     /// changes.
     VoiceDetection(VoiceDetection),
     /// A hold passed the minimum and is now a take: the shell shows it is listening.
-    Started,
+    Started {
+        /// This take's number, counted from 0 for the chain: its [`Partial`](Self::Partial)s
+        /// carry it, so a late one is never shown under the next take.
+        take: u64,
+        /// Whether the take is a voice edit (the edit key) rather than a dictation.
+        edit: bool,
+        /// The mode a dictation is expected to write in, by name, from the app in front when it
+        /// started (the text is written in the mode of the app that receives it). `None` for an
+        /// edit.
+        mode: Option<String>,
+        /// That app's name, when the OS reported one. `None` for an edit.
+        app: Option<String>,
+    },
+    /// What the live engine hears so far, while the key is held: settled words, then the current
+    /// hypothesis. Each replaces the previous one. Ephemeral: never saved, never logged
+    /// (architecture rule 4). None arrives for a take after its [`Stopped`](Self::Stopped).
+    Partial {
+        /// The take it belongs to ([`Started`](Self::Started)'s `take`).
+        take: u64,
+        /// The words so far.
+        text: Spoken,
+    },
     /// A press shorter than the minimum hold (a modifier used in a shortcut). Nothing was shown
     /// and nothing is transcribed.
     ShortPressIgnored,
@@ -147,6 +194,15 @@ pub enum DictationEvent {
     Warning(Warning),
     /// The OS removed the hotkey. Nothing more arrives until it is started again.
     HotkeyLost,
+    /// The OS removed the edit key. Nothing more arrives from it until it is started again.
+    EditHotkeyLost,
+    /// A voice edit replaced the selection with its rewrite.
+    Edited {
+        /// How the rewrite went in.
+        outcome: InsertOutcome,
+    },
+    /// A voice edit ended without touching the selection.
+    EditFailed(EditFailure),
     /// A stage panicked (an engine, the store, polish, the inserter, or the chain itself). The take
     /// in progress is lost. With `recovered`, the chain is idle again and the next take works;
     /// without it, the worker has stopped after repeated panics and dictation is off until the

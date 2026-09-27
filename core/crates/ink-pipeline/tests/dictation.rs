@@ -61,7 +61,10 @@ fn the_dictation_fixture_gives_the_expected_text() {
         inserted_text(&events),
         vec!["Please check the notes before the review.".to_owned()]
     );
-    assert!(has(&events, |e| matches!(e, DictationEvent::Started)));
+    assert!(has(&events, |e| matches!(
+        e,
+        DictationEvent::Started { .. }
+    )));
     assert!(has(&events, |e| matches!(e, DictationEvent::Stopped)));
     assert!(
         !has(&events, |e| matches!(
@@ -284,7 +287,7 @@ fn a_modifier_tapped_in_a_shortcut_starts_nothing() {
         "{events:?}"
     );
     assert!(
-        !has(&events, |e| *e == DictationEvent::Started),
+        !has(&events, |e| matches!(e, DictationEvent::Started { .. })),
         "nothing was shown"
     );
     assert!(rig.engine.calls().is_empty());
@@ -304,12 +307,18 @@ fn a_hold_past_the_minimum_starts_while_the_key_is_down() {
     rig.press();
     rig.feed(&speech_48k(0.15, -30.0, 5));
     assert!(
-        !has(&rig.events(), |e| *e == DictationEvent::Started),
+        !has(&rig.events(), |e| matches!(
+            e,
+            DictationEvent::Started { .. }
+        )),
         "not yet"
     );
     rig.feed(&speech_48k(0.1, -30.0, 6));
     assert!(
-        has(&rig.events(), |e| *e == DictationEvent::Started),
+        has(&rig.events(), |e| matches!(
+            e,
+            DictationEvent::Started { .. }
+        )),
         "held 250 ms"
     );
 }
@@ -323,7 +332,10 @@ fn a_hold_between_the_minimum_hold_and_the_minimum_length_is_too_short() {
     rig.release();
     rig.silence(0.6);
     let events = rig.events();
-    assert!(has(&events, |e| *e == DictationEvent::Started));
+    assert!(has(&events, |e| matches!(
+        e,
+        DictationEvent::Started { .. }
+    )));
     assert!(
         has(&events, |e| matches!(
             e,

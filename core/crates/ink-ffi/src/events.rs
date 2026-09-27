@@ -4,12 +4,13 @@
 //! `#[non_exhaustive]`, so a variant added later maps to the schema's `other` (and is logged)
 //! until it gets its own arm. Optional fields are left out when absent, never `null`.
 //!
-//! The words the user said travel only in `dictation.inserted`, `meeting.partial` and
-//! `meeting.final`; errors and everything else name what failed, never what was said (I5).
+//! The words the user said travel only in `dictation.inserted`, `dictation.partial`,
+//! `meeting.partial` and `meeting.final`; errors and everything else name what failed, never what
+//! was said (I5).
 
 use ink_core::{Channel, InsertOutcome, Job, RecordId};
 use ink_pipeline::events::{
-    DictationEvent, Discard, TakeFailure, VadUnavailable, VoiceDetection, Warning,
+    DictationEvent, Discard, EditFailure, TakeFailure, VadUnavailable, VoiceDetection, Warning,
 };
 use ink_pipeline::meeting::events::{
     ChannelPass, EchoFailure, EchoPass, EchoSearch, EchoState, KeptLive, MeetingEvent,
@@ -104,7 +105,24 @@ pub fn dictation(e: &DictationEvent) -> Value {
                 &[("available", available), ("reason", reason)],
             )
         }
-        DictationEvent::Started => event("dictation.started", &[]),
+        DictationEvent::Started {
+            take,
+            edit,
+            mode,
+            app,
+        } => event(
+            "dictation.started",
+            &[
+                ("take", some(*take)),
+                ("edit", some(*edit)),
+                ("mode", mode.as_deref().map(Value::from)),
+                ("app", app.as_deref().map(Value::from)),
+            ],
+        ),
+        DictationEvent::Partial { take, text } => event(
+            "dictation.partial",
+            &[("take", some(*take)), ("text", some(text.as_str()))],
+        ),
         DictationEvent::ShortPressIgnored => event("dictation.short_press_ignored", &[]),
         DictationEvent::Stopped => event("dictation.stopped", &[]),
         DictationEvent::Discarded(d) => {
@@ -185,6 +203,7 @@ pub fn dictation(e: &DictationEvent) -> Value {
                 Warning::SaveFailed(e) => ("save_failed", None, some(e.to_string())),
                 Warning::DeletedTextNotScrubbed => ("deleted_text_not_scrubbed", None, None),
                 Warning::DeletedTextScrubbed => ("deleted_text_scrubbed", None, None),
+                Warning::ReleaseMissed => ("release_missed", None, None),
                 _ => (unmapped("dictation warning"), None, None),
             };
             event(
@@ -197,6 +216,29 @@ pub fn dictation(e: &DictationEvent) -> Value {
             )
         }
         DictationEvent::HotkeyLost => event("dictation.hotkey_lost", &[]),
+        DictationEvent::EditHotkeyLost => event("dictation.edit_hotkey_lost", &[]),
+        DictationEvent::Edited { outcome } => event(
+            "dictation.edited",
+            &[("outcome", some(insert_outcome(*outcome)))],
+        ),
+        DictationEvent::EditFailed(f) => {
+            let (reason, message) = match f {
+                EditFailure::NoSelection => ("no_selection", None),
+                EditFailure::SelectionUnreadable(e) => {
+                    ("selection_unreadable", some(e.to_string()))
+                }
+                EditFailure::Transcription(e) => ("transcription", some(e.to_string())),
+                EditFailure::NoModel => ("no_model", None),
+                EditFailure::TimedOut => ("timed_out", None),
+                EditFailure::Model(e) => ("model", some(e.to_string())),
+                EditFailure::Insert(e) => ("insert", some(e.to_string())),
+                _ => (unmapped("edit failure"), None),
+            };
+            event(
+                "dictation.edit_failed",
+                &[("reason", some(reason)), ("message", message)],
+            )
+        }
         DictationEvent::WorkerFailed { recovered } => worker_failed(*recovered),
         _ => event(
             "dictation.warning",
@@ -677,7 +719,22 @@ mod tests {
             DictationEvent::VoiceDetection(VoiceDetection::Unavailable(
                 VadUnavailable::Downloading,
             )),
-            DictationEvent::Started,
+            DictationEvent::Started {
+                take: 0,
+                edit: false,
+                mode: Some("Chat".into()),
+                app: Some("Example Chat".into()),
+            },
+            DictationEvent::Started {
+                take: 1,
+                edit: true,
+                mode: None,
+                app: None,
+            },
+            DictationEvent::Partial {
+                take: 0,
+                text: Spoken::new("so far"),
+            },
             DictationEvent::ShortPressIgnored,
             DictationEvent::Stopped,
             DictationEvent::Discarded(Discard::TooShort { live_ms: 120 }),
@@ -705,7 +762,21 @@ mod tests {
             DictationEvent::Warning(Warning::SaveFailed(StoreError::NotFound)),
             DictationEvent::Warning(Warning::DeletedTextNotScrubbed),
             DictationEvent::Warning(Warning::DeletedTextScrubbed),
+            DictationEvent::Warning(Warning::ReleaseMissed),
             DictationEvent::HotkeyLost,
+            DictationEvent::EditHotkeyLost,
+            DictationEvent::Edited {
+                outcome: InsertOutcome::Pasted,
+            },
+            DictationEvent::EditFailed(EditFailure::NoSelection),
+            DictationEvent::EditFailed(EditFailure::SelectionUnreadable(
+                PlatformError::PermissionDenied(ink_core::Permission::Accessibility),
+            )),
+            DictationEvent::EditFailed(EditFailure::Transcription(e())),
+            DictationEvent::EditFailed(EditFailure::NoModel),
+            DictationEvent::EditFailed(EditFailure::TimedOut),
+            DictationEvent::EditFailed(EditFailure::Model(LlmError::Cancelled)),
+            DictationEvent::EditFailed(EditFailure::Insert(PlatformError::Failed("x".into()))),
             DictationEvent::WorkerFailed { recovered: true },
         ];
         all.extend(dictation_events.iter().map(dictation));
