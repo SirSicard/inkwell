@@ -85,9 +85,14 @@ pub fn compose(files: &[Included]) -> String {
     for f in files {
         let mut part = format!("--- {} ---\n", f.file.name);
         if let Some(reason) = &f.file.supplied {
+            let stop = if reason.ends_with(['.', '!', '?']) {
+                ""
+            } else {
+                "."
+            };
             let _ = writeln!(
                 part,
-                "[The published crate carries no text of this licence. Supplied by Inkwell: {reason}.]"
+                "[The published crate carries no text of this licence. Supplied by Inkwell: {reason}{stop}]"
             );
         }
         if let Some(holder) = &f.holder_from_manifest {
@@ -261,6 +266,27 @@ mod tests {
             "--- COPYING ---\nDual-licensed.\n\n\
              --- LICENSE-MIT ---\n[The file names no copyright holder; the line below names the crate's authors, from its manifest.]\nCopyright (c) A\n\nPermission is hereby granted\n\n\
              --- Apache-2.0 ---\n[The published crate carries no text of this licence. Supplied by Inkwell: the standard text.]\nApache License"
+        );
+    }
+
+    #[test]
+    fn a_reason_that_ends_its_sentence_gets_no_second_full_stop() {
+        let supplied = |reason: &str| {
+            compose(&[Included {
+                file: LicenceFile {
+                    name: "MIT".into(),
+                    text: "x".into(),
+                    supplied: Some(reason.into()),
+                },
+                holder_from_manifest: None,
+            }])
+        };
+        assert!(
+            supplied("the standard text.").contains("Supplied by Inkwell: the standard text.]\n")
+        );
+        assert!(supplied("is it?").contains("Supplied by Inkwell: is it?]\n"));
+        assert!(
+            supplied("the standard text").contains("Supplied by Inkwell: the standard text.]\n")
         );
     }
 

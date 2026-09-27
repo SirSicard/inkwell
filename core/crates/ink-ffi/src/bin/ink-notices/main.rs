@@ -40,7 +40,7 @@ use std::process::{Command, ExitCode};
 
 use crate::graph::Package;
 use crate::licence::LicenceFile;
-use crate::overrides::Overrides;
+use crate::overrides::{Override, Overrides};
 use crate::swift::CrateNotice;
 
 /// The features the release builds the core with: `release_features` in
@@ -104,7 +104,18 @@ fn licence_files(dir: &Path) -> Result<Vec<LicenceFile>, String> {
         let entry = entry.map_err(|e| format!("its package is not readable ({e})"))?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let lower = name.to_ascii_lowercase();
-        if !LICENCE_FILE_PREFIXES.iter().any(|p| lower.starts_with(p)) || !entry.path().is_file() {
+        if !LICENCE_FILE_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+            continue;
+        }
+        // The entry itself, not what a link points at: a published package holds no links
+        // (cargo package stores their targets), so one here is not followed out of the package.
+        let kind = entry.file_type().map_err(|e| format!("{name}: {e}"))?;
+        if kind.is_symlink() {
+            return Err(format!(
+                "{name} is a symbolic link, which a published package never holds: not followed; its notice needs a decision"
+            ));
+        }
+        if !kind.is_file() {
             continue;
         }
         let bytes = std::fs::read(entry.path()).map_err(|e| format!("{name}: {e}"))?;
@@ -146,93 +157,20 @@ fn notices(
 ) -> Result<Vec<CrateNotice>, Vec<String>> {
     let mut out = Vec::new();
     let mut errors = Vec::new();
-    let mut used = Vec::new();
     for c in crates {
-        let key = (c.name.clone(), c.version.clone());
-        let id = format!("{} {}", c.name, c.version);
-        let Some(licence) = &c.licence else {
-            errors.push(format!(
-                "{id}: declares no SPDX licence (only a licence file); its notice needs a decision"
-            ));
-            continue;
-        };
-        let expr = match licence::parse(licence) {
-            Ok(e) => e,
-            Err(e) => {
-                errors.push(format!("{id}: {e}"));
-                continue;
-            }
-        };
-        let mut files = match licence_files(&c.dir) {
-            Ok(f) => f,
-            Err(e) => {
-                errors.push(format!("{id}: {e}"));
-                continue;
-            }
-        };
-        let selection = match (
-            licence::select(&expr, &files, &c.authors),
-            overrides.get(&key),
-        ) {
-            (Ok(_), Some(o)) => {
-                errors.push(format!(
-                    "{id}: its package now carries its licence, so the override ({}) must go",
-                    o.text
-                ));
-                continue;
-            }
-            (Ok(s), None) => s,
-            (Err(e), None) => {
-                errors.push(format!("{id}: {e}"));
-                continue;
-            }
-            (Err(_), Some(o)) => {
-                used.push(key.clone());
-                let path = texts.join(&o.text);
-                let text = std::fs::read_to_string(&path)
-                    .map_err(|e| format!("notices/texts/{}: {e}", o.text))
-                    .and_then(|t| {
-                        swift::clean(&t).map_err(|e| format!("notices/texts/{} {e}", o.text))
-                    });
-                let text = match text {
-                    Ok(t) => t,
-                    Err(e) => {
-                        errors.push(format!("{id}: {e}"));
-                        continue;
-                    }
-                };
-                let name = o.text.trim_end_matches(".txt").to_string();
-                files.push(LicenceFile {
-                    name,
-                    text,
-                    supplied: Some(o.reason.clone()),
-                });
-                sort_files(&mut files);
-                match licence::select(&expr, &files, &c.authors) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        errors.push(format!("{id}: with its override, {e}"));
-                        continue;
-                    }
-                }
-            }
-        };
-        out.push(CrateNotice {
-            name: c.name.clone(),
-            version: c.version.clone(),
-            licence: licence.clone(),
-            shown: selection.shown.clone(),
-            text: swift::compose(&selection.files),
-        });
+        let over = overrides.get(&(c.name.clone(), c.version.clone()));
+        match notice(c, over, texts) {
+            Ok(n) => out.push(n),
+            Err(e) => errors.push(format!("{} {}: {e}", c.name, c.version)),
+        }
     }
-    for key in overrides.keys().filter(|k| !used.contains(k)) {
+    for (name, version) in overrides.keys() {
         if !crates
             .iter()
-            .any(|c| (&c.name, &c.version) == (&key.0, &key.1))
+            .any(|c| (&c.name, &c.version) == (name, version))
         {
             errors.push(format!(
-                "{} {}: overridden, but not in the release",
-                key.0, key.1
+                "{name} {version}: overridden, but not in the release"
             ));
         }
     }
@@ -245,6 +183,75 @@ fn notices(
             .then_with(|| version_key(&a.version).cmp(&version_key(&b.version)))
     });
     Ok(out)
+}
+
+/// One crate's notice: its own licence files, or with its override (`over`) where they carry no
+/// text of any licence it offers. An override the package no longer needs is an error.
+fn notice(c: &Package, over: Option<&Override>, texts: &Path) -> Result<CrateNotice, String> {
+    let licence = c
+        .licence
+        .as_ref()
+        .ok_or("declares no SPDX licence (only a licence file); its notice needs a decision")?;
+    let expr = licence::parse(licence)?;
+    let mut files = licence_files(&c.dir)?;
+    let selection = match (licence::select(&expr, &files, &c.authors), over) {
+        (Ok(_), Some(o)) => {
+            return Err(format!(
+                "its package now carries its licence, so the override ({}) must go",
+                o.text
+            ));
+        }
+        (Ok(s), None) => s,
+        (Err(e), None) => return Err(e),
+        (Err(_), Some(o)) => {
+            let text = std::fs::read_to_string(texts.join(&o.text))
+                .map_err(|e| format!("notices/texts/{}: {e}", o.text))?;
+            let text = swift::clean(&text).map_err(|e| format!("notices/texts/{} {e}", o.text))?;
+            files.push(LicenceFile {
+                name: o.text.trim_end_matches(".txt").to_string(),
+                text,
+                supplied: Some(o.reason.clone()),
+            });
+            sort_files(&mut files);
+            licence::select(&expr, &files, &c.authors)
+                .map_err(|e| format!("with its override, {e}"))?
+        }
+    };
+    Ok(CrateNotice {
+        name: c.name.clone(),
+        version: c.version.clone(),
+        licence: licence.clone(),
+        shown: selection.shown,
+        text: swift::compose(&selection.files),
+    })
+}
+
+/// The paths of this machine the output must not name: each package's registry directory, the
+/// checkout, and the home directory (`HOME`, and `USERPROFILE` on Windows). `var` reads the
+/// environment.
+fn machine_paths(
+    crates: &[Package],
+    root: &Path,
+    var: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let mut paths: Vec<String> = crates
+        .iter()
+        .filter_map(|c| c.dir.parent().map(|p| p.display().to_string()))
+        .collect();
+    paths.push(
+        root.canonicalize()
+            .unwrap_or_else(|_| root.to_path_buf())
+            .display()
+            .to_string(),
+    );
+    // A home of "/" or "C:\\" would match every path in every text.
+    paths.extend(
+        ["HOME", "USERPROFILE"]
+            .into_iter()
+            .filter_map(&var)
+            .filter(|h| h.trim_end_matches(['/', '\\']).len() > 3),
+    );
+    paths
 }
 
 /// The Swift file, from cargo's resolution and the packages on this machine.
@@ -304,17 +311,7 @@ fn generate(root: &Path) -> Result<String, Vec<String>> {
         &notices,
     );
     // Nothing of this machine: no path of the checkout, the registry or the home directory.
-    let mut local: Vec<String> = crates
-        .iter()
-        .filter_map(|c| c.dir.parent().map(|p| p.display().to_string()))
-        .collect();
-    local.push(
-        root.canonicalize()
-            .unwrap_or_else(|_| root.to_path_buf())
-            .display()
-            .to_string(),
-    );
-    local.extend(std::env::var("HOME").ok().filter(|h| h.len() > 1));
+    let local = machine_paths(&crates, root, |k| std::env::var(k).ok());
     if let Some(found) = local.iter().find(|p| rendered.contains(p.as_str())) {
         return Err(vec![format!(
             "the output names a path of this machine ({found})"
@@ -323,17 +320,39 @@ fn generate(root: &Path) -> Result<String, Vec<String>> {
     Ok(rendered)
 }
 
-/// The crates a generated file lists, as `name version`.
+/// The crates a generated file lists, as `name version`: the header line of each
+/// `RustCrateNotice(`, read outside the licence texts (a raw literal from its opening line,
+/// `text: #"""`, to its closing one, `"""#),`), so no text can add or hide a crate.
 fn listed(swift: &str) -> Vec<String> {
-    swift
-        .lines()
-        .filter_map(|l| {
-            let rest = l.trim_start().strip_prefix("name: \"")?;
-            let (name, rest) = rest.split_once('"')?;
-            let version = rest.strip_prefix(", version: \"")?.split('"').next()?;
-            Some(format!("{name} {version}"))
-        })
-        .collect()
+    let mut out = Vec::new();
+    let mut closing: Option<String> = None;
+    let mut after_open = false;
+    for line in swift.lines() {
+        if let Some(end) = &closing {
+            if line == end {
+                closing = None;
+            }
+            continue;
+        }
+        if let Some(hashes) = line
+            .strip_prefix("            text: ")
+            .and_then(|l| l.strip_suffix("\"\"\""))
+        {
+            closing = Some(format!("\"\"\"{hashes}),"));
+            continue;
+        }
+        if after_open
+            && let Some(rest) = line.strip_prefix("            name: \"")
+            && let Some((name, rest)) = rest.split_once('"')
+            && let Some(version) = rest
+                .strip_prefix(", version: \"")
+                .and_then(|r| r.split('"').next())
+        {
+            out.push(format!("{name} {version}"));
+        }
+        after_open = line == "        RustCrateNotice(";
+    }
+    out
 }
 
 /// Compares the file with a fresh run.
@@ -673,6 +692,69 @@ mod tests {
             "{errors:?}"
         );
         let _ = std::fs::remove_dir_all(registry);
+    }
+
+    #[test]
+    fn listed_reads_only_the_crate_headers_never_a_licence_text() {
+        let tricky = "        RustCrateNotice(\n            name: \"fake\", version: \"9.9.9\", licence: \"MIT\", shown: \"MIT\",";
+        let swift = swift::render(
+            "f",
+            "t",
+            "0123456789abcdef",
+            &[CrateNotice {
+                name: "real".into(),
+                version: "1.0.0".into(),
+                licence: "MIT".into(),
+                shown: "MIT".into(),
+                text: format!("a text quoting a header:\n{tricky}"),
+            }],
+        );
+        assert!(swift.contains("name: \"fake\""), "the trap is in the file");
+        assert_eq!(listed(&swift), ["real 1.0.0"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_in_a_package_is_an_error_naming_it_not_followed() {
+        let registry = scratch();
+        let outside = registry.join("outside-LICENSE");
+        std::fs::write(&outside, MIT).unwrap();
+        let mut c = package(&registry, "linked", "MIT", &[]);
+        std::os::unix::fs::symlink(&outside, c.dir.join("LICENSE")).unwrap();
+        let errors = notices(std::slice::from_ref(&c), &Overrides::new(), &registry).unwrap_err();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].starts_with("linked 1.0.0: LICENSE is a symbolic link"),
+            "{errors:?}"
+        );
+        // A directory named like a licence file is not read, and not an error.
+        std::fs::remove_file(c.dir.join("LICENSE")).unwrap();
+        std::fs::create_dir(c.dir.join("LICENSES")).unwrap();
+        std::fs::write(c.dir.join("LICENSE-MIT"), MIT).unwrap();
+        c.licence = Some("MIT".into());
+        assert!(notices(&[c], &Overrides::new(), &registry).is_ok());
+        let _ = std::fs::remove_dir_all(registry);
+    }
+
+    #[test]
+    fn the_paths_of_this_machine_include_both_home_directories() {
+        let env = |k: &str| match k {
+            "HOME" => Some("/home/someone".to_string()),
+            "USERPROFILE" => Some("C:\\Users\\someone".to_string()),
+            _ => None,
+        };
+        let paths = machine_paths(&[], Path::new("/checkout"), env);
+        assert!(paths.contains(&"/home/someone".to_string()), "{paths:?}");
+        assert!(
+            paths.contains(&"C:\\Users\\someone".to_string()),
+            "{paths:?}"
+        );
+        assert!(
+            machine_paths(&[], Path::new("/checkout"), |_| Some("/".into()))
+                .iter()
+                .all(|p| p != "/"),
+            "a root home would match everything"
+        );
     }
 
     #[test]
