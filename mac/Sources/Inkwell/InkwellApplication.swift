@@ -13,13 +13,20 @@
 import AppKit
 
 final class InkwellApplication: NSApplication {
+    /// Set while an app-modal alert is being stopped for a Quit. A second terminate: in that window
+    /// (two signals, or a signal and Cmd-Q) leaves it to the Quit already scheduled instead of
+    /// aborting the same modal session twice.
+    private var endingModal = false
+
     override func terminate(_ sender: Any?) {
         if modalWindow != nil {
+            guard !endingModal else { return }
+            endingModal = true
             // An app-modal alert (Open at Login's error): stop it, and quit once its modal loop has
             // returned. Scheduled in the default mode, which the modal loop does not run.
             abortModal()
             RunLoop.main.perform(inModes: [.default]) {
-                MainActor.assumeIsolated { NSApp.terminate(nil) }
+                MainActor.assumeIsolated { (NSApp as? InkwellApplication)?.quitAfterModal() }
             }
             return
         }
@@ -30,5 +37,11 @@ final class InkwellApplication: NSApplication {
             }
         }
         super.terminate(sender)
+    }
+
+    /// The Quit scheduled once an aborted modal loop has returned.
+    private func quitAfterModal() {
+        endingModal = false
+        terminate(nil)
     }
 }

@@ -22,7 +22,9 @@
   <!-- A menu-bar app: no Dock icon until the main window opens (MainWindowController). -->
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
-  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <!-- The app's own NSApplication subclass (InkwellApplication: Quit ends a sheet or alert first).
+       main() creates it; nothing reads this key today, it names the class the app really uses. -->
+  <key>NSPrincipalClass</key><string>Inkwell.InkwellApplication</string>
   <!-- Never killed without a Quit: quitting stops the core, which unloads its models first
        (llama.cpp's Metal backend aborts the process at exit with a model still loaded). -->
   <key>NSSupportsAutomaticTermination</key><false/>
