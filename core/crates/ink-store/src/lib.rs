@@ -1095,6 +1095,29 @@ impl Store for SqliteStore {
         Ok(rows.into_iter().map(|r| CommitmentId(r.id)).collect())
     }
 
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+        merges: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        let plan = ink_core::store::batch_merges(items.len(), merges)?;
+        let rows = commitment_rows(items.iter().map(|item| (item, false)))?;
+        // One write transaction, as supersede_with: the rows and their merges commit together.
+        self.write("add_commitments_merged", |tx| {
+            revision(tx, id)?;
+            insert_commitments(tx, id, &rows)?;
+            let mut merge = tx.prepare("UPDATE commitment SET merged_into = ?2 WHERE id = ?1")?;
+            for (row, into) in rows.iter().zip(&plan) {
+                if let Some(into) = into {
+                    changed(merge.execute(params![row.id, rows[*into].id])?)?;
+                }
+            }
+            Ok(())
+        })?;
+        Ok(rows.into_iter().map(|r| CommitmentId(r.id)).collect())
+    }
+
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
         self.read("commitments", |tx| {
             revision(tx, id)?;

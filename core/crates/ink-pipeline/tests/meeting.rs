@@ -1826,3 +1826,67 @@ fn a_record_the_store_could_not_end_is_reported_as_not_ended() {
     flaky.heal();
     assert!(taken_up(flaky.clone()).record_ended());
 }
+
+/// Review (S2.8): a meeting's commitments are filed with their same-batch merges in one store
+/// call. A store that would fail a separate merge (a crash between filing and merging, as it
+/// was) cannot leave the pair filed apart: the rows and the merge are saved together.
+#[test]
+fn commitments_and_their_merges_are_filed_together() {
+    let llm = Arc::new(Scripted {
+        calls: AtomicUsize::new(0),
+    });
+    let flaky = Arc::new(FlakyStore::default());
+    let mut rig = RigBuilder {
+        answer: promise(),
+        llm: Some(llm),
+        title: None,
+        store: Some(flaky.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(0.5), speech(2.0, -30.0, 71), silence(4.0)]);
+    let far = join(&[silence(3.0), speech(2.0, -30.0, 72), silence(1.5)]);
+    rig.feed(&mic, &far);
+    // The old second step: it is never called now.
+    flaky.fail(&["merge_commitment"]);
+    let outcome = rig.finish().unwrap();
+    assert!(outcome.superseded);
+    let commitments = rig.store.commitments(&record).unwrap();
+    assert_eq!(commitments.len(), 2);
+    assert_eq!(
+        commitments
+            .iter()
+            .filter(|c| c.merged_into.is_some())
+            .count(),
+        1,
+        "filed with its merge"
+    );
+    assert!(rig.events().contains(&MeetingEvent::Commitments {
+        filed: 2,
+        merged: 1
+    }));
+
+    // And when the one call fails, nothing is filed: no row without its merge.
+    let flaky2 = Arc::new(FlakyStore::default());
+    let mut rig = RigBuilder {
+        answer: promise(),
+        llm: Some(Arc::new(Scripted {
+            calls: AtomicUsize::new(0),
+        })),
+        title: None,
+        store: Some(flaky2.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    rig.feed(&mic, &far);
+    flaky2.fail(&["add_commitments_merged"]);
+    rig.finish().unwrap();
+    assert!(rig.store.commitments(&record).unwrap().is_empty());
+    assert!(
+        rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::StoreFailed(_)))
+    );
+}

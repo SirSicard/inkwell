@@ -558,6 +558,14 @@ impl Store for FaultyStore {
     ) -> Result<Vec<CommitmentId>, StoreError> {
         self.inner.add_commitments(id, items)
     }
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+        merges: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        self.inner.add_commitments_merged(id, items, merges)
+    }
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
         self.inner.commitments(id)
     }

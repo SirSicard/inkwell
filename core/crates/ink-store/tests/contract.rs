@@ -1231,6 +1231,69 @@ fn recipients_and_looks_done_round_trip_and_settle(store: &dyn Store) {
     assert_eq!(store.commitments(&older).unwrap()[1].looks_done, None);
 }
 
+/// S2.8 review: a final pass files its commitments and folds the batch's own duplicates in one
+/// transaction. A merge that cannot be applied (here the second, into an item the first folded
+/// away) fails the whole call: no row is added and no merge half-applied, so a pass that runs
+/// again never finds a batch filed without its merges.
+fn a_batch_of_commitments_and_its_merges_is_saved_whole_or_not_at_all(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let said = |text: &str, at: u64| NewCommitment {
+        recipient: None,
+        text: text.into(),
+        owner: None,
+        due: None,
+        due_at_unix_ms: None,
+        provenance: vec![Span {
+            channel: Channel::Mic,
+            start_ms: at,
+            end_ms: at + 500,
+        }],
+    };
+    let batch = [
+        said("send the deck", 1_000),
+        said("send over the deck", 5_000),
+        said("book the room", 9_000),
+    ];
+    for bad in [vec![(1, 0), (2, 1)], vec![(0, 3)], vec![(1, 1)]] {
+        assert!(
+            matches!(
+                store.add_commitments_merged(&id, &batch, &bad),
+                Err(StoreError::Invalid(_))
+            ),
+            "{bad:?}"
+        );
+        assert!(
+            store.commitments(&id).unwrap().is_empty(),
+            "{bad:?}: nothing saved"
+        );
+    }
+    assert_eq!(
+        store.add_commitments_merged(&RecordId("gone".into()), &batch, &[]),
+        Err(StoreError::NotFound)
+    );
+
+    // Folded both ways in one batch, flattened as merge_commitment flattens.
+    let ids = store
+        .add_commitments_merged(&id, &batch, &[(1, 0), (0, 2)])
+        .unwrap();
+    assert_eq!(ids.len(), 3);
+    let all = store.commitments(&id).unwrap();
+    assert_eq!(
+        all.iter().map(|c| &c.id).collect::<Vec<_>>(),
+        ids.iter().collect::<Vec<_>>()
+    );
+    assert_eq!(all[0].merged_into.as_ref(), Some(&ids[2]));
+    assert_eq!(
+        all[1].merged_into.as_ref(),
+        Some(&ids[2]),
+        "re-pointed, no chain"
+    );
+    assert_eq!(all[2].merged_into, None);
+    assert_eq!(all[1].provenance[0].start_ms, 5_000);
+    let open = store.open_commitments(10).unwrap();
+    assert_eq!(open.iter().map(|c| &c.id).collect::<Vec<_>>(), [&ids[2]]);
+}
+
 macro_rules! contract {
     ($($scenario:ident),* $(,)?) => {
         mod mem {
@@ -1256,6 +1319,7 @@ macro_rules! contract {
 }
 
 contract!(
+    a_batch_of_commitments_and_its_merges_is_saved_whole_or_not_at_all,
     summary_items_round_trip_and_are_replaced_with_their_summary,
     recipients_and_looks_done_round_trip_and_settle,
     supersede_refuses_empty_and_collapsed_revisions_and_keeps_the_live_one,

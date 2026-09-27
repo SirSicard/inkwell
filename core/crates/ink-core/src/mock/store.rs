@@ -407,6 +407,44 @@ impl Store for MemStore {
         Ok(ids)
     }
 
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+        merges: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        // Planned and checked before anything changes, then applied under one lock: all or none.
+        let plan = crate::store::batch_merges(items.len(), merges)?;
+        check_stretches(
+            items
+                .iter()
+                .flat_map(|i| &i.provenance)
+                .map(|s| (s.start_ms, s.end_ms)),
+        )?;
+        let mut inner = lock(&self.inner);
+        inner.data(id)?;
+        let ids: Vec<CommitmentId> = items
+            .iter()
+            .map(|_| CommitmentId(inner.next("com")))
+            .collect();
+        for (item, (cid, into)) in items.iter().zip(ids.iter().zip(&plan)) {
+            inner.commitments.push(Commitment {
+                id: cid.clone(),
+                record: id.clone(),
+                text: item.text.clone(),
+                owner: item.owner.clone(),
+                recipient: item.recipient.clone(),
+                due: item.due.clone(),
+                due_at_unix_ms: item.due_at_unix_ms,
+                provenance: item.provenance.clone(),
+                merged_into: into.map(|i| ids[i].clone()),
+                done: false,
+                looks_done: None,
+            });
+        }
+        Ok(ids)
+    }
+
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
         let mut inner = lock(&self.inner);
         inner.data(id)?;

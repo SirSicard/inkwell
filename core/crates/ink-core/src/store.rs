@@ -394,6 +394,18 @@ pub trait Store: Send + Sync {
         items: &[NewCommitment],
     ) -> Result<Vec<CommitmentId>, StoreError>;
 
+    /// Adds commitments to a record and folds the batch's own duplicates in the same transaction:
+    /// each `(from, into)` in `merges` indexes `items`, applied in order as
+    /// [`merge_commitment`](Self::merge_commitment) applies them (see [`batch_merges`]). All of
+    /// it is saved or none of it: a refused merge, an error or a crash part way leaves no row, so
+    /// a batch is never found filed without its merges. Returns the ids, in order.
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+        merges: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError>;
+
     /// A record's commitments in the order they were added, merged ones included.
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError>;
 
@@ -430,6 +442,38 @@ pub trait Store: Send + Sync {
 
     /// Sets a setting.
     fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError>;
+}
+
+/// Where each of `n` new commitments ends up after `merges` (`(from, into)` by index, applied in
+/// order and flattened as [`Store::merge_commitment`] applies them): the index of the commitment
+/// it is merged into, or `None`. Refuses what `merge_commitment` refuses: an index out of range, a
+/// commitment merged into itself, or into one that is itself merged. Both stores plan
+/// [`Store::add_commitments_merged`] with it.
+pub fn batch_merges(n: usize, merges: &[(usize, usize)]) -> Result<Vec<Option<usize>>, StoreError> {
+    let mut into_of: Vec<Option<usize>> = vec![None; n];
+    for &(from, into) in merges {
+        if from >= n || into >= n {
+            return Err(StoreError::Invalid("merge index out of range".into()));
+        }
+        if from == into {
+            return Err(StoreError::Invalid(
+                "a commitment cannot be merged into itself".into(),
+            ));
+        }
+        if into_of[into].is_some() {
+            return Err(StoreError::Invalid(
+                "merge into the canonical commitment, not one that is itself merged".into(),
+            ));
+        }
+        into_of[from] = Some(into);
+        // Flatten: what was folded into `from` now points at `into`.
+        for slot in &mut into_of {
+            if *slot == Some(from) {
+                *slot = Some(into);
+            }
+        }
+    }
+    Ok(into_of)
 }
 
 /// Words in a set of segments, split on whitespace.

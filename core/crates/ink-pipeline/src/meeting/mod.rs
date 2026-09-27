@@ -53,7 +53,7 @@ use ink_core::{
     RecordKind, Segment, Store, StoreError, StreamingEngine, SupersedeWith,
 };
 use ink_llm::tasks::commitments::{RecordContext, harvest, looks_done};
-use ink_llm::tasks::dedup::{apply_merges, dedup};
+use ink_llm::tasks::dedup::dedup;
 use ink_llm::tasks::due::RecordTime;
 use ink_llm::tasks::summary::{SummaryOptions, summarize};
 
@@ -1189,8 +1189,9 @@ impl EndedMeeting {
         // where the user may have settled some: those rows stay as they are, and nothing is
         // harvested, suggested or filed again. Chosen over replacing the rows because a rerun's
         // model may word a promise differently, so matching old rows to new ones (to carry done
-        // and not-yet over) would guess; and the first filing is whole, since `add_commitments`
-        // is one transaction. The summary above is replaced, which is idempotent.
+        // and not-yet over) would guess; and the first filing is whole, rows and merges, since
+        // `add_commitments_merged` is one transaction. The summary above is replaced, which is
+        // idempotent.
         match store.commitments(&core.record) {
             Ok(existing) if !existing.is_empty() => {
                 log::info!(
@@ -1242,11 +1243,11 @@ impl EndedMeeting {
                 Vec::new()
             }
         };
-        let saved = store
-            .add_commitments(&core.record, &filed)
-            .and_then(|ids| apply_merges(store.as_ref(), &ids, &merges));
-        match saved {
-            Ok(()) => core.emit(MeetingEvent::Commitments {
+        // The rows and their merges in one transaction: a crash between them would leave a pair
+        // filed apart for good (the once-per-record gate above never files again).
+        let pairs: Vec<(usize, usize)> = merges.iter().map(|m| (m.from, m.into)).collect();
+        match store.add_commitments_merged(&core.record, &filed, &pairs) {
+            Ok(_) => core.emit(MeetingEvent::Commitments {
                 filed: filed.len(),
                 merged: merges.len(),
             }),

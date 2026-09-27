@@ -530,6 +530,14 @@ impl Store for Counting {
     ) -> Result<Vec<CommitmentId>, StoreError> {
         self.inner.add_commitments(id, i)
     }
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        i: &[NewCommitment],
+        m: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        self.inner.add_commitments_merged(id, i, m)
+    }
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
         self.inner.commitments(id)
     }

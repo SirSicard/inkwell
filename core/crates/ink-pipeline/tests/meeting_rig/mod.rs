@@ -829,6 +829,15 @@ impl Store for FlakyStore {
         self.check("add_commitments")?;
         self.inner.add_commitments(id, items)
     }
+    fn add_commitments_merged(
+        &self,
+        id: &RecordId,
+        items: &[NewCommitment],
+        merges: &[(usize, usize)],
+    ) -> Result<Vec<CommitmentId>, StoreError> {
+        self.check("add_commitments_merged")?;
+        self.inner.add_commitments_merged(id, items, merges)
+    }
     fn commitments(&self, id: &RecordId) -> Result<Vec<Commitment>, StoreError> {
         self.check("commitments")?;
         self.inner.commitments(id)
