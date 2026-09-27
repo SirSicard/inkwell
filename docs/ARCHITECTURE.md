@@ -161,7 +161,7 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   Abseil has no static libraries, and its SentencePiece archive was built against a different
   Abseil than the one it installs beside it, so they are bundled as the shared libraries Homebrew
   built (SentencePiece's carries its own Abseil inside). Their versions are whatever Homebrew
-  serves when the release is built; the release workflow prints them.
+  serves when the release is built; the build manifest published with each release records them.
 
 ## Threads
 
