@@ -22,7 +22,6 @@ use ink_core::{
     RecordId, Store,
 };
 use ink_engines::{ModelDir, Os};
-use ink_pipeline::modes::Mode;
 use ink_pipeline::style::Style;
 use serde_json::{Map, Value, json};
 
@@ -47,6 +46,9 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // The user's wish for dictation polish. Whether polish runs also needs a working language
     // model; the shell shows the two apart.
     ("dictation.polish", &["on", "off"]),
+    // The dictation key and the voice-edit key (S2.7). A change rebinds them at once.
+    (crate::voice::KEY_SETTING, crate::voice::KEYS),
+    (crate::voice::EDIT_KEY_SETTING, crate::voice::EDIT_KEYS),
 ];
 
 /// The most commitments `commitments.list` returns when the command names no limit.
@@ -111,6 +113,13 @@ pub enum Query {
     },
     /// `modes.list`: the user's modes.
     ModesList,
+    /// `dictation.enable`: dictation live, or its settings read and its keys bound again.
+    DictationEnable {
+        /// The user's UTC offset, for `{date}` and `{time}` in snippets.
+        utc_offset_minutes: Option<i32>,
+    },
+    /// `dictation.disable`.
+    DictationDisable,
     /// The library's records, a search, one record, or counts ([`library`](crate::library)).
     Library(crate::library::LibraryQuery),
 }
@@ -134,6 +143,8 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "note.delete" => &["note"],
         "setting.get" => &["key"],
         "setting.set" => &["key", "value"],
+        "dictation.enable" => &["utc_offset_minutes"],
+        "dictation.disable" => &[],
         _ => return None,
     })
 }
@@ -247,6 +258,20 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             Query::SettingSet { key, value }
         }
         "modes.list" => Query::ModesList,
+        "dictation.enable" => Query::DictationEnable {
+            utc_offset_minutes: match obj.get("utc_offset_minutes") {
+                None => None,
+                Some(n) => Some(
+                    n.as_i64()
+                        .and_then(|n| i32::try_from(n).ok())
+                        .filter(|n| (-14 * 60..=14 * 60).contains(n))
+                        .ok_or_else(|| {
+                            format!("{name}: \"utc_offset_minutes\" is minutes from -840 to 840")
+                        })?,
+                ),
+            },
+        },
+        "dictation.disable" => Query::DictationDisable,
         _ => unreachable!("fields() lists every query"),
     })
 }
@@ -357,7 +382,7 @@ impl QueryWorker {
 }
 
 struct Ctx<'a> {
-    shared: &'a Shared,
+    shared: &'a Arc<Shared>,
     probe: &'a dyn PermissionProbe,
     models: &'a ModelDir,
 }
@@ -464,13 +489,22 @@ impl Ctx<'_> {
                 Err(e) => fail(e.to_string()),
             },
             Query::SettingSet { key, value } => match store.set_setting(&key, &value) {
-                Ok(()) => emit(setting(&key, Some(value))),
+                Ok(()) => {
+                    emit(setting(&key, Some(value)));
+                    if key.starts_with("dictation.") {
+                        crate::voice::settings_changed(self.shared);
+                    }
+                }
                 Err(e) => fail(e.to_string()),
             },
             Query::ModesList => match modes(store) {
                 Ok(e) => emit(e),
                 Err(e) => fail(e),
             },
+            Query::DictationEnable { utc_offset_minutes } => {
+                crate::voice::enable(self.shared, self.models, utc_offset_minutes, id.as_deref())
+            }
+            Query::DictationDisable => crate::voice::disable(self.shared, id.as_deref()),
             Query::Library(query) => {
                 match crate::library::answer(self.shared, query, id.as_deref()) {
                     Ok(e) => emit(e),
@@ -614,7 +648,8 @@ fn modes(store: &dyn Store) -> Result<Value, String> {
     let (default_id, modes) = match stored {
         Some(doc) => read_modes(&doc)?,
         None => {
-            let mode = Mode::builtin_default();
+            // The same default dictation writes in (polished whenever the switch is on).
+            let mode = crate::voice::default_modes().modes.remove(0);
             (
                 mode.id.clone(),
                 vec![json!({
@@ -732,6 +767,40 @@ mod tests {
         ] {
             assert!(matches!(p(bad), Some(Err(_))), "{bad} must be refused");
         }
+    }
+
+    /// What Settings lists is what dictation writes in: both read the same document the same way
+    /// (a style this build does not know aside, which Settings shows as its own).
+    #[test]
+    fn dictation_and_settings_read_the_modes_alike() {
+        use ink_core::mock::MemStore;
+        let doc = r#"{"default_id":"d","modes":[
+            {"id":"d","name":"Everywhere else","style":"formal","polish_enabled":true,"apps":[]},
+            {"id":"c","name":"Chat","style":"casual","apps":["com.example.chat"],"remove_fillers":false,"polish_prompt":"Keep it short."}]}"#;
+        let store = MemStore::new();
+        store.set_setting(MODES_KEY, doc).unwrap();
+        let (default_id, listed) = read_modes(doc).unwrap();
+        let used = crate::voice::load_modes(&store).unwrap();
+        assert_eq!(used.default_id, default_id);
+        assert_eq!(used.modes.len(), listed.len());
+        for (mode, shown) in used.modes.iter().zip(&listed) {
+            assert_eq!(shown["id"], mode.id.as_str());
+            assert_eq!(shown["name"], mode.name.as_str());
+            assert_eq!(shown["style"], mode.style.as_str());
+            assert_eq!(shown["polish"], mode.polish_enabled);
+            assert_eq!(shown["remove_fillers"], mode.remove_fillers);
+            assert_eq!(shown["apps"], json!(mode.apps));
+        }
+        assert_eq!(used.modes[1].polish_prompt, "Keep it short.");
+        // Nothing stored: the default mode, polished whenever the switch is on, in both.
+        let empty = MemStore::new();
+        assert!(crate::voice::load_modes(&empty).unwrap().modes[0].polish_enabled);
+        let listed = modes(&empty).unwrap();
+        assert_eq!(listed["modes"][0]["polish"], true);
+        // A damaged document is an error in both, never quietly the default.
+        store.set_setting(MODES_KEY, "not json").unwrap();
+        assert!(crate::voice::load_modes(&store).is_err());
+        assert!(modes(&store).is_err());
     }
 
     #[test]

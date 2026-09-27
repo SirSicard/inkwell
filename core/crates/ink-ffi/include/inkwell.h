@@ -48,8 +48,9 @@
  *   debug output (which prints API-key headers) and llama.cpp's debug output (which quotes
  *   generated text). Shells must not install their own logger or subscriber for the core's
  *   targets; there is nothing to configure beyond "log_level" in the config. Event payloads carry
- *   the user's words (dictation.inserted, meeting.partial, meeting.final, and the library's
- *   answers: library.records, library.search, library.record, commitments.listed): never log them.
+ *   the user's words (dictation.inserted, dictation.partial, meeting.partial, meeting.final, and
+ *   the library's answers: library.records, library.search, library.record, commitments.listed):
+ *   never log them.
  *
  * SHUTDOWN
  *   ink_shutdown stops every worker, lets go of every engine the shell registered (their release
@@ -166,8 +167,20 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       whether each is installed. Send engine.route for what serves a job now.
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
- *       "setting.value". Only the shell's settings: "onboarding.done" (true|false) and
- *       "dictation.polish" (on|off).
+ *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
+ *       "dictation.polish" (on|off), "dictation.key" (fn|right_option|right_command|
+ *       right_control|right_shift) and "dictation.edit_key" (off or one of those). A change to a
+ *       dictation.* setting reaches a running dictation at once (keys rebound): a new
+ *       "dictation.ready" (or "dictation.off") follows the "setting.value".
+ *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
+ *       Dictation live: the core holds the keys (the dictation key, and the edit key if one is
+ *       set), opens the mic at the first press and lets it go after 3 minutes without a take.
+ *       Sent again while live, it reads the settings and binds the keys again (after the user
+ *       granted Accessibility, say). "dictation.ready" names the keys held; "dictation.off" says
+ *       why dictation is not live (needs_accessibility, key_refused, unsupported, ...). Both carry
+ *       the command's "id" as "ref". "utc_offset_minutes" (optional) is for {date} and {time}.
+ *   {"cmd":"dictation.disable","id":"<ref>"}
+ *       Lets go of the keys and the mic: "dictation.off" with reason disabled.
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).

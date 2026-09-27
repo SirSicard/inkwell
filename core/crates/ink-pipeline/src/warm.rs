@@ -80,11 +80,36 @@ fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
+enum Msg {
+    Warm,
+    Stop,
+}
+
 /// Warms an engine at a take's start. See the module docs.
 pub struct EngineWarmer {
     shared: Arc<Shared>,
-    tx: Option<Sender<()>>,
+    tx: Sender<Msg>,
     thread: Option<JoinHandle<()>>,
+}
+
+/// What a take's start calls to ask for a warm-up. Cheap to clone; after the warmer stopped it
+/// asks for nothing.
+#[derive(Clone)]
+pub struct WarmHandle {
+    shared: Arc<Shared>,
+    tx: Sender<Msg>,
+}
+
+impl WarmHandle {
+    /// **Any thread but realtime.** A take has started: warm the engine if it has been idle.
+    /// Returns whether a warm-up was asked for (it may still be skipped, if a take's decode starts
+    /// first).
+    pub fn key_down(&self) -> bool {
+        if !self.shared.idle(self.shared.clock.now_ns()) {
+            return false;
+        }
+        self.tx.send(Msg::Warm).is_ok()
+    }
 }
 
 impl EngineWarmer {
@@ -113,9 +138,17 @@ impl EngineWarmer {
         };
         Ok(Self {
             shared,
-            tx: Some(tx),
+            tx,
             thread: Some(thread),
         })
+    }
+
+    /// A handle for asking for warm-ups from elsewhere (a chain's event sink).
+    pub fn handle(&self) -> WarmHandle {
+        WarmHandle {
+            shared: self.shared.clone(),
+            tx: self.tx.clone(),
+        }
     }
 
     /// The engine a chain should call: the warmed one, which comes first. Cheap to clone.
@@ -129,10 +162,7 @@ impl EngineWarmer {
     /// Returns whether a warm-up was asked for (it may still be skipped, if a take's decode starts
     /// first).
     pub fn key_down(&self) -> bool {
-        if !self.shared.idle(self.shared.clock.now_ns()) {
-            return false;
-        }
-        self.tx.as_ref().is_some_and(|tx| tx.send(()).is_ok())
+        self.handle().key_down()
     }
 
     /// Warm-ups run to their end (answered, failed or cancelled) so far.
@@ -145,7 +175,8 @@ impl EngineWarmer {
         self.shared.yielded.load(Ordering::Acquire)
     }
 
-    /// Cancels a warm-up in progress and ends the thread.
+    /// Cancels a warm-up in progress and ends the thread (handles still held ask for nothing
+    /// from then on).
     pub fn stop(mut self) {
         self.shut();
     }
@@ -154,7 +185,7 @@ impl EngineWarmer {
         if let Some(token) = self.shared.lock().as_ref() {
             token.cancel();
         }
-        drop(self.tx.take());
+        let _ = self.tx.send(Msg::Stop);
         if let Some(thread) = self.thread.take()
             && thread.join().is_err()
         {
@@ -169,10 +200,16 @@ impl Drop for EngineWarmer {
     }
 }
 
-fn run(shared: &Shared, rx: &Receiver<()>) {
-    while rx.recv().is_ok() {
-        // Requests that queued up meanwhile are one warm-up.
-        while rx.try_recv().is_ok() {}
+fn run(shared: &Shared, rx: &Receiver<Msg>) {
+    while let Ok(Msg::Warm) = rx.recv() {
+        // Requests that queued up meanwhile are one warm-up; a stop among them ends the thread.
+        loop {
+            match rx.try_recv() {
+                Ok(Msg::Warm) => {}
+                Ok(Msg::Stop) => return,
+                Err(_) => break,
+            }
+        }
         let token = {
             let mut running = shared.lock();
             if !shared.idle(shared.clock.now_ns()) {

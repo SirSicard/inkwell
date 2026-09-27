@@ -48,6 +48,10 @@ pub struct Block {
 pub enum Input {
     /// A hotkey edge.
     Hotkey(HotkeyEvent),
+    /// An edge of the voice-edit key.
+    EditHotkey(HotkeyEvent),
+    /// The mic was let go of while idle ([`DictationChain::mic_closed`]).
+    MicClosed,
     /// A VAD was installed or went away.
     SetVad(Vad),
     /// New settings.
@@ -198,6 +202,8 @@ fn dispatch(chain: &mut DictationChain, item: Option<Item<Block, Input>>) -> Ste
     match item {
         Some(Item::Audio(b, _)) => chain.push_audio(&b.samples, b.host_time_ns, b.dropped_frames),
         Some(Item::Other(Input::Hotkey(e))) => chain.hotkey(e),
+        Some(Item::Other(Input::EditHotkey(e))) => chain.edit_hotkey(e),
+        Some(Item::Other(Input::MicClosed)) => chain.mic_closed(),
         Some(Item::Other(Input::SetVad(v))) => chain.set_vad(v),
         Some(Item::Other(Input::SetSettings(s))) => chain.set_settings(*s),
         Some(Item::Other(Input::StreamEnded)) => chain.stream_ended(),

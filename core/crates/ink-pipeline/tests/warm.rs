@@ -251,3 +251,17 @@ fn a_warm_up_answer_is_never_inserted() {
     assert_eq!(platform.inserted(), ["Words made up from nothing. "]);
     warmer.stop();
 }
+
+/// A handle still held elsewhere (a chain's event sink) never keeps the thread alive, and asks
+/// for nothing once the warmer stopped.
+#[test]
+fn stopping_ends_the_thread_while_a_handle_is_still_held() {
+    let clock = Arc::new(MockClock::new(1_000_000_000, 0));
+    let engine = Engine::new(false);
+    let warmer =
+        EngineWarmer::start(engine.clone(), clock.clone(), Duration::from_secs(30)).unwrap();
+    let handle = warmer.handle();
+    warmer.stop();
+    assert!(!handle.key_down(), "nothing is listening");
+    assert!(engine.calls().is_empty());
+}

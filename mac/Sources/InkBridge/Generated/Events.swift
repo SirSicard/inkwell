@@ -673,6 +673,9 @@ public struct DictationReady: Codable, Sendable, Equatable {
     public let key: String
     /// The command's "id", when it had one.
     public let ref: String?
+    /// Which of dictation's settings could not be read (it runs with their defaults), as a
+    /// sentence: "couldn't read the modes". Never the user's words.
+    public let settingsError: String?
     /// Always `dictation.ready`.
     public let type: String
 
@@ -681,6 +684,7 @@ public struct DictationReady: Codable, Sendable, Equatable {
         case editKeyError = "edit_key_error"
         case key
         case ref
+        case settingsError = "settings_error"
         case type
     }
 }

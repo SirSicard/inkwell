@@ -1171,6 +1171,10 @@
           "type": "string",
           "description": "Why the voice-edit key set in the settings could not be bound; dictation works without it. Never the user's words."
         },
+        "settings_error": {
+          "type": "string",
+          "description": "Which of dictation's settings could not be read (it runs with their defaults), as a sentence: \"couldn't read the modes\". Never the user's words."
+        },
         "ref": {
           "type": "string",
           "description": "The command's \"id\", when it had one."
