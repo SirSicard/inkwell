@@ -1,6 +1,6 @@
-//! The screens' queries on the library (`records.list`, `records.search`, `record.open`,
-//! `commitments.open`, `commitment.set_done`, `library.stats`, `permissions.check`): each answered
-//! by one event that matches the schema, on the library's own thread.
+//! The library as the screens read it (`records.list`, `records.search`, `record.open`,
+//! `library.stats`): each answered by one event that matches the schema and echoes the command's id
+//! as `ref`, on the screens' thread; a failure is `command.failed` with that id.
 
 mod common;
 
@@ -9,13 +9,11 @@ use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
 use common::*;
-use ink_core::mock::MockPlatform;
 use ink_core::{
-    Channel, NewCommitment, NewRecord, Permission, PermissionState, RecordId, RecordKind, Segment,
-    Span, SpeakerId, Store, Summary,
+    Channel, NewCommitment, NewRecord, RecordId, RecordKind, Segment, Span, SpeakerId, Store,
+    Summary,
 };
-use ink_engines::ModelDir;
-use ink_ffi::runtime::{Core, Parts};
+use ink_ffi::runtime::Core;
 use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -63,7 +61,7 @@ fn ask(core: &Core, events: &Recorder, command: Value, id: &str) -> Value {
     command["id"] = id.into();
     core.command(&command.to_string()).unwrap();
     events
-        .wait_for(WAIT, |v| v["request"] == id || v["id"] == id)
+        .wait_for(WAIT, |v| v["ref"] == id || v["id"] == id)
         .unwrap_or_else(|| panic!("no answer to {id}: {:?}", events.types()))
 }
 
@@ -323,9 +321,9 @@ fn a_replayed_meeting_opens_with_its_chunks_on_the_recorded_timeline() {
     events.assert_valid();
 }
 
-/// Search, the owed list with its total, marking done, and the stats Today shows.
+/// Search, and the stats Today shows.
 #[test]
-fn search_owed_done_and_stats_answer_from_the_store() {
+fn search_and_stats_answer_from_the_store() {
     let dir = TempDir::new("library-owed");
     let (core, events) = core(&dir);
     let store = core.shared().store.clone();
@@ -361,32 +359,6 @@ fn search_owed_done_and_stats_answer_from_the_store() {
     store
         .append_segments(&dictated, &[seg(Channel::Mic, 0, "three words here")])
         .unwrap();
-    let filed = store
-        .add_commitments(
-            &heard,
-            &[
-                NewCommitment {
-                    text: "Share the budget sheet".into(),
-                    owner: Some("You".into()),
-                    due: Some("Monday".into()),
-                    due_at_unix_ms: Some(NOON + 24 * 60 * MINUTE),
-                    provenance: vec![Span {
-                        channel: Channel::Mic,
-                        start_ms: 0,
-                        end_ms: 1_000,
-                    }],
-                },
-                NewCommitment {
-                    text: "Book the room".into(),
-                    owner: None,
-                    due: None,
-                    due_at_unix_ms: None,
-                    provenance: Vec::new(),
-                },
-            ],
-        )
-        .unwrap();
-
     let found = ask(
         &core,
         &events,
@@ -399,39 +371,6 @@ fn search_owed_done_and_stats_answer_from_the_store() {
     assert!(!hits.is_empty());
     assert!(hits.iter().all(|h| h["record"] == heard.0.as_str()));
     assert_eq!(hits[0]["title"], "Budget review");
-
-    let owed = ask(
-        &core,
-        &events,
-        serde_json::json!({"cmd": "commitments.open", "limit": 1}),
-        "owed",
-    );
-    assert_eq!(owed["type"], "library.owed");
-    assert_eq!(owed["total"], 2);
-    let items = owed["commitments"].as_array().unwrap();
-    assert_eq!(items.len(), 1, "as many as asked");
-    assert_eq!(items[0]["commitment"]["text"], "Share the budget sheet");
-    assert_eq!(items[0]["record_title"], "Budget review");
-
-    let done = ask(
-        &core,
-        &events,
-        serde_json::json!({"cmd": "commitment.set_done", "commitment": filed[0].0, "done": true}),
-        "done",
-    );
-    assert_eq!(done["type"], "library.commitment_done");
-    assert_eq!(done["done"], true);
-    let owed = ask(
-        &core,
-        &events,
-        serde_json::json!({"cmd": "commitments.open"}),
-        "owed2",
-    );
-    assert_eq!(owed["total"], 1);
-    assert_eq!(
-        owed["commitments"][0]["commitment"]["text"],
-        "Book the room"
-    );
 
     let stats = ask(
         &core,
@@ -462,14 +401,11 @@ fn search_owed_done_and_stats_answer_from_the_store() {
     events.assert_valid();
 }
 
-/// The permission check reads the probe the core was given, and never runs on the command
-/// thread: a model update stuck there does not hold the library's answers up.
+/// A library query never runs on the command thread: a model update stuck there does not hold
+/// the library's answers up.
 #[test]
-fn permissions_and_queries_answer_while_the_command_thread_is_busy() {
+fn library_queries_answer_while_the_command_thread_is_busy() {
     let dir = TempDir::new("library-busy");
-    let platform = Arc::new(MockPlatform::new());
-    platform.set_permission(Permission::Microphone, PermissionState::Granted);
-    platform.set_permission(Permission::SystemAudio, PermissionState::Denied);
     let loader = MockLoader::new(Behaviour::Say("x".into()));
     let gate = Arc::new(Gate::default());
     let installer = Arc::new(MockInstaller {
@@ -477,19 +413,7 @@ fn permissions_and_queries_answer_while_the_command_thread_is_busy() {
         gate: Some(gate.clone()),
         installs: AtomicUsize::new(0),
     });
-    let models = ModelDir::new(dir.path().join("models"));
-    let row = test_row(ROW_ID);
-    install(&models, &row);
-    let (core, events) = start_parts(Parts {
-        store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
-        clock: clock(),
-        registry: ink_engines::Registry::new(vec![row]).unwrap(),
-        models,
-        loader,
-        installer,
-        data_dir: dir.path().to_owned(),
-        permissions: Some(platform.platform().permissions),
-    });
+    let (core, events) = start(&dir, &[test_row(ROW_ID)], loader, installer);
 
     // The update waits at the gate, on the command thread, until the end of the test.
     core.command(&format!(
@@ -498,49 +422,25 @@ fn permissions_and_queries_answer_while_the_command_thread_is_busy() {
     .unwrap();
     assert!(gate.until_waiting(WAIT));
 
-    let checked = ask(
-        &core,
-        &events,
-        serde_json::json!({"cmd": "permissions.check"}),
-        "perm",
-    );
-    assert_eq!(checked["type"], "permissions.checked");
-    assert_eq!(checked["microphone"], "granted");
-    assert_eq!(checked["system_audio"], "denied");
     let listed = ask(
         &core,
         &events,
         serde_json::json!({"cmd": "records.list"}),
         "list",
     );
+    assert_eq!(listed["type"], "library.records");
     assert_eq!(listed["records"], serde_json::json!([]));
+    let stats = ask(
+        &core,
+        &events,
+        serde_json::json!({"cmd": "library.stats", "since_unix_ms": 0}),
+        "stats",
+    );
+    assert_eq!(stats["type"], "library.stats");
     assert_eq!(events.count("model.update_finished"), 0, "still busy");
 
     gate.open();
     events.wait_type("model.update_finished", WAIT);
-    core.shutdown();
-    events.assert_valid();
-}
-
-/// Without a probe (no platform one), every permission reads "unknown", never a guess.
-#[test]
-fn without_a_probe_every_permission_is_unknown() {
-    let dir = TempDir::new("library-noprobe");
-    let (core, events) = core(&dir);
-    let checked = ask(
-        &core,
-        &events,
-        serde_json::json!({"cmd": "permissions.check"}),
-        "perm",
-    );
-    for p in [
-        "microphone",
-        "system_audio",
-        "accessibility",
-        "input_monitoring",
-    ] {
-        assert_eq!(checked[p], "unknown", "{p}");
-    }
     core.shutdown();
     events.assert_valid();
 }

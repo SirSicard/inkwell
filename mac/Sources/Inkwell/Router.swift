@@ -111,34 +111,13 @@ struct RouteScreen: View {
             TodayScreen()
         case .library:
             LibraryScreen()
-        // The placeholder until their screens land in S2.6.
-        case .owed, .live, .settings:
-            PlaceholderScreen(route: route)
+        case .owed:
+            OwedScreen()
+        case .live:
+            LiveScreen()
+        case .settings:
+            SettingsScreen()
         }
-    }
-}
-
-/// A route whose screen is not built yet: its title, and whether the core is running.
-struct PlaceholderScreen: View {
-    let route: Route
-    @Environment(CoreStore.self) private var store
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(route.title)
-                .font(Typography.screenTitle)
-                .foregroundStyle(Theme.text)
-                .accessibilityAddTraits(.isHeader)
-            Text("This screen is not built yet.")
-                .font(Typography.body)
-                .foregroundStyle(Theme.secondaryText)
-            Text(CoreStatusText.line(for: store.status))
-                .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
-            Spacer()
-        }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

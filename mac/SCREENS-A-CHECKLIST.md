@@ -35,21 +35,24 @@ need a permission (the calendar, system audio) or ears (playback); those say so.
 - [ ] Up next, calendar never asked: "See your next meeting here." and a "Show my next meeting"
       button. Nothing asks for the calendar until you click it.
 - [ ] **Calendar, grant (TCC; needs you):** click "Show my next meeting". macOS asks for calendar
-      access with Inkwell's text ("Inkwell reads your calendars to show your next meeting…").
+      access with Inkwell's text ("Inkwell reads your calendar to show your next meeting…").
       Allow. Up next shows your next timed event today: its title, "15:30 · Zoom · in 42 min"
       (the app comes from the event's link, place or notes), and "Records when Zoom opens the
       microphone". With nothing in the next 12 hours: "Nothing else on your calendar today."
 - [ ] **Calendar, change:** add an event 30 minutes from now in Calendar.app. Up next shows it
       within seconds, without leaving Today.
-- [ ] **Calendar, the minute:** leave Today open for two minutes: "in N min" counts down.
+- [ ] **Calendar, the minute:** leave Today open for two minutes: "in N min" counts down. Cover
+      the window, or minimise it, for two minutes and come back: it shows the right minute again
+      at once (it did not redraw while hidden).
+- [ ] Settings' "Know your meetings" card turns green after the grant (it is the same permission).
 - [ ] **Calendar, deny (TCC; needs you):** `tccutil reset Calendar com.inkwell.app`, relaunch,
       click "Show my next meeting", and choose Don't Allow. Up next reads "Calendar access is off,
       so Inkwell can't show your next meeting." with "Open Calendar settings", which opens System
       Settings at Privacy & Security > Calendars. Turn it on there and come back: Up next shows the
-      event (Today re-reads when the app comes to the front).
-- [ ] Owed soon: three promises, soonest first, each with a circle, its text, and a line with the
-      due day, the record's title and "▸ 00:02". An overdue one is in the seal colour, "2 days
-      overdue". "All 4" opens Owed.
+      event (Today re-reads when the app comes to the front), and so does the Settings card.
+- [ ] Owed soon: the first three of the Owed screen's list, soonest first, each with a circle, its
+      text, and a line with the due day ("Due Fri"), the record's title and "▸ 00:02". An overdue
+      one is in the alert colour, "2 days overdue". "All 3" (the Owed screen's count) opens Owed.
 - [ ] The circle marks one done: it leaves the list, the next one moves up, and "All" counts one
       fewer.
 - [ ] "▸ 00:02" opens its record and plays from where it was said.
@@ -57,18 +60,18 @@ need a permission (the calendar, system audio) or ears (playback); those say so.
 - [ ] The toolbar's "Search everything said": typing opens the Library's matches.
 - [ ] **Needs you (the watchdog and the library):** run on `/tmp/inkwell-screens-deaf`. A card with
       a red mark: "Inkwell didn't hear the other side of your calls", "Your last meeting kept only
-      your own voice…", and "Allow system audio", which opens System Settings at Privacy &
-      Security > Screen & System Audio Recording.
+      your own voice…", and "Allow system audio", the same request as Settings' "Hear the others"
+      card: macOS's prompt the first time, System Settings at its pane after that.
 - [ ] **Needs you, system audio denied (TCC; needs you):** with a meeting recorded and system
       audio allowed once (so the app has asked), turn Inkwell's system audio off in System
-      Settings, then relaunch Inkwell (Today re-checks on its own only after five minutes, or
-      when you come back through its own "Allow" button: the check plays a muted tone). The card reads "Inkwell can't hear the other side of your
+      Settings and come back to Today (it checks when it appears and when the app comes back to
+      the front while it shows; the check plays a muted tone). The card reads "Inkwell can't hear the other side of your
       calls" with "System audio has been off since <date>, so your meetings kept only your own
       voice." once a meeting has kept only your side. (Until the app has asked for system audio,
       the check cannot tell and says nothing: onboarding asks.)
 - [ ] **Needs you, microphone denied (TCC; needs you):** turn the microphone off for Inkwell and
-      relaunch: "Inkwell can't hear you" with "Allow the microphone". Turn it back on through that
-      button's pane and come back: the card goes.
+      come back to Today: "Inkwell can't hear you" with "Allow the microphone". Turn it back on
+      through that button's pane and come back: the card goes.
 - [ ] Two or more needs: the most urgent shows, with "N more" to show the rest.
 
 Not in this step, by design (so not a failure here):

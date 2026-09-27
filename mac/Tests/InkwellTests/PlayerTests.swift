@@ -70,7 +70,7 @@ final class RecordPlayerTests: XCTestCase {
         let mic = directory.appendingPathComponent("mic-000000-16000x1.pcm").path
         let far = directory.appendingPathComponent("far-000000-16000x1.pcm").path
         return #"""
-        {"type":"library.record","request":"\#(request)",
+        {"type":"library.record","ref":"\#(request)",
          "record":{"record":"r1","kind":"meeting","title":"Tones","started_at_unix_ms":0,"ended_at_unix_ms":30000,"revision":2,"has_audio":true},
          "segments":[{"channel":"mic","start_ms":12000,"end_ms":13000,"text":"a tone from you"},
                      {"channel":"far","start_ms":20100,"end_ms":21000,"text":"a tone from them"}],
@@ -84,9 +84,8 @@ final class RecordPlayerTests: XCTestCase {
 
     /// A library with the record open, its player rendering offline.
     private func openRecord() throws -> LibraryModel {
-        let library = LibraryModel()
         var sent: [String] = []
-        library.send = { sent.append($0) }
+        let library = LibraryModel(send: { sent.append($0.json) })
         library.makePlayer = { RecordPlayer(document: $0, output: .offline(sampleRate: 48_000, channels: 2)) }
         library.open("r1")
         let id = ((try JSONSerialization.jsonObject(with: Data(sent.last!.utf8))) as? [String: Any])?["id"] as? String ?? ""

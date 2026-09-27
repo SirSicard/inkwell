@@ -574,7 +574,7 @@ fn dictations(dir: &Path) {
         loader: Arc::new(Dictated(Arc::default())),
         installer,
         data_dir: dir.to_owned(),
-        permissions: None,
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
     });
     let platform = Arc::new(MockPlatform::new());
     let inbox = core

@@ -1,7 +1,7 @@
 // Today's "needs you" banner: what the user must act on, most urgent first. Fed by the silent-
 // channel watchdog (a live meeting's side states, and the warnings a meeting raised), the
-// permission probes (permissions.check), and the library's record of recent meetings that kept no
-// far end: Blotter recorded one side for four weeks without saying so, and this banner is where
+// permission probes (PermissionsModel's cards, from permissions.check), and the library's record of
+// recent meetings that kept no far end: Blotter recorded one side for four weeks without saying so, and this banner is where
 // Inkwell says so.
 import Foundation
 import InkBridge
@@ -9,21 +9,11 @@ import InkBridge
 struct NeedsYouItem: Identifiable, Equatable, Sendable {
     /// What its button does.
     enum Action: Equatable, Sendable {
-        /// Opens System Settings at a privacy pane.
-        case openSettings(SettingsPane)
+        /// Asks for a permission as its Settings card does (PermissionsModel.request): the system
+        /// prompt the first time, else System Settings at its pane.
+        case allow(PermissionCard)
         /// Dismisses a one-off notice.
         case dismiss(CoreStore.Notice.ID)
-    }
-
-    /// A pane of System Settings > Privacy & Security.
-    enum SettingsPane: String, Equatable, Sendable {
-        case microphone = "Privacy_Microphone"
-        case systemAudio = "Privacy_AudioCapture"
-        case accessibility = "Privacy_Accessibility"
-
-        var url: URL? {
-            URL(string: "x-apple.systempreferences:com.apple.preference.security?\(rawValue)")
-        }
     }
 
     let id: String
@@ -36,7 +26,7 @@ struct NeedsYouItem: Identifiable, Equatable, Sendable {
 enum NeedsYou {
     /// Everything that needs the user now, most urgent first.
     static func items(
-        permissions: PermissionsChecked?,
+        permission: (PermissionCard) -> CardState,
         farSilentMeetings: Int64,
         farSilentSince: Date?,
         meeting: CoreStore.LiveMeeting?,
@@ -45,7 +35,7 @@ enum NeedsYou {
         calendar: Calendar
     ) -> [NeedsYouItem] {
         var items: [NeedsYouItem] = []
-        let allowAudio = NeedsYouItem.Action.openSettings(.systemAudio)
+        let allowAudio = NeedsYouItem.Action.allow(.hearTheOthers)
 
         // The meeting going on now, as the watchdog judges each side.
         if let meeting {
@@ -68,7 +58,7 @@ enum NeedsYou {
                 items.append(.init(
                     id: "live-mic", title: "Inkwell can't hear you in this call",
                     detail: "Your microphone is sending silence. This meeting may keep only the other side.",
-                    actionTitle: "Check the microphone", action: .openSettings(.microphone)))
+                    actionTitle: "Check the microphone", action: .allow(.hearYou)))
             default:
                 break
             }
@@ -77,7 +67,7 @@ enum NeedsYou {
         // Permissions.
         let since = farSilentSince.map { $0.formatted(Date.FormatStyle(timeZone: calendar.timeZone)
             .locale(calendar.locale ?? .current).day().month(.abbreviated)) }
-        if permissions?.systemAudio == .denied {
+        if permission(.hearTheOthers) == .off {
             let detail = since.map { "System audio has been off since \($0), so your meetings kept only your own voice." }
                 ?? "System audio is off, so meetings keep only your own voice."
             items.append(.init(
@@ -91,17 +81,17 @@ enum NeedsYou {
                 detail: "\(count)\(from) kept only your own voice. Check that system audio is allowed.",
                 actionTitle: "Allow system audio", action: allowAudio))
         }
-        if permissions?.microphone == .denied {
+        if permission(.hearYou) == .off {
             items.append(.init(
                 id: "perm-mic", title: "Inkwell can't hear you",
                 detail: "Microphone access is off, so dictation and meetings record nothing from you.",
-                actionTitle: "Allow the microphone", action: .openSettings(.microphone)))
+                actionTitle: "Allow the microphone", action: .allow(.hearYou)))
         }
-        if permissions?.accessibility == .denied {
+        if permission(.typeForYou) == .off {
             items.append(.init(
                 id: "perm-ax", title: "Dictation can't type for you",
                 detail: "Accessibility is off, so the dictation key and typing into other apps don't work.",
-                actionTitle: "Allow Accessibility", action: .openSettings(.accessibility)))
+                actionTitle: "Allow Accessibility", action: .allow(.typeForYou)))
         }
 
         // One-off notices the core sent: what went wrong in a meeting or with the dictation key.

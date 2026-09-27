@@ -1,9 +1,10 @@
-// Today's logic: what the needs-you banner says (from the watchdog, the permission probes and the
-// library's record of meetings that kept no far end), and Up next (the calendar's next meeting).
-// The calendar here is a fake: EventKit's grant and deny are checked by a person
-// (mac/SCREENS-A-CHECKLIST.md).
+// Today's logic: what the needs-you banner says (from the watchdog, the permission cards and the
+// library's record of meetings that kept no far end), Up next (the calendar's next meeting), and
+// that its minute redraw runs only while the window is on screen. The calendar here is a fake:
+// EventKit's grant and deny are checked by a person (mac/SCREENS-A-CHECKLIST.md).
 import Foundation
 import InkBridge
+import SwiftUI
 import XCTest
 
 @testable import Inkwell
@@ -12,11 +13,9 @@ private func event(_ json: String) -> InkEvent {
     (try? InkEvent.decode(Data(json.utf8))) ?? .unknown(type: "")
 }
 
-private func permissions(mic: String = "granted", audio: String = "granted", ax: String = "granted") -> PermissionsChecked? {
-    guard case .permissionsChecked(let p) = event(#"""
-    {"type":"permissions.checked","microphone":"\#(mic)","system_audio":"\#(audio)","accessibility":"\#(ax)","input_monitoring":"unknown"}
-    """#) else { return nil }
-    return p
+/// The cards as a permissions check leaves them: `off` names the ones refused, the rest allowed.
+private func cards(off: Set<PermissionCard> = []) -> (PermissionCard) -> CardState {
+    { off.contains($0) ? .off : .allowed }
 }
 
 @MainActor
@@ -29,36 +28,35 @@ final class NeedsYouTests: XCTestCase {
     }()
 
     private func items(
-        permissions: PermissionsChecked? = nil, farSilent: Int64 = 0, since: Date? = nil,
+        permission: @escaping (PermissionCard) -> CardState = cards(), farSilent: Int64 = 0, since: Date? = nil,
         store: CoreStore = CoreStore()
     ) -> [NeedsYouItem] {
         NeedsYou.items(
-            permissions: permissions, farSilentMeetings: farSilent, farSilentSince: since,
+            permission: permission, farSilentMeetings: farSilent, farSilentSince: since,
             meeting: store.meeting, notices: store.notices, now: Date(timeIntervalSince1970: 1_790_000_000),
             calendar: calendar)
     }
 
     func testNothingNeedsYouWhenAllIsWell() {
-        XCTAssertEqual(items(permissions: permissions()), [])
-        XCTAssertEqual(items(), [], "before the first check, no guesses")
+        XCTAssertEqual(items(), [])
+        XCTAssertEqual(items(permission: { _ in .checking }), [], "before the first check, no guesses")
     }
 
     func testSystemAudioOffSaysSinceWhenMeetingsKeptOnlyYourVoice() throws {
         let since = Date(timeIntervalSince1970: 1_788_000_000)  // 29 Aug 2026
-        let list = items(permissions: permissions(audio: "denied"), farSilent: 4, since: since)
+        let list = items(permission: cards(off: [.hearTheOthers]), farSilent: 4, since: since)
         XCTAssertEqual(list.map(\.id), ["perm-system-audio"], "one item, not the permission and the symptom twice")
         let first = try XCTUnwrap(list.first)
         XCTAssertEqual(first.title, "Inkwell can't hear the other side of your calls")
         XCTAssertEqual(first.detail, "System audio has been off since 29 Aug, so your meetings kept only your own voice.")
-        XCTAssertEqual(first.action, .openSettings(.systemAudio))
-        XCTAssertEqual(NeedsYouItem.SettingsPane.systemAudio.url?.absoluteString,
-                       "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")
+        XCTAssertEqual(first.action, .allow(.hearTheOthers), "the Settings card's request: a prompt, or its pane")
     }
 
-    func testMeetingsThatKeptNoFarEndRaiseItEvenWhenThePermissionReadsGranted() {
-        let list = items(permissions: permissions(), farSilent: 2)
+    func testMeetingsThatKeptNoFarEndRaiseItEvenWhenThePermissionReadsAllowed() {
+        let list = items(farSilent: 2)
         XCTAssertEqual(list.map(\.id), ["far-silent"])
         XCTAssertTrue(list[0].detail.hasPrefix("Your last 2 meetings kept only your own voice"), list[0].detail)
+        XCTAssertEqual(items(farSilent: 1)[0].detail, "Your last meeting kept only your own voice. Check that system audio is allowed.")
     }
 
     func testTheWatchdogOnALiveMeetingComesFirst() {
@@ -68,8 +66,9 @@ final class NeedsYouTests: XCTestCase {
             event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"zeros"}"#),
             event(#"{"type":"meeting.side_state","record":"r1","channel":"mic","state":"stopped"}"#),
         ])
-        let list = items(permissions: permissions(mic: "denied", ax: "denied"), store: store)
+        let list = items(permission: cards(off: [.hearYou, .typeForYou]), store: store)
         XCTAssertEqual(list.map(\.id), ["live-far", "live-mic", "perm-mic", "perm-ax"])
+        XCTAssertEqual(list[2].action, .allow(.hearYou))
     }
 
     func testOneOffNoticesAreDismissable() throws {
@@ -88,23 +87,35 @@ final class NeedsYouTests: XCTestCase {
     }
 }
 
-/// A calendar the test sets.
-@MainActor
-private final class FakeCalendar: CalendarSource {
-    var access: CalendarAccess = .notDetermined
-    var events: [UpcomingEvent] = []
+/// The calendar's permission, as the test sets it (PermissionsModel's CalendarAccess).
+private final class FakeAccess: CalendarAccess, @unchecked Sendable {
+    // @unchecked: touched only on the main actor, by the test and the model it drives.
+    var current: CardState = .notAsked
     var grant = true
     private(set) var asked = 0
 
-    func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? {
-        guard access == .granted else { return nil }
-        return events.filter { $0.start > now && $0.start < now.addingTimeInterval(horizon) }.min { $0.start < $1.start }
+    func state() -> CardState { current }
+
+    func request(done: @escaping @MainActor @Sendable () -> Void) {
+        asked += 1
+        current = grant ? .allowed : .off
+        Task { @MainActor in done() }
+    }
+}
+
+/// The calendar's events, as the test sets them.
+@MainActor
+private final class FakeEvents: UpcomingEvents {
+    var events: [UpcomingEvent] = []
+    var access: FakeAccess
+
+    init(access: FakeAccess) {
+        self.access = access
     }
 
-    func requestAccess() async -> CalendarAccess {
-        asked += 1
-        access = grant ? .granted : .denied
-        return access
+    func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? {
+        guard access.current == .allowed else { return nil }
+        return events.filter { $0.start > now && $0.start < now.addingTimeInterval(horizon) }.min { $0.start < $1.start }
     }
 }
 
@@ -112,32 +123,76 @@ private final class FakeCalendar: CalendarSource {
 final class UpNextTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
 
-    func testNothingIsReadOrAskedUntilTheUserConnects() async {
-        let calendar = FakeCalendar()
-        calendar.events = [UpcomingEvent(title: "Pilot check-in", start: now.addingTimeInterval(2_520), end: now.addingTimeInterval(4_320), app: "Zoom")]
-        let model = UpNextModel(source: calendar)
+    private func model(grant: Bool = true) -> (UpNextModel, FakeAccess, FakeEvents) {
+        let access = FakeAccess()
+        access.grant = grant
+        let events = FakeEvents(access: access)
+        events.events = [UpcomingEvent(title: "Pilot check-in", start: now.addingTimeInterval(2_520), end: now.addingTimeInterval(4_320), app: "Zoom")]
+        let model = UpNextModel(access: access, events: events)
         model.now = { self.now }
-        model.refresh()
-        XCTAssertEqual(model.access, .notDetermined)
-        XCTAssertNil(model.event)
-        XCTAssertEqual(calendar.asked, 0, "never asks on its own")
+        return (model, access, events)
+    }
 
-        await model.connect()
-        XCTAssertEqual(calendar.asked, 1)
-        XCTAssertEqual(model.access, .granted)
+    /// Waits for the request's answer, which comes back on the main actor.
+    private func settle() async {
+        for _ in 0..<5 { await Task.yield() }
+    }
+
+    func testNothingIsReadOrAskedUntilTheUserConnects() async {
+        let (model, access, _) = model()
+        model.refresh()
+        XCTAssertEqual(model.access, .notAsked)
+        XCTAssertNil(model.event)
+        XCTAssertEqual(access.asked, 0, "never asks on its own")
+
+        model.connect()
+        await settle()
+        XCTAssertEqual(access.asked, 1)
+        XCTAssertEqual(model.access, .allowed)
         XCTAssertEqual(model.event?.title, "Pilot check-in")
         XCTAssertEqual(MeetingApp.startsIn(model.event!.start, now: now), "in 42 min")
     }
 
     func testADeniedCalendarShowsNoEvent() async {
-        let calendar = FakeCalendar()
-        calendar.grant = false
-        calendar.events = [UpcomingEvent(title: "x", start: now.addingTimeInterval(60), end: now.addingTimeInterval(120), app: nil)]
-        let model = UpNextModel(source: calendar)
-        model.now = { self.now }
-        await model.connect()
-        XCTAssertEqual(model.access, .denied)
+        let (model, _, _) = model(grant: false)
+        model.connect()
+        await settle()
+        XCTAssertEqual(model.access, .off)
         XCTAssertNil(model.event)
+    }
+
+    /// The architecture rule: nothing ticks while idle. "in N min" redraws on the minute only
+    /// while an event is shown and the window is on screen; hidden, covered or minimised, its
+    /// schedule gives one entry (the frame drawn when it stopped) and then none.
+    func testTheMinuteTicksOnlyWhileAnEventIsShownOnScreen() async {
+        let (model, _, _) = model()
+        model.connect()
+        await settle()
+        XCTAssertTrue(model.ticks(onScreen: true))
+        XCTAssertFalse(model.ticks(onScreen: false), "hidden, occluded or minimised")
+
+        let start = Date(timeIntervalSinceReferenceDate: 1_000_030)  // 30 s past a minute
+        let running = Array(MinuteSchedule(paused: false).entries(from: start, mode: .normal).prefix(3))
+        XCTAssertEqual(running.map(\.timeIntervalSinceReferenceDate), [1_000_030, 1_000_080, 1_000_140],
+                       "now, then each whole minute")
+        let paused = Array(MinuteSchedule(paused: true).entries(from: start, mode: .normal).prefix(3))
+        XCTAssertEqual(paused, [start], "one frame, then nothing")
+
+        let (empty, _, events) = self.model()
+        events.events = []
+        empty.connect()
+        await settle()
+        XCTAssertFalse(empty.ticks(onScreen: true), "no event, nothing to count down")
+    }
+
+    func testTheWindowIsOnScreenOnlyVisibleUncoveredAndNotMinimised() {
+        XCTAssertTrue(WindowPresence.onScreen(visible: true, miniaturized: false, occlusionVisible: true))
+        XCTAssertFalse(WindowPresence.onScreen(visible: true, miniaturized: false, occlusionVisible: false), "covered, another Space, screen locked")
+        XCTAssertFalse(WindowPresence.onScreen(visible: true, miniaturized: true, occlusionVisible: true), "minimised")
+        XCTAssertFalse(WindowPresence.onScreen(visible: false, miniaturized: false, occlusionVisible: true), "closed")
+        let presence = WindowPresence()
+        presence.update(nil)
+        XCTAssertFalse(presence.onScreen, "no window")
     }
 
     func testTheMeetingAppComesFromTheLinkPlaceOrNotes() {

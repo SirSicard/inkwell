@@ -11,18 +11,22 @@ import SwiftUI
 
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
-    /// Reads the calendars for Today's Up next; lives as long as the window.
-    private let calendar: EventKitCalendar
+    /// Reads the calendar's next event for Today's Up next; lives as long as the window.
+    private let events: EventKitEvents
+    /// Whether the window is on screen, for what redraws on a clock (Up next's minute).
+    private let presence = WindowPresence()
 
     /// `ink` is what the rail draws; `updates` is in the environment for the Settings screen;
-    /// `library` feeds Today and the Library.
-    init(router: Router, store: CoreStore, ink: ShellInk, updates: Updates, library: LibraryModel) {
-        let calendar = EventKitCalendar()
-        let upNext = UpNextModel(source: calendar)
-        calendar.observe { [weak upNext] in upNext?.refresh() }
-        self.calendar = calendar
+    /// `screens` holds the Live, Owed and Settings screens' models (Today reads the permissions
+    /// and what is owed from them); `library` feeds Today, the Library and a record.
+    init(router: Router, store: CoreStore, ink: ShellInk, updates: Updates, screens: ScreenModels, library: LibraryModel) {
+        let events = EventKitEvents()
+        let upNext = UpNextModel(access: EventKitCalendar(), events: events)
+        events.observe { [weak upNext] in upNext?.refresh() }
+        self.events = events
         let root = ShellView(router: router).environment(store).environment(ink).environment(updates)
-            .environment(library).environment(upNext).environment(router)
+            .environment(screens).environment(library).environment(upNext).environment(router)
+            .environment(presence)
         let hosting = NSHostingController(rootView: root)
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]
@@ -61,10 +65,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        presence.update(window)
     }
 
     func windowWillClose(_ notification: Notification) {
         // Back to the menu bar: no Dock icon for an app with no window open.
         NSApp.setActivationPolicy(.accessory)
+        presence.update(nil)
+    }
+
+    // What changes whether the window is on screen (WindowPresence): covered or uncovered (which
+    // includes another Space, the screen locking and the display sleeping), minimised or restored.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        presence.update(window)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        presence.update(window)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        presence.update(window)
     }
 }

@@ -95,20 +95,34 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case meetingCaptureFailed(MeetingCaptureFailed)
     /// `meeting.worker_failed`
     case meetingWorkerFailed(MeetingWorkerFailed)
+    /// `permissions.checked`
+    case permissionsChecked(PermissionsChecked)
+    /// `permission.requested`
+    case permissionRequested(PermissionRequested)
+    /// `commitments.listed`
+    case commitmentsListed(CommitmentsListed)
+    /// `commitment.updated`
+    case commitmentUpdated(CommitmentUpdated)
+    /// `note.added`
+    case noteAdded(NoteAdded)
+    /// `note.updated`
+    case noteUpdated(NoteUpdated)
+    /// `note.deleted`
+    case noteDeleted(NoteDeleted)
+    /// `models.listed`
+    case modelsListed(ModelsListed)
+    /// `setting.value`
+    case settingValue(SettingValue)
+    /// `modes.listed`
+    case modesListed(ModesListed)
     /// `library.records`
     case libraryRecords(LibraryRecords)
     /// `library.search`
     case librarySearch(LibrarySearch)
     /// `library.record`
     case libraryRecord(LibraryRecord)
-    /// `library.owed`
-    case libraryOwed(LibraryOwed)
-    /// `library.commitment_done`
-    case libraryCommitmentDone(LibraryCommitmentDone)
     /// `library.stats`
     case libraryStats(LibraryStats)
-    /// `permissions.checked`
-    case permissionsChecked(PermissionsChecked)
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
@@ -175,13 +189,20 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "meeting.failed": self = .meetingFailed(try MeetingFailed(from: decoder))
             case "meeting.capture_failed": self = .meetingCaptureFailed(try MeetingCaptureFailed(from: decoder))
             case "meeting.worker_failed": self = .meetingWorkerFailed(try MeetingWorkerFailed(from: decoder))
+            case "permissions.checked": self = .permissionsChecked(try PermissionsChecked(from: decoder))
+            case "permission.requested": self = .permissionRequested(try PermissionRequested(from: decoder))
+            case "commitments.listed": self = .commitmentsListed(try CommitmentsListed(from: decoder))
+            case "commitment.updated": self = .commitmentUpdated(try CommitmentUpdated(from: decoder))
+            case "note.added": self = .noteAdded(try NoteAdded(from: decoder))
+            case "note.updated": self = .noteUpdated(try NoteUpdated(from: decoder))
+            case "note.deleted": self = .noteDeleted(try NoteDeleted(from: decoder))
+            case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
+            case "setting.value": self = .settingValue(try SettingValue(from: decoder))
+            case "modes.listed": self = .modesListed(try ModesListed(from: decoder))
             case "library.records": self = .libraryRecords(try LibraryRecords(from: decoder))
             case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
             case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
-            case "library.owed": self = .libraryOwed(try LibraryOwed(from: decoder))
-            case "library.commitment_done": self = .libraryCommitmentDone(try LibraryCommitmentDone(from: decoder))
             case "library.stats": self = .libraryStats(try LibraryStats(from: decoder))
-            case "permissions.checked": self = .permissionsChecked(try PermissionsChecked(from: decoder))
             default: self = .unknown(type: type)
             }
         } catch {
@@ -234,13 +255,20 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .meetingFailed(let event): try event.encode(to: encoder)
         case .meetingCaptureFailed(let event): try event.encode(to: encoder)
         case .meetingWorkerFailed(let event): try event.encode(to: encoder)
+        case .permissionsChecked(let event): try event.encode(to: encoder)
+        case .permissionRequested(let event): try event.encode(to: encoder)
+        case .commitmentsListed(let event): try event.encode(to: encoder)
+        case .commitmentUpdated(let event): try event.encode(to: encoder)
+        case .noteAdded(let event): try event.encode(to: encoder)
+        case .noteUpdated(let event): try event.encode(to: encoder)
+        case .noteDeleted(let event): try event.encode(to: encoder)
+        case .modelsListed(let event): try event.encode(to: encoder)
+        case .settingValue(let event): try event.encode(to: encoder)
+        case .modesListed(let event): try event.encode(to: encoder)
         case .libraryRecords(let event): try event.encode(to: encoder)
         case .librarySearch(let event): try event.encode(to: encoder)
         case .libraryRecord(let event): try event.encode(to: encoder)
-        case .libraryOwed(let event): try event.encode(to: encoder)
-        case .libraryCommitmentDone(let event): try event.encode(to: encoder)
         case .libraryStats(let event): try event.encode(to: encoder)
-        case .permissionsChecked(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var keys = encoder.container(keyedBy: TypeKey.self)
             try keys.encode(type, forKey: .type)
@@ -303,6 +331,28 @@ public struct AudioDropped: Codable, Sendable, Equatable {
 public enum AudioTimeline: String, Codable, Sendable, Equatable, CaseIterable {
     case recorded
     case estimated
+}
+
+/// A model in the catalogue that runs on this OS.
+public struct CatalogueEntry: Codable, Sendable, Equatable {
+    /// Its id.
+    public let id: String
+    /// Whether its files are installed and complete.
+    public let installed: Bool
+    /// The jobs it fills, each with its measured error rate.
+    public let jobs: [JobScore]
+    /// Its weights' licence.
+    public let licence: String
+    /// Its download size.
+    public let sizeBytes: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case installed
+        case jobs
+        case licence
+        case sizeBytes = "size_bytes"
+    }
 }
 
 /// Which chain a queue feeds.
@@ -418,6 +468,25 @@ public struct CommitmentRow: Codable, Sendable, Equatable {
     }
 }
 
+/// A commitment was marked done, or open again.
+public struct CommitmentUpdated: Codable, Sendable, Equatable {
+    /// Its id.
+    public let commitment: String
+    /// Whether it is done now.
+    public let done: Bool
+    /// Always `commitment.updated`.
+    public let type: String
+}
+
+/// The open commitments across the library, in answer to commitments.list: the soonest resolved
+/// due time first, undated ones last. Carries the promises' words.
+public struct CommitmentsListed: Codable, Sendable, Equatable {
+    /// The commitments.
+    public let items: [OwedItem]
+    /// Always `commitments.listed`.
+    public let type: String
+}
+
 /// The core started. The first event after ink_init.
 public struct CoreReady: Codable, Sendable, Equatable {
     /// The core's ABI version; must equal INK_ABI_VERSION in inkwell.h.
@@ -529,6 +598,7 @@ public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable
     case focusUnreadable = "focus_unreadable"
     case polishUnavailable = "polish_unavailable"
     case polishFailed = "polish_failed"
+    case polishTimedOut = "polish_timed_out"
     case noModeForStyle = "no_mode_for_style"
     case saveFailed = "save_failed"
     case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
@@ -757,31 +827,6 @@ public struct KindStats: Codable, Sendable, Equatable {
     }
 }
 
-/// A commitment was marked done or not done (commitment.set_done).
-public struct LibraryCommitmentDone: Codable, Sendable, Equatable {
-    /// The commitment.
-    public let commitment: String
-    /// Whether it is done now.
-    public let done: Bool
-    /// The id the command carried, echoed so the shell can match the answer to its question.
-    public let request: String?
-    /// Always `library.commitment_done`.
-    public let type: String
-}
-
-/// Open commitments across every record, in answer to commitments.open: the soonest resolved
-/// due time first, undated ones last.
-public struct LibraryOwed: Codable, Sendable, Equatable {
-    /// The first of them, as many as asked.
-    public let commitments: [OwedItem]
-    /// The id the command carried, echoed so the shell can match the answer to its question.
-    public let request: String?
-    /// How many are open in all.
-    public let total: Int64
-    /// Always `library.owed`.
-    public let type: String
-}
-
 /// One record whole, in answer to record.open. Carries the library's words: never log it.
 public struct LibraryRecord: Codable, Sendable, Equatable {
     /// Its audio, when it kept some and the directory is there.
@@ -792,8 +837,9 @@ public struct LibraryRecord: Codable, Sendable, Equatable {
     public let notes: [RecordNote]
     /// The record.
     public let record: RecordRow
-    /// The id the command carried, echoed so the shell can match the answer to its question.
-    public let request: String?
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
     /// The current revision's transcript, by start time.
     public let segments: [RecordSegment]
     /// The speakers the user named.
@@ -812,8 +858,9 @@ public struct LibraryRecords: Codable, Sendable, Equatable {
     public let more: Bool
     /// The records, newest first.
     public let records: [RecordRow]
-    /// The id the command carried, echoed so the shell can match the answer to its question.
-    public let request: String?
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
     /// Always `library.records`.
     public let type: String
 }
@@ -824,8 +871,9 @@ public struct LibrarySearch: Codable, Sendable, Equatable {
     public let hits: [SearchHit]
     /// The query, as asked. The user's words: never log it.
     public let query: String
-    /// The id the command carried, echoed so the shell can match the answer to its question.
-    public let request: String?
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
     /// Always `library.search`.
     public let type: String
 }
@@ -840,8 +888,9 @@ public struct LibraryStats: Codable, Sendable, Equatable {
     public let farSilentSinceUnixMs: Int64?
     /// Per kind: dictation, meeting, file_import.
     public let kinds: [KindStats]
-    /// The id the command carried, echoed so the shell can match the answer to its question.
-    public let request: String?
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
     /// The moment asked about, Unix ms.
     public let sinceUnixMs: Int64
     /// Always `library.stats`.
@@ -851,7 +900,7 @@ public struct LibraryStats: Codable, Sendable, Equatable {
         case farSilentMeetings = "far_silent_meetings"
         case farSilentSinceUnixMs = "far_silent_since_unix_ms"
         case kinds
-        case request
+        case ref
         case sinceUnixMs = "since_unix_ms"
         case type
     }
@@ -1255,6 +1304,40 @@ public struct MeetingWorkerFailed: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A mode: how dictation writes in the apps it names.
+public struct ModeInfo: Codable, Sendable, Equatable {
+    /// The apps it is picked for, matched against the frontmost app's identity. Never shown to
+    /// the user as they are: a shell names each app.
+    public let apps: [String]
+    /// Its id.
+    public let id: String
+    /// Its name, as the user sees and says it.
+    public let name: String
+    /// Whether its dictations are polished (when a language model can).
+    public let polish: Bool
+    /// Whether fillers and stutters are removed.
+    public let removeFillers: Bool
+    /// How it writes.
+    public let style: ModeStyle
+
+    private enum CodingKeys: String, CodingKey {
+        case apps
+        case id
+        case name
+        case polish
+        case removeFillers = "remove_fillers"
+        case style
+    }
+}
+
+/// How a mode writes: a style this build knows, or other.
+public enum ModeStyle: String, Codable, Sendable, Equatable, CaseIterable {
+    case formal
+    case casual
+    case relaxed
+    case other
+}
+
 /// A job asked for a model that is held exclusively (being updated), and was refused. The job
 /// fails; nothing was loaded from files being replaced.
 public struct ModelRefused: Codable, Sendable, Equatable {
@@ -1325,25 +1408,135 @@ public struct ModelWarmed: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// An open commitment with the record it came from.
-public struct OwedItem: Codable, Sendable, Equatable {
-    /// The commitment.
-    public let commitment: CommitmentRow
-    /// When its record started, Unix ms; absent if the record is gone.
-    public let recordStartedAtUnixMs: Int64?
-    /// Its record's title, when it has one.
-    public let recordTitle: String?
+/// The catalogue's models for this OS, in answer to models.list. What serves each job now is
+/// engine.route's answer.
+public struct ModelsListed: Codable, Sendable, Equatable {
+    /// The models, in the catalogue's order.
+    public let models: [CatalogueEntry]
+    /// Always `models.listed`.
+    public let type: String
+}
+
+/// The user's modes, in answer to modes.list, in the order they are matched: the first mode
+/// naming the frontmost app wins, else the default.
+public struct ModesListed: Codable, Sendable, Equatable {
+    /// The mode used when no other matches.
+    public let defaultId: String
+    /// The modes.
+    public let modes: [ModeInfo]
+    /// Always `modes.listed`.
+    public let type: String
 
     private enum CodingKeys: String, CodingKey {
-        case commitment
-        case recordStartedAtUnixMs = "record_started_at_unix_ms"
-        case recordTitle = "record_title"
+        case defaultId = "default_id"
+        case modes
+        case type
     }
 }
 
-/// A permission's state, read without prompting: granted (and verified where the OS allows),
-/// denied, not_determined (never asked, from the app's side), or unknown (the OS gives no
-/// reliable answer).
+/// A note was saved to a record, in answer to note.add. Its words stay with the shell that sent
+/// them.
+public struct NoteAdded: Codable, Sendable, Equatable {
+    /// Where in the record it was written, ms.
+    public let atMs: Int64
+    /// The new note's id.
+    public let note: String
+    /// The record.
+    public let record: String
+    /// The command's "id", when it had one, so the shell can match the note to what it sent.
+    public let ref: String?
+    /// Always `note.added`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case atMs = "at_ms"
+        case note
+        case record
+        case ref
+        case type
+    }
+}
+
+/// A note was deleted.
+public struct NoteDeleted: Codable, Sendable, Equatable {
+    /// The note's id.
+    public let note: String
+    /// The command's "id", when it had one, so the shell can match the answer to the line that
+    /// sent it.
+    public let ref: String?
+    /// Always `note.deleted`.
+    public let type: String
+}
+
+/// A note's text was replaced.
+public struct NoteUpdated: Codable, Sendable, Equatable {
+    /// The note's id.
+    public let note: String
+    /// The command's "id", when it had one, so the shell can match the answer to the line that
+    /// sent it.
+    public let ref: String?
+    /// Always `note.updated`.
+    public let type: String
+}
+
+/// An open commitment: not done, and not merged into another.
+public struct OwedItem: Codable, Sendable, Equatable {
+    /// Which side said it there.
+    public let channel: Channel?
+    /// When, as said.
+    public let due: String?
+    /// When, resolved to a time, Unix ms: what overdue is measured against.
+    public let dueAtUnixMs: Int64?
+    /// Its id.
+    public let id: String
+    /// How many other commitments were merged into it as the same promise said again.
+    public let merged: Int64
+    /// Who owes it, as said.
+    public let owner: String?
+    /// The record it was said in.
+    public let record: String
+    /// When that record started, Unix ms.
+    public let recordStartedAtUnixMs: Int64
+    /// That record's title, when it has one.
+    public let recordTitle: String?
+    /// Where in the record it was first said, ms.
+    public let saidAtMs: Int64?
+    /// What was promised.
+    public let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case due
+        case dueAtUnixMs = "due_at_unix_ms"
+        case id
+        case merged
+        case owner
+        case record
+        case recordStartedAtUnixMs = "record_started_at_unix_ms"
+        case recordTitle = "record_title"
+        case saidAtMs = "said_at_ms"
+        case text
+    }
+}
+
+/// A permission the app depends on.
+public enum PermissionName: String, Codable, Sendable, Equatable, CaseIterable {
+    case microphone
+    case systemAudio = "system_audio"
+    case accessibility
+    case inputMonitoring = "input_monitoring"
+}
+
+/// permission.request showed the system prompt or opened the settings pane. The answer comes
+/// later: check again when the user comes back.
+public struct PermissionRequested: Codable, Sendable, Equatable {
+    /// The permission asked for.
+    public let permission: PermissionName
+    /// Always `permission.requested`.
+    public let type: String
+}
+
+/// A permission's state, as the platform's probe reads it without prompting.
 public enum PermissionState: String, Codable, Sendable, Equatable, CaseIterable {
     case granted
     case denied
@@ -1351,19 +1544,18 @@ public enum PermissionState: String, Codable, Sendable, Equatable, CaseIterable 
     case unknown
 }
 
-/// Each permission's state, in answer to permissions.check. Never prompts. System audio reads
-/// not_determined until the app has asked for it (the setting permissions.system_audio_asked);
-/// after that its check plays a muted tone and takes about a second.
+/// Every permission's state now, in answer to permissions.check. Never prompts. System audio
+/// reads not_determined until the app has asked for it, because checking it before would make
+/// macOS prompt.
 public struct PermissionsChecked: Codable, Sendable, Equatable {
-    /// Accessibility (typing for you, and the dictation key).
+    /// Typing into other apps, reading the focused app and the dictation key. Never asked reads
+    /// as denied.
     public let accessibility: PermissionState
-    /// Input Monitoring.
+    /// A listen-only key tap, which the Mac app does not use. Never asked reads as denied.
     public let inputMonitoring: PermissionState
-    /// Microphone.
+    /// Recording the microphone.
     public let microphone: PermissionState
-    /// The id the command carried, echoed so the shell can match the answer to its question.
-    public let request: String?
-    /// System audio (the other side of a call).
+    /// Recording other apps' sound (the far end), verified by listening for the app's own tone.
     public let systemAudio: PermissionState
     /// Always `permissions.checked`.
     public let type: String
@@ -1372,7 +1564,6 @@ public struct PermissionsChecked: Codable, Sendable, Equatable {
         case accessibility
         case inputMonitoring = "input_monitoring"
         case microphone
-        case request
         case systemAudio = "system_audio"
         case type
     }
@@ -1553,6 +1744,16 @@ public struct SearchHit: Codable, Sendable, Equatable {
         case startedAtUnixMs = "started_at_unix_ms"
         case title
     }
+}
+
+/// A shell setting's value, in answer to setting.get or setting.set.
+public struct SettingValue: Codable, Sendable, Equatable {
+    /// The setting.
+    public let key: String
+    /// Always `setting.value`.
+    public let type: String
+    /// Its value; absent when it has never been set.
+    public let value: String?
 }
 
 /// What a meeting side is delivering, as the silent-channel watchdog judges it: ok, stopped (no

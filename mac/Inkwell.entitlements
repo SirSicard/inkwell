@@ -8,8 +8,10 @@
   silently (no prompt, the grant simply reads as denied). System audio capture (process taps) is
   not a hardened-runtime resource and needs no entitlement; its prompt text is in Info.plist.
 
-  calendars: Today's "Up next" reads the next event with EventKit. Under the hardened runtime,
-  calendar access is refused without this entitlement, whatever the user answers the prompt.
+  personal-information.calendars: the hardened runtime blocks EventKit without it, silently like
+  the microphone. The "Know your meetings" permission (Settings, onboarding) reads the calendar to
+  name a meeting and who was in it, and Today's "Up next" reads the next event; the prompt text is
+  in Info.plist.
 
   Add an entitlement only with the feature that needs it, and say why here.
 -->

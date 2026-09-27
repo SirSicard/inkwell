@@ -98,13 +98,12 @@ final class RecordOrderTests: XCTestCase {
 
     @MainActor
     func testTheModelShowsAnAnswerSortedAndKeepsItSortedAcrossPages() {
-        let library = LibraryModel()
         var sent: [String] = []
-        library.send = { sent.append($0) }
+        let library = LibraryModel(send: { sent.append($0.json) })
         library.refreshList()
         let id = requestID(sent.last!)
         library.apply([event(#"""
-        {"type":"library.records","request":"\#(id)","more":true,"kind":"meeting","records":[
+        {"type":"library.records","ref":"\#(id)","more":true,"kind":"meeting","records":[
           \#(row("m1", start: 1_000, end: 2_000)), \#(row("m3", start: 3_000, end: 4_000)), \#(row("m2", start: 2_000, end: 3_000))]}
         """#)])
         XCTAssertEqual(library.records.map(\.record), ["m3", "m2", "m1"])
@@ -113,7 +112,7 @@ final class RecordOrderTests: XCTestCase {
         XCTAssertEqual(more["cmd"] as? String, "records.list")
         XCTAssertEqual((more["before"] as? [String: Any])?["id"] as? String, "m1", "the cursor is the last shown")
         library.apply([event(#"""
-        {"type":"library.records","request":"\#(more["id"] as! String)","more":false,"kind":"meeting","records":[\#(row("m0", start: 500, end: 900))]}
+        {"type":"library.records","ref":"\#(more["id"] as! String)","more":false,"kind":"meeting","records":[\#(row("m0", start: 500, end: 900))]}
         """#)])
         XCTAssertEqual(library.records.map(\.record), ["m3", "m2", "m1", "m0"])
         XCTAssertFalse(library.hasMore)
@@ -252,7 +251,7 @@ final class SummaryRenderingTests: XCTestCase {
 // MARK: - Record document
 
 private let recordAnswer = #"""
-{"type":"library.record","request":"REQ",
+{"type":"library.record","ref":"REQ",
  "record":{"record":"r1","kind":"meeting","title":"Launch moves to the 14th","started_at_unix_ms":1790250000000,"ended_at_unix_ms":1790250030000,"source_app":"Zoom","revision":2,"has_audio":true},
  "segments":[
    {"channel":"far","start_ms":0,"end_ms":10000,"text":"The design review needs another week.","speaker":"spk0"},
@@ -323,21 +322,25 @@ final class RecordDocumentTests: XCTestCase {
 @MainActor
 final class LibraryModelTests: XCTestCase {
     private func model() -> (LibraryModel, () -> [String]) {
-        let library = LibraryModel()
         var sent: [String] = []
-        library.send = { sent.append($0) }
+        let library = LibraryModel(send: { sent.append($0.json) })
         library.makePlayer = { _ in nil }
         return (library, { sent })
     }
 
+    /// Every library command carries an id, and the answer (or its failure) is matched by it.
     func testCommandsCarryTheirFieldsAndAnId() {
-        let list = command(LibraryCommand.list(kind: .fileImport, before: .init(startedAtUnixMs: 7, record: "r"), limit: 5).json(id: "q1"))
+        let list = command(CoreCommand.recordsList(
+            kind: .fileImport, before: .init(startedAtUnixMs: 7, record: "r"), limit: 5, ref: "q1").json)
         XCTAssertEqual(list["cmd"] as? String, "records.list")
         XCTAssertEqual(list["kind"] as? String, "file_import")
         XCTAssertEqual(list["id"] as? String, "q1")
         XCTAssertEqual((list["before"] as? [String: Any])?["started_at_unix_ms"] as? Int, 7)
-        XCTAssertEqual(command(LibraryCommand.setDone(commitment: "c", done: true).json(id: "d"))["done"] as? Bool, true)
-        XCTAssertEqual(command(LibraryCommand.permissions.json(id: "p"))["cmd"] as? String, "permissions.check")
+        XCTAssertNil(command(CoreCommand.recordsList(kind: nil, before: nil, limit: 5, ref: "q2").json)["kind"])
+        for c in [CoreCommand.recordsSearch(query: "x", limit: 1, ref: "a"), .recordOpen(record: "r", ref: "b"),
+                  .libraryStats(sinceUnixMs: 0, ref: "c")] {
+            XCTAssertNotNil(command(c.json)["id"] as? String, c.name)
+        }
     }
 
     func testAnAnswerToAnOlderQuestionIsDropped() {
@@ -346,8 +349,8 @@ final class LibraryModelTests: XCTestCase {
         let first = requestID(sent().last!)
         library.query = "budget"
         let second = requestID(sent().last!)
-        library.apply([event(#"{"type":"library.search","request":"\#(second)","query":"budget","hits":[{"record":"r","started_at_unix_ms":0,"start_ms":5,"snippet":"the budget"}]}"#)])
-        library.apply([event(#"{"type":"library.search","request":"\#(first)","query":"bud","hits":[]}"#)])
+        library.apply([event(#"{"type":"library.search","ref":"\#(second)","query":"budget","hits":[{"record":"r","started_at_unix_ms":0,"start_ms":5,"snippet":"the budget"}]}"#)])
+        library.apply([event(#"{"type":"library.search","ref":"\#(first)","query":"bud","hits":[]}"#)])
         XCTAssertEqual(library.hits.map(\.snippet), ["the budget"], "the stale answer did not replace the newer one")
         library.query = "  "
         XCTAssertTrue(library.hits.isEmpty, "an empty query clears the matches")
@@ -372,10 +375,11 @@ final class LibraryModelTests: XCTestCase {
         let (library, sent) = model()
         library.refreshToday()
         let asked = sent().map(command)
-        XCTAssertEqual(asked.map { $0["cmd"] as? String }, ["records.list", "commitments.open", "library.stats", "library.stats"])
+        XCTAssertEqual(asked.map { $0["cmd"] as? String }, ["records.list", "library.stats", "library.stats"],
+                       "what is owed is the Owed model's")
         let listID = asked[0]["id"] as! String
         library.apply([event(#"""
-        {"type":"library.records","request":"\#(listID)","more":false,"kind":"meeting","records":[
+        {"type":"library.records","ref":"\#(listID)","more":false,"kind":"meeting","records":[
           \#(row("live", start: 9_000)), \#(row("old", start: 1_000, end: 2_000)), \#(row("r1", start: 5_000, end: 6_000))]}
         """#)])
         let open = command(sent().last!)
@@ -386,32 +390,58 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertNil(library.document, "Today's record is not the Library's selection")
     }
 
-    /// The permission check can play a muted tone: Today asks again only when the last answer has
-    /// aged, or when the user comes back from System Settings.
-    func testPermissionsAreCheckedOnlyWhenThereIsAReason() {
-        let (library, sent) = model()
-        var clock = Date(timeIntervalSince1970: 1_000)
-        library.now = { clock }
-        let checks = { sent().filter { command($0)["cmd"] as? String == "permissions.check" }.count }
-        library.refreshPermissions(ifOlderThan: 300)
-        XCTAssertEqual(checks(), 1, "the first time")
-        clock += 60
-        library.refreshPermissions(ifOlderThan: 300)
-        XCTAssertEqual(checks(), 1, "a minute later, Today appearing again asks nothing")
-        library.refreshPermissions()
-        XCTAssertEqual(checks(), 2, "back from System Settings: always")
-        clock += 301
-        library.refreshPermissions(ifOlderThan: 300)
-        XCTAssertEqual(checks(), 3, "once the answer has aged")
-    }
-
     func testANewRecordOrAMarkedCommitmentRefreshesWhatIsShown() {
         let (library, sent) = model()
         let before = sent().count
         library.apply([event(#"{"type":"meeting.finished","record":"r9","revision":2}"#)])
         let asked = sent()[before...].map { command($0)["cmd"] as? String }
-        XCTAssertTrue(asked.contains("records.list") && asked.contains("commitments.open"), "\(asked)")
+        XCTAssertTrue(asked.contains("records.list") && asked.contains("library.stats"), "\(asked)")
         library.setDone("c1", true)
         XCTAssertEqual(command(sent().last!)["cmd"] as? String, "commitment.set_done")
+
+        // A commitment changed while a record is open: the record is read again.
+        library.open("r1")
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        let reads = sent().count
+        library.apply([event(#"{"type":"commitment.updated","commitment":"c2","done":true}"#)])
+        XCTAssertEqual(sent().count, reads + 1)
+        XCTAssertEqual(command(sent().last!)["cmd"] as? String, "record.open")
+    }
+
+    /// A list or a record that could not be read says so; it never reads as an empty library, and
+    /// a stale question's failure changes nothing.
+    func testAFailedLoadReadsAsCouldNotLoadNeverAsEmpty() {
+        let (library, sent) = model()
+        library.refreshList()
+        let first = requestID(sent().last!)
+        XCTAssertEqual(library.listLoad, .loading)
+        library.refreshList()
+        let second = requestID(sent().last!)
+        let failed = { (id: String, command: String) in
+            event(#"{"type":"command.failed","command":"\#(command)","id":"\#(id)","message":"the library: disk I/O error"}"#)
+        }
+        library.apply([failed(first, "records.list")])
+        XCTAssertEqual(library.listLoad, .loading, "a stale failure changes nothing")
+        library.apply([failed(second, "records.list")])
+        XCTAssertEqual(library.listLoad, .failed)
+        XCTAssertTrue(library.records.isEmpty)
+
+        library.refreshToday()
+        let today = sent().map(command).last { $0["cmd"] as? String == "records.list" }?["id"] as? String ?? ""
+        library.apply([failed(today, "records.list")])
+        XCTAssertEqual(library.lastMeetingLoad, .failed, "not \"no meetings yet\"")
+
+        library.query = "budget"
+        library.apply([failed(requestID(sent().last!), "records.search")])
+        XCTAssertEqual(library.searchLoad, .failed, "not \"nothing matches\"")
+
+        // The screens show these; the controller logs the rest by name.
+        guard case .commandFailed(let listFailure) = failed(second, "records.list"),
+              case .commandFailed(let stats) = failed("statsDay-99", "library.stats"),
+              case .commandFailed(let other) = failed("setting:x", "setting.get")
+        else { return XCTFail("not failures") }
+        XCTAssertTrue(library.handles(listFailure))
+        XCTAssertFalse(library.handles(stats), "counts that cannot be read are left out, and logged")
+        XCTAssertFalse(library.handles(other))
     }
 }

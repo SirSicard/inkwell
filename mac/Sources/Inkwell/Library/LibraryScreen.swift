@@ -12,8 +12,8 @@ struct LibraryScreen: View {
         HStack(spacing: 0) {
             LibraryColumn()
                 .frame(width: 272)
-                .background(Paper.panel)
-            Rectangle().fill(Paper.hairline).frame(width: 1)
+                .background(PaperPalette.panel)
+            Rectangle().fill(PaperPalette.border).frame(width: 1)
             Group {
                 if library.selected != nil {
                     RecordScreen()
@@ -95,9 +95,9 @@ struct KindFilter: View {
                         .font(.callout)
                         .padding(.horizontal, 10)
                         .frame(minHeight: 28)
-                        .foregroundStyle(on ? Paper.card : Theme.text)
-                        .background(Capsule().fill(on ? Paper.you : Color.clear))
-                        .overlay(Capsule().strokeBorder(on ? Paper.you : Paper.hairline, lineWidth: 1))
+                        .foregroundStyle(on ? PaperPalette.card : Theme.text)
+                        .background(Capsule().fill(on ? PaperPalette.you : Color.clear))
+                        .overlay(Capsule().strokeBorder(on ? PaperPalette.you : PaperPalette.border, lineWidth: 1))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -126,7 +126,16 @@ struct RecordList: View {
 
     var body: some View {
         let now = library.now()
-        if library.listLoaded && library.records.isEmpty {
+        if library.listLoad == .failed {
+            // Never an empty library: the list could not be read.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Couldn't load the library").font(.headline).foregroundStyle(Theme.text)
+                Button("Try again") { library.refreshList() }
+                    .buttonStyle(.link)
+            }
+            .padding(.horizontal, 6)
+            Spacer()
+        } else if library.listLoad == .loaded && library.records.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(emptyText.0).font(.headline).foregroundStyle(Theme.text)
                 Text(emptyText.1).font(.callout).foregroundStyle(Theme.secondaryText)
@@ -144,9 +153,12 @@ struct RecordList: View {
                         .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
                 }
                 if library.hasMore {
-                    Button("Show older") { library.loadMore() }
-                        .buttonStyle(.link)
-                        .listRowBackground(Color.clear)
+                    Button(library.moreLoad == .failed ? "Couldn't load older records. Try again" : "Show older") {
+                        library.loadMore()
+                    }
+                    .buttonStyle(.link)
+                    .disabled(library.moreLoad == .loading)
+                    .listRowBackground(Color.clear)
                 }
             }
             .listStyle(.plain)
@@ -176,8 +188,8 @@ struct RecordRowView: View {
         .padding(.vertical, 9)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(selected ? Paper.card : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Paper.hairline : Color.clear, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10).fill(selected ? PaperPalette.card : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? PaperPalette.border : Color.clear, lineWidth: 1))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
@@ -190,10 +202,19 @@ struct SearchResults: View {
     var body: some View {
         let now = library.now()
         if library.hits.isEmpty {
-            Text(library.hitsQuery.isEmpty ? "Searching…" : "Nothing said matches “\(library.hitsQuery)”.")
-                .font(.callout)
-                .foregroundStyle(Theme.secondaryText)
-                .padding(.horizontal, 6)
+            Group {
+                switch library.searchLoad {
+                case .failed:
+                    Text("Couldn't search the library.")
+                case .loaded:
+                    Text("Nothing said matches “\(library.hitsQuery)”.")
+                case .idle, .loading:
+                    Text("Searching…")
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(Theme.secondaryText)
+            .padding(.horizontal, 6)
             Spacer()
         } else {
             List {
@@ -208,7 +229,7 @@ struct SearchResults: View {
                                 .lineLimit(1)
                             Text(hit.snippet)
                                 .font(.system(.callout, design: .serif))
-                                .foregroundStyle(Paper.quiet)
+                                .foregroundStyle(PaperPalette.quiet)
                                 .lineLimit(2)
                             Text("\(LibraryFormat.day(LibraryFormat.date(unixMs: hit.startedAtUnixMs), now: now, calendar: library.calendar)) · \(LibraryFormat.stamp(ms: hit.startMs))")
                                 .font(PaperType.meta)

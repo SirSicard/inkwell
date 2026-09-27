@@ -210,13 +210,29 @@ Each table is one kind:
   is available.
 - A table the size of ABI 1's still registers an offline engine; newer kinds need the full table.
 
-## The library's queries
+## The screens' commands
 
-The screens read the library through commands answered by events, like everything else across the
-C ABI ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): `records.list`,
-`records.search`, `record.open`, `commitments.open`, `commitment.set_done`, `library.stats` and
-`permissions.check`. They run on their own core thread, so a query never waits behind a model
-download on the command thread, and each answer echoes the command's id.
+The screens read and change the library and the permissions through commands too
+([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): permission checks and
+requests, the open commitments ("owed"), a live meeting's notes, the model catalogue, the user's
+modes, and a short whitelist of settings the shell owns (`onboarding.done`, `dictation.polish`).
+
+- They run on their own core thread, `ink-queries`, in order among themselves. The command thread
+  can be held for minutes by a model download; a note or a permission card never waits for it.
+- A permission check never prompts. System audio has no quiet query: the platform plays a muted
+  tone into its own tap and listens for it, which takes about a second, and only once the app has
+  asked for System Audio (the core remembers that in the store), because before that the probe
+  itself would make macOS prompt. Shells check when the user comes back from System Settings and
+  when a screen showing permissions appears, never on a timer.
+- A mode names apps by identity (on macOS, bundle ids, or part of one). The shell shows each as the
+  app's name and icon; a raw identity is never shown.
+- Replies carry the user's words only where the screen asked for them (a commitment's text); a
+  note's words are never echoed back, and errors never quote them.
+
+The Library and a record read through four more, on the same thread: `records.list`,
+`records.search`, `record.open` and `library.stats`. Each answer echoes the command's id as `ref`,
+and a failure is `command.failed` with that id, so a screen can say "could not load" rather than
+show an empty library.
 
 - **Order.** Records list newest first, by start time and then id, with a keyset cursor for the
   next page. The shell never re-sorts by anything else.

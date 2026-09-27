@@ -2,7 +2,8 @@
 // what is up next on the calendar, what is owed soon, and today's and this week's counts. The ink
 // zone beside it is the shell's (InkRail); this is the content to its right.
 //
-// Everything is read from the library (LibraryModel), the core's events (CoreStore) and the
+// Everything is read from the library (LibraryModel), the core's events (CoreStore), the
+// permission cards and what is owed (ScreenModels, the Settings and Owed screens' models) and the
 // calendar (UpNextModel). It is asked for when the screen appears and when the app comes back to
 // the front; a finished meeting or a new dictation refreshes it through the library's events.
 import AppKit
@@ -14,9 +15,9 @@ struct TodayScreen: View {
     @Environment(LibraryModel.self) private var library
     @Environment(UpNextModel.self) private var upNext
     @Environment(Router.self) private var router
+    @Environment(ScreenModels.self) private var screens
+    @Environment(WindowPresence.self) private var presence
     @State private var showAllNeeds = false
-    /// The user went to System Settings from here: check again when the app comes back.
-    @State private var inSettings = false
     /// The content's width: two columns (the canvas's 1.3 : 1) from 624 pt, else one.
     @State private var width: CGFloat = 0
     /// The visible height: the counts sit at the foot of the screen, as the canvas has them.
@@ -62,15 +63,16 @@ struct TodayScreen: View {
         .searchable(text: searchText, placement: .toolbar, prompt: "Search everything said")
         .onAppear {
             library.refreshToday()
-            library.refreshPermissions(ifOlderThan: 300)
+            screens.owed.load()
+            // A screen showing permissions: checked now, and again whenever the app comes back to
+            // the front while it is up (the user may be back from System Settings).
+            screens.permissions.screenAppeared()
             upNext.refresh()
         }
+        .onDisappear {
+            screens.permissions.screenDisappeared()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            // Back from System Settings, perhaps with a permission changed.
-            if inSettings {
-                inSettings = false
-                library.refreshPermissions()
-            }
             upNext.refresh()
         }
     }
@@ -87,7 +89,7 @@ struct TodayScreen: View {
 
     private func header(_ now: Date) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            SectionLabel(LibraryFormat.longDay(now, calendar: calendar))
+            Paper.Eyebrow(text: LibraryFormat.longDay(now, calendar: calendar))
             Text(LibraryFormat.greeting(now, calendar: calendar))
                 .font(.system(.largeTitle, weight: .semibold))
                 .foregroundStyle(Theme.text)
@@ -99,7 +101,7 @@ struct TodayScreen: View {
 
     private func needItems(_ now: Date) -> [NeedsYouItem] {
         NeedsYou.items(
-            permissions: library.permissions,
+            permission: screens.permissions.state,
             farSilentMeetings: library.week?.farSilentMeetings ?? library.today?.farSilentMeetings ?? 0,
             farSilentSince: (library.week?.farSilentSinceUnixMs ?? library.today?.farSilentSinceUnixMs)
                 .map(LibraryFormat.date(unixMs:)),
@@ -115,7 +117,7 @@ struct TodayScreen: View {
                 if items.count > 1 {
                     if showAllNeeds {
                         ForEach(items.dropFirst()) { item in
-                            Divider().overlay(Paper.hairline)
+                            Divider().overlay(PaperPalette.border)
                             NeedsYouRow(item: item, perform: perform)
                         }
                     }
@@ -129,8 +131,8 @@ struct TodayScreen: View {
             }
             .padding(.vertical, 16)
             .padding(.horizontal, 18)
-            .background(RoundedRectangle(cornerRadius: 14).fill(Paper.card))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Paper.sealTint, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 14).fill(PaperPalette.card))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PaperPalette.sealTint, lineWidth: 1))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Needs you")
         }
@@ -138,11 +140,8 @@ struct TodayScreen: View {
 
     private func perform(_ action: NeedsYouItem.Action) {
         switch action {
-        case .openSettings(let pane):
-            if let url = pane.url {
-                inSettings = true
-                NSWorkspace.shared.open(url)
-            }
+        case .allow(let card):
+            screens.permissions.request(card)
         case .dismiss(let id):
             store.dismissNotice(id)
         }
@@ -153,7 +152,7 @@ struct TodayScreen: View {
     @ViewBuilder
     private func lastMeeting(_ now: Date) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionLabel("Last meeting")
+            Paper.Eyebrow(text: "Last meeting")
             if let meeting = library.lastMeeting {
                 let record = meeting.record
                 Button {
@@ -200,7 +199,14 @@ struct TodayScreen: View {
                     }
                 }
                 .padding(.top, 6)
-            } else if library.lastMeetingLoaded {
+            } else if library.lastMeetingLoad == .failed {
+                // Never "no meetings": the library could not be read.
+                Text("Couldn't load your last meeting.")
+                    .font(PaperType.reading)
+                    .foregroundStyle(Theme.secondaryText)
+                Button("Try again") { library.refreshToday() }
+                    .buttonStyle(.link)
+            } else if library.lastMeetingLoad == .loaded {
                 Text("No meetings yet. When you join a call, Inkwell records both sides and the record lands here.")
                     .font(PaperType.reading)
                     .foregroundStyle(Theme.secondaryText)
@@ -219,19 +225,20 @@ struct TodayScreen: View {
 
     private func upNextSection(_ now: Date) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            SectionLabel("Up next")
+            Paper.Eyebrow(text: "Up next")
             switch upNext.access {
-            case .granted:
+            case .allowed:
                 if let event = upNext.event {
                     Text(event.title)
                         .font(.headline)
                         .foregroundStyle(Theme.text)
-                    // Redrawn once a minute while an event is shown, so "in 42 min" stays true.
-                    TimelineView(.everyMinute) { context in
+                    // Redrawn on the minute so "in 42 min" stays true, and only while the window is
+                    // on screen: hidden, covered or minimised, it draws once and stays still.
+                    TimelineView(MinuteSchedule(paused: !upNext.ticks(onScreen: presence.onScreen))) { context in
                         Text(([LibraryFormat.time(event.start, calendar: calendar)] + [event.app].compactMap { $0 }
                             + [MeetingApp.startsIn(event.start, now: context.date)]).joined(separator: " · "))
                             .font(PaperType.meta)
-                            .foregroundStyle(Paper.quiet)
+                            .foregroundStyle(PaperPalette.quiet)
                     }
                     Text(event.app.map { "Records when \($0) opens the microphone" } ?? "Records when the call opens the microphone")
                         .font(.callout)
@@ -241,26 +248,23 @@ struct TodayScreen: View {
                         .font(.callout)
                         .foregroundStyle(Theme.secondaryText)
                 }
-            case .notDetermined:
+            case .notAsked, .checking:
                 Text("See your next meeting here.")
                     .font(.callout)
                     .foregroundStyle(Theme.secondaryText)
                 Button("Show my next meeting") {
-                    Task { await upNext.connect() }
+                    upNext.connect()
                 }
                 .buttonStyle(PaperButtonStyle())
                 .accessibilityHint("Asks for access to your calendars")
-            case .denied:
+            case .off, .unknown:
                 Text("Calendar access is off, so Inkwell can't show your next meeting.")
                     .font(.callout)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Open Calendar settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .buttonStyle(.link)
+                // The same request as the Settings card's: here, System Settings at Calendars.
+                Button("Open Calendar settings") { upNext.connect() }
+                    .buttonStyle(.link)
             }
         }
         .accessibilityElement(children: .contain)
@@ -268,27 +272,32 @@ struct TodayScreen: View {
 
     // MARK: Owed soon
 
+    /// How many promises Today lists.
+    static let owedShown = 3
+
+    /// The Owed screen's list (OwedModel), soonest due first: its first three.
     private func owedSoon(_ now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let owed = screens.owed
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                SectionLabel("Owed soon")
+                Paper.Eyebrow(text: "Owed soon")
                 Spacer()
-                if library.owedTotal > 0 {
-                    Button("All \(library.owedTotal)") { router.open(.owed) }
+                if !owed.items.isEmpty {
+                    Button("All \(owed.items.count)") { router.open(.owed) }
                         .buttonStyle(.link)
                         .font(.callout)
                 }
             }
-            if library.owed.isEmpty {
+            if owed.loaded && owed.items.isEmpty {
                 Text("Nothing owed. Promises made in meetings show up here.")
                     .font(.callout)
                     .foregroundStyle(Theme.secondaryText)
             }
-            ForEach(library.owed, id: \.commitment.commitment) { item in
+            ForEach(owed.items.prefix(Self.owedShown), id: \.id) { item in
                 OwedSoonRow(
-                    item: item, now: now, calendar: calendar,
-                    done: { library.setDone(item.commitment.commitment, true) },
-                    open: { ms in openRecord(item.commitment.record, seekMs: ms, play: true) })
+                    item: item, due: owed.due(item, now: now), calendar: calendar,
+                    done: { owed.markDone(item.id) },
+                    open: { ms in openRecord(item.record, seekMs: ms, play: true) })
             }
         }
         .accessibilityElement(children: .contain)
@@ -317,7 +326,7 @@ struct TodayScreen: View {
         .font(PaperType.meta)
         .foregroundStyle(Theme.secondaryText)
         .padding(.top, 16)
-        .overlay(alignment: .top) { Rectangle().fill(Paper.hairline).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(PaperPalette.border).frame(height: 1) }
         .accessibilityElement(children: .combine)
     }
 }
@@ -339,7 +348,7 @@ struct NeedsYouRow: View {
                     .foregroundStyle(Theme.text)
                 Text(item.detail)
                     .font(.callout)
-                    .foregroundStyle(Paper.quiet)
+                    .foregroundStyle(PaperPalette.quiet)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
@@ -350,28 +359,13 @@ struct NeedsYouRow: View {
     }
 }
 
-/// One commitment on Today: a circle to mark it done, what is owed, and when and where it was said.
+/// One promise on Today: a circle to mark it done, what is owed, and when and where it was said.
 struct OwedSoonRow: View {
     let item: OwedItem
-    let now: Date
+    let due: DueLabel
     let calendar: Calendar
     let done: () -> Void
     let open: (Int64) -> Void
-
-    private var overdueDays: Int? {
-        guard let due = item.commitment.dueAtUnixMs.map(LibraryFormat.date(unixMs:)), due < now else { return nil }
-        return max(calendar.dateComponents([.day], from: calendar.startOfDay(for: due), to: calendar.startOfDay(for: now)).day ?? 0, 0)
-    }
-
-    private var when: String? {
-        if let days = overdueDays {
-            return days == 0 ? "Due today" : "\(days) \(days == 1 ? "day" : "days") overdue"
-        }
-        if let due = item.commitment.dueAtUnixMs.map(LibraryFormat.date(unixMs:)) {
-            return LibraryFormat.day(due, now: now, calendar: calendar)
-        }
-        return item.commitment.due
-    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -379,23 +373,24 @@ struct OwedSoonRow: View {
                 Circle().strokeBorder(Theme.text, lineWidth: 1.5).frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Mark done: \(item.commitment.text)")
+            .accessibilityLabel("Mark done: \(item.text)")
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.commitment.text)
+                Text(item.text)
                     .font(.body)
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 4) {
-                    Text([when, item.recordTitle].compactMap { $0 }.joined(separator: " · "))
+                    Text([due == .undated ? nil : due.text(calendar: calendar), item.recordTitle]
+                        .compactMap { $0 }.joined(separator: " · "))
                         .lineLimit(1)
-                    if let at = item.commitment.provenance.map(\.startMs).min() {
+                    if let at = item.saidAtMs {
                         Button("▸ \(LibraryFormat.stamp(ms: at))") { open(at) }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Play where it was said, \(LibraryFormat.stamp(ms: at))")
                     }
                 }
                 .font(PaperType.meta)
-                .foregroundStyle(overdueDays != nil ? Paper.alert : Theme.secondaryText)
+                .foregroundStyle(due.isOverdue ? PaperPalette.alertText : Theme.secondaryText)
             }
         }
         .accessibilityElement(children: .contain)

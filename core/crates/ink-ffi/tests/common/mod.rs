@@ -420,7 +420,7 @@ pub fn start(
         loader,
         installer,
         data_dir: dir.path().to_owned(),
-        permissions: None,
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
     };
     start_parts(parts)
 }

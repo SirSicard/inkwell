@@ -40,6 +40,8 @@ struct RecordScreen: View {
                 Text(failure)
                     .font(.callout)
                     .foregroundStyle(Theme.secondaryText)
+                Button("Try again") { library.reopen() }
+                    .buttonStyle(.link)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -84,8 +86,8 @@ struct RecordHeader: View {
                         Image(systemName: "square.and.arrow.up").frame(width: 32, height: 32)
                     }
                     .buttonStyle(.plain)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Paper.card))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Paper.hairline, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(PaperPalette.card))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PaperPalette.border, lineWidth: 1))
                     .accessibilityLabel("Share")
                     .help("Share the summary")
                     Menu {
@@ -99,8 +101,8 @@ struct RecordHeader: View {
                     .menuIndicator(.hidden)
                     .buttonStyle(.plain)
                     .frame(width: 32, height: 32)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Paper.card))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Paper.hairline, lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(PaperPalette.card))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PaperPalette.border, lineWidth: 1))
                     .accessibilityLabel("More")
                 }
             }
@@ -131,8 +133,8 @@ struct RecordHeader: View {
             Image(systemName: symbol).frame(width: 32, height: 32)
         }
         .buttonStyle(.plain)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Paper.card))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Paper.hairline, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 8).fill(PaperPalette.card))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(PaperPalette.border, lineWidth: 1))
         .disabled(disabled)
         .accessibilityLabel(label)
         .help(label)
@@ -173,7 +175,7 @@ struct TabRow: View {
             }
             Spacer()
         }
-        .overlay(alignment: .bottom) { Rectangle().fill(Paper.hairline).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(PaperPalette.border).frame(height: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Record")
     }
@@ -193,8 +195,8 @@ struct NotesAndTranscript: View {
             HStack(alignment: .top, spacing: 0) {
                 MergedNotesView(document: document)
                     .frame(width: notes, alignment: .topLeading)
-                Rectangle().fill(Paper.hairline).frame(width: 1)
-                LedgerView(document: document, current: current)
+                Rectangle().fill(PaperPalette.border).frame(width: 1)
+                RecordLedgerView(document: document, current: current)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxHeight: .infinity, alignment: .top)
@@ -213,9 +215,11 @@ struct PlayheadLine: View {
     let document: RecordDocument
     @Binding var current: Int?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(WindowPresence.self) private var presence
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 0.25, paused: !player.isPlaying)) { _ in
+        // Only while playing and on screen: audio playing behind a covered window draws nothing.
+        TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 0.25, paused: !player.isPlaying || !presence.onScreen)) { _ in
             // Marked once the playhead has been put somewhere: by playing, or by a chip or a line.
             let placed = player.state != .idle || player.anchorMs > 0
             let line = placed ? document.line(atPlayhead: player.positionMs())?.id : nil
@@ -233,7 +237,7 @@ struct MergedNotesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                SectionLabel(document.merged.contains { $0.kind == .note } ? "Your notes, filled in" : "Key moments")
+                Paper.Eyebrow(text: document.merged.contains { $0.kind == .note } ? "Your notes, filled in" : "Key moments")
                 if !document.merged.contains(where: { $0.kind == .note }) {
                     Text(document.record.kind == .meeting ? "You typed no notes in this meeting." : "No notes.")
                         .font(.callout)
@@ -264,7 +268,7 @@ struct MergedNotesView: View {
             .padding(.top, 4)
         case .said(let speaker):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(Text("\(speaker.label): ").foregroundStyle(speaker.isYou ? Paper.you : Paper.them).bold())\(entry.text)")
+                Text("\(Text("\(speaker.label): ").foregroundStyle(speaker.isYou ? PaperPalette.you : PaperPalette.them).bold())\(entry.text)")
                     .font(.system(.callout, design: .serif))
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -272,7 +276,7 @@ struct MergedNotesView: View {
             }
         case .owed:
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "checkmark.circle").foregroundStyle(Paper.them).accessibilityLabel("Owed")
+                Image(systemName: "checkmark.circle").foregroundStyle(PaperPalette.them).accessibilityLabel("Owed")
                 Text(entry.text)
                     .font(.system(.callout, design: .serif))
                     .foregroundStyle(Theme.text)
@@ -285,7 +289,7 @@ struct MergedNotesView: View {
 
 /// The ledger: every line with its time, who said it and what; the line under the playhead is
 /// marked. Clicking a line plays from it.
-struct LedgerView: View {
+struct RecordLedgerView: View {
     let document: RecordDocument
     let current: Int?
     @Environment(LibraryModel.self) private var library
@@ -304,11 +308,11 @@ struct LedgerView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    SectionLabel("What was said")
+                    Paper.Eyebrow(text: "What was said")
                     Spacer()
                     Label(status, systemImage: document.isFinal ? "drop.fill" : "drop")
                         .font(PaperType.meta)
-                        .foregroundStyle(Paper.quiet)
+                        .foregroundStyle(PaperPalette.quiet)
                         .labelStyle(.titleAndIcon)
                 }
                 .padding(.leading, 80)
@@ -320,7 +324,7 @@ struct LedgerView: View {
                         .padding(.leading, 80)
                 }
                 ForEach(document.ledger) { line in
-                    LedgerRow(line: line, current: line.id == current) {
+                    RecordLedgerRow(line: line, current: line.id == current) {
                         library.playFrom(line.startMs)
                     }
                 }
@@ -332,7 +336,7 @@ struct LedgerView: View {
     }
 }
 
-struct LedgerRow: View {
+struct RecordLedgerRow: View {
     let line: LedgerLine
     let current: Bool
     let play: () -> Void
@@ -346,14 +350,14 @@ struct LedgerRow: View {
                     .frame(width: 64, alignment: .trailing)
                     .padding(.top, 3)
                 Circle()
-                    .fill(line.speaker.isYou ? Paper.you : Paper.them)
+                    .fill(line.speaker.isYou ? PaperPalette.you : PaperPalette.them)
                     .frame(width: 8, height: 8)
                     .padding(.top, 7)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(line.speaker.label)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(line.speaker.isYou ? Paper.you : Paper.them)
+                        .foregroundStyle(line.speaker.isYou ? PaperPalette.you : PaperPalette.them)
                     Text(line.text)
                         .font(PaperType.reading)
                         .lineSpacing(2)
@@ -364,7 +368,7 @@ struct LedgerRow: View {
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(current ? Paper.highlight : Color.clear))
+            .background(RoundedRectangle(cornerRadius: 8).fill(current ? PaperPalette.chip : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -396,7 +400,7 @@ struct SummaryTab: View {
                 }
                 let cited = document.owed.filter { $0.citedLine != nil }
                 if !cited.isEmpty {
-                    SectionLabel("Where it was said").padding(.top, 14)
+                    Paper.Eyebrow(text: "Where it was said").padding(.top, 14)
                     ForEach(cited) { item in
                         CitedItem(item: item) { ms in library.playFrom(ms) }
                     }
@@ -469,7 +473,7 @@ struct CitedItem: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("\(line.speaker.label): “\(line.text)”")
                         .font(.system(.callout, design: .serif))
-                        .foregroundStyle(Paper.quiet)
+                        .foregroundStyle(PaperPalette.quiet)
                         .fixedSize(horizontal: false, vertical: true)
                     StampChip(ms: line.startMs) { play(line.startMs) }
                 }

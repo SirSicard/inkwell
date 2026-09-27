@@ -1,6 +1,6 @@
 // The player at the foot of a record: play or pause, the two-lane waveform (them above in sepia,
 // you below in ink, the played part solid) with the playhead, the time, and the You/Them mix.
-// It redraws only while playing.
+// It redraws only while playing, with the window on screen.
 import InkBridge
 import SwiftUI
 
@@ -9,6 +9,7 @@ struct PlayerBar: View {
     let document: RecordDocument
     @State private var waveform = Waveform.empty
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(WindowPresence.self) private var presence
 
     /// Buckets in the waveform: one bar each.
     nonisolated static let bars = 160
@@ -20,14 +21,15 @@ struct PlayerBar: View {
             } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Paper.card)
+                    .foregroundStyle(PaperPalette.card)
                     .frame(width: 38, height: 38)
-                    .background(Circle().fill(Paper.you))
+                    .background(Circle().fill(PaperPalette.you))
             }
             .buttonStyle(.plain)
             // No bare Space shortcut: it would fire while typing in the search field.
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-            TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30, paused: !player.isPlaying)) { _ in
+            // Only while playing and on screen: audio playing behind a covered window draws nothing.
+            TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30, paused: !player.isPlaying || !presence.onScreen)) { _ in
                 let position = player.positionMs()
                 HStack(spacing: 16) {
                     WaveformView(waveform: waveform, position: position, duration: player.durationMs) { ms in
@@ -35,26 +37,26 @@ struct PlayerBar: View {
                     }
                     Text("\(LibraryFormat.stamp(ms: position)) / \(LibraryFormat.stamp(ms: player.durationMs))")
                         .font(PaperType.meta)
-                        .foregroundStyle(Paper.quiet)
+                        .foregroundStyle(PaperPalette.quiet)
                         .monospacedDigit()
                         .fixedSize()
                         .accessibilityLabel("\(LibraryFormat.stamp(ms: position)) of \(LibraryFormat.stamp(ms: player.durationMs))")
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                mix("You", value: $player.youVolume, tint: Paper.you, label: "Your volume", enabled: player.sides.contains(.mic))
-                mix("Them", value: $player.themVolume, tint: Paper.them, label: "Their volume", enabled: player.sides.contains(.far))
+                mix("You", value: $player.youVolume, tint: PaperPalette.you, label: "Your volume", enabled: player.sides.contains(.mic))
+                mix("Them", value: $player.themVolume, tint: PaperPalette.them, label: "Their volume", enabled: player.sides.contains(.far))
             }
             .fixedSize()
         }
         .padding(.leading, 32)
         .padding(.trailing, 24)
         .frame(height: 72)
-        .background(Paper.panel)
-        .overlay(alignment: .top) { Rectangle().fill(Paper.hairline).frame(height: 1) }
+        .background(PaperPalette.panel)
+        .overlay(alignment: .top) { Rectangle().fill(PaperPalette.border).frame(height: 1) }
         .overlay(alignment: .bottomLeading) {
             if case .failed(let why) = player.state {
-                Text(why).font(.caption).foregroundStyle(Paper.alert).padding(.leading, 86).padding(.bottom, 2)
+                Text(why).font(.caption).foregroundStyle(PaperPalette.alertText).padding(.leading, 86).padding(.bottom, 2)
             }
         }
         .task(id: document.record.record) {
@@ -71,7 +73,7 @@ struct PlayerBar: View {
         HStack(spacing: 8) {
             Text(title)
                 .font(.caption)
-                .foregroundStyle(Paper.quiet)
+                .foregroundStyle(PaperPalette.quiet)
                 .frame(width: 34, alignment: .leading)
                 .accessibilityHidden(true)
             Slider(value: value, in: 0...1)
@@ -137,13 +139,13 @@ struct WaveformView: View {
             let youHeight = max(you * lane, 1)
             context.fill(
                 Path(roundedRect: CGRect(x: x - barWidth / 2, y: size.height / 2 - 1 - themHeight, width: barWidth, height: themHeight), cornerRadius: 1),
-                with: .color(Paper.them.opacity(opacity)))
+                with: .color(PaperPalette.them.opacity(opacity)))
             context.fill(
                 Path(roundedRect: CGRect(x: x - barWidth / 2, y: size.height / 2 + 1, width: barWidth, height: youHeight), cornerRadius: 1),
-                with: .color(Paper.you.opacity(opacity)))
+                with: .color(PaperPalette.you.opacity(opacity)))
         }
         let head = CGFloat(fraction) * size.width
-        context.fill(Path(CGRect(x: head - 1, y: 0, width: 2, height: size.height)), with: .color(Paper.alert))
+        context.fill(Path(CGRect(x: head - 1, y: 0, width: 2, height: size.height)), with: .color(PaperPalette.alertText))
     }
 }
 

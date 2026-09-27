@@ -44,7 +44,7 @@ bundle_check_newer() {
 # code no signature covers. A link that stays inside passes (a framework is built of them); what it
 # points at is checked where it is.
 check_bundle_linkage() {
-  local app target allow main main_rpaths problems=0 checked=0 newer=0 f records rel dir kind exe
+  local app target allow main main_rpaths problems=0 checked=0 newer=0 f records rel dir kind exe own_rpaths candidates
   local rec cmd name rp resolved candidate found minos real
   app="$(cd "$1" && pwd -P)"
   target="$2"
@@ -76,6 +76,7 @@ check_bundle_linkage() {
     checked=$((checked + 1))
     dir="$(dirname "$f")"
     records="$(bundle_check_records "$f")"
+    own_rpaths="$(sed -n 's/^rpath //p' <<<"$records")"
     kind="$(sed -n 's/^type //p' <<<"$records" | head -1)"
     if [ "$kind" = EXECUTE ]; then exe="$dir"; else exe="$(dirname "$main")"; fi
 
@@ -104,7 +105,20 @@ check_bundle_linkage() {
         @loader_path/*) found="$dir/${name#@loader_path/}" ;;
         @executable_path/*) found="$exe/${name#@executable_path/}" ;;
         @rpath/*)
-          # Its own rpaths, then (a library) the app executable's, as dyld searches them.
+          # Its own rpaths, then (a library) the app executable's, as dyld searches them. Built
+          # into a variable first: the loop below leaves early (break), and when it read a process
+          # substitution instead, the writer was left on a closed pipe. The release build died
+          # here of a SIGTRAP, next to a broken pipe from that writer.
+          candidates="$(
+            while IFS= read -r rp; do
+              if [ -n "$rp" ]; then printf '%s\t%s\n' "$dir" "$rp"; fi
+            done <<<"$own_rpaths"
+            if [ "$kind" != EXECUTE ]; then
+              while IFS= read -r rp; do
+                if [ -n "$rp" ]; then printf '%s\t%s\n' "$(dirname "$main")" "$rp"; fi
+              done <<<"$main_rpaths"
+            fi
+          )"
           while IFS=$'\t' read -r candidate rp; do
             [ -n "$rp" ] || continue
             case "$rp" in
@@ -116,12 +130,7 @@ check_bundle_linkage() {
               found="$resolved/${name#@rpath/}"
               break
             fi
-          done < <(
-            sed -n 's/^rpath //p' <<<"$records" | while IFS= read -r rp; do printf '%s\t%s\n' "$dir" "$rp"; done
-            [ "$kind" = EXECUTE ] || while IFS= read -r rp; do
-              [ -n "$rp" ] && printf '%s\t%s\n' "$(dirname "$main")" "$rp"
-            done <<<"$main_rpaths"
-          )
+          done <<<"$candidates"
           ;;
         *)
           problem "loads $name, which no rule here resolves"

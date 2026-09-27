@@ -49,7 +49,7 @@
  *   generated text). Shells must not install their own logger or subscriber for the core's
  *   targets; there is nothing to configure beyond "log_level" in the config. Event payloads carry
  *   the user's words (dictation.inserted, meeting.partial, meeting.final, and the library's
- *   answers: library.records, library.search, library.record, library.owed): never log them.
+ *   answers: library.records, library.search, library.record, commitments.listed): never log them.
  *
  * SHUTDOWN
  *   ink_shutdown stops every worker, lets go of every engine the shell registered (their release
@@ -139,9 +139,38 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
  *
- * The library's queries run on their own thread, in order among themselves, so they never wait
- * behind a command above (a model download can take minutes). Each is answered by one event that
- * echoes the command's "id" as "request"; a failure is "command.failed" with that id.
+ *   The screens' commands run on their own thread, in order among themselves, so a model update
+ *   holding the commands above never delays them. Each answers with the event named, or
+ *   "command.failed" (with the "id").
+ *   {"cmd":"permissions.check"}
+ *       "permissions.checked": microphone, system audio, accessibility, input monitoring. Never
+ *       prompts. System audio takes about a second once the app has asked for it, and reads
+ *       not_determined until then. Check when the user comes back from System Settings, not on a
+ *       timer.
+ *   {"cmd":"permission.request","permission":"microphone|system_audio|accessibility|input_monitoring"}
+ *       Shows the system prompt the first time, else opens the settings pane: only when the user
+ *       asks. "permission.requested"; the answer comes later, so check again afterwards.
+ *   {"cmd":"commitments.list","limit":200}
+ *       "commitments.listed": the open commitments, soonest due first ("limit" optional, 1-1000).
+ *   {"cmd":"commitment.set_done","commitment":"<id>","done":true}
+ *       "commitment.updated".
+ *   {"cmd":"note.add","record":"<record id>","at_ms":754000,"text":"...","id":"<ref>"}
+ *   {"cmd":"note.update","note":"<note id>","text":"..."}
+ *   {"cmd":"note.delete","note":"<note id>"}
+ *       A record's notes: "note.added" (with the note's id), "note.updated", "note.deleted",
+ *       each with the command's "id" as "ref"; a failure is "command.failed" with that "id". So
+ *       every answer can be matched to the line that sent it. The note's words are never echoed
+ *       back.
+ *   {"cmd":"models.list"}
+ *       "models.listed": the catalogue's models for this OS, their measured error rates and
+ *       whether each is installed. Send engine.route for what serves a job now.
+ *   {"cmd":"setting.get","key":"<key>"}
+ *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
+ *       "setting.value". Only the shell's settings: "onboarding.done" (true|false) and
+ *       "dictation.polish" (on|off).
+ *   {"cmd":"modes.list"}
+ *       "modes.listed": the user's modes, in the order they are matched, with the app identities
+ *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
  *   {"cmd":"records.list","kind":"meeting","limit":50,"before":{"started_at_unix_ms":0,"id":"..."}}
  *       "library.records": records newest first (by start time, then id). All fields optional:
  *       "kind" is meeting, dictation or file_import; "limit" 1-500 (default 50); "before" is the
@@ -151,18 +180,11 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"record.open","record":"<record id>"}
  *       "library.record": the record whole: transcript, notes, summary (markdown, to be rendered),
  *       commitments, named speakers, and its audio chunks placed on its timeline.
- *   {"cmd":"commitments.open","limit":50}
- *       "library.owed": open commitments, soonest due first, with their record's title; "total"
- *       counts them all.
- *   {"cmd":"commitment.set_done","commitment":"<id>","done":true}
- *       "library.commitment_done".
  *   {"cmd":"library.stats","since_unix_ms":0}
  *       "library.stats": per kind, records, time and words since the moment; and how many of the
  *       newest meetings in a row kept the user's words and none of the far end's.
- *   {"cmd":"permissions.check"}
- *       "permissions.checked": each permission's state, never prompting. System audio reads
- *       not_determined until the setting "permissions.system_audio_asked" is "true" (the shell
- *       sets it when it asks); after that the check plays a muted tone and takes about a second.
+ *       These four answer with the command's "id" as "ref"; a failure is "command.failed" with
+ *       that "id", so a screen can tell "could not load" from "empty".
  *
  * Returns INK_OK once the command is queued; its outcome arrives as events. A command the core
  * cannot read returns INK_ERR_INVALID_ARGUMENT and queues nothing.
