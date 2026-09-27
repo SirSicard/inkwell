@@ -42,6 +42,27 @@ out="$(/bin/bash "$summary" "$work/fail.log")" || status=$?
 assert_status "a failing bundle fails the summary" 1 "$status"
 assert_contains "failures are counted" "$out" "2 failures"
 
+# A bundle with skipped tests (a local-only test without its data) says so in the same line.
+cat >"$work/skipped.log" <<'LOG'
+Test Suite 'AppleEnginesTests.xctest' passed at 2026-09-27 10:25:43.972.
+	 Executed 33 tests, with 5 tests skipped and 0 failures (0 unexpected) in 2.062 (2.064) seconds
+Test Suite 'All tests' passed at 2026-09-27 10:25:43.972.
+	 Executed 33 tests, with 5 tests skipped and 0 failures (0 unexpected) in 2.062 (2.070) seconds
+LOG
+cat "$work/pass.log" "$work/skipped.log" >"$work/with-skips.log"
+status=0
+out="$(/bin/bash "$summary" "$work/with-skips.log")" || status=$?
+assert_status "skipped tests pass" 0 "$status"
+assert_contains "a bundle with skips is counted" "$out" "68 tests in 3 bundles"
+assert_contains "and named" "$out" "AppleEnginesTests 33"
+sed -e "s/'AppleEnginesTests.xctest' passed/'AppleEnginesTests.xctest' failed/" \
+  -e 's/5 tests skipped and 0 failures/1 test skipped and 3 failures/' \
+  "$work/with-skips.log" >"$work/skips-fail.log"
+status=0
+out="$(/bin/bash "$summary" "$work/skips-fail.log")" || status=$?
+assert_status "failures beside skips fail the summary" 1 "$status"
+assert_contains "and are counted" "$out" "3 failures"
+
 printf 'error: build failed\n' >"$work/none.log"
 status=0
 out="$(/bin/bash "$summary" "$work/none.log")" || status=$?

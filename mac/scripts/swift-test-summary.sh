@@ -19,9 +19,10 @@ awk '
     pending = name
     next
   }
-  pending != "" && /Executed [0-9]+ tests?, with [0-9]+ failures?/ {
+  # "with N failures", or "with S tests skipped and N failures" when a bundle skipped some.
+  pending != "" && /Executed [0-9]+ tests?, with ([0-9]+ tests? skipped and )?[0-9]+ failures?/ {
     match($0, /Executed [0-9]+/); tests = substr($0, RSTART + 9, RLENGTH - 9) + 0
-    match($0, /with [0-9]+/); fails = substr($0, RSTART + 5, RLENGTH - 5) + 0
+    match($0, /[0-9]+ failures?/); fails = substr($0, RSTART, RLENGTH) + 0
     total += tests; failures += fails; bundles++
     list = list (list == "" ? "" : ", ") pending " " tests
     pending = ""
