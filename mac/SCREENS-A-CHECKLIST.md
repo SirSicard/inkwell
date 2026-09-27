@@ -141,8 +141,16 @@ Not in this step, by design (so not a failure here):
 - [ ] Clicking or dragging on the waveform moves the playhead there.
 - [ ] Them at zero leaves only your side; You at zero only theirs.
 - [ ] Playing to the end stops at "00:30 / 00:30"; Play again starts from the beginning.
-- [ ] With no output device (or it disconnects), the bar says "This recording can't be played
-      right now." instead of failing silently.
+- [ ] With no output device, the bar says "This recording can't be played right now." instead of
+      failing silently.
+- [ ] Unplug headphones (or switch the output in Control Centre) while it plays: it carries on
+      from where it was on the new output (needs ears), or says it can't play.
+- [ ] A record whose `timeline.json` is missing (delete it from the seeded meeting's folder under
+      `meetings/`): the ledger reads "Blotted … · final · timing estimated", and the bar says
+      "Timing estimated: the two sides may be out of step."
+- [ ] A record with a chunk file removed or cut short (`truncate -s 1000` one of its `.pcm`
+      files): the bar says "Part of this recording can't be played." and that stretch of the
+      waveform is flat; nothing claims it is silence.
 - [ ] Idle, the Library draws nothing: Activity Monitor shows Inkwell at 0 % CPU with a record
       open and paused, and no audio engine runs until Play.
 

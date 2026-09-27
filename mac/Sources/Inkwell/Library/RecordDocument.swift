@@ -92,7 +92,28 @@ struct RecordDocument: Equatable, Sendable {
     /// The people on the far end, as named or numbered.
     let people: [String]
     let chunks: [TimelineChunk]
-    let timelineEstimated: Bool
+    /// What the player cannot vouch for: the screen shows each (beside the ledger's status and in
+    /// the player bar), so an estimated or partial recording never plays with a precise one's
+    /// confidence.
+    let playbackCaveats: Caveats
+
+    /// What is uncertain about a record's audio.
+    struct Caveats: Equatable, Sendable {
+        /// The chunks were placed from the earliest one, the meeting's start not being written:
+        /// the two sides may be out of step.
+        let timelineEstimated: Bool
+        /// Chunk files the core left out of the player (unreadable, or of unknown format or place).
+        let leftOut: Int
+
+        /// The words the player bar shows, one per line; `waveformPartial` when a chunk could not
+        /// be read for the waveform.
+        func messages(waveformPartial: Bool) -> [String] {
+            var out: [String] = []
+            if timelineEstimated { out.append("Timing estimated: the two sides may be out of step.") }
+            if leftOut > 0 || waveformPartial { out.append("Part of this recording can't be played.") }
+            return out
+        }
+    }
     /// The transcript is the final pass's (revision 2 or later), not the live one.
     let isFinal: Bool
 
@@ -152,7 +173,22 @@ struct RecordDocument: Equatable, Sendable {
                 channel: $0.channel, path: $0.path, startMs: $0.startMs, frames: $0.frames,
                 sampleRate: Int($0.sampleRate), channels: Int($0.channels), dataOffset: Int($0.dataOffset))
         }
-        timelineEstimated = answer.audio?.timeline == .estimated
+        playbackCaveats = Caveats(
+            timelineEstimated: answer.audio?.timeline == .estimated,
+            leftOut: Int(answer.audio?.leftOut ?? 0))
+    }
+
+    /// The ledger's status: blotted (the final pass's transcript) or live, and whether the audio's
+    /// timing is estimated. `blottedAt` is the summary's time, formatted.
+    func ledgerStatus(blottedAt: String?) -> String {
+        var parts: [String]
+        if isFinal {
+            parts = [blottedAt.map { "Blotted \($0)" } ?? "Blotted", "final"]
+        } else {
+            parts = ["Live transcript", "not blotted"]
+        }
+        if playbackCaveats.timelineEstimated { parts.append("timing estimated") }
+        return parts.joined(separator: " · ")
     }
 
     /// The ledger line to highlight while the playhead is at `ms`: the last line that has started.

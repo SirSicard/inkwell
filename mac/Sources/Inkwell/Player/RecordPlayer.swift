@@ -5,7 +5,11 @@
 // timeline, so the sides stay aligned across gaps, and a line's stamp and the audio agree.
 //
 // The engine exists only while something plays or is paused: an idle Record screen holds no audio
-// engine and draws nothing (architecture rule 9). Tests render offline (manual rendering), which
+// engine and draws nothing (architecture rule 9).
+//
+// When the output changes under it (a device unplugged, the route moved: the engine's
+// configuration-change notice), the engine is let go and playback starts again in place, from
+// where it was; if it cannot, the player fails with its words rather than going silent. Tests render offline (manual rendering), which
 // needs no audio device.
 import AVFoundation
 import Foundation
@@ -58,6 +62,8 @@ final class RecordPlayer {
     @ObservationIgnored private let chunks: [Channel: [TimelineChunk]]
     @ObservationIgnored private let output: Output
     @ObservationIgnored private var engine: AVAudioEngine?
+    /// The engine's configuration-change observer. Main actor; removed with the engine.
+    @ObservationIgnored private var configurationObserver: NSObjectProtocol?
     @ObservationIgnored private var nodes: [Channel: AVAudioPlayerNode] = [:]
     @ObservationIgnored private var formats: [Channel: AVAudioFormat] = [:]
     @ObservationIgnored private var cursors: [Channel: SliceCursor] = [:]
@@ -128,15 +134,44 @@ final class RecordPlayer {
 
     /// Lets go of the engine.
     func stop() {
-        stopNodes()
-        engine?.stop()
-        engine = nil
-        nodes = [:]
-        formats = [:]
+        releaseEngine()
         if state == .playing || state == .paused || state == .ended {
             state = .idle
         }
     }
+
+    /// Stops and drops the engine and its nodes, and stops listening to it.
+    private func releaseEngine() {
+        stopNodes()
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+        }
+        configurationObserver = nil
+        engine?.stop()
+        engine = nil
+        nodes = [:]
+        formats = [:]
+    }
+
+    /// The engine's output changed (AVAudioEngineConfigurationChange): the engine has stopped. A
+    /// new one starts from where playback was; paused, the next Play starts it.
+    private func configurationChanged() {
+        let wasPlaying = state == .playing
+        let at = positionMs()
+        releaseEngine()
+        anchorMs = at
+        guard wasPlaying else { return }
+        do {
+            try startEngine()
+            try startRun()
+            state = .playing
+        } catch {
+            fail(error)
+        }
+    }
+
+    /// The engine now (tests: to post its configuration change).
+    var engineForTests: AVAudioEngine? { engine }
 
     /// Where the playhead is now, ms on the record's timeline. Read while drawing (the view
     /// redraws only while playing); not observed.
@@ -176,6 +211,11 @@ final class RecordPlayer {
         engine.prepare()
         try engine.start()
         self.engine = engine
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.configurationChanged() }
+        }
     }
 
     /// Queues each side from `anchorMs` and starts both nodes at one moment.

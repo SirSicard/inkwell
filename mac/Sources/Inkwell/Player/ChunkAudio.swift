@@ -75,7 +75,9 @@ enum ChunkAudio {
         let bytesPerFrame = UInt64(max(chunk.channels, 1)) * 4
         try handle.seek(toOffset: UInt64(chunk.dataOffset) + UInt64(slice.firstFrame) * bytesPerFrame)
         let wanted = Int(UInt64(slice.frameCount) * bytesPerFrame)
-        guard let data = try handle.read(upToCount: wanted), !data.isEmpty else { throw ReadError.short }
+        // Fewer bytes than the slice's frames (a truncated file) would put everything after it
+        // early by the difference, since the cursor moves on by the full count: an error instead.
+        guard let data = try handle.read(upToCount: wanted), data.count == wanted else { throw ReadError.short }
         let count = data.count / 4
         var samples = [Float](repeating: 0, count: count)
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in

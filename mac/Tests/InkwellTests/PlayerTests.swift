@@ -66,7 +66,7 @@ final class RecordPlayerTests: XCTestCase {
 
     /// A meeting's `library.record` answer whose audio is the two chunks above, with a note at
     /// 12.4 s (a chip) and a line at 20.1 s.
-    private func answer(request: String) -> String {
+    private func answer(request: String, timeline: String = "recorded", leftOut: Int = 0) -> String {
         let mic = directory.appendingPathComponent("mic-000000-16000x1.pcm").path
         let far = directory.appendingPathComponent("far-000000-16000x1.pcm").path
         return #"""
@@ -76,20 +76,20 @@ final class RecordPlayerTests: XCTestCase {
                      {"channel":"far","start_ms":20100,"end_ms":21000,"text":"a tone from them"}],
          "notes":[{"note":"n1","at_ms":12400,"text":"you spoke here"}],
          "commitments":[],"speakers":[],
-         "audio":{"timeline":"recorded","left_out":0,"chunks":[
+         "audio":{"timeline":"\#(timeline)","left_out":\#(leftOut),"chunks":[
            {"channel":"mic","path":"\#(mic)","start_ms":0,"frames":480000,"sample_rate":16000,"channels":1,"data_offset":64},
            {"channel":"far","path":"\#(far)","start_ms":2000,"frames":448000,"sample_rate":16000,"channels":1,"data_offset":64}]}}
         """#
     }
 
     /// A library with the record open, its player rendering offline.
-    private func openRecord() throws -> LibraryModel {
+    private func openRecord(timeline: String = "recorded", leftOut: Int = 0) throws -> LibraryModel {
         var sent: [String] = []
         let library = LibraryModel(send: { sent.append($0.json) })
         library.makePlayer = { RecordPlayer(document: $0, output: .offline(sampleRate: 48_000, channels: 2)) }
         library.open("r1")
         let id = ((try JSONSerialization.jsonObject(with: Data(sent.last!.utf8))) as? [String: Any])?["id"] as? String ?? ""
-        library.apply([try InkEvent.decode(Data(answer(request: id).utf8))])
+        library.apply([try InkEvent.decode(Data(answer(request: id, timeline: timeline, leftOut: leftOut).utf8))])
         XCTAssertNotNil(library.player)
         return library
     }
@@ -193,5 +193,123 @@ final class RecordPlayerTests: XCTestCase {
         XCTAssertEqual(buffer.floatChannelData?[1][1], -0.3)
         let missing = TimelineChunk(channel: .far, path: directory.appendingPathComponent("gone.pcm").path, startMs: 0, frames: 3, sampleRate: 8_000, channels: 2, dataOffset: 64)
         XCTAssertThrowsError(try ChunkAudio.buffer(ChunkSlice(chunk: missing, firstFrame: 0, frameCount: 1)))
+    }
+
+    // MARK: Review fixes
+
+    /// Item 1: an estimated timeline (the meeting's start was not written) and chunks left out
+    /// reach what the Record screen reads, with the words it shows; a precise one shows none.
+    func testAnEstimatedTimelineAndMissingAudioReachTheScreensState() throws {
+        let precise = try XCTUnwrap(try openRecord().document)
+        XCTAssertEqual(precise.playbackCaveats.messages(waveformPartial: false), [])
+        XCTAssertEqual(precise.ledgerStatus(blottedAt: nil), "Blotted · final")
+
+        let library = try openRecord(timeline: "estimated", leftOut: 2)
+        let doc = try XCTUnwrap(library.document)
+        XCTAssertTrue(doc.playbackCaveats.timelineEstimated)
+        XCTAssertEqual(doc.playbackCaveats.leftOut, 2)
+        XCTAssertEqual(doc.playbackCaveats.messages(waveformPartial: false), [
+            "Timing estimated: the two sides may be out of step.",
+            "Part of this recording can't be played.",
+        ])
+        XCTAssertEqual(doc.ledgerStatus(blottedAt: nil), "Blotted · final · timing estimated")
+        XCTAssertEqual(doc.playbackCaveats.messages(waveformPartial: true).last,
+                       "Part of this recording can't be played.", "said once")
+        XCTAssertEqual(RecordDocument.Caveats(timelineEstimated: false, leftOut: 0).messages(waveformPartial: true),
+                       ["Part of this recording can't be played."])
+    }
+
+    /// Item 5: a chunk shorter on disk than its frame count is an error, never fewer samples with
+    /// the cursor moving on by the full count (which would drift the rest of the side).
+    func testATruncatedChunkIsAnErrorNotDrift() throws {
+        let url = directory.appendingPathComponent("mic-000009-16000x1.pcm")
+        try writeChunk(url, samples: [Float](repeating: 0.1, count: 50))
+        let chunk = TimelineChunk(channel: .mic, path: url.path, startMs: 0, frames: 100, sampleRate: 16_000, channels: 1, dataOffset: 64)
+        XCTAssertEqual(try ChunkAudio.samples(ChunkSlice(chunk: chunk, firstFrame: 0, frameCount: 50)).count, 50)
+        XCTAssertThrowsError(try ChunkAudio.samples(ChunkSlice(chunk: chunk, firstFrame: 0, frameCount: 100))) { error in
+            XCTAssertEqual(error as? ChunkAudio.ReadError, .short)
+        }
+        XCTAssertThrowsError(try ChunkAudio.samples(ChunkSlice(chunk: chunk, firstFrame: 60, frameCount: 10)))
+    }
+
+    /// Item 3: a chunk that cannot be read leaves its stretch flat, and the waveform says it is
+    /// partial (the player bar shows that), rather than looking like silence.
+    func testAWaveformWithAnUnreadableChunkIsMarkedPartial() throws {
+        let doc = try XCTUnwrap(try openRecord().document)
+        let whole = Waveform.build(chunks: doc.chunks, durationMs: 30_000, buckets: 30)
+        XCTAssertFalse(whole.partial)
+        var chunks = doc.chunks
+        chunks.append(TimelineChunk(channel: .far, path: directory.appendingPathComponent("far-000001-16000x1.pcm").path,
+                                    startMs: 28_000, frames: 16_000, sampleRate: 16_000, channels: 1, dataOffset: 64))
+        let partial = Waveform.build(chunks: chunks, durationMs: 30_000, buckets: 30)
+        XCTAssertTrue(partial.partial)
+        XCTAssertEqual(partial.you.firstIndex(where: { $0 > 0.5 }), 12, "what could be read is still drawn")
+    }
+
+    /// Item 6: switching records quickly never shows the first record's waveform over the second's:
+    /// the first build is cancelled, and a late result is checked against the record shown.
+    func testARapidSwitchKeepsTheNewestRecordsWaveform() async throws {
+        let long = try XCTUnwrap(try openRecord().document)
+        let shortURL = directory.appendingPathComponent("mic-000000-16000x1-short.pcm")
+        try writeChunk(shortURL, samples: samples(seconds: 2, tone: 0.5...1.0))
+        let short = RecordDocument(try XCTUnwrap({
+            guard case .libraryRecord(let r) = try InkEvent.decode(Data(#"""
+            {"type":"library.record","ref":"x","record":{"record":"r2","kind":"meeting","started_at_unix_ms":0,"ended_at_unix_ms":2000,"revision":2,"has_audio":true},
+             "segments":[],"notes":[],"commitments":[],"speakers":[],
+             "audio":{"timeline":"recorded","left_out":0,"chunks":[{"channel":"mic","path":"\#(shortURL.path)","start_ms":0,"frames":32000,"sample_rate":16000,"channels":1,"data_offset":64}]}}
+            """#.utf8)) else { return nil }
+            return r
+        }()))
+        let loader = WaveformLoader()
+        loader.load(long, buckets: 40)
+        loader.load(short, buckets: 40)
+        await loader.settled()
+        XCTAssertEqual(loader.record, "r2")
+        XCTAssertEqual(loader.waveform, Waveform.build(chunks: short.chunks, durationMs: short.durationMs, buckets: 40))
+        // And the other way round.
+        loader.load(short, buckets: 40)
+        loader.load(long, buckets: 40)
+        await loader.settled()
+        XCTAssertEqual(loader.record, "r1")
+        XCTAssertEqual(loader.waveform.you.firstIndex(where: { $0 > 0.5 }), Waveform.build(chunks: long.chunks, durationMs: long.durationMs, buckets: 40).you.firstIndex(where: { $0 > 0.5 }))
+    }
+
+    /// Item 7: the output changing under a playing engine (a device unplugged, the route moved)
+    /// restarts playback in place, from where it was, rather than going silent unnoticed.
+    func testAnOutputChangeRestartsPlaybackInPlace() async throws {
+        let library = try openRecord()
+        let player = try XCTUnwrap(library.player)
+        library.playFrom(12_400)
+        _ = try await listen(player)
+        let before = player.positionMs()
+        let engine = try XCTUnwrap(player.engineForTests)
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        XCTAssertEqual(player.state, .playing)
+        XCTAssertFalse(player.engineForTests === engine, "a new engine")
+        let heard = try await listen(player)
+        XCTAssertLessThanOrEqual(abs(player.positionMs() - before), 1_000, "from where it was")
+        XCTAssertGreaterThan(rms(heard), 0.05, "and it plays")
+
+        // Paused, a change only lets the engine go; Play starts a new one.
+        player.pause()
+        let paused = try XCTUnwrap(player.engineForTests)
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: paused)
+        XCTAssertEqual(player.state, .paused)
+        XCTAssertNil(player.engineForTests)
+        player.stop()
+    }
+
+    /// Item 7: when playback cannot start again after an output change, it says so (.failed with
+    /// its words), never plays nothing as if all were well.
+    func testAnOutputChangeThatCannotRestartFailsVisibly() async throws {
+        let library = try openRecord()
+        let player = try XCTUnwrap(library.player)
+        library.playFrom(12_400)
+        _ = try await listen(player)
+        let engine = try XCTUnwrap(player.engineForTests)
+        // The files go before the change: the new engine cannot read them.
+        try FileManager.default.removeItem(at: directory)
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        XCTAssertEqual(player.state, .failed("This recording can't be played right now."))
     }
 }

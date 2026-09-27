@@ -1,13 +1,14 @@
 // The player at the foot of a record: play or pause, the two-lane waveform (them above in sepia,
 // you below in ink, the played part solid) with the playhead, the time, and the You/Them mix.
-// It redraws only while playing, with the window on screen.
+// It redraws only while playing, with the window on screen. What it cannot vouch for (an
+// estimated timing, audio it cannot play) is said under the waveform, never played as if precise.
 import InkBridge
 import SwiftUI
 
 struct PlayerBar: View {
     @Bindable var player: RecordPlayer
     let document: RecordDocument
-    @State private var waveform = Waveform.empty
+    @State private var loader = WaveformLoader()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(WindowPresence.self) private var presence
 
@@ -32,7 +33,7 @@ struct PlayerBar: View {
             TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30, paused: !player.isPlaying || !presence.onScreen)) { _ in
                 let position = player.positionMs()
                 HStack(spacing: 16) {
-                    WaveformView(waveform: waveform, position: position, duration: player.durationMs) { ms in
+                    WaveformView(waveform: loader.waveform, position: position, duration: player.durationMs) { ms in
                         player.seek(toMs: ms)
                     }
                     Text("\(LibraryFormat.stamp(ms: position)) / \(LibraryFormat.stamp(ms: player.durationMs))")
@@ -55,18 +56,21 @@ struct PlayerBar: View {
         .background(PaperPalette.panel)
         .overlay(alignment: .top) { Rectangle().fill(PaperPalette.border).frame(height: 1) }
         .overlay(alignment: .bottomLeading) {
-            if case .failed(let why) = player.state {
-                Text(why).font(.caption).foregroundStyle(PaperPalette.alertText).padding(.leading, 86).padding(.bottom, 2)
+            let caveats = document.playbackCaveats.messages(waveformPartial: loader.waveform.partial)
+            let failure: String? = if case .failed(let why) = player.state { why } else { nil }
+            let lines = [failure].compactMap { $0 } + caveats
+            if !lines.isEmpty {
+                Text(lines.joined(separator: " "))
+                    .font(.caption)
+                    .foregroundStyle(PaperPalette.alertText)
+                    .lineLimit(1)
+                    .padding(.leading, 86)
+                    .padding(.bottom, 2)
             }
         }
-        .task(id: document.record.record) {
-            let chunks = document.chunks
-            let duration = document.durationMs
-            // Read off the main actor, a second of audio at a time.
-            waveform = await Task.detached(priority: .utility) {
-                Waveform.build(chunks: chunks, durationMs: duration, buckets: Self.bars)
-            }.value
-        }
+        .onAppear { loader.load(document, buckets: Self.bars) }
+        .onChange(of: document.record.record) { loader.load(document, buckets: Self.bars) }
+        .onDisappear { loader.cancel() }
     }
 
     private func mix(_ title: String, value: Binding<Float>, tint: Color, label: String, enabled: Bool) -> some View {

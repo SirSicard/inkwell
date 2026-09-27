@@ -295,13 +295,9 @@ struct RecordLedgerView: View {
     @Environment(LibraryModel.self) private var library
 
     private var status: String {
-        if document.isFinal {
-            if let at = document.summaryWrittenAt {
-                return "Blotted \(LibraryFormat.time(LibraryFormat.date(unixMs: at), calendar: library.calendar)) · final"
-            }
-            return "Blotted · final"
-        }
-        return "Live transcript · not blotted"
+        document.ledgerStatus(blottedAt: document.summaryWrittenAt.map {
+            LibraryFormat.time(LibraryFormat.date(unixMs: $0), calendar: library.calendar)
+        })
     }
 
     var body: some View {
