@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 /// A callback the core hands to a platform service or an engine.
 ///
@@ -36,10 +37,13 @@ pub type EventSink<T> = Arc<dyn Fn(T) + Send + Sync>;
 /// model requests.
 ///
 /// Cloning shares the flag. An implementation checks [`is_cancelled`](Self::is_cancelled) at
-/// convenient points and returns its `Cancelled` error. Checking is lock-free, so it is safe
-/// anywhere, including a realtime thread.
+/// convenient points and returns its `Cancelled` error. Checking is lock-free (a token with a
+/// deadline also reads the monotonic clock), so it is safe anywhere, including a realtime thread.
 #[derive(Clone, Debug, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
+pub struct CancelToken {
+    flag: Arc<AtomicBool>,
+    deadline: Option<Instant>,
+}
 
 impl CancelToken {
     /// A token that is not cancelled.
@@ -47,14 +51,24 @@ impl CancelToken {
         Self::default()
     }
 
-    /// Asks every holder of this token to stop. It cannot be undone.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+    /// A token that also reads as cancelled once `deadline` has passed. Nothing fires it: a
+    /// holder sees the deadline at its next check, exactly as it would see [`cancel`](Self::cancel),
+    /// so a budget costs no thread or timer.
+    pub fn with_deadline(deadline: Instant) -> Self {
+        Self {
+            flag: Arc::default(),
+            deadline: Some(deadline),
+        }
     }
 
-    /// Whether [`cancel`](Self::cancel) has been called on any clone.
+    /// Asks every holder of this token to stop. It cannot be undone.
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+    }
+
+    /// Whether [`cancel`](Self::cancel) has been called on any clone, or the deadline has passed.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.flag.load(Ordering::Acquire) || self.deadline.is_some_and(|d| Instant::now() >= d)
     }
 }
 
@@ -69,5 +83,19 @@ mod tests {
         assert!(!b.is_cancelled());
         a.cancel();
         assert!(b.is_cancelled());
+    }
+
+    #[test]
+    fn a_deadline_cancels_every_clone_once_it_passes_with_no_timer() {
+        let now = Instant::now();
+        let past = CancelToken::with_deadline(now);
+        assert!(past.clone().is_cancelled(), "a deadline already reached");
+
+        let future = CancelToken::with_deadline(now + std::time::Duration::from_secs(3_600));
+        let clone = future.clone();
+        assert!(!clone.is_cancelled());
+        // `cancel` still works before the deadline, on any clone.
+        future.cancel();
+        assert!(clone.is_cancelled());
     }
 }
