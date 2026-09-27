@@ -83,7 +83,7 @@ final class FoundationModelsPolishTests: XCTestCase {
     /// get the same codes, and missing assets are still "unavailable". Only against an SDK that
     /// declares them (27's FoundationModels is module version 2).
     func testTheMacOS27ErrorsGetTheSameCodes() throws {
-        #if canImport(FoundationModels, _version: 2.0)
+        #if compiler(>=6.4) && canImport(FoundationModels, _version: 2.0)
             guard #available(macOS 27.0, *) else { throw XCTSkip("macOS 27 types") }
             let words = "synthetic words"
             let cases: [(any Error, InkEngineError)] = [
@@ -213,7 +213,7 @@ final class FoundationModelsPolishTests: XCTestCase {
                 let isGenerationError = error is LanguageModelSession.GenerationError
                 if #available(macOS 27.0, *) {
                     XCTAssertFalse(isGenerationError, "macOS 27 throws the new types")
-                    #if canImport(FoundationModels, _version: 2.0)
+                    #if compiler(>=6.4) && canImport(FoundationModels, _version: 2.0)
                         XCTAssertTrue(error is LanguageModelError)
                     #endif
                 } else {

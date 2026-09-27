@@ -189,7 +189,7 @@ public final class FoundationModelsPolish: InkLanguageModel {
     /// two requests at once on one session `LanguageModelSession.Error`; neither matches
     /// `GenerationError`, so both went out as code 1. Each type is mapped, to the same codes.
     static func engineError(_ error: any Error) -> InkEngineError {
-        #if canImport(FoundationModels, _version: 2.0)
+        #if compiler(>=6.4) && canImport(FoundationModels, _version: 2.0)
             if #available(macOS 27.0, *), let code = macOS27Error(error) { return code }
         #endif
         #if canImport(FoundationModels)
@@ -214,11 +214,13 @@ public final class FoundationModelsPolish: InkLanguageModel {
     }
 
     // Compiled only against an SDK that declares the macOS 27 types: its FoundationModels is
-    // module version 2 (the 26.x SDKs ship 1.5). CI builds with a 26 SDK, where `#available` alone
-    // could not hide a type the SDK lacks. The module's version is checked rather than the
-    // compiler's, since it is the SDK that has the types or not; both were verified to skip the
-    // block with Swift 6.3 and the 26.5 SDK, and to compile it with Swift 6.4 and the 27 SDK.
-    #if canImport(FoundationModels, _version: 2.0)
+    // module version 2 (the 26.5 SDK ships 1.5). `#available` alone could not hide a type the SDK
+    // lacks. The version check is not enough on its own: the macos-26 runner's SDK carries no
+    // version for the module, and Swift then ignores the check (a warning) and compiles the block
+    // against types that are not there. Swift 6.4 comes with the 27 SDK, so the compiler check
+    // hides the block from every older toolchain, and the version check still stops a 6.4
+    // compiler used with an older SDK.
+    #if compiler(>=6.4) && canImport(FoundationModels, _version: 2.0)
         /// A macOS 27 error as a code, or nil for any other error.
         @available(macOS 27.0, *)
         static func macOS27Error(_ error: any Error) -> InkEngineError? {
