@@ -1,6 +1,7 @@
 // Parakeet's model holder: loaded once however many ask, a failed load reported (never a
 // download) and retried, and decodes taken one at a time.
 @testable import AppleEngines
+import InkBridge
 import Synchronization
 import XCTest
 
@@ -116,6 +117,30 @@ final class ParakeetModelTests: XCTestCase {
         XCTAssertEqual(ParakeetModel.decodeLimit(samples: 0), .seconds(20))
         XCTAssertEqual(ParakeetModel.decodeLimit(samples: LiveWindowConfig().maxBuffer), .seconds(27.5))
         XCTAssertEqual(ParakeetModel.decodeLimit(samples: 3_600 * 16_000), .seconds(920))
+    }
+
+    /// The offline engine answers a buffer too short for FluidAudio with no words, without loading
+    /// or decoding; its guard is its own constant, not the live window's.
+    func testTheOfflineEngineAnswersATooShortBufferEmptyWithoutADecode() throws {
+        let loads = Counter()
+        let model = ParakeetModel(loader: {
+            loads.add()
+            return Overlap()
+        })
+        let engine = ParakeetOfflineEngine(model: model)
+        XCTAssertEqual(ParakeetOfflineEngine.minimumSamples, 4_800, "0.3 s")
+        let short = Signal<Result<[InkSegment], InkEngineError>>()
+        engine.transcribe(
+            [Float](repeating: 0, count: ParakeetOfflineEngine.minimumSamples - 1), channel: .mic,
+            context: nil) { short.set($0) }
+        XCTAssertEqual(try XCTUnwrap(short.wait()), .success([]))
+        XCTAssertEqual(loads.value, 0)
+        let long = Signal<Result<[InkSegment], InkEngineError>>()
+        engine.transcribe(
+            [Float](repeating: 0, count: ParakeetOfflineEngine.minimumSamples), channel: .mic,
+            context: nil) { long.set($0) }
+        XCTAssertEqual(try XCTUnwrap(long.wait()), .success([]))
+        XCTAssertEqual(loads.value, 1, "long enough: decoded")
     }
 
     func testAFailedLoadIsReportedAndCanBeRetried() async throws {

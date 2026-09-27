@@ -21,6 +21,12 @@ public final class ParakeetOfflineEngine: InkOfflineEngine {
     /// The id the fallback registers under.
     public static let fallbackID = "fluidaudio-parakeet-tdt-0.6b-v3-offline"
 
+    /// The shortest buffer decoded (0.3 s): FluidAudio refuses less. The live window's `minimum`
+    /// has the same value today for the same reason, but this guard is the offline engine's own: a
+    /// dictation take or a final-pass region is not a live window, and tuning one must not move
+    /// the other.
+    public static let minimumSamples = 4_800
+
     /// The rates measured for Parakeet TDT v3 on FluidAudio when the engines were chosen:
     /// FLEURS en for dictation (6.7; Qwen3-ASR 4.59) and AMI IHM for meetings (23.4; Qwen3-ASR
     /// 16.08). Being worse on both is what keeps it the fallback: never raise it above the
@@ -48,7 +54,7 @@ public final class ParakeetOfflineEngine: InkOfflineEngine {
         completion: @escaping @Sendable (Result<[InkSegment], InkEngineError>) -> Void
     ) {
         // Shorter than FluidAudio takes: nothing it could hear.
-        guard samples.count >= LiveWindowConfig().minimum else { return completion(.success([])) }
+        guard samples.count >= Self.minimumSamples else { return completion(.success([])) }
         let model = self.model
         Task {
             do throws(ParakeetError) {
