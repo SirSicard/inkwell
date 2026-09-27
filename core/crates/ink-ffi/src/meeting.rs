@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use ink_audio::{BandAnalyzer, Bands, ChunkStore, FileReplaySource, Pacing, capture_ring};
+use ink_audio::{BandAnalyzer, Bands, ChunkStore, FileReplaySource, Pacing, StartAt, capture_ring};
 use ink_core::{
     AudioBlock, AudioSink, AudioSource, CancelToken, Channel, EventSink, Job, RecordId,
     StreamingEngine,
@@ -72,6 +72,10 @@ pub struct CaptureSide {
     ///
     /// [`DEFAULT_RING_DURATION`]: ink_audio::DEFAULT_RING_DURATION
     pub ring: Duration,
+    /// For a replay: where its host times start, set to the meeting's start before capture
+    /// starts, so the final pass reads the same audio on every run of the same files. A device
+    /// stamps its own times and has none.
+    pub start_at: Option<StartAt>,
 }
 
 impl Replay {
@@ -88,9 +92,11 @@ impl Replay {
         };
         let mut sides = Vec::new();
         for (channel, path) in paths {
+            let start_at = StartAt::new();
             let source = FileReplaySource::open(&path, channel, shared.clock.clone())
                 .map_err(|e| e.to_string())?
-                .with_pacing(pacing);
+                .with_pacing(pacing)
+                .starting_at(start_at.clone());
             let format = source.format();
             let seconds = source.total_frames() as f64 / f64::from(format.sample_rate.max(1));
             let ring = if self.fast {
@@ -108,6 +114,7 @@ impl Replay {
             sides.push(CaptureSide {
                 source: Box::new(source),
                 ring,
+                start_at: Some(start_at),
             });
         }
         Ok(sides)
@@ -121,10 +128,12 @@ enum Input {
     Stop,
 }
 
-/// A side's source, and whether it has delivered everything.
+/// A side's source, whether it has delivered everything, and (a replay's) where its host times
+/// start.
 struct Source {
     source: Box<dyn AudioSource>,
     done: Arc<AtomicBool>,
+    start_at: Option<StartAt>,
 }
 
 /// The capture sink a replay pushes into: the ring, plus a flag set when the replay drops it,
@@ -173,7 +182,12 @@ impl MeetingRun {
             .map_err(|e| format!("the meeting's audio directory: {e}"))?;
         let mut sources = Vec::new();
         let mut captures = Vec::new();
-        for CaptureSide { source, ring } in capture {
+        for CaptureSide {
+            source,
+            ring,
+            start_at,
+        } in capture
+        {
             let channel = source.channel();
             let (producer, consumer) =
                 capture_ring(source.format(), ring).map_err(|e| e.to_string())?;
@@ -185,14 +199,20 @@ impl MeetingRun {
                     done: done.clone(),
                 },
             ));
-            sources.push(Source { source, done });
+            sources.push(Source {
+                source,
+                done,
+                start_at,
+            });
         }
 
         let mailbox = Arc::new(Mailbox::new(DEFAULT_AUDIO_CAPACITY));
         let record: Arc<OnceLock<RecordId>> = Arc::default();
         let abort = Arc::new(AtomicBool::new(false));
         let cancel = CancelToken::new();
-        let (go_tx, go_rx) = mpsc::channel::<bool>();
+        // The worker's answer once the chain has started: the meeting's start (host time), or
+        // `None` when it did not start.
+        let (go_tx, go_rx) = mpsc::channel::<Option<u64>>();
         let worker = {
             let (shared, mailbox, cancel) = (shared.clone(), mailbox.clone(), cancel.clone());
             let record = record.clone();
@@ -278,7 +298,7 @@ fn pump(
     sources: Vec<Source>,
     captures: Vec<(SideCapture, Delivered)>,
     abort: &AtomicBool,
-    go: &mpsc::Receiver<bool>,
+    go: &mpsc::Receiver<Option<u64>>,
 ) {
     let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         capture(shared, mailbox, sources, captures, abort, go);
@@ -311,15 +331,20 @@ fn capture(
     mut sources: Vec<Source>,
     captures: Vec<(SideCapture, Delivered)>,
     abort: &AtomicBool,
-    go: &mpsc::Receiver<bool>,
+    go: &mpsc::Receiver<Option<u64>>,
 ) {
-    // The worker says whether the chain started; if it did not, nothing is captured.
-    if go.recv() != Ok(true) {
+    // The worker says whether the chain started, and when; if it did not, nothing is captured.
+    let Ok(Some(t0)) = go.recv() else {
         return;
-    }
+    };
     let mut sides = Vec::new();
     for (source, (side, sink)) in sources.iter_mut().zip(captures) {
         let channel = source.source.channel();
+        // A replay's first frame is the meeting's first (architecture rule 7: the same files give
+        // the final pass the same audio on every run).
+        if let Some(start_at) = &source.start_at {
+            start_at.set(t0);
+        }
         if let Err(e) = source.source.start(Box::new(sink)) {
             let _ = mailbox.push(Input::Issue(channel, CaptureIssue::Convert(e.to_string())));
             source.done.store(true, Ordering::Release);
@@ -399,7 +424,7 @@ fn worker(
     start: MeetingStart,
     chunks: ChunkStore,
     cancel: &CancelToken,
-    go: mpsc::Sender<bool>,
+    go: mpsc::Sender<Option<u64>>,
 ) {
     let sink: EventSink<MeetingEvent> = {
         let (events, record) = (shared.events.clone(), record.clone());
@@ -425,7 +450,7 @@ fn worker(
             match MeetingChain::start(services, MeetingSettings::default(), vad, sink, start) {
                 Ok(chain) => chain,
                 Err(e) => {
-                    let _ = go.send(false);
+                    let _ = go.send(None);
                     failed(shared, None, &format!("the meeting could not start: {e}"));
                     return;
                 }
@@ -436,7 +461,7 @@ fn worker(
         if let Err(e) = crate::library::write_timeline(chunks.dir(), chain.start_ns()) {
             log::warn!("meeting: the timeline start could not be written: {e}");
         }
-        let _ = go.send(true);
+        let _ = go.send(Some(chain.start_ns()));
         loop {
             let deadline = chain.deadline_ns().map(|d| {
                 Instant::now() + Duration::from_nanos(d.saturating_sub(shared.clock.now_ns()))
@@ -527,7 +552,7 @@ mod tests {
             let record = Arc::default();
             thread::spawn(move || worker(&shared, &mailbox, &record, start, chunks, &cancel, go_tx))
         };
-        assert_eq!(go_rx.recv(), Ok(true));
+        assert!(matches!(go_rx.recv(), Ok(Some(_))));
 
         // One block of signal from the mic, then nothing.
         let block = ink_audio::synth::speech_like(0.01, -30.0, 1);

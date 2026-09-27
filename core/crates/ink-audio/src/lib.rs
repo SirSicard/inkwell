@@ -93,7 +93,7 @@ pub use gain::{
 pub use levels::{CaptureHealth, LevelMeter, assess};
 pub use rate::{Continuity, RateCheck, RateVerdict};
 pub use realtime::{RealtimeGuard, unguarded};
-pub use replay::{FileReplaySource, Pacing};
+pub use replay::{FileReplaySource, Pacing, StartAt};
 pub use resample::{ResampleError, StreamResampler, resample};
 pub use ring::{
     CaptureConsumer, CaptureProducer, CapturedBlock, DEFAULT_RING_DURATION, Overruns, RingError,

@@ -116,3 +116,48 @@ fn a_bad_replay_fails_as_an_event_and_starts_nothing() {
     assert_eq!(events.count("meeting.started"), 0);
     events.assert_valid();
 }
+
+/// Replay determinism (carried into S2.8 from S2.2): two replays of the same files hand the final
+/// pass the same audio, sample for sample. The replay's host times start at the meeting's start,
+/// not whenever its thread happened to start, so the final pass (which places audio by host time
+/// against the meeting's start) reads the same samples however the threads are scheduled.
+#[test]
+fn two_replays_of_the_same_files_feed_identical_audio_to_the_final_pass() {
+    let dir = TempDir::new("replay-determinism");
+    let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));
+    speech_wav(&mic, 4.0, 11);
+    speech_wav(&far, 3.0, 12);
+    let mut runs = Vec::new();
+    for run in 0..2 {
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let loader = MockLoader::new(Behaviour::Keep(heard.clone(), "words".into()));
+        let installer = Arc::new(MockInstaller {
+            generation: loader.generation.clone(),
+            gate: None,
+            installs: AtomicUsize::new(0),
+        });
+        let (core, events) = start(&dir, &[test_row(ROW_ID)], loader, installer);
+        core.command(&format!(
+            r#"{{"cmd":"replay_meeting","mic":{:?},"far":{:?},"pacing":"fast","id":"r{run}"}}"#,
+            mic.to_str().unwrap(),
+            far.to_str().unwrap()
+        ))
+        .unwrap();
+        events.wait_type("meeting.finished", Duration::from_secs(60));
+        core.shutdown();
+        let calls = std::mem::take(&mut *heard.lock().unwrap());
+        assert!(
+            !calls.is_empty(),
+            "run {run}: the final pass called the engine"
+        );
+        runs.push(calls);
+    }
+    assert_eq!(runs[0].len(), runs[1].len(), "the same regions");
+    for (a, b) in runs[0].iter().zip(&runs[1]) {
+        assert_eq!(a.len(), b.len(), "the same region lengths");
+        assert!(
+            a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "the same samples"
+        );
+    }
+}

@@ -249,6 +249,8 @@ pub enum Behaviour {
     Panic,
     /// Waits for the gate to open, then answers.
     WaitThen(Arc<Gate>, String),
+    /// Keeps the audio of each call, then answers with this text.
+    Keep(Arc<Mutex<Vec<Vec<f32>>>>, String),
 }
 
 /// A one-shot gate a test opens.
@@ -323,6 +325,10 @@ impl OfflineEngine for MockModel {
             Behaviour::Panic => panic!("scripted engine panic"),
             Behaviour::WaitThen(gate, t) => {
                 gate.wait();
+                t.clone()
+            }
+            Behaviour::Keep(heard, t) => {
+                heard.lock().unwrap().push(audio.to_vec());
                 t.clone()
             }
         };
