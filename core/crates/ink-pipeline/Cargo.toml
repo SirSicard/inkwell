@@ -16,6 +16,8 @@ ink-audio = { path = "../ink-audio" }
 ink-engines = { path = "../ink-engines" }
 # AI polish (stage 9) is ink-llm's task, not a second copy of it here.
 ink-llm = { path = "../ink-llm" }
+# Echo cancellation for the mic: the path search, AEC3, the echo gate and duplicate-line removal.
+ink-echo = { path = "../ink-echo" }
 # File import reads WAV (Apache-2.0; already in the tree through ink-audio).
 hound = "3.5.1"
 # Snippet and voice-command triggers (MIT OR Unlicense). Already in the tree through regex.
@@ -42,3 +44,10 @@ ink-core = { workspace = true, features = ["mock"] }
 ink-store = { path = "../ink-store" }
 # The AMI fixture is checked against its manifest (MIT OR Apache-2.0; already in the tree).
 sha2 = "0.10.9"
+# The echo fixture's room is convolved by FFT (MIT OR Apache-2.0; both already in the tree through
+# ink-echo's aec3).
+rustfft = "6.4.1"
+num-complex = "0.4.6"
+# A second connection holding a read transaction, as another process would, for the store's
+# scrub (MIT; already in the tree through ink-store, with the same features).
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }

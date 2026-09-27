@@ -513,6 +513,21 @@ fn out_of_range_or_reversed_times_are_invalid_and_change_nothing(store: &dyn Sto
     ));
     assert!(store.notes(&id).unwrap().is_empty());
 
+    store
+        .save_removed(&id, &[seg(Channel::Mic, 0, "kept")])
+        .unwrap();
+    let mut too_late = seg(Channel::Mic, 0, "too late");
+    too_late.end_ms = MAX_TIME_MS + 1;
+    assert!(matches!(
+        store.save_removed(&id, &[seg(Channel::Mic, 5, "fine"), too_late]),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(
+        store.removed(&id).unwrap().len(),
+        1,
+        "the earlier save stands"
+    );
+
     let said = |start_ms: u64| NewCommitment {
         text: "t".into(),
         owner: None,
@@ -605,6 +620,9 @@ fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store)
         nf
     );
     assert_eq!(store.speaker_names(&ghost), Err(StoreError::NotFound));
+    assert_eq!(store.save_removed(&ghost, &[seg(Channel::Mic, 0, "x")]), nf);
+    assert_eq!(store.save_removed(&ghost, &[]), nf);
+    assert_eq!(store.removed(&ghost), Err(StoreError::NotFound));
     assert_eq!(
         store.add_commitments(&ghost, &[]),
         Err(StoreError::NotFound)
@@ -819,6 +837,163 @@ fn search_follows_supersede_and_delete(store: &dyn Store) {
     assert!(store.search("echo", 10).unwrap().is_empty());
 }
 
+/// A supersede may drop the previous segments the pass explained (exactly those), and nothing
+/// else; the guard runs on the rows the transaction replaces.
+fn a_supersede_may_drop_only_what_the_pass_explained(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let ten = "w w w w w w w w w w";
+    store
+        .append_segments(
+            &id,
+            &[
+                seg(Channel::Mic, 0, ten),
+                seg(Channel::Mic, 5_000, "yes that works"),
+                seg(Channel::Far, 0, ten),
+            ],
+        )
+        .unwrap();
+    let echo = Explained {
+        channel: Channel::Mic,
+        start_ms: 0,
+        end_ms: 1_000,
+    };
+    let new = [
+        seg(Channel::Far, 0, ten),
+        seg(Channel::Mic, 5_000, "yes that works"),
+    ];
+    assert!(matches!(
+        store.supersede(&id, &new),
+        Err(StoreError::SuspiciousSupersede {
+            channel: Channel::Mic,
+            ..
+        })
+    ));
+    // Dropping the user's own line too is still refused, explained echo or not.
+    assert!(matches!(
+        store.supersede_with(
+            &id,
+            &new[..1],
+            SupersedeWith {
+                explained: &[echo],
+                removed: None
+            }
+        ),
+        Err(StoreError::SuspiciousSupersede {
+            channel: Channel::Mic,
+            previous_words: 3,
+            new_words: 0
+        })
+    ));
+    assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
+    assert_eq!(
+        store.supersede_with(
+            &id,
+            &new,
+            SupersedeWith {
+                explained: &[echo],
+                removed: None
+            }
+        ),
+        Ok(2)
+    );
+    assert_eq!(store.segments(&id).unwrap(), new.to_vec());
+}
+
+/// A supersede can replace the record's removed lines in its own transaction: both land, or
+/// neither does (a refused guard, a removed line out of range), and `None` leaves them.
+fn a_supersede_replaces_the_removed_lines_all_or_nothing(store: &dyn Store) {
+    use ink_core::store::MAX_TIME_MS;
+
+    let id = meeting(store, 1);
+    store
+        .append_segments(&id, &[seg(Channel::Mic, 0, "one two three four")])
+        .unwrap();
+    let earlier = [seg(Channel::Mic, 50, "an earlier pass's line")];
+    store.save_removed(&id, &earlier).unwrap();
+    let echo = [seg(Channel::Mic, 9_000, "the budget is due on friday")];
+    let with = |removed| SupersedeWith {
+        explained: &[],
+        removed,
+    };
+
+    // The guard refuses: neither the transcript nor the removed lines change.
+    assert!(matches!(
+        store.supersede_with(&id, &[seg(Channel::Mic, 0, "one")], with(Some(&echo))),
+        Err(StoreError::SuspiciousSupersede { .. })
+    ));
+    assert_eq!(store.removed(&id).unwrap(), earlier.to_vec());
+    // A removed line out of range: the whole call is refused before anything is written.
+    let mut late = echo[0].clone();
+    late.end_ms = MAX_TIME_MS + 1;
+    assert!(matches!(
+        store.supersede_with(
+            &id,
+            &[seg(Channel::Mic, 0, "one two three four five")],
+            with(Some(std::slice::from_ref(&late)))
+        ),
+        Err(StoreError::Invalid(_))
+    ));
+    assert_eq!(store.record(&id).unwrap().unwrap().revision, 1);
+    assert_eq!(store.removed(&id).unwrap(), earlier.to_vec());
+
+    // Both land together.
+    let new = [seg(Channel::Mic, 0, "one two three four five")];
+    assert_eq!(store.supersede_with(&id, &new, with(Some(&echo))), Ok(2));
+    assert_eq!(store.segments(&id).unwrap(), new.to_vec());
+    assert_eq!(store.removed(&id).unwrap(), echo.to_vec());
+    // `None` (a plain supersede) leaves them.
+    assert_eq!(store.supersede_with(&id, &new, with(None)), Ok(3));
+    assert_eq!(store.removed(&id).unwrap(), echo.to_vec());
+    assert_eq!(store.supersede(&id, &new), Ok(4));
+    assert_eq!(store.removed(&id).unwrap(), echo.to_vec());
+}
+
+/// Lines a pass removed are kept per record, apart from the transcript: in start order, replaced
+/// by the next save, left by a supersede, never searched, and deleted with their record.
+fn removed_lines_are_kept_apart_from_the_transcript(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let other = meeting(store, 2);
+    store
+        .append_segments(&id, &[seg(Channel::Mic, 0, "one two three")])
+        .unwrap();
+    assert!(store.removed(&id).unwrap().is_empty());
+
+    let echo = [
+        seg(Channel::Mic, 9_000, "the budget is due on friday"),
+        seg(Channel::Mic, 2_000, "please send the zulu report"),
+    ];
+    store.save_removed(&id, &echo).unwrap();
+    store
+        .save_removed(&other, &[seg(Channel::Mic, 5, "somebody else's line")])
+        .unwrap();
+    assert_eq!(
+        store.removed(&id).unwrap(),
+        vec![echo[1].clone(), echo[0].clone()],
+        "in start order"
+    );
+    // Not the transcript: not a segment, not searched.
+    assert_eq!(store.segments(&id).unwrap().len(), 1);
+    assert!(store.search("zulu", 10).unwrap().is_empty());
+
+    // A supersede leaves them.
+    store
+        .supersede(&id, &[seg(Channel::Mic, 0, "one two three four")])
+        .unwrap();
+    assert_eq!(store.removed(&id).unwrap().len(), 2);
+
+    // Saving again replaces them; an empty save clears them.
+    store.save_removed(&id, &echo[..1]).unwrap();
+    assert_eq!(store.removed(&id).unwrap(), vec![echo[0].clone()]);
+    store.save_removed(&id, &[]).unwrap();
+    assert!(store.removed(&id).unwrap().is_empty());
+
+    // Deleted with their record, and only theirs.
+    store.save_removed(&id, &echo).unwrap();
+    store.delete_record(&id).unwrap();
+    assert_eq!(store.removed(&id), Err(StoreError::NotFound));
+    assert_eq!(store.removed(&other).unwrap().len(), 1);
+}
+
 /// Every field of a record and a commitment survives the round trip.
 fn fields_round_trip(store: &dyn Store) {
     let id = store
@@ -945,5 +1120,8 @@ contract!(
     same_time_segments_and_notes_keep_a_stable_order,
     upserts_replace_the_previous_value,
     search_follows_supersede_and_delete,
+    removed_lines_are_kept_apart_from_the_transcript,
+    a_supersede_may_drop_only_what_the_pass_explained,
+    a_supersede_replaces_the_removed_lines_all_or_nothing,
     fields_round_trip,
 );

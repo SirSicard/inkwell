@@ -515,6 +515,44 @@ fn merges_point_at_a_canonical_commitment_and_outlive_its_record() {
 /// Each query word matches as a case-insensitive word prefix, any word is enough, and the segment
 /// matching more of the words comes first.
 #[test]
+fn removed_lines_are_kept_per_record_apart_from_the_transcript() {
+    let store = MemStore::new();
+    let id = meeting(&store, 1);
+    store
+        .append_segments(&id, &[seg(Channel::Mic, 0, "one two three")])
+        .unwrap();
+    let echo = [
+        seg(Channel::Mic, 9_000, "the budget is due on friday"),
+        seg(Channel::Mic, 2_000, "please send the zulu report"),
+    ];
+    store.save_removed(&id, &echo).unwrap();
+    assert_eq!(
+        store.removed(&id).unwrap(),
+        vec![echo[1].clone(), echo[0].clone()]
+    );
+    assert!(
+        store.search("zulu", 10).unwrap().is_empty(),
+        "never searched"
+    );
+    store
+        .supersede(&id, &[seg(Channel::Mic, 0, "one two three four")])
+        .unwrap();
+    assert_eq!(
+        store.removed(&id).unwrap().len(),
+        2,
+        "a supersede leaves them"
+    );
+    store.save_removed(&id, &[]).unwrap();
+    assert!(
+        store.removed(&id).unwrap().is_empty(),
+        "a save replaces them"
+    );
+    store.save_removed(&id, &echo).unwrap();
+    store.delete_record(&id).unwrap();
+    assert_eq!(store.removed(&id), Err(StoreError::NotFound));
+}
+
+#[test]
 fn search_matches_any_word_as_a_prefix_best_first() {
     let store = MemStore::new();
     let add = |text: &str| {
