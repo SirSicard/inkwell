@@ -8,5 +8,45 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[lib]
+# rlib for the Rust tests; staticlib for the Mac XCFramework (mac/scripts/build-core.sh); cdylib
+# for the Windows shell (S3.3a). All three are built with the engine features off in CI.
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[[bin]]
+# Writes the Swift event types from schema/events.schema.json (tests/schema.rs checks they are
+# current).
+name = "ink-schema"
+path = "src/bin/ink-schema.rs"
+
+[features]
+# Qwen3-ASR through llama.cpp as the registry models' loader, and llama.cpp's own log filter in
+# the core's subscriber. Off in CI's library builds; on for the local shutdown test.
+engine-llama = ["ink-engines/engine-llama", "ink-pipeline/engine-llama"]
+
 [dependencies]
 ink-core.workspace = true
+ink-audio = { path = "../ink-audio" }
+# The default `http` feature: model updates download through its HTTPS fetcher.
+ink-engines = { path = "../ink-engines" }
+# Only for `log_record_allowed`, the filter the core's logger applies.
+ink-llm = { path = "../ink-llm" }
+ink-pipeline = { path = "../ink-pipeline" }
+ink-store = { path = "../ink-store" }
+# Commands, config and events are JSON, built and read as `serde_json::Value` without derive
+# macros, as the rest of the core does.
+serde_json = "1"
+# The core's logger. Both already in the tree.
+log = "0.4"
+# The core's `tracing` subscriber, for llama.cpp's logs. No default features: the attribute
+# macros are not needed. (`tracing`'s `log` feature must stay off; see src/logging.rs.)
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The platform clock (mach_absolute_time), the timebase of capture.
+ink-platform-mac = { path = "../ink-platform-mac" }
+
+[dev-dependencies]
+ink-core = { workspace = true, features = ["mock"] }
+# Synthetic test audio (already in the tree).
+hound = "3.5.1"

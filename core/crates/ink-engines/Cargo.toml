@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+# The NeMo-Speech.cpp library build.rs links (engine-nemo). Declaring it passes the library's
+# directory to dependents' build scripts (DEP_NEMO_SPEECH_ASR_C_LIB_DIR), so their test binaries
+# can find it too (ink-pipeline's build.rs).
+links = "nemo_speech_asr_c"
 
 [features]
 default = ["http"]

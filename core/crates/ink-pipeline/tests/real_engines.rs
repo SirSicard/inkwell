@@ -6,15 +6,14 @@
 //! Ignored, and built only with the engine features:
 //!
 //! ```text
-//! NEMO_SPEECH_DIR=<prefix> DYLD_LIBRARY_PATH=<prefix>/lib INK_BENCH_DIR=<bench> \
+//! NEMO_SPEECH_DIR=<prefix> INK_BENCH_DIR=<bench> \
 //!     cargo test -p ink-pipeline --release --features engine-silero,engine-nemo,engine-llama \
 //!     --test real_engines -- --ignored --nocapture
 //! ```
 //!
 //! `INK_BENCH_DIR` holds `models/silero-vad/silero_vad_16k_op15.onnx`,
-//! `models/nemotron-3-diarization/` and `models/qwen3-asr-1.7b-gguf/`. The library path is needed
-//! because ink-engines' build script gives NeMo's library an rpath only in its own binaries (on
-//! Linux, `LD_LIBRARY_PATH`).
+//! `models/nemotron-3-diarization/` and `models/qwen3-asr-1.7b-gguf/`. NeMo's library is found
+//! through the rpath this package's `build.rs` gives its test binaries; no library path is needed.
 //!
 //! Measured on an M5 Pro (2026-09-26): the final pass took 1.7 s; the mic gave 2 regions and 27
 //! words, the far end 4 engine calls and 32 words; Nemotron found 4 substantial clusters in the far
