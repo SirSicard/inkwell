@@ -258,8 +258,9 @@ fn import(
         let stop = |s: Stop| match s {
             Stop::Cancelled => ImportError::Cancelled,
             Stop::Window(e) => ImportError::Regions(e),
-            // An import reads no chunks.
+            // An import reads no chunks, and cancels no echo.
             Stop::Chunks(e) => ImportError::Read(e.to_string()),
+            Stop::Echo(e) => ImportError::Read(e.to_string()),
         };
         loop {
             next(&mut buf)?;

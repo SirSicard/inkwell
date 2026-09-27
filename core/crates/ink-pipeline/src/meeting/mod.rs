@@ -3,10 +3,11 @@
 //! ```text
 //! live:  mic ─┐                                      partials ─► events only
 //!             ├─► canonical ─► Agc + VAD ─► live engine ─► finals ─► checked ─► revision 1
-//!        far ─┘   (chunks on disk: the pump)
+//!        far ─┘   (chunks on disk: the pump)      (the mic: AEC3's linear output once an echo
+//!                                                  path is found; its finals behind the echo gate)
 //!
-//! end:   chunks ─► speech regions ─► final engine ─► mic segments ────────────────┐
-//!        chunks ─► speech regions ─► diarizer (far only, rule 5) ─► final engine ─┴─► supersede ─► summary ─► commitments
+//! end:   chunks ─► echo path? ─► AEC3 ─► speech regions ─► final engine ─► mic segments ─► dedup ─┐
+//!        chunks ─► speech regions ─► diarizer (far only, rule 5) ─► final engine ─────────────────┴─► supersede ─► summary ─► commitments
 //! ```
 //!
 //! | Stage | Here |
@@ -14,6 +15,7 @@
 //! | Capture and chunks | [`capture`](crate::capture): the pump writes each side's chunks and hands canonical audio on |
 //! | Live, per side | `live`: the AGC with a VAD (the fallback when it fails), the live engine, finals placed in the meeting and saved only over VAD speech |
 //! | Final pass, per side | `offline`: the chunks read back, VAD-gated gain, one engine call per speech region, empty regions reported |
+//! | Echo | [`echo`]: live, the mic cancelled along an echo path once one is found, "you" finals behind the echo gate; at the end, a path fitted over the whole recording, the linear output transcribed where the full output holds speech, "you" lines that repeat the far end removed (and handed back) |
 //! | Diarization | [`diarize`]: the far end only, its speech streamed from disk into the diarizer a window at a time; labels kept with at least two substantial clusters |
 //! | Supersede | the final pass replaces the live transcript in one transaction, as revision 2, unless the guard ([`check_supersede`]) refuses it or a region failed |
 //! | Summary, commitments | `ink-llm`: a summary (in overlapping windows when long), commitments from it and from the mic, deduplicated |
@@ -29,6 +31,7 @@
 //! between regions.
 
 pub mod diarize;
+pub mod echo;
 pub mod events;
 mod live;
 pub(crate) mod offline;
@@ -54,10 +57,16 @@ use ink_llm::tasks::dedup::{apply_merges, dedup};
 use ink_llm::tasks::due::RecordTime;
 use ink_llm::tasks::summary::{SummaryOptions, summarize};
 
+use ink_echo::{DedupConfig, EchoError, PathReport, echo_duplicates};
+
 use self::diarize::{rule5, to_meeting};
-use self::events::{KeptLive, MeetingEvent, MeetingWarning, Phase};
+use self::echo::{LiveEcho, MicBlock};
+use self::events::{
+    EchoPass, EchoPath, EchoSearch, EchoState, FarLine, KeptLive, MeetingEvent, MeetingWarning,
+    Phase, RemovedEcho,
+};
 use self::live::{LiveChannel, Settled};
-use self::offline::{Pass, RegionWindows, SideRead, SideReader, Stop};
+use self::offline::{EchoReader, Pass, RegionWindows, SideRead, SideReader, Stop};
 use self::watchdog::{Routing, SideState, Watch, Watchdog};
 use crate::capture::SideSummary;
 use crate::redact::Spoken;
@@ -115,6 +124,8 @@ pub struct MeetingChain {
     far: LiveChannel,
     asr: Receiver<(Channel, AsrEvent)>,
     watchdog: Watchdog,
+    /// Echo cancellation for the live mic ([`echo`]).
+    echo: LiveEcho,
 }
 
 /// What a meeting keeps from start to end.
@@ -243,12 +254,19 @@ impl MeetingChain {
         };
         let mic = open(Channel::Mic);
         let far = open(Channel::Far);
+        // Unprotected from here until the search finds an echo path (if there is one to find).
+        core.emit(MeetingEvent::Echo(EchoState::Searching {
+            since_ms: 0,
+            why: EchoSearch::Start,
+        }));
+        let echo = LiveEcho::new(t0_ns, core.vad.clone());
         Ok(Self {
             core,
             mic,
             far,
             asr,
             watchdog: Watchdog::new(start.routing, t0_ns),
+            echo,
         })
     }
 
@@ -285,7 +303,20 @@ impl MeetingChain {
             });
         }
         let events = self.core.events.clone();
-        self.side(channel).push(samples, host_time_ns, &*events);
+        // The mic reaches its live channel through the echo stage: as captured, or cancelled.
+        if channel == Channel::Far {
+            self.far.push(samples, host_time_ns, &*events);
+        }
+        let mut mic = Vec::new();
+        self.echo.push(
+            channel,
+            samples,
+            host_time_ns,
+            dropped_frames > 0,
+            &mut mic,
+            &*events,
+        );
+        self.push_mic(mic);
         self.collect(false);
         let now = self.core.services.clock.now_ns();
         for watch in self.watchdog.observe(channel, samples, now) {
@@ -308,10 +339,25 @@ impl MeetingChain {
         self.watchdog.deadline_ns()
     }
 
-    /// The capture's routing changed (a device switched, the headset-mic setting).
+    /// The capture's routing changed (a device switched, the headset-mic setting). A new device
+    /// is a new echo path: live cancellation stops and the search starts again
+    /// ([`EchoSearch::DeviceSwitch`]).
     pub fn set_routing(&mut self, routing: Routing) {
         self.core.mic_bluetooth |= routing.mic == ink_core::Transport::Bluetooth;
         self.watchdog.set_routing(routing);
+        let events = self.core.events.clone();
+        let mut mic = Vec::new();
+        self.echo.device_switched(&mut mic, &*events);
+        self.push_mic(mic);
+        self.collect(false);
+    }
+
+    /// Mic audio from the echo stage into the mic's live channel.
+    fn push_mic(&mut self, blocks: Vec<MicBlock>) {
+        let events = self.core.events.clone();
+        for block in blocks {
+            self.mic.push(&block.samples, block.host_ns, &*events);
+        }
     }
 
     fn watched(&self, watch: Watch) {
@@ -366,25 +412,30 @@ impl MeetingChain {
                 self.save(settled);
             }
         }
+        self.save_released();
     }
 
-    fn save(&self, settled: Settled) {
-        match settled {
-            Settled::Keep(segment) => {
-                let store = &self.core.services.store;
-                if let Err(error) =
-                    store.append_segments(&self.core.record, std::slice::from_ref(&segment))
-                {
-                    log::warn!("meeting: a live final could not be saved: {error}");
-                    self.core.warn(MeetingWarning::StoreFailed(error));
-                }
-                self.core.emit(MeetingEvent::Final {
-                    channel: segment.channel,
-                    start_ms: segment.start_ms,
-                    end_ms: segment.end_ms,
-                    text: Spoken::new(segment.text),
-                });
+    /// Saves the "you" finals the echo gate has judged, and reports those it judged echo.
+    fn save_released(&mut self) {
+        for (segment, keep) in self.echo.released() {
+            if keep {
+                self.save_final(segment);
+            } else {
+                let (start_ms, end_ms) = (segment.start_ms, segment.end_ms);
+                log::info!(
+                    "meeting: a live you final at {start_ms} ms was echo of the far end; not saved"
+                );
+                self.core
+                    .warn(MeetingWarning::EchoOnlyFinal { start_ms, end_ms });
             }
+        }
+    }
+
+    fn save(&mut self, settled: Settled) {
+        match settled {
+            // A "you" final waits for the echo gate.
+            Settled::Keep(segment) if segment.channel == Channel::Mic => self.echo.hold(segment),
+            Settled::Keep(segment) => self.save_final(segment),
             Settled::NoSpeech {
                 channel,
                 start_ms,
@@ -402,6 +453,21 @@ impl MeetingChain {
         }
     }
 
+    fn save_final(&self, segment: Segment) {
+        let store = &self.core.services.store;
+        if let Err(error) = store.append_segments(&self.core.record, std::slice::from_ref(&segment))
+        {
+            log::warn!("meeting: a live final could not be saved: {error}");
+            self.core.warn(MeetingWarning::StoreFailed(error));
+        }
+        self.core.emit(MeetingEvent::Final {
+            channel: segment.channel,
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            text: Spoken::new(segment.text),
+        });
+    }
+
     /// **Worker.** Ends the live phase: flushes each side into its live engine, saves the trailing
     /// finals, and marks the record ended. Call it once capture has stopped and the pump has handed
     /// on the last audio.
@@ -410,9 +476,14 @@ impl MeetingChain {
     /// meeting, and then the start is used ([`MeetingWarning::ClockWentBack`]).
     pub fn stop(mut self) -> EndedMeeting {
         let events = self.core.events.clone();
+        let mut mic = Vec::new();
+        self.echo.flush(&mut mic);
+        self.push_mic(mic);
         self.mic.finish(&*events);
         self.far.finish(&*events);
         self.collect(true);
+        self.echo.close(&*events);
+        self.save_released();
         // From here, a live event is late: every stream has finished. What raced in before the
         // close is counted too.
         self.core.backlogged = [self.mic.backlogged(), self.far.backlogged()];
@@ -445,7 +516,7 @@ pub struct EndedMeeting {
 }
 
 /// What a meeting's final pass came to.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MeetingOutcome {
     /// The transcript's revision now: 2 after a first supersede, 1 when the live one was kept.
     /// `None` only when the live one was kept and the record could not be read
@@ -459,6 +530,11 @@ pub struct MeetingOutcome {
     pub far: events::ChannelPass,
     /// What diarization did, when a diarizer is installed.
     pub diarization: Option<events::Diarization>,
+    /// What echo cancellation did.
+    pub echo: EchoPass,
+    /// "You" lines removed as echo of the far end, whole, so they can be stored and restored
+    /// (also sent as [`MeetingEvent::RemovedAsEcho`]).
+    pub removed_as_echo: Vec<RemovedEcho>,
 }
 
 /// Why a final pass stopped before replacing the live transcript. Every one of these happens
@@ -473,6 +549,9 @@ pub enum FinalizeError {
     Chunks(ChunkError),
     /// The region sizes in the settings cannot work.
     Regions(WindowError),
+    /// Echo cancellation refused the audio outside the mic pass, which falls back on its own
+    /// ([`MeetingWarning::EchoFailed`]).
+    Echo(EchoError),
 }
 
 impl fmt::Display for FinalizeError {
@@ -481,6 +560,7 @@ impl fmt::Display for FinalizeError {
             Self::Cancelled => f.write_str("meeting final pass cancelled"),
             Self::Chunks(e) => write!(f, "meeting final pass: {e}"),
             Self::Regions(e) => write!(f, "meeting final pass: {e}"),
+            Self::Echo(e) => write!(f, "meeting final pass: {e}"),
         }
     }
 }
@@ -493,6 +573,7 @@ impl From<Stop> for FinalizeError {
             Stop::Cancelled => Self::Cancelled,
             Stop::Chunks(e) => Self::Chunks(e),
             Stop::Window(e) => Self::Regions(e),
+            Stop::Echo(e) => Self::Echo(e),
         }
     }
 }
@@ -525,22 +606,41 @@ impl EndedMeeting {
             emit: &*core.events,
         };
 
-        // The mic: each region transcribed as it is read.
-        let mut mic_report = offline::report(Channel::Mic);
-        let mut mic = Vec::new();
-        let (mut reader, opened) = self.open_reader(audio, Channel::Mic)?;
-        while let Some(region) = reader.next_region()? {
-            mic.extend(offline::transcribe(
-                &ctx,
-                Channel::Mic,
-                &region.audio,
-                region.start,
-                &mut mic_report,
-            )?);
-        }
-        let read = self.close_reader(&reader, Channel::Mic, opened);
-        self.account(&mut mic_report, read);
-        core.emit(MeetingEvent::Transcribed(mic_report));
+        // Echo: a path fitted over the whole recording, from the chunks (never the live search).
+        let fit = offline::fit_path(audio, core.t0_ns, cancel).or_else(|stop| match stop {
+            Stop::Echo(error) => {
+                log::warn!("meeting final pass: the echo path search failed: {error}");
+                core.warn(MeetingWarning::EchoFailed(error.into()));
+                Ok(None)
+            }
+            stop => Err(stop),
+        })?;
+        let mut echo = echo_pass(fit.as_ref());
+
+        // The mic: each region transcribed as it is read; along the echo path, if there is one.
+        let path = fit.and_then(|r| r.path);
+        let mut evidence = None;
+        let (mut mic, mic_report) = match path {
+            Some(path) => match self.mic_pass_cancelled(audio, path, &ctx) {
+                Ok((mic, report, heard, erle)) => {
+                    echo.cancelled = true;
+                    echo.erle_first_db = erle.first().erle_db();
+                    echo.erle_db = erle.after().erle_db();
+                    echo.linear_erle_db = erle.linear().erle_db();
+                    evidence = Some(heard);
+                    (mic, report)
+                }
+                Err(Stop::Echo(error)) => {
+                    log::warn!(
+                        "meeting final pass: echo cancellation failed ({error}); the mic is transcribed as captured"
+                    );
+                    core.warn(MeetingWarning::EchoFailed(error.into()));
+                    self.mic_pass(audio, &ctx)?
+                }
+                Err(stop) => return Err(stop.into()),
+            },
+            None => self.mic_pass(audio, &ctx)?,
+        };
 
         // The far end. With a diarizer, in two passes over the recorded audio, each holding one
         // region at a time: the diarizer hears the far end's speech streamed from disk, then each
@@ -579,7 +679,13 @@ impl EndedMeeting {
                 &mut far_report,
             )?);
         }
-        let read = self.close_reader(&reader, Channel::Far, opened.or(first_vad_error));
+        let read = self.close_side(
+            Channel::Far,
+            opened
+                .or(first_vad_error)
+                .or_else(|| reader.vad_error().cloned()),
+            reader.summary(),
+        );
         self.account(&mut far_report, read);
         let diarization = decided.map(|r| events::Diarization {
             clusters: r.clusters,
@@ -590,6 +696,23 @@ impl EndedMeeting {
         core.emit(MeetingEvent::Transcribed(far_report));
         if let Some(d) = diarization {
             core.emit(MeetingEvent::Diarized(d));
+        }
+
+        // "You" lines that repeat the far end where nobody on the near end spoke: only with the
+        // full output's verdicts (without a path there is no acoustic evidence to judge by).
+        let removed_as_echo = match &evidence {
+            Some(heard) => remove_echo(&mut mic, &far, heard, &mut echo),
+            None => Vec::new(),
+        };
+        if !removed_as_echo.is_empty() {
+            log::info!(
+                "meeting final pass: {} you lines removed as echo",
+                removed_as_echo.len()
+            );
+        }
+        core.emit(MeetingEvent::EchoPass(echo));
+        if !removed_as_echo.is_empty() {
+            core.emit(MeetingEvent::RemovedAsEcho(removed_as_echo.clone()));
         }
 
         let mut new: Vec<Segment> = mic.into_iter().chain(far).collect();
@@ -631,7 +754,93 @@ impl EndedMeeting {
             mic: mic_report,
             far: far_report,
             diarization,
+            echo,
+            removed_as_echo,
         })
+    }
+
+    /// The mic as captured: each region transcribed as it is read.
+    fn mic_pass(
+        &self,
+        audio: &ChunkStore,
+        ctx: &Pass<'_>,
+    ) -> Result<(Vec<Segment>, events::ChannelPass), FinalizeError> {
+        let mut report = offline::report(Channel::Mic);
+        let mut mic = Vec::new();
+        let (mut reader, opened) = self.open_reader(audio, Channel::Mic)?;
+        while let Some(region) = reader.next_region()? {
+            mic.extend(offline::transcribe(
+                ctx,
+                Channel::Mic,
+                &region.audio,
+                region.start,
+                &mut report,
+            )?);
+        }
+        let read = self.close_side(
+            Channel::Mic,
+            opened.or_else(|| reader.vad_error().cloned()),
+            reader.summary(),
+        );
+        self.account(&mut report, read);
+        self.core.emit(MeetingEvent::Transcribed(report));
+        Ok((mic, report))
+    }
+
+    /// The mic cancelled along `path`: regions where the VAD hears speech in AEC3's full output,
+    /// the linear output transcribed inside them. Returns the VAD's verdicts too, and the ERLE.
+    /// [`Stop::Echo`] when cancellation fails (the caller falls back to [`mic_pass`]).
+    ///
+    /// [`mic_pass`]: Self::mic_pass
+    fn mic_pass_cancelled(
+        &self,
+        audio: &ChunkStore,
+        path: ink_echo::Alignment,
+        ctx: &Pass<'_>,
+    ) -> Result<
+        (
+            Vec<Segment>,
+            events::ChannelPass,
+            crate::speech::HeardSpeech,
+            echo::ErleMeter,
+        ),
+        Stop,
+    > {
+        let core = &self.core;
+        let (vad, opened) = core.vad.open();
+        let pass = SpeechPass::paired(vad, core.settings.vad, core.settings.regions)?;
+        let mut reader = match EchoReader::open(audio, core.t0_ns, path, pass) {
+            Ok(reader) => reader,
+            Err(Stop::Chunks(e)) => {
+                log::warn!("meeting final pass: the mic side's chunks cannot be listed: {e}");
+                core.warn(MeetingWarning::AudioUnlisted {
+                    channel: Channel::Mic,
+                    reason: e.to_string(),
+                });
+                return Err(Stop::Chunks(e));
+            }
+            Err(stop) => return Err(stop),
+        };
+        let mut report = offline::report(Channel::Mic);
+        let mut mic = Vec::new();
+        while let Some(region) = reader.next_region()? {
+            mic.extend(offline::transcribe(
+                ctx,
+                Channel::Mic,
+                &region.audio,
+                region.start,
+                &mut report,
+            )?);
+        }
+        let read = self.close_side(
+            Channel::Mic,
+            opened.or_else(|| reader.vad_error().cloned()),
+            reader.summary(),
+        );
+        self.account(&mut report, read);
+        core.emit(MeetingEvent::Transcribed(report));
+        let (heard, erle) = reader.into_evidence();
+        Ok((mic, report, heard, erle))
     }
 
     /// What a side captured, into its report: the pump's count, what is on disk, and a warning
@@ -679,7 +888,7 @@ impl EndedMeeting {
 
     /// A reader over one side's chunks, with a fresh VAD. Returns, too, the error the VAD factory
     /// failed with, if it did (the pass then levels with the fallback), for
-    /// [`close_reader`](Self::close_reader) to report.
+    /// [`close_side`](Self::close_side) to report.
     fn open_reader<'a>(
         &self,
         audio: &'a ChunkStore,
@@ -707,15 +916,15 @@ impl EndedMeeting {
     }
 
     /// Reports a finished side's VAD health and unreadable audio, once per side, and returns
-    /// what it read. `vad_error` is the VAD factory's error, or another pass's over the same side.
-    fn close_reader(
+    /// what it read. `vad_error` is the VAD factory's error, or a pass's over the side.
+    fn close_side(
         &self,
-        reader: &SideReader<'_>,
         channel: Channel,
         vad_error: Option<EngineError>,
+        read: SideRead,
     ) -> SideRead {
         let core = &self.core;
-        if let Some(error) = vad_error.or_else(|| reader.vad_error().cloned()) {
+        if let Some(error) = vad_error {
             log::warn!("meeting final pass: the {channel:?} VAD failed; the fallback finished it");
             core.warn(MeetingWarning::VadFailed {
                 channel,
@@ -723,7 +932,6 @@ impl EndedMeeting {
                 error,
             });
         }
-        let read = reader.summary();
         if read.skipped > 0 {
             log::warn!(
                 "meeting final pass: {} {channel:?} chunk files could not be read",
@@ -876,4 +1084,75 @@ impl EndedMeeting {
             Err(error) => core.warn(MeetingWarning::StoreFailed(error)),
         }
     }
+}
+
+/// The report of a path search, before the mic is cancelled.
+fn echo_pass(fit: Option<&PathReport>) -> EchoPass {
+    let Some(fit) = fit else {
+        return EchoPass::default();
+    };
+    EchoPass {
+        path: fit.path.map(|p| EchoPath {
+            delay_ms: p.delay_ms(),
+            drift_ppm: p.drift_ppm(),
+            inliers: fit.inliers,
+            stable_from_ms: fit.stable_from_s.map(|s| (s * 1000.0).round() as u64),
+        }),
+        windows: fit.windows,
+        candidates: fit.candidates,
+        ..EchoPass::default()
+    }
+}
+
+/// Removes from `mic` the lines that repeat `far` where `heard` says nobody on the near end spoke
+/// (`ink_echo::dedup`'s rule), counting into `echo`, and returns them whole.
+fn remove_echo(
+    mic: &mut Vec<Segment>,
+    far: &[Segment],
+    heard: &crate::speech::HeardSpeech,
+    echo: &mut EchoPass,
+) -> Vec<RemovedEcho> {
+    let lines = |segments: &[Segment]| -> Vec<ink_core::TimedText> {
+        segments
+            .iter()
+            .map(|s| ink_core::TimedText {
+                start_ms: s.start_ms,
+                end_ms: s.end_ms,
+                text: s.text.clone(),
+            })
+            .collect()
+    };
+    let report = echo_duplicates(&lines(mic), &lines(far), heard, &DedupConfig::default());
+    echo.removed = report.removed.len();
+    echo.kept_near_speech = report.kept_near_speech;
+    echo.kept_no_evidence = report.kept_no_evidence;
+    let mut drop = vec![false; mic.len()];
+    let removed = report
+        .removed
+        .iter()
+        .map(|d| {
+            drop[d.you] = true;
+            RemovedEcho {
+                start_ms: d.start_ms,
+                end_ms: d.end_ms,
+                text: Spoken::new(mic[d.you].text.clone()),
+                far: d
+                    .far
+                    .iter()
+                    .map(|&f| FarLine {
+                        start_ms: far[f].start_ms,
+                        end_ms: far[f].end_ms,
+                    })
+                    .collect(),
+                words: d.words,
+                matched: d.matched,
+            }
+        })
+        .collect();
+    let mut k = 0;
+    mic.retain(|_| {
+        k += 1;
+        !drop[k - 1]
+    });
+    removed
 }

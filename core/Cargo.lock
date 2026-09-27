@@ -669,10 +669,13 @@ dependencies = [
  "hound",
  "ink-audio",
  "ink-core",
+ "ink-echo",
  "ink-engines",
  "ink-llm",
  "ink-store",
  "log",
+ "num-complex",
+ "rustfft",
  "serde_json",
  "sha2",
 ]

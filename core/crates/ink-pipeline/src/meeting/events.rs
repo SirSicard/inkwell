@@ -6,6 +6,7 @@
 //! event cannot leak a transcript (I5).
 
 use ink_core::{Channel, EngineError, LlmError, RecordId, StoreError};
+use ink_echo::EchoError;
 
 use crate::capture::CaptureIssue;
 use crate::events::VoiceDetection;
@@ -161,6 +162,22 @@ pub enum MeetingWarning {
         /// Which side.
         channel: Channel,
     },
+    /// A live "you" final lay where the far end was playing and AEC3's full output heard nobody
+    /// on the near end (the echo gate, [`echo`](crate::meeting::echo)), so it was not saved: the
+    /// live engine transcribed echo that the linear output still carried.
+    EchoOnlyFinal {
+        /// Its start, ms into the meeting.
+        start_ms: u64,
+        /// Its end.
+        end_ms: u64,
+    },
+    /// The VAD that judges AEC3's full output for the live echo gate could not be loaded, or
+    /// failed. The gate has no evidence from here, so it keeps every live "you" final, and a
+    /// weak cancellation can no longer be noticed ([`EchoState::Degraded`]).
+    EchoGateVadFailed(EngineError),
+    /// Echo cancellation failed in the final pass: the mic was transcribed as captured instead,
+    /// with no echo removed.
+    EchoFailed(EchoFailure),
     /// The diarizer failed: the far end keeps no speaker labels.
     DiarizationFailed(EngineError),
     /// The store failed: a live final, the final pass, the summary or commitments could not be
@@ -225,6 +242,177 @@ pub struct Diarization {
     pub labelled: bool,
     /// Far-end segments given a speaker.
     pub attributed: usize,
+}
+
+/// Why the live echo search (re)started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EchoSearch {
+    /// The meeting started.
+    Start,
+    /// The capture's routing changed ([`MeetingChain::set_routing`]): a new device is a new
+    /// echo path, so the old one is dropped.
+    ///
+    /// [`MeetingChain::set_routing`]: crate::meeting::MeetingChain::set_routing
+    DeviceSwitch,
+    /// Cancellation failed ([`EchoState::Failed`]).
+    AfterFailure,
+}
+
+/// Why echo cancellation stopped. Nothing here carries audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EchoFailure {
+    /// One side ran more than 10 s ahead of the other (a mic that stopped delivering while the
+    /// far end played, or the reverse).
+    Backlog {
+        /// The side that ran ahead.
+        ahead: Channel,
+    },
+    /// The path found is outside what the canceller follows (more than 10 s of delay, or 1 % of
+    /// drift): no real echo path is.
+    BadAlignment,
+    /// The canceller stopped for a reason inside the pipeline (its thread ended, or it was used
+    /// after it finished): a bug, reported rather than hidden.
+    Internal,
+}
+
+impl From<EchoError> for EchoFailure {
+    fn from(error: EchoError) -> Self {
+        match error {
+            EchoError::Backlog { ahead } => Self::Backlog { ahead },
+            EchoError::BadAlignment => Self::BadAlignment,
+            EchoError::Ended | EchoError::BadSpeechProbability => Self::Internal,
+        }
+    }
+}
+
+/// Whether the mic is protected from the far end's echo while the meeting is live: sent when it
+/// changes ([`echo`](crate::meeting::echo)). The final pass cancels the whole recording again on
+/// its own ([`EchoPass`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EchoState {
+    /// No echo path yet: the mic reaches the live transcript as captured, **unprotected**. From
+    /// the start, and after each device switch or failure, the search needs at least 10 s of
+    /// far-end audio. With earbuds or headphones there is no path to find, and this stays.
+    Searching {
+        /// Where in the meeting the search began, ms.
+        since_ms: u64,
+        /// Why it began.
+        why: EchoSearch,
+    },
+    /// An echo path was found: from `from_ms` the live "you" transcript hears AEC3's linear
+    /// output, behind the echo gate. Sent again when a later estimate moves the path by more than
+    /// 2 ms (a first fit over under 10 s of audio has no drift), cancellation carrying on along
+    /// the better one, and when [`Degraded`](Self::Degraded) recovers.
+    Cancelling {
+        /// Where cancellation (along this path) began, ms into the meeting.
+        from_ms: u64,
+        /// How long the mic went unprotected before it, since the search began, ms (0 when
+        /// cancellation was already running).
+        unprotected_ms: u64,
+        /// Where the windows first supported this path, ms into the meeting: the search runs a
+        /// few times a minute, so it can find a path some seconds after that.
+        stable_from_ms: Option<u64>,
+        /// How late the mic hears the far end, ms.
+        delay_ms: f64,
+        /// How fast the mic's clock runs against the far end's, ppm.
+        drift_ppm: f64,
+    },
+    /// Cancelling, but removing far less echo than it should: the linear stage, which the live
+    /// "you" transcript hears, takes under 4 dB off the far end's frames over the last 20 s of
+    /// far-end audio (converged, its frames reach 11–13 dB). Echo from audio the tap does not
+    /// carry, or a path gone wrong. Cancellation goes on; `Cancelling` is sent again when it
+    /// recovers (6 dB).
+    Degraded {
+        /// The measured linear-stage ERLE, dB.
+        erle_db: f32,
+    },
+    /// Cancellation failed and stopped. The mic reaches the live transcript as captured again,
+    /// and the search restarts ([`EchoSearch::AfterFailure`]).
+    Failed(EchoFailure),
+    /// Sent once at the end of the live phase when the search was still running and a last look
+    /// at its windows found a path: the mic went unprotected for the whole search. The final
+    /// pass cancels it.
+    FoundAtEnd {
+        /// How long the search ran without cancelling, ms.
+        unprotected_ms: u64,
+        /// Where the windows first supported the path, ms into the meeting.
+        stable_from_ms: Option<u64>,
+    },
+}
+
+/// The echo path the final pass fitted over the whole recording.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EchoPath {
+    /// How late the mic hears the far end at the start, ms.
+    pub delay_ms: f64,
+    /// How fast the mic's clock runs against the far end's, ppm.
+    pub drift_ppm: f64,
+    /// Windows on the path.
+    pub inliers: usize,
+    /// Where the windows first supported it, ms into the meeting: live cancellation could not
+    /// have begun earlier.
+    pub stable_from_ms: Option<u64>,
+}
+
+/// What echo cancellation did in the final pass.
+///
+/// The final pass fits its own path over the whole recording (never the live one), cancels the
+/// mic along it from the start, and transcribes AEC3's linear output inside the stretches where
+/// the VAD hears speech in the full output. Then "you" lines that repeat the far end over audio
+/// where the full output heard nobody are removed ([`RemovedEcho`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EchoPass {
+    /// The path, when the recording has one.
+    pub path: Option<EchoPath>,
+    /// Windows analysed.
+    pub windows: usize,
+    /// Windows loud and clear enough to vote.
+    pub candidates: usize,
+    /// Whether the mic was cancelled (false: no path, or cancellation failed:
+    /// [`MeetingWarning::EchoFailed`]).
+    pub cancelled: bool,
+    /// Echo return loss enhancement over the first 10 s of far-end audio, dB: how far AEC3's
+    /// full output sits under the mic in the frames the best fifth of them reach (a monitor that
+    /// needs no knowledge of when the near end talks; the gate's figure is measured against the
+    /// truth, by the echo fixture). `None` under a second of far-end audio.
+    pub erle_first_db: Option<f32>,
+    /// Echo return loss enhancement over far-end audio after that, dB.
+    pub erle_db: Option<f32>,
+    /// The same for the linear output alone (what the "you" transcript hears), dB.
+    pub linear_erle_db: Option<f32>,
+    /// "You" lines removed as echo of the far end.
+    pub removed: usize,
+    /// Lines whose words repeated the far end's but were kept: the full output heard the near end
+    /// over them (a read-back).
+    pub kept_near_speech: usize,
+    /// Lines whose words repeated the far end's but were kept for want of acoustic evidence.
+    pub kept_no_evidence: usize,
+}
+
+/// A far-end line a removed "you" line matched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FarLine {
+    /// Its start, ms into the meeting.
+    pub start_ms: u64,
+    /// Its end.
+    pub end_ms: u64,
+}
+
+/// A "you" line the final pass removed as echo of the far end, whole, so it can be put back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedEcho {
+    /// Its start, ms into the meeting.
+    pub start_ms: u64,
+    /// Its end.
+    pub end_ms: u64,
+    /// The words.
+    pub text: Spoken,
+    /// The far-end lines whose words it matched, in time order.
+    pub far: Vec<FarLine>,
+    /// Its words, normalised.
+    pub words: usize,
+    /// How many of them matched the far end, in order.
+    pub matched: usize,
 }
 
 /// Why the final pass did not replace the live transcript.
@@ -293,6 +481,13 @@ pub enum MeetingEvent {
     Transcribed(ChannelPass),
     /// Diarization of the far end finished. Not sent when no diarizer is installed.
     Diarized(Diarization),
+    /// Whether the live mic is protected from echo, when it changes.
+    Echo(EchoState),
+    /// What echo cancellation did in the final pass. Sent before the supersede.
+    EchoPass(EchoPass),
+    /// "You" lines the final pass removed as echo, with their words (as [`Spoken`]), so they can
+    /// be stored and put back. Sent only when there are some.
+    RemovedAsEcho(Vec<RemovedEcho>),
     /// The final pass replaced the live transcript.
     Superseded {
         /// The new revision.
