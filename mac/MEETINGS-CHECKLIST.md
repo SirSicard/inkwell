@@ -85,6 +85,8 @@ name or a meeting title into this file or a bug: the repository is public.
       or secret. The Drop shows whenever a meeting records, on every Space and beside full-screen
       apps.
 - [ ] Inkwell never starts recording without a click (the offer is only an offer).
+- [ ] Record now: Live says it records everything this Mac plays. A call app Inkwell can't hear
+      alone (if you meet one): the Drop says so until the first line, and Live says so throughout.
 
 ## 6. The dogfood week: five real meetings (the plan's exit is Mattias's private dogfood file)
 

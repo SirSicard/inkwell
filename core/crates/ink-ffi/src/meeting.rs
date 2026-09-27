@@ -45,7 +45,7 @@ use ink_pipeline::meeting::events::{MeetingEvent, MeetingWarning};
 use ink_pipeline::meeting::watchdog::Routing;
 use ink_pipeline::meeting::{MeetingChain, MeetingServices, MeetingSettings, MeetingStart};
 
-use crate::capture::{MicInfo, transport_name};
+use crate::capture::{FarScope, MicInfo, transport_name};
 
 use crate::dictation::dropped_event;
 use crate::events::{self, event};
@@ -83,6 +83,8 @@ pub struct MeetingInfo {
     pub routing: Routing,
     /// The mic it records, when the platform said.
     pub mic: Option<MicInfo>,
+    /// What its far end records.
+    pub far: FarScope,
 }
 
 /// One side of a meeting's capture.
@@ -542,6 +544,18 @@ pub(crate) fn meeting_sink(
         if let MeetingEvent::Started { record: r } = &e {
             let _ = record.set(r.clone());
             events.emit(started(r, &info));
+            if let (FarScope::EverythingInstead(why), Some((id, name))) = (&info.far, &info.app) {
+                // Other apps' sound is in this recording: said once, right after the start.
+                events.emit(event(
+                    "meeting.far_end_fallback",
+                    &[
+                        ("record", Some(r.0.as_str().into())),
+                        ("app", Some(id.as_str().into())),
+                        ("app_name", Some(name.as_str().into())),
+                        ("message", Some(why.as_str().into())),
+                    ],
+                ));
+            }
             return;
         }
         let r = record.get().cloned().unwrap_or(RecordId(String::new()));
@@ -572,6 +586,7 @@ pub fn started(record: &RecordId, info: &MeetingInfo) -> serde_json::Value {
                     .map(|m| transport_name(m.transport).into()),
             ),
             ("mic_reason", info.mic.as_ref().map(|m| m.reason.into())),
+            ("far_end", Some(info.far.name().into())),
         ],
     )
 }

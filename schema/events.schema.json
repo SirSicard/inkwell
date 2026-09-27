@@ -77,6 +77,9 @@
       "$ref": "#/$defs/MeetingStarted"
     },
     {
+      "$ref": "#/$defs/MeetingFarEndFallback"
+    },
+    {
       "$ref": "#/$defs/MeetingDetected"
     },
     {
@@ -1066,11 +1069,48 @@
         "mic_reason": {
           "$ref": "#/$defs/MicReason",
           "description": "Why that microphone was chosen."
+        },
+        "far_end": {
+          "$ref": "#/$defs/FarEnd",
+          "description": "What it records as the other side."
         }
       },
       "required": [
         "type",
         "record"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingFarEndFallback": {
+      "type": "object",
+      "description": "The meeting was started for an app whose own sound could not be recorded alone, so it records everything this Mac plays instead (except Inkwell itself): other apps' sound is in the recording too. Sent once, right after meeting.started; the shell says so where the meeting shows.",
+      "properties": {
+        "type": {
+          "const": "meeting.far_end_fallback"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "app": {
+          "type": "string",
+          "description": "The app it was started for, by id."
+        },
+        "app_name": {
+          "type": "string",
+          "description": "That app's name, as the shell shows it."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why its sound could not be recorded alone (the platform's error). Never audio or words."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "app",
+        "app_name",
+        "message"
       ],
       "additionalProperties": false
     },
@@ -1256,6 +1296,14 @@
         "first_input",
         "requested",
         "unknown"
+      ]
+    },
+    "FarEnd": {
+      "type": "string",
+      "description": "What a meeting records as the other side: the sound of its app alone (a call recorded from the consent Drop's offer), or everything this Mac plays except Inkwell itself (Record now, which names no app, or a call whose app could not be heard alone: meeting.far_end_fallback says so).",
+      "enum": [
+        "app",
+        "everything"
       ]
     },
     "MeetingVoiceDetection": {

@@ -94,6 +94,11 @@ struct LiveMeetingView: View {
                 }
                 .font(Typography.timestamp)
                 .foregroundStyle(Theme.secondaryText)
+                if let far = Self.farEndLine(meeting) {
+                    Text(far.text)
+                        .font(Typography.caption)
+                        .foregroundStyle(far.alert ? Theme.alert : Theme.secondaryText)
+                }
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 8) {
@@ -105,6 +110,20 @@ struct LiveMeetingView: View {
                 legend
             }
         }
+    }
+
+    /// What the other side is, when it is more than the call's app: everything this Mac plays,
+    /// for Record now, or because the call's app could not be heard alone (said as a warning:
+    /// other apps' sound is in the recording).
+    static func farEndLine(_ meeting: CoreStore.LiveMeeting) -> (text: String, alert: Bool)? {
+        if meeting.farEndFallback {
+            let app = meeting.appName ?? "the call"
+            return ("Inkwell couldn't hear \(app) alone, so it is recording everything this Mac plays.", true)
+        }
+        if meeting.farEnd == .everything {
+            return ("Recording everything this Mac plays, as well as your microphone.", false)
+        }
+        return nil
     }
 
     /// Which mic, when the reason is worth saying ("why is it using the laptop mic?").

@@ -335,6 +335,40 @@ final class CitedDecisionTests: XCTestCase {
 }
 
 @MainActor
+final class FarEndHonestyTests: XCTestCase {
+    /// Review (S2.8, security): a call whose app can't be heard alone records everything this Mac
+    /// plays; the Drop says so until the first line, and Live's header says so throughout.
+    func testACallThatCantBeHeardAloneSaysItRecordsEverything() {
+        let store = CoreStore()
+        let ink = ShellInk(store: store)
+        store.apply([event(#"{"type":"meeting.started","record":"r1","app":"com.example.call","app_name":"Example Call","far_end":"everything"}"#)])
+        XCTAssertEqual(ink.dropText.detail, "Recording this meeting", "not yet told")
+        store.apply([event(#"{"type":"meeting.far_end_fallback","record":"r1","app":"com.example.call","app_name":"Example Call","message":"no audio process for that app"}"#)])
+        XCTAssertEqual(ink.dropText.detail, "Inkwell couldn't hear Example Call alone, so it is recording everything this Mac plays")
+        let meeting = try! XCTUnwrap(store.meeting)
+        let line = try! XCTUnwrap(LiveMeetingView.farEndLine(meeting))
+        XCTAssertTrue(line.alert)
+        XCTAssertTrue(line.text.contains("everything this Mac plays"))
+        store.apply([event(#"{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"shall we start"}"#)])
+        XCTAssertEqual(ink.dropText.detail, "shall we start")
+        XCTAssertNotNil(LiveMeetingView.farEndLine(try! XCTUnwrap(store.meeting)), "Live keeps saying it")
+    }
+
+    /// Record now records everything this Mac plays by design: Live says so, plainly; a call
+    /// recorded from the offer says nothing more.
+    func testRecordNowSaysWhatItRecordsAndAnOfferedCallDoesNot() {
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meeting.started","record":"r1","far_end":"everything"}"#)])
+        let now = try! XCTUnwrap(LiveMeetingView.farEndLine(try! XCTUnwrap(store.meeting)))
+        XCTAssertFalse(now.alert)
+        XCTAssertTrue(now.text.contains("everything this Mac plays"))
+        store.apply([event(#"{"type":"meeting.finished","record":"r1","revision":2}"#)])
+        store.apply([event(#"{"type":"meeting.started","record":"r2","app":"a","app_name":"A","far_end":"app"}"#)])
+        XCTAssertNil(LiveMeetingView.farEndLine(try! XCTUnwrap(store.meeting)))
+    }
+}
+
+@MainActor
 final class DetectionStateTests: XCTestCase {
     /// Review (S2.8): Today follows the core's detection state: a setting the core could not read
     /// is announced as not listening, with why, and Today says so however the setting reads.

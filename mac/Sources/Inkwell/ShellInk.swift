@@ -133,9 +133,14 @@ struct DropText: Equatable, Sendable {
             guard let meeting else { return DropText.for(state, dictation: dictation) }
             let source = meeting.appName ?? meeting.title
             let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Said until the first line arrives (Live keeps saying it): other apps' sound is in
+            // this recording.
+            let waiting = meeting.farEndFallback
+                ? "Inkwell couldn't hear \(meeting.appName ?? "the call") alone, so it is recording everything this Mac plays"
+                : "Recording this meeting"
             return DropText(
                 title: ["● REC", source].compactMap { $0 }.joined(separator: " · "),
-                detail: latest.flatMap { $0.isEmpty ? nil : $0 } ?? "Recording this meeting",
+                detail: latest.flatMap { $0.isEmpty ? nil : $0 } ?? waiting,
                 tone: .recording)
         case .problem:
             let far = meeting?.sides[.far]

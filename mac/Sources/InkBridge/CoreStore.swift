@@ -53,6 +53,11 @@ public final class CoreStore {
         /// The microphone it records, and why that one.
         public var micName: String?
         public var micReason: MicReason?
+        /// What it records as the other side: the app alone, or everything this Mac plays.
+        public var farEnd: FarEnd?
+        /// It was started for an app whose sound could not be recorded alone, so it records
+        /// everything this Mac plays instead (`meeting.far_end_fallback`).
+        public var farEndFallback = false
         /// `meeting.stopped` arrived: capture ended and the final pass is running.
         public var stopping = false
         /// The latest state of each side's capture.
@@ -280,6 +285,7 @@ public final class CoreStore {
             live.appName = started.appName
             live.micName = started.micName
             live.micReason = started.micReason
+            live.farEnd = started.farEnd
             meeting = live
             offer = nil
         case .meetingDetected(let detected):
@@ -299,6 +305,8 @@ public final class CoreStore {
                     notice(.detectionUnavailable, message)
                 }
             }
+        case .meetingFarEndFallback(let fallback):
+            updateMeeting(fallback.record) { $0.farEndFallback = true }
         case .meetingRecovered:
             notice(.meetingRecovered)
         case .meetingsRecovered(let done):

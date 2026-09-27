@@ -19,7 +19,7 @@ use ink_core::{
     RecordKind, Store, Transport,
 };
 use ink_engines::{ModelDir, Registry};
-use ink_ffi::capture::{MeetingCapture, MicInfo, Opened};
+use ink_ffi::capture::{FarScope, MeetingCapture, MicInfo, Opened};
 use ink_ffi::external::{InkEngineVTable, KIND_LLM, Registration};
 use ink_ffi::meeting::CaptureSide;
 use ink_ffi::runtime::{Core, MeetingPlatform, Parts};
@@ -35,6 +35,8 @@ struct ReplayCapture {
     far: PathBuf,
     clock: Arc<dyn Clock>,
     opened_for: Mutex<Vec<Option<String>>>,
+    /// An app's own sound cannot be tapped: everything this "Mac" plays is recorded instead.
+    tap_fails: std::sync::atomic::AtomicBool,
 }
 
 impl MeetingCapture for ReplayCapture {
@@ -67,6 +69,13 @@ impl MeetingCapture for ReplayCapture {
                 transport: Transport::BuiltIn,
                 reason: "default_input",
             }),
+            far: match app {
+                None => FarScope::Everything,
+                Some(_) if self.tap_fails.load(std::sync::atomic::Ordering::Relaxed) => {
+                    FarScope::EverythingInstead("no audio process for that app".into())
+                }
+                Some(_) => FarScope::App,
+            },
         })
     }
 }
@@ -133,6 +142,7 @@ fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Sto
         far,
         clock: clock.clone(),
         opened_for: Mutex::default(),
+        tap_fails: Default::default(),
     });
     let detector = Arc::new(FakeDetector::default());
     let parts = Parts {
@@ -184,6 +194,10 @@ fn a_meeting_from_the_devices_starts_named_and_stops_by_hand_into_its_final_pass
     assert_eq!(started["mic_transport"], "built_in");
     assert_eq!(started["mic_reason"], "default_input");
     assert!(started.get("app").is_none(), "Record now names no app");
+    assert_eq!(
+        started["far_end"], "everything",
+        "and records all this Mac plays"
+    );
     assert_eq!(*r.capture.opened_for.lock().unwrap(), [None]);
 
     // A second start while it records is refused, and changes nothing.
@@ -302,6 +316,8 @@ fn detection_offers_an_app_the_user_answers_and_its_meeting_ends_when_it_lets_go
     let started = r.events.wait_type("meeting.started", WAIT);
     assert_eq!(started["app"], "com.example.call");
     assert_eq!(started["app_name"], "Example Call");
+    assert_eq!(started["far_end"], "app", "the call's own sound alone");
+    assert_eq!(r.events.count("meeting.far_end_fallback"), 0);
     assert_eq!(
         *r.capture.opened_for.lock().unwrap(),
         [Some("com.example.call".to_owned())]
@@ -1125,6 +1141,41 @@ fn local_only_refuses_a_model_that_is_not_local_for_ask_and_the_summary() {
         "{warning}"
     );
     assert_eq!(model.requests.lock().unwrap().len(), asked, "never called");
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+// --- The far end, honestly -------------------------------------------------------------------
+
+/// Review (S2.8, security): a call whose app cannot be recorded alone records everything this Mac
+/// plays instead; the shell is told at once (`meeting.far_end_fallback`, right after
+/// `meeting.started`), never only the log.
+#[test]
+fn a_call_that_cannot_be_heard_alone_says_it_records_everything_this_mac_plays() {
+    let r = rig("far-fallback", 30.0, clock());
+    r.capture
+        .tap_fails
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    r.core
+        .command(r#"{"cmd":"meeting.start","app":"com.example.call"}"#)
+        .unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    assert_eq!(started["far_end"], "everything");
+    let fallback = r.events.wait_type("meeting.far_end_fallback", WAIT);
+    assert_eq!(fallback["record"], started["record"]);
+    assert_eq!(fallback["app"], "com.example.call");
+    assert_eq!(
+        fallback["app_name"], "com.example.call",
+        "no offer: named by its id"
+    );
+    assert_eq!(fallback["message"], "no audio process for that app");
+    assert!(
+        r.events.seq_of("meeting.far_end_fallback") > r.events.seq_of("meeting.started"),
+        "said right after the start"
+    );
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
+    assert_eq!(r.events.count("meeting.far_end_fallback"), 1, "once");
     r.events.assert_valid();
     r.core.shutdown();
 }

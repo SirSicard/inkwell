@@ -399,6 +399,7 @@ impl State {
             app: app.as_ref().map(|a| (a.id.clone(), a.name.clone())),
             routing: opened.routing,
             mic: opened.mic,
+            far: opened.far,
         };
         let tx = Mutex::new(self.tx.clone());
         let ended = Box::new(move || {

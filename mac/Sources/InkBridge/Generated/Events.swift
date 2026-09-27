@@ -57,6 +57,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case dictationWorkerFailed(DictationWorkerFailed)
     /// `meeting.started`
     case meetingStarted(MeetingStarted)
+    /// `meeting.far_end_fallback`
+    case meetingFarEndFallback(MeetingFarEndFallback)
     /// `meeting.detected`
     case meetingDetected(MeetingDetected)
     /// `meeting.detection_ended`
@@ -186,6 +188,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "dictation.hotkey_lost": self = .dictationHotkeyLost(try DictationHotkeyLost(from: decoder))
             case "dictation.worker_failed": self = .dictationWorkerFailed(try DictationWorkerFailed(from: decoder))
             case "meeting.started": self = .meetingStarted(try MeetingStarted(from: decoder))
+            case "meeting.far_end_fallback": self = .meetingFarEndFallback(try MeetingFarEndFallback(from: decoder))
             case "meeting.detected": self = .meetingDetected(try MeetingDetected(from: decoder))
             case "meeting.detection_ended": self = .meetingDetectionEnded(try MeetingDetectionEnded(from: decoder))
             case "meeting.detection": self = .meetingDetection(try MeetingDetection(from: decoder))
@@ -260,6 +263,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .dictationHotkeyLost(let event): try event.encode(to: encoder)
         case .dictationWorkerFailed(let event): try event.encode(to: encoder)
         case .meetingStarted(let event): try event.encode(to: encoder)
+        case .meetingFarEndFallback(let event): try event.encode(to: encoder)
         case .meetingDetected(let event): try event.encode(to: encoder)
         case .meetingDetectionEnded(let event): try event.encode(to: encoder)
         case .meetingDetection(let event): try event.encode(to: encoder)
@@ -837,6 +841,15 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
+/// What a meeting records as the other side: the sound of its app alone (a call recorded from
+/// the consent Drop's offer), or everything this Mac plays except Inkwell itself (Record now,
+/// which names no app, or a call whose app could not be heard alone: meeting.far_end_fallback
+/// says so).
+public enum FarEnd: String, Codable, Sendable, Equatable, CaseIterable {
+    case app
+    case everything
+}
+
 /// How a dictation went in. blocked: Secure Input or an elevated target refused synthetic
 /// input, and nothing was inserted. inserted_clipboard_not_restored: inserted, and the previous
 /// clipboard could not be put back.
@@ -1192,6 +1205,31 @@ public struct MeetingFailed: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// The meeting was started for an app whose own sound could not be recorded alone, so it
+/// records everything this Mac plays instead (except Inkwell itself): other apps' sound is in
+/// the recording too. Sent once, right after meeting.started; the shell says so where the
+/// meeting shows.
+public struct MeetingFarEndFallback: Codable, Sendable, Equatable {
+    /// The app it was started for, by id.
+    public let app: String
+    /// That app's name, as the shell shows it.
+    public let appName: String
+    /// Why its sound could not be recorded alone (the platform's error). Never audio or words.
+    public let message: String
+    /// The meeting's record id.
+    public let record: String
+    /// Always `meeting.far_end_fallback`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case app
+        case appName = "app_name"
+        case message
+        case record
+        case type
+    }
+}
+
 /// Settled live text, saved as revision 1. Carries the meeting's words: never log it.
 public struct MeetingFinal: Codable, Sendable, Equatable {
     /// Which side.
@@ -1331,6 +1369,8 @@ public struct MeetingStarted: Codable, Sendable, Equatable {
     public let app: String?
     /// That app's name, as the shell shows it.
     public let appName: String?
+    /// What it records as the other side.
+    public let farEnd: FarEnd?
     /// The microphone it records, as the OS names it.
     public let micName: String?
     /// Why that microphone was chosen.
@@ -1348,6 +1388,7 @@ public struct MeetingStarted: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case app
         case appName = "app_name"
+        case farEnd = "far_end"
         case micName = "mic_name"
         case micReason = "mic_reason"
         case micTransport = "mic_transport"

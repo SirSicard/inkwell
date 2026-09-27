@@ -24,6 +24,31 @@ pub struct MicInfo {
     pub reason: &'static str,
 }
 
+/// What a meeting's far end records.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FarScope {
+    /// The meeting's app alone.
+    App,
+    /// Everything this machine plays, except this app: Record now, which names no app (and
+    /// replays, which have no devices).
+    #[default]
+    Everything,
+    /// Everything this machine plays, except this app, because the meeting's app could not be
+    /// tapped alone: other apps' sound is recorded too, and the shell must say so
+    /// (`meeting.far_end_fallback`). Why, as the platform said it.
+    EverythingInstead(String),
+}
+
+impl FarScope {
+    /// Its schema word (`FarEnd`).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::Everything | Self::EverythingInstead(_) => "everything",
+        }
+    }
+}
+
 /// Both sides of a meeting's capture, opened and not started.
 pub struct Opened {
     /// The mic, then the far end.
@@ -32,6 +57,8 @@ pub struct Opened {
     pub routing: Routing,
     /// The mic, when the platform says which it is.
     pub mic: Option<MicInfo>,
+    /// What the far end records.
+    pub far: FarScope,
 }
 
 /// Opens a meeting's capture on this machine.
@@ -112,24 +139,33 @@ mod mac {
                 .open_mic_source(Some(&device.id))
                 .map_err(|e| format!("the microphone {}: {e}", device.name))?;
             let transport = mic.transport();
-            let far = match app {
-                Some(app) => self
+            let (far, scope) = match app {
+                Some(app) => match self
                     .capture
                     .open_far_end_source(&FarEndTarget::Apps(vec![app.clone()]))
-                    .or_else(|e| {
+                {
+                    Ok(far) => (Ok(far), FarScope::App),
+                    Err(e) => {
                         // The app has no audio process the tap can name (it may play through a
                         // helper under another id): everything this Mac plays is the far end
-                        // instead, which still leaves this app out.
+                        // instead, which still leaves this app out. Other apps' sound is then in
+                        // the recording, so the shell is told (meeting.far_end_fallback).
                         log::warn!(
                             "meeting: the far end of {} could not be tapped ({e}); tapping everything this Mac plays",
                             app.id
                         );
-                        self.capture
-                            .open_far_end_source(&FarEndTarget::AllOutput)
-                    }),
-                None => self.capture.open_far_end_source(&FarEndTarget::AllOutput),
-            }
-            .map_err(|e| format!("the other side's sound: {e}"))?;
+                        (
+                            self.capture.open_far_end_source(&FarEndTarget::AllOutput),
+                            FarScope::EverythingInstead(e.to_string()),
+                        )
+                    }
+                },
+                None => (
+                    self.capture.open_far_end_source(&FarEndTarget::AllOutput),
+                    FarScope::Everything,
+                ),
+            };
+            let far = far.map_err(|e| format!("the other side's sound: {e}"))?;
             let side = |source: Box<dyn AudioSource>| CaptureSide {
                 source,
                 ring: DEFAULT_RING_DURATION,
@@ -146,6 +182,7 @@ mod mac {
                     transport,
                     reason: reason(why),
                 }),
+                far: scope,
             })
         }
     }
