@@ -195,7 +195,9 @@ public final class FoundationModelsPolish: InkLanguageModel {
                 case .rateLimited: return .failed(code: 14)
                 case .concurrentRequests: return .failed(code: 15)
                 case .decodingFailure: return .failed(code: 16)
-                default: return .failed(code: 19)
+                case .unsupportedGuide: return .failed(code: 17)
+                // A case a later SDK adds; the compiler names any known case left out.
+                @unknown default: return .failed(code: 19)
                 }
             }
         #endif

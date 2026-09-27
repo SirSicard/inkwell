@@ -6,6 +6,9 @@ import Foundation
 import InkBridge
 import Synchronization
 import XCTest
+#if canImport(FoundationModels)
+    import FoundationModels
+#endif
 
 private let request = InkLlmRequest(
     system: "Clean up this dictation. Return only the text.",
@@ -64,6 +67,16 @@ final class FoundationModelsPolishTests: XCTestCase {
         struct Quoting: Error, CustomStringConvertible { var description: String { "heard: synthetic words" } }
         let model = FoundationModelsPolish(availability: { .available }, respond: { _ in throw Quoting() })
         XCTAssertEqual(generate(model)?.failureValue, .failed(code: 1))
+        #if canImport(FoundationModels)
+            // Every case the SDK knows has its own code; one it adds later is 19.
+            let context = LanguageModelSession.GenerationError.Context(debugDescription: "synthetic words")
+            XCTAssertEqual(
+                FoundationModelsPolish.engineError(LanguageModelSession.GenerationError.decodingFailure(context)),
+                .failed(code: 16))
+            XCTAssertEqual(
+                FoundationModelsPolish.engineError(LanguageModelSession.GenerationError.unsupportedGuide(context)),
+                .failed(code: 17))
+        #endif
     }
 
     /// A fake system model: what was prewarmed, and which requests found a prepared session.
