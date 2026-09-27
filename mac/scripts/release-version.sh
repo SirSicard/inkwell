@@ -28,3 +28,5 @@ esac
 echo "version=$version"
 # Apple silicon only: the core and the app are built for the runner's arm64.
 echo "dmg=Inkwell_${version}_aarch64.dmg"
+# The build manifest (build-manifest.sh), an asset beside the dmg.
+echo "manifest=Inkwell_${version}_build-manifest.txt"

@@ -9,6 +9,10 @@
 //!   misread at run time;
 //! - the manifest the build script wrote: the pinned commit, and the SHA-256 of every library it
 //!   installed, which each file must still match. The library linked must be one of them.
+//! - that the manifest records `ggml_native OFF`: ggml built for any Apple silicon Mac, not tuned
+//!   to the CPU of the Mac that built it (whose newer instructions would stop an older Mac). A
+//!   manifest from before the script recorded it is refused too: that prefix was built native, and
+//!   links SentencePiece and Abseil from where Homebrew installed them.
 //!
 //! `INK_NEMO_CHECK_ONLY=1` is for type-checking (CI's clippy) where the library is not built: it
 //! skips the library, the manifest and the link, so a binary or test built that way does not link.
@@ -112,6 +116,7 @@ fn check_manifest(dir: &Path) -> PathBuf {
         ))
     });
     let mut commit = None;
+    let mut ggml_native = None;
     let mut listed = Vec::new();
     for line in text.lines().map(str::trim) {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -119,6 +124,7 @@ fn check_manifest(dir: &Path) -> PathBuf {
             [] => {}
             [first, ..] if first.starts_with('#') => {}
             ["commit", hash] => commit = Some(hash.to_string()),
+            ["ggml_native", value] => ggml_native = Some(value.to_string()),
             ["sha256", hash, file] => {
                 let file_path = dir.join(file);
                 println!("cargo:rerun-if-changed={}", file_path.display());
@@ -137,6 +143,14 @@ fn check_manifest(dir: &Path) -> PathBuf {
     if commit.as_deref() != Some(NEMO_COMMIT) {
         fail(&format!(
             "{} records commit {commit:?}, not the pinned {NEMO_COMMIT}",
+            path.display()
+        ));
+    }
+    if ggml_native.as_deref() != Some("OFF") {
+        fail(&format!(
+            "{} records GGML_NATIVE {ggml_native:?}, not OFF: rebuild the prefix with \
+             crates/ink-engines/native/build-nemo-speech.sh, which builds ggml for every Apple \
+             silicon Mac and bundles NeMo's dependencies",
             path.display()
         ));
     }
@@ -164,8 +178,9 @@ fn link(dir: &Path, library: &Path) {
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=dylib=nemo_speech_asr_c");
     println!("cargo:lib_dir={}", lib.display());
-    // This package's own tests and examples find the library where it was installed. A shipped
-    // app bundles it next to the binary and sets its own rpath.
+    // This package's own tests and examples find the library where it was installed. The Mac app
+    // bundles the prefix's libraries in Contents/Frameworks and gives itself the rpath there
+    // (mac/scripts/build-mac.sh); a static library of the core carries no rpath of its own.
     match env::var("CARGO_CFG_TARGET_OS") {
         Ok(os) if os == "macos" || os == "linux" => {
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());

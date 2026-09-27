@@ -103,6 +103,16 @@ ggml it was measured with, and a llama.cpp update never drags the diarizer along
 
 The cost is a second copy of ggml's code and a second Metal device setup.
 
+Both copies are built for every Apple silicon Mac, not for the one that built them:
+`GGML_NATIVE=OFF` and no `-march`, so ggml gets the compiler's arm64 macOS default, the M1's
+instruction set (NEON, dot product, FP16 arithmetic; no int8 matrix multiply, SVE or SME). A native
+build on a newer Mac compiles in i8mm and SME kernels that stop an older one with an illegal
+instruction, and nothing on the building Mac shows it. llama-cpp-sys-2 builds non-native unless
+`RUSTFLAGS` carries `target-cpu=native`; `mac/scripts/build-core.sh` reads the value back from
+llama.cpp's CMake cache and fails on anything else. The diarizer's prefix records its own (below).
+(The pure-Rust VAD runtime, tract, carries SME kernels too, but chooses them at run time from what
+the CPU reports.)
+
 ## The diarizer's native library
 
 The diarizer (Nemotron-3-Diarization) runs on NeMo-Speech.cpp, a C++ library with a C API. The
@@ -119,17 +129,40 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   the manifest the build script wrote (the commit and each library's SHA-256).
 - **In CI** the adapter is compiled and linted without the library (`INK_NEMO_CHECK_ONLY=1`); the
   tests that run it, and reproduce the diarizer's DER on AMI, run locally.
+- **Built to ship.** The script builds with `GGML_NATIVE=OFF` (read back from the CMake cache and
+  recorded in the manifest, which `build.rs` refuses without it) and for macOS 26
+  (`MACOSX_DEPLOYMENT_TARGET`, Package.swift's platform). Its prefix is self-contained: every
+  library NeMo-Speech.cpp loads from outside the OS (SentencePiece and Abseil) is copied into
+  `<prefix>/lib`, every library there is loaded by `@rpath` with `@loader_path` as its only rpath,
+  and the script checks that nothing in the prefix names an absolute path outside `/usr/lib` and
+  `/System/Library` before it writes the manifest. The manifest also names where each copy came
+  from, for its licence.
 - **Found at run time by rpath, never by `DYLD_LIBRARY_PATH`.** Test binaries: ink-engines
   declares `links = "nemo_speech_asr_c"` and hands the library's directory to dependents' build
   scripts; ink-engines gives its own binaries the rpath, and ink-pipeline's `build.rs` gives its
-  test binaries the same. The app bundle ships NeMo-Speech.cpp's libraries (which already find
-  each other through `@rpath`) in `Contents/Frameworks`, and the app binary gets an rpath to
-  them (`@executable_path/../Frameworks`).
+  test binaries the same. The core's static library carries no rpath: `build-core.sh` writes the
+  linker arguments it needs (`mac/build/InkCore.link`: the prefix's `lib` and rustc's
+  native-static-libs), and `build-mac.sh --engines` links the app with them, copies
+  `libnemo_speech_asr_c` and everything it loads through `@rpath` into `Contents/Frameworks`, and
+  gives the app binary an rpath there (`@executable_path/../Frameworks`). Each copy is signed with
+  the app's identity and the hardened runtime, and carries no entitlements.
+- **Checked in the bundle.** `build-mac.sh` reads every Mach-O's load commands
+  (`mac/scripts/lib/bundle-check.sh`) and fails the build if any loads a path outside the bundle
+  and the OS, has an rpath that is not relative to itself or the executable, cannot resolve a
+  library it loads inside the bundle, or was built for a newer macOS than 26. A Homebrew built for
+  a newer macOS than the app's (on a Mac running one) fails that last check; `INK_ALLOW_NEWER_MACOS=1`
+  lets a local build through with a warning, and a release (`--timestamp`) refuses it. Every
+  bundled library must also be one `THIRD_PARTY.md` covers, by name.
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
   apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
 - **Its dependencies**, SentencePiece and Abseil, are listed in [THIRD_PARTY.md](../THIRD_PARTY.md)
-  with NeMo-Speech.cpp and its ggml; `cargo deny` cannot see them.
+  with NeMo-Speech.cpp and its ggml; `cargo deny` cannot see them. They ship inside the app now,
+  so their notices go in its About screen. They come from Homebrew at build time: Homebrew's
+  Abseil has no static libraries, and its SentencePiece archive was built against a different
+  Abseil than the one it installs beside it, so they are bundled as the shared libraries Homebrew
+  built (SentencePiece's carries its own Abseil inside). Their versions are whatever Homebrew
+  serves when the release is built; the build manifest published with each release records them.
 
 ## Threads
 

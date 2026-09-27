@@ -16,6 +16,7 @@ run() {
 
 run "a v1 tag" 0 "version=1.2.3" tag v1.2.3
 run "... and its dmg" 0 "dmg=Inkwell_1.2.3_aarch64.dmg" tag v1.2.3
+run "... and its build manifest" 0 "manifest=Inkwell_1.2.3_build-manifest.txt" tag v1.2.3
 run "v1.0.0" 0 "version=1.0.0" tag v1.0.0
 run "a dry run's version" 0 "version=0.0.1" dry-run 0.0.1
 
