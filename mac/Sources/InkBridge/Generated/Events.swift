@@ -90,59 +90,69 @@ public enum InkEvent: Codable, Sendable, Equatable {
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
+    /// A known event whose content did not decode (a value this build does not know). Its
+    /// type and record are kept so the shell can still tell what it was about.
+    case undecodable(type: String, record: String?)
 
     private enum TypeKey: String, CodingKey {
         case type
+        case record
     }
 
-    /// Decodes one event: the JSON an `InkEventCallback` receives.
+    /// Decodes one event: the JSON an `InkEventCallback` receives. Throws only when it has no
+    /// string "type".
     public static func decode(_ json: Data) throws -> InkEvent {
         try JSONDecoder().decode(InkEvent.self, from: json)
     }
 
     public init(from decoder: Decoder) throws {
-        let type = try decoder.container(keyedBy: TypeKey.self).decode(String.self, forKey: .type)
-        switch type {
-        case "core.ready": self = .coreReady(try CoreReady(from: decoder))
-        case "core.stopped": self = .coreStopped(try CoreStopped(from: decoder))
-        case "command.failed": self = .commandFailed(try CommandFailed(from: decoder))
-        case "engine.registered": self = .engineRegistered(try EngineRegistered(from: decoder))
-        case "engine.unregistered": self = .engineUnregistered(try EngineUnregistered(from: decoder))
-        case "model.warmed": self = .modelWarmed(try ModelWarmed(from: decoder))
-        case "model.warm_failed": self = .modelWarmFailed(try ModelWarmFailed(from: decoder))
-        case "model.refused": self = .modelRefused(try ModelRefused(from: decoder))
-        case "model.update_started": self = .modelUpdateStarted(try ModelUpdateStarted(from: decoder))
-        case "model.update_finished": self = .modelUpdateFinished(try ModelUpdateFinished(from: decoder))
-        case "audio.dropped": self = .audioDropped(try AudioDropped(from: decoder))
-        case "dictation.voice_detection": self = .dictationVoiceDetection(try DictationVoiceDetection(from: decoder))
-        case "dictation.started": self = .dictationStarted(try DictationStarted(from: decoder))
-        case "dictation.short_press_ignored": self = .dictationShortPressIgnored(try DictationShortPressIgnored(from: decoder))
-        case "dictation.stopped": self = .dictationStopped(try DictationStopped(from: decoder))
-        case "dictation.discarded": self = .dictationDiscarded(try DictationDiscarded(from: decoder))
-        case "dictation.command": self = .dictationCommand(try DictationCommand(from: decoder))
-        case "dictation.inserted": self = .dictationInserted(try DictationInserted(from: decoder))
-        case "dictation.failed": self = .dictationFailed(try DictationFailed(from: decoder))
-        case "dictation.warning": self = .dictationWarningEvent(try DictationWarningEvent(from: decoder))
-        case "dictation.hotkey_lost": self = .dictationHotkeyLost(try DictationHotkeyLost(from: decoder))
-        case "dictation.worker_failed": self = .dictationWorkerFailed(try DictationWorkerFailed(from: decoder))
-        case "meeting.started": self = .meetingStarted(try MeetingStarted(from: decoder))
-        case "meeting.voice_detection": self = .meetingVoiceDetection(try MeetingVoiceDetection(from: decoder))
-        case "meeting.side_state": self = .meetingSideState(try MeetingSideState(from: decoder))
-        case "meeting.partial": self = .meetingPartial(try MeetingPartial(from: decoder))
-        case "meeting.final": self = .meetingFinal(try MeetingFinal(from: decoder))
-        case "meeting.warning": self = .meetingWarningEvent(try MeetingWarningEvent(from: decoder))
-        case "meeting.stopped": self = .meetingStopped(try MeetingStopped(from: decoder))
-        case "meeting.transcribed": self = .meetingTranscribed(try MeetingTranscribed(from: decoder))
-        case "meeting.diarized": self = .meetingDiarized(try MeetingDiarized(from: decoder))
-        case "meeting.superseded": self = .meetingSuperseded(try MeetingSuperseded(from: decoder))
-        case "meeting.kept_live": self = .meetingKeptLive(try MeetingKeptLive(from: decoder))
-        case "meeting.summarized": self = .meetingSummarized(try MeetingSummarized(from: decoder))
-        case "meeting.commitments": self = .meetingCommitments(try MeetingCommitments(from: decoder))
-        case "meeting.finished": self = .meetingFinished(try MeetingFinished(from: decoder))
-        case "meeting.failed": self = .meetingFailed(try MeetingFailed(from: decoder))
-        case "meeting.capture_failed": self = .meetingCaptureFailed(try MeetingCaptureFailed(from: decoder))
-        case "meeting.worker_failed": self = .meetingWorkerFailed(try MeetingWorkerFailed(from: decoder))
-        default: self = .unknown(type: type)
+        let keys = try decoder.container(keyedBy: TypeKey.self)
+        let type = try keys.decode(String.self, forKey: .type)
+        do {
+            switch type {
+            case "core.ready": self = .coreReady(try CoreReady(from: decoder))
+            case "core.stopped": self = .coreStopped(try CoreStopped(from: decoder))
+            case "command.failed": self = .commandFailed(try CommandFailed(from: decoder))
+            case "engine.registered": self = .engineRegistered(try EngineRegistered(from: decoder))
+            case "engine.unregistered": self = .engineUnregistered(try EngineUnregistered(from: decoder))
+            case "model.warmed": self = .modelWarmed(try ModelWarmed(from: decoder))
+            case "model.warm_failed": self = .modelWarmFailed(try ModelWarmFailed(from: decoder))
+            case "model.refused": self = .modelRefused(try ModelRefused(from: decoder))
+            case "model.update_started": self = .modelUpdateStarted(try ModelUpdateStarted(from: decoder))
+            case "model.update_finished": self = .modelUpdateFinished(try ModelUpdateFinished(from: decoder))
+            case "audio.dropped": self = .audioDropped(try AudioDropped(from: decoder))
+            case "dictation.voice_detection": self = .dictationVoiceDetection(try DictationVoiceDetection(from: decoder))
+            case "dictation.started": self = .dictationStarted(try DictationStarted(from: decoder))
+            case "dictation.short_press_ignored": self = .dictationShortPressIgnored(try DictationShortPressIgnored(from: decoder))
+            case "dictation.stopped": self = .dictationStopped(try DictationStopped(from: decoder))
+            case "dictation.discarded": self = .dictationDiscarded(try DictationDiscarded(from: decoder))
+            case "dictation.command": self = .dictationCommand(try DictationCommand(from: decoder))
+            case "dictation.inserted": self = .dictationInserted(try DictationInserted(from: decoder))
+            case "dictation.failed": self = .dictationFailed(try DictationFailed(from: decoder))
+            case "dictation.warning": self = .dictationWarningEvent(try DictationWarningEvent(from: decoder))
+            case "dictation.hotkey_lost": self = .dictationHotkeyLost(try DictationHotkeyLost(from: decoder))
+            case "dictation.worker_failed": self = .dictationWorkerFailed(try DictationWorkerFailed(from: decoder))
+            case "meeting.started": self = .meetingStarted(try MeetingStarted(from: decoder))
+            case "meeting.voice_detection": self = .meetingVoiceDetection(try MeetingVoiceDetection(from: decoder))
+            case "meeting.side_state": self = .meetingSideState(try MeetingSideState(from: decoder))
+            case "meeting.partial": self = .meetingPartial(try MeetingPartial(from: decoder))
+            case "meeting.final": self = .meetingFinal(try MeetingFinal(from: decoder))
+            case "meeting.warning": self = .meetingWarningEvent(try MeetingWarningEvent(from: decoder))
+            case "meeting.stopped": self = .meetingStopped(try MeetingStopped(from: decoder))
+            case "meeting.transcribed": self = .meetingTranscribed(try MeetingTranscribed(from: decoder))
+            case "meeting.diarized": self = .meetingDiarized(try MeetingDiarized(from: decoder))
+            case "meeting.superseded": self = .meetingSuperseded(try MeetingSuperseded(from: decoder))
+            case "meeting.kept_live": self = .meetingKeptLive(try MeetingKeptLive(from: decoder))
+            case "meeting.summarized": self = .meetingSummarized(try MeetingSummarized(from: decoder))
+            case "meeting.commitments": self = .meetingCommitments(try MeetingCommitments(from: decoder))
+            case "meeting.finished": self = .meetingFinished(try MeetingFinished(from: decoder))
+            case "meeting.failed": self = .meetingFailed(try MeetingFailed(from: decoder))
+            case "meeting.capture_failed": self = .meetingCaptureFailed(try MeetingCaptureFailed(from: decoder))
+            case "meeting.worker_failed": self = .meetingWorkerFailed(try MeetingWorkerFailed(from: decoder))
+            default: self = .unknown(type: type)
+            }
+        } catch {
+            self = .undecodable(type: type, record: try? keys.decode(String.self, forKey: .record))
         }
     }
 
@@ -188,8 +198,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .meetingCaptureFailed(let event): try event.encode(to: encoder)
         case .meetingWorkerFailed(let event): try event.encode(to: encoder)
         case .unknown(let type):
-            var c = encoder.container(keyedBy: TypeKey.self)
-            try c.encode(type, forKey: .type)
+            var keys = encoder.container(keyedBy: TypeKey.self)
+            try keys.encode(type, forKey: .type)
+        case .undecodable(let type, let record):
+            var keys = encoder.container(keyedBy: TypeKey.self)
+            try keys.encode(type, forKey: .type)
+            try keys.encodeIfPresent(record, forKey: .record)
         }
     }
 }

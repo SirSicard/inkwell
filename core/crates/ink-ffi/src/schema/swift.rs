@@ -188,26 +188,34 @@ pub fn swift(schema: &Schema) -> String {
     out.push_str(
         "    /// An event this build does not know. The core and the shell ship together, so this\n    \
          /// means a mismatched build.\n    \
-         case unknown(type: String)\n\n    \
-         private enum TypeKey: String, CodingKey {\n        case type\n    }\n\n    \
-         /// Decodes one event: the JSON an `InkEventCallback` receives.\n    \
+         case unknown(type: String)\n    \
+         /// A known event whose content did not decode (a value this build does not know). Its\n    \
+         /// type and record are kept so the shell can still tell what it was about.\n    \
+         case undecodable(type: String, record: String?)\n\n    \
+         private enum TypeKey: String, CodingKey {\n        case type\n        case record\n    }\n\n    \
+         /// Decodes one event: the JSON an `InkEventCallback` receives. Throws only when it has no\n    \
+         /// string \"type\".\n    \
          public static func decode(_ json: Data) throws -> InkEvent {\n        \
          try JSONDecoder().decode(InkEvent.self, from: json)\n    }\n\n    \
          public init(from decoder: Decoder) throws {\n        \
-         let type = try decoder.container(keyedBy: TypeKey.self).decode(String.self, forKey: .type)\n        \
+         let keys = try decoder.container(keyedBy: TypeKey.self)\n        \
+         let type = try keys.decode(String.self, forKey: .type)\n        \
+         do {\n            \
          switch type {\n",
     );
     for e in &schema.events {
         if let Some(ty) = schema.event_type(e) {
             let _ = writeln!(
                 out,
-                "        case \"{ty}\": self = .{}(try {e}(from: decoder))",
+                "            case \"{ty}\": self = .{}(try {e}(from: decoder))",
                 ident(&lower_first(e))
             );
         }
     }
     out.push_str(
-        "        default: self = .unknown(type: type)\n        }\n    }\n\n    \
+        "            default: self = .unknown(type: type)\n            }\n        } catch {\n            \
+         self = .undecodable(type: type, record: try? keys.decode(String.self, forKey: .record))\n        \
+         }\n    }\n\n    \
          public func encode(to encoder: Encoder) throws {\n        switch self {\n",
     );
     for e in &schema.events {
@@ -219,8 +227,12 @@ pub fn swift(schema: &Schema) -> String {
     }
     out.push_str(
         "        case .unknown(let type):\n            \
-         var c = encoder.container(keyedBy: TypeKey.self)\n            \
-         try c.encode(type, forKey: .type)\n        }\n    }\n}\n",
+         var keys = encoder.container(keyedBy: TypeKey.self)\n            \
+         try keys.encode(type, forKey: .type)\n        \
+         case .undecodable(let type, let record):\n            \
+         var keys = encoder.container(keyedBy: TypeKey.self)\n            \
+         try keys.encode(type, forKey: .type)\n            \
+         try keys.encodeIfPresent(record, forKey: .record)\n        }\n    }\n}\n",
     );
     for d in &schema.defs {
         out.push('\n');
@@ -282,6 +294,8 @@ mod tests {
         for expected in [
             "case tick(Tick)",
             "case \"tick.now\": self = .tick(try Tick(from: decoder))",
+            "case undecodable(type: String, record: String?)",
+            "self = .undecodable(type: type, record: try? keys.decode(String.self, forKey: .record))",
             "public let atMs: Int64\n",
             "public let phase: Phase?\n",
             "case atMs = \"at_ms\"",

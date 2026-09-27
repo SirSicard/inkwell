@@ -94,7 +94,9 @@ public final class InkSession: Sendable {
                 guard let ctx, let json else { return }
                 let sink = Unmanaged<EventSink>.fromOpaque(ctx).takeUnretainedValue()
                 let data = Data(bytes: json, count: len)
-                sink.handler((try? InkEvent.decode(data)) ?? .unknown(type: "undecodable"))
+                // Only JSON without a "type" fails to decode at all: a known event whose content
+                // does not decode arrives as .undecodable with its type and record.
+                sink.handler((try? InkEvent.decode(data)) ?? .undecodable(type: "", record: nil))
             }, ctx)
         }
         try check(status)
