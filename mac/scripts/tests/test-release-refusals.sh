@@ -16,13 +16,32 @@ touch "$work/some.zip" "$work/Inkwell.dmg"
 run() {
   local label=$1 text=$2 out status=0
   shift 2
-  out="$(env -u INK_SIGN_IDENTITY -u NOTARY_PROFILE -u SPARKLE_BIN "$@" 2>&1 </dev/null)" || status=$?
+  out="$(env -u INK_SIGN_IDENTITY -u NOTARY_PROFILE -u SPARKLE_BIN -u INK_CORE_FEATURES \
+    -u INK_ALLOW_NEWER_MACOS "$@" 2>&1 </dev/null)" || status=$?
   if [ "$status" = 0 ]; then flunk "$label: it succeeded"; else pass "$label"; fi
   assert_contains "$label: says why" "$out" "$text"
 }
 
 run "a timestamped build without an identity" "--timestamp needs INK_SIGN_IDENTITY" \
+  /bin/bash "$scripts/build-mac.sh" --skip-core --timestamp --engines
+run "a release without its engines" "a release ships its engines: add --engines" \
   /bin/bash "$scripts/build-mac.sh" --skip-core --timestamp
+run "a release allowed code for a newer macOS" "INK_ALLOW_NEWER_MACOS is for local builds" \
+  INK_ALLOW_NEWER_MACOS=1 /bin/bash "$scripts/build-mac.sh" --skip-core --timestamp --engines
+release="engine-llama,ink-engines/engine-silero,ink-engines/engine-nemo"
+run "the engines with other core features" "--engines builds the core with exactly $release" \
+  INK_CORE_FEATURES=engine-llama /bin/bash "$scripts/build-mac.sh" --skip-core --engines
+# Exactly that text, on purpose (build-mac.sh says why): the same set in another order is refused.
+run "the engines with the release's features in another order" "INK_CORE_FEATURES asks for [ink-engines/engine-silero" \
+  INK_CORE_FEATURES=ink-engines/engine-silero,engine-llama,ink-engines/engine-nemo \
+  /bin/bash "$scripts/build-mac.sh" --skip-core --engines
+# The same check on a core built earlier (--skip-core, as the release workflow builds): a copy of
+# the scripts in a scratch mac/ whose build holds a core built with other features.
+mkdir -p "$work/mac/build/InkCore.xcframework"
+cp -R "$scripts" "$work/mac/scripts"
+echo "# features: ink-engines/engine-silero,engine-llama,ink-engines/engine-nemo" >"$work/mac/build/InkCore.link"
+run "the engines, on a core built with them in another order" "the core in mac/build was built with [ink-engines/engine-silero" \
+  /bin/bash "$work/mac/scripts/build-mac.sh" --skip-core --engines
 run "a dmg without an identity" "the dmg would go out unsigned" \
   /bin/bash "$scripts/package-dmg.sh" "$work/Inkwell.app" "$work/out.dmg"
 run "a dmg named otherwise" "the output must end in .dmg" \
