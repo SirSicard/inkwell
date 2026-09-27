@@ -390,7 +390,7 @@ impl Core {
                 .name("ink-commands".into())
                 .spawn(move || {
                     while let Ok(envelope) = rx.recv() {
-                        run_command(&shared, &runs, envelope);
+                        guarded(&shared, &runs, envelope);
                     }
                 })?
         };
@@ -581,6 +581,26 @@ fn start_meeting(
     }
     runs.meeting = Some(MeetingRun::start(shared, capture, title)?);
     Ok(())
+}
+
+/// Runs one command behind a panic boundary, so a bug in one costs that command, not the thread
+/// every later command needs. What a command holds is released on the way out: gate holds and
+/// uses, residency's load and unload markers and the runs lock are guards, and the locks here
+/// ignore poison.
+fn guarded(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
+    let (name, id) = (envelope.name.clone(), envelope.id.clone());
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_command(shared, runs, envelope);
+    }));
+    if ran.is_err() {
+        // The payload is not logged: it could hold what was said (I5).
+        log::error!("command {name} panicked; the next command still runs");
+        shared.events.emit(events::command_failed(
+            &name,
+            id.as_deref(),
+            "a bug in the core stopped this command; nothing it held is kept",
+        ));
+    }
 }
 
 fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {

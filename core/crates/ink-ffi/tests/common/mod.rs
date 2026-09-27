@@ -347,6 +347,8 @@ pub struct MockLoader {
     pub behaviour: Mutex<Behaviour>,
     pub journal: Arc<Journal>,
     pub generation: Arc<AtomicU64>,
+    /// Loading panics while set: a bug in an adapter.
+    pub panic_on_load: std::sync::atomic::AtomicBool,
 }
 
 impl MockLoader {
@@ -355,12 +357,16 @@ impl MockLoader {
             behaviour: Mutex::new(behaviour),
             journal: Arc::default(),
             generation: Arc::new(AtomicU64::new(1)),
+            panic_on_load: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
 
 impl Loader<Model> for MockLoader {
     fn load(&self, row: &EngineRow) -> Result<Model, EngineError> {
+        if self.panic_on_load.load(Ordering::SeqCst) {
+            panic!("scripted adapter panic");
+        }
         self.journal
             .loads
             .lock()
