@@ -74,6 +74,11 @@ need a permission (the calendar, system audio) or ears (playback); those say so.
       through that button's pane and come back: the card goes.
 - [ ] Two or more needs: the most urgent shows, with "N more" to show the rest.
 
+- [ ] The ink zone beside Today shows the ink with INKWELL knocked out of it, and the Library
+      the narrow rail with ink (S2.4's ink; checked here because this step's screenshots were
+      taken with the screen locked, when no window is on screen and the ink rightly draws
+      nothing: its layer is plain paper until the first visible frame).
+
 Not in this step, by design (so not a failure here):
 - The ink zone's own lines ("Listening for meetings", "Hold fn to dictate") and "Record now":
   meeting capture from devices is S2.8. The zone and the wordmark are S2.4's.
