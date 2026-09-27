@@ -59,6 +59,14 @@ pub use insert::MacTextInserter;
 #[cfg(target_os = "macos")]
 pub use permissions::MacPermissionProbe;
 
+/// **Worker.** The focused text element's length in characters, when it reports one; never its
+/// text. Needs Accessibility (without it, `None`). For hand-run timing (`examples/dictation_timing.rs`):
+/// the moment the length changes is the moment inserted text arrived.
+#[cfg(target_os = "macos")]
+pub fn focused_character_count() -> Option<i64> {
+    ax::focused_character_count()
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     /// The prompting permission calls, spelled in pieces so this test does not find itself.
@@ -69,7 +77,7 @@ mod tests {
     ];
 
     /// Every source file in the crate, read at compile time.
-    const SOURCES: [(&str, &str); 23] = [
+    const SOURCES: [(&str, &str); 24] = [
         ("lib.rs", include_str!("lib.rs")),
         ("ax.rs", include_str!("ax.rs")),
         ("clock.rs", include_str!("clock.rs")),
@@ -95,6 +103,10 @@ mod tests {
         (
             "capture_check.rs",
             include_str!("../examples/capture_check.rs"),
+        ),
+        (
+            "dictation_timing.rs",
+            include_str!("../examples/dictation_timing.rs"),
         ),
     ];
 
