@@ -585,6 +585,7 @@ final class ScreensCoreContractTests: XCTestCase {
     }
 }
 
+#if DEBUG
 final class ReplayOnLaunchTests: XCTestCase {
     func testAReplayIsAskedForOnlyWithAbsolutePaths() {
         XCTAssertNil(ReplayOnLaunch.command(from: [:]))
@@ -596,6 +597,7 @@ final class ReplayOnLaunchTests: XCTestCase {
         XCTAssertEqual(both?["cmd"], "replay_meeting")
     }
 }
+#endif
 
 /// The window follows its content's minimum size (MainWindowController's hosting controller), so a
 /// screen whose minimum grows with its content grows the window off the screen.

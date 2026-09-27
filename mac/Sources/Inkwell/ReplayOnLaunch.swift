@@ -1,7 +1,11 @@
 // A meeting replayed from WAV files once the core is ready: INK_REPLAY_MEETING=<mic.wav>[,<far.wav>]
 // runs the core's replay_meeting (the whole live chain and the final pass, from files instead of
 // devices), so the Live screen can be seen and checked without a call (mac/SCREENS-B-CHECKLIST.md).
-// Off unless that variable is set; only whoever launches the process can set it.
+//
+// Debug builds only: a replay writes a meeting nobody had into the library, so a release build
+// (what build-mac.sh makes, and ships) has no such hook, and build-mac.sh refuses a release binary
+// that names the variable.
+#if DEBUG
 import Foundation
 
 enum ReplayOnLaunch {
@@ -19,3 +23,4 @@ enum ReplayOnLaunch {
         return command
     }
 }
+#endif
