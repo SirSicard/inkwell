@@ -192,7 +192,12 @@ final class PermissionsModel {
         // permission.requested needs nothing: the answer comes from a prompt or System Settings,
         // and the check when the app is active again reads it.
         case .commandFailed(let failed) where failed.command == "permissions.check":
+            // No answer: what the cards showed before may no longer be true, and a card must never
+            // read allowed (or off) on a guess.
             checking = false
+            for card in PermissionCard.allCases where card.corePermission != nil {
+                states[card] = .unknown
+            }
         default:
             break
         }

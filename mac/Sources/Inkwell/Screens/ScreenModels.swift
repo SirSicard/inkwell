@@ -22,9 +22,11 @@ final class OnboardingModel {
     var step: Step = .welcome
 
     @ObservationIgnored private let send: SendCommand
+    @ObservationIgnored private let log: ScreenLog
 
-    init(send: @escaping SendCommand) {
+    init(send: @escaping SendCommand, log: ScreenLog = .system) {
         self.send = send
+        self.log = log
     }
 
     /// Whether the window shows it.
@@ -54,9 +56,22 @@ final class OnboardingModel {
         send(.settingSet(.onboardingDone, "true"))
     }
 
+    /// The id of this model's setting commands (CoreCommand.json gives each setting command one).
+    static let settingID = "setting:\(ShellSetting.onboardingDone.rawValue)"
+
     func apply(_ event: InkEvent) {
-        if case .settingValue(let value) = event, value.key == ShellSetting.onboardingDone.rawValue {
+        switch event {
+        case .settingValue(let value) where value.key == ShellSetting.onboardingDone.rawValue:
             completed = value.value == "true"
+        case .commandFailed(let failed) where failed.command == "setting.get" && failed.id == Self.settingID:
+            // Not known whether it was completed: show it rather than never show it. Completing it
+            // again costs a click; a first run that never appears costs the permissions.
+            log.write("setting.get for onboarding.done failed; showing the first run")
+            if completed == nil {
+                completed = false
+            }
+        default:
+            break
         }
     }
 }
@@ -158,7 +173,8 @@ final class ScreenModels {
         apps: any AppDirectory = WorkspaceApps(),
         ask: any AskService = AskNotAvailable(),
         dataDirectory: URL? = nil,
-        modelsDirectory: URL? = nil
+        modelsDirectory: URL? = nil,
+        log: ScreenLog = .system
     ) {
         permissions = PermissionsModel(send: send, calendar: calendar)
         polish = PolishModel(send: send)
@@ -166,7 +182,7 @@ final class ScreenModels {
         modes = ModesModel(send: send, apps: apps)
         owed = OwedModel(send: send)
         live = LiveModel(send: send, ask: ask)
-        onboarding = OnboardingModel(send: send)
+        onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
     }
 

@@ -21,6 +21,13 @@ private func event(_ json: String, file: StaticString = #filePath, line: UInt = 
     return decoded
 }
 
+/// What was logged.
+private final class Logged: Sendable {
+    private let lines = Mutex<[String]>([])
+    var messages: [String] { lines.withLock { $0 } }
+    var log: ScreenLog { ScreenLog { [self] message in lines.withLock { $0.append(message) } } }
+}
+
 /// What a model sent.
 @MainActor
 private final class Sent {
@@ -97,6 +104,20 @@ final class PermissionsModelTests: XCTestCase {
         model.screenDisappeared()
         model.appBecameActive()
         XCTAssertEqual(sent.commands.count, 2)
+    }
+
+    func testAFailedCheckLeavesNoCardGreenOrRed() {
+        let model = PermissionsModel(send: { _ in }, calendar: FakeCalendar(answer: .allowed))
+        model.refresh()
+        model.apply(checked(mic: "granted", system: "denied", ax: "granted"))
+        XCTAssertEqual(model.state(.hearYou), .allowed)
+        model.refresh()
+        model.apply(event(#"{"type":"command.failed","command":"permissions.check","message":"a bug in the core stopped this command"}"#))
+        for card in [PermissionCard.hearYou, .hearTheOthers, .typeForYou] {
+            XCTAssertEqual(model.state(card), .unknown, "\(card): neither green nor red after a failed check")
+        }
+        XCTAssertEqual(model.state(.knowYourMeetings), .allowed, "the calendar is read by the shell, not the check")
+        XCTAssertFalse(model.checking)
     }
 
     func testEachStateReadsAsItsCardAndAllowAsksTheCoreOrTheCalendar() {
@@ -221,6 +242,15 @@ final class CatalogueModelTests: XCTestCase {
         XCTAssertEqual(sent.commands.count, 16, "and when it went")
         catalogue.apply(event(#"{"type":"model.warmed","id":"qwen3-asr-1.7b-q8","job":"dictation_final"}"#))
         XCTAssertEqual(sent.commands.count, 16, "warming changes no answer")
+    }
+
+    func testAFailedListReadsAsFailedNotAsNothingInstalled() {
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(event(#"{"type":"command.failed","command":"models.list","message":"the registry could not be read"}"#))
+        XCTAssertTrue(catalogue.failed)
+        XCTAssertEqual(CatalogueModel.failedText, "The model list could not be read.")
+        catalogue.apply(event(#"{"type":"models.listed","models":[]}"#))
+        XCTAssertFalse(catalogue.failed, "a list that arrives clears it")
     }
 
     func testEachJobShowsWhatServesItAndItsMeasuredAccuracy() {
@@ -529,6 +559,25 @@ final class LiveModelTests: XCTestCase {
 
 @MainActor
 final class OnboardingModelTests: XCTestCase {
+    func testAFirstRunStateThatCannotBeReadIsShownAndLogged() {
+        let logged = Logged()
+        let sent = Sent()
+        let onboarding = OnboardingModel(send: sent.send, log: logged.log)
+        onboarding.load()
+        XCTAssertEqual(sent.commands, [.settingGet(.onboardingDone)])
+        let id = try? XCTUnwrap(
+            (JSONSerialization.jsonObject(with: Data(CoreCommand.settingGet(.onboardingDone).json.utf8)) as? [String: Any])?["id"] as? String)
+        XCTAssertEqual(id, "setting:onboarding.done")
+        onboarding.apply(event(#"{"type":"command.failed","command":"setting.get","id":"setting:onboarding.done","message":"the library could not be read"}"#))
+        XCTAssertTrue(onboarding.showing, "fails toward showing it")
+        XCTAssertEqual(logged.messages.count, 1)
+        XCTAssertTrue(logged.messages[0].contains("setting.get"), logged.messages[0])
+        // Another setting's failure is not the first run's.
+        let other = OnboardingModel(send: { _ in }, log: logged.log)
+        other.apply(event(#"{"type":"command.failed","command":"setting.get","id":"setting:dictation.polish","message":"x"}"#))
+        XCTAssertFalse(other.showing)
+    }
+
     func testTheFirstRunStateShowsUntilItIsCompletedAndRemembersThat() {
         let sent = Sent()
         let onboarding = OnboardingModel(send: sent.send)

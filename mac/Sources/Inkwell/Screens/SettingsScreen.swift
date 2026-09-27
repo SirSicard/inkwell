@@ -375,6 +375,9 @@ private struct ModelsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Models", note: "Read-only")
+            if catalogue.failed {
+                Text(CatalogueModel.failedText).foregroundStyle(Theme.alert)
+            }
             ForEach(CatalogueModel.jobs, id: \.self) { job in
                 let line = catalogue.line(job)
                 HStack(alignment: .firstTextBaseline, spacing: 12) {

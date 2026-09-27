@@ -16,6 +16,10 @@ final class CatalogueModel {
 
     /// The catalogue's models for this OS.
     private(set) var models: [CatalogueEntry] = []
+    /// The last models.list failed: the list is not known, which is not the same as empty.
+    private(set) var failed = false
+
+    static let failedText = "The model list could not be read."
     /// Engines the shell registered, with their measured rates.
     private(set) var shellEngines: [String: [JobScore]] = [:]
     /// What serves each job, as last answered; a job asked about and unfilled maps to nil.
@@ -99,6 +103,9 @@ final class CatalogueModel {
         switch event {
         case .modelsListed(let listed):
             models = listed.models
+            failed = false
+        case .commandFailed(let failure) where failure.command == "models.list":
+            failed = true
         case .engineRouted(let routed):
             serving[routed.job] = routed
         case .engineRegistered(let engine):

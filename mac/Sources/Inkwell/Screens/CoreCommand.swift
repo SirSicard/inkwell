@@ -2,6 +2,7 @@
 // these through a closure, so a test can read what it sent and answer with events of its own.
 import Foundation
 import InkBridge
+import os
 
 /// One command to the core.
 enum CoreCommand: Equatable, Sendable {
@@ -33,8 +34,10 @@ enum CoreCommand: Equatable, Sendable {
         case .noteDelete(let note, let ref): ["cmd": "note.delete", "note": note, "id": ref]
         case .modelsList: ["cmd": "models.list"]
         case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue]
-        case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue]
-        case .settingSet(let key, let value): ["cmd": "setting.set", "key": key.rawValue, "value": value]
+        // The id names the setting, so a failure can be matched to it (command.failed has no key).
+        case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue, "id": "setting:\(key.rawValue)"]
+        case .settingSet(let key, let value):
+            ["cmd": "setting.set", "key": key.rawValue, "value": value, "id": "setting:\(key.rawValue)"]
         case .modesList: ["cmd": "modes.list"]
         }
         // Strings, numbers and booleans only: serialisation cannot fail.
@@ -71,3 +74,19 @@ enum ShellSetting: String, Sendable {
 
 /// Where the screens' commands go.
 typealias SendCommand = @MainActor (CoreCommand) -> Void
+
+/// Where the shell's diagnostics about commands go: a command's name and what kind of failure,
+/// never its fields or anything the user said (a note's words travel in them).
+struct ScreenLog: Sendable {
+    let write: @Sendable (String) -> Void
+
+    init(_ write: @escaping @Sendable (String) -> Void) {
+        self.write = write
+    }
+
+    /// The unified log, subsystem com.inkwell.app, category "screens". Every message is built from
+    /// command names and fixed words only, so it is logged as public.
+    static let system = ScreenLog { message in
+        Logger(subsystem: "com.inkwell.app", category: "screens").error("\(message, privacy: .public)")
+    }
+}
