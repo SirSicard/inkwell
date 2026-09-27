@@ -6,6 +6,7 @@
 // requests (ShowWindowChannel) before its core starts; a second copy sends one and exits without
 // touching the core, the microphone or the dictation key.
 import AppKit
+import InkRenderer
 import os
 
 @main
@@ -45,6 +46,10 @@ enum InkwellMain {
             let failure = error as NSError
             log.error("the data directory could not be created (\(failure.domain, privacy: .public) \(failure.code, privacy: .public))")
         }
+
+        // The ink's shader compiles on a background queue from here, alongside the core's start:
+        // no window or Drop waits for it on the main thread.
+        InkPipelineLoader.shared.warm()
 
         let app = NSApplication.shared
         let delegate = AppDelegate(instanceLock: lock, showChannel: channel, showRequests: showRequests)

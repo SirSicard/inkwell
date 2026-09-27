@@ -29,7 +29,8 @@ VO means Control-Option (or Caps Lock, if VoiceOver uses it as its modifier).
 - [ ] On each row in turn, press VO-Space. The content changes, and VO-Right into the content
       reads that row's name as a heading. Every row: Today, Library, Owed, Settings.
 - [ ] The arrow keys move through the rows with the list focused, and the content follows.
-- [ ] The ink rail beside the content is never announced (it is decorative until the ink draws).
+- [ ] The ink beside the content (the wide zone with the wordmark on Today, the narrow rail
+      elsewhere) is never announced: it is decorative.
 - [ ] VO-U (the rotor) lists the screen title under Headings.
 - [ ] Live is not listed: it appears only while a meeting runs, which this build cannot start.
       It is checked with the Live screen.

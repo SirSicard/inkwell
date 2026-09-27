@@ -62,6 +62,9 @@ let package = Package(
         ),
         .target(
             name: "InkRenderer",
+            // The shader as MSL source, generated from shaders/ink.wgsl (core/crates/ink-shader) and
+            // compiled at run time. Copied as is: a .msl file is never built by a Metal toolchain.
+            resources: [.copy("Resources/ink.msl")],
             linkerSettings: [
                 .linkedFramework("CoreText"),
                 .linkedFramework("Metal"),
@@ -80,6 +83,7 @@ let package = Package(
         ),
         .testTarget(name: "InkBridgeTests", dependencies: ["InkBridge"]),
         .testTarget(name: "InkwellTests", dependencies: ["Inkwell"]),
+        .testTarget(name: "InkRendererTests", dependencies: ["InkRenderer"]),
     ],
     swiftLanguageModes: [.v6]
 )
