@@ -642,7 +642,10 @@ impl DictationChain {
     ///
     /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out.
     /// The budget is a deadline the token carries, so no thread or timer fires it: the model sees
-    /// it at its next check of the token (a shell engine's wait checks every 20 ms).
+    /// it at its next check of the token (a shell engine's wait checks every 20 ms). A polish that
+    /// ran out of its budget is reported as [`Warning::PolishTimedOut`]; one the model stopped
+    /// before the budget (a shell engine at shutdown) stays [`Warning::PolishFailed`], so the shell
+    /// can tell "polish keeps timing out" from an ordinary cancel.
     ///
     /// The next take's press does not cancel it. The take behind it loses no audio (the owner's
     /// queue holds tens of seconds of it) and at most starts later, while cancelling would cost a
@@ -672,16 +675,16 @@ impl DictationChain {
                 written
             }
             Err(error) => {
+                if error == LlmError::Cancelled && deadline.is_some_and(|d| Instant::now() >= d) {
+                    log::warn!(
+                        "dictation: polish gave no answer within its {budget:?} budget; the text goes out as written"
+                    );
+                    self.emit(DictationEvent::Warning(Warning::PolishTimedOut));
+                    return written;
+                }
                 if error == LlmError::Cancelled {
-                    if deadline.is_some_and(|d| Instant::now() >= d) {
-                        log::warn!(
-                            "dictation: polish gave no answer within its {budget:?} budget; the text goes out as written"
-                        );
-                    } else {
-                        // The model stopped for its own reasons (a shell engine when the core
-                        // stops).
-                        log::info!("dictation: polish was cancelled; the text goes out as written");
-                    }
+                    // The model stopped for its own reasons (a shell engine when the core stops).
+                    log::info!("dictation: polish was cancelled; the text goes out as written");
                 }
                 self.emit(DictationEvent::Warning(Warning::PolishFailed(error)));
                 written

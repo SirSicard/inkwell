@@ -628,10 +628,13 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
         vec!["First take. ".to_owned()],
         "as written"
     );
+    // A timeout, told apart from a cancel, and carrying no text.
     assert!(has(&rig.events(), |e| *e
-        == DictationEvent::Warning(Warning::PolishFailed(
-            LlmError::Cancelled
-        ))));
+        == DictationEvent::Warning(Warning::PolishTimedOut)));
+    assert!(!has(&rig.events(), |e| matches!(
+        e,
+        DictationEvent::Warning(Warning::PolishFailed(_))
+    )));
 
     // The next take is not held up, and polish works again for it.
     rig.dictate(&second);
@@ -639,6 +642,47 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
         rig.inserted(),
         vec!["First take. ".to_owned(), "Polished text. ".to_owned()]
     );
+}
+
+/// A model that stops by itself before the budget runs out: what a shell engine does when the
+/// core shuts down under it.
+struct StopsItself;
+
+impl Llm for StopsItself {
+    fn info(&self) -> LlmInfo {
+        LlmInfo {
+            provider: "stops".into(),
+            model: "stops".into(),
+            endpoint: Endpoint::InProcess,
+        }
+    }
+
+    fn complete(&self, _: &LlmRequest, _: &CancelToken) -> Result<LlmResponse, LlmError> {
+        Err(LlmError::Cancelled)
+    }
+}
+
+#[test]
+fn a_polish_cancelled_before_its_budget_is_a_cancel_not_a_timeout() {
+    let rig = Rig::builder()
+        .settings(|s| {
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_budget = Duration::from_secs(60);
+        })
+        .llm(Arc::new(StopsItself))
+        .build();
+    rig.dictate_fixture("stopped early", 2.0, -30.0);
+    assert_eq!(
+        rig.inserted(),
+        vec!["Stopped early. ".to_owned()],
+        "as written"
+    );
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::Warning(Warning::PolishFailed(
+            LlmError::Cancelled
+        ))));
+    assert!(!has(&rig.events(), |e| *e
+        == DictationEvent::Warning(Warning::PolishTimedOut)));
 }
 
 #[test]

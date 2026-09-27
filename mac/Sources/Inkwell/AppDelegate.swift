@@ -93,6 +93,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// Quit is on its way (InkwellApplication.terminate): the screens let go of what would block it,
+    /// recording nothing (the first-run sheet ended this way shows again at the next launch).
+    func prepareToQuit() {
+        core.screens.onboarding.appQuitting()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard core.isRunning || quitting else { return .terminateNow }
         // A second Quit while the core is stopping waits for the same stop.
@@ -107,25 +113,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showMainWindow() {
         measurement?.windowShown()
         if mainWindow == nil {
-            mainWindow = MainWindowController(router: router, store: core.store, ink: ink, updates: updates)
+            mainWindow = MainWindowController(
+                router: router, store: core.store, ink: ink, updates: updates, screens: core.screens)
         }
         mainWindow?.present()
     }
 
     /// SIGTERM and SIGINT become an ordinary Quit, so they stop the core like any other.
     ///
-    /// The Quit runs as a run-loop block, outside the signal source's main-queue block: Quit waits
-    /// in a nested run loop, and from inside a main-queue block that loop could run no other
-    /// main-queue block (the event relay's among them) until Quit returned.
+    /// The signal is taken on a background queue and the Quit handed to the main run loop as a
+    /// run-loop block in the common modes. Not a main-queue block: Quit waits in a nested run loop,
+    /// and from inside a main-queue block that loop could run no other main-queue block (the event
+    /// relay's among them) until Quit returned; and while an app-modal alert runs, the main queue is
+    /// not served at all (measured on macOS 27), while a common-modes run-loop block is
+    /// (InkwellApplication.terminate then ends the alert).
+    /// **Signal queue.** Hands Quit to the main run loop, in the common modes, and wakes it.
+    nonisolated private static func quitOnMainRunLoop() {
+        let main = CFRunLoopGetMain()
+        CFRunLoopPerformBlock(main, CFRunLoopMode.commonModes.rawValue) {
+            MainActor.assumeIsolated { NSApp.terminate(nil) }
+        }
+        CFRunLoopWakeUp(main)
+    }
+
     private func turnSignalsIntoQuit() {
         for number in [SIGTERM, SIGINT] {
             signal(number, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
-            source.setEventHandler {
-                RunLoop.main.perform {
-                    MainActor.assumeIsolated { NSApp.terminate(nil) }
-                }
-            }
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .global(qos: .userInitiated))
+            // A nonisolated function, not a closure written here: a closure in this main-actor
+            // method would be main-actor isolated, and running it on the signal queue traps.
+            source.setEventHandler(handler: Self.quitOnMainRunLoop)
             source.resume()
             signalSources.append(source)
         }

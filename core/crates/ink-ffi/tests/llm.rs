@@ -319,7 +319,8 @@ fn polishing(
     (core, events, platform, inbox)
 }
 
-/// The take went out as written, and the warning says polish was cancelled, without the words.
+/// The take went out as written, and the warning says polish ran out of its time, without the
+/// words: `polish_timed_out`, apart from a cancel's `polish_failed`.
 fn assert_unpolished_and_warned(events: &Recorder, platform: &MockPlatform) {
     let inserted = platform.inserted();
     let last = inserted.last().unwrap();
@@ -329,10 +330,49 @@ fn assert_unpolished_and_warned(events: &Recorder, platform: &MockPlatform) {
     );
     let warning = events
         .wait_for(Duration::from_secs(5), |v| {
-            v["type"] == "dictation.warning" && v["kind"] == "polish_failed"
+            v["type"] == "dictation.warning" && v["kind"] == "polish_timed_out"
         })
-        .expect("polish_failed");
-    assert_eq!(warning["message"], "cancelled");
+        .expect("polish_timed_out");
+    assert!(warning.get("message").is_none(), "no text: {warning}");
+    assert!(
+        !events
+            .all()
+            .iter()
+            .any(|v| v["type"] == "dictation.warning" && v["kind"] == "polish_failed"),
+        "a timeout is not reported as a cancel too"
+    );
+}
+
+/// A polish in flight when the core shuts down is cancelled, not timed out: `polish_failed` with
+/// "cancelled", as before, and never `polish_timed_out`.
+#[test]
+fn a_polish_cut_short_by_shutdown_is_a_cancel_not_a_timeout() {
+    let dir = TempDir::new("llm-shutdown");
+    let model = Model::new(Says::Never);
+    let (core, events, _platform, inbox) = polishing(&dir, &model, Duration::from_secs(60));
+    take(&core, &inbox, 1);
+    let until = Instant::now() + Duration::from_secs(20);
+    while model.requests.lock().unwrap().is_empty() {
+        assert!(Instant::now() < until, "polish never started");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    core.shutdown();
+    let warnings: Vec<_> = events
+        .all()
+        .into_iter()
+        .filter(|v| v["type"] == "dictation.warning")
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|v| v["kind"] == "polish_failed" && v["message"] == "cancelled"),
+        "{warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|v| v["kind"] == "polish_timed_out"),
+        "{warnings:?}"
+    );
+    events.assert_valid();
 }
 
 #[test]

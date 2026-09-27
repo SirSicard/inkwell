@@ -132,6 +132,36 @@
     },
     {
       "$ref": "#/$defs/MeetingWorkerFailed"
+    },
+    {
+      "$ref": "#/$defs/PermissionsChecked"
+    },
+    {
+      "$ref": "#/$defs/PermissionRequested"
+    },
+    {
+      "$ref": "#/$defs/CommitmentsListed"
+    },
+    {
+      "$ref": "#/$defs/CommitmentUpdated"
+    },
+    {
+      "$ref": "#/$defs/NoteAdded"
+    },
+    {
+      "$ref": "#/$defs/NoteUpdated"
+    },
+    {
+      "$ref": "#/$defs/NoteDeleted"
+    },
+    {
+      "$ref": "#/$defs/ModelsListed"
+    },
+    {
+      "$ref": "#/$defs/SettingValue"
+    },
+    {
+      "$ref": "#/$defs/ModesListed"
     }
   ],
   "$defs": {
@@ -266,6 +296,7 @@
         "focus_unreadable",
         "polish_unavailable",
         "polish_failed",
+        "polish_timed_out",
         "no_mode_for_style",
         "save_failed",
         "deleted_text_not_scrubbed",
@@ -1756,6 +1787,422 @@
       "required": [
         "type",
         "record"
+      ],
+      "additionalProperties": false
+    },
+    "PermissionState": {
+      "type": "string",
+      "description": "A permission's state, as the platform's probe reads it without prompting.",
+      "enum": [
+        "granted",
+        "denied",
+        "not_determined",
+        "unknown"
+      ]
+    },
+    "PermissionName": {
+      "type": "string",
+      "description": "A permission the app depends on.",
+      "enum": [
+        "microphone",
+        "system_audio",
+        "accessibility",
+        "input_monitoring"
+      ]
+    },
+    "ModeStyle": {
+      "type": "string",
+      "description": "How a mode writes: a style this build knows, or other.",
+      "enum": [
+        "formal",
+        "casual",
+        "relaxed",
+        "other"
+      ]
+    },
+    "OwedItem": {
+      "type": "object",
+      "description": "An open commitment: not done, and not merged into another.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "record": {
+          "type": "string",
+          "description": "The record it was said in."
+        },
+        "record_title": {
+          "type": "string",
+          "description": "That record's title, when it has one."
+        },
+        "record_started_at_unix_ms": {
+          "type": "integer",
+          "description": "When that record started, Unix ms."
+        },
+        "text": {
+          "type": "string",
+          "description": "What was promised."
+        },
+        "owner": {
+          "type": "string",
+          "description": "Who owes it, as said."
+        },
+        "due": {
+          "type": "string",
+          "description": "When, as said."
+        },
+        "due_at_unix_ms": {
+          "type": "integer",
+          "description": "When, resolved to a time, Unix ms: what overdue is measured against."
+        },
+        "said_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where in the record it was first said, ms."
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel",
+          "description": "Which side said it there."
+        },
+        "merged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many other commitments were merged into it as the same promise said again."
+        }
+      },
+      "required": [
+        "id",
+        "record",
+        "record_started_at_unix_ms",
+        "text",
+        "merged"
+      ],
+      "additionalProperties": false
+    },
+    "ModeInfo": {
+      "type": "object",
+      "description": "A mode: how dictation writes in the apps it names.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name, as the user sees and says it."
+        },
+        "style": {
+          "$ref": "#/$defs/ModeStyle",
+          "description": "How it writes."
+        },
+        "polish": {
+          "type": "boolean",
+          "description": "Whether its dictations are polished (when a language model can)."
+        },
+        "remove_fillers": {
+          "type": "boolean",
+          "description": "Whether fillers and stutters are removed."
+        },
+        "apps": {
+          "type": "array",
+          "description": "The apps it is picked for, matched against the frontmost app's identity. Never shown to the user as they are: a shell names each app.",
+          "items": {
+            "type": "string",
+            "description": "An app identity, or part of one: on macOS a bundle id such as com.example.mail."
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "style",
+        "polish",
+        "remove_fillers",
+        "apps"
+      ],
+      "additionalProperties": false
+    },
+    "PermissionsChecked": {
+      "type": "object",
+      "description": "Every permission's state now, in answer to permissions.check. Never prompts. System audio reads not_determined until the app has asked for it, because checking it before would make macOS prompt.",
+      "properties": {
+        "type": {
+          "const": "permissions.checked"
+        },
+        "microphone": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "Recording the microphone."
+        },
+        "system_audio": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "Recording other apps' sound (the far end), verified by listening for the app's own tone."
+        },
+        "accessibility": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "Typing into other apps, reading the focused app and the dictation key. Never asked reads as denied."
+        },
+        "input_monitoring": {
+          "$ref": "#/$defs/PermissionState",
+          "description": "A listen-only key tap, which the Mac app does not use. Never asked reads as denied."
+        }
+      },
+      "required": [
+        "type",
+        "microphone",
+        "system_audio",
+        "accessibility",
+        "input_monitoring"
+      ],
+      "additionalProperties": false
+    },
+    "PermissionRequested": {
+      "type": "object",
+      "description": "permission.request showed the system prompt or opened the settings pane. The answer comes later: check again when the user comes back.",
+      "properties": {
+        "type": {
+          "const": "permission.requested"
+        },
+        "permission": {
+          "$ref": "#/$defs/PermissionName",
+          "description": "The permission asked for."
+        }
+      },
+      "required": [
+        "type",
+        "permission"
+      ],
+      "additionalProperties": false
+    },
+    "CommitmentsListed": {
+      "type": "object",
+      "description": "The open commitments across the library, in answer to commitments.list: the soonest resolved due time first, undated ones last. Carries the promises' words.",
+      "properties": {
+        "type": {
+          "const": "commitments.listed"
+        },
+        "items": {
+          "type": "array",
+          "description": "The commitments.",
+          "items": {
+            "$ref": "#/$defs/OwedItem",
+            "description": "One open commitment."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "CommitmentUpdated": {
+      "type": "object",
+      "description": "A commitment was marked done, or open again.",
+      "properties": {
+        "type": {
+          "const": "commitment.updated"
+        },
+        "commitment": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "done": {
+          "type": "boolean",
+          "description": "Whether it is done now."
+        }
+      },
+      "required": [
+        "type",
+        "commitment",
+        "done"
+      ],
+      "additionalProperties": false
+    },
+    "NoteAdded": {
+      "type": "object",
+      "description": "A note was saved to a record, in answer to note.add. Its words stay with the shell that sent them.",
+      "properties": {
+        "type": {
+          "const": "note.added"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record."
+        },
+        "note": {
+          "type": "string",
+          "description": "The new note's id."
+        },
+        "at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Where in the record it was written, ms."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the note to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "note",
+        "at_ms"
+      ],
+      "additionalProperties": false
+    },
+    "NoteUpdated": {
+      "type": "object",
+      "description": "A note's text was replaced.",
+      "properties": {
+        "type": {
+          "const": "note.updated"
+        },
+        "note": {
+          "type": "string",
+          "description": "The note's id."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to the line that sent it."
+        }
+      },
+      "required": [
+        "type",
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    "NoteDeleted": {
+      "type": "object",
+      "description": "A note was deleted.",
+      "properties": {
+        "type": {
+          "const": "note.deleted"
+        },
+        "note": {
+          "type": "string",
+          "description": "The note's id."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to the line that sent it."
+        }
+      },
+      "required": [
+        "type",
+        "note"
+      ],
+      "additionalProperties": false
+    },
+    "ModelsListed": {
+      "type": "object",
+      "description": "The catalogue's models for this OS, in answer to models.list. What serves each job now is engine.route's answer.",
+      "properties": {
+        "type": {
+          "const": "models.listed"
+        },
+        "models": {
+          "type": "array",
+          "description": "The models, in the catalogue's order.",
+          "items": {
+            "$ref": "#/$defs/CatalogueEntry",
+            "description": "A model."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "models"
+      ],
+      "additionalProperties": false
+    },
+    "SettingValue": {
+      "type": "object",
+      "description": "A shell setting's value, in answer to setting.get or setting.set.",
+      "properties": {
+        "type": {
+          "const": "setting.value"
+        },
+        "key": {
+          "type": "string",
+          "description": "The setting."
+        },
+        "value": {
+          "type": "string",
+          "description": "Its value; absent when it has never been set."
+        }
+      },
+      "required": [
+        "type",
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "ModesListed": {
+      "type": "object",
+      "description": "The user's modes, in answer to modes.list, in the order they are matched: the first mode naming the frontmost app wins, else the default.",
+      "properties": {
+        "type": {
+          "const": "modes.listed"
+        },
+        "default_id": {
+          "type": "string",
+          "description": "The mode used when no other matches."
+        },
+        "modes": {
+          "type": "array",
+          "description": "The modes.",
+          "items": {
+            "$ref": "#/$defs/ModeInfo",
+            "description": "A mode."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "default_id",
+        "modes"
+      ],
+      "additionalProperties": false
+    },
+    "CatalogueEntry": {
+      "type": "object",
+      "description": "A model in the catalogue that runs on this OS.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "licence": {
+          "type": "string",
+          "description": "Its weights' licence."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its download size."
+        },
+        "installed": {
+          "type": "boolean",
+          "description": "Whether its files are installed and complete."
+        },
+        "jobs": {
+          "type": "array",
+          "description": "The jobs it fills, each with its measured error rate.",
+          "items": {
+            "$ref": "#/$defs/JobScore",
+            "description": "A job and its error rate."
+          }
+        }
+      },
+      "required": [
+        "id",
+        "licence",
+        "size_bytes",
+        "installed",
+        "jobs"
       ],
       "additionalProperties": false
     }

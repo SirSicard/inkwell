@@ -53,7 +53,12 @@ enum InkwellMain {
         // no window or Drop waits for it on the main thread.
         InkPipelineLoader.shared.warm()
 
-        let app = NSApplication.shared
+        // InkwellApplication: a Quit that a sheet on screen cannot block. The first use of `shared`
+        // creates NSApp, so it is created as this class.
+        let app = InkwellApplication.shared
+        if !(app is InkwellApplication) {
+            log.error("NSApp was created before main: a sheet on screen can block Quit")
+        }
         let delegate = AppDelegate(instanceLock: lock, showChannel: channel, showRequests: showRequests)
         app.delegate = delegate
         // The delegate property is weak: keep ours alive for as long as the app runs.

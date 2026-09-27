@@ -420,6 +420,7 @@ pub fn start(
         loader,
         installer,
         data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
     };
     let recorder = Recorder::new();
     let (writer, _) = bands_channel();

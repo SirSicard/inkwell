@@ -39,7 +39,9 @@
 #   rebuild is a new app: grants reset, and a far end that silently lost its grant records
 #   nothing for weeks. A stable identity keeps one requirement across builds.
 # - The hardened runtime blocks the microphone unless the audio-input entitlement is signed in,
-#   and it blocks it silently: no prompt, just a deny.
+#   and the calendar unless the calendars one is, and it blocks them silently: no prompt, just a
+#   deny. The signed set is checked against an allow-list (lib/entitlements-check.sh): exactly
+#   Inkwell.entitlements, plus library validation off for an ad-hoc build only.
 # - Signing the bundle does not sign a loose executable elsewhere in it (only nested bundles are
 #   walked), and `codesign --verify --deep --strict` still passes with that file ad-hoc. So every
 #   Mach-O is signed on its own, inside out, and each one's signature is checked afterwards.
@@ -62,6 +64,8 @@ mac="$(cd "$(dirname "$0")/.." && pwd)"
 . "$mac/scripts/lib/redact-signing.sh"
 # check_bundle_linkage: what the bundle's code loads, and from where.
 . "$mac/scripts/lib/bundle-check.sh"
+# check_entitlements: the signed entitlements, against the allow-list.
+. "$mac/scripts/lib/entitlements-check.sh"
 config=release
 skip_core=0
 same_as=""
@@ -160,6 +164,11 @@ done <"$link_file"
 swift build --package-path "$mac" -c "$config" --product Inkwell --only-use-versions-from-resolved-file \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks ${link_args[@]+"${link_args[@]}"}
 bin="$(swift build --package-path "$mac" -c "$config" --show-bin-path --only-use-versions-from-resolved-file)"
+# Development hooks are compiled out of a release build (`#if DEBUG`): a replayed meeting would write
+# a meeting nobody had into the user's library. A release binary that still names one is refused.
+if [ "$config" = release ] && strings "$bin/Inkwell" | grep -q 'INK_REPLAY_MEETING'; then
+  fail "the release binary carries INK_REPLAY_MEETING, a debug-only hook"
+fi
 
 # --- bundle -------------------------------------------------------------------------------------
 rm -rf "$app"
@@ -312,13 +321,13 @@ grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' <<<"$info" || fail "
 
 signed_ents="$mac/build/signed-entitlements.plist"
 codesign -d --entitlements - --xml "$app" >"$signed_ents" 2>/dev/null || fail "no entitlements could be read back"
-# PlistBuddy, not plutil: plutil's key paths split on the dots in the key.
-[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' "$signed_ents" 2>/dev/null)" = true ] \
-  || fail "the audio-input entitlement is missing: the hardened runtime would deny the microphone silently"
-if [ -n "$identity" ] \
-  && /usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.disable-library-validation' "$signed_ents" >/dev/null 2>&1; then
-  fail "a Developer ID build carries disable-library-validation: only an ad-hoc build may"
-fi
+# Exactly Inkwell.entitlements (a missing key is a silent deny: the microphone, the calendar), plus
+# disable-library-validation for an ad-hoc build only.
+adhoc=1
+[ -n "$identity" ] && adhoc=0
+check_entitlements "$signed_ents" "$mac/Inkwell.entitlements" "$adhoc" \
+  || fail "the signed entitlements are not exactly Inkwell.entitlements (above)"
+signed_keys="$(entitlement_keys "$mac/Inkwell.entitlements" | sed 's/.*\.//' | paste -sd, - | sed 's/,/, /g')"
 
 # Every Mach-O in the bundle, the frameworks' helpers included (for one inside a nested bundle,
 # codesign reads that bundle's signature): same kind of signature as the app (ad-hoc or not), same
@@ -363,8 +372,8 @@ fi
 
 summary="$machos Mach-O file(s): ${#nested[@]} loose (of them $bundled the engines' libraries), $frameworks framework(s)"
 if [ -n "$identity" ]; then
-  echo "signed: INK_SIGN_IDENTITY$([ "$timestamp" = 1 ] && echo ', secure timestamp'), hardened runtime, audio-input; $summary"
+  echo "signed: INK_SIGN_IDENTITY$([ "$timestamp" = 1 ] && echo ', secure timestamp'), hardened runtime, $signed_keys; $summary"
 else
-  echo "signed: ad-hoc (build check only), hardened runtime, audio-input, library validation off; $summary"
+  echo "signed: ad-hoc (build check only), hardened runtime, $signed_keys, library validation off; $summary"
 fi
 echo "built: $app ($config)"

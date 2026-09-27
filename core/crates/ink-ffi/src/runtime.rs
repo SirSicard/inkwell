@@ -7,6 +7,7 @@
 //! | `ink-commands` | commands, one at a time, in order: warming, model updates, starting a meeting, unregistering |
 //! | `ink-meeting`, `ink-pump` | a meeting ([`meeting`](crate::meeting)) |
 //! | `ink-dictation` | the dictation chain ([`dictation`](crate::dictation)) |
+//! | `ink-queries` | the screens' commands, in order, apart from the command thread ([`queries`](crate::queries)) |
 //!
 //! **Shutdown** ([`Core::shutdown`]) goes in an order that leaves nothing loaded behind it:
 //! cancel what waits (shell engines, installs, the final pass), stop and join every thread that
@@ -23,7 +24,8 @@ use std::thread::{self, JoinHandle};
 
 use ink_audio::BandsWriter;
 use ink_core::{
-    CancelToken, Clock, EngineError, FocusReader, Job, Llm, OfflineEngine, Store, TextInserter,
+    CancelToken, Clock, EngineError, FocusReader, Job, Llm, OfflineEngine, PermissionProbe, Store,
+    TextInserter,
 };
 use ink_engines::{EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
@@ -39,6 +41,7 @@ use crate::hub::{EventOut, Events, Hub};
 use crate::llms::{PolishModel, ShellLlms};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureSide, MeetingRun, Replay};
+use crate::queries::QueryWorker;
 
 /// The model type residency holds: any offline engine an adapter loads.
 pub type Model = Box<dyn OfflineEngine>;
@@ -113,6 +116,8 @@ pub struct Parts {
     pub installer: Arc<dyn ModelInstaller>,
     /// Where meetings' recordings go.
     pub data_dir: PathBuf,
+    /// Checks and requests the OS permissions (the screens' `permissions.*` commands).
+    pub permissions: Arc<dyn PermissionProbe>,
 }
 
 impl Parts {
@@ -123,6 +128,7 @@ impl Parts {
             .map_err(|e| format!("the data directory could not be created: {e}"))?;
         let store = ink_store::SqliteStore::open(config.data_dir.join("library.sqlite"))
             .map_err(|e| format!("the library: {e}"))?;
+        let permissions = platform_permissions(&store)?;
         let models = ModelDir::new(&config.models_dir);
         let fetch = ink_engines::HttpFetch::new().map_err(|e| format!("HTTP: {e}"))?;
         Ok(Self {
@@ -136,8 +142,33 @@ impl Parts {
             )),
             models,
             data_dir: config.data_dir.clone(),
+            permissions,
         })
     }
+}
+
+/// The Mac's permission probe, told whether the app has asked for System Audio before (until it
+/// has, a check never runs the tone probe, which would make macOS prompt).
+#[cfg(target_os = "macos")]
+fn platform_permissions(store: &dyn Store) -> Result<Arc<dyn PermissionProbe>, String> {
+    let asked = match store.setting(crate::queries::SYSTEM_AUDIO_ASKED_KEY) {
+        Ok(v) => v.as_deref() == Some("true"),
+        // Treated as never asked: a check then says "not determined" instead of prompting.
+        Err(e) => {
+            log::error!("could not read whether system audio was asked for: {e}");
+            false
+        }
+    };
+    let clock = ink_platform_mac::MacClock::new().map_err(|e| e.to_string())?;
+    Ok(Arc::new(
+        ink_platform_mac::MacPermissionProbe::new(clock).with_system_audio_asked(asked),
+    ))
+}
+
+/// Until ink-platform-win's probe (S3.1): every state unknown, nothing can be asked for.
+#[cfg(not(target_os = "macos"))]
+fn platform_permissions(_: &dyn Store) -> Result<Arc<dyn PermissionProbe>, String> {
+    Ok(Arc::new(crate::queries::NoPermissionProbe))
 }
 
 #[cfg(target_os = "macos")]
@@ -396,6 +427,7 @@ pub struct Core {
     commands: Sender<Envelope>,
     command_thread: JoinHandle<()>,
     runs: Arc<Mutex<Runs>>,
+    queries: QueryWorker,
 }
 
 impl Core {
@@ -404,6 +436,7 @@ impl Core {
     pub fn start(parts: Parts, out: EventOut) -> io::Result<Self> {
         let hub = Hub::start(out)?;
         let os = Os::current().unwrap_or(Os::MacOs);
+        let (models, permissions) = (parts.models.clone(), parts.permissions);
         let shared = Arc::new(Shared {
             events: hub.events(),
             router: Router::new(&parts.registry, parts.models, os),
@@ -431,6 +464,7 @@ impl Core {
                     }
                 })?
         };
+        let queries = QueryWorker::start(shared.clone(), permissions, models)?;
         shared.events.emit(events::ready());
         Ok(Self {
             shared,
@@ -438,6 +472,7 @@ impl Core {
             commands,
             command_thread,
             runs,
+            queries,
         })
     }
 
@@ -449,6 +484,10 @@ impl Core {
 
     /// Reads a command and queues it. Errors mean nothing was queued.
     pub fn command(&self, json: &str) -> Result<(), String> {
+        // The screens' commands go to their own thread (see `queries`).
+        if let Some((name, id, query)) = crate::queries::read(json)? {
+            return self.queries.send(name, id, query);
+        }
         let envelope = parse_command(json)?;
         self.commands
             .send(envelope)
@@ -586,12 +625,15 @@ impl Core {
             commands,
             command_thread,
             runs,
+            queries,
         } = self;
         shared.shutdown.cancel();
         drop(commands);
         if command_thread.join().is_err() {
             log::error!("the command thread panicked");
         }
+        // It holds `shared`, and its events go out before `core.stopped`.
+        queries.stop();
         let (meeting, dictation) = {
             let mut runs = lock(&runs);
             (runs.meeting.take(), runs.dictation.take())
@@ -873,6 +915,7 @@ pub(crate) mod testing {
             loader: Arc::new(NoModels),
             installer: Arc::new(NoModels),
             data_dir,
+            permissions: Arc::new(crate::queries::NoPermissionProbe),
         };
         let core = Core::start(
             parts,

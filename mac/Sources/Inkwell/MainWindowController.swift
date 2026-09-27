@@ -11,9 +11,11 @@ import SwiftUI
 
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
-    /// `ink` is what the rail draws; `updates` is in the environment for the Settings screen.
-    init(router: Router, store: CoreStore, ink: ShellInk, updates: Updates) {
+    /// `ink` is what the rail draws; `updates` is in the environment for the Settings screen, and
+    /// `screens` holds the Live, Owed and Settings screens' models.
+    init(router: Router, store: CoreStore, ink: ShellInk, updates: Updates, screens: ScreenModels) {
         let root = ShellView(router: router).environment(store).environment(ink).environment(updates)
+            .environment(screens)
         let hosting = NSHostingController(rootView: root)
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]
