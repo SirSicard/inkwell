@@ -774,6 +774,7 @@ impl EndedMeeting {
                 removed: Some(&removed),
             },
         );
+        self.report_scrub();
         let revision = saved.or(record.as_ref().map(|r| r.revision));
         // The transcript now, from memory: the pass just saved, or the live one as read.
         let current = if saved.is_some() {
@@ -792,6 +793,8 @@ impl EndedMeeting {
             log::warn!("meeting: the live engine sent {late} events after the meeting stopped");
             core.warn(MeetingWarning::LiveEventsAfterStop { count: late });
         }
+        // The summary and title replace text too.
+        self.report_scrub();
         core.emit(MeetingEvent::Finished { revision });
         Ok(MeetingOutcome {
             revision,
@@ -886,6 +889,21 @@ impl EndedMeeting {
         core.emit(MeetingEvent::Transcribed(report));
         let (heard, erle) = reader.into_evidence();
         Ok((mic, report, heard, erle))
+    }
+
+    /// Tells the shell when text the library deleted or replaced could not yet be cleared from its
+    /// files, and when it has been: each change once ([`Store::scrub_change`]).
+    fn report_scrub(&self) {
+        match self.core.services.store.scrub_change() {
+            Some(true) => {
+                log::warn!(
+                    "meeting final pass: deleted text is not yet cleared from the library's files"
+                );
+                self.core.warn(MeetingWarning::DeletedTextNotScrubbed);
+            }
+            Some(false) => self.core.warn(MeetingWarning::DeletedTextScrubbed),
+            None => {}
+        }
     }
 
     /// What a side captured, into its report: the pump's count, what is on disk, and a warning

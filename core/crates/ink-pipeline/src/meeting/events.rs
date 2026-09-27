@@ -186,6 +186,14 @@ pub enum MeetingWarning {
         /// How long the mic was audible while the far end played, ms.
         heard_ms: u64,
     },
+    /// Text the library deleted or replaced (the live transcript this pass superseded, an old
+    /// summary or title) could not yet be cleared from the database's files: another process is
+    /// reading the database. The change itself is saved. The store keeps trying, and
+    /// [`DeletedTextScrubbed`](Self::DeletedTextScrubbed) follows once it succeeds. Sent once per
+    /// change, from whichever chain sees it first.
+    DeletedTextNotScrubbed,
+    /// Deleted text the library could not clear before is now cleared from its files.
+    DeletedTextScrubbed,
     /// The diarizer failed: the far end keeps no speaker labels.
     DiarizationFailed(EngineError),
     /// The store failed: a live final, the final pass, the summary or commitments could not be

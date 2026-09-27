@@ -73,6 +73,17 @@ final class EventDecodingTests: XCTestCase {
             return XCTFail("\(noPath)")
         }
         XCTAssertEqual(warning.kind, .echoPathNotFound)
+        let pending = try decode(
+            #"{"type":"meeting.warning","record":"r1","kind":"deleted_text_not_scrubbed"}"#)
+        guard case .meetingWarningEvent(let scrub) = pending else {
+            return XCTFail("\(pending)")
+        }
+        XCTAssertEqual(scrub.kind, .deletedTextNotScrubbed)
+        let cleared = try decode(#"{"type":"dictation.warning","kind":"deleted_text_scrubbed"}"#)
+        guard case .dictationWarningEvent(let clear) = cleared else {
+            return XCTFail("\(cleared)")
+        }
+        XCTAssertEqual(clear.kind, .deletedTextScrubbed)
 
         let pass = try decode(
             #"{"type":"meeting.echo_pass","record":"r1","path":{"delay_ms":46.04,"drift_ppm":1.63,"inliers":64},"windows":81,"candidates":72,"cancelled":true,"erle_db":26,"removed":1,"kept_near_speech":0,"kept_no_evidence":0,"live_echo_finals":2}"#

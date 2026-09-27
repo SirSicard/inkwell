@@ -48,3 +48,6 @@ sha2 = "0.10.9"
 # ink-echo's aec3).
 rustfft = "6.4.1"
 num-complex = "0.4.6"
+# A second connection holding a read transaction, as another process would, for the store's
+# scrub (MIT; already in the tree through ink-store, with the same features).
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }

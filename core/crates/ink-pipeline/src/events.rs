@@ -99,6 +99,13 @@ pub enum Warning {
     NoModeForStyle,
     /// The dictation was inserted (or insertion was attempted) but not saved to the library.
     SaveFailed(StoreError),
+    /// Text the library deleted or replaced could not yet be cleared from the database's files:
+    /// another process is reading the database. The change itself is saved; the store keeps
+    /// trying, and [`DeletedTextScrubbed`](Self::DeletedTextScrubbed) follows once it succeeds.
+    /// Sent once per change, from whichever chain sees it first.
+    DeletedTextNotScrubbed,
+    /// Deleted text the library could not clear before is now cleared from its files.
+    DeletedTextScrubbed,
 }
 
 /// An event from the dictation chain, in order for one chain.

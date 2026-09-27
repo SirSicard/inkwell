@@ -816,3 +816,57 @@ fn a_you_side_that_collapses_for_any_other_reason_is_still_refused() {
         outcome.echo
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Deleted text the store could not yet clear
+
+#[test]
+fn deleted_text_the_store_could_not_clear_is_a_warning_once_and_its_clear_too() {
+    use ink_pipeline::meeting::events::MeetingWarning as W;
+
+    let dir = TempDir::new("scrub");
+    let path = dir.path().join("library.sqlite");
+    let store = std::sync::Arc::new(ink_store::SqliteStore::open(&path).unwrap());
+    let meeting = |store: std::sync::Arc<ink_store::SqliteStore>| {
+        // The rig's live engine writes a final per burst of sound, more words than its scripted
+        // final pass gives the far end; without it the supersede is never refused.
+        let mut rig = RigBuilder {
+            vad: echo_vad(),
+            store: Some(store),
+            no_live_engine: true,
+            ..Default::default()
+        }
+        .build();
+        let scene = echo_rig::protocol(Spec::earbuds());
+        rig.feed(&scene.mic[..30 * 16_000], &scene.far[..30 * 16_000]);
+        rig.finish().expect("the final pass");
+        rig.warnings()
+    };
+    let scrub = |warnings: &[W]| -> Vec<W> {
+        warnings
+            .iter()
+            .filter(|w| matches!(w, W::DeletedTextNotScrubbed | W::DeletedTextScrubbed))
+            .cloned()
+            .collect()
+    };
+
+    // Another process reads the database through the first meeting's final pass: its supersede
+    // is a write that replaces text, and what it replaced cannot leave the log yet.
+    let reader = rusqlite::Connection::open(&path).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row("SELECT count(*) FROM record", [], |r| r.get(0))
+        .unwrap();
+    let first = meeting(store.clone());
+    assert_eq!(scrub(&first), vec![W::DeletedTextNotScrubbed]);
+    assert!(ink_core::Store::unscrubbed(&*store));
+
+    // Once the reader is done, the next meeting's calls catch up, and say so once.
+    reader.execute_batch("COMMIT").unwrap();
+    drop(reader);
+    let second = meeting(store.clone());
+    assert_eq!(scrub(&second), vec![W::DeletedTextScrubbed]);
+    assert!(!ink_core::Store::unscrubbed(&*store));
+    // And a third, with nothing pending, says nothing.
+    assert!(scrub(&meeting(store)).is_empty());
+}

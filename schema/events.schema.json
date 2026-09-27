@@ -238,7 +238,7 @@
     },
     "DictationWarning": {
       "type": "string",
-      "description": "Something went wrong during a dictation, and it went on without it.",
+      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings.",
       "enum": [
         "vad_failed",
         "audio_lost",
@@ -248,6 +248,8 @@
         "polish_failed",
         "no_mode_for_style",
         "save_failed",
+        "deleted_text_not_scrubbed",
+        "deleted_text_scrubbed",
         "other"
       ]
     },
@@ -270,7 +272,7 @@
     },
     "MeetingWarning": {
       "type": "string",
-      "description": "Something went wrong in a meeting, and it went on without it.",
+      "description": "Something went wrong in a meeting, and it went on without it. deleted_text_not_scrubbed: text the library deleted or replaced could not yet be cleared from its files (another process is reading the database; the change is saved, and the store keeps trying); deleted_text_scrubbed: it now is. Each is sent once per change.",
       "enum": [
         "vad_failed",
         "capture",
@@ -299,6 +301,8 @@
         "echo_gate_vad_failed",
         "echo_failed",
         "echo_path_not_found",
+        "deleted_text_not_scrubbed",
+        "deleted_text_scrubbed",
         "other"
       ]
     },

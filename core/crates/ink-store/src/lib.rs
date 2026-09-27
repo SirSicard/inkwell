@@ -79,7 +79,8 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// of the app) keeps the log from being cut: the checkpoint is tried [`SCRUB_ATTEMPTS`] times,
 /// waiting up to [`SCRUB_WAIT`] for readers each time, and if it still cannot finish the call
 /// succeeds anyway (its change is committed), [`Store::unscrubbed`] says so, a warning is logged
-/// (no text), and every later call tries again first until it succeeds.
+/// (no text), and every later call tries again first until it succeeds. [`Store::scrub_change`]
+/// hands each change to the chains once, which tell the shell.
 ///
 /// What this cannot promise: the store overwrites what the file system lets it overwrite. An SSD
 /// remaps written blocks (wear levelling), and copy-on-write file systems, snapshots and backups
@@ -89,6 +90,8 @@ pub struct SqliteStore {
     conn: Mutex<Connection>,
     /// A scrub that could not finish, retried at the start of every call.
     unscrubbed: AtomicBool,
+    /// What [`Store::scrub_change`] last reported.
+    reported: AtomicBool,
 }
 
 /// How many times a scrub's checkpoint is tried before the store reports it unfinished.
@@ -117,6 +120,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             unscrubbed: AtomicBool::new(false),
+            reported: AtomicBool::new(false),
         })
     }
 
@@ -128,6 +132,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             unscrubbed: AtomicBool::new(false),
+            reported: AtomicBool::new(false),
         })
     }
 
@@ -1023,6 +1028,12 @@ impl Store for SqliteStore {
 
     fn unscrubbed(&self) -> bool {
         self.unscrubbed.load(Ordering::Acquire)
+    }
+
+    fn scrub_change(&self) -> Option<bool> {
+        let now = self.unscrubbed.load(Ordering::Acquire);
+        // The swap makes each change reported once, whichever thread asks.
+        (self.reported.swap(now, Ordering::AcqRel) != now).then_some(now)
     }
 }
 

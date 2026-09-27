@@ -418,6 +418,7 @@ public struct DictationVoiceDetection: Codable, Sendable, Equatable {
 }
 
 /// Something went wrong during a dictation, and it went on without it.
+/// deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings.
 public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case audioLost = "audio_lost"
@@ -427,6 +428,8 @@ public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable
     case polishFailed = "polish_failed"
     case noModeForStyle = "no_mode_for_style"
     case saveFailed = "save_failed"
+    case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
+    case deletedTextScrubbed = "deleted_text_scrubbed"
     case other
 }
 
@@ -899,7 +902,10 @@ public struct MeetingVoiceDetection: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// Something went wrong in a meeting, and it went on without it.
+/// Something went wrong in a meeting, and it went on without it. deleted_text_not_scrubbed:
+/// text the library deleted or replaced could not yet be cleared from its files (another
+/// process is reading the database; the change is saved, and the store keeps trying);
+/// deleted_text_scrubbed: it now is. Each is sent once per change.
 public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case capture
@@ -928,6 +934,8 @@ public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case echoGateVadFailed = "echo_gate_vad_failed"
     case echoFailed = "echo_failed"
     case echoPathNotFound = "echo_path_not_found"
+    case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
+    case deletedTextScrubbed = "deleted_text_scrubbed"
     case other
 }
 

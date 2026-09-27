@@ -685,6 +685,7 @@ dependencies = [
  "ink-store",
  "log",
  "num-complex",
+ "rusqlite",
  "rustfft",
  "serde_json",
  "sha2",

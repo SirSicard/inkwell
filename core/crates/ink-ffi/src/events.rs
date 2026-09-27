@@ -182,6 +182,8 @@ pub fn dictation(e: &DictationEvent) -> Value {
                 Warning::PolishFailed(e) => ("polish_failed", None, some(e.to_string())),
                 Warning::NoModeForStyle => ("no_mode_for_style", None, None),
                 Warning::SaveFailed(e) => ("save_failed", None, some(e.to_string())),
+                Warning::DeletedTextNotScrubbed => ("deleted_text_not_scrubbed", None, None),
+                Warning::DeletedTextScrubbed => ("deleted_text_scrubbed", None, None),
                 _ => (unmapped("dictation warning"), None, None),
             };
             event(
@@ -494,6 +496,8 @@ fn meeting_warning(w: &MeetingWarning) -> Vec<(&'static str, Option<Value>)> {
             ("phase", some("live")),
             msg(e.to_string()),
         ],
+        MeetingWarning::DeletedTextNotScrubbed => vec![kind("deleted_text_not_scrubbed")],
+        MeetingWarning::DeletedTextScrubbed => vec![kind("deleted_text_scrubbed")],
         MeetingWarning::EchoPathNotFound { heard_ms } => vec![
             kind("echo_path_not_found"),
             ("channel", some("mic")),
@@ -697,6 +701,8 @@ mod tests {
             DictationEvent::Warning(Warning::AudioLost { frames: 480 }),
             DictationEvent::Warning(Warning::PolishFailed(LlmError::NoKey)),
             DictationEvent::Warning(Warning::SaveFailed(StoreError::NotFound)),
+            DictationEvent::Warning(Warning::DeletedTextNotScrubbed),
+            DictationEvent::Warning(Warning::DeletedTextScrubbed),
             DictationEvent::HotkeyLost,
             DictationEvent::WorkerFailed { recovered: true },
         ];
@@ -768,6 +774,8 @@ mod tests {
             }),
             MeetingWarning::EchoFailed(EchoFailure::Internal),
             MeetingWarning::EchoPathNotFound { heard_ms: 12_000 },
+            MeetingWarning::DeletedTextNotScrubbed,
+            MeetingWarning::DeletedTextScrubbed,
         ];
         let mut meeting_events = vec![
             MeetingEvent::Started {

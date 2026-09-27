@@ -916,6 +916,7 @@ fn a_reader_that_holds_the_log_delays_the_scrub_and_it_is_reported() {
         .query_row("SELECT count(*) FROM segment", [], |r| r.get(0))
         .unwrap();
 
+    assert_eq!(store.scrub_change(), None, "nothing to report yet");
     store.delete_record(&doomed).unwrap();
     assert!(
         store.unscrubbed(),
@@ -925,6 +926,9 @@ fn a_reader_that_holds_the_log_delays_the_scrub_and_it_is_reported() {
         on_disk(&db, "zqxheldmarker") >= 1,
         "still in the log while it is read"
     );
+    // The change is reported once, however often it is asked.
+    assert_eq!(store.scrub_change(), Some(true));
+    assert_eq!(store.scrub_change(), None);
 
     reader.execute_batch("COMMIT").unwrap();
     drop(reader);
@@ -932,6 +936,8 @@ fn a_reader_that_holds_the_log_delays_the_scrub_and_it_is_reported() {
     assert_eq!(store.search("ordinary", 100).unwrap().len(), 40);
     assert!(!store.unscrubbed());
     assert_eq!(on_disk(&db, "zqxheldmarker"), 0);
+    assert_eq!(store.scrub_change(), Some(false), "the clear, once");
+    assert_eq!(store.scrub_change(), None);
 }
 
 // --- Threads -----------------------------------------------------------------------------------

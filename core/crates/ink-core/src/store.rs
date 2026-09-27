@@ -298,6 +298,14 @@ pub trait Store: Send + Sync {
         false
     }
 
+    /// A change in [`unscrubbed`](Self::unscrubbed) not yet reported: `Some(true)` once when it
+    /// becomes set, `Some(false)` once when it clears after that, `None` otherwise. The chains
+    /// that can tell the shell (a meeting's final pass, a dictation's save) take it after their
+    /// writes, so each change reaches the shell once, through whichever sees it first.
+    fn scrub_change(&self) -> Option<bool> {
+        None
+    }
+
     /// Full-text search across every record's current revision.
     ///
     /// The query is split into words on whitespace. Each word matches as a case-insensitive
