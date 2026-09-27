@@ -32,9 +32,50 @@ final class NeedsYouTests: XCTestCase {
         store: CoreStore = CoreStore()
     ) -> [NeedsYouItem] {
         NeedsYou.items(
-            permission: permission, farSilentMeetings: farSilent, farSilentSince: since,
+            permission: permission, farEnd: .checked(meetings: farSilent, since: since),
             meeting: store.meeting, notices: store.notices, now: Date(timeIntervalSince1970: 1_790_000_000),
             calendar: calendar)
+    }
+
+    /// Review fix: the counts that tell whether the far end recorded nothing could not be read.
+    /// That is said ("couldn't check"), never read as zero meetings, which would silence the one
+    /// warning this banner exists for. Tested through Today's own wiring (TodayScreen.needItems)
+    /// from the library model's answers.
+    func testTodaysBannerSaysWhenItCouldNotCheckTheFarEnd() throws {
+        var sent: [String] = []
+        let library = LibraryModel(send: { sent.append($0.json) })
+        let store = CoreStore()
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let today = { TodayScreen.needItems(library: library, store: store, permission: cards(), now: now) }
+        library.refreshToday()
+        let stats = sent.compactMap { json -> String? in
+            let c = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+            return c?["cmd"] as? String == "library.stats" ? c?["id"] as? String : nil
+        }
+        XCTAssertEqual(stats.count, 2)
+        XCTAssertEqual(today(), [], "still asking: no guess either way")
+
+        for id in stats {
+            library.apply([event(#"{"type":"command.failed","command":"library.stats","id":"\#(id)","message":"the library: disk I/O error"}"#)])
+        }
+        let failed = today()
+        XCTAssertEqual(failed.map(\.id), ["far-unknown"])
+        XCTAssertEqual(failed[0].title, "Inkwell couldn't check the other side of your calls")
+        XCTAssertEqual(failed[0].action, .retryChecks)
+        guard case .commandFailed(let failure) = event(#"{"type":"command.failed","command":"library.stats","id":"\#(stats[0])","message":"x"}"#) else {
+            return XCTFail("not a failure")
+        }
+        XCTAssertTrue(library.handles(failure), "shown on Today, so the model claims it")
+
+        // Asked again, and answered: two meetings kept no far end.
+        sent.removeAll()
+        library.refreshToday()
+        let again = sent.compactMap { json -> String? in
+            let c = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+            return c?["cmd"] as? String == "library.stats" ? c?["id"] as? String : nil
+        }
+        library.apply([event(#"{"type":"library.stats","ref":"\#(again[1])","since_unix_ms":0,"kinds":[],"far_silent_meetings":2,"far_silent_since_unix_ms":1789000000000}"#)])
+        XCTAssertEqual(today().map(\.id), ["far-silent"])
     }
 
     func testNothingNeedsYouWhenAllIsWell() {

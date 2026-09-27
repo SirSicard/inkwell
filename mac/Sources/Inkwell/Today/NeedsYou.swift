@@ -14,6 +14,8 @@ struct NeedsYouItem: Identifiable, Equatable, Sendable {
         case allow(PermissionCard)
         /// Dismisses a one-off notice.
         case dismiss(CoreStore.Notice.ID)
+        /// Reads Today's counts again (they could not be read).
+        case retryChecks
     }
 
     let id: String
@@ -27,8 +29,7 @@ enum NeedsYou {
     /// Everything that needs the user now, most urgent first.
     static func items(
         permission: (PermissionCard) -> CardState,
-        farSilentMeetings: Int64,
-        farSilentSince: Date?,
+        farEnd: LibraryModel.FarEndCheck,
         meeting: CoreStore.LiveMeeting?,
         notices: [CoreStore.Notice],
         now: Date,
@@ -64,7 +65,11 @@ enum NeedsYou {
             }
         }
 
-        // Permissions.
+        // Permissions, and whether recent meetings kept the far end.
+        let (farSilentMeetings, farSilentSince): (Int64, Date?) = switch farEnd {
+        case .checked(let meetings, let since): (meetings, since)
+        case .unknown, .failed: (0, nil)
+        }
         let since = farSilentSince.map { $0.formatted(Date.FormatStyle(timeZone: calendar.timeZone)
             .locale(calendar.locale ?? .current).day().month(.abbreviated)) }
         if permission(.hearTheOthers) == .off {
@@ -80,6 +85,12 @@ enum NeedsYou {
                 id: "far-silent", title: "Inkwell didn't hear the other side of your calls",
                 detail: "\(count)\(from) kept only your own voice. Check that system audio is allowed.",
                 actionTitle: "Allow system audio", action: allowAudio))
+        } else if farEnd == .failed {
+            // Not known is not "none": the warning this banner exists for may be the one hidden.
+            items.append(.init(
+                id: "far-unknown", title: "Inkwell couldn't check the other side of your calls",
+                detail: "Your library could not be read to see whether recent meetings kept both sides.",
+                actionTitle: "Try again", action: .retryChecks))
         }
         if permission(.hearYou) == .off {
             items.append(.init(

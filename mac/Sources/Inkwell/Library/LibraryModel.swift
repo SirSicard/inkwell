@@ -82,6 +82,29 @@ final class LibraryModel {
     private(set) var today: LibraryStats?
     /// Since the start of the week.
     private(set) var week: LibraryStats?
+    /// The two counts' questions. `.failed`: that count could not be read, which is not zero.
+    private(set) var todayLoad: Load = .idle
+    private(set) var weekLoad: Load = .idle
+
+    /// Whether the far end recorded nothing lately, as far as the counts can tell.
+    enum FarEndCheck: Equatable, Sendable {
+        /// Not answered yet: no guess either way.
+        case unknown
+        /// The counts could not be read: said, never taken as "none".
+        case failed
+        /// The newest meetings in a row that kept only the user's voice, and since when.
+        case checked(meetings: Int64, since: Date?)
+    }
+
+    /// What the needs-you banner reads about the far end.
+    var farEnd: FarEndCheck {
+        if let stats = week ?? today {
+            return .checked(
+                meetings: stats.farSilentMeetings,
+                since: stats.farSilentSinceUnixMs.map(LibraryFormat.date(unixMs:)))
+        }
+        return todayLoad == .failed && weekLoad == .failed ? .failed : .unknown
+    }
 
     /// Records per page.
     static let pageSize = 100
@@ -134,10 +157,9 @@ final class LibraryModel {
     /// screen and needs no log line of its own.
     func handles(_ failed: CommandFailed) -> Bool {
         guard let id = failed.id, let dash = id.lastIndex(of: "-"),
-            let slot = Slot(rawValue: String(id[..<dash]))
+            Slot(rawValue: String(id[..<dash])) != nil
         else { return false }
-        // The counts are left out when they cannot be read; that is logged, not shown.
-        return slot != .statsDay && slot != .statsWeek
+        return true
     }
 
     /// Reloads the list's first page.
@@ -187,6 +209,8 @@ final class LibraryModel {
         let now = now()
         let dayStart = calendar.startOfDay(for: now)
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? dayStart
+        if todayLoad != .loaded { todayLoad = .loading }
+        if weekLoad != .loaded { weekLoad = .loading }
         send(.libraryStats(sinceUnixMs: Int64(dayStart.timeIntervalSince1970 * 1000), ref: ref(for: .statsDay)))
         send(.libraryStats(sinceUnixMs: Int64(weekStart.timeIntervalSince1970 * 1000), ref: ref(for: .statsWeek)))
     }
@@ -254,8 +278,12 @@ final class LibraryModel {
                 receive(answer)
             case .libraryStats(let answer):
                 switch current(answer.ref) {
-                case .statsDay: today = answer
-                case .statsWeek: week = answer
+                case .statsDay:
+                    today = answer
+                    todayLoad = .loaded
+                case .statsWeek:
+                    week = answer
+                    weekLoad = .loaded
                 default: break
                 }
             case .commandFailed(let failed):
@@ -295,6 +323,13 @@ final class LibraryModel {
             }
         case .todayMeetings, .todayOpen:
             lastMeetingLoad = .failed
+        case .statsDay:
+            // An old count is not shown as today's: it is gone, and the failure is said.
+            today = nil
+            todayLoad = .failed
+        case .statsWeek:
+            week = nil
+            weekLoad = .failed
         default:
             break
         }

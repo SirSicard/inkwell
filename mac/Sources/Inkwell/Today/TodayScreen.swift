@@ -100,12 +100,18 @@ struct TodayScreen: View {
     // MARK: Needs you
 
     private func needItems(_ now: Date) -> [NeedsYouItem] {
+        Self.needItems(library: library, store: store, permission: screens.permissions.state, now: now)
+    }
+
+    /// What the banner lists, from the models Today reads: the permission cards, the watchdog and
+    /// notices (CoreStore), and the far-end check (LibraryModel), where "could not read" stays
+    /// apart from "none".
+    static func needItems(
+        library: LibraryModel, store: CoreStore, permission: (PermissionCard) -> CardState, now: Date
+    ) -> [NeedsYouItem] {
         NeedsYou.items(
-            permission: screens.permissions.state,
-            farSilentMeetings: library.week?.farSilentMeetings ?? library.today?.farSilentMeetings ?? 0,
-            farSilentSince: (library.week?.farSilentSinceUnixMs ?? library.today?.farSilentSinceUnixMs)
-                .map(LibraryFormat.date(unixMs:)),
-            meeting: store.meeting, notices: store.notices, now: now, calendar: calendar)
+            permission: permission, farEnd: library.farEnd,
+            meeting: store.meeting, notices: store.notices, now: now, calendar: library.calendar)
     }
 
     @ViewBuilder
@@ -144,6 +150,8 @@ struct TodayScreen: View {
             screens.permissions.request(card)
         case .dismiss(let id):
             store.dismissNotice(id)
+        case .retryChecks:
+            library.refreshToday()
         }
     }
 
@@ -309,9 +317,12 @@ struct TodayScreen: View {
     private var stats: some View {
         let dictated = library.today?.kinds.first { $0.kind == .dictation }
         let met = library.week?.kinds.first { $0.kind == .meeting }
+        // A count that could not be read says so; it is never shown as zero.
         let lines = [
-            dictated.map { "Dictated today · \($0.words.formatted()) words · \(LibraryFormat.duration(ms: $0.durationMs))" },
-            met.map { "This week · \($0.records) \($0.records == 1 ? "meeting" : "meetings") · \(LibraryFormat.duration(ms: $0.durationMs))" },
+            dictated.map { "Dictated today · \($0.words.formatted()) words · \(LibraryFormat.duration(ms: $0.durationMs))" }
+                ?? (library.todayLoad == .failed ? "Dictated today · couldn't be counted" : nil),
+            met.map { "This week · \($0.records) \($0.records == 1 ? "meeting" : "meetings") · \(LibraryFormat.duration(ms: $0.durationMs))" }
+                ?? (library.weekLoad == .failed ? "This week · couldn't be counted" : nil),
         ].compactMap { $0 }
         // Side by side when they fit, one under the other when not: never a line broken mid-count.
         return ViewThatFits(in: .horizontal) {

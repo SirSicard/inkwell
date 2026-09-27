@@ -73,6 +73,9 @@ need a permission (the calendar, system audio) or ears (playback); those say so.
       come back to Today: "Inkwell can't hear you" with "Allow the microphone". Turn it back on
       through that button's pane and come back: the card goes.
 - [ ] Two or more needs: the most urgent shows, with "N more" to show the rest.
+- [ ] When Today's counts cannot be read, the banner says "Inkwell couldn't check the other side
+      of your calls" with "Try again", and the foot says "couldn't be counted"; neither reads as
+      zero. (Unit-tested; to see it by hand, the library must fail to answer a query.)
 
 - [ ] The ink zone beside Today shows the ink with INKWELL knocked out of it, and the Library
       the narrow rail with ink (S2.4's ink; checked here because this step's screenshots were

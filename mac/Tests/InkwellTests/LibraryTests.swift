@@ -519,7 +519,7 @@ final class LibraryModelTests: XCTestCase {
               case .commandFailed(let other) = failed("setting:x", "setting.get")
         else { return XCTFail("not failures") }
         XCTAssertTrue(library.handles(listFailure))
-        XCTAssertFalse(library.handles(stats), "counts that cannot be read are left out, and logged")
+        XCTAssertTrue(library.handles(stats), "Today says the counts could not be read")
         XCTAssertFalse(library.handles(other))
     }
 }
