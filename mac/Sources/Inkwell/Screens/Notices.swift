@@ -17,6 +17,10 @@
 //   with its own header and disclaimer, are kept whole).
 // - Silero VAD's weights: the standard MIT text with its copyright line.
 //
+// The three composed texts (protobuf-lite, Darts-clone, Silero VAD) are listed in
+// mac/composed-notices.txt with whether they have been compared with their upstream files yet; a
+// release tag waits until they have (mac/scripts/notices-verified.sh).
+//
 // Generated once from the upstream files; edit by hand from now on, keeping the texts verbatim.
 import Foundation
 

@@ -644,6 +644,7 @@ mod tests {
             ("bare".into(), "1.0.0".into()),
             overrides::Override {
                 text: "Apache-2.0.txt".into(),
+                verified: None,
                 reason: "the standard text".into(),
             },
         );
@@ -677,6 +678,7 @@ mod tests {
         let mut table = Overrides::new();
         let o = || overrides::Override {
             text: "MIT.txt".into(),
+            verified: None,
             reason: "why".into(),
         };
         table.insert(("good".into(), "1.0.0".into()), o());

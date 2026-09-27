@@ -93,6 +93,11 @@ lists, kept in two ways:
   After a dependency change, `mac/scripts/rust-notices.sh` regenerates it (it fetches the crates
   first). A crate whose package carries no text of its licence stops the generator until
   `core/crates/ink-ffi/notices/overrides.txt` supplies one for that version.
+- **Checked against upstream before a release.** Each text written without its upstream file on
+  hand (a line of `overrides.txt`, and the notices `Notices.swift` composes, listed in
+  `mac/composed-notices.txt`) carries `verified=no` until someone compares it with that file, and
+  the date after. `mac/scripts/notices-verified.sh` lists the open ones; `release-version.sh`
+  refuses a release tag while there is one, and a dry run only lists them.
 
 ### Once: the update key (the maintainer, by hand)
 
@@ -244,12 +249,11 @@ Before the tag:
 
 - [ ] **The maintainer:** the update key, the `release` environment and its secret, the public
       key in `mac/Info.plist`, and the tag ruleset (the steps under "Once: the update key").
-- [ ] The Mac CI job runs `mac/scripts/rust-notices.sh --check`, as a step after the Rust
-      toolchain is installed; add the step if it is not there yet.
-- [ ] Every notice written without its upstream file checked against that project's repository,
-      and replaced where it differs: the texts in `core/crates/ink-ffi/notices/overrides.txt`
-      (then `mac/scripts/rust-notices.sh`), and in `Notices.swift` those its header lists as
-      composed from standard licence text (protobuf-lite, Darts-clone, Silero VAD).
+- [ ] Every notice written without its upstream file compared with that project's own licence
+      file, replaced where it differs, and its `verified=` set to the date: the lines of
+      `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`) and of
+      `mac/composed-notices.txt` (replacing the text in `Notices.swift`).
+      `mac/scripts/notices-verified.sh` must pass: the tag refuses to build until it does.
 - [ ] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
       `src-tauri/`, `public/`, `index.html`, `package.json`, `package-lock.json`,
       `vite.config.ts`, `eslint.config.js` and the three `tsconfig*.json`. With them, what points

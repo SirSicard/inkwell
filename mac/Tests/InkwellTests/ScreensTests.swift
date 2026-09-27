@@ -671,6 +671,32 @@ final class NoticesTests: XCTestCase {
     }
 }
 
+/// The notices composed from a licence's standard text (their upstream file was not on hand) are
+/// the ones mac/composed-notices.txt lists, each with its upstream-check marker, which a release
+/// tag waits for (mac/scripts/notices-verified.sh).
+final class ComposedNoticesTests: XCTestCase {
+    func testEveryComposedNoticeIsListedWithItsUpstreamCheck() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let list = try String(contentsOf: root.appendingPathComponent("mac/composed-notices.txt"), encoding: .utf8)
+        var listed: [String: String] = [:]
+        for line in list.split(separator: "\n") where !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            let words = line.split(separator: " ", omittingEmptySubsequences: true)
+            XCTAssertGreaterThanOrEqual(words.count, 3, "<id> verified=<no|date> <what to compare with>: \(line)")
+            let marker = String(words[1])
+            XCTAssertTrue(marker == "verified=no" || marker.wholeMatch(of: /verified=\d{4}-\d{2}-\d{2}/) != nil, marker)
+            listed[String(words[0])] = marker
+        }
+        // The notices Notices.swift composes: two BSD-3-Clause components inside SentencePiece, and
+        // Silero VAD's MIT notice.
+        XCTAssertEqual(Set(listed.keys), ["protobuf-lite", "darts-clone", "silero-vad"])
+        let ids = Set(Notices.components.map(\.id)).union(Notices.models.filter { $0.notice != nil }.map(\.id))
+        for id in listed.keys {
+            XCTAssertTrue(ids.contains(id), "\(id) is no notice About shows")
+        }
+    }
+}
+
 // MARK: - The commands against the real core
 
 /// The commands the screens build are the ones the core reads, and its answers decode. A fresh
