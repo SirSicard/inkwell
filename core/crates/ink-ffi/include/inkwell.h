@@ -199,8 +199,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
- *       "dictation.polish" (on|off), "meetings.detect" (on|off), "meetings.headset_mic" (on|off)
- *       and "retention.days" (forever|7|30|90|365: meetings and dictations older than that are
+ *       "dictation.polish" (on|off), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
+ *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a
+ *       language model whose info says "local":false is never called, and the call fails saying
+ *       so) and "retention.days" (forever|7|30|90|365: meetings and dictations older than that are
  *       deleted, never imports; at launch, after each meeting and when it changes, on the core's
  *       own thread; "library.swept" says how many).
  *   {"cmd":"modes.list"}

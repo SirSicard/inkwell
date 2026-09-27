@@ -1031,3 +1031,100 @@ fn recovery_says_when_it_could_not_look_for_interrupted_meetings() {
     events.assert_valid();
     core.shutdown();
 }
+
+// --- Local-only mode --------------------------------------------------------------------------
+
+/// Review (S2.8): local-only mode is enforced in code, not left to the shell. The setting
+/// (`llm.local_only`) is on unless turned off; while it is on, a registered model that says it is
+/// not local is never called, for Ask or for a meeting's summary, and the refusal is said. Turned
+/// off, the same model answers.
+#[test]
+fn local_only_refuses_a_model_that_is_not_local_for_ask_and_the_summary() {
+    let r = rig("local-only", 30.0, clock());
+    let model = Box::leak(Box::new(Model {
+        requests: Mutex::default(),
+    }));
+    let info =
+        CString::new(r#"{"id":"remote-llm","licence":"MIT","model":"t","local":false}"#).unwrap();
+    let table = InkEngineVTable {
+        kind: KIND_LLM,
+        info_json: info.as_ptr(),
+        ctx: model as *const Model as *mut c_void,
+        release: Some(release),
+        generate: Some(generate),
+        ..Default::default()
+    };
+    // SAFETY: a valid table whose ctx outlives the core.
+    let registration =
+        unsafe { Registration::from_table(&table, r.core.shared().shutdown.clone()) }.unwrap();
+    r.core.register(registration).unwrap();
+    r.core.command(r#"{"cmd":"meeting.start"}"#).unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    let record = ink_core::RecordId(started["record"].as_str().unwrap().to_owned());
+    r.core
+        .shared()
+        .store
+        .append_segments(
+            &record,
+            &[ink_core::Segment {
+                channel: Channel::Far,
+                start_ms: 1_000,
+                end_ms: 2_000,
+                text: "What about the budget for the pilot?".into(),
+                speaker: None,
+            }],
+        )
+        .unwrap();
+
+    // On by default: refused, and said.
+    r.core
+        .command(r#"{"cmd":"meeting.ask","question":"What did they ask?","id":"q1"}"#)
+        .unwrap();
+    let refused = failed_with(&r.events, "q1");
+    assert!(
+        refused["message"].as_str().unwrap().contains("local-only"),
+        "{refused}"
+    );
+    assert!(model.requests.lock().unwrap().is_empty(), "never called");
+
+    // Off: the same model answers.
+    r.core
+        .command(r#"{"cmd":"setting.set","key":"llm.local_only","value":"off"}"#)
+        .unwrap();
+    r.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "llm.local_only"
+        })
+        .unwrap();
+    r.core
+        .command(r#"{"cmd":"meeting.ask","question":"What did they ask?","id":"q2"}"#)
+        .unwrap();
+    r.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "meeting.answered" && v["ref"] == "q2"
+        })
+        .expect("answered with local-only off");
+    let asked = model.requests.lock().unwrap().len();
+    assert_eq!(asked, 1);
+
+    // On again: the meeting's summary is refused too, and said.
+    r.core
+        .command(r#"{"cmd":"setting.set","key":"llm.local_only","value":"on"}"#)
+        .unwrap();
+    assert!(r.events.wait_count("setting.value", 2, WAIT));
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
+    let warning = r
+        .events
+        .wait_for(Duration::ZERO, |v| {
+            v["type"] == "meeting.warning" && v["kind"] == "summary_failed"
+        })
+        .expect("the summary was refused");
+    assert!(
+        warning["message"].as_str().unwrap().contains("local-only"),
+        "{warning}"
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), asked, "never called");
+    r.events.assert_valid();
+    r.core.shutdown();
+}

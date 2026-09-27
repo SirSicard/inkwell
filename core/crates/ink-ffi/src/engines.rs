@@ -111,10 +111,12 @@ impl Diarizer for RoutedDiarizer {
 /// **Worker.** The language model for a meeting's summary, commitments and Ask: the one the shell
 /// registered, picked at each call, if one is registered now.
 pub fn llm(shared: &Shared) -> Option<Arc<dyn Llm>> {
-    shared
-        .llms
-        .pick()
-        .map(|_| Arc::new(PolishModel::new(shared.llms.clone())) as Arc<dyn Llm>)
+    shared.llms.pick().map(|_| {
+        Arc::new(PolishModel::new(
+            shared.llms.clone(),
+            shared.local_only.clone(),
+        )) as Arc<dyn Llm>
+    })
 }
 
 /// The context the registered language model holds, in tokens.

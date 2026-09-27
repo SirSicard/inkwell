@@ -10,8 +10,26 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
+use ink_llm::guard::{GuardedLlm, LocalOnly};
 
 use crate::external::ExternalLlm;
+
+/// The setting for local-only mode: `on` (the default: a model that is not on this machine is
+/// refused) or `off`.
+pub const LOCAL_ONLY_KEY: &str = "llm.local_only";
+
+/// **Worker.** Local-only mode as the setting says: on unless it says `off`, and on when it
+/// cannot be read (refusing a remote model by mistake costs a summary; sending a meeting away by
+/// mistake cannot be undone).
+pub fn local_only_setting(store: &dyn ink_core::Store) -> bool {
+    match store.setting(LOCAL_ONLY_KEY) {
+        Ok(v) => v.as_deref() != Some("off"),
+        Err(e) => {
+            log::warn!("the local-only setting could not be read ({e}); local-only stays on");
+            true
+        }
+    }
+}
 
 /// The registered language models, by id. `Send + Sync`; the lock is held only to insert,
 /// remove or copy out an `Arc`, never across a call.
@@ -56,17 +74,24 @@ impl ShellLlms {
     }
 }
 
-/// The dictation chain's polish model: whichever registered model [`ShellLlms::pick`] gives at
-/// each call. With none registered, a call fails (the chain keeps the text as written and says
+/// The dictation chain's polish model, and every other use of a registered language model (a
+/// meeting's summary and commitments, Ask): whichever registered model [`ShellLlms::pick`] gives
+/// at each call. With none registered, a call fails (the chain keeps the text as written and says
 /// polish failed); it never makes up an answer.
+///
+/// **Local-only mode** (architecture rule 6) is enforced here, in code: each call goes through
+/// [`GuardedLlm`] around the model picked for it, so a model whose info says it is not on this
+/// machine is refused while the switch is on ([`LlmError::LocalOnly`]), before anything is sent.
+/// The check is on the model called, never on one picked a moment earlier.
 pub struct PolishModel {
     llms: Arc<ShellLlms>,
+    local_only: LocalOnly,
 }
 
 impl PolishModel {
-    /// Polish through the models in `llms`.
-    pub fn new(llms: Arc<ShellLlms>) -> Self {
-        Self { llms }
+    /// Calls through the models in `llms`, behind the `local_only` switch.
+    pub fn new(llms: Arc<ShellLlms>, local_only: LocalOnly) -> Self {
+        Self { llms, local_only }
     }
 }
 
@@ -94,6 +119,6 @@ impl Llm for PolishModel {
                 "no language model is registered for polish".into(),
             ));
         };
-        llm.complete(request, cancel)
+        GuardedLlm::new(llm, self.local_only.clone()).complete(request, cancel)
     }
 }

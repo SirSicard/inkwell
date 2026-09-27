@@ -37,6 +37,8 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
    diarized, and speaker labels are kept only when there are at least two substantial clusters,
    each holding at least 2 % of the speech.
 6. **Local-only is structural.** A switch refuses any non-loopback language-model endpoint in code.
+   The core holds it (`llm.local_only`, on unless turned off, on when unreadable) and every
+   language-model call goes through it: dictation polish, meeting summaries and commitments, Ask.
 7. **One replay harness.** `FileReplaySource` drives the whole pipeline from WAV fixtures,
    identically on macOS and Windows.
 8. **One event schema.** Events are defined once in `schema/`, and the Swift and C# types are

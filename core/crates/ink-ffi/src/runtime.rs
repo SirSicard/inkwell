@@ -50,6 +50,7 @@ use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureEnded, CaptureSide, MeetingInfo, MeetingRun, Replay};
 use crate::queries::QueryWorker;
 use crate::retention::Sweeper;
+use ink_llm::guard::{GuardedLlm, LocalOnly};
 
 /// The model type residency holds: any offline engine an adapter loads.
 pub type Model = Box<dyn OfflineEngine>;
@@ -309,8 +310,12 @@ pub struct Shared {
     pub shutdown: CancelToken,
     /// Where meetings' recordings go.
     pub data_dir: PathBuf,
-    /// Language models the shell registered (dictation polish).
+    /// Language models the shell registered (dictation polish, meetings' summaries, Ask).
     pub llms: Arc<ShellLlms>,
+    /// Local-only mode (architecture rule 6), from the `llm.local_only` setting: on unless the
+    /// user turned it off, and on when the setting cannot be read. Every language model call
+    /// goes through it ([`PolishModel`]).
+    pub local_only: LocalOnly,
     /// Where models are installed (the meeting's VAD and diarizer load from here).
     pub models: ModelDir,
     /// Ids of the engines the shell registered, of every kind: one id space.
@@ -518,6 +523,8 @@ impl Core {
         let os = Os::current().unwrap_or(Os::MacOs);
         let (models, permissions) = (parts.models.clone(), parts.permissions);
         let meetings = parts.meetings;
+        // Read before anything can call a model.
+        let local_only = LocalOnly::new(crate::llms::local_only_setting(parts.store.as_ref()));
         let shared = Arc::new(Shared {
             events: hub.events(),
             models: parts.models.clone(),
@@ -531,6 +538,7 @@ impl Core {
             shutdown: CancelToken::new(),
             data_dir: parts.data_dir,
             llms: Arc::default(),
+            local_only,
             externals: Mutex::default(),
             bands: Mutex::new(None),
             far_bands: Mutex::new(None),
@@ -726,9 +734,13 @@ impl Core {
                 inserter: parts.inserter,
                 focus: parts.focus,
                 clock: s.clock.clone(),
-                llm: parts
-                    .llm
-                    .or_else(|| Some(Arc::new(PolishModel::new(s.llms.clone())) as Arc<dyn Llm>)),
+                // Whichever model polishes, it is behind the local-only switch.
+                llm: Some(match parts.llm {
+                    Some(llm) => {
+                        Arc::new(GuardedLlm::new(llm, s.local_only.clone())) as Arc<dyn Llm>
+                    }
+                    None => Arc::new(PolishModel::new(s.llms.clone(), s.local_only.clone())),
+                }),
             },
             parts.settings,
             parts.vad,

@@ -52,6 +52,9 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     (crate::control::DETECT_KEY, &["on", "off"]),
     // Record the Bluetooth headset's own mic instead of the built-in one (call-quality audio).
     (crate::control::HEADSET_MIC_KEY, &["on", "off"]),
+    // Local-only mode (architecture rule 6): on unless turned off; while on, a language model
+    // that is not on this machine is never called (crate::llms::PolishModel).
+    (crate::llms::LOCAL_ONLY_KEY, &["on", "off"]),
     // How long the library keeps records (crate::retention): changing it sweeps at once.
     (
         crate::retention::RETENTION_KEY,
@@ -496,6 +499,9 @@ impl Ctx<'_> {
             },
             Query::SettingSet { key, value } => match store.set_setting(&key, &value) {
                 Ok(()) => {
+                    if key == crate::llms::LOCAL_ONLY_KEY {
+                        self.shared.local_only.set(value != "off");
+                    }
                     if key == crate::control::DETECT_KEY {
                         self.shared.tell_meetings(crate::control::Msg::Detect {
                             on: value == "on",

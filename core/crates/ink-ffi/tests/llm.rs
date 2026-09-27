@@ -183,7 +183,7 @@ fn dictation_polish_goes_to_the_registered_model_and_never_fakes_an_answer() {
     );
 
     // Where it runs is the shell's declaration, for the local-only guard.
-    let polish = PolishModel::new(core.shared().llms.clone());
+    let polish = PolishModel::new(core.shared().llms.clone(), core.shared().local_only.clone());
     assert_eq!(polish.info().endpoint, ink_core::Endpoint::InProcess);
     assert_eq!(polish.info().model, "system");
 
@@ -275,7 +275,7 @@ fn a_model_still_registered_at_shutdown_is_released_before_it_returns() {
         CString::new(r#"{"id":"m","licence":"Apple","model":"system","local":false}"#).unwrap();
     register(&core, &model, &info).unwrap();
     // A model that says it is not local is reported as remote, for local-only mode to refuse.
-    let polish = PolishModel::new(core.shared().llms.clone());
+    let polish = PolishModel::new(core.shared().llms.clone(), core.shared().local_only.clone());
     assert!(!polish.info().endpoint.is_local());
     drop(polish);
     let stopped = core.shutdown();
