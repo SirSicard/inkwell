@@ -285,3 +285,50 @@ fn a_stop_racing_a_warm_up_request_returns_at_once() {
         );
     }
 }
+
+/// An engine that checks its token only between 20 ms steps, as a decoder does, and would run
+/// well past the warm-up's budget if nothing cancelled it.
+struct Stepped;
+
+impl OfflineEngine for Stepped {
+    fn info(&self) -> EngineInfo {
+        EngineInfo {
+            id: "stepped".into(),
+            jobs: vec![Job::DictationFinal],
+            licence: "MIT".into(),
+        }
+    }
+
+    fn transcribe(
+        &self,
+        _: &[f32],
+        options: &TranscribeOptions,
+    ) -> Result<Transcript, EngineError> {
+        for _ in 0..500 {
+            std::thread::sleep(Duration::from_millis(20));
+            if options.cancel.is_cancelled() {
+                return Err(EngineError::Cancelled);
+            }
+        }
+        Ok(Transcript::default())
+    }
+}
+
+/// Stopping mid-warm-up (the core shutting down) cancels the warm-up before joining it, so it
+/// waits one engine step, never the warm-up's budget.
+#[test]
+fn stopping_waits_one_engine_step_never_the_budget() {
+    use ink_pipeline::warm::WARM_BUDGET;
+    let clock = Arc::new(MockClock::new(1_000_000_000, 0));
+    let warmer =
+        EngineWarmer::start(Arc::new(Stepped), clock.clone(), Duration::from_secs(30)).unwrap();
+    assert!(warmer.key_down());
+    std::thread::sleep(Duration::from_millis(100));
+    let started = Instant::now();
+    warmer.stop();
+    let took = started.elapsed();
+    assert!(
+        took < WARM_BUDGET / 10,
+        "{took:?} against a budget of {WARM_BUDGET:?}"
+    );
+}

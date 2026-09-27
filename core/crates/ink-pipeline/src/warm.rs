@@ -185,13 +185,15 @@ impl EngineWarmer {
         self.shared.yielded.load(Ordering::Acquire)
     }
 
-    /// Cancels a warm-up in progress and ends the thread (handles still held ask for nothing
-    /// from then on).
+    /// Cancels a warm-up in progress, then ends the thread (handles still held ask for nothing
+    /// from then on). It waits at most one step of the engine (the next check of its token),
+    /// never the warm-up's [`WARM_BUDGET`].
     pub fn stop(mut self) {
         self.shut();
     }
 
     fn shut(&mut self) {
+        // Cancelled before the join, under the lock the thread checks before it starts a decode.
         {
             let mut running = self.shared.lock();
             running.stopping = true;
