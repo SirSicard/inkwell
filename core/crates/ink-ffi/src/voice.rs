@@ -26,7 +26,7 @@
 //! ([`EngineWarmer`]).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -475,8 +475,9 @@ impl Activity {
     }
 }
 
-/// Messages for `ink-voice`. Its channel is unbounded on purpose: the messages come at the pace
-/// of key presses (a press wakes the mic) and control (stop), never of audio.
+/// Messages for `ink-voice`, on a bounded channel ([`ctl_channel`]): a press only tries to add a
+/// wake ([`wake`]), so the tap's thread never waits or allocates for it; the rest (the worker gone,
+/// a stop) are sent from worker threads and may wait the few ms the mic thread takes to drain.
 enum Ctl {
     /// A press: open the mic if it is closed.
     Wake,
@@ -484,6 +485,21 @@ enum Ctl {
     WorkerGone,
     /// End the thread.
     Stop,
+}
+
+/// How many messages the mic thread's channel holds. One pending wake is as good as many.
+const CTL_CAPACITY: usize = 4;
+
+/// The mic thread's channel: bounded, so its buffer is allocated once, here.
+fn ctl_channel() -> (SyncSender<Ctl>, Receiver<Ctl>) {
+    mpsc::sync_channel(CTL_CAPACITY)
+}
+
+/// **Callback thread** (the tap's). Asks the mic thread to open the mic: never waits and never
+/// allocates. When the channel is full, a wake is already pending (or a stop, which ends it all),
+/// so this one is not needed.
+fn wake(ctl: &SyncSender<Ctl>) {
+    let _ = ctl.try_send(Ctl::Wake);
 }
 
 /// Why a rebind did not leave dictation running.
@@ -534,7 +550,7 @@ pub struct Voice {
     worker: Option<DictationWorker>,
     inbox: DictationInbox,
     warmer: Option<EngineWarmer>,
-    ctl: Sender<Ctl>,
+    ctl: SyncSender<Ctl>,
     controller: Option<JoinHandle<()>>,
     activity: Arc<Activity>,
     key: Option<String>,
@@ -557,7 +573,7 @@ impl Voice {
             WARM_AFTER_IDLE,
         )
         .map_err(|e| failed("the warm-up thread did not start", e))?;
-        let (ctl, rx) = mpsc::channel();
+        let (ctl, rx) = ctl_channel();
         let activity = Arc::new(Activity::default());
         let sink = chain_sink(
             shared.events.clone(),
@@ -732,18 +748,22 @@ impl Voice {
     }
 }
 
-/// The sink for one key: queues the edge for the chain, and on a press wakes the mic. **The tap's
-/// thread:** it only enqueues.
+/// The sink for one key: queues the edge for the chain, and on a press wakes the mic.
+///
+/// **Callback thread** (the event tap's, which macOS disables if it is slow): a short lock is
+/// allowed (the mailbox's, never held across a wait), never a wait, and no allocation per event:
+/// the wake is a `try_send` on the bounded channel, the activity an atomic, and the mailbox's queue
+/// was grown by the audio before and is kept.
 fn key_sink(
     inbox: DictationInbox,
-    ctl: Sender<Ctl>,
+    ctl: SyncSender<Ctl>,
     activity: Arc<Activity>,
     edit: bool,
 ) -> EventSink<HotkeyEvent> {
     Arc::new(move |e| {
         if let HotkeyEvent::Pressed { at_ns } = e {
             activity.touch(at_ns);
-            let _ = ctl.send(Ctl::Wake);
+            wake(&ctl);
         }
         // After the worker stopped, refused (the keys are let go of then).
         let _ = inbox.send(if edit {
@@ -761,7 +781,7 @@ fn chain_sink(
     clock: Arc<dyn ink_core::Clock>,
     warm: WarmHandle,
     activity: Arc<Activity>,
-    ctl: Sender<Ctl>,
+    ctl: SyncSender<Ctl>,
 ) -> EventSink<DictationEvent> {
     Arc::new(move |e| {
         match &e {
@@ -943,5 +963,40 @@ fn pump(
             );
             return Closed::Idle;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// The tap's thread never waits on the mic thread: a burst of presses with nobody receiving
+    /// returns at once, the pending wakes stay bounded, and a stop still gets through once the
+    /// mic thread drains them.
+    #[test]
+    fn a_press_wakes_the_mic_without_ever_waiting() {
+        let (tx, rx) = ctl_channel();
+        let started = Instant::now();
+        for _ in 0..10_000 {
+            wake(&tx);
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        let stopper = std::thread::spawn(move || tx.send(Ctl::Stop).is_ok());
+        let mut wakes = 0;
+        loop {
+            match rx.recv() {
+                Ok(Ctl::Wake) => wakes += 1,
+                Ok(Ctl::Stop) => break,
+                Ok(Ctl::WorkerGone) | Err(_) => panic!("unexpected"),
+            }
+        }
+        assert!(stopper.join().unwrap());
+        assert!((1..=CTL_CAPACITY).contains(&wakes), "{wakes} wakes pending");
     }
 }
