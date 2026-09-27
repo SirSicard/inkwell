@@ -50,7 +50,7 @@ use ink_core::store::check_supersede_explained;
 use ink_core::{
     AsrEvent, CancelToken, Channel, Clock, Diarizer, EngineError, EventSink, Explained, Llm,
     LlmError, NewCommitment, NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment,
-    Store, StoreError, StreamingEngine,
+    Store, StoreError, StreamingEngine, SupersedeWith,
 };
 use ink_llm::tasks::commitments::{RecordContext, harvest};
 use ink_llm::tasks::dedup::{apply_merges, dedup};
@@ -533,8 +533,8 @@ pub struct MeetingOutcome {
     /// What echo cancellation did.
     pub echo: EchoPass,
     /// "You" lines removed as echo of the far end, whole (also sent as
-    /// [`MeetingEvent::RemovedAsEcho`]). Once the pass is saved, the store keeps them with the
-    /// record ([`Store::save_removed`]), so they can be put back.
+    /// [`MeetingEvent::RemovedAsEcho`]). The supersede keeps them with the record in its own
+    /// transaction ([`Store::supersede_with`]), so they can be put back.
     pub removed_as_echo: Vec<RemovedEcho>,
 }
 
@@ -736,29 +736,29 @@ impl EndedMeeting {
         let mut new: Vec<Segment> = mic.into_iter().chain(far).collect();
         new.sort_by_key(|s| (s.start_ms, s.channel));
 
+        // The lines this pass removed as echo are kept with the record, so they can be put back
+        // (an empty list clears what an earlier pass kept), in the supersede's own transaction:
+        // the transcript never loses a line whose undo copy did not persist.
+        let removed: Vec<Segment> = removed_as_echo
+            .iter()
+            .map(|r| Segment {
+                channel: Channel::Mic,
+                start_ms: r.start_ms,
+                end_ms: r.end_ms,
+                text: r.text.as_str().to_owned(),
+                speaker: None,
+            })
+            .collect();
         let failed = mic_report.failed_regions + far_report.failed_regions;
-        let saved = self.supersede(&new, failed, previous.as_deref(), &explained);
-        if saved.is_some() {
-            // The lines this pass removed as echo, kept with the record so they can be put back
-            // (an empty list clears what an earlier pass kept). After the supersede, so a refused
-            // pass keeps nothing; a failure here loses only the undo, and says so.
-            let lines: Vec<Segment> = removed_as_echo
-                .iter()
-                .map(|r| Segment {
-                    channel: Channel::Mic,
-                    start_ms: r.start_ms,
-                    end_ms: r.end_ms,
-                    text: r.text.as_str().to_owned(),
-                    speaker: None,
-                })
-                .collect();
-            if let Err(error) = store.save_removed(&core.record, &lines) {
-                log::warn!(
-                    "meeting final pass: the lines removed as echo could not be kept: {error}"
-                );
-                core.warn(MeetingWarning::StoreFailed(error));
-            }
-        }
+        let saved = self.supersede(
+            &new,
+            failed,
+            previous.as_deref(),
+            SupersedeWith {
+                explained: &explained,
+                removed: Some(&removed),
+            },
+        );
         let revision = saved.or(record.as_ref().map(|r| r.revision));
         // The transcript now, from memory: the pass just saved, or the live one as read.
         let current = if saved.is_some() {
@@ -978,14 +978,15 @@ impl EndedMeeting {
     /// Replaces the live transcript with `new`, unless a region failed or the guard refuses.
     /// Returns the new revision when it did. `previous` is the live transcript, when it could be
     /// read: the guard is checked against it first, so a refusal is an outcome of the pass; without
-    /// it, the store's own check (inside its transaction) decides. `explained`: live finals the
-    /// pass judged to be echo, which the guard does not count.
+    /// it, the store's own check (inside its transaction) decides. `with`: the live finals the pass
+    /// judged to be echo, which the guard does not count, and its removed lines, saved in the same
+    /// transaction.
     fn supersede(
         &self,
         new: &[Segment],
         failed_regions: usize,
         previous: Option<&[Segment]>,
-        explained: &[Explained],
+        with: SupersedeWith<'_>,
     ) -> Option<u32> {
         let core = &self.core;
         if failed_regions > 0 {
@@ -998,13 +999,10 @@ impl EndedMeeting {
             return None;
         }
         let checked = previous.map_or(Ok(()), |previous| {
-            check_supersede_explained(previous, new, explained)
+            check_supersede_explained(previous, new, with.explained)
         });
-        let saved = checked.and_then(|()| {
-            core.services
-                .store
-                .supersede_explained(&core.record, new, explained)
-        });
+        let saved =
+            checked.and_then(|()| core.services.store.supersede_with(&core.record, new, with));
         let refused = match saved {
             Ok(revision) => {
                 core.emit(MeetingEvent::Superseded { revision });

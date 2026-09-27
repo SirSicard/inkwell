@@ -470,13 +470,13 @@ impl Store for FaultyStore {
     fn segments(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
         self.inner.segments(id)
     }
-    fn supersede_explained(
+    fn supersede_with(
         &self,
         id: &RecordId,
         s: &[Segment],
-        explained: &[ink_core::Explained],
+        with: ink_core::SupersedeWith<'_>,
     ) -> Result<u32, StoreError> {
-        self.inner.supersede_explained(id, s, explained)
+        self.inner.supersede_with(id, s, with)
     }
     fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
         self.inner.save_removed(id, lines)

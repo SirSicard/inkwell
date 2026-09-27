@@ -491,8 +491,8 @@ pub enum MeetingEvent {
     /// What echo cancellation did in the final pass. Sent before the supersede.
     EchoPass(EchoPass),
     /// "You" lines the final pass removed as echo, with their words (as [`Spoken`]). Sent only
-    /// when there are some, before the supersede; once the pass is saved the store keeps them
-    /// with the record, in the same order (by start time), so they can be put back.
+    /// when there are some, before the supersede; the supersede keeps them with the record, in its
+    /// own transaction and in the same order (by start time), so they can be put back.
     RemovedAsEcho(Vec<RemovedEcho>),
     /// The final pass replaced the live transcript.
     Superseded {

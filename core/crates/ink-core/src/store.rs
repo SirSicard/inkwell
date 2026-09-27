@@ -261,17 +261,19 @@ pub trait Store: Send + Sync {
     /// Replaces the current revision with `segments` in one transaction and returns the new
     /// revision. Refuses what [`check_supersede`] refuses; a refused supersede changes nothing.
     fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
-        self.supersede_explained(id, segments, &[])
+        self.supersede_with(id, segments, SupersedeWith::default())
     }
 
-    /// [`supersede`](Self::supersede), where the segments of the current revision that
-    /// `explained` names do not count against the guard ([`check_supersede_explained`], run on
-    /// the rows the transaction replaces).
-    fn supersede_explained(
+    /// [`supersede`](Self::supersede), with what the pass carries besides its segments
+    /// ([`SupersedeWith`]): previous segments the guard does not count, and the record's removed
+    /// lines to replace in the same transaction. The guard ([`check_supersede_explained`]) runs
+    /// on the rows the transaction replaces; a refusal, or a removed line out of range, changes
+    /// nothing.
+    fn supersede_with(
         &self,
         id: &RecordId,
         segments: &[Segment],
-        explained: &[Explained],
+        with: SupersedeWith<'_>,
     ) -> Result<u32, StoreError>;
 
     /// Keeps lines a pass removed from a record's transcript, whole, so they can be put back: the
@@ -400,6 +402,17 @@ impl Explained {
             && self.start_ms == segment.start_ms
             && self.end_ms == segment.end_ms
     }
+}
+
+/// What a supersede carries besides the new segments ([`Store::supersede_with`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SupersedeWith<'a> {
+    /// Segments of the current revision the guard does not count ([`Explained`]).
+    pub explained: &'a [Explained],
+    /// When `Some`, the record's removed lines are replaced by these in the same transaction (as
+    /// [`Store::save_removed`] replaces them), so a transcript never loses a line whose undo copy
+    /// did not persist. `None` leaves them, as a plain supersede does.
+    pub removed: Option<&'a [Segment]>,
 }
 
 /// The supersede guard (architecture rule 4), shared by every [`Store`]: the guard with nothing

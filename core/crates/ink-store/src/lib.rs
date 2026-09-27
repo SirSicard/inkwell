@@ -29,8 +29,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use ink_core::store::{
-    Commitment, CommitmentId, Explained, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
-    RecordQuery, SearchHit, Segment, Span, Store, Summary, check_supersede_explained,
+    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
+    RecordQuery, SearchHit, Segment, Span, Store, Summary, SupersedeWith,
+    check_supersede_explained,
 };
 use ink_core::{SpeakerId, StoreError};
 use rusqlite::types::ValueRef;
@@ -379,6 +380,27 @@ fn insert_segments(
     Ok(())
 }
 
+/// Replaces a record's removed lines. With `secure_delete`, the lines replaced are overwritten,
+/// not left in free pages.
+fn replace_removed(conn: &Connection, id: &RecordId, rows: &[SegmentRow<'_>]) -> Result<(), Fail> {
+    conn.execute("DELETE FROM removed_line WHERE record_id = ?1", [&id.0])?;
+    let mut insert = conn.prepare(
+        "INSERT INTO removed_line (record_id, channel, start_ms, end_ms, text, speaker)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    for row in rows {
+        insert.execute(params![
+            id.0,
+            row.channel,
+            row.start_ms,
+            row.end_ms,
+            row.text,
+            row.speaker
+        ])?;
+    }
+    Ok(())
+}
+
 /// One revision's segments by start time; at the same start the mic comes first, then the order
 /// they were written.
 fn segments_of(conn: &Connection, id: &RecordId, revision: u32) -> Result<Vec<Segment>, Fail> {
@@ -550,20 +572,21 @@ impl Store for SqliteStore {
         })
     }
 
-    fn supersede_explained(
+    fn supersede_with(
         &self,
         id: &RecordId,
         segments: &[Segment],
-        explained: &[Explained],
+        with: SupersedeWith<'_>,
     ) -> Result<u32, StoreError> {
         let rows = segment_rows(segments)?;
+        let removed = with.removed.map(segment_rows).transpose()?;
         // The guard has to see the rows this transaction replaces, so it runs under the lock.
         self.write("supersede", |tx| {
             let current = revision(tx, id)?;
             let previous = segments_of(tx, id, current)?;
             // A refusal returns before anything is written, and dropping the transaction rolls
             // back regardless.
-            check_supersede_explained(&previous, segments, explained)?;
+            check_supersede_explained(&previous, segments, with.explained)?;
             let next = current
                 .checked_add(1)
                 .ok_or_else(|| Fail::backend("supersede: revision overflow".to_string()))?;
@@ -577,6 +600,9 @@ impl Store for SqliteStore {
                 "UPDATE record SET revision = ?2 WHERE id = ?1",
                 params![id.0, next],
             )?;
+            if let Some(lines) = &removed {
+                replace_removed(tx, id, lines)?;
+            }
             Ok(next)
         })
     }
@@ -586,23 +612,7 @@ impl Store for SqliteStore {
         self.write("save_removed", |tx| {
             // The record must exist, empty list or not.
             revision(tx, id)?;
-            // With `secure_delete`, the lines replaced are overwritten, not left in free pages.
-            tx.execute("DELETE FROM removed_line WHERE record_id = ?1", [&id.0])?;
-            let mut insert = tx.prepare(
-                "INSERT INTO removed_line (record_id, channel, start_ms, end_ms, text, speaker)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )?;
-            for row in &rows {
-                insert.execute(params![
-                    id.0,
-                    row.channel,
-                    row.start_ms,
-                    row.end_ms,
-                    row.text,
-                    row.speaker
-                ])?;
-            }
-            Ok(())
+            replace_removed(tx, id, &rows)
         })
     }
 

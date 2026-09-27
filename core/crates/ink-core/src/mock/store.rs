@@ -5,8 +5,9 @@ use super::lock;
 use crate::engine::SpeakerId;
 use crate::error::StoreError;
 use crate::store::{
-    Commitment, CommitmentId, Explained, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId,
-    Record, RecordId, RecordQuery, SearchHit, Segment, Store, Summary, check_supersede_explained,
+    Commitment, CommitmentId, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId, Record,
+    RecordId, RecordQuery, SearchHit, Segment, Store, Summary, SupersedeWith,
+    check_supersede_explained,
 };
 
 /// Refuses times a SQLite store could not hold, before anything changes.
@@ -30,6 +31,13 @@ fn check_stretches(stretches: impl IntoIterator<Item = (u64, u64)>) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Lines by start time; the same start keeps the order given.
+fn sorted_by_start(lines: &[Segment]) -> Vec<Segment> {
+    let mut lines = lines.to_vec();
+    lines.sort_by_key(|s| s.start_ms);
+    lines
 }
 
 fn segment_stretches(segments: &[Segment]) -> impl Iterator<Item = (u64, u64)> + '_ {
@@ -210,29 +218,28 @@ impl Store for MemStore {
         Ok(segments)
     }
 
-    fn supersede_explained(
+    fn supersede_with(
         &self,
         id: &RecordId,
         segments: &[Segment],
-        explained: &[Explained],
+        with: SupersedeWith<'_>,
     ) -> Result<u32, StoreError> {
         check_stretches(segment_stretches(segments))?;
+        check_stretches(segment_stretches(with.removed.unwrap_or_default()))?;
         let mut inner = lock(&self.inner);
         let data = inner.data(id)?;
-        check_supersede_explained(&data.segments, segments, explained)?;
+        check_supersede_explained(&data.segments, segments, with.explained)?;
         data.segments = segments.to_vec();
         data.record.revision += 1;
+        if let Some(lines) = with.removed {
+            data.removed = sorted_by_start(lines);
+        }
         Ok(data.record.revision)
     }
 
     fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
         check_stretches(segment_stretches(lines))?;
-        let mut inner = lock(&self.inner);
-        let data = inner.data(id)?;
-        let mut lines = lines.to_vec();
-        // Stable: the same start keeps the order given.
-        lines.sort_by_key(|s| s.start_ms);
-        data.removed = lines;
+        lock(&self.inner).data(id)?.removed = sorted_by_start(lines);
         Ok(())
     }
 

@@ -53,5 +53,6 @@ pub use platform::{
 pub use store::{
     Commitment, CommitmentId, Explained, NewCommitment, NewRecord, Note, NoteId, Record,
     RecordCursor, RecordId, RecordKind, RecordQuery, SearchHit, Segment, Span, Store, Summary,
+    SupersedeWith,
 };
 pub use threading::{CancelToken, EventSink};
