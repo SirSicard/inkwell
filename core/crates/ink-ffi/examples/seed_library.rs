@@ -8,6 +8,10 @@
 //! INK_DATA_DIR=<that directory> <the app>
 //! ```
 //!
+//! `SEED_UTC_OFFSET_MINUTES` (default 0) is the offset spoken deadlines ("by Friday") resolve in:
+//! set it to the Mac's, or a Friday's end lands on Saturday there. `SEED_FAR_SILENT=1` adds a
+//! newest meeting whose far end kept nothing (the mic side only), for Today's needs-you banner.
+//!
 //! CI has no models, and neither does this: the engine, the diarizer and the language model are
 //! scripted, so every word in the library is synthetic. The audio, its speech regions, the chunks,
 //! the timeline and everything the chain does with them are real. It refuses a directory that
@@ -384,6 +388,7 @@ fn meeting(
     script: &'static Script,
     started_unix_ms: i64,
     names: &[(&str, &str)],
+    far: bool,
 ) -> String {
     const T0_NS: u64 = 5_000_000_000;
     let clock = Arc::new(MockClock::new(T0_NS, started_unix_ms));
@@ -418,7 +423,13 @@ fn meeting(
             clock: clock.clone(),
             llm: Some(Arc::new(Writer { script })),
         },
-        MeetingSettings::default(),
+        MeetingSettings {
+            utc_offset_minutes: std::env::var("SEED_UTC_OFFSET_MINUTES")
+                .ok()
+                .and_then(|m| m.parse().ok())
+                .unwrap_or(0),
+            ..MeetingSettings::default()
+        },
         vad,
         Arc::new(|_| {}),
         MeetingStart {
@@ -432,10 +443,15 @@ fn meeting(
     write_timeline(chunks.dir(), chain.start_ns()).expect("timeline");
     let record = chain.record().clone();
     let mut sides = Vec::new();
-    for (channel, file) in [
-        (Channel::Mic, "IS1009a-mic.wav"),
-        (Channel::Far, "IS1009a-far.wav"),
-    ] {
+    let replayed: &[(Channel, &str)] = if far {
+        &[
+            (Channel::Mic, "IS1009a-mic.wav"),
+            (Channel::Far, "IS1009a-far.wav"),
+        ]
+    } else {
+        &[(Channel::Mic, "IS1009a-mic.wav")]
+    };
+    for &(channel, file) in replayed {
         let (tx, rx) = capture_ring(StreamFormat::CANONICAL, Duration::from_secs(31)).unwrap();
         let mut source =
             FileReplaySource::open(fixtures().join(file), channel, clock.clone()).unwrap();
@@ -603,9 +619,12 @@ fn main() {
     // Out of order on purpose: the list must sort by start, not by when a record was written.
     let names = [("spk0", "Alex"), ("spk1", "Robin"), ("spk2", "Sam")];
     let days_ago = |d: i64, hour: i64| now - d * DAY_MS - (now % DAY_MS) + hour * HOUR_MS;
-    let standup = meeting(&dir, &store, &STANDUP, days_ago(4, 7), &names);
-    let launch = meeting(&dir, &store, &LAUNCH, now - 2 * HOUR_MS, &names);
-    let pricing = meeting(&dir, &store, &PRICING, days_ago(1, 13), &names);
+    let standup = meeting(&dir, &store, &STANDUP, days_ago(4, 7), &names, true);
+    let launch = meeting(&dir, &store, &LAUNCH, now - 2 * HOUR_MS, &names, true);
+    let pricing = meeting(&dir, &store, &PRICING, days_ago(1, 13), &names, true);
+    if std::env::var("SEED_FAR_SILENT").as_deref() == Ok("1") {
+        meeting(&dir, &store, &STANDUP, now - HOUR_MS, &names, false);
+    }
     // A file import of the mic side (S1.5b's import path): titled by its file name.
     let imported = import_wav(
         &fixtures().join("IS1009a-mic.wav"),
