@@ -182,6 +182,7 @@ final class ScreenModels {
     let meetings: MeetingModel
     let onboarding: OnboardingModel
     let storage: StorageModel
+    let dictation: DictationModel
 
     init(
         send: @escaping SendCommand,
@@ -201,6 +202,8 @@ final class ScreenModels {
         meetings = MeetingModel(send: send, titles: callTitles)
         onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
+        dictation = DictationModel(send: send)
+        dictation.hasLanguageModel = { [polish] in polish.hasWorkingEngine }
     }
 
     /// A batch of the core's events, after the CoreStore has applied it.
@@ -217,6 +220,7 @@ final class ScreenModels {
             live.apply(event)
             meetings.apply(event)
             onboarding.apply(event)
+            dictation.apply(event)
         }
     }
 
@@ -228,11 +232,15 @@ final class ScreenModels {
         meetings.load()
         permissions.refresh()
         catalogue.requery()
+        // Reads the switch, then (unless it is off) the core holds the keys; without
+        // Accessibility it answers dictation.off, and coming back to the app tries again.
+        dictation.load()
     }
 
     /// The app became active again.
     func appBecameActive() {
         permissions.appBecameActive()
+        dictation.appBecameActive()
     }
 
     /// The core is about to stop: hand it what the screens hold unsaved.
@@ -247,8 +255,15 @@ final class ScreenModels {
              "commitment.not_yet", "note.add", "note.update", "note.delete",
              "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
             true
-        case "setting.get", "setting.set":
-            failed.id == OnboardingModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
+        case "setting.get":
+            failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
+                || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
+        case "setting.set":
+            // Onboarding's is not shown (the first run shows again next launch), so it is logged.
+            failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
+                || dictation.handles(failed)
+        case "dictation.enable", "dictation.disable":
+            dictation.handles(failed)
         default:
             false
         }

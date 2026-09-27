@@ -44,11 +44,11 @@ final class ShellInk {
     /// What the Drop says beside it.
     var dropText: DropText {
         if held != nil {
-            return DropText.for(state, dictation: store.dictation)
+            return DropText.for(state, dictation: store.dictation, live: store.liveDictation)
         }
         return DropText.for(
-            state, dictation: store.dictation, meeting: store.meeting, offer: store.offer,
-            systemAudioOff: systemAudioOff, failure: meetings?.failure(on: .drop))
+            state, dictation: store.dictation, live: store.liveDictation, meeting: store.meeting,
+            offer: store.offer, systemAudioOff: systemAudioOff, failure: meetings?.failure(on: .drop))
     }
 
     /// Whether the Drop shows: something is live, or the core offers to record a call.
@@ -83,8 +83,8 @@ final class ShellInk {
     }
 }
 
-/// The Drop's two lines, and the buttons it offers. The live screens (S2.7, S2.8) fill the second
-/// line with partials and prompts.
+/// The Drop's two lines, and the buttons it offers. While a dictation is held the second line holds
+/// its live words; during a meeting, the latest line said.
 struct DropText: Equatable, Sendable {
     /// How the Drop colours the title and its border.
     enum Tone: Equatable, Sendable {
@@ -117,26 +117,30 @@ struct DropText: Equatable, Sendable {
     var detail: String
     var tone = Tone.plain
     var actions: [Action] = []
+    /// The detail is the live words of a take being held: its end matters (the head is cut, not
+    /// the tail), and its newest words are still wet.
+    var liveWords = false
 
     /// What the Drop says for what is going on. A consent offer shows only while nothing is live.
     /// The consent line is honest about what recording does: both sides are kept on this Mac, and
     /// the others should be told (the app ships consent tooling; it never claims to be unseen).
     /// `failure`: a Drop answer that failed, in words; the offer stays, so it can be answered
-    /// again.
+    /// again. A dictation shows as `for(_:dictation:live:)` has it.
     static func `for`(
-        _ state: InkState, dictation: CoreStore.DictationPhase, meeting: CoreStore.LiveMeeting?,
-        offer: CoreStore.Offer?, systemAudioOff: Bool, failure: String? = nil
+        _ state: InkState, dictation: CoreStore.DictationPhase, live: CoreStore.LiveDictation? = nil,
+        meeting: CoreStore.LiveMeeting?, offer: CoreStore.Offer?, systemAudioOff: Bool,
+        failure: String? = nil
     ) -> DropText {
         switch state {
         case .idle:
-            guard let offer else { return DropText.for(state, dictation: dictation) }
+            guard let offer else { return DropText.for(state, dictation: dictation, live: live) }
             return DropText(
                 title: "\(offer.appName) opened the microphone",
                 detail: failure ?? "Recording keeps both sides on this Mac. Tell the others you are recording.",
                 tone: failure == nil ? .plain : .alert,
                 actions: [.record(app: offer.app), .dismiss(app: offer.app)])
         case .meeting:
-            guard let meeting else { return DropText.for(state, dictation: dictation) }
+            guard let meeting else { return DropText.for(state, dictation: dictation, live: live) }
             let source = meeting.appName ?? meeting.title
             let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
             // Said until the first line arrives (Live keeps saying it): other apps' sound is in
@@ -162,16 +166,19 @@ struct DropText: Equatable, Sendable {
         case .blotting:
             return DropText(title: "Blotting · final pass", detail: meeting?.title ?? meeting?.appName ?? "The final pass")
         case .dictating:
-            return DropText.for(state, dictation: dictation)
+            return DropText.for(state, dictation: dictation, live: live)
         }
     }
 
-    static func `for`(_ state: InkState, dictation: CoreStore.DictationPhase) -> DropText {
+    /// How many of the newest live words are shown wet (italic, muted), as on the canvas.
+    static let wetWords = 2
+
+    static func `for`(_ state: InkState, dictation: CoreStore.DictationPhase, live: CoreStore.LiveDictation? = nil) -> DropText {
         switch state {
         case .idle:
             DropText(title: "", detail: "")
         case .dictating:
-            DropText(title: "Dictating", detail: dictation == .transcribing ? "Transcribing" : "Listening")
+            dictating(dictation, live: live)
         case .meeting:
             DropText(title: "● REC", detail: "Recording this meeting", tone: .recording)
         case .blotting:
@@ -179,6 +186,42 @@ struct DropText: Equatable, Sendable {
         case .problem:
             DropText(title: "Far end silent", detail: "Nothing is arriving from the call", tone: .alert)
         }
+    }
+
+    /// A take: "Dictating · Slack · Chat" (the app in front and its mode) over its live words, or
+    /// what it is doing when there are none.
+    static func dictating(_ phase: CoreStore.DictationPhase, live: CoreStore.LiveDictation?) -> DropText {
+        if live?.edit == true {
+            return DropText(title: "Editing the selection", detail: phase == .transcribing ? "Rewriting" : "Say what to change")
+        }
+        let place = [live?.app, live?.mode].compactMap { $0 }.filter { !$0.isEmpty }
+        let title = (["Dictating"] + place).joined(separator: " · ")
+        if phase == .transcribing {
+            return DropText(title: title, detail: "Transcribing")
+        }
+        if let words = live?.partial, !words.trimmingCharacters(in: .whitespaces).isEmpty {
+            return DropText(title: title, detail: words, liveWords: true)
+        }
+        return DropText(title: title, detail: "Listening")
+    }
+
+    /// Where the wet words of `detail` start: the last `wetWords` words.
+    static func wetStart(_ detail: String) -> String.Index {
+        var index = detail.endIndex
+        var words = 0
+        var inWord = false
+        for i in detail.indices.reversed() {
+            let space = detail[i].isWhitespace
+            if !space && !inWord {
+                words += 1
+                inWord = true
+            } else if space && inWord {
+                inWord = false
+                if words == wetWords { return index }
+            }
+            if !space { index = i }
+        }
+        return detail.startIndex
     }
 }
 

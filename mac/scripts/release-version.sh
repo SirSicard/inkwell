@@ -5,11 +5,16 @@
 #   mac/scripts/release-version.sh tag v1.2.3      a release: v1.X.Y exactly
 #   mac/scripts/release-version.sh dry-run 1.2.3   the dry run: X.Y.Z
 #
+# A release tag also waits until every licence notice written without its upstream file on hand
+# has been compared with it (notices-verified.sh); a dry run lists those still open, on stderr, and
+# goes on.
+#
 # Only plain X.Y.Z, no suffix: the version is also the bundle's CFBundleVersion, which macOS
 # requires to be at most three integers, and which Sparkle compares to decide what is newer. A
 # pre-release is a dry run, not a tag. No leading zeros: "1.02" and "1.2" would name one version.
 set -euo pipefail
 
+here="$(cd "$(dirname "$0")" && pwd)"
 fail() { echo "release-version: $*" >&2; exit 1; }
 [ $# -eq 2 ] || fail "usage: release-version.sh tag v1.X.Y | dry-run X.Y.Z"
 
@@ -25,6 +30,13 @@ case "$1" in
     ;;
   *) fail "unknown kind: $1" ;;
 esac
+# stdout is the workflow's outputs: notices-verified.sh prints only to stderr.
+if [ "$1" = tag ]; then
+  /bin/bash "$here/notices-verified.sh" \
+    || fail "a release tag needs every licence notice compared with its upstream file first (above)"
+else
+  /bin/bash "$here/notices-verified.sh" --warn
+fi
 echo "version=$version"
 # Apple silicon only: the core and the app are built for the runner's arm64.
 echo "dmg=Inkwell_${version}_aarch64.dmg"

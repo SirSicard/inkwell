@@ -34,6 +34,29 @@ public final class CoreStore {
         case transcribing
     }
 
+    /// The take being held or processed: what the Drop shows beside the ink.
+    public struct LiveDictation: Equatable, Sendable {
+        /// The take's number (`dictation.started`), which its partials carry.
+        public let take: Int64
+        /// A voice edit rather than a dictation.
+        public let edit: Bool
+        /// The mode it is expected to write in, by name.
+        public let mode: String?
+        /// The app in front when it started, by name.
+        public let app: String?
+        /// What the live engine hears so far, while the key is held. The user's words: shown,
+        /// never logged, gone when the take stops.
+        public var partial: String?
+
+        public init(take: Int64, edit: Bool, mode: String?, app: String?, partial: String? = nil) {
+            self.take = take
+            self.edit = edit
+            self.mode = mode
+            self.app = app
+            self.partial = partial
+        }
+    }
+
     /// How the last dictation ended.
     public enum DictationOutcome: Equatable, Sendable {
         case inserted(InsertOutcome)
@@ -120,6 +143,7 @@ public final class CoreStore {
             case dictationFailed(FailedStage)
             case dictationWarning(DictationWarning)
             case hotkeyLost
+            case editKeyLost
             case dictationWorkerFailed(recovered: Bool)
             case voiceDetectionUnavailable(VadUnavailable?)
             case audioDropped(Chain)
@@ -167,6 +191,8 @@ public final class CoreStore {
     /// it).
     public private(set) var lastLedger: (record: String, stats: LedgerStats)?
     public private(set) var dictation: DictationPhase = .idle
+    /// The take in progress, while there is one.
+    public private(set) var liveDictation: LiveDictation?
     public private(set) var lastDictation: DictationOutcome?
     public private(set) var notices: [Notice] = []
 
@@ -220,6 +246,7 @@ public final class CoreStore {
             offer = nil
             listening = nil
             dictation = .idle
+            liveDictation = nil
         case .commandFailed(let failed):
             notice(.commandFailed(command: failed.command), failed.message)
 
@@ -248,22 +275,38 @@ public final class CoreStore {
             notice(.audioDropped(dropped.chain))
 
         // Dictation
-        case .dictationStarted:
+        case .dictationStarted(let started):
             dictation = .listening
+            liveDictation = LiveDictation(take: started.take, edit: started.edit, mode: started.mode, app: started.app)
+        case .dictationPartial(let partial):
+            // Only the take being held: a late partial of an earlier take is never shown.
+            if dictation == .listening, liveDictation?.take == partial.take {
+                liveDictation?.partial = partial.text
+            }
         case .dictationStopped:
             dictation = .transcribing
+            liveDictation?.partial = nil
         case .dictationShortPressIgnored:
-            dictation = .idle
+            endDictation()
         case .dictationInserted(let inserted):
-            dictation = .idle
+            endDictation()
             lastDictation = .inserted(inserted.outcome)
         case .dictationDiscarded(let discarded):
-            dictation = .idle
+            endDictation()
             lastDictation = .discarded(discarded.reason)
         case .dictationFailed(let failed):
-            dictation = .idle
+            endDictation()
             lastDictation = .failed(failed.stage)
             notice(.dictationFailed(failed.stage), failed.message)
+        case .dictationCommand:
+            // A voice command ends its take like any other outcome (the Drop would otherwise
+            // stay on "Transcribing").
+            endDictation()
+        case .dictationEdited, .dictationEditFailed, .dictationMicFailed:
+            // The Drop says how an edit or a failed mic went (DictationModel).
+            endDictation()
+        case .dictationEditHotkeyLost:
+            notice(.editKeyLost)
         case .dictationVoiceDetection(let vad):
             if !vad.available {
                 notice(.voiceDetectionUnavailable(vad.reason))
@@ -271,10 +314,10 @@ public final class CoreStore {
         case .dictationWarningEvent(let warning):
             notice(.dictationWarning(warning.kind), warning.message)
         case .dictationHotkeyLost:
-            dictation = .idle
+            endDictation()
             notice(.hotkeyLost)
         case .dictationWorkerFailed(let failed):
-            dictation = .idle
+            endDictation()
             notice(.dictationWorkerFailed(recovered: failed.recovered))
 
         // Meetings
@@ -360,6 +403,11 @@ public final class CoreStore {
         default:
             break
         }
+    }
+
+    private func endDictation() {
+        dictation = .idle
+        liveDictation = nil
     }
 
     /// Changes the live meeting when `record` is the one live. An event for another record (one

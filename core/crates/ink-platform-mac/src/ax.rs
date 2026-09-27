@@ -237,6 +237,15 @@ fn string_attribute(element: &CFType, name: &str) -> Result<Option<String>, Plat
         .and_then(|value| value.downcast_ref::<CFString>().map(ToString::to_string)))
 }
 
+/// The focused element's length in characters, when it reports one (never its text). For the
+/// dictation timing harness (`examples/dictation_timing.rs`): a change of length is text arriving.
+pub(crate) fn focused_character_count() -> Option<i64> {
+    focused_element()
+        .ok()
+        .flatten()
+        .and_then(|e| character_count(&e))
+}
+
 fn character_count(element: &CFType) -> Option<i64> {
     copy_attribute(element, NUMBER_OF_CHARACTERS)
         .ok()

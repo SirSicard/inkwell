@@ -1,0 +1,341 @@
+//! The generated Swift: `enum RustNotices`, one `RustCrateNotice` per crate (the struct is
+//! hand-written in `mac/Sources/Inkwell/Screens/Notices.swift`), and the fingerprint of the lock it
+//! was generated from.
+
+use std::fmt::Write as _;
+
+use crate::licence::Included;
+
+/// A crate's notice, ready to render.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CrateNotice {
+    /// Its name.
+    pub name: String,
+    /// Its version.
+    pub version: String,
+    /// Its licence as it publishes it.
+    pub licence: String,
+    /// The licence the texts are (see `licence::Selection::shown`).
+    pub shown: String,
+    /// Its licence files, composed ([`compose`]).
+    pub text: String,
+}
+
+// 64-bit FNV-1a, the constants as ink-core's mock engine has them (tested there against the
+// published vectors, and here).
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(FNV_OFFSET, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME)
+    })
+}
+
+/// What the notices were generated from: FNV-1a (64-bit, 16 hex digits) of the features, a line
+/// feed, the target, a line feed, and `Cargo.lock` with its line ends normalised (a Windows
+/// checkout may turn them into CRLF). Not a security hash: it only has to change when the lock does.
+pub fn fingerprint(features: &str, target: &str, lock: &str) -> String {
+    let input = format!("{features}\n{target}\n{}", lock.replace("\r\n", "\n"));
+    format!("{:016x}", fnv1a(input.as_bytes()))
+}
+
+/// The value of `static let <name> = "..."` in generated Swift.
+pub fn recorded(swift: &str, name: &str) -> Option<String> {
+    let prefix = format!("static let {name} = \"");
+    swift.lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix(&prefix)?;
+        rest.strip_suffix('"').map(str::to_string)
+    })
+}
+
+/// A licence file's text as it ships: a leading byte-order mark dropped, line ends normalised,
+/// trailing spaces trimmed, and leading and trailing blank lines dropped. Refuses a text with any
+/// other control character than a tab, which a Swift string literal cannot hold as written.
+pub fn clean(text: &str) -> Result<String, String> {
+    let text = text
+        .strip_prefix('\u{feff}')
+        .unwrap_or(text)
+        .replace("\r\n", "\n");
+    if let Some(c) = text
+        .chars()
+        .find(|c| (c.is_control() && *c != '\n' && *c != '\t') || *c == '\u{7f}')
+    {
+        return Err(format!(
+            "holds the control character U+{:04X}",
+            u32::from(c)
+        ));
+    }
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let first = lines
+        .iter()
+        .position(|l| !l.is_empty())
+        .unwrap_or(lines.len());
+    let last = lines
+        .iter()
+        .rposition(|l| !l.is_empty())
+        .map_or(first, |i| i + 1);
+    Ok(lines[first..last].join("\n"))
+}
+
+/// A crate's files as one text: each under its name, with a note where Inkwell supplied the text
+/// or the copyright line.
+pub fn compose(files: &[Included]) -> String {
+    let mut parts = Vec::new();
+    for f in files {
+        let mut part = format!("--- {} ---\n", f.file.name);
+        if let Some(reason) = &f.file.supplied {
+            let stop = if reason.ends_with(['.', '!', '?']) {
+                ""
+            } else {
+                "."
+            };
+            let _ = writeln!(
+                part,
+                "[The published crate carries no text of this licence. Supplied by Inkwell: {reason}{stop}]"
+            );
+        }
+        if let Some(holder) = &f.holder_from_manifest {
+            let _ = writeln!(
+                part,
+                "[The file names no copyright holder; the line below names the crate's authors, from its manifest.]\n{holder}\n"
+            );
+        }
+        part.push_str(&f.file.text);
+        parts.push(part);
+    }
+    parts.join("\n\n")
+}
+
+/// A Swift string literal (`"..."`) of a one-line value.
+fn string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The number of `#` a raw multi-line literal needs so that `text` can neither close it (`"""#`)
+/// nor start an escape in it (`\#`).
+fn raw_hashes(text: &str) -> usize {
+    (1..)
+        .find(|&n| {
+            let hashes = "#".repeat(n);
+            !text.contains(&format!("\"\"\"{hashes}")) && !text.contains(&format!("\\{hashes}"))
+        })
+        .unwrap_or(1)
+}
+
+/// The Swift file. `crates` must already be sorted.
+pub fn render(features: &str, target: &str, fingerprint: &str, crates: &[CrateNotice]) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "// Generated by `cargo run -p ink-ffi --bin ink-notices`: do not edit. Regenerate after any\n\
+         // change to core/Cargo.lock, a crate's manifest or core/crates/ink-ffi/notices/ (the core's\n\
+         // tests fail while this file was made from another Cargo.lock; `ink-notices --check`, which\n\
+         // mac/scripts/rust-notices.sh runs, fails on any difference).\n\
+         //\n\
+         // The licence notices of the third-party Rust crates linked into the core as the release\n\
+         // builds it: ink-ffi's normal dependencies for the target and features below\n\
+         // (mac/scripts/build-mac.sh --engines). Build scripts, proc macros, dev-only crates and the\n\
+         // workspace's own crates are not in the app and are left out; C and C++ code a crate\n\
+         // compiles in (llama.cpp, SQLite) has its own notice in Notices.swift. The texts are the\n\
+         // crates' own licence files, with line ends normalised and trailing spaces trimmed;\n\
+         // core/crates/ink-ffi/src/bin/ink-notices says which files ship.\n\
+         \n\
+         enum RustNotices {\n",
+    );
+    let _ = writeln!(
+        out,
+        "    /// The cargo features the release builds the core with."
+    );
+    let _ = writeln!(out, "    static let features = {}", string(features));
+    let _ = writeln!(out, "    /// The target the release builds the core for.");
+    let _ = writeln!(out, "    static let target = {}", string(target));
+    let _ = writeln!(
+        out,
+        "    /// FNV-1a (64-bit) of the features, a line feed, the target, a line feed and core/Cargo.lock\n    \
+         /// (line ends normalised) this was generated from."
+    );
+    let _ = writeln!(
+        out,
+        "    static let lockFingerprint = {}",
+        string(fingerprint)
+    );
+    out.push('\n');
+    let _ = writeln!(out, "    static let crates: [RustCrateNotice] = [");
+    for c in crates {
+        let hashes = "#".repeat(raw_hashes(&c.text));
+        let _ = writeln!(out, "        RustCrateNotice(");
+        let _ = writeln!(
+            out,
+            "            name: {}, version: {}, licence: {}, shown: {},",
+            string(&c.name),
+            string(&c.version),
+            string(&c.licence),
+            string(&c.shown)
+        );
+        let _ = writeln!(
+            out,
+            "            text: {hashes}\"\"\"\n{}\n\"\"\"{hashes}),",
+            c.text
+        );
+    }
+    out.push_str("    ]\n}\n");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::licence::LicenceFile;
+
+    fn notice(name: &str, text: &str) -> CrateNotice {
+        CrateNotice {
+            name: name.into(),
+            version: "1.0.0".into(),
+            licence: "MIT".into(),
+            shown: "MIT".into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn fnv1a_matches_the_published_vectors() {
+        assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(fnv1a(b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn the_fingerprint_changes_with_the_lock_features_or_target_but_not_line_ends() {
+        let a = fingerprint("f", "t", "[[package]]\nname = \"a\"\n");
+        assert_eq!(a.len(), 16);
+        assert_eq!(a, fingerprint("f", "t", "[[package]]\r\nname = \"a\"\r\n"));
+        assert_ne!(a, fingerprint("f", "t", "[[package]]\nname = \"b\"\n"));
+        assert_ne!(a, fingerprint("g", "t", "[[package]]\nname = \"a\"\n"));
+        assert_ne!(a, fingerprint("f", "u", "[[package]]\nname = \"a\"\n"));
+    }
+
+    #[test]
+    fn texts_are_cleaned_and_control_characters_refused() {
+        assert_eq!(
+            clean("\u{feff}\r\n\r\nMIT  \r\nline\t\n\n").unwrap(),
+            "MIT\nline"
+        );
+        assert!(clean("a\u{c}b").unwrap_err().contains("U+000C"));
+        assert!(clean("a\rb").is_err(), "a lone carriage return");
+        assert_eq!(clean("\t indented\n").unwrap(), "\t indented");
+    }
+
+    #[test]
+    fn a_crate_text_names_each_file_and_says_what_inkwell_supplied() {
+        let f = |name: &str, text: &str, supplied: Option<&str>, holder: Option<&str>| Included {
+            file: LicenceFile {
+                name: name.into(),
+                text: text.into(),
+                supplied: supplied.map(Into::into),
+            },
+            holder_from_manifest: holder.map(Into::into),
+        };
+        let text = compose(&[
+            f("COPYING", "Dual-licensed.", None, None),
+            f(
+                "LICENSE-MIT",
+                "Permission is hereby granted",
+                None,
+                Some("Copyright (c) A"),
+            ),
+            f(
+                "Apache-2.0",
+                "Apache License",
+                Some("the standard text"),
+                None,
+            ),
+        ]);
+        assert_eq!(
+            text,
+            "--- COPYING ---\nDual-licensed.\n\n\
+             --- LICENSE-MIT ---\n[The file names no copyright holder; the line below names the crate's authors, from its manifest.]\nCopyright (c) A\n\nPermission is hereby granted\n\n\
+             --- Apache-2.0 ---\n[The published crate carries no text of this licence. Supplied by Inkwell: the standard text.]\nApache License"
+        );
+    }
+
+    #[test]
+    fn a_reason_that_ends_its_sentence_gets_no_second_full_stop() {
+        let supplied = |reason: &str| {
+            compose(&[Included {
+                file: LicenceFile {
+                    name: "MIT".into(),
+                    text: "x".into(),
+                    supplied: Some(reason.into()),
+                },
+                holder_from_manifest: None,
+            }])
+        };
+        assert!(
+            supplied("the standard text.").contains("Supplied by Inkwell: the standard text.]\n")
+        );
+        assert!(supplied("is it?").contains("Supplied by Inkwell: is it?]\n"));
+        assert!(
+            supplied("the standard text").contains("Supplied by Inkwell: the standard text.]\n")
+        );
+    }
+
+    #[test]
+    fn the_raw_literal_outgrows_any_delimiter_in_its_text() {
+        assert_eq!(raw_hashes("plain \"\"\" quotes"), 1);
+        assert_eq!(raw_hashes("ends a literal \"\"\"# here"), 2);
+        assert_eq!(raw_hashes("an escape \\# and \"\"\"##"), 3);
+        let swift = render("f", "t", "0123456789abcdef", &[notice("a", "x \"\"\"# y")]);
+        assert!(
+            swift.contains("text: ##\"\"\"\nx \"\"\"# y\n\"\"\"##),"),
+            "{swift}"
+        );
+    }
+
+    #[test]
+    fn the_swift_records_what_it_was_made_from_and_lists_the_crates_in_order() {
+        let swift = render(
+            "engine-a,b/c",
+            "aarch64-apple-darwin",
+            "0123456789abcdef",
+            &[notice("a", "A"), notice("b", "B")],
+        );
+        assert_eq!(
+            recorded(&swift, "features").as_deref(),
+            Some("engine-a,b/c")
+        );
+        assert_eq!(
+            recorded(&swift, "target").as_deref(),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(
+            recorded(&swift, "lockFingerprint").as_deref(),
+            Some("0123456789abcdef")
+        );
+        let a = swift.find("name: \"a\"").unwrap();
+        let b = swift.find("name: \"b\"").unwrap();
+        assert!(a < b);
+        assert!(swift.ends_with("    ]\n}\n"));
+        assert_eq!(
+            swift,
+            render(
+                "engine-a,b/c",
+                "aarch64-apple-darwin",
+                "0123456789abcdef",
+                &[notice("a", "A"), notice("b", "B")]
+            ),
+            "deterministic"
+        );
+        assert_eq!(string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
+}

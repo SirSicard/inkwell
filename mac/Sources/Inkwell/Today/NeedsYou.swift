@@ -141,6 +141,8 @@ enum NeedsYou {
             ("Inkwell stopped listening for calls", "It can't tell when a call starts, so it won't offer to record one. Record now still works.")
         case .librarySwept(_, let failed) where failed > 0:
             ("Some old records couldn't be removed", "Your storage setting deletes old records, and some of them, or their recordings, are still on this Mac.")
+        case .editKeyLost:
+            ("The edit key stopped working", "macOS stopped sending it to Inkwell, so editing a selection by voice is off. Check Accessibility in System Settings.")
         default:
             nil
         }

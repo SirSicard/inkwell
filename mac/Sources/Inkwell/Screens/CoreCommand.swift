@@ -37,6 +37,11 @@ enum CoreCommand: Equatable, Sendable {
     case meetingsRecover
     /// "Not yet": a looks-done suggestion is dismissed.
     case commitmentNotYet(id: String)
+    /// Dictation live (the core holds the keys): answered by `dictation.ready` or `dictation.off`
+    /// with `ref`. `utcOffsetMinutes` is for {date} and {time} in snippets.
+    case dictationEnable(utcOffsetMinutes: Int, ref: String)
+    /// Lets go of the keys and the mic: `dictation.off` with `ref`.
+    case dictationDisable(ref: String)
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -78,6 +83,8 @@ enum CoreCommand: Equatable, Sendable {
         case .meetingAsk(let question, let ref): ["cmd": "meeting.ask", "question": question, "id": ref]
         case .meetingsRecover: ["cmd": "meetings.recover"]
         case .commitmentNotYet(let id): ["cmd": "commitment.not_yet", "commitment": id]
+        case .dictationEnable(let offset, let ref): ["cmd": "dictation.enable", "utc_offset_minutes": offset, "id": ref]
+        case .dictationDisable(let ref): ["cmd": "dictation.disable", "id": ref]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -109,6 +116,8 @@ enum CoreCommand: Equatable, Sendable {
         case .meetingAsk: "meeting.ask"
         case .meetingsRecover: "meetings.recover"
         case .commitmentNotYet: "commitment.not_yet"
+        case .dictationEnable: "dictation.enable"
+        case .dictationDisable: "dictation.disable"
         }
     }
 }
@@ -125,6 +134,12 @@ enum ShellSetting: String, Sendable {
     case meetingsHeadsetMic = "meetings.headset_mic"
     /// "forever" (the default), or days: how long the library keeps records.
     case retentionDays = "retention.days"
+    /// The dictation key (a token: fn, right_option, ...).
+    case dictationKey = "dictation.key"
+    /// The voice-edit key, or "off".
+    case dictationEditKey = "dictation.edit_key"
+    /// "on" or "off": whether dictation is live (Settings > Voice). Never set: on.
+    case dictationEnabled = "dictation.enabled"
 }
 
 /// Where the screens' commands go.

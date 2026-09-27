@@ -13,6 +13,7 @@ const ENUMS: &[(&str, &str)] = &[
     ("ink-pipeline/src/events.rs", "Discard"),
     ("ink-pipeline/src/events.rs", "TakeFailure"),
     ("ink-pipeline/src/events.rs", "Warning"),
+    ("ink-pipeline/src/events.rs", "EditFailure"),
     ("ink-pipeline/src/events.rs", "DictationEvent"),
     ("ink-pipeline/src/meeting/events.rs", "Phase"),
     ("ink-pipeline/src/meeting/events.rs", "MeetingWarning"),

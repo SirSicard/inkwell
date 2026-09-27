@@ -9,6 +9,10 @@
 // It also tells "polish keeps timing out" from an ordinary failure: a take whose polish ran out of
 // its time budget arrives as the dictation warning polish_timed_out, while a polish cancelled for
 // another reason (the core shutting down) stays polish_failed.
+//
+// A wish that could not be read or saved says so under the toggle ("couldn't …"), never reads as
+// off: a failed read leaves the toggle unknown (and unswitchable until read), a failed save puts
+// the toggle back where it was.
 import AppleEngines
 import InkBridge
 import Observation
@@ -24,12 +28,24 @@ final class PolishModel {
     private(set) var models: Set<String> = []
     /// Polish timeouts in a row, across takes; a take that polished resets it.
     private(set) var timeoutsInARow = 0
+    /// The wish could not be read or saved.
+    private(set) var failure: Failure?
+
+    enum Failure: Equatable, Sendable {
+        case read
+        case write
+    }
 
     /// Timeouts in a row at which the toggle warns.
     static let timeoutWarning = 2
 
+    /// The id of this model's setting commands (CoreCommand.json gives each setting command one).
+    static let settingID = "setting:\(ShellSetting.dictationPolish.rawValue)"
+
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var takeTimedOut = false
+    /// The wish before a switch the core has not confirmed, to put back if saving it fails.
+    @ObservationIgnored private var beforeSwitch: Bool??
 
     init(send: @escaping SendCommand) {
         self.send = send
@@ -49,6 +65,11 @@ final class PolishModel {
 
     /// The line under the toggle.
     var status: String {
+        switch failure {
+        case .read: return "Couldn't read your polish setting. Open Settings again to retry."
+        case .write: return "Couldn't save the change, so polish stays as it was."
+        case nil: break
+        }
         guard hasWorkingEngine else { return Self.unavailable(appleState) }
         if keepsTimingOut {
             return "Polish keeps timing out, so your words go in as you said them."
@@ -94,9 +115,16 @@ final class PolishModel {
     /// The user switched the toggle. Does nothing without a working engine.
     func setOn(_ on: Bool) {
         guard canToggle else { return }
+        if beforeSwitch == nil {
+            beforeSwitch = .some(preference)
+        }
         preference = on
+        failure = nil
         send(.settingSet(.dictationPolish, on ? "on" : "off"))
     }
+
+    /// Whether the status is a problem to show in the alert colour.
+    var isProblem: Bool { failure != nil || keepsTimingOut }
 
     func apply(_ event: InkEvent) {
         switch event {
@@ -109,6 +137,18 @@ final class PolishModel {
         case .settingValue(let value) where value.key == ShellSetting.dictationPolish.rawValue:
             // Never set: off, as a mode's polish is by default.
             preference = value.value == "on"
+            failure = nil
+            beforeSwitch = nil
+        case .commandFailed(let failed) where failed.id == Self.settingID:
+            if failed.command == "setting.set" {
+                failure = .write
+                if let before = beforeSwitch {
+                    preference = before
+                }
+                beforeSwitch = nil
+            } else {
+                failure = .read
+            }
         case .dictationStarted:
             takeTimedOut = false
         case .dictationWarningEvent(let warning) where warning.kind == .polishTimedOut:

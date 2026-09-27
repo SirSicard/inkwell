@@ -12,6 +12,25 @@
 //! | 10 persist | a [`RecordKind::Dictation`] record in the [`Store`] |
 //! | 11 output | the platform's [`TextInserter`] |
 //!
+//! # Around the stages
+//!
+//! - **Live words.** While the key is held, the take's audio (lead included) goes through a live
+//!   AGC to the router's live-partials engine when one is set ([`set_live`](DictationChain::set_live)),
+//!   and what it hears reaches the shell as [`DictationEvent::Partial`]: provisional, never saved.
+//!   The stream is closed before [`DictationEvent::Stopped`], so no partial follows it.
+//! - **Voice edit** ([`edit_hotkey`](DictationChain::edit_hotkey)): select text, hold the edit
+//!   key, say what to change. The selection is read once the hold is confirmed (never under Secure
+//!   Input), the instruction is transcribed like a dictation, and the language model's rewrite
+//!   replaces the selection (it is still selected, so inserting over it replaces it). Edits are always push to talk, share the
+//!   dictation's recorder (one take at a time: the other key is ignored while a take is open), are
+//!   not saved to the library, and never go through voice commands, cleanup, style or snippets.
+//! - **A missed release** (the stuck-key watchdog): a push-to-talk or edit hold longer than
+//!   [`DEFAULT_STUCK_AFTER`] (180 s) is stopped there and processed, with
+//!   [`Warning::ReleaseMissed`]. A toggle take is exempt: a long one is deliberate.
+//! - **A second press never wipes the take.** A press of the key already held changes nothing in
+//!   push to talk (it is a lost release or a repeat), and is the stop in toggle mode; the take in
+//!   progress is always kept (Inkwell 0.2 once cleared its buffer on such a press).
+//!
 //! # Threads
 //!
 //! **Worker**, every method: one thread owns the chain (see [`worker`](crate::worker)). Audio
@@ -30,16 +49,18 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use std::sync::{Mutex, PoisonError};
+
 use ink_audio::take::{TAIL, Take};
-use ink_audio::{TakeRecorder, VadConfig};
+use ink_audio::{Agc, TakeRecorder, VadConfig};
 use ink_core::{
-    CANONICAL_RATE, CancelToken, Channel, Clock, EventSink, FocusReader, HotkeyEvent, Llm,
-    LlmError, NewRecord, OfflineEngine, RecordId, RecordKind, Segment, Store, StoreError,
-    TextInserter, TranscribeOptions,
+    AsrEvent, CANONICAL_RATE, CancelToken, Channel, Clock, EngineStream, EventSink, FocusReader,
+    HotkeyEvent, Llm, LlmError, NewRecord, OfflineEngine, RecordId, RecordKind, Segment, Store,
+    StoreError, StreamingEngine, TextInserter, TranscribeOptions,
 };
 
 use crate::dictionary::Dictionary;
-use crate::events::{DictationEvent, Discard, TakeFailure, VoiceDetection, Warning};
+use crate::events::{DictationEvent, Discard, EditFailure, TakeFailure, VoiceDetection, Warning};
 use crate::gain_stage::{self, Vad};
 use crate::modes::{Mode, ModeStore};
 use crate::redact::{Spoken, redact};
@@ -65,6 +86,15 @@ pub const DEFAULT_MIN_LIVE: Duration = Duration::from_millis(300);
 /// and every take queued behind it (the chain has one worker). Other language-model jobs keep
 /// their own limits.
 pub const POLISH_BUDGET: Duration = Duration::from_secs(10);
+
+/// How long a voice edit's rewrite may run before the selection is left alone. Longer than
+/// polish's: an edit rewrites a whole selection, and the user is waiting for exactly that.
+pub const EDIT_BUDGET: Duration = Duration::from_secs(20);
+
+/// How long a push-to-talk (or edit) hold may last before the chain takes its release as missed
+/// and stops the take there (Inkwell 0.2's watchdog, which saw holds run for minutes after a lost
+/// key-up event).
+pub const DEFAULT_STUCK_AFTER: Duration = Duration::from_secs(180);
 
 const NS_PER_SAMPLE: u64 = 1_000_000_000 / CANONICAL_RATE as u64;
 
@@ -109,6 +139,14 @@ pub struct DictationSettings {
     pub tail: TailConfig,
     /// How long polish may run ([`POLISH_BUDGET`]). Not a user preference: tests shorten it.
     pub polish_budget: Duration,
+    /// The user's switch for polish ("Polish my words"). Off, nothing is polished; on, the modes
+    /// that polish do. A voice command overrides both until the chain restarts.
+    pub polish_wish: bool,
+    /// How long a voice edit's rewrite may run ([`EDIT_BUDGET`]). Tests shorten it.
+    pub edit_budget: Duration,
+    /// How long a push-to-talk hold may last before its release is taken as missed
+    /// ([`DEFAULT_STUCK_AFTER`]). Tests shorten it.
+    pub stuck_after: Duration,
 }
 
 impl Default for DictationSettings {
@@ -127,6 +165,9 @@ impl Default for DictationSettings {
             vad: VadConfig::default(),
             tail: TailConfig::default(),
             polish_budget: POLISH_BUDGET,
+            polish_wish: true,
+            edit_budget: EDIT_BUDGET,
+            stuck_after: DEFAULT_STUCK_AFTER,
         }
     }
 }
@@ -144,8 +185,15 @@ pub struct Services {
     pub focus: Arc<dyn FocusReader>,
     /// The platform clock: the timebase of key events and audio.
     pub clock: Arc<dyn Clock>,
-    /// The polish model, when one is set up.
+    /// The polish model, when one is set up. Voice edits rewrite through it too.
     pub llm: Option<Arc<dyn Llm>>,
+}
+
+/// Which key an event came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Key {
+    Dictate,
+    Edit,
 }
 
 /// Where the hotkey is.
@@ -156,17 +204,55 @@ enum Hold {
     /// Pressed, not yet held for the minimum. The take is recording (so no lead is lost) but
     /// nothing has been shown.
     Pending { press_ns: u64 },
-    /// A take, shown to the user.
-    Recording,
+    /// A take, shown to the user, pressed at `press_ns`.
+    Recording { press_ns: u64 },
     /// Released; the take is waiting for its tail.
     Tail { release: u64, deadline_ns: u64 },
 }
 
+/// What the open take is for.
+#[derive(Clone, Debug)]
+enum Intent {
+    Dictate,
+    /// A voice edit, with the selection once the hold is confirmed. [`Spoken`] so that a debug
+    /// print of the take cannot write the user's text.
+    Edit {
+        selection: Option<Spoken>,
+    },
+}
+
 /// Bookkeeping for the open take.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Open {
     started_unix_ms: i64,
     lost_frames: u64,
+    intent: Intent,
+}
+
+impl Open {
+    fn key(&self) -> Key {
+        match self.intent {
+            Intent::Dictate => Key::Dictate,
+            Intent::Edit { .. } => Key::Edit,
+        }
+    }
+}
+
+/// The live words of the take being held: its stream, and the live AGC in front of it (rule 11:
+/// no engine hears the raw level).
+struct Live {
+    stream: Box<dyn EngineStream>,
+    agc: Agc,
+    scratch: Vec<f32>,
+}
+
+impl Live {
+    fn push(&mut self, samples: &[f32]) -> Result<(), ink_core::EngineError> {
+        self.scratch.clear();
+        self.scratch.extend_from_slice(samples);
+        self.agc.process(&mut self.scratch);
+        self.stream.push(&self.scratch)
+    }
 }
 
 /// A record being written. Dropped before [`keep`](Self::keep), by an error return or a panic in
@@ -226,6 +312,12 @@ pub struct DictationChain {
     completed_takes: u64,
     /// Polish turned on or off by voice command, overriding the mode.
     polish_override: Option<bool>,
+    /// The live-partials engine, when one is set.
+    live_engine: Option<Arc<dyn StreamingEngine>>,
+    /// The held take's live words.
+    live: Option<Live>,
+    /// Takes confirmed so far: the next take's number.
+    takes_started: u64,
 }
 
 fn detection(vad: &Vad) -> VoiceDetection {
@@ -257,7 +349,16 @@ impl DictationChain {
             pinned_mode: None,
             polish_override: None,
             completed_takes: 0,
+            live_engine: None,
+            live: None,
+            takes_started: 0,
         }
+    }
+
+    /// Sets the engine that shows live words while the key is held (the router's live-partials
+    /// engine), or none. Takes from the next one on use it.
+    pub fn set_live(&mut self, engine: Option<Arc<dyn StreamingEngine>>) {
+        self.live_engine = engine;
     }
 
     fn emit(&self, event: DictationEvent) {
@@ -280,7 +381,7 @@ impl DictationChain {
 
     /// Whether a take is open and the key is down (or, in toggle mode, not yet pressed again).
     pub fn is_recording(&self) -> bool {
-        matches!(self.hold, Hold::Pending { .. } | Hold::Recording)
+        matches!(self.hold, Hold::Pending { .. } | Hold::Recording { .. })
     }
 
     /// Takes processed to the end (inserted, discarded or failed) without a panic.
@@ -298,6 +399,7 @@ impl DictationChain {
         self.anchor = None;
         self.hold = Hold::Idle;
         self.open = None;
+        self.live = None;
         self.emit(DictationEvent::WorkerFailed { recovered });
     }
 
@@ -307,12 +409,22 @@ impl DictationChain {
     }
 
     /// When [`tick`](Self::tick) should next run, as host time: set while a take waits for a tail
-    /// whose audio may never come.
+    /// whose audio may never come, and while a push-to-talk key is held (its release may be lost).
     pub fn deadline_ns(&self) -> Option<u64> {
         match self.hold {
             Hold::Tail { deadline_ns, .. } => Some(deadline_ns),
+            Hold::Pending { press_ns } | Hold::Recording { press_ns } if self.watched() => {
+                Some(press_ns.saturating_add(ns(self.settings.stuck_after)))
+            }
             _ => None,
         }
+    }
+
+    /// Whether the open take stops on its key's release, so a lost release would leave it
+    /// running: push to talk, and every edit. A toggle take is stopped by a press.
+    fn watched(&self) -> bool {
+        self.settings.recording_mode == RecordingMode::PushToTalk
+            || self.open.as_ref().is_some_and(|o| o.key() == Key::Edit)
     }
 
     /// The next mic audio: 16 kHz mono from [`MicPath`](crate::mic::MicPath), the host time of its
@@ -322,6 +434,9 @@ impl DictationChain {
         if let Some(open) = &mut self.open {
             open.lost_frames += dropped_frames;
             self.tail.observe(samples);
+        }
+        if matches!(self.hold, Hold::Recording { .. }) {
+            self.feed_live(samples);
         }
         if let Some(take) = self.recorder.push(samples) {
             self.finish_take(take, false);
@@ -339,8 +454,23 @@ impl DictationChain {
         }
     }
 
-    /// A hotkey event, from the platform's callback through the owning thread's queue.
+    /// A dictation hotkey event, from the platform's callback through the owning thread's queue.
     pub fn hotkey(&mut self, event: HotkeyEvent) {
+        self.key_event(Key::Dictate, event);
+    }
+
+    /// A voice-edit hotkey event. See the module docs.
+    pub fn edit_hotkey(&mut self, event: HotkeyEvent) {
+        self.key_event(Key::Edit, event);
+    }
+
+    /// The key whose take is open, if any.
+    fn open_key(&self) -> Option<Key> {
+        self.open.as_ref().map(Open::key)
+    }
+
+    fn key_event(&mut self, key: Key, event: HotkeyEvent) {
+        let edit = key == Key::Edit;
         match event {
             HotkeyEvent::Pressed { at_ns } => {
                 // A new press ends a tail still in progress: the next take starts now.
@@ -349,19 +479,30 @@ impl DictationChain {
                 {
                     self.finish_take(take, false);
                 }
+                if self.is_recording() && self.open_key() != Some(key) {
+                    // The other key while a take is open: one take at a time. Its release is
+                    // ignored the same way.
+                    log::info!("dictation: a {key:?} press during another take was ignored");
+                    return;
+                }
+                // Guarded on state, never on the event: a press of the key already held (a lost
+                // release, a repeat) keeps the take in push to talk, and stops it in toggle mode.
                 let t = decide_transition(
                     true,
                     self.is_recording(),
                     self.settings.recording_mode,
-                    false,
+                    edit,
                 );
                 if t.start {
-                    self.start(at_ns);
+                    self.start(at_ns, key);
                 } else if t.stop {
                     self.stop(at_ns);
                 }
             }
             HotkeyEvent::Released { at_ns } => {
+                if self.open_key() != Some(key) || !self.is_recording() {
+                    return;
+                }
                 if let Hold::Pending { press_ns } = self.hold {
                     if at_ns.saturating_sub(press_ns) < ns(self.settings.min_hold) {
                         self.abandon();
@@ -369,34 +510,80 @@ impl DictationChain {
                         return;
                     }
                     self.confirm();
+                    if !self.is_recording() {
+                        // An edit with nothing selected ended at its confirmation.
+                        return;
+                    }
                 }
                 let t = decide_transition(
                     false,
                     self.is_recording(),
                     self.settings.recording_mode,
-                    false,
+                    edit,
                 );
                 if t.stop {
                     self.stop(at_ns);
                 }
             }
-            HotkeyEvent::Cancelled => self.end_hold(false),
+            HotkeyEvent::Cancelled => {
+                if self.open_key() == Some(key) {
+                    self.end_hold(false);
+                }
+            }
             HotkeyEvent::Lost => {
-                self.end_hold(true);
-                self.emit(DictationEvent::HotkeyLost);
+                if self.open_key() == Some(key) {
+                    self.end_hold(true);
+                }
+                self.emit(if edit {
+                    DictationEvent::EditHotkeyLost
+                } else {
+                    DictationEvent::HotkeyLost
+                });
             }
         }
     }
 
     /// Ends a take whose tail stopped arriving, once its deadline has passed. Call it when the
     /// owning thread wakes at [`deadline_ns`](Self::deadline_ns); early calls do nothing.
+    ///
+    /// It also stops a push-to-talk take whose key has been held for
+    /// [`stuck_after`](DictationSettings::stuck_after): the release was most likely lost, and the
+    /// take is processed with what was said, never discarded.
     pub fn tick(&mut self) {
-        if let Hold::Tail { deadline_ns, .. } = self.hold
-            && self.services.clock.now_ns() >= deadline_ns
-            && let Some(take) = self.recorder.finish()
-        {
-            self.finish_take(take, true);
+        let now = self.services.clock.now_ns();
+        match self.hold {
+            Hold::Tail { deadline_ns, .. } if now >= deadline_ns => {
+                if let Some(take) = self.recorder.finish() {
+                    self.finish_take(take, true);
+                }
+            }
+            Hold::Pending { press_ns } | Hold::Recording { press_ns }
+                if self.watched()
+                    && now >= press_ns.saturating_add(ns(self.settings.stuck_after)) =>
+            {
+                log::warn!(
+                    "dictation: a key held {} s with no release; the take is stopped and processed",
+                    self.settings.stuck_after.as_secs()
+                );
+                self.emit(DictationEvent::Warning(Warning::ReleaseMissed));
+                if matches!(self.hold, Hold::Pending { .. }) {
+                    self.confirm();
+                    if !self.is_recording() {
+                        return;
+                    }
+                }
+                self.stop(now);
+            }
+            _ => {}
         }
+    }
+
+    /// The mic was let go of while idle and will be opened again at the next press: nothing heard
+    /// so far may lead a later take, and the timeline restarts with the next audio. A take open
+    /// now (a press that raced the close) keeps what it has and goes on when the audio returns.
+    pub fn mic_closed(&mut self) {
+        self.recorder.claim_heard();
+        self.anchor = None;
     }
 
     /// The mic stream stopped (the device went away, or capture was stopped). A confirmed take is
@@ -408,7 +595,8 @@ impl DictationChain {
                 self.abandon();
                 self.emit(DictationEvent::Discarded(Discard::Cancelled));
             }
-            Hold::Recording | Hold::Tail { .. } => {
+            Hold::Recording { .. } | Hold::Tail { .. } => {
+                self.live = None;
                 if let Some(take) = self.recorder.finish() {
                     self.finish_take(take, true);
                 }
@@ -427,7 +615,7 @@ impl DictationChain {
         u64::try_from((i128::from(position) + delta).max(0)).unwrap_or(u64::MAX)
     }
 
-    fn start(&mut self, at_ns: u64) {
+    fn start(&mut self, at_ns: u64, key: Key) {
         if !self.recorder.press(self.position_at(at_ns)) {
             // Cannot happen: every path that leaves `Idle` closes the recorder's take first.
             log::error!("dictation: a take was already open at a press; the press was ignored");
@@ -437,6 +625,10 @@ impl DictationChain {
         self.open = Some(Open {
             started_unix_ms: self.services.clock.unix_ms(),
             lost_frames: 0,
+            intent: match key {
+                Key::Dictate => Intent::Dictate,
+                Key::Edit => Intent::Edit { selection: None },
+            },
         });
         self.hold = Hold::Pending { press_ns: at_ns };
         if self.settings.min_hold.is_zero() {
@@ -444,13 +636,142 @@ impl DictationChain {
         }
     }
 
+    /// The hold passed the minimum: it is a take. An edit reads the selection here, not at the
+    /// press, so a modifier tapped in a shortcut never reaches into the focused app; with nothing
+    /// selected the take ends here, unheard.
     fn confirm(&mut self) {
-        self.hold = Hold::Recording;
-        self.emit(DictationEvent::Started);
+        let press_ns = match self.hold {
+            Hold::Pending { press_ns } | Hold::Recording { press_ns } => press_ns,
+            _ => self.services.clock.now_ns(),
+        };
+        let edit = self.open_key() == Some(Key::Edit);
+        let (mode, app) = if edit {
+            // Never read what the user selected while Secure Input is on: it is a password field
+            // or the like, and the selection would go to a language model. Focus that cannot be
+            // read cannot be shown safe, so it refuses too.
+            match self.services.focus.focus() {
+                Ok(focus) if focus.secure_input => {
+                    self.abandon();
+                    self.emit(DictationEvent::EditFailed(EditFailure::SecureInput));
+                    return;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.abandon();
+                    self.emit(DictationEvent::EditFailed(
+                        EditFailure::SelectionUnreadable(error),
+                    ));
+                    return;
+                }
+            }
+            match self.services.focus.selected_text() {
+                Ok(Some(text)) if !text.trim().is_empty() => {
+                    if let Some(open) = &mut self.open {
+                        open.intent = Intent::Edit {
+                            selection: Some(Spoken::new(text)),
+                        };
+                    }
+                }
+                Ok(_) => {
+                    self.abandon();
+                    self.emit(DictationEvent::EditFailed(EditFailure::NoSelection));
+                    return;
+                }
+                Err(error) => {
+                    self.abandon();
+                    self.emit(DictationEvent::EditFailed(
+                        EditFailure::SelectionUnreadable(error),
+                    ));
+                    return;
+                }
+            }
+            (None, None)
+        } else {
+            // What the Drop shows: the app in front now and its mode. The text itself is written
+            // in the mode of the app that receives it (read again at insertion).
+            let app = self.services.focus.focus().ok().and_then(|f| f.app);
+            let mode = self
+                .settings
+                .modes
+                .resolve_with_override(
+                    app.as_ref().map(|a| a.id.as_str()),
+                    self.pinned_mode.as_deref(),
+                )
+                .name
+                .clone();
+            (Some(mode), app.map(|a| a.name))
+        };
+        let take = self.takes_started;
+        self.takes_started += 1;
+        self.hold = Hold::Recording { press_ns };
+        self.emit(DictationEvent::Started {
+            take,
+            edit,
+            mode,
+            app,
+        });
+        if !edit {
+            self.open_live(take);
+        }
+    }
+
+    /// Opens the live stream for take `take` and feeds it the take so far (the lead included), so
+    /// the live words describe the audio the final will.
+    fn open_live(&mut self, take: u64) {
+        let Some(engine) = self.live_engine.clone() else {
+            return;
+        };
+        let events = self.events.clone();
+        // Settled words so far; each event shows them and the current hypothesis after them.
+        let settled = Arc::new(Mutex::new(String::new()));
+        let sink: EventSink<AsrEvent> = Arc::new(move |e| {
+            let mut settled = settled.lock().unwrap_or_else(PoisonError::into_inner);
+            let shown = match e {
+                AsrEvent::Partial { text } => join_words(&settled, &text),
+                AsrEvent::Final(t) => {
+                    *settled = join_words(&settled, &t.text);
+                    settled.clone()
+                }
+                AsrEvent::Stalled { .. } => return,
+            };
+            drop(settled);
+            events(DictationEvent::Partial {
+                take,
+                text: Spoken::new(shown),
+            });
+        });
+        match engine.open_stream(Channel::Mic, sink) {
+            Ok(stream) => {
+                let mut live = Live {
+                    stream,
+                    agc: Agc::without_vad(),
+                    scratch: Vec::new(),
+                };
+                let so_far = self.recorder.open_audio().unwrap_or(&[]);
+                match live.push(so_far) {
+                    Ok(()) => self.live = Some(live),
+                    Err(e) => log::info!("dictation: live words stopped for this take: {e}"),
+                }
+            }
+            // Usually no live engine installed (Parakeet's models missing): the Drop shows that
+            // it is listening, without words. The error names the engine, never any text.
+            Err(e) => log::info!("dictation: no live words for this take: {e}"),
+        }
+    }
+
+    fn feed_live(&mut self, samples: &[f32]) {
+        if let Some(live) = &mut self.live
+            && let Err(e) = live.push(samples)
+        {
+            // A stuck live engine costs the live words, never the take.
+            log::info!("dictation: live words stopped for this take: {e}");
+            self.live = None;
+        }
     }
 
     /// Drops the open take unseen.
     fn abandon(&mut self) {
+        self.live = None;
         self.recorder.cancel();
         self.open = None;
         self.hold = Hold::Idle;
@@ -458,6 +779,8 @@ impl DictationChain {
 
     /// The key came up (or, in toggle mode, went down again) at `at_ns`.
     fn stop(&mut self, at_ns: u64) {
+        // Closed first: no live word of this take reaches the shell after `Stopped`.
+        self.live = None;
         self.emit(DictationEvent::Stopped);
         let release = self.position_at(at_ns);
         self.tail.release(&self.settings.tail);
@@ -493,40 +816,43 @@ impl DictationChain {
                 self.abandon();
                 self.emit(DictationEvent::Discarded(Discard::Cancelled));
             }
-            Hold::Recording
-                if lost || self.settings.recording_mode == RecordingMode::PushToTalk =>
-            {
+            Hold::Recording { .. } if lost || self.watched() => {
                 self.stop(self.services.clock.now_ns());
             }
-            Hold::Idle | Hold::Recording | Hold::Tail { .. } => {}
+            Hold::Idle | Hold::Recording { .. } | Hold::Tail { .. } => {}
         }
     }
 
     fn finish_take(&mut self, take: Take, cut_short: bool) {
         self.hold = Hold::Idle;
+        self.live = None;
         let open = self.open.take();
         if cut_short {
             self.emit(DictationEvent::Warning(Warning::TailCutShort));
         }
-        let lost = open.map_or(0, |o| o.lost_frames);
+        let lost = open.as_ref().map_or(0, |o| o.lost_frames);
         if lost > 0 {
             self.emit(DictationEvent::Warning(Warning::AudioLost { frames: lost }));
         }
-        let started = open.map_or_else(|| self.services.clock.unix_ms(), |o| o.started_unix_ms);
-        self.process(take, started);
+        let started = open
+            .as_ref()
+            .map_or_else(|| self.services.clock.unix_ms(), |o| o.started_unix_ms);
+        match open.map(|o| o.intent) {
+            Some(Intent::Edit { selection }) => self.process_edit(take, selection),
+            _ => self.process(take, started),
+        }
         // Not reached when a stage panics: that is what the count is for.
         self.completed_takes += 1;
     }
 
-    /// Stages 3–11 for one take.
-    fn process(&mut self, take: Take, started_unix_ms: i64) {
+    /// Stages 3 and 4 for one take: the level, the discard rules, the engine. `None` when the take
+    /// ended there (each ending already reported).
+    fn transcribe(&mut self, take: Take) -> Option<Result<String, ink_core::EngineError>> {
         let live_ms = samples_to_ms(take.live());
         if take.live() < duration_to_samples(self.settings.min_live) {
             self.emit(DictationEvent::Discarded(Discard::TooShort { live_ms }));
-            return;
+            return None;
         }
-
-        // Stage 3.
         let levelled = gain_stage::level(take.samples, &mut self.vad, &self.settings.vad);
         log::info!(
             "dictation take: {live_ms} ms held, {:?} via {:?}, {} samples to the engine",
@@ -539,18 +865,93 @@ impl DictationChain {
         }
         if let Some(discard) = levelled.discard() {
             self.emit(DictationEvent::Discarded(discard));
-            return;
+            return None;
         }
-
-        // Stage 4.
         let options = TranscribeOptions {
             channel: Channel::Mic,
             context: self.settings.dictionary.hotwords(),
             cancel: CancelToken::new(),
         };
-        let raw = match self.services.engine.transcribe(&levelled.audio, &options) {
-            Ok(transcript) => transcript.text(),
+        Some(
+            self.services
+                .engine
+                .transcribe(&levelled.audio, &options)
+                .map(|t| t.text()),
+        )
+    }
+
+    /// A voice edit: the instruction, then the model's rewrite over the selection. Nothing is
+    /// saved: the text belongs to another app.
+    fn process_edit(&mut self, take: Take, selection: Option<Spoken>) {
+        let Some(selection) = selection else {
+            // Cannot happen: an edit becomes a take only once its selection was read.
+            log::error!("dictation: an edit reached processing without its selection");
+            self.emit(DictationEvent::EditFailed(EditFailure::NoSelection));
+            return;
+        };
+        let raw = match self.transcribe(take) {
+            None => return,
+            Some(Ok(text)) => text,
+            Some(Err(error)) => {
+                self.emit(DictationEvent::EditFailed(EditFailure::Transcription(
+                    error,
+                )));
+                return;
+            }
+        };
+        if raw.trim().is_empty() {
+            self.emit(DictationEvent::Discarded(Discard::NothingHeard));
+            return;
+        }
+        // Names the engine mishears are corrected here too: an instruction naming the wrong thing
+        // would be applied as the wrong instruction.
+        let instruction = self.settings.dictionary.apply(&raw);
+        let Some(llm) = self.services.llm.clone() else {
+            self.emit(DictationEvent::EditFailed(EditFailure::NoModel));
+            return;
+        };
+        let budget = self.settings.edit_budget;
+        let deadline = Instant::now().checked_add(budget);
+        let token = deadline.map_or_else(CancelToken::new, CancelToken::with_deadline);
+        let rewritten = match ink_llm::tasks::voice_edit::apply_edit(
+            llm.as_ref(),
+            selection.as_str(),
+            &instruction,
+            &token,
+        ) {
+            Ok(text) => text,
+            Err(LlmError::Cancelled) if deadline.is_some_and(|d| Instant::now() >= d) => {
+                log::warn!("dictation: the edit gave no answer within its {budget:?} budget");
+                self.emit(DictationEvent::EditFailed(EditFailure::TimedOut));
+                return;
+            }
             Err(error) => {
+                self.emit(DictationEvent::EditFailed(EditFailure::Model(error)));
+                return;
+            }
+        };
+        // No trailing space: an edit replaces the selection exactly.
+        match self.services.inserter.insert(&rewritten) {
+            Ok(outcome) => {
+                log::info!(
+                    "dictation edit: {} -> {} ({outcome:?})",
+                    redact(selection.as_str()),
+                    redact(&rewritten)
+                );
+                self.emit(DictationEvent::Edited { outcome });
+            }
+            Err(error) => self.emit(DictationEvent::EditFailed(EditFailure::Insert(error))),
+        }
+    }
+
+    /// Stages 3–11 for one take.
+    fn process(&mut self, take: Take, started_unix_ms: i64) {
+        let live_ms = samples_to_ms(take.live());
+        // Stages 3 and 4.
+        let raw = match self.transcribe(take) {
+            None => return,
+            Some(Ok(text)) => text,
+            Some(Err(error)) => {
                 self.emit(DictationEvent::Failed(TakeFailure::Transcription(error)));
                 return;
             }
@@ -651,7 +1052,8 @@ impl DictationChain {
     /// queue holds tens of seconds of it) and at most starts later, while cancelling would cost a
     /// working polish every time someone presses again quickly, which is how push-to-talk is used.
     fn polish(&self, written: String, mode: &Mode) -> String {
-        if !self.polish_override.unwrap_or(mode.polish_enabled) {
+        let wanted = self.settings.polish_wish && mode.polish_enabled;
+        if !self.polish_override.unwrap_or(wanted) {
             return written;
         }
         let Some(llm) = &self.services.llm else {
@@ -749,10 +1151,21 @@ impl DictationChain {
                     .settings
                     .modes
                     .resolve_with_override(None, self.pinned_mode.as_deref());
-                let now = self.polish_override.unwrap_or(mode.polish_enabled);
+                let now = self
+                    .polish_override
+                    .unwrap_or(self.settings.polish_wish && mode.polish_enabled);
                 self.polish_override = Some(!now);
             }
             _ => {}
         }
+    }
+}
+
+/// `settled` and `more`, with one space between when both have words.
+fn join_words(settled: &str, more: &str) -> String {
+    match (settled.trim(), more.trim()) {
+        ("", more) => more.to_owned(),
+        (settled, "") => settled.to_owned(),
+        (settled, more) => format!("{settled} {more}"),
     }
 }

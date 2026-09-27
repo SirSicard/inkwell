@@ -206,7 +206,7 @@ final class PolishModelTests: XCTestCase {
         polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
         polish.apply(event(#"{"type":"setting.value","key":"dictation.polish","value":"on"}"#))
         func take(_ warning: String?) {
-            polish.apply(event(#"{"type":"dictation.started"}"#))
+            polish.apply(event(#"{"type":"dictation.started","take":0,"edit":false}"#))
             if let warning { polish.apply(event(warning)) }
             polish.apply(event(#"{"type":"dictation.inserted","text":"x","outcome":"pasted"}"#))
         }
@@ -671,6 +671,59 @@ final class NoticesTests: XCTestCase {
     }
 }
 
+/// The notices composed from a licence's standard text (their upstream file was not on hand) say
+/// so in Notices.swift (`composed: true`), and mac/composed-notices.txt lists exactly those, each
+/// with its upstream-check marker, which a release tag waits for (mac/scripts/notices-verified.sh).
+final class ComposedNoticesTests: XCTestCase {
+    /// The list's lines, by notice id: `<id> verified=<no|YYYY-MM-DD> <what to compare with>`.
+    private func markers(_ list: String) -> [String: String] {
+        var listed: [String: String] = [:]
+        for line in list.split(separator: "\n") where !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            let words = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard words.count >= 3 else { continue }
+            listed[String(words[0])] = String(words[1])
+        }
+        return listed
+    }
+
+    /// What is wrong between the composed notices and the list: one declared without a line, one
+    /// listed that is not declared, and a marker that is neither `verified=no` nor a date.
+    private func problems(declared: Set<String>, list: String) -> [String] {
+        let listed = markers(list)
+        var out = declared.subtracting(listed.keys).sorted().map { "\($0) is composed but has no line (no verified= marker)" }
+        out += Set(listed.keys).subtracting(declared).sorted().map { "\($0) is listed but not composed in Notices.swift" }
+        out += listed.sorted { $0.key < $1.key }.compactMap { id, marker in
+            marker == "verified=no" || marker.wholeMatch(of: /verified=\d{4}-\d{2}-\d{2}/) != nil ? nil : "\(id): \(marker)"
+        }
+        return out
+    }
+
+    func testEveryComposedNoticeIsListedWithItsUpstreamCheckAndNothingElseIs() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let list = try String(contentsOf: root.appendingPathComponent("mac/composed-notices.txt"), encoding: .utf8)
+        let declared = Notices.composedIDs
+        XCTAssertFalse(declared.isEmpty, "Notices.swift declares its composed notices")
+        XCTAssertEqual(problems(declared: declared, list: list), [])
+        // Every line is well formed (a short line would drop out of the comparison above).
+        for line in list.split(separator: "\n") where !line.hasPrefix("#") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            XCTAssertGreaterThanOrEqual(line.split(separator: " ").count, 3, "\(line)")
+        }
+    }
+
+    /// The check fails when a composed notice has no line, and when a line names no composed notice.
+    func testACheckThatCatchesAComposedNoticeWithoutItsMarker() {
+        let list = "# header\nprotobuf-lite  verified=no  its file\nsilero-vad verified=2026-10-04 its file\n"
+        XCTAssertEqual(problems(declared: ["protobuf-lite", "silero-vad"], list: list), [])
+        XCTAssertEqual(
+            problems(declared: ["protobuf-lite", "silero-vad", "new-one"], list: list),
+            ["new-one is composed but has no line (no verified= marker)"])
+        XCTAssertEqual(
+            problems(declared: ["protobuf-lite"], list: list), ["silero-vad is listed but not composed in Notices.swift"])
+        XCTAssertEqual(problems(declared: ["x"], list: "x verified=soon its file"), ["x: verified=soon"])
+    }
+}
+
 // MARK: - The commands against the real core
 
 /// The commands the screens build are the ones the core reads, and its answers decode. A fresh
@@ -791,7 +844,7 @@ final class PolishTimeoutPathTests: XCTestCase {
         ])
         for _ in 0..<PolishModel.timeoutWarning {
             screens.apply([
-                event(#"{"type":"dictation.started"}"#), timedOut,
+                event(#"{"type":"dictation.started","take":0,"edit":false}"#), timedOut,
                 event(#"{"type":"dictation.inserted","text":"x","outcome":"pasted"}"#),
             ])
         }
@@ -822,6 +875,9 @@ final class CoreControllerCommandTests: XCTestCase {
             "far": fixtures.appendingPathComponent("IS1009a-far.wav").path,
         ])
         try await until { core.screens.live.record != nil }
+        // Dictation's switch is read and answered at launch (dictation.ready or .off); a quit
+        // before that answer would log the enable it then sends as not sent.
+        try await until { core.screens.dictation.state != .starting }
         // Typed, the caret still in it: nothing has been handed to the core yet.
         core.screens.live.notesEdited("A line still being typed", caretParagraph: 0)
 
@@ -841,11 +897,11 @@ final class CoreControllerCommandTests: XCTestCase {
     func testAFailureNoScreenHandlesIsLoggedByNameOnly() throws {
         let logged = Logged()
         let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
-        core.received([event(#"{"type":"command.failed","command":"setting.set","id":"setting:dictation.polish","message":"the library could not be written: zebra"}"#)])
+        core.received([event(#"{"type":"command.failed","command":"setting.set","id":"setting:onboarding.done","message":"the library could not be written: zebra"}"#)])
         XCTAssertEqual(logged.messages.count, 1)
         XCTAssertTrue(logged.messages[0].contains("setting.set"), logged.messages[0])
         XCTAssertFalse(logged.messages[0].contains("zebra"), "never the core's message or a field")
-        XCTAssertFalse(logged.messages[0].contains("dictation.polish"))
+        XCTAssertFalse(logged.messages[0].contains("onboarding.done"))
         // Handled ones are the screens' to show.
         for handled in ["permissions.check", "models.list", "modes.list", "commitment.set_done", "note.add", "note.update", "note.delete"] {
             core.received([event(#"{"type":"command.failed","command":"\#(handled)","message":"x"}"#)])
@@ -853,8 +909,12 @@ final class CoreControllerCommandTests: XCTestCase {
         // (Owed lists again after a failed set_done; with no core running that is logged as not sent.)
         func failures() -> [String] { logged.messages.filter { $0.hasPrefix("command.failed") } }
         XCTAssertEqual(failures().count, 1)
+        // Polish and the dictation keys show their own setting failures (S2.7).
         core.received([event(#"{"type":"command.failed","command":"setting.get","id":"setting:dictation.polish","message":"x"}"#)])
-        XCTAssertEqual(failures().count, 2, "a setting only onboarding reads is handled only for onboarding")
+        core.received([event(#"{"type":"command.failed","command":"setting.set","id":"setting:dictation.key","message":"x"}"#)])
+        XCTAssertEqual(failures().count, 1)
+        core.received([event(#"{"type":"command.failed","command":"setting.get","id":"setting:somebody.else","message":"x"}"#)])
+        XCTAssertEqual(failures().count, 2, "a setting no screen reads is logged")
     }
 
     private func until(_ timeout: Duration = .seconds(20), _ done: () -> Bool) async throws {

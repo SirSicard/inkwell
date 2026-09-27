@@ -482,3 +482,39 @@ final class RecoveryNoticeTests: XCTestCase {
         XCTAssertTrue(items.map(\.title).contains("This meeting isn't protected against a crash"))
     }
 }
+
+@MainActor
+final class MergedDropTests: XCTestCase {
+    /// S2.7 and S2.8 share the Drop: a take (its live words) and a dictation note come before the
+    /// consent offer, which comes back once they are done; nothing is recorded meanwhile.
+    func testATakeOrANoteComesBeforeAnOfferAndTheOfferComesBack() async throws {
+        let store = CoreStore()
+        let ink = ShellInk(store: store)
+        let dictation = DictationModel(send: { _ in })
+        let drop = DropController(ink: ink, notes: dictation)
+        store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
+        drop.update()
+        XCTAssertEqual(drop.shownText?.title, "Example Call opened the microphone")
+        XCTAssertEqual(drop.shownText?.actions.count, 2)
+        XCTAssertEqual(drop.inkState, .idle)
+
+        // A take: its live words, no buttons.
+        store.apply([event(#"{"type":"dictation.started","take":0,"edit":false}"#)])
+        drop.update()
+        XCTAssertEqual(drop.inkState, .dictating)
+        XCTAssertEqual(drop.shownText?.actions, [])
+        XCTAssertTrue(drop.shownText?.title.hasPrefix("Dictating") == true)
+        store.apply([event(#"{"type":"dictation.stopped"}"#), event(#"{"type":"dictation.inserted","text":"x","outcome":"pasted"}"#)])
+        drop.update()
+        XCTAssertEqual(drop.shownText?.title, "Example Call opened the microphone", "the offer is back")
+
+        // A note: its moment, then the offer again.
+        dictation.apply(event(#"{"type":"dictation.discarded","reason":"speech_too_short"}"#))
+        drop.update()
+        XCTAssertEqual(drop.shownText, DropText(title: "Too short", detail: "Try again"))
+        try await Task.sleep(for: DropController.noteDuration + .milliseconds(300))
+        XCTAssertEqual(drop.shownText?.title, "Example Call opened the microphone")
+        XCTAssertTrue(drop.isShown)
+        XCTAssertFalse(drop.panelIsKey)
+    }
+}

@@ -450,3 +450,58 @@ fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it
     core.shutdown();
     events.assert_valid();
 }
+
+/// S2.8 review item 5, after merging S2.7: dictation's polish (and voice edit, which calls the
+/// same model) goes through the local-only guard. A registered model that says it is not local
+/// is never called while local-only is on; the take goes in as written, and the refusal is said.
+#[test]
+fn dictation_polish_never_calls_a_model_that_is_not_local_while_local_only_is_on() {
+    let dir = TempDir::new("llm-local-only");
+    let loader = MockLoader::new(Behaviour::Say("synthetic words".into()));
+    let installer = Arc::new(MockInstaller {
+        generation: loader.generation.clone(),
+        gate: None,
+        installs: AtomicUsize::new(0),
+    });
+    let (core, events) = start(&dir, &[test_row(ROW_ID)], loader, installer);
+    let model = Model::new(Says::Polished);
+    let info =
+        CString::new(r#"{"id":"remote-model","licence":"MIT","model":"remote","local":false}"#)
+            .unwrap();
+    register(&core, &model, &info).unwrap();
+    events.wait_type("engine.registered", Duration::from_secs(5));
+    assert!(core.shared().local_only.is_on(), "on by default");
+    let platform = Arc::new(MockPlatform::new());
+    let mut settings = DictationSettings::default();
+    settings.modes.modes[0].polish_enabled = true;
+    let inbox = core
+        .start_dictation(DictationParts {
+            inserter: platform.clone(),
+            focus: platform.clone(),
+            llm: None,
+            settings,
+            vad: Vad::Unavailable(VadUnavailable::ModelMissing),
+        })
+        .unwrap();
+    take(&core, &inbox, 1);
+    assert!(events.wait_count("dictation.inserted", 1, Duration::from_secs(20)));
+    let inserted = platform.inserted();
+    assert!(
+        inserted.last().is_some_and(|s| !s.contains("Polished")),
+        "{inserted:?}"
+    );
+    assert!(model.requests.lock().unwrap().is_empty(), "never called");
+    let warning = events
+        .wait_for(Duration::from_secs(5), |v| {
+            v["type"] == "dictation.warning" && v["kind"] == "polish_failed"
+        })
+        .expect("the refusal is said");
+    assert!(
+        warning["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("local-only")),
+        "{warning}"
+    );
+    events.assert_valid();
+    core.shutdown();
+}

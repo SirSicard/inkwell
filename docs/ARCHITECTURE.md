@@ -217,7 +217,8 @@ Each table is one kind:
 The screens read and change the library and the permissions through commands too
 ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): permission checks and
 requests, the open commitments ("owed"), a live meeting's notes, the model catalogue, the user's
-modes, and a short whitelist of settings the shell owns (`onboarding.done`, `dictation.polish`).
+modes, and a short whitelist of settings the shell owns (`onboarding.done`, `dictation.polish`,
+`dictation.key`, `dictation.edit_key`).
 
 - They run on their own core thread, `ink-queries`, in order among themselves. The command thread
   can be held for minutes by a model download; a note or a permission card never waits for it.
@@ -230,6 +231,27 @@ modes, and a short whitelist of settings the shell owns (`onboarding.done`, `dic
   app's name and icon; a raw identity is never shown.
 - Replies carry the user's words only where the screen asked for them (a commitment's text); a
   note's words are never echoed back, and errors never quote them.
+
+**Dictation** is turned on by the shell (`dictation.enable`, answered by `dictation.ready` or
+`dictation.off`) and then lives in the core ([`voice.rs`](../core/crates/ink-ffi/src/voice.rs)):
+
+- **Keys.** The core holds the dictation key and, when one is set, the voice-edit key (two event
+  taps under Accessibility). The shell only stores the choice (`dictation.key`,
+  `dictation.edit_key`); a change rebinds at once. Without Accessibility the answer is
+  `dictation.off` with `needs_accessibility`, never a prompt.
+- **The mic.** It opens at the first press, not at launch, and stays open so each take keeps the
+  300 ms said before its press; after 3 minutes without a take it is let go of (an open input keeps
+  the Mac awake and the microphone indicator on). The first take after that starts when the device
+  does. The ink's bands follow the voice while a take is open.
+- **A take.** Live words go to the router's live-partials engine through a live gain stage and
+  reach the Drop as `dictation.partial` (never saved; none after `dictation.stopped`). A take's
+  start warms the dictation engine after 30 s without a decode (half a second of silence, the
+  answer dropped unread; the take's own decode cancels it). A push-to-talk hold past 180 s is taken
+  as a lost release: stopped and processed, never discarded.
+- **Voice edit.** Select text, hold the edit key, say what to change: the selection (read once the
+  hold is confirmed) and the instruction go to the registered language model, and its rewrite
+  replaces the selection. Edits are push to talk, one take at a time with dictation, and are not
+  saved to the Library.
 
 The Library and a record read through four more, on the same thread: `records.list`,
 `records.search`, `record.open` and `library.stats`. Each answer echoes the command's id as `ref`,

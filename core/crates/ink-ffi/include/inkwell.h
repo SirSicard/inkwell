@@ -48,8 +48,9 @@
  *   debug output (which prints API-key headers) and llama.cpp's debug output (which quotes
  *   generated text). Shells must not install their own logger or subscriber for the core's
  *   targets; there is nothing to configure beyond "log_level" in the config. Event payloads carry
- *   the user's words (dictation.inserted, meeting.partial, meeting.final, and the library's
- *   answers: library.records, library.search, library.record, commitments.listed): never log them.
+ *   the user's words (dictation.inserted, dictation.partial, meeting.partial, meeting.final, and
+ *   the library's answers: library.records, library.search, library.record, commitments.listed):
+ *   never log them.
  *
  * SHUTDOWN
  *   ink_shutdown stops every worker, lets go of every engine the shell registered (their release
@@ -199,12 +200,27 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
- *       "dictation.polish" (on|off), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
+ *       "dictation.polish" (on|off), "dictation.key" (fn|right_option|right_command|
+ *       right_control|right_shift), "dictation.edit_key" (off or one of those),
+ *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
+ *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a
- *       language model whose info says "local":false is never called, and the call fails saying
- *       so) and "retention.days" (forever|7|30|90|365: meetings and dictations older than that are
- *       deleted, never imports; at launch, after each meeting and when it changes, on the core's
- *       own thread; "library.swept" says how many).
+ *       language model whose info says "local":false is never called, for polish, voice edit,
+ *       summaries or Ask, and the call fails saying so) and "retention.days"
+ *       (forever|7|30|90|365: meetings and dictations older than that are deleted, never
+ *       imports; at launch, after each meeting and when it changes, on the core's own thread;
+ *       "library.swept" says how many). A change to the keys or to dictation.polish reaches a
+ *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
+ *       follows the "setting.value".
+ *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
+ *       Dictation live: the core holds the keys (the dictation key, and the edit key if one is
+ *       set), opens the mic at the first press and lets it go after 3 minutes without a take.
+ *       Sent again while live, it reads the settings and binds the keys again (after the user
+ *       granted Accessibility, say). "dictation.ready" names the keys held; "dictation.off" says
+ *       why dictation is not live (needs_accessibility, key_refused, unsupported, ...). Both carry
+ *       the command's "id" as "ref". "utc_offset_minutes" (optional) is for {date} and {time}.
+ *   {"cmd":"dictation.disable","id":"<ref>"}
+ *       Lets go of the keys and the mic: "dictation.off" with reason disabled.
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
