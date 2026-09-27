@@ -37,7 +37,7 @@ jobs:
         working-directory: core
       # Still on its tag until the commit v2.9.1 points at is confirmed: a pin is read from the
       # tag, never guessed.
-      - uses: Swatinem/rust-cache@v2.9.1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: core
       # No INK_SIGN_IDENTITY here: ad-hoc.
