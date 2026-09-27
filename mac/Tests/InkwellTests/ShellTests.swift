@@ -136,3 +136,25 @@ final class DesignTokenTests: XCTestCase {
         }
     }
 }
+
+final class MeasurementTests: XCTestCase {
+    @MainActor
+    func testAStartedMeasurementIsReleasedWithItsOwner() throws {
+        // The app's Measurement, not Foundation's.
+        weak var released: Inkwell.Measurement?
+        do {
+            let measurement = try XCTUnwrap(Inkwell.Measurement.fromEnvironment(["INK_MEASURE": "idle"]))
+            measurement.start { false }
+            released = measurement
+        }
+        // Its signal source's handler must not keep it alive (a retain cycle through the source).
+        XCTAssertNil(released)
+    }
+
+    func testNoMeasurementWithoutINK_MEASURE() {
+        MainActor.assumeIsolated {
+            XCTAssertNil(Inkwell.Measurement.fromEnvironment([:]))
+            XCTAssertNil(Inkwell.Measurement.fromEnvironment(["INK_MEASURE": ""]))
+        }
+    }
+}

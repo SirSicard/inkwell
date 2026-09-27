@@ -21,6 +21,11 @@ final class Measurement {
         self.state = state
     }
 
+    deinit {
+        // A released source that was never cancelled would stay armed with nothing behind it.
+        signalSource?.cancel()
+    }
+
     /// A measurement when INK_MEASURE is set, else nil.
     static func fromEnvironment(_ environment: [String: String]) -> Measurement? {
         guard let state = environment["INK_MEASURE"], !state.isEmpty else { return nil }
@@ -32,9 +37,10 @@ final class Measurement {
         mark("start state=\(state) pid=\(getpid())")
         signal(SIGUSR1, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
-        source.setEventHandler {
+        // Weak: the source is this object's, so a strong capture would keep both alive forever.
+        source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
-                self.mark("frames=\(InkRenderer.frames.count) visible=\(windowVisible())")
+                self?.mark("frames=\(InkRenderer.frames.count) visible=\(windowVisible())")
             }
         }
         source.resume()
