@@ -383,7 +383,12 @@ fn live_engine(shared: &Shared) -> Option<Arc<dyn StreamingEngine>> {
             );
             None
         }
-        Err(_) => None,
+        Err(e) => {
+            // Usually nothing registered for live partials (Parakeet's models missing, say). The
+            // error names the job, never any text.
+            log::warn!("no live transcript for this meeting: {e}");
+            None
+        }
     }
 }
 
