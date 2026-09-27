@@ -126,14 +126,16 @@ public final class InkSession: Sendable {
     }
 
     /// Stops the core: every worker, every engine (their releases run first), every model. When
-    /// it returns no event arrives any more. Safe to call twice. Never from the event handler.
+    /// it returns, from whichever caller, the core has stopped and no event arrives any more. Safe
+    /// to call from several threads and twice: later callers wait for the first to finish. Never
+    /// from the event handler (the core waits for that thread to finish, and it would wait here).
     public func shutdown() {
-        let first = stopped.withLock { stopped in
-            defer { stopped = true }
-            return !stopped
-        }
-        if first {
+        // The lock is held across ink_shutdown, so a caller that arrives meanwhile waits for it
+        // to finish instead of returning while the core is still stopping.
+        stopped.withLock { stopped in
+            guard !stopped else { return }
             _ = ink_shutdown()
+            stopped = true
         }
     }
 
