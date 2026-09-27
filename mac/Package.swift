@@ -1,5 +1,6 @@
 // swift-tools-version: 6.2
-// The Mac app. No .xcodeproj: SwiftPM builds everything (the release bundle comes in S2.9b).
+// The Mac app. No .xcodeproj: SwiftPM builds everything, scripts/build-mac.sh bundles and signs it,
+// and .github/workflows/mac-release.yml notarizes and releases it (docs/RELEASING.md).
 //
 // | Target       | Holds                                                                    |
 // |--------------|--------------------------------------------------------------------------|
@@ -8,6 +9,7 @@
 // | AppleEngines | FluidAudio and Foundation Models, registered into the core (S2.2)        |
 // | InkRenderer  | the Metal ink (S2.4)                                                     |
 // | Inkwell      | the app: SwiftUI and AppKit (S2.3)                                       |
+// | Sparkle      | in-app updates: Sparkle's prebuilt XCFramework, pinned by checksum       |
 //
 // Each target links the system frameworks it uses; InkBridge links what the core's static library
 // needs (`cargo rustc -p ink-ffi --crate-type staticlib -- --print native-static-libs`).
@@ -21,6 +23,16 @@ let package = Package(
     ],
     targets: [
         .binaryTarget(name: "InkCore", path: "build/InkCore.xcframework"),
+        // In-app updates: Sparkle 2.10.0 (MIT, with BSD-2-Clause and Zlib parts; THIRD_PARTY.md).
+        // Sparkle's own release archive, pinned here by URL and SHA-256 rather than through its
+        // package, so the one download is the vetted archive and no repository is cloned. SwiftPM
+        // refuses an archive whose hash differs; scripts/licence-audit-swift.sh refuses a URL or
+        // checksum that differs from its vetted entry.
+        .binaryTarget(
+            name: "Sparkle",
+            url: "https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-for-Swift-Package-Manager.zip",
+            checksum: "17e28312b8e18ab7cdbbe09a6fb28cc55a5479ec6c371dbc07cdecd2a14fd959"
+        ),
         .target(
             name: "InkBridge",
             dependencies: ["InkCore"],
@@ -62,7 +74,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "Inkwell",
-            dependencies: ["InkBridge", "AppleEngines", "InkRenderer"],
+            dependencies: ["InkBridge", "AppleEngines", "InkRenderer", "Sparkle"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ServiceManagement"),

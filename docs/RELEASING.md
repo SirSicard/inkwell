@@ -1,12 +1,173 @@
 # Releasing
 
+Two release chains share this repository until the 0.2 app retires:
+
+- **Inkwell 1.x, the native Mac app** (`mac/`): `.github/workflows/mac-release.yml`, on `v1.X.Y`
+  tags. It is described first.
+- **Inkwell 0.2, the Tauri app** (branch `legacy/0.2`): `build.yml`, on `v0.*` tags. Its chain is
+  [below](#inkwell-02-the-tauri-app).
+
+## Inkwell 1.x, the Mac app
+
+On a `v1.X.Y` tag the workflow builds the app, signs it with the Developer ID, notarizes and staples
+the app and then the dmg, asks Gatekeeper about both the way a user's Mac will, signs the Sparkle
+appcast, and **drafts** a GitHub release holding the dmg and `appcast.xml`. Nothing is public until
+a person publishes the draft. Installed apps read the feed of the latest published release:
+
+    https://github.com/SirSicard/inkwell/releases/latest/download/appcast.xml
+
+| Job | Runs on | Holds | Does |
+|---|---|---|---|
+| `build` | tag and dry run | the `APPLE_*` secrets; read access | build, sign, notarize, staple, Gatekeeper check, the dmg as a run artifact |
+| `appcast-rehearsal` | dry run only | nothing secret; read access | the appcast signed with a throwaway key, and checked |
+| `publish` | tag only | `SPARKLE_ED_PRIVATE_KEY` (environment `release`); write access | the appcast signed and checked against the app's key; the draft release |
+
+Everything a step does lives in a script under `mac/scripts/` that runs the same on a Mac:
+`build-mac.sh --timestamp`, `notarize.sh`, `package-dmg.sh`, `verify-release.sh`,
+`sparkle-tools.sh` and `appcast.sh` (with `appcast-check.swift`). Each prints nothing that names the
+signing identity (`lib/redact-signing.sh`).
+
+### Once: the update key (the maintainer, by hand)
+
+Sparkle refuses any update whose archive is not signed with the EdDSA key whose public half the
+installed app carries. The key is the maintainer's alone: no script makes it, and no agent handles
+it. Until it exists, `SUPublicEDKey` in `mac/Info.plist` is empty, the app starts no updater, and a
+tag's run stops at its first check (the dry run still runs, and says so).
+
+1. **Sparkle's tools**, checked against the pinned hash (the 2.10.0 release, as `mac/Package.swift`):
+
+   ```bash
+   mac/scripts/sparkle-tools.sh ~/sparkle-2.10.0
+   ```
+
+2. **Make the key.** It goes into the login keychain (account `ed25519`), and the tool prints the
+   public half:
+
+   ```bash
+   ~/sparkle-2.10.0/bin/generate_keys
+   ```
+
+   Lost, no installed copy can ever be updated again: people would have to download the next
+   release by hand. Leaked, anyone who can also publish a release here could ship an update.
+   (Rotating it takes a release signed with the old key that carries the new public key.) Step 4
+   exports it once; that file, stored encrypted and offline, is the backup.
+
+3. **The environment.** In the repository's Settings > Environments, create `release`. Under
+   Deployment branches and tags choose "Selected branches and tags" and add the **tag** rule
+   `v1.*`: only a job running on such a tag can then read the environment's secrets. A required
+   reviewer (yourself) is optional: `publish` would then wait for an approval. From a shell
+   (untested; the web page does the same):
+
+   ```bash
+   gh api -X PUT repos/SirSicard/inkwell/environments/release \
+     -F 'deployment_branch_policy[protected_branches]=false' \
+     -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST repos/SirSicard/inkwell/environments/release/deployment-branch-policies \
+     -f name='v1.*' -f type=tag
+   ```
+
+4. **The secret `SPARKLE_ED_PRIVATE_KEY`**, in the `release` environment, not the repository:
+
+   ```bash
+   ~/sparkle-2.10.0/bin/generate_keys -x ~/sparkle-private-key
+   gh secret set SPARKLE_ED_PRIVATE_KEY --env release --repo SirSicard/inkwell < ~/sparkle-private-key
+   # Now move the file into your encrypted backup, and leave no copy here.
+   ```
+
+5. **The public half into the app.** `~/sparkle-2.10.0/bin/generate_keys -p` prints it. Put it in
+   `mac/Info.plist` as the `SUPublicEDKey` string, with nothing around it, and merge that through a
+   pull request (`ShippedUpdateSettingsTests` refuses a key that is not 32 bytes of base64).
+
+6. **Recommended:** a tag ruleset (Settings > Rules) that lets only you create or move `v1.*` tags.
+   The workflow already refuses a tag on a commit that `main` does not contain.
+
+The signing and notarization secrets are the ones the 0.2 chain uses: `APPLE_CERTIFICATE` (the
+Developer ID Application certificate and key, a base64 .p12), `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and
+`APPLE_TEAM_ID`.
+
+### Step 0: the dry run
+
+A manual run builds, signs and notarizes exactly as a tag does, keeps the notarized dmg as a run
+artifact for 14 days, rehearses the appcast with a throwaway key, and publishes nothing. Run it
+before touching a version number; a failure here costs a re-run, the same failure after tagging a
+deleted tag.
+
+```bash
+gh workflow run mac-release.yml --repo SirSicard/inkwell --ref main -f version=1.0.0
+run="$(gh run list --repo SirSicard/inkwell --workflow mac-release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run" --repo SirSicard/inkwell
+gh run download "$run" --repo SirSicard/inkwell --name inkwell-dmg --dir ~/Downloads/inkwell-dry-run
+mac/scripts/verify-release.sh ~/Downloads/inkwell-dry-run/Inkwell_1.0.0_aarch64.dmg --notarized --version 1.0.0
+spctl -a -vv -t open --context context:primary-signature ~/Downloads/inkwell-dry-run/Inkwell_1.0.0_aarch64.dmg
+```
+
+`verify-release.sh` quarantines a copy first, as a browser does, and must end with both verdicts
+`accepted`, `source=Notarized Developer ID`. A dispatch needs the workflow on `main` first.
+
+### Cut it
+
+```bash
+# 1. The CHANGELOG heading: ## [Unreleased] -> ## [X.Y.Z] - date, merged to main. The version
+#    itself comes from the tag: build-mac.sh writes it into the bundle.
+# 2. Tag main and push the tag. Only v1.X.Y exactly (no suffix: it is also CFBundleVersion, which
+#    Sparkle compares); a pre-release is a dry run.
+git fetch origin && git tag -a v1.X.Y -m "Inkwell X.Y.Z" origin/main && git push origin v1.X.Y
+```
+
+### After CI goes green
+
+```bash
+# 3. The draft's dmg, checked the way a user's Mac will check it.
+gh release download v1.X.Y --repo SirSicard/inkwell --pattern '*.dmg' --dir ~/Downloads/inkwell-vX.Y.Z
+mac/scripts/verify-release.sh ~/Downloads/inkwell-vX.Y.Z/Inkwell_X.Y.Z_aarch64.dmg --notarized --version X.Y.Z --update-key
+
+# 4. Publish. This is the moment installed apps can see it: the feed URL follows "latest".
+gh release edit v1.X.Y --repo SirSicard/inkwell --draft=false --latest
+
+# 5. The feed now names the new version.
+curl -sL https://github.com/SirSicard/inkwell/releases/latest/download/appcast.xml | grep -m1 '<sparkle:version>'
+```
+
+**Publish in order, and only 1.x as latest.** The feed is the latest published release's
+`appcast.xml`, and each release's appcast is built from the one published before it. So publish
+drafts in version order, and publish any later 0.2.x release with `--latest=false`: a 0.2 release
+marked latest has no appcast, and every installed 1.x app would stop finding updates.
+
+### What guards the update chain
+
+- **Two signatures on every update.** Sparkle installs an update only if its archive's EdDSA
+  signature verifies against the installed app's `SUPublicEDKey` (checked before it unpacks the
+  archive: `SUVerifyUpdateBeforeExtraction`) and the new app is signed by the same Developer ID team.
+  The feed itself is signed too (`SURequireSignedFeed`).
+- **Checked before it ships.** `appcast.sh` reads the key out of the app in the dmg and checks the
+  new feed and item against it, so a feed signed with any other key fails in CI rather than on
+  users' Macs. The previous feed is checked the same way before its items are carried over.
+- **Secrets by job.** The Apple secrets never share a job with write access; the EdDSA key is read
+  only in `publish`, only on a `v1.*` tag, and goes to Sparkle's tools on stdin, never to disk.
+  Neither trigger can come from a pull request, so no fork's code runs next to a secret.
+- **Pinned inputs.** Actions by commit; Sparkle's framework by URL and SHA-256 in `mac/Package.swift`
+  (and in the Swift licence audit's vetted list); Sparkle's tools by size and SHA-256 in
+  `sparkle-tools.sh`. The release build restores no cache.
+- **No new entitlements.** The app is not sandboxed, so Sparkle installs through its `Autoupdate`
+  tool and `Updater.app` as ordinary helpers and never starts its XPC services (they serve sandboxed
+  apps, which opt in through Info.plist). `build-mac.sh` signs all of Sparkle's code with the app's
+  identity, hardened runtime and timestamp, and fails if any signature but the app's carries an
+  entitlement. The app keeps only `audio-input`.
+- **Asked, not assumed.** Sparkle asks the user before its first automatic check, and a check sends
+  no system profile (`SUEnableSystemProfiling` off).
+
+## Inkwell 0.2, the Tauri app
+
+This chain runs from the `legacy/0.2` branch, where `build.yml` builds on `v0.*` tags.
+
 The chain used to be six manual steps held in one person's head, and two of
 them failed silently in production: the updater manifest push exited without
 writing (0.2.6, unnoticed for two days) and the canonical URL stayed pinned to
 the previous build (0.2.5 and 0.2.6). Both now either automate themselves or
 refuse to lie about having worked.
 
-## First, prove it builds
+### First, prove it builds
 
 **Nothing compiles this repository on push.** `build.yml` triggers on `v*` tags
 and on manual dispatch only, so between one release and the next, Windows and
@@ -27,7 +188,7 @@ gh run watch "$(gh run list --workflow build.yml --limit 1 --json databaseId --j
 Do this before touching a version number. A failure here costs a re-push; the
 same failure after tagging costs a deleted tag and a burnt version.
 
-## Cut it
+### Cut it
 
 ```bash
 # 1. Bump the version in FOUR places, plus Cargo.lock
@@ -53,7 +214,7 @@ npm run tauri info | sed -n '/Packages/,/^$/p'
 git tag -a vX.Y.Z -m "Inkwell X.Y.Z" && git push origin vX.Y.Z
 ```
 
-## After CI goes green
+### After CI goes green
 
 ```bash
 # 4. Verify the artefact the way a user's Mac will: fresh download, browser
@@ -82,7 +243,7 @@ bin/update-cask.sh
 #    deploys the homepage.
 ```
 
-## What no longer needs doing
+### What no longer needs doing
 
 **The homepage.** The `inkwell` Vercel project is connected to this repository
 with root directory `homepage`, so pushing to `main` deploys it. "Include files

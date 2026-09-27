@@ -5,9 +5,10 @@ import AppKit
 
 @MainActor
 enum MainMenu {
-    static func make() -> NSMenu {
+    /// `checkForUpdates`: the updater's item, nil when this build does not update itself.
+    static func make(checkForUpdates: NSMenuItem?) -> NSMenu {
         let bar = NSMenu()
-        bar.addItem(submenu(appMenu()))
+        bar.addItem(submenu(appMenu(checkForUpdates: checkForUpdates)))
         bar.addItem(submenu(editMenu()))
         let window = windowMenu()
         bar.addItem(submenu(window))
@@ -21,10 +22,13 @@ enum MainMenu {
         return item
     }
 
-    private static func appMenu() -> NSMenu {
+    private static func appMenu(checkForUpdates: NSMenuItem?) -> NSMenu {
         let menu = NSMenu(title: "Inkwell")
         menu.addItem(withTitle: "About Inkwell",
                      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        if let checkForUpdates {
+            menu.addItem(checkForUpdates)
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Hide Inkwell", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let others = menu.addItem(withTitle: "Hide Others",
