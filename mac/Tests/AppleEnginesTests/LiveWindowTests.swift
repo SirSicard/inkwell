@@ -146,6 +146,28 @@ final class LiveWindowTests: XCTestCase {
         XCTAssertEqual(live.buffer.count, live.config.maxBuffer)
     }
 
+    /// The newest words are the least settled: a word ending in the last 0.16 s of the decoded
+    /// audio is not shown yet, and appears once audio after it has been decoded. Finals keep every
+    /// word.
+    func testThePartialHidesWordsEndingInTheNewestAudio() {
+        let hide = LiveWindowConfig().hideNewest
+        XCTAssertEqual(hide, 2_560, "0.16 s")
+        var live = LiveWindow()
+        // Two words; the second ends 0.1 s before the window's end.
+        live.append(indexed(0..<16_000))
+        let script = [ScriptWord(text: "early", start: 2_000, end: 6_000),
+                      ScriptWord(text: "late", start: 10_000, end: 16_000 - 1_600)]
+        let first = live.takeWindow()
+        XCTAssertEqual(live.apply(decode(first, script), of: first), [.partial("early")])
+        // Half a second later the same word is well inside the window: shown.
+        live.append(indexed(16_000..<24_000))
+        let second = live.takeWindow()
+        XCTAssertEqual(live.apply(decode(second, script), of: second), [.partial("early late")])
+        // Every word reaches the finals.
+        let sent = drive(unbroken(10), seconds: 5)
+        XCTAssertEqual(finals(sent).flatMap { words($0.segment.text) }, unbroken(10).map(\.text))
+    }
+
     func testTheStreamsEndSettlesWhatIsLeft() {
         let script = unbroken(10)
         // The stream ends 0.1 s after the last word: no pause heard.

@@ -10,6 +10,11 @@
 //     settled at a word boundary, and the rest stay pending.
 // Both are measured in samples of audio, never with a timer.
 //
+// A partial leaves out the words that end in the newest `hideNewest` (0.16 s) of the decoded
+// audio: those are the words the next decode most often changes. On the AMI replay this cut the
+// words a partial takes back by a third, for about 0.1 s more before a word shows (the owner's
+// choice, 2026-09-27). Finals are not affected: they only settle words well before the newest.
+//
 // Lessons from an earlier FluidAudio engine, each pinned by a test (LiveWindowTests):
 //   - Its end-of-utterance model fired only on a pause: 25 s of unbroken speech produced no final
 //     at all. Here the length bound settles unbroken speech too.
@@ -48,6 +53,10 @@ public struct LiveWindowConfig: Sendable, Equatable {
     /// A settled utterance keeps this much audio after its last word, so the next window does not
     /// start inside that word's tail (0.2 s).
     public var afterWord = 3_200
+    /// A partial does not show words that end within this much of the decoded window's end
+    /// (0.16 s): the newest words, which the next decode most often changes. The one place this
+    /// policy is set; 0 shows every word.
+    public var hideNewest = 2_560
     /// The most audio kept (30 s). Only a decoder that has fallen far behind lets the buffer grow
     /// past `maxUtterance`; then the oldest audio goes, so memory holds seconds, never the session
     /// (architecture rule 3). Its words are left to the final pass.
@@ -173,10 +182,9 @@ public struct LiveWindow: Sendable {
             }
             // Cut in the gap between the two words, so neither is split.
             drop(upTo: window.start + (lastSettled.end + firstPending.start) / 2)
-            return [.final(segment(Array(settled), in: window))]
-                + partial(rest.map(\.text).joined(separator: " "))
+            return [.final(segment(Array(settled), in: window))] + partial(shown(rest, in: window))
         }
-        return partial(decoded.text)
+        return partial(shown(words[...], in: window))
     }
 
     /// The window for the stream's end: everything not settled, when there is enough to decode.
@@ -200,6 +208,12 @@ public struct LiveWindow: Sendable {
     public mutating func endWithoutWindow() -> [LiveOutput] {
         drop(upTo: bufferStart + buffer.count)
         return partial("")
+    }
+
+    /// The words of a partial: those not ending in the newest `hideNewest` of `window`.
+    private func shown(_ words: ArraySlice<TimedWord>, in window: Window) -> String {
+        let limit = window.samples.count - config.hideNewest
+        return words.prefix { $0.end <= limit }.map(\.text).joined(separator: " ")
     }
 
     /// The partial to send: `text`, unless it is what was sent last.
