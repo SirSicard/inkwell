@@ -75,6 +75,7 @@ All crates exist from the first commit, so work in parallel only ever touches it
 | `ink-platform-mac` | objc2 implementations of the platform traits. |
 | `ink-platform-win` | windows-rs and WASAPI implementations of the platform traits. |
 | `ink-ffi` | The C ABI (`include/inkwell.h`), event bridge, bands copy-out. |
+| `ink-shader` | Build-time only: turns `shaders/ink.wgsl` into the Metal source the app compiles at runtime (naga as a library); a test fails when the checked-in MSL is stale. Never linked into the app. |
 | `ink-bench` | Replay plus WER, DER, ERLE and latency. Reads `$INK_BENCH_DIR`. |
 
 Later: `mac/` (Swift package: app, Apple engines, renderer, the core as an XCFramework),
