@@ -423,24 +423,86 @@ final class LiveModelTests: XCTestCase {
         XCTAssertEqual(sent.commands, [], "the line being typed is not saved yet")
         now += 10
         live.notesEdited("Pilot: two teams\n", caretParagraph: 1)
-        XCTAssertEqual(sent.commands, [.noteAdd(record: "rec", atMs: 754_000, text: "Pilot: two teams", ref: "note-line-0")],
+        XCTAssertEqual(sent.commands, [.noteAdd(record: "rec", atMs: 754_000, text: "Pilot: two teams", ref: "rec:line:0")],
                        "stamped with when it was started, not when it was left")
         live.notesEdited("Pilot: two teams\nSecurity review first", caretParagraph: 1)
         // The first line is edited before the core answered its add.
         live.notesEdited("Pilot: two teams, six weeks\nSecurity review first", caretParagraph: 1)
         XCTAssertEqual(sent.commands.count, 1, "an add on its way is not sent twice")
-        live.apply(event(#"{"type":"note.added","record":"rec","note":"n1","at_ms":754000,"ref":"note-line-0"}"#))
-        XCTAssertEqual(sent.commands.last, .noteUpdate(note: "n1", text: "Pilot: two teams, six weeks"))
+        live.apply(event(#"{"type":"note.added","record":"rec","note":"n1","at_ms":754000,"ref":"rec:line:0"}"#))
+        XCTAssertEqual(sent.commands.last, .noteUpdate(note: "n1", text: "Pilot: two teams, six weeks", ref: "rec:line:0:update"))
         // The user leaves the editor: the second line is saved too.
         live.notesLeft()
-        XCTAssertEqual(sent.commands.last, .noteAdd(record: "rec", atMs: 764_000, text: "Security review first", ref: "note-line-1"))
-        live.apply(event(#"{"type":"note.added","record":"rec","note":"n2","at_ms":764000,"ref":"note-line-1"}"#))
+        XCTAssertEqual(sent.commands.last, .noteAdd(record: "rec", atMs: 764_000, text: "Security review first", ref: "rec:line:1"))
+        live.apply(event(#"{"type":"note.added","record":"rec","note":"n2","at_ms":764000,"ref":"rec:line:1"}"#))
         // Deleting the first line deletes its note; the second keeps its own.
         live.notesEdited("Security review first", caretParagraph: 0)
-        XCTAssertEqual(sent.commands.last, .noteDelete(note: "n1"))
+        XCTAssertEqual(sent.commands.last, .noteDelete(note: "n1", ref: "rec:line:0:delete"))
         let before = sent.commands.count
         live.apply(event(#"{"type":"meeting.stopped","record":"rec"}"#))
         XCTAssertEqual(sent.commands.count, before, "nothing unsaved is left when capture stops")
+    }
+
+    /// One line typed and added as note n1: the line under test.
+    private func savedLine(_ sent: Sent) -> LiveModel {
+        let live = LiveModel(send: sent.send, now: { Date(timeIntervalSince1970: 1_000) })
+        meeting(live)
+        live.notesEdited("Alpha\nBeta", caretParagraph: 1)
+        live.apply(event(#"{"type":"note.added","record":"rec","note":"n1","at_ms":0,"ref":"rec:line:0"}"#))
+        sent.commands = []
+        return live
+    }
+
+    func testAFailingUpdateKeepsTheLineUnsavedAndRetriesOnTheNextLeave() {
+        let sent = Sent()
+        let live = savedLine(sent)
+        live.notesEdited("Alpha two\nBeta", caretParagraph: 1)
+        XCTAssertEqual(sent.commands, [.noteUpdate(note: "n1", text: "Alpha two", ref: "rec:line:0:update")])
+        live.apply(event(#"{"type":"command.failed","command":"note.update","id":"rec:line:0:update","message":"the library is busy"}"#))
+        XCTAssertEqual(sent.commands.count, 1, "no retry loop: tried again when the user moves on")
+        live.notesLeft()
+        XCTAssertTrue(sent.commands.dropFirst().contains(.noteUpdate(note: "n1", text: "Alpha two", ref: "rec:line:0:update")),
+                      "the line was not marked saved: \(sent.commands)")
+        live.apply(event(#"{"type":"note.updated","note":"n1","ref":"rec:line:0:update"}"#))
+        live.notesLeft()
+        XCTAssertEqual(sent.commands.filter { $0.name == "note.update" }.count, 2, "saved now: nothing more to send")
+    }
+
+    func testAFailingDeleteKeepsTheNoteSoARetypeUpdatesAndNeverDuplicates() {
+        let sent = Sent()
+        let live = savedLine(sent)
+        live.notesEdited("\nBeta", caretParagraph: 1)
+        XCTAssertEqual(sent.commands, [.noteDelete(note: "n1", ref: "rec:line:0:delete")])
+        // Retyped while the delete is on its way: nothing is sent until the delete settles.
+        live.notesEdited("Alpha again\nBeta", caretParagraph: 1)
+        XCTAssertEqual(sent.commands.count, 1)
+        live.apply(event(#"{"type":"command.failed","command":"note.delete","id":"rec:line:0:delete","message":"the library is busy"}"#))
+        XCTAssertEqual(sent.commands.last, .noteUpdate(note: "n1", text: "Alpha again", ref: "rec:line:0:update"),
+                       "the note still exists: updated, never added again")
+        XCTAssertFalse(sent.commands.contains { $0.name == "note.add" })
+    }
+
+    func testAConfirmedDeleteLetsARetypedLineBeAddedAfresh() {
+        let sent = Sent()
+        let live = savedLine(sent)
+        live.notesEdited("\nBeta", caretParagraph: 1)
+        live.notesEdited("Alpha again\nBeta", caretParagraph: 1)
+        live.apply(event(#"{"type":"note.deleted","note":"n1","ref":"rec:line:0:delete"}"#))
+        XCTAssertEqual(sent.commands.last, .noteAdd(record: "rec", atMs: 0, text: "Alpha again", ref: "rec:line:0"))
+    }
+
+    func testARemovedLinesFailedDeleteIsTriedAgainOnTheNextLeave() {
+        let sent = Sent()
+        let live = savedLine(sent)
+        live.notesEdited("Beta", caretParagraph: 0)
+        XCTAssertEqual(sent.commands, [.noteDelete(note: "n1", ref: "rec:line:0:delete")])
+        live.apply(event(#"{"type":"command.failed","command":"note.delete","id":"rec:line:0:delete","message":"the library is busy"}"#))
+        live.notesLeft()
+        XCTAssertEqual(sent.commands.filter { $0 == .noteDelete(note: "n1", ref: "rec:line:0:delete") }.count, 2,
+                       "the note the user deleted does not stay in the record")
+        live.apply(event(#"{"type":"note.deleted","note":"n1","ref":"rec:line:0:delete"}"#))
+        live.notesLeft()
+        XCTAssertEqual(sent.commands.filter { $0.name == "note.delete" }.count, 2, "done")
     }
 
     func testPartialsNeverBecomeNotesOrCommands() {

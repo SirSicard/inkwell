@@ -156,8 +156,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"note.add","record":"<record id>","at_ms":754000,"text":"...","id":"<ref>"}
  *   {"cmd":"note.update","note":"<note id>","text":"..."}
  *   {"cmd":"note.delete","note":"<note id>"}
- *       A record's notes: "note.added" (with the note's id, and the command's "id" as "ref"),
- *       "note.updated", "note.deleted". The note's words are never echoed back.
+ *       A record's notes: "note.added" (with the note's id), "note.updated", "note.deleted",
+ *       each with the command's "id" as "ref"; a failure is "command.failed" with that "id". So
+ *       every answer can be matched to the line that sent it. The note's words are never echoed
+ *       back.
  *   {"cmd":"models.list"}
  *       "models.listed": the catalogue's models for this OS, their measured error rates and
  *       whether each is installed. Send engine.route for what serves a job now.

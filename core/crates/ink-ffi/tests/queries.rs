@@ -316,27 +316,67 @@ fn a_live_meetings_notes_are_added_updated_and_deleted_and_matched_to_their_comm
     assert!(added.get("text").is_none(), "the words stay with the shell");
     let note = added["note"].as_str().unwrap().to_owned();
 
-    rig.ask(
-        json!({"cmd": "note.update", "note": note, "text": "Pilot: two teams, six weeks"}),
+    let updated = rig.ask(
+        json!({"cmd": "note.update", "note": note, "text": "Pilot: two teams, six weeks", "id": "line-1.update"}),
         "note.updated",
         1,
+    );
+    assert_eq!(
+        updated["ref"], "line-1.update",
+        "matched to the line that sent it"
     );
     let notes = rig.store.notes(&record).unwrap();
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].text, "Pilot: two teams, six weeks");
     assert_eq!(notes[0].at_ms, 754_000);
 
-    rig.ask(
-        json!({"cmd": "note.delete", "note": note}),
+    let deleted = rig.ask(
+        json!({"cmd": "note.delete", "note": note, "id": "line-1.delete"}),
         "note.deleted",
         1,
     );
+    assert_eq!(deleted["ref"], "line-1.delete");
     assert!(rig.store.notes(&record).unwrap().is_empty());
 
+    // An update or delete that fails names its command's id, so the shell can roll the line back.
+    for (cmd, id) in [
+        ("note.update", "line-9.update"),
+        ("note.delete", "line-9.delete"),
+    ] {
+        let before = rig.events.count("command.failed");
+        let mut command = json!({"cmd": cmd, "note": "no-such-note", "id": id});
+        if cmd == "note.update" {
+            command["text"] = json!("zebra quartz");
+        }
+        rig.core.command(&command.to_string()).unwrap();
+        assert!(
+            rig.events.wait_count("command.failed", before + 1, WAIT),
+            "{cmd}"
+        );
+        let failed = rig
+            .events
+            .all()
+            .into_iter()
+            .filter(|e| e["type"] == "command.failed")
+            .nth(before)
+            .unwrap();
+        assert_eq!(failed["command"], cmd);
+        assert_eq!(failed["id"], id);
+        assert!(!failed["message"].as_str().unwrap().contains("zebra"));
+    }
+
+    let before = rig.events.count("command.failed");
     rig.core
         .command(r#"{"cmd":"note.add","record":"no-such-record","at_ms":0,"text":"zebra quartz","id":"n2"}"#)
         .unwrap();
-    let failed = rig.events.wait_type("command.failed", WAIT);
+    assert!(rig.events.wait_count("command.failed", before + 1, WAIT));
+    let failed = rig
+        .events
+        .all()
+        .into_iter()
+        .filter(|e| e["type"] == "command.failed")
+        .nth(before)
+        .unwrap();
     assert_eq!(failed["command"], "note.add");
     assert_eq!(failed["id"], "n2");
     assert!(

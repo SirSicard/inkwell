@@ -433,12 +433,24 @@ impl Ctx<'_> {
             },
             Query::NoteUpdate { note, text } => {
                 match store.update_note(&NoteId(note.clone()), &text) {
-                    Ok(()) => emit(event("note.updated", &[("note", Some(note.into()))])),
+                    Ok(()) => emit(event(
+                        "note.updated",
+                        &[
+                            ("note", Some(note.into())),
+                            ("ref", id.clone().map(Into::into)),
+                        ],
+                    )),
                     Err(e) => fail(e.to_string()),
                 }
             }
             Query::NoteDelete { note } => match store.delete_note(&NoteId(note.clone())) {
-                Ok(()) => emit(event("note.deleted", &[("note", Some(note.into()))])),
+                Ok(()) => emit(event(
+                    "note.deleted",
+                    &[
+                        ("note", Some(note.into())),
+                        ("ref", id.clone().map(Into::into)),
+                    ],
+                )),
                 Err(e) => fail(e.to_string()),
             },
             Query::ModelsList => emit(self.catalogue()),

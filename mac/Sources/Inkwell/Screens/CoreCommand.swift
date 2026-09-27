@@ -11,8 +11,9 @@ enum CoreCommand: Equatable, Sendable {
     case commitmentSetDone(id: String, done: Bool)
     /// `ref` comes back in `note.added`, so the note can be matched to the line that sent it.
     case noteAdd(record: String, atMs: UInt64, text: String, ref: String)
-    case noteUpdate(note: String, text: String)
-    case noteDelete(note: String)
+    /// `ref` comes back in `note.updated` / `note.deleted`, or as the id of a `command.failed`.
+    case noteUpdate(note: String, text: String, ref: String)
+    case noteDelete(note: String, ref: String)
     case modelsList
     case engineRoute(Job)
     case settingGet(ShellSetting)
@@ -28,8 +29,8 @@ enum CoreCommand: Equatable, Sendable {
         case .commitmentSetDone(let id, let done): ["cmd": "commitment.set_done", "commitment": id, "done": done]
         case .noteAdd(let record, let at, let text, let ref):
             ["cmd": "note.add", "record": record, "at_ms": at, "text": text, "id": ref]
-        case .noteUpdate(let note, let text): ["cmd": "note.update", "note": note, "text": text]
-        case .noteDelete(let note): ["cmd": "note.delete", "note": note]
+        case .noteUpdate(let note, let text, let ref): ["cmd": "note.update", "note": note, "text": text, "id": ref]
+        case .noteDelete(let note, let ref): ["cmd": "note.delete", "note": note, "id": ref]
         case .modelsList: ["cmd": "models.list"]
         case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue]
         case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue]

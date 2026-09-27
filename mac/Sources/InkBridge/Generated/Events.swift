@@ -1276,6 +1276,9 @@ public struct NoteAdded: Codable, Sendable, Equatable {
 public struct NoteDeleted: Codable, Sendable, Equatable {
     /// The note's id.
     public let note: String
+    /// The command's "id", when it had one, so the shell can match the answer to the line that
+    /// sent it.
+    public let ref: String?
     /// Always `note.deleted`.
     public let type: String
 }
@@ -1284,6 +1287,9 @@ public struct NoteDeleted: Codable, Sendable, Equatable {
 public struct NoteUpdated: Codable, Sendable, Equatable {
     /// The note's id.
     public let note: String
+    /// The command's "id", when it had one, so the shell can match the answer to the line that
+    /// sent it.
+    public let ref: String?
     /// Always `note.updated`.
     public let type: String
 }

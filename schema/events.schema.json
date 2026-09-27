@@ -2062,6 +2062,10 @@
         "note": {
           "type": "string",
           "description": "The note's id."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to the line that sent it."
         }
       },
       "required": [
@@ -2080,6 +2084,10 @@
         "note": {
           "type": "string",
           "description": "The note's id."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to the line that sent it."
         }
       },
       "required": [

@@ -61,22 +61,35 @@ struct LiveNoteLine: Equatable {
     var text: String
     /// Where in the meeting it was started, ms: set on its first character.
     var atMs: UInt64?
-    /// The core's id, once added.
+    /// The core's id, once added. Kept while a delete is on its way, and after a delete failed.
     var note: String?
-    /// The text the core has (or has been sent).
+    /// The text the core has, or has been sent. Cleared when a save fails, so the next save tries
+    /// again.
     var saved: String?
     /// note.add is on its way.
     var adding = false
+    /// note.delete is on its way (the line was emptied). Nothing else is sent for the line until
+    /// it is answered: a retype then updates the note (the delete failed) or adds a new one.
+    var deleting = false
 
     var isBlank: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }
 
 /// The notes of one live meeting: paragraphs in, note commands out.
+///
+/// Every command carries a ref naming the record, the line and the kind of command, and every
+/// answer (note.added, note.updated, note.deleted, or command.failed with the ref as its id) is
+/// matched back to its line. A failed save leaves the line unsaved, to be tried again when the
+/// user next moves on; a failed delete keeps the note's id, so the line is never added twice.
 struct LiveNotesDraft {
     private(set) var lines: [LiveNoteLine] = [LiveNoteLine(key: 0, text: "")]
     private var nextKey = 1
     /// The line with the caret; it is saved when the user moves on.
     private var editingKey: Int?
+    /// Notes of lines that no longer exist, by line key: their delete is on its way.
+    private var orphans: [Int: String] = [:]
+    /// Notes of lines that no longer exist whose delete failed: tried again on the next flush.
+    private var orphansToRetry: [Int: String] = [:]
     /// The meeting's record.
     let record: String
 
@@ -84,7 +97,22 @@ struct LiveNotesDraft {
         self.record = record
     }
 
-    static func ref(_ key: Int) -> String { "note-line-\(key)" }
+    /// What a command for a line is.
+    enum RefKind: String {
+        case add = ""
+        case update = ":update"
+        case delete = ":delete"
+    }
+
+    /// The ref of `kind` for line `key`: the record, the line, and the kind.
+    func ref(_ key: Int, _ kind: RefKind = .add) -> String { "\(record):line:\(key)\(kind.rawValue)" }
+
+    /// The line key in `ref` if it is a ref of `kind` of this draft's record.
+    private func key(_ ref: String, _ kind: RefKind) -> Int? {
+        let prefix = "\(record):line:"
+        guard ref.hasPrefix(prefix), ref.hasSuffix(kind.rawValue) else { return nil }
+        return Int(ref.dropFirst(prefix.count).dropLast(kind.rawValue.count))
+    }
 
     /// The editor's paragraphs after an edit, with the caret's paragraph (nil: no caret). Returns
     /// what to send.
@@ -100,30 +128,69 @@ struct LiveNotesDraft {
         return commands
     }
 
-    /// Saves every line, the one being edited included (focus left, or the meeting ended).
+    /// Saves every line, the one being edited included (focus left, the meeting ended, or the app
+    /// quitting), and tries again the deletes that failed.
     mutating func flush() -> [CoreCommand] {
         editingKey = nil
-        return lines.indices.flatMap { persist($0) }
+        var commands = lines.indices.flatMap { persist($0) }
+        for (key, note) in orphansToRetry.sorted(by: { $0.key < $1.key }) {
+            orphans[key] = note
+            commands.append(.noteDelete(note: note, ref: ref(key, .delete)))
+        }
+        orphansToRetry = [:]
+        return commands
     }
 
     /// The core added the note sent for `ref`.
-    mutating func added(ref: String, note: String) -> [CoreCommand] {
-        guard let i = lines.firstIndex(where: { Self.ref($0.key) == ref }) else {
+    mutating func added(ref added: String, note: String) -> [CoreCommand] {
+        guard let key = key(added, .add) else { return [] }
+        guard let i = lines.firstIndex(where: { $0.key == key }) else {
             // Its line was deleted while the add was on its way.
-            return [.noteDelete(note: note)]
+            orphans[key] = note
+            return [.noteDelete(note: note, ref: ref(key, .delete))]
         }
         lines[i].note = note
         lines[i].adding = false
         return lines[i].key == editingKey ? [] : persist(i)
     }
 
-    /// The core refused the add sent for `ref`: the line is unsaved and is tried again on the next
-    /// save.
-    mutating func addFailed(ref: String) {
-        if let i = lines.firstIndex(where: { Self.ref($0.key) == ref }) {
+    /// The core refused an add, update or delete: the line is rolled back to what the core has.
+    mutating func failed(ref failed: String) -> [CoreCommand] {
+        if let key = key(failed, .add), let i = lines.firstIndex(where: { $0.key == key }) {
+            // No note: tried again on the next save.
             lines[i].adding = false
             lines[i].saved = nil
+        } else if let key = key(failed, .update), let i = lines.firstIndex(where: { $0.key == key }) {
+            // The core has the older text: tried again on the next save.
+            lines[i].saved = nil
+        } else if let key = key(failed, .delete) {
+            if let i = lines.firstIndex(where: { $0.key == key }) {
+                // The note is still there: a retyped line updates it, and a still-empty line
+                // deletes it again on the next save.
+                lines[i].deleting = false
+                lines[i].saved = nil
+                if !lines[i].isBlank && lines[i].key != editingKey {
+                    return persist(i)
+                }
+            } else if let note = orphans.removeValue(forKey: key) {
+                orphansToRetry[key] = note
+            }
         }
+        return []
+    }
+
+    /// The core deleted the note sent for `ref`.
+    mutating func deleted(ref deleted: String) -> [CoreCommand] {
+        guard let key = key(deleted, .delete) else { return [] }
+        guard let i = lines.firstIndex(where: { $0.key == key }) else {
+            orphans[key] = nil
+            return []
+        }
+        lines[i].deleting = false
+        lines[i].note = nil
+        lines[i].saved = nil
+        // Retyped while the delete was on its way: it is a new note now.
+        return !lines[i].isBlank && lines[i].key != editingKey ? persist(i) : []
     }
 
     /// Matches the old lines to `paragraphs`: unchanged lines at both ends keep their identity,
@@ -152,10 +219,14 @@ struct LiveNotesDraft {
             }
         }
         for line in oldMiddle.dropFirst(newMiddle.count) {
-            if let note = line.note {
-                commands.append(.noteDelete(note: note))
+            guard let note = line.note else {
+                // A line whose add is on its way is deleted when note.added names it (added(ref:)).
+                continue
             }
-            // A line whose add is on its way is deleted when note.added names it (added(ref:)).
+            orphans[line.key] = note
+            if !line.deleting {
+                commands.append(.noteDelete(note: note, ref: ref(line.key, .delete)))
+            }
         }
         lines = Array(lines[..<head]) + middle + Array(lines[(old.count - tail)...])
         return commands
@@ -164,21 +235,24 @@ struct LiveNotesDraft {
     /// What saving line `i` takes now.
     private mutating func persist(_ i: Int) -> [CoreCommand] {
         let line = lines[i]
+        if line.deleting {
+            return []
+        }
         if line.isBlank {
             guard let note = line.note else { return [] }
-            lines[i].note = nil
+            lines[i].deleting = true
             lines[i].saved = nil
-            return [.noteDelete(note: note)]
+            return [.noteDelete(note: note, ref: ref(line.key, .delete))]
         }
         guard line.saved != line.text else { return [] }
         if let note = line.note {
             lines[i].saved = line.text
-            return [.noteUpdate(note: note, text: line.text)]
+            return [.noteUpdate(note: note, text: line.text, ref: ref(line.key, .update))]
         }
         guard !line.adding else { return [] }
         lines[i].adding = true
         lines[i].saved = line.text
-        return [.noteAdd(record: record, atMs: line.atMs ?? 0, text: line.text, ref: Self.ref(line.key))]
+        return [.noteAdd(record: record, atMs: line.atMs ?? 0, text: line.text, ref: ref(line.key))]
     }
 }
 
@@ -361,12 +435,14 @@ final class LiveModel {
             // Capture ended: whatever is typed is saved now.
             notesLeft()
         case .noteAdded(let added) where added.record == record:
-            guard let ref = added.ref, var draft else { return }
-            let commands = draft.added(ref: ref, note: added.note)
-            self.draft = draft
-            commands.forEach(send)
-        case .commandFailed(let failed) where failed.command == "note.add":
-            if let ref = failed.id { draft?.addFailed(ref: ref) }
+            guard let ref = added.ref else { return }
+            update { $0.added(ref: ref, note: added.note) }
+        case .noteDeleted(let deleted):
+            guard let ref = deleted.ref else { return }
+            update { $0.deleted(ref: ref) }
+        case .commandFailed(let failed) where ["note.add", "note.update", "note.delete"].contains(failed.command):
+            guard let ref = failed.id else { return }
+            update { $0.failed(ref: ref) }
         case .meetingFinished(let finished) where finished.record == record:
             end()
         case .meetingFailed(let failed) where failed.record == record:
@@ -378,6 +454,14 @@ final class LiveModel {
         default:
             break
         }
+    }
+
+    /// Changes the draft and sends what the change takes.
+    private func update(_ change: (inout LiveNotesDraft) -> [CoreCommand]) {
+        guard var draft else { return }
+        let commands = change(&draft)
+        self.draft = draft
+        commands.forEach(send)
     }
 
     private func end() {
