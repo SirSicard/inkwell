@@ -71,7 +71,10 @@ extern "C" {
 
 /* The version of this header. core.ready reports the core's; they must match.
  * 2: live-stream and language-model engines (INK_ENGINE_STREAMING, INK_ENGINE_LLM), the fields
- *    appended to InkEngineVTable for them, ink_stream_event, and the "unavailable" error kind. */
+ *    appended to InkEngineVTable for them, ink_stream_event, and the "unavailable" error kind.
+ *    Added since without a new version (every addition is a new name, nothing changed shape):
+ *    ink_far_bands_read, the meetings commands, and a language model's optional
+ *    "context_tokens". */
 #define INK_ABI_VERSION 2
 
 /* The longest JSON string the core reads (config, command, engine info, engine answer), in bytes
@@ -139,6 +142,33 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
  *
+ *   Meetings run on their own thread (starting one never waits behind a model download), and
+ *   questions about one on another. A failure is "command.failed" with the "id".
+ *   {"cmd":"meeting.start","app":"<app id>","title":"..."}
+ *       Records a meeting from this machine: the mic (with Bluetooth output, the built-in one
+ *       unless "meetings.headset_mic" is on) and the far end ("app", when the start answers a
+ *       "meeting.detected" offer: that app; otherwise everything this machine plays). Both
+ *       optional. "meeting.started" (with the title, the app's name and the mic), then the live
+ *       events. Only when the user asks: detection offers, it never starts a recording.
+ *   {"cmd":"meeting.stop"}
+ *       Ends the recording; the final pass follows ("meeting.stopped" ... "meeting.finished").
+ *       A meeting started for an app also ends by itself 15 s after that app lets go of the
+ *       microphone.
+ *   {"cmd":"meeting.dismiss","app":"<app id>"}
+ *       "Not this one": the offer ends ("meeting.detection_ended" with "dismissed") and that app
+ *       is not offered again until it releases the microphone.
+ *   {"cmd":"meeting.ask","question":"...","id":"<ref>"}
+ *       A question about the live meeting, answered from its transcript so far by the language
+ *       model the shell registered: "meeting.answered" with the "id" as "ref". The answer is the
+ *       model's words: render them as text only.
+ *   {"cmd":"meetings.recover"}
+ *       Finishes the meetings a crash interrupted (their audio repaired, their final pass run):
+ *       "meeting.recovered" and the pass's events per meeting, then "meetings.recovered". Send it
+ *       once the shell's own engines are registered, so a recovered meeting gets them too.
+ *   Detection follows the "meetings.detect" setting (on unless turned off): "meeting.detection"
+ *   says whether it listens, "meeting.detected" offers an app that has held the microphone for
+ *   3 s, "meeting.detection_ended" takes the offer back.
+ *
  *   The screens' commands run on their own thread, in order among themselves, so a model update
  *   holding the commands above never delays them. Each answers with the event named, or
  *   "command.failed" (with the "id").
@@ -153,7 +183,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"commitments.list","limit":200}
  *       "commitments.listed": the open commitments, soonest due first ("limit" optional, 1-1000).
  *   {"cmd":"commitment.set_done","commitment":"<id>","done":true}
- *       "commitment.updated".
+ *       "commitment.updated". Settles a looks-done suggestion either way.
+ *   {"cmd":"commitment.not_yet","commitment":"<id>"}
+ *       Dismisses a looks-done suggestion; the commitment stays open. "commitment.updated".
  *   {"cmd":"note.add","record":"<record id>","at_ms":754000,"text":"...","id":"<ref>"}
  *   {"cmd":"note.update","note":"<note id>","text":"..."}
  *   {"cmd":"note.delete","note":"<note id>"}
@@ -166,8 +198,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       whether each is installed. Send engine.route for what serves a job now.
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
- *       "setting.value". Only the shell's settings: "onboarding.done" (true|false) and
- *       "dictation.polish" (on|off).
+ *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
+ *       "dictation.polish" (on|off), "meetings.detect" (on|off), "meetings.headset_mic" (on|off)
+ *       and "retention.days" (forever|7|30|90|365: records older than that are deleted, at launch,
+ *       after each meeting and when it changes; "library.swept" says how many).
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
@@ -206,8 +240,10 @@ typedef struct InkBands {
  * Copies the latest bands into `*out`. Never hands out a pointer into the core. Before ink_init,
  * after ink_shutdown, or while nothing is live, it copies zeros with the last count (see THREADS
  * 3 for where it may run). Returns INK_OK, or INK_ERR_INVALID_ARGUMENT for a NULL `out`.
+ * ink_bands_read reads your mic's; ink_far_bands_read the far end's, during a meeting.
  */
 int32_t ink_bands_read(InkBands *out);
+int32_t ink_far_bands_read(InkBands *out);
 
 /* Engine kinds. An engine is one kind; its table fills that kind's functions and leaves the
  * others NULL. */
@@ -226,9 +262,13 @@ int32_t ink_bands_read(InkBands *out);
  *     "live_partials". "wer" is the engine's measured word error rate on that job: the router
  *     picks the lowest.
  *   language models:
- *     {"id":"<unique id>","licence":"<weights licence>","model":"<model name>","local":true}
+ *     {"id":"<unique id>","licence":"<weights licence>","model":"<model name>","local":true,
+ *      "context_tokens":4096}
  *     "local" says whether the text stays on this machine; local-only mode refuses a model that
- *     says false. Registered language models do dictation polish.
+ *     says false. "context_tokens" (optional, at least 256) is how many tokens its context holds,
+ *     prompt and answer together: a meeting's summary and Ask are sized to fit it (4096 when not
+ *     said). Registered language models do dictation polish, meeting summaries, commitments and
+ *     Ask.
  * Ids are unique across every kind.
  *
  * ANSWERS. Every call below that takes a `call` id is answered with ink_engine_complete(call,

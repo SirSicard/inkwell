@@ -163,3 +163,65 @@ fn the_reader_never_sees_a_torn_value() {
         assert_eq!(last, u64::from(PUBLISHES), "saw the final publish");
     }
 }
+
+
+/// The ink's level map (mac/Sources/InkRenderer/InkLevels.swift: `floorDB`, `ceilingDB`) rests
+/// on these measurements of the public AMI fixture as published (S2.8): every 16 ms hop's band
+/// power, in dBFS, as the pump publishes it for the ink.
+///
+/// | Fixture | p10 | p25 | p50 | p75 | p90 | p99 |
+/// |---|---|---|---|---|---|---|
+/// | `IS1009a-mic.wav` (one headset: the talker and the room between words) | -58.8 | -56.6 | -50.6 | -40.9 | -25.1 | -19.4 |
+/// | `IS1009a-far.wav` (three headsets mixed: nearly always someone talking) | -53.0 | -50.6 | -42.1 | -34.8 | -28.6 | -18.4 |
+///
+/// So a floor of -55 dBFS leaves the room between words still (the mic's p10 and p25 read 0;
+/// S0.3's built-in-mic room floor, -50.6 dB full band, reads about 0.1: barely a breath), and a
+/// ceiling of -20 dBFS lets only the loudest speech saturate (p99 -19.4). The droplet threshold,
+/// 0.5, falls at -37.5 dBFS: the far mix crosses it from its p75, the single talker in its loud
+/// quarter. The same map serves both sides: the far end's digital silence reads 0 anyway. This
+/// test keeps the table true; the Swift constants cite it.
+#[test]
+fn the_ink_level_map_rests_on_the_measured_fixture_levels() {
+    const FLOOR_DB: f64 = -55.0;
+    const CEILING_DB: f64 = -20.0;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/ami");
+    let percentiles = |file: &str| -> Vec<f64> {
+        let mut reader = hound::WavReader::open(root.join(file)).unwrap();
+        let samples: Vec<f32> = reader
+            .samples::<i32>()
+            .map(|x| x.unwrap() as f32 / 32_768.0)
+            .collect();
+        let mut analyzer = BandAnalyzer::new();
+        let mut db: Vec<f64> = samples
+            .chunks(HOP)
+            .filter_map(|c| analyzer.process(c))
+            .map(|b| {
+                let p = f64::from(b.low * b.low + b.mid * b.mid + b.high * b.high);
+                if p > 0.0 { 10.0 * p.log10() } else { -150.0 }
+            })
+            .collect();
+        db.sort_by(f64::total_cmp);
+        [0.10, 0.25, 0.50, 0.75, 0.90, 0.99]
+            .iter()
+            .map(|q| db[((db.len() - 1) as f64 * q) as usize])
+            .collect()
+    };
+    let level = |db: f64| ((db - FLOOR_DB) / (CEILING_DB - FLOOR_DB)).clamp(0.0, 1.0);
+    let near = percentiles("IS1009a-mic.wav");
+    let far = percentiles("IS1009a-far.wav");
+    let table = [
+        (&near, [-58.8, -56.6, -50.6, -40.9, -25.1, -19.4]),
+        (&far, [-53.0, -50.6, -42.1, -34.8, -28.6, -18.4]),
+    ];
+    for (measured, documented) in table {
+        for (m, d) in measured.iter().zip(documented) {
+            assert!((m - d).abs() < 0.05, "measured {measured:?}, documented {documented:?}");
+        }
+    }
+    assert_eq!(level(near[0]), 0.0, "the room between words is still");
+    assert_eq!(level(near[1]), 0.0);
+    assert!(level(near[4]) > 0.5, "a talker's loud quarter throws droplets");
+    assert!(level(far[3]) > 0.5 && level(far[2]) < 0.5);
+    assert!(level(near[4]) < 1.0 && level(far[4]) < 1.0, "only the loudest speech saturates");
+    assert!(level(-50.6) < 0.15, "S0.3's room floor barely moves it");
+}

@@ -57,6 +57,18 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case dictationWorkerFailed(DictationWorkerFailed)
     /// `meeting.started`
     case meetingStarted(MeetingStarted)
+    /// `meeting.detected`
+    case meetingDetected(MeetingDetected)
+    /// `meeting.detection_ended`
+    case meetingDetectionEnded(MeetingDetectionEnded)
+    /// `meeting.detection`
+    case meetingDetection(MeetingDetection)
+    /// `meeting.answered`
+    case meetingAnswered(MeetingAnswered)
+    /// `meeting.recovered`
+    case meetingRecovered(MeetingRecovered)
+    /// `meetings.recovered`
+    case meetingsRecovered(MeetingsRecovered)
     /// `meeting.voice_detection`
     case meetingVoiceDetection(MeetingVoiceDetection)
     /// `meeting.side_state`
@@ -125,6 +137,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case libraryRecord(LibraryRecord)
     /// `library.stats`
     case libraryStats(LibraryStats)
+    /// `library.swept`
+    case librarySwept(LibrarySwept)
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
@@ -172,6 +186,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "dictation.hotkey_lost": self = .dictationHotkeyLost(try DictationHotkeyLost(from: decoder))
             case "dictation.worker_failed": self = .dictationWorkerFailed(try DictationWorkerFailed(from: decoder))
             case "meeting.started": self = .meetingStarted(try MeetingStarted(from: decoder))
+            case "meeting.detected": self = .meetingDetected(try MeetingDetected(from: decoder))
+            case "meeting.detection_ended": self = .meetingDetectionEnded(try MeetingDetectionEnded(from: decoder))
+            case "meeting.detection": self = .meetingDetection(try MeetingDetection(from: decoder))
+            case "meeting.answered": self = .meetingAnswered(try MeetingAnswered(from: decoder))
+            case "meeting.recovered": self = .meetingRecovered(try MeetingRecovered(from: decoder))
+            case "meetings.recovered": self = .meetingsRecovered(try MeetingsRecovered(from: decoder))
             case "meeting.voice_detection": self = .meetingVoiceDetection(try MeetingVoiceDetection(from: decoder))
             case "meeting.side_state": self = .meetingSideState(try MeetingSideState(from: decoder))
             case "meeting.partial": self = .meetingPartial(try MeetingPartial(from: decoder))
@@ -206,6 +226,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
             case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
             case "library.stats": self = .libraryStats(try LibraryStats(from: decoder))
+            case "library.swept": self = .librarySwept(try LibrarySwept(from: decoder))
             default: self = .unknown(type: type)
             }
         } catch {
@@ -239,6 +260,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .dictationHotkeyLost(let event): try event.encode(to: encoder)
         case .dictationWorkerFailed(let event): try event.encode(to: encoder)
         case .meetingStarted(let event): try event.encode(to: encoder)
+        case .meetingDetected(let event): try event.encode(to: encoder)
+        case .meetingDetectionEnded(let event): try event.encode(to: encoder)
+        case .meetingDetection(let event): try event.encode(to: encoder)
+        case .meetingAnswered(let event): try event.encode(to: encoder)
+        case .meetingRecovered(let event): try event.encode(to: encoder)
+        case .meetingsRecovered(let event): try event.encode(to: encoder)
         case .meetingVoiceDetection(let event): try event.encode(to: encoder)
         case .meetingSideState(let event): try event.encode(to: encoder)
         case .meetingPartial(let event): try event.encode(to: encoder)
@@ -273,6 +300,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .librarySearch(let event): try event.encode(to: encoder)
         case .libraryRecord(let event): try event.encode(to: encoder)
         case .libraryStats(let event): try event.encode(to: encoder)
+        case .librarySwept(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var keys = encoder.container(keyedBy: TypeKey.self)
             try keys.encode(type, forKey: .type)
@@ -449,12 +477,16 @@ public struct CommitmentRow: Codable, Sendable, Equatable {
     public let due: String?
     /// When, resolved, Unix ms; absent when it could not be resolved.
     public let dueAtUnixMs: Int64?
+    /// Where a later meeting suggests it is already done, until the user answers.
+    public let looksDone: DoneEvidence?
     /// The commitment it was folded into ("said twice"), when it was.
     public let mergedInto: String?
     /// Who owes it, as said.
     public let owner: String?
     /// Where in the record it was said.
     public let provenance: [Span]
+    /// Who it is owed to, as said, when the transcript says.
+    public let recipient: String?
     /// The record it came from.
     public let record: String
     /// What was promised. The library's words: never log it.
@@ -465,15 +497,18 @@ public struct CommitmentRow: Codable, Sendable, Equatable {
         case done
         case due
         case dueAtUnixMs = "due_at_unix_ms"
+        case looksDone = "looks_done"
         case mergedInto = "merged_into"
         case owner
         case provenance
+        case recipient
         case record
         case text
     }
 }
 
-/// A commitment was marked done, or open again.
+/// A commitment was marked done or open again (commitment.set_done), or its looks-done
+/// suggestion was dismissed (commitment.not_yet). Either way, a suggestion on it is settled.
 public struct CommitmentUpdated: Codable, Sendable, Equatable {
     /// Its id.
     public let commitment: String
@@ -652,6 +687,31 @@ public enum Discard: String, Codable, Sendable, Equatable, CaseIterable {
     case nothingLeft = "nothing_left"
     case cancelled
     case other
+}
+
+/// Where a later meeting suggests an open commitment is already done: the user said, there,
+/// that they had finished it. A suggestion for the user to confirm (commitment.set_done) or
+/// dismiss (commitment.not_yet).
+public struct DoneEvidence: Codable, Sendable, Equatable {
+    /// The record it was said in.
+    public let record: String
+    /// When that record started, Unix ms.
+    public let recordStartedAtUnixMs: Int64?
+    /// That record's title, when it has one.
+    public let recordTitle: String?
+    /// Where in that record.
+    public let span: Span
+    /// The line said there, when it is still in the record's transcript. The library's words:
+    /// never log it.
+    public let text: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case record
+        case recordStartedAtUnixMs = "record_started_at_unix_ms"
+        case recordTitle = "record_title"
+        case span
+        case text
+    }
 }
 
 /// Why echo cancellation stopped: backlog (one side ran more than 10 s ahead of the other;
@@ -911,6 +971,40 @@ public struct LibraryStats: Codable, Sendable, Equatable {
     }
 }
 
+/// The retention setting deleted records older than it keeps (at launch, after a meeting, or
+/// when it changed). Their text is overwritten in the library's files, their audio removed.
+public struct LibrarySwept: Codable, Sendable, Equatable {
+    /// Records that started before this moment were due, Unix ms.
+    public let beforeUnixMs: Int64
+    /// Records deleted.
+    public let deleted: Int64
+    /// Records, or their audio, that could not be removed (each logged by what failed).
+    public let failed: Int64
+    /// Always `library.swept`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case beforeUnixMs = "before_unix_ms"
+        case deleted
+        case failed
+        case type
+    }
+}
+
+/// An answer to meeting.ask about the live meeting: the model's words. Render them as text only
+/// (no links): model text can say anything. A failure is command.failed with the command's id.
+/// Never log it.
+public struct MeetingAnswered: Codable, Sendable, Equatable {
+    /// The meeting's record id.
+    public let record: String
+    /// The id of the meeting.ask command this answers.
+    public let ref: String?
+    /// The answer.
+    public let text: String
+    /// Always `meeting.answered`.
+    public let type: String
+}
+
 /// Capture stopped because the core's pump failed (a bug in the core, contained). What reached
 /// disk is kept: the meeting ends as if capture had stopped, and its final pass runs over it.
 public struct MeetingCaptureFailed: Codable, Sendable, Equatable {
@@ -929,6 +1023,47 @@ public struct MeetingCommitments: Codable, Sendable, Equatable {
     /// The meeting's record id.
     public let record: String
     /// Always `meeting.commitments`.
+    public let type: String
+}
+
+/// An app has held the microphone long enough to be a call, and no meeting is being recorded:
+/// the shell offers to record it (the consent Drop), and records only if the user says so
+/// (meeting.start with this app).
+public struct MeetingDetected: Codable, Sendable, Equatable {
+    /// The app, by id (a bundle id on the Mac).
+    public let app: String
+    /// Its name, as the shell shows it.
+    public let appName: String
+    /// Always `meeting.detected`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case app
+        case appName = "app_name"
+        case type
+    }
+}
+
+/// Whether the core is listening for calls now: sent when detection starts, stops (the
+/// meetings.detect setting), fails to start, or stops on its own (the platform stopped
+/// answering).
+public struct MeetingDetection: Codable, Sendable, Equatable {
+    /// Whether apps taking the microphone are being watched.
+    public let listening: Bool
+    /// Why not, when detection could not start or stopped on its own. Never content.
+    public let message: String?
+    /// Always `meeting.detection`.
+    public let type: String
+}
+
+/// The offer to record an app is over before it was taken: the app released the microphone, or
+/// the user said not this one (meeting.dismiss).
+public struct MeetingDetectionEnded: Codable, Sendable, Equatable {
+    /// The app, by id.
+    public let app: String
+    /// Whether the user dismissed it (rather than the app releasing the microphone).
+    public let dismissed: Bool
+    /// Always `meeting.detection_ended`.
     public let type: String
 }
 
@@ -1138,6 +1273,32 @@ public struct MeetingPartial: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A meeting a crash interrupted is being finished: its recorded audio was repaired and its
+/// final pass follows (its events, ending in meeting.finished or meeting.failed).
+public struct MeetingRecovered: Codable, Sendable, Equatable {
+    /// Chunk headers rebuilt.
+    public let rebuilt: Int64
+    /// The meeting's record id.
+    public let record: String
+    /// How much audio the meeting recorded before the crash, ms.
+    public let recordedMs: Int64
+    /// Torn partial frames cut from a chunk's end.
+    public let trimmed: Int64
+    /// Always `meeting.recovered`.
+    public let type: String
+    /// Chunk files left as they were: nothing could place them.
+    public let unrecoverable: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case rebuilt
+        case record
+        case recordedMs = "recorded_ms"
+        case trimmed
+        case type
+        case unrecoverable
+    }
+}
+
 /// You lines the final pass removed as echo, by place and span only. Sent only when there are
 /// some, before the supersede.
 public struct MeetingRemovedAsEcho: Codable, Sendable, Equatable {
@@ -1161,12 +1322,37 @@ public struct MeetingSideState: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// A meeting's record exists and its capture is being transcribed live.
+/// A meeting's record exists and its capture is being transcribed live. Names what the shell
+/// shows of it: its title, its app and its mic, when known.
 public struct MeetingStarted: Codable, Sendable, Equatable {
+    /// The app it records, by id (a bundle id on the Mac), when it was started for one.
+    public let app: String?
+    /// That app's name, as the shell shows it.
+    public let appName: String?
+    /// The microphone it records, as the OS names it.
+    public let micName: String?
+    /// Why that microphone was chosen.
+    public let micReason: MicReason?
+    /// How that microphone connects.
+    public let micTransport: MicTransport?
     /// The meeting's record id.
     public let record: String
+    /// Its title, when known at the start (a calendar event, a replay's name); otherwise the
+    /// summary's headline names it later.
+    public let title: String?
     /// Always `meeting.started`.
     public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case app
+        case appName = "app_name"
+        case micName = "mic_name"
+        case micReason = "mic_reason"
+        case micTransport = "mic_transport"
+        case record
+        case title
+        case type
+    }
 }
 
 /// Capture ended and the record is marked ended; the final pass runs next.
@@ -1319,6 +1505,37 @@ public struct MeetingWorkerFailed: Codable, Sendable, Equatable {
     public let record: String
     /// Always `meeting.worker_failed`.
     public let type: String
+}
+
+/// Recovery (meetings.recover) is done.
+public struct MeetingsRecovered: Codable, Sendable, Equatable {
+    /// Interrupted meetings it finished or tried to.
+    public let meetings: Int64
+    /// Always `meetings.recovered`.
+    public let type: String
+}
+
+/// Why a meeting records this microphone: the system default input; the built-in mic because
+/// the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because
+/// the user's setting says so; the default because this Mac has no built-in mic; the first
+/// input because no default is set; or it was named.
+public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case defaultInput = "default_input"
+    case builtInForBluetoothOutput = "built_in_for_bluetooth_output"
+    case headsetMicSetting = "headset_mic_setting"
+    case noBuiltInMic = "no_built_in_mic"
+    case firstInput = "first_input"
+    case requested
+}
+
+/// How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user
+/// is silent), USB, a virtual or aggregate device, or anything else.
+public enum MicTransport: String, Codable, Sendable, Equatable, CaseIterable {
+    case builtIn = "built_in"
+    case bluetooth
+    case usb
+    case virtual
+    case other
 }
 
 /// A mode: how dictation writes in the apps it names.
@@ -1506,10 +1723,14 @@ public struct OwedItem: Codable, Sendable, Equatable {
     public let dueAtUnixMs: Int64?
     /// Its id.
     public let id: String
+    /// Where a later meeting suggests it is already done, until the user answers.
+    public let looksDone: DoneEvidence?
     /// How many other commitments were merged into it as the same promise said again.
     public let merged: Int64
     /// Who owes it, as said.
     public let owner: String?
+    /// Who it is owed to, as said, when the transcript says.
+    public let recipient: String?
     /// The record it was said in.
     public let record: String
     /// When that record started, Unix ms.
@@ -1526,8 +1747,10 @@ public struct OwedItem: Codable, Sendable, Equatable {
         case due
         case dueAtUnixMs = "due_at_unix_ms"
         case id
+        case looksDone = "looks_done"
         case merged
         case owner
+        case recipient
         case record
         case recordStartedAtUnixMs = "record_started_at_unix_ms"
         case recordTitle = "record_title"
@@ -1698,6 +1921,9 @@ public struct RecordSegment: Codable, Sendable, Equatable {
 public struct RecordSummary: Codable, Sendable, Equatable {
     /// When it was written, Unix ms.
     public let createdAtUnixMs: Int64
+    /// Its decisions and actions with the line each cites, in the order the text lists them
+    /// (empty for a summary saved before they were kept).
+    public let items: [SummaryItemRow]
     /// The model that wrote it.
     public let model: String
     /// The markdown. The library's words: never log it.
@@ -1705,6 +1931,7 @@ public struct RecordSummary: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case createdAtUnixMs = "created_at_unix_ms"
+        case items
         case model
         case text
     }
@@ -1814,6 +2041,22 @@ public struct SpeakerName: Codable, Sendable, Equatable {
     public let name: String
     /// The diarizer's label.
     public let speaker: String
+}
+
+/// Whether a summary item is a decision or an action.
+public enum SummaryItemKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case decision
+    case action
+}
+
+/// A decision or an action in a summary, with the line it cites.
+public struct SummaryItemRow: Codable, Sendable, Equatable {
+    /// Which it is.
+    public let kind: SummaryItemKind
+    /// Where the line it cites was said.
+    public let span: Span
+    /// The item as the summary states it. The library's words: never log it.
+    public let text: String
 }
 
 /// Why no voice detection model is in use.

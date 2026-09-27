@@ -77,6 +77,24 @@
       "$ref": "#/$defs/MeetingStarted"
     },
     {
+      "$ref": "#/$defs/MeetingDetected"
+    },
+    {
+      "$ref": "#/$defs/MeetingDetectionEnded"
+    },
+    {
+      "$ref": "#/$defs/MeetingDetection"
+    },
+    {
+      "$ref": "#/$defs/MeetingAnswered"
+    },
+    {
+      "$ref": "#/$defs/MeetingRecovered"
+    },
+    {
+      "$ref": "#/$defs/MeetingsRecovered"
+    },
+    {
       "$ref": "#/$defs/MeetingVoiceDetection"
     },
     {
@@ -177,6 +195,9 @@
     },
     {
       "$ref": "#/$defs/LibraryStats"
+    },
+    {
+      "$ref": "#/$defs/LibrarySwept"
     }
   ],
   "$defs": {
@@ -1012,7 +1033,7 @@
     },
     "MeetingStarted": {
       "type": "object",
-      "description": "A meeting's record exists and its capture is being transcribed live.",
+      "description": "A meeting's record exists and its capture is being transcribed live. Names what the shell shows of it: its title, its app and its mic, when known.",
       "properties": {
         "type": {
           "const": "meeting.started"
@@ -1020,6 +1041,30 @@
         "record": {
           "type": "string",
           "description": "The meeting's record id."
+        },
+        "title": {
+          "type": "string",
+          "description": "Its title, when known at the start (a calendar event, a replay's name); otherwise the summary's headline names it later."
+        },
+        "app": {
+          "type": "string",
+          "description": "The app it records, by id (a bundle id on the Mac), when it was started for one."
+        },
+        "app_name": {
+          "type": "string",
+          "description": "That app's name, as the shell shows it."
+        },
+        "mic_name": {
+          "type": "string",
+          "description": "The microphone it records, as the OS names it."
+        },
+        "mic_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How that microphone connects."
+        },
+        "mic_reason": {
+          "$ref": "#/$defs/MicReason",
+          "description": "Why that microphone was chosen."
         }
       },
       "required": [
@@ -1027,6 +1072,185 @@
         "record"
       ],
       "additionalProperties": false
+    },
+    "MeetingDetected": {
+      "type": "object",
+      "description": "An app has held the microphone long enough to be a call, and no meeting is being recorded: the shell offers to record it (the consent Drop), and records only if the user says so (meeting.start with this app).",
+      "properties": {
+        "type": {
+          "const": "meeting.detected"
+        },
+        "app": {
+          "type": "string",
+          "description": "The app, by id (a bundle id on the Mac)."
+        },
+        "app_name": {
+          "type": "string",
+          "description": "Its name, as the shell shows it."
+        }
+      },
+      "required": [
+        "type",
+        "app",
+        "app_name"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingDetectionEnded": {
+      "type": "object",
+      "description": "The offer to record an app is over before it was taken: the app released the microphone, or the user said not this one (meeting.dismiss).",
+      "properties": {
+        "type": {
+          "const": "meeting.detection_ended"
+        },
+        "app": {
+          "type": "string",
+          "description": "The app, by id."
+        },
+        "dismissed": {
+          "type": "boolean",
+          "description": "Whether the user dismissed it (rather than the app releasing the microphone)."
+        }
+      },
+      "required": [
+        "type",
+        "app",
+        "dismissed"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingDetection": {
+      "type": "object",
+      "description": "Whether the core is listening for calls now: sent when detection starts, stops (the meetings.detect setting), fails to start, or stops on its own (the platform stopped answering).",
+      "properties": {
+        "type": {
+          "const": "meeting.detection"
+        },
+        "listening": {
+          "type": "boolean",
+          "description": "Whether apps taking the microphone are being watched."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why not, when detection could not start or stopped on its own. Never content."
+        }
+      },
+      "required": [
+        "type",
+        "listening"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingAnswered": {
+      "type": "object",
+      "description": "An answer to meeting.ask about the live meeting: the model's words. Render them as text only (no links): model text can say anything. A failure is command.failed with the command's id. Never log it.",
+      "properties": {
+        "type": {
+          "const": "meeting.answered"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the meeting.ask command this answers."
+        },
+        "text": {
+          "type": "string",
+          "description": "The answer."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingRecovered": {
+      "type": "object",
+      "description": "A meeting a crash interrupted is being finished: its recorded audio was repaired and its final pass follows (its events, ending in meeting.finished or meeting.failed).",
+      "properties": {
+        "type": {
+          "const": "meeting.recovered"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "trimmed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Torn partial frames cut from a chunk's end."
+        },
+        "rebuilt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Chunk headers rebuilt."
+        },
+        "unrecoverable": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Chunk files left as they were: nothing could place them."
+        },
+        "recorded_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How much audio the meeting recorded before the crash, ms."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "trimmed",
+        "rebuilt",
+        "unrecoverable",
+        "recorded_ms"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingsRecovered": {
+      "type": "object",
+      "description": "Recovery (meetings.recover) is done.",
+      "properties": {
+        "type": {
+          "const": "meetings.recovered"
+        },
+        "meetings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Interrupted meetings it finished or tried to."
+        }
+      },
+      "required": [
+        "type",
+        "meetings"
+      ],
+      "additionalProperties": false
+    },
+    "MicTransport": {
+      "type": "string",
+      "description": "How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user is silent), USB, a virtual or aggregate device, or anything else.",
+      "enum": [
+        "built_in",
+        "bluetooth",
+        "usb",
+        "virtual",
+        "other"
+      ]
+    },
+    "MicReason": {
+      "type": "string",
+      "description": "Why a meeting records this microphone: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because the user's setting says so; the default because this Mac has no built-in mic; the first input because no default is set; or it was named.",
+      "enum": [
+        "default_input",
+        "built_in_for_bluetooth_output",
+        "headset_mic_setting",
+        "no_built_in_mic",
+        "first_input",
+        "requested"
+      ]
     },
     "MeetingVoiceDetection": {
       "type": "object",
@@ -1887,6 +2111,10 @@
           "type": "string",
           "description": "Who owes it, as said."
         },
+        "recipient": {
+          "type": "string",
+          "description": "Who it is owed to, as said, when the transcript says."
+        },
         "due": {
           "type": "string",
           "description": "When, as said."
@@ -1908,6 +2136,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "How many other commitments were merged into it as the same promise said again."
+        },
+        "looks_done": {
+          "$ref": "#/$defs/DoneEvidence",
+          "description": "Where a later meeting suggests it is already done, until the user answers."
         }
       },
       "required": [
@@ -1916,6 +2148,37 @@
         "record_started_at_unix_ms",
         "text",
         "merged"
+      ],
+      "additionalProperties": false
+    },
+    "DoneEvidence": {
+      "type": "object",
+      "description": "Where a later meeting suggests an open commitment is already done: the user said, there, that they had finished it. A suggestion for the user to confirm (commitment.set_done) or dismiss (commitment.not_yet).",
+      "properties": {
+        "record": {
+          "type": "string",
+          "description": "The record it was said in."
+        },
+        "record_title": {
+          "type": "string",
+          "description": "That record's title, when it has one."
+        },
+        "record_started_at_unix_ms": {
+          "type": "integer",
+          "description": "When that record started, Unix ms."
+        },
+        "span": {
+          "$ref": "#/$defs/Span",
+          "description": "Where in that record."
+        },
+        "text": {
+          "type": "string",
+          "description": "The line said there, when it is still in the record's transcript. The library's words: never log it."
+        }
+      },
+      "required": [
+        "record",
+        "span"
       ],
       "additionalProperties": false
     },
@@ -2037,7 +2300,7 @@
     },
     "CommitmentUpdated": {
       "type": "object",
-      "description": "A commitment was marked done, or open again.",
+      "description": "A commitment was marked done or open again (commitment.set_done), or its looks-done suggestion was dismissed (commitment.not_yet). Either way, a suggestion on it is settled.",
       "properties": {
         "type": {
           "const": "commitment.updated"
@@ -2388,12 +2651,53 @@
         "created_at_unix_ms": {
           "type": "integer",
           "description": "When it was written, Unix ms."
+        },
+        "items": {
+          "type": "array",
+          "description": "Its decisions and actions with the line each cites, in the order the text lists them (empty for a summary saved before they were kept).",
+          "items": {
+            "$ref": "#/$defs/SummaryItemRow",
+            "description": "An item."
+          }
         }
       },
       "required": [
         "text",
         "model",
-        "created_at_unix_ms"
+        "created_at_unix_ms",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "SummaryItemKind": {
+      "type": "string",
+      "description": "Whether a summary item is a decision or an action.",
+      "enum": [
+        "decision",
+        "action"
+      ]
+    },
+    "SummaryItemRow": {
+      "type": "object",
+      "description": "A decision or an action in a summary, with the line it cites.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SummaryItemKind",
+          "description": "Which it is."
+        },
+        "text": {
+          "type": "string",
+          "description": "The item as the summary states it. The library's words: never log it."
+        },
+        "span": {
+          "$ref": "#/$defs/Span",
+          "description": "Where the line it cites was said."
+        }
+      },
+      "required": [
+        "kind",
+        "text",
+        "span"
       ],
       "additionalProperties": false
     },
@@ -2443,6 +2747,10 @@
           "type": "string",
           "description": "Who owes it, as said."
         },
+        "recipient": {
+          "type": "string",
+          "description": "Who it is owed to, as said, when the transcript says."
+        },
         "due": {
           "type": "string",
           "description": "When, as said (\"by Friday\")."
@@ -2466,6 +2774,10 @@
         "done": {
           "type": "boolean",
           "description": "Whether it is done."
+        },
+        "looks_done": {
+          "$ref": "#/$defs/DoneEvidence",
+          "description": "Where a later meeting suggests it is already done, until the user answers."
         }
       },
       "required": [
@@ -2809,6 +3121,36 @@
         "since_unix_ms",
         "kinds",
         "far_silent_meetings"
+      ],
+      "additionalProperties": false
+    },
+    "LibrarySwept": {
+      "type": "object",
+      "description": "The retention setting deleted records older than it keeps (at launch, after a meeting, or when it changed). Their text is overwritten in the library's files, their audio removed.",
+      "properties": {
+        "type": {
+          "const": "library.swept"
+        },
+        "deleted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Records deleted."
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Records, or their audio, that could not be removed (each logged by what failed)."
+        },
+        "before_unix_ms": {
+          "type": "integer",
+          "description": "Records that started before this moment were due, Unix ms."
+        }
+      },
+      "required": [
+        "type",
+        "deleted",
+        "failed",
+        "before_unix_ms"
       ],
       "additionalProperties": false
     }

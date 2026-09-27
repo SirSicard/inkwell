@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! source ─realtime─► capture ring ─► pump ─┬─► chunks on disk (what the final pass reads)
-//!  (a WAV replay today; devices in S2.8)   ├─► bands (the ink, lock-free copy-out)
+//!  (a device, or a WAV replay)             ├─► bands (the ink, lock-free copy-out: one per side)
 //!                                          └─► Mailbox (bounded) ─► worker: MeetingChain, tick,
 //!                                                                    stop, final pass
 //! ```
@@ -17,8 +17,15 @@
 //!   [`tick`](MeetingChain::tick), and at the end stops the chain and runs the final pass.
 //!   The meeting chain has no thread of its own; this is it.
 //! - **Capture** is any [`AudioSource`] per side ([`CaptureSide`]): a [`FileReplaySource`] for a
-//!   replay (architecture rule 7), a device in S2.8. A side has ended when its source drops the
-//!   sink it was given, which a replay does after its last block.
+//!   replay (architecture rule 7), the mic and a process tap for a real meeting
+//!   ([`capture`](crate::capture)). A side has ended when its source drops the sink it was given,
+//!   which a replay does after its last block; a device's meeting ends when it is told to
+//!   ([`MeetingRun::end`]).
+//! - **What it runs on** besides the speech engines ([`engines`](crate::engines)): the installed
+//!   VAD, the diarizer for the final pass, and the language model the shell registered, each
+//!   looked up when the meeting starts.
+//! - **A crash** leaves a marker beside the chunks ([`recovery`](crate::recovery)) until the final
+//!   pass has run, so the next launch can finish what a killed one could not.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -34,10 +41,11 @@ use ink_core::{
 };
 use ink_engines::{ExternalEngine, Route};
 use ink_pipeline::capture::{CanonicalBlock, CaptureIssue, SideCapture, SideSummary};
-use ink_pipeline::events::VadUnavailable;
 use ink_pipeline::meeting::events::MeetingEvent;
+use ink_pipeline::meeting::watchdog::Routing;
 use ink_pipeline::meeting::{MeetingChain, MeetingServices, MeetingSettings, MeetingStart};
-use ink_pipeline::speech::VadSource;
+
+use crate::capture::{MicInfo, transport_name};
 
 use crate::dictation::dropped_event;
 use crate::events::{self, event};
@@ -62,6 +70,19 @@ pub struct Replay {
     pub title: Option<String>,
     /// Deliver as fast as the ring takes it, rather than in real time.
     pub fast: bool,
+}
+
+/// What is known about a meeting when it starts, for its record and `meeting.started`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MeetingInfo {
+    /// Its title, when the shell knows one (a calendar event, a replay's name).
+    pub title: Option<String>,
+    /// The app it records, when there is one: its id (a bundle id on the Mac) and its name.
+    pub app: Option<(String, String)>,
+    /// How its capture is routed, for the watchdog.
+    pub routing: Routing,
+    /// The mic it records, when the platform said.
+    pub mic: Option<MicInfo>,
 }
 
 /// One side of a meeting's capture.
@@ -155,22 +176,41 @@ impl Drop for Delivered {
     }
 }
 
+/// What [`MeetingRun::end`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ending {
+    /// Capture is stopping; the final pass follows.
+    Ended,
+    /// It had already been told to end.
+    AlreadyEnding,
+    /// Capture had already ended (by itself, or long ago): nothing is being recorded.
+    NotCapturing,
+}
+
+/// Called once when a meeting's capture has ended, however it ended (the pump's last act).
+pub type CaptureEnded = Box<dyn FnOnce() + Send>;
+
 /// A meeting in progress, or finished and not yet collected.
 pub struct MeetingRun {
     abort: Arc<AtomicBool>,
+    /// Set by [`end`](Self::end): capture is stopping, the final pass will run.
+    ending: AtomicBool,
     cancel: CancelToken,
     mailbox: Arc<Box2>,
     pump: JoinHandle<()>,
     worker: JoinHandle<()>,
+    /// The meeting's record, once its chain has started.
+    record: Arc<OnceLock<RecordId>>,
 }
 
 impl MeetingRun {
     /// Starts the worker, which starts the chain, and the pump, which starts capture once the
-    /// chain has. Errors name what failed, never audio.
+    /// chain has. `ended` runs when capture has ended. Errors name what failed, never audio.
     pub fn start(
         shared: &Arc<Shared>,
         capture: Vec<CaptureSide>,
-        title: Option<String>,
+        info: MeetingInfo,
+        ended: Option<CaptureEnded>,
     ) -> Result<Self, String> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir_name = format!(
@@ -217,34 +257,67 @@ impl MeetingRun {
             let (shared, mailbox, cancel) = (shared.clone(), mailbox.clone(), cancel.clone());
             let record = record.clone();
             let start = MeetingStart {
-                title,
-                source_app: None,
+                title: info.title.clone(),
+                source_app: info.app.as_ref().map(|(id, _)| id.clone()),
                 audio_dir: Some(format!("meetings/{dir_name}")),
-                routing: Default::default(),
+                routing: info.routing,
             };
             thread::Builder::new()
                 .name("ink-meeting".into())
-                .spawn(move || worker(&shared, &mailbox, &record, start, chunks, &cancel, go_tx))
+                .spawn(move || {
+                    worker(
+                        &shared, &mailbox, &record, start, &info, chunks, &cancel, go_tx,
+                    );
+                })
                 .map_err(|e| format!("the meeting worker did not start: {e}"))?
         };
         let pump = {
             let (shared, mailbox, abort) = (shared.clone(), mailbox.clone(), abort.clone());
+            let record = record.clone();
             thread::Builder::new()
                 .name("ink-pump".into())
                 .spawn(move || {
                     pump(
                         &shared, &mailbox, &record, sources, captures, &abort, &go_rx,
                     );
+                    if let Some(ended) = ended {
+                        ended();
+                    }
                 })
                 .map_err(|e| format!("the pump did not start: {e}"))?
         };
         Ok(Self {
             abort,
+            ending: AtomicBool::new(false),
             cancel,
             mailbox,
             pump,
             worker,
+            record,
         })
+    }
+
+    /// The meeting's record, once its chain has started.
+    pub fn record(&self) -> Option<&RecordId> {
+        self.record.get()
+    }
+
+    /// **Any thread.** Ends the meeting: capture stops, the pump hands on what it has, and the
+    /// worker runs the final pass (which is not cancelled). Returns at once.
+    pub fn end(&self) -> Ending {
+        if self.pump.is_finished() {
+            return Ending::NotCapturing;
+        }
+        if self.ending.swap(true, Ordering::AcqRel) {
+            return Ending::AlreadyEnding;
+        }
+        self.abort.store(true, Ordering::Release);
+        Ending::Ended
+    }
+
+    /// Whether capture is still running: not ended, and not told to end.
+    pub fn is_capturing(&self) -> bool {
+        !self.pump.is_finished() && !self.ending.load(Ordering::Acquire)
     }
 
     /// Whether the meeting is over: its final pass has finished, or it failed.
@@ -321,6 +394,7 @@ fn pump(
     }
     // Idle is a still frame (architecture rule 9): the last thing drawn is silence.
     shared.publish_bands(Bands::default());
+    shared.publish_far_bands(Bands::default());
 }
 
 /// Starts the sources once the chain has started, and drains them until they end or the meeting
@@ -351,12 +425,20 @@ fn capture(
         }
         sides.push((channel, side));
     }
-    let mut analyzer = BandAnalyzer::new();
+    // One analyzer per side: your drop pulses with the mic, theirs with the far end.
+    let (mut near, mut far) = (BandAnalyzer::new(), BandAnalyzer::new());
     let mut feed = |block: CanonicalBlock| {
-        if block.channel == Channel::Mic
-            && let Some(b) = analyzer.process(&block.samples)
-        {
-            shared.publish_bands(b);
+        match block.channel {
+            Channel::Mic => {
+                if let Some(b) = near.process(&block.samples) {
+                    shared.publish_bands(b);
+                }
+            }
+            Channel::Far => {
+                if let Some(b) = far.process(&block.samples) {
+                    shared.publish_far_bands(b);
+                }
+            }
         }
         let n = block.samples.len();
         if let Pushed::Queued {
@@ -417,49 +499,104 @@ fn live_engine(shared: &Shared) -> Option<Arc<dyn StreamingEngine>> {
     }
 }
 
+/// The events of a meeting's chain, as the shell gets them: `meeting.started` also names the
+/// meeting's title, its app and its mic (the chain knows only its record).
+pub(crate) fn meeting_sink(
+    shared: &Shared,
+    record: &Arc<OnceLock<RecordId>>,
+    info: &MeetingInfo,
+) -> EventSink<MeetingEvent> {
+    let (events, record) = (shared.events.clone(), record.clone());
+    let info = info.clone();
+    Arc::new(move |e| {
+        if let MeetingEvent::Started { record: r } = &e {
+            let _ = record.set(r.clone());
+            events.emit(started(r, &info));
+            return;
+        }
+        let r = record.get().cloned().unwrap_or(RecordId(String::new()));
+        events.emit(events::meeting(&r, &e));
+    })
+}
+
+/// `meeting.started`, with what the shell shows of a starting meeting.
+pub fn started(record: &RecordId, info: &MeetingInfo) -> serde_json::Value {
+    event(
+        "meeting.started",
+        &[
+            ("record", Some(record.0.as_str().into())),
+            ("title", info.title.clone().map(Into::into)),
+            ("app", info.app.as_ref().map(|(id, _)| id.as_str().into())),
+            (
+                "app_name",
+                info.app.as_ref().map(|(_, name)| name.as_str().into()),
+            ),
+            (
+                "mic_name",
+                info.mic.as_ref().map(|m| m.name.as_str().into()),
+            ),
+            (
+                "mic_transport",
+                info.mic
+                    .as_ref()
+                    .map(|m| transport_name(m.transport).into()),
+            ),
+            ("mic_reason", info.mic.as_ref().map(|m| m.reason.into())),
+        ],
+    )
+}
+
+/// **Worker.** What a meeting starting now runs on (see [`engines`](crate::engines)), and its
+/// settings: the summary sized for the language model.
+pub(crate) fn services(shared: &Arc<Shared>) -> (MeetingServices, MeetingSettings) {
+    let services = MeetingServices {
+        live: live_engine(shared),
+        offline: Arc::new(Routed::new(shared.clone(), Job::MeetingFinal)),
+        diarizer: crate::engines::diarizer(shared),
+        store: shared.store.clone(),
+        clock: shared.clock.clone(),
+        llm: crate::engines::llm(shared),
+    };
+    let settings = MeetingSettings {
+        summary: crate::engines::summary_options(shared),
+        ..MeetingSettings::default()
+    };
+    (services, settings)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn worker(
     shared: &Arc<Shared>,
     mailbox: &Box2,
     record: &Arc<OnceLock<RecordId>>,
     start: MeetingStart,
+    info: &MeetingInfo,
     chunks: ChunkStore,
     cancel: &CancelToken,
     go: mpsc::Sender<Option<u64>>,
 ) {
-    let sink: EventSink<MeetingEvent> = {
-        let (events, record) = (shared.events.clone(), record.clone());
-        Arc::new(move |e| {
-            if let MeetingEvent::Started { record: r } = &e {
-                let _ = record.set(r.clone());
-            }
-            let r = record.get().cloned().unwrap_or(RecordId(String::new()));
-            events.emit(events::meeting(&r, &e));
-        })
-    };
-    let services = MeetingServices {
-        live: live_engine(shared),
-        offline: Arc::new(Routed::new(shared.clone(), Job::MeetingFinal)),
-        diarizer: None,
-        store: shared.store.clone(),
-        clock: shared.clock.clone(),
-        llm: None,
-    };
+    let sink = meeting_sink(shared, record, info);
+    let (services, settings) = services(shared);
     let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let vad = VadSource::Unavailable(VadUnavailable::ModelMissing);
-        let mut chain =
-            match MeetingChain::start(services, MeetingSettings::default(), vad, sink, start) {
-                Ok(chain) => chain,
-                Err(e) => {
-                    let _ = go.send(None);
-                    failed(shared, None, &format!("the meeting could not start: {e}"));
-                    return;
-                }
-            };
+        let vad = crate::engines::vad_source(shared);
+        let mut chain = match MeetingChain::start(services, settings, vad, sink, start) {
+            Ok(chain) => chain,
+            Err(e) => {
+                let _ = go.send(None);
+                failed(shared, None, &format!("the meeting could not start: {e}"));
+                return;
+            }
+        };
         // Where the record's timeline starts, beside its chunks: the player places each chunk by
         // its host time against it. Without it the player estimates from the first chunk, so a
         // failure costs precision, not the meeting.
         if let Err(e) = crate::library::write_timeline(chunks.dir(), chain.start_ns()) {
             log::warn!("meeting: the timeline start could not be written: {e}");
+        }
+        // Until the final pass has run: a launch after a crash finds it and finishes the meeting.
+        let live = crate::recovery::mark_live(chunks.dir(), chain.record());
+        if let Err(e) = &live {
+            log::warn!("meeting: the crash-recovery marker could not be written: {e}");
         }
         let _ = go.send(Some(chain.start_ns()));
         loop {
@@ -479,8 +616,18 @@ fn worker(
             }
         }
         let ended = chain.stop();
-        if let Err(e) = ended.finalize(&chunks, cancel) {
+        let result = ended.finalize(&chunks, cancel);
+        if let Err(e) = &result {
             failed(shared, Some(ended.record()), &e.to_string());
+        }
+        // Cancelled (the app quitting mid-pass): the marker stays, and the next launch runs the
+        // pass again. Otherwise the meeting is done, well or not.
+        if live.is_ok() && !matches!(result, Err(ink_pipeline::meeting::FinalizeError::Cancelled)) {
+            crate::recovery::clear_live(chunks.dir());
+        }
+        if result.is_ok() {
+            // The library changed: a retention setting applies to it now, not at next launch.
+            crate::retention::sweep(shared);
         }
     }));
     if body.is_err() {
@@ -550,7 +697,12 @@ mod tests {
                 routing: Default::default(),
             };
             let record = Arc::default();
-            thread::spawn(move || worker(&shared, &mailbox, &record, start, chunks, &cancel, go_tx))
+            let info = MeetingInfo::default();
+            thread::spawn(move || {
+                worker(
+                    &shared, &mailbox, &record, start, &info, chunks, &cancel, go_tx,
+                );
+            })
         };
         assert!(matches!(go_rx.recv(), Ok(Some(_))));
 

@@ -47,6 +47,16 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // The user's wish for dictation polish. Whether polish runs also needs a working language
     // model; the shell shows the two apart.
     ("dictation.polish", &["on", "off"]),
+    // Whether the app watches for calls and offers to record them (the consent Drop). On unless
+    // turned off; the meetings thread starts or stops detection when it changes.
+    (crate::control::DETECT_KEY, &["on", "off"]),
+    // Record the Bluetooth headset's own mic instead of the built-in one (call-quality audio).
+    (crate::control::HEADSET_MIC_KEY, &["on", "off"]),
+    // How long the library keeps records (crate::retention): changing it sweeps at once.
+    (
+        crate::retention::RETENTION_KEY,
+        crate::retention::RETENTION_VALUES,
+    ),
 ];
 
 /// The most commitments `commitments.list` returns when the command names no limit.
@@ -73,6 +83,11 @@ pub enum Query {
         id: String,
         /// Done, or open again.
         done: bool,
+    },
+    /// `commitment.not_yet`: its looks-done suggestion is dismissed; it stays open.
+    CommitmentNotYet {
+        /// The commitment.
+        id: String,
     },
     /// `note.add`.
     NoteAdd {
@@ -129,6 +144,7 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "permission.request" => &["permission"],
         "commitments.list" => &["limit"],
         "commitment.set_done" => &["commitment", "done"],
+        "commitment.not_yet" => &["commitment"],
         "note.add" => &["record", "at_ms", "text"],
         "note.update" => &["note", "text"],
         "note.delete" => &["note"],
@@ -211,6 +227,9 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
                 .get("done")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| format!("{name}: needs \"done\", true or false"))?,
+        },
+        "commitment.not_yet" => Query::CommitmentNotYet {
+            id: text("commitment")?,
         },
         "note.add" => Query::NoteAdd {
             record: text("record")?,
@@ -420,6 +439,18 @@ impl Ctx<'_> {
                 )),
                 Err(e) => fail(e.to_string()),
             },
+            Query::CommitmentNotYet { id: commitment } => {
+                match store.set_done_evidence(&CommitmentId(commitment.clone()), None) {
+                    Ok(()) => emit(event(
+                        "commitment.updated",
+                        &[
+                            ("commitment", Some(commitment.into())),
+                            ("done", Some(false.into())),
+                        ],
+                    )),
+                    Err(e) => fail(e.to_string()),
+                }
+            }
             Query::NoteAdd {
                 record,
                 at_ms,
@@ -464,7 +495,17 @@ impl Ctx<'_> {
                 Err(e) => fail(e.to_string()),
             },
             Query::SettingSet { key, value } => match store.set_setting(&key, &value) {
-                Ok(()) => emit(setting(&key, Some(value))),
+                Ok(()) => {
+                    if key == crate::control::DETECT_KEY {
+                        self.shared
+                            .tell_meetings(crate::control::Msg::Detect(value == "on"));
+                    }
+                    let sweep = key == crate::retention::RETENTION_KEY;
+                    emit(setting(&key, Some(value)));
+                    if sweep {
+                        let _ = crate::retention::sweep(self.shared);
+                    }
+                }
                 Err(e) => fail(e.to_string()),
             },
             Query::ModesList => match modes(store) {
@@ -567,6 +608,7 @@ fn commitments(store: &dyn Store, limit: usize) -> Result<Value, String> {
         .filter_map(|c| {
             let (title, started) = records.get(&c.record)?;
             Some(owed(
+                store,
                 c,
                 title.as_deref(),
                 *started,
@@ -580,7 +622,13 @@ fn commitments(store: &dyn Store, limit: usize) -> Result<Value, String> {
     ))
 }
 
-fn owed(c: &Commitment, title: Option<&str>, started: i64, merged: Option<u64>) -> Value {
+fn owed(
+    store: &dyn Store,
+    c: &Commitment,
+    title: Option<&str>,
+    started: i64,
+    merged: Option<u64>,
+) -> Value {
     let mut item = Map::new();
     item.insert("id".into(), c.id.0.clone().into());
     item.insert("record".into(), c.record.0.clone().into());
@@ -588,6 +636,7 @@ fn owed(c: &Commitment, title: Option<&str>, started: i64, merged: Option<u64>) 
     item.insert("record_started_at_unix_ms".into(), started.into());
     item.insert("text".into(), c.text.clone().into());
     put(&mut item, "owner", c.owner.clone().map(Into::into));
+    put(&mut item, "recipient", c.recipient.clone().map(Into::into));
     put(&mut item, "due", c.due.clone().map(Into::into));
     put(
         &mut item,
@@ -599,6 +648,13 @@ fn owed(c: &Commitment, title: Option<&str>, started: i64, merged: Option<u64>) 
         item.insert("channel".into(), events::channel(span.channel).into());
     }
     item.insert("merged".into(), merged.unwrap_or(0).into());
+    put(
+        &mut item,
+        "looks_done",
+        c.looks_done
+            .as_ref()
+            .map(|e| crate::library::done_evidence(store, e)),
+    );
     Value::Object(item)
 }
 

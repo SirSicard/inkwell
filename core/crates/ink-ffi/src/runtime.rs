@@ -6,6 +6,9 @@
 //! | `ink-events` | every event to the shell ([`hub`](crate::hub)) |
 //! | `ink-commands` | commands, one at a time, in order: warming, model updates, starting a meeting, unregistering |
 //! | `ink-meeting`, `ink-pump` | a meeting ([`meeting`](crate::meeting)) |
+//! | `ink-meetings` | starting and stopping meetings, detection ([`control`](crate::control)) |
+//! | `ink-ask` | questions about the live meeting ([`asking`](crate::asking)) |
+//! | `ink-recovery`, `ink-retention` | a crashed meeting's final pass; the launch's retention sweep |
 //! | `ink-dictation` | the dictation chain ([`dictation`](crate::dictation)) |
 //! | `ink-queries` | the screens' commands, in order, apart from the command thread ([`queries`](crate::queries)) |
 //!
@@ -24,8 +27,8 @@ use std::thread::{self, JoinHandle};
 
 use ink_audio::BandsWriter;
 use ink_core::{
-    CancelToken, Clock, EngineError, FocusReader, Job, Llm, OfflineEngine, PermissionProbe, Store,
-    TextInserter,
+    CancelToken, Clock, EngineError, FocusReader, Job, Llm, MeetingDetector, OfflineEngine,
+    PermissionProbe, Store, TextInserter,
 };
 use ink_engines::{EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
@@ -33,6 +36,9 @@ use ink_pipeline::gain_stage::Vad;
 use ink_pipeline::update::{ModelInstaller, update_model};
 use serde_json::Value;
 
+use crate::asking::Asking;
+use crate::capture::{MeetingCapture, NoCapture};
+use crate::control::{Control, Msg};
 use crate::dictation::{DictationInbox, DictationWorker};
 use crate::events::{self, event};
 use crate::external::Registration;
@@ -40,7 +46,7 @@ use crate::gate::{ModelGate, Routed, refused_event};
 use crate::hub::{EventOut, Events, Hub};
 use crate::llms::{PolishModel, ShellLlms};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
-use crate::meeting::{CaptureSide, MeetingRun, Replay};
+use crate::meeting::{CaptureEnded, CaptureSide, MeetingInfo, MeetingRun, Replay};
 use crate::queries::QueryWorker;
 
 /// The model type residency holds: any offline engine an adapter loads.
@@ -118,6 +124,47 @@ pub struct Parts {
     pub data_dir: PathBuf,
     /// Checks and requests the OS permissions (the screens' `permissions.*` commands).
     pub permissions: Arc<dyn PermissionProbe>,
+    /// A real meeting's capture and detection ([`MeetingPlatform::default`]: neither).
+    pub meetings: MeetingPlatform,
+}
+
+/// What a real meeting needs from the platform.
+pub struct MeetingPlatform {
+    /// Opens the mic and the far end for `meeting.start`.
+    pub capture: Arc<dyn MeetingCapture>,
+    /// Watches for apps taking the mic, when the platform has a detector.
+    pub detector: Option<Arc<dyn MeetingDetector>>,
+}
+
+impl Default for MeetingPlatform {
+    /// No devices and no detection: a test core, or a platform without them yet.
+    fn default() -> Self {
+        Self {
+            capture: Arc::new(NoCapture),
+            detector: None,
+        }
+    }
+}
+
+impl MeetingPlatform {
+    /// The Mac's: the routed mic and a process tap on the platform clock, and the audio server's
+    /// process watcher.
+    #[cfg(target_os = "macos")]
+    fn production() -> Result<Self, String> {
+        let clock = ink_platform_mac::MacClock::new().map_err(|e| e.to_string())?;
+        Ok(Self {
+            capture: Arc::new(crate::capture::MacMeetingCapture::new(
+                ink_platform_mac::MacCapture::new(clock),
+            )),
+            detector: Some(Arc::new(ink_platform_mac::MacMeetingDetector::new())),
+        })
+    }
+
+    /// Until ink-platform-win (S3.1): neither.
+    #[cfg(not(target_os = "macos"))]
+    fn production() -> Result<Self, String> {
+        Ok(Self::default())
+    }
 }
 
 impl Parts {
@@ -143,6 +190,7 @@ impl Parts {
             models,
             data_dir: config.data_dir.clone(),
             permissions,
+            meetings: MeetingPlatform::production()?,
         })
     }
 }
@@ -261,13 +309,19 @@ pub struct Shared {
     pub data_dir: PathBuf,
     /// Language models the shell registered (dictation polish).
     pub llms: Arc<ShellLlms>,
+    /// Where models are installed (the meeting's VAD and diarizer load from here).
+    pub models: ModelDir,
     /// Ids of the engines the shell registered, of every kind: one id space.
     externals: Mutex<Vec<String>>,
     /// The ink's bands writer, lent by the C ABI; the pump publishes through it.
     bands: Mutex<Option<BandsWriter>>,
+    /// The far end's bands writer, likewise.
+    far_bands: Mutex<Option<BandsWriter>>,
+    /// The meetings thread, once it has started (settings the screens change reach it here).
+    pub(crate) control: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<Msg>>>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // Every critical section here is a swap or a list edit: consistent at each step.
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -287,6 +341,22 @@ impl Shared {
 
     fn return_bands(&self, writer: BandsWriter) {
         *lock(&self.bands) = Some(writer);
+    }
+
+    /// **Pump.** Publishes the far end's bands, as [`publish_bands`](Self::publish_bands) does
+    /// the mic's.
+    pub fn publish_far_bands(&self, bands: ink_audio::Bands) {
+        if let Some(writer) = lock(&self.far_bands).as_mut() {
+            writer.publish(bands);
+        }
+    }
+
+    /// **Any thread.** Tells the meetings thread, if it runs; a message to a stopped one is
+    /// dropped (the core is shutting down).
+    pub(crate) fn tell_meetings(&self, msg: Msg) {
+        if let Some(tx) = self.control.get() {
+            let _ = lock(tx).send(msg);
+        }
     }
 }
 
@@ -404,9 +474,10 @@ pub struct DictationParts {
     pub vad: Vad,
 }
 
+/// What runs now: the meeting (or the last one, not yet collected) and the dictation worker.
 #[derive(Default)]
-struct Runs {
-    meeting: Option<MeetingRun>,
+pub struct Runs {
+    pub(crate) meeting: Option<MeetingRun>,
     dictation: Option<DictationWorker>,
 }
 
@@ -418,6 +489,8 @@ pub struct Stopped {
     pub engines_released: usize,
     /// The bands writer, for the next start.
     pub bands: Option<BandsWriter>,
+    /// The far end's bands writer, likewise.
+    pub far_bands: Option<BandsWriter>,
 }
 
 /// The running core. See the module docs.
@@ -428,6 +501,9 @@ pub struct Core {
     command_thread: JoinHandle<()>,
     runs: Arc<Mutex<Runs>>,
     queries: QueryWorker,
+    control: Control,
+    asking: Asking,
+    retention: Option<JoinHandle<()>>,
 }
 
 impl Core {
@@ -437,8 +513,10 @@ impl Core {
         let hub = Hub::start(out)?;
         let os = Os::current().unwrap_or(Os::MacOs);
         let (models, permissions) = (parts.models.clone(), parts.permissions);
+        let meetings = parts.meetings;
         let shared = Arc::new(Shared {
             events: hub.events(),
+            models: parts.models.clone(),
             router: Router::new(&parts.registry, parts.models, os),
             residency: Residency::new(parts.loader, parts.clock.clone()),
             store: parts.store,
@@ -451,6 +529,8 @@ impl Core {
             llms: Arc::default(),
             externals: Mutex::default(),
             bands: Mutex::new(None),
+            far_bands: Mutex::new(None),
+            control: std::sync::OnceLock::new(),
         });
         let runs = Arc::new(Mutex::new(Runs::default()));
         let (commands, rx) = mpsc::channel::<Envelope>();
@@ -465,7 +545,37 @@ impl Core {
                 })?
         };
         let queries = QueryWorker::start(shared.clone(), permissions, models)?;
+        let control = Control::start(
+            shared.clone(),
+            runs.clone(),
+            meetings.capture,
+            meetings.detector,
+        )?;
+        let _ = shared.control.set(Mutex::new(control.sender()));
+        let asking = Asking::start(shared.clone(), runs.clone())?;
         shared.events.emit(events::ready());
+        // Detection follows the user's setting (on unless turned off); what it finds is offered
+        // only once the shell is listening, after `core.ready`.
+        let detect = match shared.store.setting(crate::control::DETECT_KEY) {
+            Ok(v) => v.as_deref() != Some("off"),
+            Err(e) => {
+                log::warn!("the detection setting could not be read ({e}); detection stays off");
+                false
+            }
+        };
+        control
+            .send(Msg::Detect(detect))
+            .map_err(io::Error::other)?;
+        // The launch's retention sweep, off every thread a screen or a meeting waits on.
+        let retention = {
+            let shared = shared.clone();
+            thread::Builder::new()
+                .name("ink-retention".into())
+                .spawn(move || {
+                    let _ = crate::retention::sweep(&shared);
+                })
+                .ok()
+        };
         Ok(Self {
             shared,
             hub,
@@ -473,7 +583,15 @@ impl Core {
             command_thread,
             runs,
             queries,
+            control,
+            asking,
+            retention,
         })
+    }
+
+    /// Lends the far end's bands writer, as [`lend_bands`](Self::lend_bands) does the mic's.
+    pub fn lend_far_bands(&self, writer: BandsWriter) {
+        *lock(&self.shared.far_bands) = Some(writer);
     }
 
     /// Lends the bands writer the pump publishes through; [`shutdown`](Self::shutdown) returns
@@ -487,6 +605,14 @@ impl Core {
         // The screens' commands go to their own thread (see `queries`).
         if let Some((name, id, query)) = crate::queries::read(json)? {
             return self.queries.send(name, id, query);
+        }
+        // Meetings go to theirs (see `control`), and questions about one to Ask's.
+        match read_meeting_command(json)? {
+            Some(MeetingCommand::Control(msg)) => return self.control.send(msg),
+            Some(MeetingCommand::Ask { id, question }) => {
+                return self.asking.ask(&self.shared, id, question);
+            }
+            None => {}
         }
         let envelope = parse_command(json)?;
         self.commands
@@ -564,13 +690,14 @@ impl Core {
 
     /// **Worker.** Starts a meeting captured from `capture` (one source per side), unless one is
     /// running. It ends when every source has delivered everything (dropped the sink it was
-    /// given), then runs its final pass; its events say how it went.
+    /// given), or when told to (`meeting.stop`), then runs its final pass; its events say how it
+    /// went.
     pub fn start_meeting(
         &self,
         capture: Vec<CaptureSide>,
-        title: Option<String>,
+        info: MeetingInfo,
     ) -> Result<(), String> {
-        start_meeting(&self.shared, &self.runs, capture, title)
+        start_meeting(&self.shared, &self.runs, capture, info, None)
     }
 
     /// The shared state, for tests and the C ABI.
@@ -626,6 +753,9 @@ impl Core {
             command_thread,
             runs,
             queries,
+            control,
+            asking,
+            retention,
         } = self;
         shared.shutdown.cancel();
         drop(commands);
@@ -634,6 +764,15 @@ impl Core {
         }
         // It holds `shared`, and its events go out before `core.stopped`.
         queries.stop();
+        // Its model call sees the cancel; detection stops, and a recovery in progress stops at
+        // its next region (its marker stays for the next launch).
+        asking.stop();
+        control.stop();
+        if let Some(retention) = retention
+            && retention.join().is_err()
+        {
+            log::error!("the retention sweep panicked");
+        }
         let (meeting, dictation) = {
             let mut runs = lock(&runs);
             (runs.meeting.take(), runs.dictation.take())
@@ -664,6 +803,7 @@ impl Core {
             }
         }
         let bands = shared.take_bands();
+        let far_bands = lock(&shared.far_bands).take();
         let events = shared.events.clone();
         match Arc::try_unwrap(shared) {
             // Router (and with it the shell's engines), residency and the store drop here.
@@ -680,6 +820,7 @@ impl Core {
             models_unloaded,
             engines_released,
             bands,
+            far_bands,
         }
     }
 }
@@ -693,11 +834,13 @@ fn stop_dictation(worker: DictationWorker) {
 }
 
 /// Starts a meeting on `capture`, unless one is running; collects one that has finished.
-fn start_meeting(
+/// `ended` runs when its capture has ended.
+pub(crate) fn start_meeting(
     shared: &Arc<Shared>,
     runs: &Mutex<Runs>,
     capture: Vec<CaptureSide>,
-    title: Option<String>,
+    info: MeetingInfo,
+    ended: Option<CaptureEnded>,
 ) -> Result<(), String> {
     let mut runs = lock(runs);
     if runs.meeting.as_ref().is_some_and(|m| !m.is_finished()) {
@@ -706,8 +849,71 @@ fn start_meeting(
     if let Some(done) = runs.meeting.take() {
         done.join();
     }
-    runs.meeting = Some(MeetingRun::start(shared, capture, title)?);
+    runs.meeting = Some(MeetingRun::start(shared, capture, info, ended)?);
     Ok(())
+}
+
+/// A meetings command, read: one for the meetings thread, or a question for Ask.
+enum MeetingCommand {
+    Control(Msg),
+    Ask {
+        id: Option<String>,
+        question: String,
+    },
+}
+
+/// Reads `json` as a meetings command: `Ok(None)` when it is some other command, else the command
+/// or why it cannot be read. Unknown fields are refused, as for every other command.
+fn read_meeting_command(json: &str) -> Result<Option<MeetingCommand>, String> {
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return Ok(None);
+    };
+    let Some(name) = v.get("cmd").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let fields: &[&str] = match name {
+        "meeting.start" => &["app", "title"],
+        "meeting.stop" | "meetings.recover" => &[],
+        "meeting.dismiss" => &["app"],
+        "meeting.ask" => &["question"],
+        _ => return Ok(None),
+    };
+    let obj = object(&v, "command")?;
+    let allowed: Vec<&str> = ["cmd", "id"].iter().chain(fields).copied().collect();
+    only_fields(obj, &allowed, name)?;
+    let id = match v.get("id") {
+        None => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err("command: \"id\" must be a string".into()),
+    };
+    let text = |k: &str| -> Result<Option<String>, String> {
+        match v.get(k) {
+            None => Ok(None),
+            Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.clone())),
+            Some(_) => Err(format!("{name}: \"{k}\" must be a non-empty string")),
+        }
+    };
+    let needed = |k: &str| -> Result<String, String> {
+        text(k)?.ok_or_else(|| format!("{name}: needs a string \"{k}\""))
+    };
+    Ok(Some(match name {
+        "meeting.start" => MeetingCommand::Control(Msg::Start {
+            id,
+            app: text("app")?,
+            title: text("title")?,
+        }),
+        "meeting.stop" => MeetingCommand::Control(Msg::Stop { id }),
+        "meeting.dismiss" => MeetingCommand::Control(Msg::Dismiss {
+            id,
+            app: needed("app")?,
+        }),
+        "meetings.recover" => MeetingCommand::Control(Msg::Recover { id }),
+        "meeting.ask" => MeetingCommand::Ask {
+            id,
+            question: needed("question")?,
+        },
+        _ => return Ok(None),
+    }))
 }
 
 /// Runs one command behind a panic boundary, so a bug in one costs that command, not the thread
@@ -740,9 +946,13 @@ fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
     };
     match command {
         Command::ReplayMeeting(replay) => {
+            let info = MeetingInfo {
+                title: replay.title.clone(),
+                ..MeetingInfo::default()
+            };
             let started = replay
                 .open(shared)
-                .and_then(|capture| start_meeting(shared, runs, capture, replay.title.clone()));
+                .and_then(|capture| start_meeting(shared, runs, capture, info, None));
             if let Err(e) = started {
                 fail(e);
             }
@@ -916,6 +1126,7 @@ pub(crate) mod testing {
             installer: Arc::new(NoModels),
             data_dir,
             permissions: Arc::new(crate::queries::NoPermissionProbe),
+            meetings: Default::default(),
         };
         let core = Core::start(
             parts,

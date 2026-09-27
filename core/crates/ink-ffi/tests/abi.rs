@@ -120,6 +120,11 @@ fn every_function_in_the_header_works_through_the_c_abi() {
             ink_bands_read(std::ptr::null_mut()),
             INK_ERR_INVALID_ARGUMENT
         );
+        assert_eq!(ink_far_bands_read(&mut bands), INK_OK, "zeros before init");
+        assert_eq!(
+            ink_far_bands_read(std::ptr::null_mut()),
+            INK_ERR_INVALID_ARGUMENT
+        );
         assert_eq!(
             ink_init(std::ptr::null(), Some(on_event), ctx),
             INK_ERR_INVALID_ARGUMENT

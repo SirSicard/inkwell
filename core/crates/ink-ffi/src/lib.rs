@@ -16,6 +16,12 @@
 //! | [`dictation`] | the dictation worker |
 //! | [`library`] | the library as the screens read it (records, search, a record, counts), answered on `queries`' thread |
 //! | [`logging`] | the only logger and `tracing` subscriber, with both privacy filters |
+//! | [`control`] | meetings started, stopped and detected, on their own thread ([`detection`] decides) |
+//! | [`capture`] | a meeting's mic and far end from this machine's devices |
+//! | [`engines`] | what a meeting runs on besides speech: the VAD, the diarizer, the language model |
+//! | [`asking`] | Ask: questions about the live meeting, on their own thread |
+//! | [`recovery`] | finishing a meeting a crash interrupted |
+//! | [`retention`] | the retention setting's sweep |
 //!
 //! The threading contract is the header's (THREADS). In short: events reach the shell on one
 //! core thread, engines are called on worker threads and answer through a completion call, and
@@ -28,7 +34,12 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 #![warn(missing_docs)]
 
+pub mod asking;
+pub mod capture;
+pub mod control;
+pub mod detection;
 pub mod dictation;
+pub mod engines;
 pub mod events;
 #[allow(unsafe_code)]
 pub mod external;
@@ -40,6 +51,8 @@ pub mod logging;
 pub mod mailbox;
 pub mod meeting;
 pub mod queries;
+pub mod recovery;
+pub mod retention;
 pub mod runtime;
 pub mod schema;
 
@@ -93,6 +106,9 @@ static LIFECYCLE: Mutex<()> = Mutex::new(());
 /// The ink's bands: one writer, lent to each core in turn, and one reader for the process.
 static BANDS_WRITER: Mutex<Option<BandsWriter>> = Mutex::new(None);
 static BANDS_READER: OnceLock<BandsReader> = OnceLock::new();
+/// The far end's, likewise (`ink_far_bands_read`).
+static FAR_BANDS_WRITER: Mutex<Option<BandsWriter>> = Mutex::new(None);
+static FAR_BANDS_READER: OnceLock<BandsReader> = OnceLock::new();
 
 fn guard(f: impl FnOnce() -> i32) -> i32 {
     panic::catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
@@ -231,6 +247,16 @@ pub unsafe extern "C" fn ink_init(
                 });
                 drop(slot);
                 core.lend_bands(writer);
+                let mut slot = FAR_BANDS_WRITER
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                let far = slot.take().unwrap_or_else(|| {
+                    let (writer, reader) = bands_channel();
+                    let _ = FAR_BANDS_READER.set(reader);
+                    writer
+                });
+                drop(slot);
+                core.lend_far_bands(far);
                 *CORE.write().unwrap_or_else(PoisonError::into_inner) = Some(core);
                 INK_OK
             }
@@ -278,12 +304,35 @@ pub unsafe extern "C" fn ink_command(command_json: *const c_char) -> i32 {
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ink_bands_read(out: *mut InkBands) -> i32 {
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { read_bands(&BANDS_READER, out) }
+}
+
+/// See `inkwell.h`: [`ink_bands_read`] for the far end. Lock-free and allocation-free.
+///
+/// # Safety
+///
+/// `out` is NULL or points to writable memory for one `InkBands`.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ink_far_bands_read(out: *mut InkBands) -> i32 {
+    // SAFETY: forwarded from this function's own contract.
+    unsafe { read_bands(&FAR_BANDS_READER, out) }
+}
+
+/// Copies the latest bands from `reader` into `out`.
+///
+/// # Safety
+///
+/// `out` is NULL or points to writable memory for one `InkBands`.
+#[allow(unsafe_code)]
+unsafe fn read_bands(reader: &OnceLock<BandsReader>, out: *mut InkBands) -> i32 {
     if out.is_null() {
         return INK_ERR_INVALID_ARGUMENT;
     }
     // No panic boundary: nothing here can panic, and `catch_unwind` itself costs nothing to
     // leave out on a path a render loop calls.
-    let bands = BANDS_READER
+    let bands = reader
         .get()
         .map(BandsReader::read)
         .map_or_else(InkBands::default, |s| InkBands {
@@ -386,6 +435,11 @@ pub extern "C" fn ink_shutdown() -> i32 {
         let stopped = core.shutdown();
         if let Some(writer) = stopped.bands {
             *BANDS_WRITER.lock().unwrap_or_else(PoisonError::into_inner) = Some(writer);
+        }
+        if let Some(writer) = stopped.far_bands {
+            *FAR_BANDS_WRITER
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(writer);
         }
         INK_OK
     })

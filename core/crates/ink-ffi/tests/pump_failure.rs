@@ -51,7 +51,10 @@ fn a_pump_that_panics_ends_the_meeting_and_shutdown_still_returns() {
             ring: Duration::from_secs(2),
             start_at: None,
         }],
-        Some("Faulty capture".into()),
+        ink_ffi::meeting::MeetingInfo {
+            title: Some("Faulty capture".into()),
+            ..Default::default()
+        },
     )
     .unwrap();
 

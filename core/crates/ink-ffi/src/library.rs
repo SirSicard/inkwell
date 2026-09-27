@@ -29,7 +29,8 @@ use std::path::{Path, PathBuf};
 use ink_audio::{ChunkInfo, ChunkStore};
 use ink_core::store::word_count;
 use ink_core::{
-    Channel, Commitment, Record, RecordCursor, RecordId, RecordKind, RecordQuery, Segment, Span,
+    Channel, Commitment, DoneEvidence, Record, RecordCursor, RecordId, RecordKind, RecordQuery,
+    Segment, Span, SummaryItemKind,
 };
 use serde_json::{Map, Value, json};
 
@@ -316,16 +317,45 @@ fn preview(segments: &[Segment]) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
-fn span(s: &Span) -> Value {
+pub(crate) fn span(s: &Span) -> Value {
     json!({"channel": events::channel(s.channel), "start_ms": s.start_ms, "end_ms": s.end_ms})
 }
 
-fn commitment(c: &Commitment) -> Value {
+/// A looks-done suggestion as the screens show it: the record it was said in (its title and
+/// start), where, and the line said there when it is still in that record's transcript. A read
+/// that fails leaves out what it could not read; the suggestion still shows.
+pub(crate) fn done_evidence(store: &dyn ink_core::Store, e: &DoneEvidence) -> Value {
+    let record = store.record(&e.record).ok().flatten();
+    let line = store.segments(&e.record).ok().and_then(|segments| {
+        segments
+            .into_iter()
+            .find(|s| s.channel == e.span.channel && s.start_ms == e.span.start_ms)
+            .map(|s| s.text)
+    });
+    event_object(&[
+        ("record", Some(e.record.0.as_str().into())),
+        (
+            "record_title",
+            record
+                .as_ref()
+                .and_then(|r| r.title.as_deref().map(Value::from)),
+        ),
+        (
+            "record_started_at_unix_ms",
+            record.as_ref().map(|r| r.started_at_unix_ms.into()),
+        ),
+        ("span", Some(span(&e.span))),
+        ("text", line.map(Value::from)),
+    ])
+}
+
+fn commitment(store: &dyn ink_core::Store, c: &Commitment) -> Value {
     event_object(&[
         ("commitment", Some(c.id.0.as_str().into())),
         ("record", Some(c.record.0.as_str().into())),
         ("text", Some(c.text.as_str().into())),
         ("owner", c.owner.as_deref().map(Value::from)),
+        ("recipient", c.recipient.as_deref().map(Value::from)),
         ("due", c.due.as_deref().map(Value::from)),
         ("due_at_unix_ms", c.due_at_unix_ms.map(Value::from)),
         (
@@ -337,6 +367,10 @@ fn commitment(c: &Commitment) -> Value {
             c.merged_into.as_ref().map(|m| m.0.as_str().into()),
         ),
         ("done", Some(c.done.into())),
+        (
+            "looks_done",
+            c.looks_done.as_ref().map(|e| done_evidence(store, e)),
+        ),
     ])
 }
 
@@ -362,14 +396,29 @@ fn open(shared: &Shared, ref_field: (&str, Option<Value>), r: &Record) -> Result
         .iter()
         .map(|n| json!({"note": n.id.0, "at_ms": n.at_ms, "text": n.text}))
         .collect();
-    let summary = store.summary(&r.id).map_err(e)?.map(
-        |s| json!({"text": s.text, "model": s.model, "created_at_unix_ms": s.created_at_unix_ms}),
-    );
+    let summary = store.summary(&r.id).map_err(e)?.map(|s| {
+        let items: Vec<Value> = s
+            .items
+            .iter()
+            .map(|i| {
+                json!({
+                    "kind": match i.kind {
+                        SummaryItemKind::Decision => "decision",
+                        SummaryItemKind::Action => "action",
+                    },
+                    "text": i.text,
+                    "span": span(&i.span),
+                })
+            })
+            .collect();
+        json!({"text": s.text, "model": s.model, "created_at_unix_ms": s.created_at_unix_ms,
+               "items": items})
+    });
     let commitments: Vec<Value> = store
         .commitments(&r.id)
         .map_err(e)?
         .iter()
-        .map(commitment)
+        .map(|c| commitment(store, c))
         .collect();
     let speakers: Vec<Value> = store
         .speaker_names(&r.id)
@@ -419,7 +468,7 @@ pub fn write_timeline(dir: &Path, start_host_ns: u64) -> io::Result<()> {
 
 /// Syncs a directory's entries, so a rename in it survives a power cut. On Windows std cannot
 /// open a directory, and NTFS journals the entry.
-fn sync_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         std::fs::File::open(dir)?.sync_all()

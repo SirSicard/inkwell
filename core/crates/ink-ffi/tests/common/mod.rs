@@ -427,6 +427,7 @@ pub fn start(
         installer,
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: Default::default(),
     };
     start_parts(parts)
 }

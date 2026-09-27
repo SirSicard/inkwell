@@ -54,6 +54,7 @@ fn rig(label: &str) -> Rig {
         }),
         data_dir: dir.path().to_owned(),
         permissions: probe.clone() as Arc<dyn PermissionProbe>,
+        meetings: Default::default(),
     };
     let events = Recorder::new();
     let core = Core::start(parts, events.out()).unwrap();

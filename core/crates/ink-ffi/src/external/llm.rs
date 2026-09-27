@@ -29,9 +29,12 @@ pub(crate) struct Info {
     pub(crate) licence: String,
     pub(crate) model: String,
     pub(crate) local: bool,
+    /// How many tokens its context holds, prompt and answer together, when the shell says.
+    pub(crate) context_tokens: Option<u32>,
 }
 
-/// `{"id","licence","model","local"}`, all required.
+/// `{"id","licence","model","local"}`, all required, and `"context_tokens"` (a whole number of
+/// at least 256), optional.
 pub(crate) fn parse_info(json: &str) -> Option<Info> {
     let v: Value = serde_json::from_str(json).ok()?;
     let id = v.get("id")?.as_str()?.to_owned();
@@ -43,6 +46,14 @@ pub(crate) fn parse_info(json: &str) -> Option<Info> {
         licence: v.get("licence")?.as_str()?.to_owned(),
         model: v.get("model")?.as_str()?.to_owned(),
         local: v.get("local")?.as_bool()?,
+        context_tokens: match v.get("context_tokens") {
+            None => None,
+            Some(n) => Some(
+                n.as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| *n >= 256)?,
+            ),
+        },
     })
 }
 
@@ -70,6 +81,11 @@ impl ExternalLlm {
     /// The weights' licence.
     pub fn licence(&self) -> &str {
         &self.info.licence
+    }
+
+    /// How many tokens its context holds, prompt and answer together, when the shell said.
+    pub fn context_tokens(&self) -> Option<u32> {
+        self.info.context_tokens
     }
 
     /// Makes the drop skip `release`: for a table the core refused.
@@ -147,12 +163,20 @@ mod tests {
             parse_info(r#"{"id":"fm","licence":"Apple","model":"system","local":true}"#).unwrap();
         assert_eq!(info.model, "system");
         assert!(info.local);
+        assert_eq!(info.context_tokens, None);
+        let sized = parse_info(
+            r#"{"id":"fm","licence":"Apple","model":"system","local":true,"context_tokens":4096}"#,
+        )
+        .unwrap();
+        assert_eq!(sized.context_tokens, Some(4096));
         for bad in [
             r#"{"id":"fm","licence":"Apple","model":"system"}"#,
             r#"{"id":"fm","licence":"Apple","local":true}"#,
             r#"{"id":"","licence":"Apple","model":"m","local":true}"#,
             r#"{"id":"fm","licence":"Apple","model":"m","local":"yes"}"#,
             r#"{"id":"fm","model":"m","local":true}"#,
+            r#"{"id":"fm","licence":"A","model":"m","local":true,"context_tokens":10}"#,
+            r#"{"id":"fm","licence":"A","model":"m","local":true,"context_tokens":"big"}"#,
         ] {
             assert!(parse_info(bad).is_none(), "{bad}");
         }
