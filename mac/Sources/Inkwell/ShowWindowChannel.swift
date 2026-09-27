@@ -126,8 +126,10 @@ final class ShowWindowChannel: Sendable {
         // Read only once the peer is known to be this app, so no other process can hold the
         // queue with a slow write.
         guard readLine(connection, limit: 16) == showCommand else { return }
-        _ = accepted.withCString { write(connection, $0, strlen($0)) }
+        // Handed on first, then answered: "shown" tells the second copy the request reached this
+        // one, not only that it was read.
         onShow()
+        _ = accepted.withCString { write(connection, $0, strlen($0)) }
     }
 
     private enum Verdict {
