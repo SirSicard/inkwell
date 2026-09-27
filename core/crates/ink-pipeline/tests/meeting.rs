@@ -1458,3 +1458,137 @@ fn no_live_engine_still_gives_a_final_transcript() {
     assert_eq!(outcome.revision, Some(2));
     assert_eq!(store.segments(&record).unwrap().len(), 2);
 }
+
+/// Carried into S2.8 from S2.1a: the Bluetooth-mic flag was sticky. A meeting whose mic changed
+/// route is judged by every mic it had: the softer warning holds only when the mic was a
+/// Bluetooth headset throughout, because zeros from any other mic mean no data at all.
+#[test]
+fn the_bluetooth_mic_flag_clears_when_the_route_changes() {
+    use ink_pipeline::meeting::watchdog::Routing;
+    let bluetooth = Routing {
+        mic: ink_core::Transport::Bluetooth,
+        ..Default::default()
+    };
+    let far = || join(&[silence(1.0), speech(3.0, -30.0, 154), silence(4.0)]);
+    let zeros_in_two = |rig: &mut Rig, then: Routing| {
+        let far = far();
+        rig.feed(&silence(4.0), &far[..4 * 16_000]);
+        rig.chain().set_routing(then);
+        rig.feed(&silence(4.0), &far[4 * 16_000..]);
+        rig.finish().unwrap();
+        rig.warnings()
+    };
+    let only_zeros = |w: &[MeetingWarning]| {
+        w.contains(&MeetingWarning::CapturedOnlyZeros {
+            channel: Channel::Mic,
+        })
+    };
+
+    // A headset, then the built-in mic (the headset disconnected): zeros are a failure.
+    let mut rig = RigBuilder {
+        routing: bluetooth,
+        ..RigBuilder::default()
+    }
+    .build();
+    let w = zeros_in_two(&mut rig, Routing::default());
+    assert!(only_zeros(&w), "{w:?}");
+    assert!(!w.contains(&MeetingWarning::BluetoothMicOnlyZeros), "{w:?}");
+
+    // The built-in mic, then a headset: the built-in stretch of zeros is a failure too.
+    let mut rig = RigBuilder::default().build();
+    let w = zeros_in_two(&mut rig, bluetooth);
+    assert!(only_zeros(&w), "{w:?}");
+    assert!(!w.contains(&MeetingWarning::BluetoothMicOnlyZeros), "{w:?}");
+
+    // A headset throughout (a route change to the same headset): the softer warning.
+    let mut rig = RigBuilder {
+        routing: bluetooth,
+        ..RigBuilder::default()
+    }
+    .build();
+    let w = zeros_in_two(&mut rig, bluetooth);
+    assert!(w.contains(&MeetingWarning::BluetoothMicOnlyZeros), "{w:?}");
+    assert!(!only_zeros(&w), "{w:?}");
+}
+
+/// Crash recovery (S2.8): a meeting whose app was killed mid-meeting leaves its chunks on disk and
+/// its live finals in the store. After the chunks are recovered, the interrupted meeting's final
+/// pass runs as any other: the record is marked ended and the pass supersedes the live transcript
+/// from the recorded audio.
+#[test]
+fn an_interrupted_meeting_is_ended_and_finalized_from_its_recovered_chunks() {
+    use ink_core::mock::MockClock;
+    use ink_pipeline::meeting::{EndedMeeting, Interrupted, MeetingServices};
+
+    let mut rig = RigBuilder::default().build();
+    let record = rig.chain().record().clone();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    // The crash: the chain and the pump's writers go without a stop or a finish, and the last
+    // mic chunk ends in a torn frame.
+    drop(rig.chain.take());
+    drop(rig.mic.take());
+    drop(rig.far.take());
+    let last = rig
+        .chunks
+        .chunks(Channel::Mic)
+        .unwrap()
+        .chunks
+        .last()
+        .unwrap()
+        .path
+        .clone();
+    let mut torn = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&last)
+        .unwrap();
+    std::io::Write::write_all(&mut torn, &[1, 2]).unwrap();
+    drop(torn);
+    let live = rig.store.segments(&record).unwrap();
+    assert!(
+        !live.is_empty(),
+        "the live finals were saved before the crash"
+    );
+    assert_eq!(
+        rig.store.record(&record).unwrap().unwrap().ended_at_unix_ms,
+        None
+    );
+
+    let report = rig.chunks.recover().unwrap();
+    assert!(!report.is_clean(), "the torn frame was trimmed");
+    let events = rig.events.clone();
+    let sink: ink_core::EventSink<MeetingEvent> = Arc::new(move |e| events.lock().unwrap().push(e));
+    let services = MeetingServices {
+        live: None,
+        offline: rig.engine.clone(),
+        diarizer: None,
+        store: rig.store.clone(),
+        clock: Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)),
+        llm: None,
+    };
+    let ended = EndedMeeting::interrupted(
+        services,
+        Default::default(),
+        energy_vad(),
+        sink,
+        Interrupted {
+            record: record.clone(),
+            started_unix_ms: T0_UNIX_MS,
+            t0_ns: T0_NS,
+            ended_unix_ms: T0_UNIX_MS + 8_000,
+        },
+    );
+    assert_eq!(
+        rig.store.record(&record).unwrap().unwrap().ended_at_unix_ms,
+        Some(T0_UNIX_MS + 8_000)
+    );
+    let outcome = ended.finalize(&rig.chunks, &CancelToken::new()).unwrap();
+    assert!(outcome.superseded, "{:?}", rig.warnings());
+    assert_eq!(outcome.revision, Some(2));
+    assert!(outcome.mic.chunks >= 1 && outcome.far.chunks >= 1);
+    assert_eq!(outcome.mic.chunks_written, None, "unknown after a crash");
+    let segments = rig.store.segments(&record).unwrap();
+    assert!(segments.iter().any(|s| s.channel == Channel::Mic));
+    assert!(segments.iter().any(|s| s.channel == Channel::Far));
+    assert_monotonic(&segments);
+}

@@ -141,8 +141,11 @@ struct Core {
     written: [Option<SideSummary>; 2],
     /// Live finals each side saved unchecked (mic, far).
     backlogged: [u64; 2],
-    /// Whether the mic was a Bluetooth headset mic at any point: its zeros can be its user's
-    /// silence.
+    /// Whether the mic has been a Bluetooth headset mic for the whole meeting so far: then a
+    /// meeting of its zeros can be its user's silence. Cleared for good by the first route that is
+    /// not Bluetooth, because zeros from any other mic are no data at all (S2.8: the flag used to
+    /// stick once set, so a built-in mic that captured only zeros after a headset disconnected got
+    /// the softer warning).
     mic_bluetooth: bool,
     /// Live events that arrived after the meeting stopped.
     late: Arc<Late>,
@@ -343,7 +346,7 @@ impl MeetingChain {
     /// is a new echo path: live cancellation stops and the search starts again
     /// ([`EchoSearch::DeviceSwitch`]).
     pub fn set_routing(&mut self, routing: Routing) {
-        self.core.mic_bluetooth |= routing.mic == ink_core::Transport::Bluetooth;
+        self.core.mic_bluetooth &= routing.mic == ink_core::Transport::Bluetooth;
         self.watchdog.set_routing(routing);
         let events = self.core.events.clone();
         let mut mic = Vec::new();
@@ -515,6 +518,22 @@ pub struct EndedMeeting {
     core: Core,
 }
 
+/// A meeting whose live phase ended without [`MeetingChain::stop`]: the app was killed or crashed
+/// while it recorded. What the final pass needs is read back from the record and from beside its
+/// chunks by the caller, who has already run [`ChunkStore::recover`] over them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Interrupted {
+    /// The meeting's record: still revision 1, with the live finals saved before the crash.
+    pub record: RecordId,
+    /// When it started, Unix ms (the record's start).
+    pub started_unix_ms: i64,
+    /// The host time of its timeline's start, as written beside its chunks.
+    pub t0_ns: u64,
+    /// When it ended, Unix ms: the end of its last recorded audio, as the caller works it out.
+    /// Never recorded before the start.
+    pub ended_unix_ms: i64,
+}
+
 /// What a meeting's final pass came to.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeetingOutcome {
@@ -580,6 +599,39 @@ impl From<Stop> for FinalizeError {
 }
 
 impl EndedMeeting {
+    /// **Worker.** An interrupted meeting ([`Interrupted`]), ready for its final pass: the record is
+    /// marked ended now, as [`MeetingChain::stop`] would have. What the live phase knew and a crash
+    /// lost is taken at its most cautious: how many chunks the pump wrote is unknown (the pass
+    /// counts what is on disk), and the mic is not taken for a Bluetooth headset, so a meeting of
+    /// its zeros is reported as no data, never as a silent listener.
+    pub fn interrupted(
+        services: MeetingServices,
+        settings: MeetingSettings,
+        vad: VadSource,
+        events: EventSink<MeetingEvent>,
+        meeting: Interrupted,
+    ) -> Self {
+        let core = Core {
+            services,
+            settings,
+            vad,
+            events,
+            record: meeting.record,
+            started_unix_ms: meeting.started_unix_ms,
+            t0_ns: meeting.t0_ns,
+            written: [None, None],
+            backlogged: [0, 0],
+            mic_bluetooth: false,
+            late: Arc::default(),
+        };
+        let ended = meeting.ended_unix_ms.max(meeting.started_unix_ms);
+        if let Err(error) = core.services.store.finish_record(&core.record, ended) {
+            log::warn!("meeting recovery: the record could not be marked ended: {error}");
+            core.warn(MeetingWarning::StoreFailed(error));
+        }
+        Self { core }
+    }
+
     /// The meeting's record.
     pub fn record(&self) -> &RecordId {
         &self.core.record
