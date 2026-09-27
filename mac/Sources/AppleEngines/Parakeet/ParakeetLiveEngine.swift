@@ -23,13 +23,34 @@ public protocol LiveSink: Sendable {
     func stalled(code: Int)
 }
 
-/// The core, through `ink_stream_event`.
+/// The core, through `ink_stream_event`. The core refuses an event once it has closed the stream
+/// (a decode can end just as it does) or when it cannot read it; the first refusal on a stream is
+/// logged, the rest are not.
 struct CoreSink: LiveSink {
     let events: InkStreamEvents
+    private let refused = FirstTime()
 
-    func partial(_ text: String) { events.partial(text) }
-    func final(_ segment: InkSegment) { events.final(segment) }
-    func stalled(code: Int) { events.stalled(code: code) }
+    init(events: InkStreamEvents) {
+        self.events = events
+    }
+
+    func partial(_ text: String) { check(events.partial(text)) }
+    func final(_ segment: InkSegment) { check(events.final(segment)) }
+    func stalled(code: Int) { check(events.stalled(code: code)) }
+
+    private func check(_ accepted: Bool) {
+        guard !accepted, refused.now() else { return }
+        Log.engine.notice("live partials: the core refused an event on stream \(events.stream); later refusals on it are not logged")
+    }
+}
+
+/// True the first time it is asked, false after. Any thread.
+private final class FirstTime: Sendable {
+    private let asked = Atomic(false)
+
+    func now() -> Bool {
+        !asked.exchange(true, ordering: .relaxed)
+    }
 }
 
 /// A stream, for an observer: its number in this engine and its side.

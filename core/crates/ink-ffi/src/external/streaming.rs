@@ -275,7 +275,14 @@ pub fn stream_event(stream: u64, json: &str) -> Result<(), StreamEventError> {
     let Some(route) = streams().get(&stream).cloned() else {
         return Err(StreamEventError::Unknown);
     };
-    let event = parse_event(&route.engine, json).ok_or(StreamEventError::Malformed)?;
+    let Some(event) = parse_event(&route.engine, json) else {
+        // Not the payload: it may hold the engine's words (I5).
+        log::debug!(
+            "stream {stream} of shell engine {}: an event the header does not describe was dropped",
+            route.engine
+        );
+        return Err(StreamEventError::Malformed);
+    };
     let sink = route.sink();
     let Some(sink) = sink.as_ref() else {
         return Err(StreamEventError::Unknown);
