@@ -85,12 +85,18 @@ final class LibraryModel {
 
     /// Records per page.
     static let pageSize = 100
+    /// The most characters a search asks with.
+    static let maxQueryLength = 200
 
     /// Makes the player for a record with audio (tests pass one that renders offline).
     @ObservationIgnored var makePlayer: (RecordDocument) -> RecordPlayer? = { RecordPlayer(document: $0) }
     /// The calendar and clock the stats' "today" and "this week" are counted in.
     @ObservationIgnored var calendar = Calendar.autoupdatingCurrent
     @ObservationIgnored var now: () -> Date = Date.init
+    /// How long typing must pause before a search is asked: one question per pause, not one per
+    /// key. A one-shot wait, cancelled by the next key, never a timer that polls.
+    @ObservationIgnored var searchDelay: Duration = .milliseconds(250)
+    @ObservationIgnored private var pendingSearch: Task<Void, Never>?
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var sequence = 0
@@ -151,7 +157,9 @@ final class LibraryModel {
     }
 
     private func search() {
-        let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingSearch?.cancel()
+        pendingSearch = nil
+        let words = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxQueryLength))
         if words.isEmpty {
             latest[.search] = nil
             hits = []
@@ -160,7 +168,16 @@ final class LibraryModel {
             return
         }
         searchLoad = .loading
-        send(.recordsSearch(query: words, limit: 100, ref: ref(for: .search)))
+        if searchDelay == .zero {
+            send(.recordsSearch(query: words, limit: 100, ref: ref(for: .search)))
+            return
+        }
+        let delay = searchDelay
+        pendingSearch = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.send(.recordsSearch(query: words, limit: 100, ref: self.ref(for: .search)))
+        }
     }
 
     /// Everything Today shows that the library holds (what is owed is OwedModel's).

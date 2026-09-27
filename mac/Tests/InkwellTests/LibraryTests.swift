@@ -373,6 +373,7 @@ final class LibraryModelTests: XCTestCase {
         var sent: [String] = []
         let library = LibraryModel(send: { sent.append($0.json) })
         library.makePlayer = { _ in nil }
+        library.searchDelay = .zero
         return (library, { sent })
     }
 
@@ -389,6 +390,35 @@ final class LibraryModelTests: XCTestCase {
                   .libraryStats(sinceUnixMs: 0, ref: "c")] {
             XCTAssertNotNil(command(c.json)["id"] as? String, c.name)
         }
+    }
+
+    /// Review fix: a search waits for typing to pause (one question, not one per key), and asks
+    /// with at most 200 characters.
+    func testSearchWaitsForTypingToPauseAndIsCapped() async throws {
+        let (library, sent) = model()
+        library.searchDelay = .milliseconds(60)
+        let searches = { sent().map(command).filter { $0["cmd"] as? String == "records.search" } }
+        library.query = "b"
+        library.query = "bu"
+        library.query = "budget"
+        XCTAssertEqual(searches().count, 0, "nothing while typing")
+        XCTAssertEqual(library.searchLoad, .loading)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(searches().count, 1)
+        XCTAssertEqual(searches().last?["query"] as? String, "budget")
+
+        library.query = String(repeating: "budget ", count: 60)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(searches().count, 2)
+        let sentQuery = searches().last?["query"] as? String ?? ""
+        XCTAssertEqual(sentQuery.count, LibraryModel.maxQueryLength)
+        XCTAssertTrue(sentQuery.hasPrefix("budget budget"))
+
+        library.query = "zebra"
+        library.query = ""
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(searches().count, 2, "cleared before the pause: nothing asked")
+        XCTAssertEqual(library.searchLoad, .idle)
     }
 
     func testAnAnswerToAnOlderQuestionIsDropped() {
