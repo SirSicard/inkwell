@@ -73,8 +73,10 @@ if [ "$skip_core" = 1 ]; then
 else
   "$mac/scripts/build-core.sh"
 fi
-swift build --package-path "$mac" -c "$config" --product Inkwell
-bin="$(swift build --package-path "$mac" -c "$config" --show-bin-path)"
+# Only the versions pinned in the committed Package.resolved: a build that re-resolved could ship
+# a dependency the licence audit never saw. A stale or missing Package.resolved fails here.
+swift build --package-path "$mac" -c "$config" --product Inkwell --only-use-versions-from-resolved-file
+bin="$(swift build --package-path "$mac" -c "$config" --show-bin-path --only-use-versions-from-resolved-file)"
 
 # --- bundle -------------------------------------------------------------------------------------
 rm -rf "$app"

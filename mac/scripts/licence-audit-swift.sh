@@ -7,8 +7,14 @@
 # is not a control; CI is. So a package passes only when a person has read its LICENSE file and
 # listed it here, and, once it is checked out, only when that file still says what was vetted.
 #
-#   mac/scripts/licence-audit-swift.sh              the pins (mac/Package.resolved) against the list;
-#                                                   LICENSE files too where checked out. Offline.
+#   mac/scripts/licence-audit-swift.sh              every dependency Package.swift declares must be
+#                                                   pinned in the committed mac/Package.resolved (or
+#                                                   be a vetted path dependency), and every pin
+#                                                   vetted; LICENSE files too where checked out.
+#                                                   Offline, and meant to run BEFORE any build: a
+#                                                   build resolves, and what it resolved is then
+#                                                   what ships (build-mac.sh builds only from the
+#                                                   pinned versions).
 #   mac/scripts/licence-audit-swift.sh --checkouts  after a build or `swift package resolve`: also
 #                                                   require every pin's checkout and audit it, and
 #                                                   every downloaded binary artifact (CI)
@@ -44,6 +50,11 @@ vetted_binaries=(
 # Licence files inside a package that may mention a copyleft licence without being one:
 # "identity|path|why".
 vetted_mentions=(
+)
+
+# Path dependencies (`.package(path:)`): never pinned, so nothing but this list vets them.
+# "identity|SPDX|why"; the licence file at the path must still read as SPDX.
+vetted_local=(
 )
 
 fail=0
@@ -86,9 +97,18 @@ classify() {
   esac
 }
 
-# The top-level licence file of a checkout.
+# The top-level licence file of a checkout: a LICENSE (or LICENCE) file first, COPYING only
+# without one.
 licence_file() {
-  find "$1" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' \) | sort | head -1
+  local found
+  found="$(find "$1" -maxdepth 1 -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' \) | sort | head -1)"
+  [ -n "$found" ] || found="$(find "$1" -maxdepth 1 -type f -iname 'COPYING*' | sort | head -1)"
+  printf '%s\n' "$found"
+}
+
+# A repository URL as SwiftPM compares them: case-insensitive, with or without .git or a slash.
+normalise_url() {
+  tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's#/+$##; s#\.git$##'
 }
 
 # A copyleft licence's own text anywhere in a checkout's licence files (the uppercase title that
@@ -99,18 +119,26 @@ copyleft_texts() {
     | xargs -0 grep -lE 'GNU (AFFERO |LESSER |LIBRARY )?GENERAL PUBLIC LICENSE|Mozilla Public License Version|Eclipse Public License|Server Side Public License|Business Source License' 2>/dev/null || true
 }
 
-# --- pins ----------------------------------------------------------------------------------------
 echo "== Swift licence audit (mac/) =="
 
-# Every dependency Package.swift declares, whatever its kind (sourceControl, fileSystem, registry).
-declared="$(swift package dump-package --package-path "$mac" | python3 -c 'import json, sys
+# --- declared against pinned -----------------------------------------------------------------------
+# kind<TAB>identity<TAB>location for every dependency Package.swift declares: sourceControl (a
+# URL), fileSystem (a path) or registry. Read from the manifest itself, so nothing a build could
+# resolve escapes the audit.
+dump="$(swift package dump-package --package-path "$mac")" || { echo "FAIL  Package.swift could not be read"; exit 1; }
+declared="$(python3 -c 'import json, sys
 for dep in json.load(sys.stdin)["dependencies"]:
-    for spec in dep.values():
-        print(spec[0].get("identity", "?"))')"
-if [ -n "$declared" ] && [ ! -f "$resolved" ]; then
-  flag "Package.swift declares dependencies but mac/Package.resolved is missing: resolve and commit it,"
-  note "so what CI audits is exactly what ships"
-fi
+    for kind, specs in dep.items():
+        spec = specs[0]
+        if kind == "sourceControl":
+            remote = spec.get("location", {}).get("remote", [{}])
+            where = remote[0].get("urlString", "") if remote else ""
+            where = where or spec.get("location", {}).get("local", [""])[0]
+        elif kind == "fileSystem":
+            where = spec.get("path", "")
+        else:
+            where = spec.get("identity", "")
+        print(kind + "\t" + spec.get("identity", "?").lower() + "\t" + where)' <<<"$dump")"
 
 # identity<TAB>location, one per pin (Package.resolved v2 and v3).
 pins=""
@@ -122,7 +150,56 @@ fi
 if [ -z "$pins" ] && [ -z "$declared" ]; then
   echo "PASS  no Swift package dependencies"
 fi
+if [ -n "$declared" ] && grep -qv '^fileSystem' <<<"$declared" && [ ! -f "$resolved" ]; then
+  flag "Package.swift declares dependencies but mac/Package.resolved is missing: resolve and commit it,"
+  note "so what CI audits is exactly what ships"
+fi
 
+while IFS=$'\t' read -r kind identity where; do
+  [ -n "$kind" ] || continue
+  case "$kind" in
+    fileSystem)
+      entry="$(lookup "$identity" ${vetted_local[@]+"${vetted_local[@]}"})"
+      if [ -z "$entry" ]; then
+        flag "$identity is a path dependency ($where) that is not on the vetted list"
+        note "a path dependency is never pinned: vet it by reading its licence, and add it to vetted_local"
+        continue
+      fi
+      spdx="$(field "$entry" 2)"
+      case "$allowed" in
+        *" $spdx "*) ;;
+        *) flag "$identity is vetted as $spdx, which is not allowed"; continue ;;
+      esac
+      lic="$(licence_file "$where")"
+      if [ -z "$lic" ]; then
+        flag "$identity ($where) has no licence file: all rights reserved"
+        continue
+      fi
+      found="$(classify "$lic")"
+      if [ "$found" != "$spdx" ]; then
+        flag "$identity: ${lic#"$where/"} reads as $found, vetted as $spdx"
+        continue
+      fi
+      pass "$identity ($spdx, path dependency, ${lic#"$where/"} read)"
+      ;;
+    *)
+      pin="$(awk -F'\t' -v id="$identity" '$1 == id { print $2; exit }' <<<"$pins")"
+      if [ -z "$pin" ]; then
+        # Without a Package.resolved at all, that was reported above.
+        if [ -f "$resolved" ]; then
+          flag "$identity is declared in Package.swift but not pinned in Package.resolved:"
+          note "resolve, audit the new pins, and commit Package.resolved with the change"
+        fi
+        continue
+      fi
+      if [ "$kind" = sourceControl ] && [ "$(normalise_url "$pin")" != "$(normalise_url "$where")" ]; then
+        flag "$identity is declared from $where but is pinned from another location ($pin)"
+      fi
+      ;;
+  esac
+done <<<"$declared"
+
+# --- pins ------------------------------------------------------------------------------------------
 while IFS=$'\t' read -r identity location; do
   [ -n "$identity" ] || continue
   entry="$(lookup "$identity" ${vetted[@]+"${vetted[@]}"})"
