@@ -20,6 +20,9 @@
       "$ref": "#/$defs/EngineUnregistered"
     },
     {
+      "$ref": "#/$defs/EngineRouted"
+    },
+    {
       "$ref": "#/$defs/ModelWarmed"
     },
     {
@@ -138,6 +141,14 @@
       "enum": [
         "mic",
         "far"
+      ]
+    },
+    "EngineSource": {
+      "type": "string",
+      "description": "Where a routed engine comes from: registry (a model downloaded from the built-in registry) or shell (an engine the shell registered, such as FluidAudio's Parakeet on the Mac).",
+      "enum": [
+        "registry",
+        "shell"
       ]
     },
     "EngineKind": {
@@ -510,6 +521,32 @@
         "id",
         "kind",
         "jobs"
+      ],
+      "additionalProperties": false
+    },
+    "EngineRouted": {
+      "type": "object",
+      "description": "What serves a job now, in answer to engine.route: the router's choice among installed models and registered engines. Without id, nothing installed or registered fills the job.",
+      "properties": {
+        "type": {
+          "const": "engine.routed"
+        },
+        "job": {
+          "$ref": "#/$defs/Job",
+          "description": "The job asked about."
+        },
+        "id": {
+          "type": "string",
+          "description": "The engine that serves it: a registry model's id, or the id a shell engine registered under."
+        },
+        "source": {
+          "$ref": "#/$defs/EngineSource",
+          "description": "Where that engine comes from."
+        }
+      },
+      "required": [
+        "type",
+        "job"
       ],
       "additionalProperties": false
     },

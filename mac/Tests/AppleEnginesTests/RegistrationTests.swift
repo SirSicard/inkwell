@@ -19,6 +19,13 @@ private struct Chatter: WindowDecoder {
     }
 }
 
+/// A loaded model that hears nothing.
+private struct Silent: ParakeetBackend {
+    func transcribe(_ samples: [Float]) async throws(ParakeetError) -> Transcribed {
+        Transcribed(text: "", words: [], reportedDuration: 0)
+    }
+}
+
 /// Which threads pushed.
 private final class Threads: LiveObserver {
     private let names = Mutex<Set<String>>([])
@@ -66,6 +73,34 @@ final class RegistrationTests: XCTestCase {
         XCTAssertFalse(threads.onMain)
     }
 
+    /// Parakeet also registers for both finals, with the rates measured for it: worse than
+    /// Qwen3-ASR's, so the router uses it only while Qwen3-ASR is not installed. With no registry
+    /// model installed here, it serves; `engine.route` is where the shell sees that.
+    func testParakeetRegistersAsTheFinalsFallback() async throws {
+        let core = try TestCore.start()
+        defer { core.stop() }
+        let loaded = ParakeetModel(loader: { Silent() })
+        let report = await AppleEngines(session: core.session, parakeet: loaded).register()
+        XCTAssertEqual(report.livePartials, .registered)
+        XCTAssertEqual(report.finals, .registered)
+        let offline = try XCTUnwrap(core.events.wait(5) {
+            if case .engineRegistered(let e) = $0, e.kind == .offline { e } else { nil }
+        })
+        XCTAssertEqual(offline.id, ParakeetOfflineEngine.fallbackID)
+        // The core keeps rates as 32-bit floats: compared to a tenth.
+        XCTAssertEqual(
+            Set(offline.jobs.map { "\($0.job.rawValue) \(String(format: "%.1f", $0.wer))" }),
+            ["dictation_final 6.7", "meeting_final 23.4"])
+        for job in [Job.dictationFinal, .meetingFinal] {
+            try core.session.command(["cmd": "engine.route", "job": job.rawValue])
+            let routed = try XCTUnwrap(core.events.wait(5) {
+                if case .engineRouted(let r) = $0, r.job == job { r } else { nil }
+            })
+            XCTAssertEqual(routed.id, ParakeetOfflineEngine.fallbackID)
+            XCTAssertEqual(routed.source, .shell)
+        }
+    }
+
     func testMissingModelsAreReportedAndNothingIsRegistered() async throws {
         let core = try TestCore.start()
         defer { core.stop() }
@@ -74,7 +109,8 @@ final class RegistrationTests: XCTestCase {
         })
         let report = await AppleEngines(session: core.session, parakeet: missing).register()
         XCTAssertEqual(report.livePartials, .modelMissing)
-        XCTAssertTrue(core.registered.allSatisfy { $0.kind != .streaming }, "\(core.registered)")
+        XCTAssertEqual(report.finals, .modelMissing)
+        XCTAssertTrue(core.registered.allSatisfy { $0.kind == .llm }, "\(core.registered)")
     }
 
     func testPolishIsRegisteredOnlyWhileAppleIntelligenceIsAvailable() throws {

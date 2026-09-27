@@ -19,6 +19,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case engineRegistered(EngineRegistered)
     /// `engine.unregistered`
     case engineUnregistered(EngineUnregistered)
+    /// `engine.routed`
+    case engineRouted(EngineRouted)
     /// `model.warmed`
     case modelWarmed(ModelWarmed)
     /// `model.warm_failed`
@@ -121,6 +123,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "command.failed": self = .commandFailed(try CommandFailed(from: decoder))
             case "engine.registered": self = .engineRegistered(try EngineRegistered(from: decoder))
             case "engine.unregistered": self = .engineUnregistered(try EngineUnregistered(from: decoder))
+            case "engine.routed": self = .engineRouted(try EngineRouted(from: decoder))
             case "model.warmed": self = .modelWarmed(try ModelWarmed(from: decoder))
             case "model.warm_failed": self = .modelWarmFailed(try ModelWarmFailed(from: decoder))
             case "model.refused": self = .modelRefused(try ModelRefused(from: decoder))
@@ -172,6 +175,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .commandFailed(let event): try event.encode(to: encoder)
         case .engineRegistered(let event): try event.encode(to: encoder)
         case .engineUnregistered(let event): try event.encode(to: encoder)
+        case .engineRouted(let event): try event.encode(to: encoder)
         case .modelWarmed(let event): try event.encode(to: encoder)
         case .modelWarmFailed(let event): try event.encode(to: encoder)
         case .modelRefused(let event): try event.encode(to: encoder)
@@ -560,6 +564,27 @@ public struct EngineRegistered: Codable, Sendable, Equatable {
     public let kind: EngineKind
     /// Always `engine.registered`.
     public let type: String
+}
+
+/// What serves a job now, in answer to engine.route: the router's choice among installed models
+/// and registered engines. Without id, nothing installed or registered fills the job.
+public struct EngineRouted: Codable, Sendable, Equatable {
+    /// The engine that serves it: a registry model's id, or the id a shell engine registered
+    /// under.
+    public let id: String?
+    /// The job asked about.
+    public let job: Job
+    /// Where that engine comes from.
+    public let source: EngineSource?
+    /// Always `engine.routed`.
+    public let type: String
+}
+
+/// Where a routed engine comes from: registry (a model downloaded from the built-in registry)
+/// or shell (an engine the shell registered, such as FluidAudio's Parakeet on the Mac).
+public enum EngineSource: String, Codable, Sendable, Equatable, CaseIterable {
+    case registry
+    case shell
 }
 
 /// An engine the shell registered was let go; its release function runs once no call is in

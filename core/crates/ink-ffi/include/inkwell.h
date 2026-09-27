@@ -128,6 +128,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "model.refused", never served from files being replaced. "model.update_started", then
  *       "model.update_finished". While a job is using the model, or another update holds it,
  *       the update is "command.failed" and nothing changes: send it again later.
+ *   {"cmd":"engine.route","job":"dictation_final"}
+ *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
+ *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
+ *       or no id when nothing fills it. The router picks the lowest measured error rate among
+ *       installed models and registered engines, at every call: a shell engine registered as a
+ *       fallback serves until a better model finishes installing, then that model does.
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".

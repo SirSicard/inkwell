@@ -1,5 +1,6 @@
 // Apple accelerators, registered into the core as engines over the C ABI (architecture rule 2):
-// FluidAudio's Parakeet for live partials and Foundation Models for polish.
+// FluidAudio's Parakeet for live partials, and for the finals until Qwen3-ASR is installed, and
+// Foundation Models for polish.
 //
 // Each is registered only when it can run, and the core's router then picks it for its job: live
 // partials go to the registered streaming engine, and polish to the registered language model.
@@ -22,9 +23,14 @@ public enum AppleEngineState: Sendable, Equatable {
     case failed(code: Int)
 }
 
-/// Both engines' states after `AppleEngines.register()`.
+/// The engines' states after `AppleEngines.register()`.
 public struct AppleEnginesReport: Sendable, Equatable {
+    /// Parakeet, streaming.
     public var livePartials: AppleEngineState
+    /// Parakeet, as the dictation and meeting finals' fallback (`ParakeetOfflineEngine`). Whether
+    /// it serves now is the router's choice: ask with `engine.route`.
+    public var finals: AppleEngineState
+    /// Foundation Models.
     public var polish: AppleEngineState
 }
 
@@ -41,21 +47,23 @@ public final class AppleEngines: Sendable {
     }
 
     /// Loads Parakeet (once per process; seconds on the first launch) and registers it for live
-    /// partials, and registers polish if Apple Intelligence is available. Call once the session
-    /// has started; call `syncPolish` again whenever Apple Intelligence may have changed.
+    /// partials and as the finals' fallback, and registers polish if Apple Intelligence is
+    /// available. Call once the session has started; call `syncPolish` again whenever Apple
+    /// Intelligence may have changed.
     public func register() async -> AppleEnginesReport {
-        let live: AppleEngineState
+        let live, finals: AppleEngineState
         do throws(ParakeetError) {
             try await parakeet.load()
             live = Self.state { try session.register(ParakeetLiveEngine(decoder: parakeet)) }
+            finals = Self.state { try session.register(ParakeetOfflineEngine.fallback(model: parakeet)) }
         } catch .modelMissing, .downloadRefused {
-            live = .modelMissing
+            (live, finals) = (.modelMissing, .modelMissing)
         } catch .unsupported {
-            live = .unavailable(code: 1)
+            (live, finals) = (.unavailable(code: 1), .unavailable(code: 1))
         } catch {
-            live = .failed(code: error.engineError.code)
+            (live, finals) = (.failed(code: error.engineError.code), .failed(code: error.engineError.code))
         }
-        return AppleEnginesReport(livePartials: live, polish: syncPolish())
+        return AppleEnginesReport(livePartials: live, finals: finals, polish: syncPolish())
     }
 
     /// Registers polish when Apple Intelligence is available and it is not registered, and lets go
