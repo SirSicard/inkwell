@@ -23,7 +23,7 @@ http = ["dep:ureq"]
 engine-llama = ["dep:llama-cpp-2", "dep:tracing"]
 # Silero VAD on tract, a pure-Rust ONNX runtime: ink-audio's speech probability, no native code and
 # no build-time download.
-engine-silero = ["dep:tract-onnx", "dep:ink-audio"]
+engine-silero = ["dep:tract-onnx"]
 # Nemotron-3-Diarization through NeMo-Speech.cpp's C API. Links a library built outside cargo:
 # set NEMO_SPEECH_DIR to its install prefix (native/build-nemo-speech.sh; checked in build.rs).
 engine-nemo = []
@@ -43,8 +43,9 @@ llama-cpp-2 = { version = "=0.1.157", default-features = false, features = ["met
 # llama.cpp's logs arrive as `tracing` events (through llama-cpp-2); `llama::log_allowed` reads
 # their metadata. Already in llama-cpp-2's tree.
 tracing = { version = "0.1.44", optional = true }
-# engine-silero: the speech-probability trait it implements.
-ink-audio = { path = "../ink-audio", optional = true }
+# The speech-probability trait the VAD adapter implements, named in every build by `load_vad`
+# (a workspace crate every core build already links).
+ink-audio = { path = "../ink-audio" }
 # engine-silero: ONNX inference in pure Rust (MIT OR Apache-2.0). Exact pin: the model graph is
 # checked against this version's optimiser. Default features off: they add tract-transformers,
 # which the VAD does not need.

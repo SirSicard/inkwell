@@ -21,6 +21,7 @@
 #![cfg_attr(feature = "engine-nemo", deny(unsafe_code))]
 #![warn(missing_docs)]
 
+mod adapters;
 mod download;
 #[cfg(feature = "http")]
 mod http;
@@ -37,6 +38,7 @@ mod rows;
 #[cfg(feature = "engine-silero")]
 mod silero;
 
+pub use adapters::{VadModel, load_diarizer, load_vad};
 pub use download::{DownloadError, DownloadProgress, Downloader, Fetch, FetchError, Fetched};
 #[cfg(feature = "http")]
 pub use http::HttpFetch;
