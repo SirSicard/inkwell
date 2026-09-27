@@ -194,9 +194,34 @@ private final class EngineBox: Sendable {
     }
 }
 
-private struct Options: Decodable {
+/// One transcription request as the core sends it, copied out of the call's pointers.
+struct EngineRequest: Equatable {
+    let samples: [Float]
     let channel: Channel
     let context: String?
+
+    private struct Options: Decodable {
+        let channel: Channel
+        let context: String?
+    }
+
+    /// Reads the call's arguments, or refuses the request (`.badRequest`). Nothing is guessed:
+    /// the channel decides "you" versus "them", so a request that does not say it is refused
+    /// rather than read as the mic.
+    static func read(
+        samples: UnsafePointer<Float>?, count: Int, options: UnsafePointer<CChar>?
+    ) -> Result<EngineRequest, InkEngineError> {
+        guard let options, samples != nil || count == 0 else {
+            return .failure(.badRequest)
+        }
+        let json = Data(bytes: options, count: strlen(options))
+        guard let parsed = try? JSONDecoder().decode(Options.self, from: json) else {
+            return .failure(.badRequest)
+        }
+        // Copied: the pointers are valid only during the call, and the answer may come later.
+        let audio = samples.map { Array(UnsafeBufferPointer(start: $0, count: count)) } ?? []
+        return .success(EngineRequest(samples: audio, channel: parsed.channel, context: parsed.context))
+    }
 }
 
 /// `info_json`, as the header gives it.
@@ -230,11 +255,14 @@ private enum InkEngineTable {
                 transcribe: { ctx, call, samples, len, options in
                     guard let ctx else { return }
                     let engine = Unmanaged<EngineBox>.fromOpaque(ctx).takeUnretainedValue().engine
-                    // Valid only during this call: copied before anything answers later.
-                    let audio = samples.map { Array(UnsafeBufferPointer(start: $0, count: len)) } ?? []
-                    let parsed = options.flatMap { try? JSONDecoder().decode(Options.self, from: Data(String(cString: $0).utf8)) }
-                    engine.transcribe(audio, channel: parsed?.channel ?? .mic, context: parsed?.context) { result in
-                        InkEngineTable.complete(call, result)
+                    switch EngineRequest.read(samples: samples, count: len, options: options) {
+                    case .failure(let refusal):
+                        // The engine never sees a request it could misread.
+                        InkEngineTable.complete(call, .failure(refusal))
+                    case .success(let request):
+                        engine.transcribe(request.samples, channel: request.channel, context: request.context) { result in
+                            InkEngineTable.complete(call, result)
+                        }
                     }
                 },
                 cancel: nil,
