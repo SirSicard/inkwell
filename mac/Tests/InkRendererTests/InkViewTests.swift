@@ -19,6 +19,7 @@ final class InkViewTests: XCTestCase {
     func testIdleDrawsOneStillFrameLiveRunsAtTheDisplayRateAndIdleStopsAgain() async throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
         let view = InkView(frame: NSRect(x: 0, y: 0, width: 84, height: 84))
+        view.assumeReduceMotion = false  // GitHub's macOS runners turn Reduce Motion on
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 84, height: 84), styleMask: [.borderless],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

@@ -75,6 +75,17 @@ public final class InkView: NSView {
         didSet { visibilityChanged() }
     }
 
+    /// For tests: pin Reduce Motion instead of reading the system setting. GitHub's macOS runners
+    /// turn Reduce Motion on, so a test of live motion must not depend on the host's setting.
+    var assumeReduceMotion: Bool? {
+        didSet { perform(schedule.set(reduceMotion: reduceMotion)) }
+    }
+
+    /// The system's Reduce Motion setting, unless a test pinned it.
+    private var reduceMotion: Bool {
+        assumeReduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
     private var pipeline: InkPipeline?
     private var simulation = InkSimulation()
     private var schedule = InkSchedule()
@@ -99,7 +110,7 @@ public final class InkView: NSView {
         // The prototype starts each ink at a random point in its slow motion.
         simulation.t = Double.random(in: 0..<30)
         simulation.cy = inkCentreHeight
-        _ = schedule.set(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        _ = schedule.set(reduceMotion: reduceMotion)
         updateCanvas()
         if let outcome = loader.outcome {
             adopt(outcome)
@@ -172,7 +183,7 @@ public final class InkView: NSView {
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // The setting may have changed while the view was out of a window, unheard.
-        perform(schedule.set(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
+        perform(schedule.set(reduceMotion: reduceMotion))
         updateCanvas()
         visibilityChanged()
     }
@@ -225,7 +236,7 @@ public final class InkView: NSView {
 
     @objc private nonisolated func displayOptionsChanged(_ note: Notification) {
         onMain { view in
-            view.perform(view.schedule.set(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
+            view.perform(view.schedule.set(reduceMotion: view.reduceMotion))
         }
     }
 

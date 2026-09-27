@@ -38,6 +38,7 @@ final class PipelineLoaderTests: XCTestCase {
         let clock = ContinuousClock()
         let start = clock.now
         let view = InkView(frame: NSRect(x: 0, y: 0, width: 84, height: 84), loader: loader)
+        view.assumeReduceMotion = false  // GitHub's macOS runners turn Reduce Motion on
         view.assumeOnScreen = true
         view.state = .meeting
         let elapsed = clock.now - start

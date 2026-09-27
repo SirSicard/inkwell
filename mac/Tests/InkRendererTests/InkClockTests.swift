@@ -14,6 +14,9 @@ final class InkClockTests: XCTestCase {
         _ = loader.wait()
         let drop = InkView(frame: NSRect(x: 0, y: 0, width: 96, height: 84), loader: loader, clock: clock)
         let rail = InkView(frame: NSRect(x: 0, y: 0, width: 56, height: 700), loader: loader, clock: clock)
+        // Pinned: GitHub's macOS runners turn Reduce Motion on.
+        drop.assumeReduceMotion = false
+        rail.assumeReduceMotion = false
         drop.assumeOnScreen = true
         rail.assumeOnScreen = true
         return (drop, rail)
@@ -72,6 +75,19 @@ final class InkClockTests: XCTestCase {
         rail.state = .idle
         XCTAssertEqual(clock.clientCount, 0)
         XCTAssertEqual(clock.linkCount, 0, "no live view, no link")
+    }
+
+    func testReduceMotionKeepsALiveViewOffTheClock() throws {
+        let clock = InkClock()
+        let (drop, _) = try views(on: clock)
+        drop.assumeReduceMotion = true
+        let still = drop.framesDrawn
+        drop.state = .meeting
+        XCTAssertFalse(drop.isAnimating, "Reduce Motion: no clock")
+        XCTAssertEqual(clock.linkCount, 0)
+        XCTAssertEqual(drop.framesDrawn, still + 1, "one still frame for the new state")
+        drop.assumeReduceMotion = false
+        XCTAssertTrue(drop.isAnimating, "motion allowed again: the live ink runs")
     }
 
     func testAViewThatGoesOffScreenLeavesTheClock() throws {
