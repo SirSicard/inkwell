@@ -139,7 +139,11 @@ fn answer_about(shared: &Shared, record: &RecordId, question: &str) -> Result<St
     let segments = store
         .segments(record)
         .map_err(|e| format!("the transcript could not be read: {e}"))?;
-    let names = store.speaker_names(record).unwrap_or_default();
+    // Names only label the lines; without them the answer still comes, with default labels.
+    let names = store.speaker_names(record).unwrap_or_else(|e| {
+        log::warn!("meeting.ask: speaker names could not be read ({e}); lines go unnamed");
+        Default::default()
+    });
     let ctx = RecordContext {
         title: stored.title.as_deref(),
         time: RecordTime {
