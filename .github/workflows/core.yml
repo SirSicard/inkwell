@@ -84,8 +84,7 @@ jobs:
       - if: runner.os == 'macOS'
         run: cargo test -p ink-ffi --locked --features engine-llama --test logging
       # The C ABI from Swift: the core as an XCFramework (engine features off), the mac/ package
-      # with every target, and the XCTest smoke test. Thread Sanitizer runs locally
-      # (swift test --package-path mac --sanitize=thread).
+      # with every target, and its XCTests. Thread Sanitizer runs in its own job below.
       - if: runner.os == 'macOS'
         name: Swift smoke test (mac/)
         working-directory: .
@@ -93,6 +92,26 @@ jobs:
           mac/scripts/build-core.sh
           swift build --package-path mac
           swift test --package-path mac
+
+  # The Swift tests under Thread Sanitizer, in a job of their own so a slow run does not hold up
+  # the test matrix. Only the Swift code is instrumented: the Rust static library (the core) is
+  # built without it, so a race inside the core is not seen here, only races in the bridge and in
+  # how it is called (events, engine callbacks, shutdown).
+  swift-tsan:
+    name: Swift tests under Thread Sanitizer (macos-26)
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+        working-directory: core
+      - uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: core
+      - run: mac/scripts/build-core.sh
+      - run: swift test --package-path mac --sanitize=thread
 
   deny:
     name: licences, advisories, sources
