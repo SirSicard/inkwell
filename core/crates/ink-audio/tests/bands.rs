@@ -164,7 +164,6 @@ fn the_reader_never_sees_a_torn_value() {
     }
 }
 
-
 /// The ink's level map (mac/Sources/InkRenderer/InkLevels.swift: `floorDB`, `ceilingDB`) rests
 /// on these measurements of the public AMI fixture as published (S2.8): every 16 ms hop's band
 /// power, in dBFS, as the pump publishes it for the ink.
@@ -215,13 +214,22 @@ fn the_ink_level_map_rests_on_the_measured_fixture_levels() {
     ];
     for (measured, documented) in table {
         for (m, d) in measured.iter().zip(documented) {
-            assert!((m - d).abs() < 0.05, "measured {measured:?}, documented {documented:?}");
+            assert!(
+                (m - d).abs() < 0.05,
+                "measured {measured:?}, documented {documented:?}"
+            );
         }
     }
     assert_eq!(level(near[0]), 0.0, "the room between words is still");
     assert_eq!(level(near[1]), 0.0);
-    assert!(level(near[4]) > 0.5, "a talker's loud quarter throws droplets");
+    assert!(
+        level(near[4]) > 0.5,
+        "a talker's loud quarter throws droplets"
+    );
     assert!(level(far[3]) > 0.5 && level(far[2]) < 0.5);
-    assert!(level(near[4]) < 1.0 && level(far[4]) < 1.0, "only the loudest speech saturates");
+    assert!(
+        level(near[4]) < 1.0 && level(far[4]) < 1.0,
+        "only the loudest speech saturates"
+    );
     assert!(level(-50.6) < 0.15, "S0.3's room floor barely moves it");
 }

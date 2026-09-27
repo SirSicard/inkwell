@@ -253,6 +253,47 @@ show an empty library.
 - **Words.** These answers carry the library's words (transcripts, notes, summaries, search
   snippets). As with every event that does, they never reach a log.
 
+## Meetings
+
+A meeting records the mic and the far end from this machine (`meeting.start`), or replays two WAV
+files through the same path (`replay_meeting`, architecture rule 7). Commands for meetings run on
+their own thread, `ink-meetings`, so a model download on the command thread never delays "Record
+this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
+
+- **Consent.** Detection only offers. An app that has held the microphone for 3 s is offered
+  (`meeting.detected`, the shell's Drop), one at a time; "not this one" lasts until that app
+  releases the microphone. Nothing records until the user says so. A meeting recorded for an app
+  ends 15 s after the app lets go of the microphone; one started with "Record now" ends when it is
+  stopped. The rules are a pure state machine (`ink-ffi/src/detection.rs`); the thread wakes only
+  while something is pending. The platform's detector polls the audio server once a second while
+  detection is on (`meetings.detect`).
+- **Capture.** On the Mac: the routed mic's own IOProc (the built-in mic with Bluetooth output,
+  unless `meetings.headset_mic`) and a process tap of the meeting's app, else of everything this
+  Mac plays except Inkwell. `meeting.started` names the title (the calendar's event on now, from
+  the shell), the app and the mic.
+- **What it runs on.** The VAD (Silero), loaded at the start; the far end's diarizer (Nemotron),
+  loaded only for the final pass and let go of after it; and the language model the shell
+  registered, for the summary, commitments and Ask, sized to its context (`context_tokens`: the
+  on-device model holds 4,096 tokens, so a long meeting's summary is written in windows cut by
+  size and combined in groups). Foundation Models generates structured answers to the request's
+  JSON Schema. Any of them missing is said, never guessed around.
+- **The far end's bands** are published beside the mic's (`ink_far_bands_read`), so each drop in
+  the ink pulses with its own side.
+- **Crash recovery.** A marker (`live.json`) sits beside a meeting's chunks from its start until
+  its final pass has run. After a crash, `meetings.recover` (which the shell sends once its own
+  engines are registered) repairs the chunks (torn tails trimmed, torn headers rebuilt), ends the
+  record where its audio ends, and runs the final pass over what is on disk. Chunks are written
+  block by block with no buffer in between, so a killed process loses what was still in the
+  capture ring: measured at 0.03 s by a test that kills a real child process mid-meeting; the
+  limit is one chunk (10 s).
+- **Retention.** `retention.days` (forever by default, or 7, 30, 90, 365 days) deletes whole records
+  older than that, at launch, after each meeting and when it changes: the store's delete overwrites
+  the text in the database and checkpoints the write-ahead log with TRUNCATE, then the audio
+  directory is removed (a record without an end is never swept).
+- **Summaries keep their citations.** Each decision and action is saved with the span of the line
+  it cites, so a record shows it; a promise names who it is owed to; a later meeting in which the
+  user says an open promise is already done marks it "looks done" for the user to confirm.
+
 ## Testing
 
 - `cargo test --workspace` in `core/`. CI runs it with fmt, `clippy -D warnings` and `cargo deny` on
