@@ -10,7 +10,7 @@ final class RenderTests: XCTestCase {
 
     override func setUpWithError() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
-        pipeline = try InkPipeline.shared.get()
+        pipeline = try InkPipelineLoader.shared.wait().get()
     }
 
     func testTheBundledShaderIsFoundAndCompiles() throws {

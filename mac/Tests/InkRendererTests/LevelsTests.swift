@@ -30,7 +30,7 @@ final class LevelsTests: XCTestCase {
 
     func testGPUTimesAreRecordedOnlyOnceStarted() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
-        let pipeline = try InkPipeline.shared.get()
+        let pipeline = try InkPipelineLoader.shared.wait().get()
         let times = GPUFrameTimes()
         try frame(pipeline, observedBy: times)
         XCTAssertNil(times.drain(), "not recording")

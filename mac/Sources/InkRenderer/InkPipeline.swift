@@ -3,9 +3,11 @@
 //
 // The shader ships as source: Resources/ink.msl, generated from shaders/ink.wgsl by
 // core/crates/ink-shader, compiled here with makeLibrary(source:). Building the app needs no Metal
-// toolchain, and the shells share one WGSL source.
+// toolchain, and the shells share one WGSL source. The compile runs once, off the main thread
+// (InkPipelineLoader).
 import Foundation
 import Metal
+import Synchronization
 
 /// Why the ink cannot draw. The app then shows plain paper where the ink would be.
 public enum InkRendererError: Error, Equatable, CustomStringConvertible {
@@ -44,11 +46,6 @@ public final class InkPipeline: @unchecked Sendable {
 
     /// The pixel format every ink target uses: the drawable's, and the offscreen render's.
     public static let pixelFormat = MTLPixelFormat.bgra8Unorm
-
-    /// The process's pipeline, made on first use (the shader compiles once). A failure is kept:
-    /// a Mac without Metal, or a build without the shader, does not retry on every frame.
-    public static let shared: Result<InkPipeline, InkRendererError> = Result { try InkPipeline() }
-        .mapError { $0 as? InkRendererError ?? .shaderFailed(String(describing: $0)) }
 
     init(source: String? = nil) throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw InkRendererError.noDevice }
@@ -139,6 +136,116 @@ public final class InkPipeline: @unchecked Sendable {
         encoder.setFragmentSamplerState(sampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
+    }
+}
+
+/// Compiles the ink's pipeline once, on a background queue, and hands it to everything that waits
+/// for it. The app starts the compile in main(), next to the core's start, so no ink view ever
+/// compiles on the main thread: a view made before the compile finishes shows plain paper and
+/// starts drawing when the pipeline arrives. A failure is kept: a Mac without Metal, or a build
+/// without the shader, does not retry.
+public final class InkPipelineLoader: Sendable {
+    public typealias Outcome = Result<InkPipeline, InkRendererError>
+
+    private enum Phase {
+        case idle
+        case compiling
+        case done(Outcome)
+    }
+
+    private struct State {
+        var phase = Phase.idle
+        var duration: Duration?
+        var waiters: [@Sendable (Outcome) -> Void] = []
+    }
+
+    private let make: @Sendable () throws -> InkPipeline
+    private let state = Mutex(State())
+
+    /// The process's loader: the bundled shader.
+    public static let shared = InkPipelineLoader { try InkPipeline() }
+
+    /// A loader whose compile is `make` (tests hold it back or make it fail).
+    public init(make: @escaping @Sendable () throws -> InkPipeline) {
+        self.make = make
+    }
+
+    /// Starts the compile on a background queue, the first time only. Any thread; never waits.
+    public func warm() {
+        let start = state.withLock { state -> Bool in
+            guard case .idle = state.phase else { return false }
+            state.phase = .compiling
+            return true
+        }
+        guard start else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let clock = ContinuousClock()
+            let began = clock.now
+            let outcome: Outcome
+            do {
+                outcome = .success(try make())
+            } catch let error as InkRendererError {
+                outcome = .failure(error)
+            } catch {
+                outcome = .failure(.shaderFailed(String(describing: error)))
+            }
+            let took = clock.now - began
+            let waiters = state.withLock { state -> [@Sendable (Outcome) -> Void] in
+                state.phase = .done(outcome)
+                state.duration = took
+                defer { state.waiters = [] }
+                return state.waiters
+            }
+            for waiter in waiters { waiter(outcome) }
+        }
+    }
+
+    /// The outcome once the compile has finished, else nil. Never waits.
+    public var outcome: Outcome? {
+        state.withLock { state in
+            if case .done(let outcome) = state.phase { return outcome }
+            return nil
+        }
+    }
+
+    /// How long the compile took, once it has finished.
+    public var compileDuration: Duration? {
+        state.withLock { $0.duration }
+    }
+
+    /// Calls `body` on the main thread with the outcome: on a later turn of the main queue, even
+    /// when the compile has already finished. Starts the compile if nothing has.
+    public func whenReady(_ body: @escaping @MainActor @Sendable (Outcome) -> Void) {
+        warm()
+        subscribe { outcome in
+            DispatchQueue.main.async { MainActor.assumeIsolated { body(outcome) } }
+        }
+    }
+
+    /// Waits for the outcome, starting the compile if nothing has. For tests and offline renders:
+    /// the app's main thread uses `whenReady` instead.
+    public func wait() -> Outcome {
+        warm()
+        let done = DispatchSemaphore(value: 0)
+        let result = Mutex<Outcome?>(nil)
+        subscribe { outcome in
+            result.withLock { $0 = outcome }
+            done.signal()
+        }
+        done.wait()
+        // Set before the signal above.
+        return result.withLock { $0 } ?? .failure(.resource("pipeline"))
+    }
+
+    /// Runs `waiter` with the outcome: now if there is one, else on the compiling thread when it
+    /// finishes.
+    private func subscribe(_ waiter: @escaping @Sendable (Outcome) -> Void) {
+        let ready = state.withLock { state -> Outcome? in
+            if case .done(let outcome) = state.phase { return outcome }
+            state.waiters.append(waiter)
+            return nil
+        }
+        if let ready { waiter(ready) }
     }
 }
 

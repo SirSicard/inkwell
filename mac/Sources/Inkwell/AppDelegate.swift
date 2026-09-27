@@ -53,10 +53,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The shell budget's live phase holds the ink live with no audio; the focus check cycles
         // the Drop through its states. Neither is set in ordinary use.
         ink.held = measurement?.heldInk
-        if case .failure(let failure) = InkPipeline.shared {
-            // The app runs on without the ink: every ink zone shows plain paper.
-            Logger(subsystem: "com.inkwell.app", category: "ink")
-                .error("the ink cannot draw: \(failure.description, privacy: .public)")
+        InkPipelineLoader.shared.whenReady { [weak self] outcome in
+            let log = Logger(subsystem: "com.inkwell.app", category: "ink")
+            let took = InkPipelineLoader.shared.compileDuration ?? .zero
+            switch outcome {
+            case .success:
+                log.notice("the ink's shader compiled in \(Int(took / .milliseconds(1)), privacy: .public) ms")
+            case .failure(let failure):
+                // The app runs on without the ink: every ink zone shows plain paper.
+                log.error("the ink cannot draw: \(failure.description, privacy: .public)")
+            }
+            self?.measurement?.inkReady(outcome, took: took)
         }
         drop = DropController(ink: ink)
         if let interval = DropDemo.interval(from: ProcessInfo.processInfo.environment) {

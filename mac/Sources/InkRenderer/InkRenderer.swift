@@ -4,7 +4,7 @@
 // |---|---|
 // | InkSimulation | the prototype's state machine and droplet physics, and the uniform block |
 // | InkLevels | the core's audio bands as the ink's live levels |
-// | InkPipeline | the shader (Resources/ink.msl, generated from shaders/ink.wgsl) compiled at run time |
+// | InkPipeline | the shader (Resources/ink.msl, generated from shaders/ink.wgsl) compiled at run time, off the main thread |
 // | InkSchedule | when a view draws: a display link only while live, else one still frame at most |
 // | InkView | the ink on screen (CAMetalLayer) |
 // | Wordmark | INKWELL, rasterised with CoreText, knocked out of the ink |

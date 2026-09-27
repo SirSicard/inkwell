@@ -50,7 +50,7 @@ final class ReferenceTests: XCTestCase {
             throw XCTSkip("INK_REFERENCE_DIR is not set")
         }
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
-        let pipeline = try InkPipeline.shared.get()
+        let pipeline = try InkPipelineLoader.shared.wait().get()
         let out = environment["INK_RENDER_OUT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
         if let out { try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true) }
         // The two faces' boxes together, grown by 2 px for antialiasing: outside it the frames must
@@ -89,7 +89,7 @@ final class ReferenceTests: XCTestCase {
     func testGPUTimePerFrameAt60FPS() throws {
         guard environment["INK_GPU_TIMING"] == "1" else { throw XCTSkip("INK_GPU_TIMING is not 1") }
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
-        let pipeline = try InkPipeline.shared.get()
+        let pipeline = try InkPipelineLoader.shared.wait().get()
         for (name, w, h, pointWidth, mark) in [
             ("drop", 168, 168, 84.0, false), ("rail", 112, 1400, 56.0, false),
             ("today", 375, 875, 300.0, true), ("panel", 450, 900, 360.0, true),

@@ -63,9 +63,18 @@ public final class InkView: NSView {
     public var isAnimating: Bool { link != nil }
 
     /// Why the ink cannot draw, if it cannot. The view then shows plain paper.
-    public let failure: InkRendererError?
+    public private(set) var failure: InkRendererError?
 
-    private let pipeline: InkPipeline?
+    /// Whether the pipeline has arrived. Until then the view shows plain paper and never runs a
+    /// clock.
+    public var isReady: Bool { pipeline != nil }
+
+    /// For tests: treat the view as on screen without a window.
+    var assumeOnScreen = false {
+        didSet { visibilityChanged() }
+    }
+
+    private var pipeline: InkPipeline?
     private var simulation = InkSimulation()
     private var schedule = InkSchedule()
     private var link: CADisplayLink?
@@ -77,15 +86,9 @@ public final class InkView: NSView {
     /// Paper, #F2EEE6: the layer's colour until its first frame, and where the ink cannot draw.
     private static let paper = CGColor(srgbRed: 0xF2 / 255, green: 0xEE / 255, blue: 0xE6 / 255, alpha: 1)
 
-    public init(frame: NSRect = .zero, pipeline: Result<InkPipeline, InkRendererError> = InkPipeline.shared) {
-        switch pipeline {
-        case .success(let p):
-            self.pipeline = p
-            failure = nil
-        case .failure(let error):
-            self.pipeline = nil
-            failure = error
-        }
+    /// A view that draws with `loader`'s pipeline. It never waits for the compile: made before it
+    /// finishes, the view shows paper and starts drawing when the pipeline arrives.
+    public init(frame: NSRect = .zero, loader: InkPipelineLoader = .shared) {
         super.init(frame: frame)
         wantsLayer = true
         // The layer's content is the Metal drawable; AppKit never redraws it.
@@ -94,6 +97,24 @@ public final class InkView: NSView {
         simulation.t = Double.random(in: 0..<30)
         simulation.cy = inkCentreHeight
         _ = schedule.set(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        updateCanvas()
+        if let outcome = loader.outcome {
+            adopt(outcome)
+        } else {
+            loader.whenReady { [weak self] outcome in self?.adopt(outcome) }
+        }
+    }
+
+    /// The compile finished: draw from now on, or show paper for good.
+    private func adopt(_ outcome: InkPipelineLoader.Outcome) {
+        switch outcome {
+        case .success(let ready):
+            pipeline = ready
+            metalLayer?.device = ready.device
+        case .failure(let error):
+            failure = error
+        }
+        visibilityChanged()
     }
 
     @available(*, unavailable)
@@ -176,6 +197,7 @@ public final class InkView: NSView {
 
     /// On screen: in a visible window that is not fully covered, not hidden, and not empty.
     private var isOnScreen: Bool {
+        if assumeOnScreen { return bounds.width >= 1 && bounds.height >= 1 }
         guard let window, window.isVisible, window.occlusionState.contains(.visible) else { return false }
         return !isHiddenOrHasHiddenAncestor && bounds.width >= 1 && bounds.height >= 1
     }
@@ -187,8 +209,10 @@ public final class InkView: NSView {
         visibilityChanged()
     }
 
+    /// The schedule sees a view that cannot draw yet (no pipeline) as not on screen: no clock, no
+    /// still frame, until the pipeline arrives.
     private func visibilityChanged() {
-        perform(schedule.set(onScreen: isOnScreen))
+        perform(schedule.set(onScreen: isOnScreen && pipeline != nil))
     }
 
     // Both notifications arrive on the main thread; the hop covers a sender that ever does not.

@@ -85,6 +85,16 @@ final class Measurement {
         }
     }
 
+    /// The ink's shader finished compiling (off the main thread), and how long it took.
+    func inkReady(_ outcome: InkPipelineLoader.Outcome, took: Duration) {
+        switch outcome {
+        case .success:
+            mark(String(format: "ink ready compile_ms=%.1f", took / .milliseconds(1)))
+        case .failure(let failure):
+            mark("ink failed \(failure.description.replacingOccurrences(of: "\n", with: " "))")
+        }
+    }
+
     /// The main window was asked to show (at launch, from the menu, or by a second copy).
     func windowShown() {
         mark("window shown")
