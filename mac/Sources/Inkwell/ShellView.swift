@@ -128,6 +128,11 @@ struct RecordControls: View {
                 }
                 .buttonStyle(PaperButtonStyle(prominent: true))
                 .accessibilityHint("Records the mic and everything this Mac plays, until you stop it")
+                if let failure = screens.meetings.failure(on: .recordNow) {
+                    Text(failure)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

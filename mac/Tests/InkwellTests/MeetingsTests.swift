@@ -223,9 +223,9 @@ final class LiveMeetingTests: XCTestCase {
         meetings.recordNow()
         XCTAssertEqual(sent.commands, [.meetingStart(app: nil, title: nil)])
         meetings.apply(event(#"{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"the microphone: no input device"}"#))
-        XCTAssertEqual(meetings.failure, "the microphone: no input device")
+        XCTAssertEqual(meetings.failure(on: .recordNow), "Couldn't start recording: the microphone: no input device")
         meetings.apply(event(#"{"type":"meeting.started","record":"r1"}"#))
-        XCTAssertNil(meetings.failure)
+        XCTAssertNil(meetings.failure(on: .recordNow))
         meetings.stop()
         XCTAssertEqual(sent.commands.last, .meetingStop)
     }
@@ -331,6 +331,60 @@ final class CitedDecisionTests: XCTestCase {
         XCTAssertEqual(document.summaryItems[0].citedLine?.text, "Agreed, the fourteenth it is.")
         XCTAssertEqual(document.summaryItems[0].citedLine?.speaker.isYou, true)
         XCTAssertEqual(document.summaryItems[1].citedLine?.text, "Let us start on the fourteenth.")
+    }
+}
+
+@MainActor
+final class MeetingFailureTests: XCTestCase {
+    private final class Lines: @unchecked Sendable {
+        var lines: [String] = []
+    }
+
+    /// Review (S2.8): a failed Record now shows where it was pressed (Today, and Live's Record
+    /// now), and nowhere else; it is logged by command name, never with the core's words.
+    func testARecordNowFailureShowsWhereItWasPressed() {
+        let sent = Sent()
+        let lines = Lines()
+        let meetings = MeetingModel(
+            send: sent.send, titles: FixedTitle(title: nil), log: ScreenLog { lines.lines.append($0) })
+        meetings.recordNow()
+        meetings.apply(event(#"{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"the microphone: no input device"}"#))
+        XCTAssertEqual(meetings.failure(on: .recordNow), "Couldn't start recording: the microphone: no input device")
+        XCTAssertNil(meetings.failure(on: .drop))
+        XCTAssertNil(meetings.failure(on: .liveStop))
+        XCTAssertEqual(lines.lines, ["command.failed for a meeting.start command; shown where it was asked"])
+    }
+
+    /// The Drop's own buttons: a failed "Record this call" or "Not this one" shows in the Drop,
+    /// which keeps its buttons so the user can try again.
+    func testADropAnswerThatFailsShowsInTheDrop() {
+        let sent = Sent()
+        let store = CoreStore()
+        let meetings = MeetingModel(send: sent.send, titles: FixedTitle(title: nil))
+        let ink = ShellInk(store: store, meetings: meetings)
+        store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
+        meetings.record(app: "com.example.call")
+        meetings.apply(event(#"{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"the other side's sound: permission denied"}"#))
+        XCTAssertEqual(ink.dropText.title, "Example Call opened the microphone")
+        XCTAssertEqual(ink.dropText.detail, "Couldn't start recording: the other side's sound: permission denied")
+        XCTAssertEqual(ink.dropText.tone, .alert)
+        XCTAssertEqual(ink.dropText.actions, [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
+        XCTAssertNil(meetings.failure(on: .recordNow), "not claimed on Today")
+        meetings.dismiss(app: "com.example.call")
+        XCTAssertEqual(ink.dropText.detail, "Recording keeps both sides on this Mac. Tell the others you are recording.", "a new answer clears it")
+        meetings.apply(event(#"{"type":"command.failed","command":"meeting.dismiss","id":"meeting.dismiss","message":"that app is not being offered"}"#))
+        XCTAssertEqual(ink.dropText.detail, "Couldn't dismiss the offer: that app is not being offered")
+    }
+
+    /// Live's Stop: a failed stop shows in Live's header, beside the button.
+    func testAStopThatFailsShowsInLive() {
+        let sent = Sent()
+        let meetings = MeetingModel(send: sent.send, titles: FixedTitle(title: nil))
+        meetings.stop()
+        meetings.apply(event(#"{"type":"command.failed","command":"meeting.stop","id":"meeting.stop","message":"the meeting is already stopping"}"#))
+        XCTAssertEqual(meetings.failure(on: .liveStop), "Couldn't stop: the meeting is already stopping")
+        XCTAssertNil(meetings.failure(on: .recordNow))
+        XCTAssertNil(meetings.failure(on: .drop))
     }
 }
 

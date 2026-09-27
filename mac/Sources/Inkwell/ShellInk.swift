@@ -19,13 +19,16 @@ final class ShellInk {
     /// The permission cards: a system-audio probe that says "off" during a meeting is a problem the
     /// Drop shows at once, before the watchdog has heard ten seconds of silence.
     @ObservationIgnored let permissions: PermissionsModel?
+    /// The meeting commands: a Drop answer that failed is said in the Drop.
+    @ObservationIgnored let meetings: MeetingModel?
     /// A state held whatever the core says: the shell budget's live phase (INK_MEASURE=live) and
     /// the Drop's focus check (INK_DROP_DEMO). Nil in ordinary use.
     var held: InkState?
 
-    init(store: CoreStore, permissions: PermissionsModel? = nil) {
+    init(store: CoreStore, permissions: PermissionsModel? = nil, meetings: MeetingModel? = nil) {
         self.store = store
         self.permissions = permissions
+        self.meetings = meetings
     }
 
     /// Whether the system-audio probe says it is off.
@@ -45,7 +48,7 @@ final class ShellInk {
         }
         return DropText.for(
             state, dictation: store.dictation, meeting: store.meeting, offer: store.offer,
-            systemAudioOff: systemAudioOff)
+            systemAudioOff: systemAudioOff, failure: meetings?.failure(on: .drop))
     }
 
     /// Whether the Drop shows: something is live, or the core offers to record a call.
@@ -118,16 +121,19 @@ struct DropText: Equatable, Sendable {
     /// What the Drop says for what is going on. A consent offer shows only while nothing is live.
     /// The consent line is honest about what recording does: both sides are kept on this Mac, and
     /// the others should be told (the app ships consent tooling; it never claims to be unseen).
+    /// `failure`: a Drop answer that failed, in words; the offer stays, so it can be answered
+    /// again.
     static func `for`(
         _ state: InkState, dictation: CoreStore.DictationPhase, meeting: CoreStore.LiveMeeting?,
-        offer: CoreStore.Offer?, systemAudioOff: Bool
+        offer: CoreStore.Offer?, systemAudioOff: Bool, failure: String? = nil
     ) -> DropText {
         switch state {
         case .idle:
             guard let offer else { return DropText.for(state, dictation: dictation) }
             return DropText(
                 title: "\(offer.appName) opened the microphone",
-                detail: "Recording keeps both sides on this Mac. Tell the others you are recording.",
+                detail: failure ?? "Recording keeps both sides on this Mac. Tell the others you are recording.",
+                tone: failure == nil ? .plain : .alert,
                 actions: [.record(app: offer.app), .dismiss(app: offer.app)])
         case .meeting:
             guard let meeting else { return DropText.for(state, dictation: dictation) }

@@ -23,8 +23,8 @@ struct LiveScreen: View {
                     .foregroundStyle(Theme.secondaryText)
                 Button("Record now") { screens.meetings.recordNow() }
                     .buttonStyle(PaperButtonStyle(prominent: true))
-                if let failure = screens.meetings.failure {
-                    Text("Couldn't start recording: \(failure)")
+                if let failure = screens.meetings.failure(on: .recordNow) {
+                    Text(failure)
                         .font(Typography.caption)
                         .foregroundStyle(Theme.alert)
                 }
@@ -106,6 +106,11 @@ struct LiveMeetingView: View {
                     Button("Stop") { meetings.stop() }
                         .keyboardShortcut(".", modifiers: .command)
                         .accessibilityHint("Stops recording; the final pass then writes the record")
+                }
+                if let failure = meetings.failure(on: .liveStop) {
+                    Text(failure)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
                 }
                 legend
             }

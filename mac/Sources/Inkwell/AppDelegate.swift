@@ -23,7 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
     private var mainWindow: MainWindowController?
     /// The ink every surface shows, and the Drop that shows it while something is live.
-    private lazy var ink = ShellInk(store: core.store, permissions: core.screens.permissions)
+    private lazy var ink = ShellInk(
+        store: core.store, permissions: core.screens.permissions, meetings: core.screens.meetings)
     private var drop: DropController?
     private var dropDemo: DropDemo?
     private var signalSources: [DispatchSourceSignal] = []

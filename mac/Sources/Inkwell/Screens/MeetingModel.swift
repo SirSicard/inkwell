@@ -66,8 +66,36 @@ enum Retention: String, CaseIterable, Identifiable, Sendable {
 @MainActor
 @Observable
 final class MeetingModel {
-    /// Why the last meeting command failed, in the core's words (they never quote the user).
-    private(set) var failure: String?
+    /// Where a meeting command was asked for, so its failure shows there and nowhere else.
+    enum Origin: Equatable, Sendable {
+        /// Record now (Today, or Live with no meeting).
+        case recordNow
+        /// "Record this call", on the Drop.
+        case offer
+        /// "Not this one", on the Drop.
+        case dismiss
+        /// Stop, in Live.
+        case stop
+    }
+
+    /// The places that show a meeting command's failure.
+    enum Place: Equatable, Sendable {
+        /// Record now's button (Today's foot, Live with no meeting).
+        case recordNow
+        /// The Drop, whose buttons answer an offer.
+        case drop
+        /// Live's header, beside Stop.
+        case liveStop
+    }
+
+    /// The last meeting command's failure: where it was asked, and the core's words (they never
+    /// quote the user).
+    struct Failure: Equatable, Sendable {
+        let origin: Origin
+        let message: String
+    }
+
+    private(set) var failure: Failure?
     /// Whether the core listens for calls (the user's setting; on unless turned off).
     private(set) var detect = true
     /// With Bluetooth output, record the headset's own mic.
@@ -80,11 +108,33 @@ final class MeetingModel {
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let titles: any CallTitles
     @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let log: ScreenLog
+    /// Where the start in flight was asked for (a start's command id is the same from both).
+    @ObservationIgnored private var starting: Origin = .recordNow
 
-    init(send: @escaping SendCommand, titles: any CallTitles = EventKitCallTitles(), now: @escaping () -> Date = Date.init) {
+    init(
+        send: @escaping SendCommand, titles: any CallTitles = EventKitCallTitles(),
+        now: @escaping () -> Date = Date.init, log: ScreenLog = .system
+    ) {
         self.send = send
         self.titles = titles
         self.now = now
+        self.log = log
+    }
+
+    /// What `place` says about the last failure, or nil when it was not asked there.
+    func failure(on place: Place) -> String? {
+        guard let failure else { return nil }
+        switch (place, failure.origin) {
+        case (.recordNow, .recordNow), (.drop, .offer):
+            return "Couldn't start recording: \(failure.message)"
+        case (.drop, .dismiss):
+            return "Couldn't dismiss the offer: \(failure.message)"
+        case (.liveStop, .stop):
+            return "Couldn't stop: \(failure.message)"
+        default:
+            return nil
+        }
     }
 
     /// The ids of this model's setting commands (CoreCommand gives each setting command one).
@@ -101,21 +151,25 @@ final class MeetingModel {
     /// Records now, the whole of what this Mac plays as the far end.
     func recordNow() {
         failure = nil
+        starting = .recordNow
         send(.meetingStart(app: nil, title: titles.titleNow(now())))
     }
 
     /// Records the call the core offered.
     func record(app: String) {
         failure = nil
+        starting = .offer
         send(.meetingStart(app: app, title: titles.titleNow(now())))
     }
 
     /// "Not this one".
     func dismiss(app: String) {
+        failure = nil
         send(.meetingDismiss(app: app))
     }
 
     func stop() {
+        failure = nil
         send(.meetingStop)
     }
 
@@ -156,7 +210,15 @@ final class MeetingModel {
         case .meetingStarted:
             failure = nil
         case .commandFailed(let failed) where ["meeting.start", "meeting.stop", "meeting.dismiss"].contains(failed.command):
-            failure = failed.message
+            let origin: Origin = switch failed.command {
+            case "meeting.stop": .stop
+            case "meeting.dismiss": .dismiss
+            default: starting
+            }
+            failure = Failure(origin: origin, message: failed.message)
+            // The core logged why; this says the shell showed it (the controller does not log a
+            // failure a screen shows). The command's name only, never the core's words.
+            log.write("command.failed for a \(failed.command) command; shown where it was asked")
         case .commandFailed(let failed) where Self.settingIDs.contains(failed.id ?? ""):
             // Not known, or not saved: the control shows it, never a guessed value.
             settingsFailed = true
