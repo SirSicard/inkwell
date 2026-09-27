@@ -30,10 +30,11 @@ jobs:
         os: [macos-26, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Installs the channel and components pinned in core/rust-toolchain.toml.
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2.9.1
+      # Pinned to the commit tag v2.9.1 points at, read from GitHub (never typed from memory).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: core
       - run: cargo fmt --all --check
@@ -104,10 +105,11 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
         working-directory: core
-      - uses: Swatinem/rust-cache@v2.9.1
+      # Pinned to the commit tag v2.9.1 points at, read from GitHub (never typed from memory).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: core
       - run: mac/scripts/build-core.sh
@@ -117,9 +119,9 @@ jobs:
     name: licences, advisories, sources
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-deny
       - run: cargo deny --all-features check

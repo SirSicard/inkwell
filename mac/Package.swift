@@ -62,10 +62,12 @@ let package = Package(
             dependencies: ["InkBridge", "AppleEngines", "InkRenderer"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
+                .linkedFramework("ServiceManagement"),
                 .linkedFramework("SwiftUI"),
             ]
         ),
         .testTarget(name: "InkBridgeTests", dependencies: ["InkBridge"]),
+        .testTarget(name: "InkwellTests", dependencies: ["Inkwell"]),
     ],
     swiftLanguageModes: [.v6]
 )
