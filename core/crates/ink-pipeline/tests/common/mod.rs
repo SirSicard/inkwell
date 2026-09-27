@@ -178,6 +178,7 @@ pub struct RigBuilder {
     settings: DictationSettings,
     llm: Option<Arc<dyn Llm>>,
     store: Option<Arc<dyn Store>>,
+    focus: Option<Arc<dyn ink_core::FocusReader>>,
 }
 
 impl RigBuilder {
@@ -193,6 +194,12 @@ impl RigBuilder {
 
     pub fn llm(mut self, llm: Arc<dyn Llm>) -> Self {
         self.llm = Some(llm);
+        self
+    }
+
+    /// A focus reader other than the mock platform's.
+    pub fn focus(mut self, focus: Arc<dyn ink_core::FocusReader>) -> Self {
+        self.focus = Some(focus);
         self
     }
 
@@ -220,7 +227,10 @@ impl RigBuilder {
             engine: tap.clone(),
             store: store.clone(),
             inserter: platform.clone(),
-            focus: platform.clone(),
+            focus: self
+                .focus
+                .clone()
+                .unwrap_or_else(|| platform.clone() as Arc<dyn ink_core::FocusReader>),
             clock: platform.clock(),
             llm: self.llm.clone(),
         };
@@ -284,6 +294,7 @@ impl Rig {
             settings: DictationSettings::default(),
             llm: None,
             store: None,
+            focus: None,
         }
     }
 

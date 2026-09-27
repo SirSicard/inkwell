@@ -622,3 +622,45 @@ fn a_too_short_edit_is_discarded_like_a_dictation() {
     )));
     assert_eq!(llm.calls(), 0);
 }
+
+/// A focus reader under Secure Input (a password field): counts every selection read.
+struct SecureFocus {
+    selection_reads: AtomicUsize,
+}
+
+impl ink_core::FocusReader for SecureFocus {
+    fn focus(&self) -> Result<FocusInfo, ink_core::PlatformError> {
+        Ok(FocusInfo {
+            app: None,
+            secure_input: true,
+        })
+    }
+
+    fn selected_text(&self) -> Result<Option<String>, ink_core::PlatformError> {
+        self.selection_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(Some("a password".into()))
+    }
+}
+
+/// Under Secure Input the selection is never read, so it can never reach a language model: the
+/// edit ends at its confirmation and says why.
+#[test]
+fn an_edit_under_secure_input_never_reads_the_selection() {
+    let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "never"));
+    let focus = Arc::new(SecureFocus {
+        selection_reads: AtomicUsize::new(0),
+    });
+    let rig = Rig::builder().llm(llm.clone()).focus(focus.clone()).build();
+    rig.answer_anything("make it formal");
+    rig.silence(0.5);
+    rig.edit_press();
+    rig.feed(&speech_48k(1.0, -25.0, 29));
+    rig.edit_release();
+    rig.silence(0.6);
+    assert_eq!(focus.selection_reads.load(Ordering::SeqCst), 0);
+    assert_eq!(llm.calls(), 0);
+    assert!(rig.engine_inputs().is_empty(), "nothing transcribed either");
+    assert!(rig.inserted().is_empty());
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::EditFailed(EditFailure::SecureInput)));
+}

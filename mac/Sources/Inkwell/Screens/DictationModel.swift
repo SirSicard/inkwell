@@ -242,6 +242,8 @@ final class DictationModel {
             switch failed.reason {
             case .noSelection:
                 return DropText(title: "Select some text first", detail: "Then hold the edit key and say what to change")
+            case .secureInput:
+                return DropText(title: "Secure input is on", detail: "The selection was left alone", tone: .alert)
             case .selectionUnreadable:
                 return DropText(title: "Couldn't read the selection", detail: "Inkwell needs \u{201C}Type for you\u{201D}", tone: .alert)
             case .transcription:

@@ -19,9 +19,9 @@
 //!   and what it hears reaches the shell as [`DictationEvent::Partial`]: provisional, never saved.
 //!   The stream is closed before [`DictationEvent::Stopped`], so no partial follows it.
 //! - **Voice edit** ([`edit_hotkey`](DictationChain::edit_hotkey)): select text, hold the edit
-//!   key, say what to change. The selection is read once the hold is confirmed, the instruction is
-//!   transcribed like a dictation, and the language model's rewrite replaces the selection (it is
-//!   still selected, so inserting over it replaces it). Edits are always push to talk, share the
+//!   key, say what to change. The selection is read once the hold is confirmed (never under Secure
+//!   Input), the instruction is transcribed like a dictation, and the language model's rewrite
+//!   replaces the selection (it is still selected, so inserting over it replaces it). Edits are always push to talk, share the
 //!   dictation's recorder (one take at a time: the other key is ignored while a take is open), are
 //!   not saved to the library, and never go through voice commands, cleanup, style or snippets.
 //! - **A missed release** (the stuck-key watchdog): a push-to-talk or edit hold longer than
@@ -646,6 +646,24 @@ impl DictationChain {
         };
         let edit = self.open_key() == Some(Key::Edit);
         let (mode, app) = if edit {
+            // Never read what the user selected while Secure Input is on: it is a password field
+            // or the like, and the selection would go to a language model. Focus that cannot be
+            // read cannot be shown safe, so it refuses too.
+            match self.services.focus.focus() {
+                Ok(focus) if focus.secure_input => {
+                    self.abandon();
+                    self.emit(DictationEvent::EditFailed(EditFailure::SecureInput));
+                    return;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.abandon();
+                    self.emit(DictationEvent::EditFailed(
+                        EditFailure::SelectionUnreadable(error),
+                    ));
+                    return;
+                }
+            }
             match self.services.focus.selected_text() {
                 Ok(Some(text)) if !text.trim().is_empty() => {
                     if let Some(open) = &mut self.open {

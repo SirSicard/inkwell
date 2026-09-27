@@ -1050,9 +1050,10 @@
     },
     "EditFailure": {
       "type": "string",
-      "description": "Why a voice edit left the selection alone. None of these changed the user's text.",
+      "description": "Why a voice edit left the selection alone. None of these changed the user's text. secure_input: Secure Input was on, so the selection was never read.",
       "enum": [
         "no_selection",
+        "secure_input",
         "selection_unreadable",
         "transcription",
         "no_model",

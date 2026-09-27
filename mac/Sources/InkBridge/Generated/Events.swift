@@ -859,8 +859,10 @@ public enum EchoState: String, Codable, Sendable, Equatable, CaseIterable {
 }
 
 /// Why a voice edit left the selection alone. None of these changed the user's text.
+/// secure_input: Secure Input was on, so the selection was never read.
 public enum EditFailure: String, Codable, Sendable, Equatable, CaseIterable {
     case noSelection = "no_selection"
+    case secureInput = "secure_input"
     case selectionUnreadable = "selection_unreadable"
     case transcription
     case noModel = "no_model"

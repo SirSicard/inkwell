@@ -224,6 +224,7 @@ pub fn dictation(e: &DictationEvent) -> Value {
         DictationEvent::EditFailed(f) => {
             let (reason, message) = match f {
                 EditFailure::NoSelection => ("no_selection", None),
+                EditFailure::SecureInput => ("secure_input", None),
                 EditFailure::SelectionUnreadable(e) => {
                     ("selection_unreadable", some(e.to_string()))
                 }
@@ -769,6 +770,7 @@ mod tests {
                 outcome: InsertOutcome::Pasted,
             },
             DictationEvent::EditFailed(EditFailure::NoSelection),
+            DictationEvent::EditFailed(EditFailure::SecureInput),
             DictationEvent::EditFailed(EditFailure::SelectionUnreadable(
                 PlatformError::PermissionDenied(ink_core::Permission::Accessibility),
             )),

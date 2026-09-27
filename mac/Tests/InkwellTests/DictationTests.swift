@@ -130,6 +130,8 @@ final class DictationModelTests: XCTestCase {
         XCTAssertNil(note(#"{"type":"dictation.inserted","text":"hi","outcome":"pasted"}"#), "it went in: nothing to say")
         XCTAssertEqual(note(#"{"type":"dictation.inserted","text":"hi","outcome":"blocked"}"#)?.title, "Secure input is on")
         XCTAssertEqual(note(#"{"type":"dictation.edit_failed","reason":"no_selection"}"#)?.title, "Select some text first")
+        XCTAssertEqual(note(#"{"type":"dictation.edit_failed","reason":"secure_input"}"#),
+                       DropText(title: "Secure input is on", detail: "The selection was left alone", tone: .alert))
         XCTAssertEqual(note(#"{"type":"dictation.edit_failed","reason":"model","message":"no language model is registered for polish"}"#, model: false)?.title,
                        "Editing needs Apple Intelligence")
         XCTAssertEqual(note(#"{"type":"dictation.edit_failed","reason":"model","message":"x"}"#, model: true)?.title,

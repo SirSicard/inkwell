@@ -124,6 +124,9 @@ pub enum Warning {
 pub enum EditFailure {
     /// Nothing was selected in the focused app when the key was held.
     NoSelection,
+    /// Secure Input was on (a password field, a terminal's secure entry): the selection was not
+    /// read, so nothing of it could reach a language model.
+    SecureInput,
     /// The selection could not be read (Accessibility is off, or the app does not expose it).
     SelectionUnreadable(PlatformError),
     /// The instruction could not be transcribed.
