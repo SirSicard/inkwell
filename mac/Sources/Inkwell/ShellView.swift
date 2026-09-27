@@ -38,10 +38,11 @@ struct ShellView: View {
         .onChange(of: meetingLive) { _, live in
             router.reconcile(meetingLive: live)
         }
-        // The first-run state, until it is completed or skipped (dismissing it counts as skipped).
+        // The first-run state, until it is completed or skipped (dismissing it counts as skipped,
+        // except when the app is quitting: OnboardingModel.appQuitting).
         .sheet(isPresented: Binding(
             get: { screens.onboarding.showing },
-            set: { if !$0 && screens.onboarding.showing { screens.onboarding.finish() } }
+            set: { if !$0 { screens.onboarding.sheetDismissed() } }
         )) {
             OnboardingView()
         }
