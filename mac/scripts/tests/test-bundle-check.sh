@@ -65,6 +65,32 @@ bundle escape @rpath/libfoo.dylib -Wl,-rpath,@executable_path/../../..
 cp "$work/escape.app/Contents/Frameworks/libfoo.dylib" "$work/libfoo.dylib"
 check "an rpath that leads out of the bundle" 1 "@rpath/libfoo.dylib" "$work/escape.app"
 
+# Links. dyld follows a link, and the app's signature seals it as a link (its target path), not
+# the file behind it: a library that is a link out of the bundle would load unsigned code from
+# anywhere that path leads on the user's Mac.
+bundle link-out @rpath/libfoo.dylib -Wl,-rpath,@executable_path/../Frameworks
+mkdir -p "$work/outside"
+mv "$work/link-out.app/Contents/Frameworks/libfoo.dylib" "$work/outside/libfoo.dylib"
+ln -s "$work/outside/libfoo.dylib" "$work/link-out.app/Contents/Frameworks/libfoo.dylib"
+check "a library that is a link out of the bundle" 1 "Contents/Frameworks/libfoo.dylib: a link to" "$work/link-out.app"
+check "... and the library loaded through it" 1 "resolves outside the bundle" "$work/link-out.app"
+
+bundle dir-out @rpath/libfoo.dylib -Wl,-rpath,@executable_path/../Frameworks
+mv "$work/dir-out.app/Contents/Frameworks" "$work/outside/Frameworks"
+ln -s "$work/outside/Frameworks" "$work/dir-out.app/Contents/Frameworks"
+check "a directory that is a link out of the bundle" 1 "Contents/Frameworks: a link to" "$work/dir-out.app"
+
+bundle dangling @rpath/libfoo.dylib -Wl,-rpath,@executable_path/../Frameworks
+ln -s libgone.dylib "$work/dangling.app/Contents/Frameworks/libbar.dylib"
+check "a link to nothing" 1 "Contents/Frameworks/libbar.dylib: a link to libgone.dylib, which does not exist" "$work/dangling.app"
+
+# A link that stays inside the bundle passes: a framework is built of them (Versions/Current,
+# and its top-level names), and the file behind it is inspected where it is, once.
+bundle link-in @rpath/libfoo.dylib -Wl,-rpath,@executable_path/../Frameworks
+mv "$work/link-in.app/Contents/Frameworks/libfoo.dylib" "$work/link-in.app/Contents/Frameworks/libfoo.1.dylib"
+ln -s libfoo.1.dylib "$work/link-in.app/Contents/Frameworks/libfoo.dylib"
+check "a link that stays inside the bundle" 0 "linkage: 2 Mach-O file(s)" "$work/link-in.app"
+
 check "code built for a newer macOS than the target" 1 "built for macOS 26.0" "$work/good.app" 25.0
 check "the same, allowed for a local build" 0 "built for macOS 26.0" "$work/good.app" 25.0 1
 check "the same, allowed, and the summary says so" 0 "2 built for a newer macOS than 25.0" "$work/good.app" 25.0 1

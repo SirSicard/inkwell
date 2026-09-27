@@ -38,9 +38,14 @@ bundle_check_newer() {
 #   search, simplified: a library loaded only by a helper resolves through that helper);
 # - was built for the deployment target or older. With "allow newer", that last one only warns:
 #   a local build on a Mac whose Homebrew was built for its own, newer macOS.
+# And every link (a symlink) in the bundle, and every library a Mach-O loads, resolves, link by
+# link to the last one, to a place inside the bundle. dyld follows links, and the app's signature
+# seals a link as its target path, not as the file behind it: a link out of the bundle would load
+# code no signature covers. A link that stays inside passes (a framework is built of them); what it
+# points at is checked where it is.
 check_bundle_linkage() {
   local app target allow main main_rpaths problems=0 checked=0 newer=0 f records rel dir kind exe
-  local rec cmd name rp resolved candidate found minos
+  local rec cmd name rp resolved candidate found minos real
   app="$(cd "$1" && pwd -P)"
   target="$2"
   allow="${3:-0}"
@@ -54,9 +59,21 @@ check_bundle_linkage() {
   }
 
   while IFS= read -r -d '' f; do
+    rel="${f#"$app/"}"
+    if [ -L "$f" ]; then
+      # realpath resolves every link on the way, the last one included.
+      if ! real="$(realpath "$f" 2>/dev/null)"; then
+        problem "a link to $(readlink "$f"), which does not exist"
+        continue
+      fi
+      case "$real/" in
+        "$app"/*) ;;
+        *) problem "a link to $real, outside the bundle" ;;
+      esac
+      continue
+    fi
     case "$(file -b "$f")" in Mach-O*) ;; *) continue ;; esac
     checked=$((checked + 1))
-    rel="${f#"$app/"}"
     dir="$(dirname "$f")"
     records="$(bundle_check_records "$f")"
     kind="$(sed -n 's/^type //p' <<<"$records" | head -1)"
@@ -117,9 +134,11 @@ check_bundle_linkage() {
         problem "loads $name, which does not resolve to a file in the bundle"
         continue
       fi
-      case "$(cd "$(dirname "$found")" && pwd -P)/" in
+      # The file itself, not only its directory: the library may be a link.
+      real="$(realpath "$found")"
+      case "$real/" in
         "$app"/*) ;;
-        *) problem "loads $name, which resolves outside the bundle ($found)" ;;
+        *) problem "loads $name, which resolves outside the bundle ($real)" ;;
       esac
     done <<<"$records"
 
@@ -133,7 +152,7 @@ check_bundle_linkage() {
         fi
       fi
     done < <(sed -n 's/^minos //p' <<<"$records" | sort -u)
-  done < <(find "$app/Contents" -type f -print0)
+  done < <(find "$app/Contents" \( -type f -o -type l \) -print0)
 
   if [ "$problems" -ne 0 ]; then
     echo "  $problems problem(s) in what the bundle's code loads" >&2
