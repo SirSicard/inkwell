@@ -394,6 +394,11 @@ pub struct RigBuilder {
     /// A mock clock that moves 10 ms with every 10 ms fed (the default clock stands still, so
     /// the watchdog never sees time pass).
     pub moving_clock: bool,
+    /// No live engine at all: the live transcript stays empty (as on a machine whose live engine
+    /// runs in the shell).
+    pub no_live_engine: bool,
+    /// A final-pass engine in place of the rig's scripted one (a real model, locally).
+    pub offline: Option<Arc<dyn OfflineEngine>>,
 }
 
 impl Default for RigBuilder {
@@ -412,6 +417,8 @@ impl Default for RigBuilder {
             live_engine: None,
             routing: Default::default(),
             moving_clock: false,
+            no_live_engine: false,
+            offline: None,
         }
     }
 }
@@ -458,12 +465,15 @@ impl RigBuilder {
         let sink_events = events.clone();
         let sink: EventSink<MeetingEvent> = Arc::new(move |e| sink_events.lock().unwrap().push(e));
         let services = MeetingServices {
-            live: Some(
+            live: (!self.no_live_engine).then(|| {
                 self.live_engine
                     .clone()
-                    .unwrap_or_else(|| live.clone() as Arc<dyn StreamingEngine>),
-            ),
-            offline: engine.clone(),
+                    .unwrap_or_else(|| live.clone() as Arc<dyn StreamingEngine>)
+            }),
+            offline: self
+                .offline
+                .clone()
+                .unwrap_or_else(|| engine.clone() as Arc<dyn OfflineEngine>),
             diarizer: self.diarizer.clone(),
             store: store.clone(),
             clock,
@@ -753,9 +763,22 @@ impl Store for FlakyStore {
         self.check("segments")?;
         self.inner.segments(id)
     }
-    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+    fn supersede_with(
+        &self,
+        id: &RecordId,
+        segments: &[Segment],
+        with: ink_core::SupersedeWith<'_>,
+    ) -> Result<u32, StoreError> {
         self.check("supersede")?;
-        self.inner.supersede(id, segments)
+        self.inner.supersede_with(id, segments, with)
+    }
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
+        self.check("save_removed")?;
+        self.inner.save_removed(id, lines)
+    }
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        self.check("removed")?;
+        self.inner.removed(id)
     }
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {
         self.check("search")?;

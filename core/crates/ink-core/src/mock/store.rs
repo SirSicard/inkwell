@@ -6,7 +6,8 @@ use crate::engine::SpeakerId;
 use crate::error::StoreError;
 use crate::store::{
     Commitment, CommitmentId, MAX_TIME_MS, NewCommitment, NewRecord, Note, NoteId, Record,
-    RecordId, RecordQuery, SearchHit, Segment, Store, Summary, check_supersede,
+    RecordId, RecordQuery, SearchHit, Segment, Store, Summary, SupersedeWith,
+    check_supersede_explained,
 };
 
 /// Refuses times a SQLite store could not hold, before anything changes.
@@ -30,6 +31,13 @@ fn check_stretches(stretches: impl IntoIterator<Item = (u64, u64)>) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Lines by start time; the same start keeps the order given.
+fn sorted_by_start(lines: &[Segment]) -> Vec<Segment> {
+    let mut lines = lines.to_vec();
+    lines.sort_by_key(|s| s.start_ms);
+    lines
 }
 
 fn segment_stretches(segments: &[Segment]) -> impl Iterator<Item = (u64, u64)> + '_ {
@@ -57,6 +65,7 @@ fn occurrences(term: &[String], text: &[String]) -> usize {
 struct RecordData {
     record: Record,
     segments: Vec<Segment>,
+    removed: Vec<Segment>,
     summary: Option<Summary>,
     speakers: BTreeMap<SpeakerId, String>,
 }
@@ -129,6 +138,7 @@ impl Store for MemStore {
             RecordData {
                 record,
                 segments: Vec::new(),
+                removed: Vec::new(),
                 summary: None,
                 speakers: BTreeMap::new(),
             },
@@ -208,14 +218,33 @@ impl Store for MemStore {
         Ok(segments)
     }
 
-    fn supersede(&self, id: &RecordId, segments: &[Segment]) -> Result<u32, StoreError> {
+    fn supersede_with(
+        &self,
+        id: &RecordId,
+        segments: &[Segment],
+        with: SupersedeWith<'_>,
+    ) -> Result<u32, StoreError> {
         check_stretches(segment_stretches(segments))?;
+        check_stretches(segment_stretches(with.removed.unwrap_or_default()))?;
         let mut inner = lock(&self.inner);
         let data = inner.data(id)?;
-        check_supersede(&data.segments, segments)?;
+        check_supersede_explained(&data.segments, segments, with.explained)?;
         data.segments = segments.to_vec();
         data.record.revision += 1;
+        if let Some(lines) = with.removed {
+            data.removed = sorted_by_start(lines);
+        }
         Ok(data.record.revision)
+    }
+
+    fn save_removed(&self, id: &RecordId, lines: &[Segment]) -> Result<(), StoreError> {
+        check_stretches(segment_stretches(lines))?;
+        lock(&self.inner).data(id)?.removed = sorted_by_start(lines);
+        Ok(())
+    }
+
+    fn removed(&self, id: &RecordId) -> Result<Vec<Segment>, StoreError> {
+        Ok(lock(&self.inner).data(id)?.removed.clone())
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, StoreError> {

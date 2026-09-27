@@ -51,7 +51,8 @@ pub use platform::{
     Permission, PermissionProbe, PermissionState, Platform, TextInserter, Transport,
 };
 pub use store::{
-    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordCursor,
-    RecordId, RecordKind, RecordQuery, SearchHit, Segment, Span, Store, Summary,
+    Commitment, CommitmentId, Explained, NewCommitment, NewRecord, Note, NoteId, Record,
+    RecordCursor, RecordId, RecordKind, RecordQuery, SearchHit, Segment, Span, Store, Summary,
+    SupersedeWith,
 };
 pub use threading::{CancelToken, EventSink};

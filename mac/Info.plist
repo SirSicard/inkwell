@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The app's Info.plist. scripts/build-mac.sh copies it into the bundle and sets the two version
+  keys (INK_VERSION, INK_BUILD_NUMBER).
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleDisplayName</key><string>Inkwell</string>
+  <key>CFBundleExecutable</key><string>Inkwell</string>
+  <!-- The 0.2 app's identifier. Same identifier and same Developer ID team means the same
+       designated requirement, so the microphone and Accessibility grants carry over. -->
+  <key>CFBundleIdentifier</key><string>com.inkwell.app</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>Inkwell</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.0.0</string>
+  <key>CFBundleVersion</key><string>0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+  <key>LSMinimumSystemVersion</key><string>26.0</string>
+  <!-- A menu-bar app: no Dock icon until the main window opens (MainWindowController). -->
+  <key>LSUIElement</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <!-- Never killed without a Quit: quitting stops the core, which unloads its models first
+       (llama.cpp's Metal backend aborts the process at exit with a model still loaded). -->
+  <key>NSSupportsAutomaticTermination</key><false/>
+  <key>NSSupportsSuddenTermination</key><false/>
+  <!-- Shown verbatim in the permission prompts: what is captured, and that it stays here. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Inkwell records your voice while you dictate or take meeting notes. It is transcribed on this Mac, and the recording never leaves it.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Inkwell records the other side of your meetings from your meeting app, so both sides are transcribed on this Mac. The recording never leaves it.</string>
+</dict>
+</plist>

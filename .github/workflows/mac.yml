@@ -1,0 +1,54 @@
+name: Mac
+
+# The Mac app (mac/): the scripts' own tests, the Swift licence audit, the app bundle
+# mac/scripts/build-mac.sh makes, and the Swift tests with their total. CI has no signing
+# identity, so the bundle is signed ad-hoc: the check is that it assembles, signs every Mach-O,
+# and verifies with the hardened runtime and the audio-input entitlement.
+on:
+  push:
+    branches: [main]
+    paths: ['mac/**', 'core/**', 'schema/**', '.github/workflows/mac.yml']
+  pull_request:
+    paths: ['mac/**', 'core/**', 'schema/**', '.github/workflows/mac.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: licence audit, app bundle and tests (macos-26)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The redaction, the licence audit and the test summary on fixtures (offline, seconds).
+      - name: Script tests
+        run: mac/scripts/tests/run.sh
+      # The manifest against the pins, and the pins against the vetted list, before anything
+      # builds: an unvetted or unpinned dependency fails in seconds.
+      - name: Swift licence audit (pins)
+        run: mac/scripts/licence-audit-swift.sh
+      # Installs the channel and components pinned in core/rust-toolchain.toml.
+      - run: rustup toolchain install
+        working-directory: core
+      # Pinned to the commit tag v2.9.1 points at, read from GitHub (never typed from memory).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: core
+      # No INK_SIGN_IDENTITY here: ad-hoc.
+      - name: Build the app bundle
+        run: mac/scripts/build-mac.sh
+      # What the build fetched: every checkout's licence file, and every prebuilt binary.
+      - name: Swift licence audit (checkouts and binaries)
+        run: mac/scripts/licence-audit-swift.sh --checkouts
+      # Each XCTest bundle prints its own "Executed N tests": the summary adds them up, so the
+      # last bundle's count is not read as the run's.
+      - name: Swift tests
+        shell: bash
+        run: |
+          swift test --package-path mac --only-use-versions-from-resolved-file 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+          mac/scripts/swift-test-summary.sh "$RUNNER_TEMP/swift-test.log" | tee -a "$GITHUB_STEP_SUMMARY"

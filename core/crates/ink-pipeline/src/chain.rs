@@ -590,7 +590,15 @@ impl DictationChain {
         let written = self.polish(written, mode);
 
         // Stage 10.
-        let record = match self.save(&written, started_unix_ms, live_ms, app) {
+        let saved = self.save(&written, started_unix_ms, live_ms, app);
+        // A half-saved record the save removed is deleted text too: each change of the library's
+        // scrub reaches the shell once.
+        match self.services.store.scrub_change() {
+            Some(true) => self.emit(DictationEvent::Warning(Warning::DeletedTextNotScrubbed)),
+            Some(false) => self.emit(DictationEvent::Warning(Warning::DeletedTextScrubbed)),
+            None => {}
+        }
+        let record = match saved {
             Ok(id) => Some(id),
             Err(error) => {
                 self.emit(DictationEvent::Warning(Warning::SaveFailed(error)));
