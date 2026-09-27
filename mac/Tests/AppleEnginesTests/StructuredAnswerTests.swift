@@ -120,9 +120,9 @@ final class StructuredAnswerTests: XCTestCase {
         XCTAssertEqual(refused.wait(10)?.failureValue, .badRequest)
     }
 
-    /// Review (S2.8): the context size is read only from an SDK that declares it (26.4 and
-    /// later, behind the same gate as the macOS 27 code); elsewhere nil, and the core sizes for
-    /// 4,096 tokens. When said, it is a size the core accepts.
+    /// Review (S2.8): the context size is read only behind the macOS 27 code's gate (Swift 6.4 and
+    /// the 27 SDK); a pre-6.4 build says nil, and the core sizes for 4,096 tokens. When said, it is
+    /// a size the core accepts.
     func testTheOnDeviceModelSaysHowMuchContextItHasWhereTheSDKCanTell() {
         let model = FoundationModelsPolish(availability: { .available }, respond: { _ in "" })
         #if compiler(>=6.4) && canImport(FoundationModels, _version: 2.0)
