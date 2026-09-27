@@ -14,10 +14,26 @@ entitlement_keys() {
   sed -n 's:.*<key>\(.*\)</key>.*:\1:p' <<<"$xml" | sort -u
 }
 
-# entitlement_value <plist> <key>: the value as PlistBuddy prints it (PlistBuddy, not plutil:
-# plutil's key paths split on the dots in the key).
+# entitlement_type <plist> <key>: the top-level value's plist type (true, false, string, integer,
+# array, dict, ...), read from the element after the key in plutil's XML, where a top-level key is
+# indented by one tab.
+entitlement_type() {
+  plutil -convert xml1 -o - "$1" 2>/dev/null | awk -v key="	<key>$2</key>" '
+    found { if (match($0, /<[a-z]+/)) print substr($0, RSTART + 1, RLENGTH - 1); exit }
+    $0 == key { found = 1 }'
+}
+
+# entitlement_value <plist> <key>: "true" or "false" for a boolean, otherwise its type and the value
+# as PlistBuddy prints it. PlistBuddy alone prints <true/> and <string>true</string> alike, and the
+# hardened runtime honours only the boolean. (PlistBuddy, not plutil, for the value: plutil's key
+# paths split on the dots in the key.)
 entitlement_value() {
-  /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null
+  local type
+  type="$(entitlement_type "$1" "$2")"
+  case "$type" in
+    true | false) echo "$type" ;;
+    *) echo "$type $(/usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null)" ;;
+  esac
 }
 
 # check_entitlements <signed plist> <expected plist> <adhoc: 1 or 0>

@@ -11,16 +11,21 @@ here="$(cd "$(dirname "$0")" && pwd)"
 dir="$(mktemp -d)"
 trap 'rm -rf "$dir"' EXIT
 
-# plist <file> <key=value>...: an entitlements plist (values true or false).
+# plist <file> <key=value>...: an entitlements plist (values true or false, or string:<text> for a
+# string).
 plist() {
-  local file="$1" pair
+  local file="$1" pair value
   shift
   {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
     echo '<plist version="1.0"><dict>'
     for pair in "$@"; do
-      echo "  <key>${pair%%=*}</key><${pair#*=}/>"
+      value="${pair#*=}"
+      case "$value" in
+        string:*) echo "  <key>${pair%%=*}</key><string>${value#string:}</string>" ;;
+        *) echo "  <key>${pair%%=*}</key><$value/>" ;;
+      esac
     done
     echo '</dict></plist>'
   } >"$file"
@@ -58,6 +63,13 @@ run "library validation off in a Developer ID build" 0 1 "$mic=true" "$cal=true"
 assert_contains "names library validation" "$out" "$dlv was not asked for"
 run "an ad-hoc build without library validation off" 1 1 "$mic=true" "$cal=true"
 assert_contains "names it missing" "$out" "$dlv is missing"
+
+# PlistBuddy prints <true/> and <string>true</string> alike; the hardened runtime honours only the
+# boolean, so a string would pass by its text and grant nothing.
+run "a true written as a string" 0 1 "$mic=true" "$cal=string:true"
+assert_contains "names the wrong type" "$out" "$cal is string true, expected true"
+run "library validation off written as a string (ad-hoc)" 1 1 "$mic=true" "$cal=true" "$dlv=string:true"
+assert_contains "names its wrong type" "$out" "$dlv is string true, expected true"
 
 run "an expected key signed false" 0 1 "$mic=true" "$cal=false"
 assert_contains "names the wrong value" "$out" "$cal is false, expected true"
