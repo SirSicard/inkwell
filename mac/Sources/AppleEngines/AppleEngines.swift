@@ -38,12 +38,32 @@ public struct AppleEnginesReport: Sendable, Equatable {
 public final class AppleEngines: Sendable {
     private let session: InkSession
     private let parakeet: ParakeetModel
-    /// The polish model registered now, if any: what `syncPolish` compares against.
+    /// The polish model this registers while Apple Intelligence is available.
+    private let polishModel: FoundationModelsPolish
+    /// Whether `polishModel` is registered now: what `syncPolish` compares against.
     private let polish = Mutex<FoundationModelsPolish?>(nil)
 
-    public init(session: InkSession, parakeet: ParakeetModel = .shared) {
+    public init(
+        session: InkSession, parakeet: ParakeetModel = .shared,
+        polish: FoundationModelsPolish = FoundationModelsPolish()
+    ) {
         self.session = session
         self.parakeet = parakeet
+        self.polishModel = polish
+    }
+
+    /// Forward the core's events here (the shell's event handler, on the core's event thread; it
+    /// returns at once). A take starting prewarms polish, so the polish at its release does not
+    /// pay the model's cold start.
+    public func handle(_ event: InkEvent) {
+        if case .dictationStarted = event {
+            prewarmPolish()
+        }
+    }
+
+    /// Prewarms polish if it is registered (so never while Apple Intelligence is unavailable).
+    public func prewarmPolish() {
+        polish.withLock { $0 }?.prewarm()
     }
 
     /// Loads Parakeet (once per process; seconds on the first launch) and registers it for live
@@ -74,7 +94,7 @@ public final class AppleEngines: Sendable {
             switch availability {
             case .available:
                 if registered != nil { return .registered }
-                let model = FoundationModelsPolish()
+                let model = polishModel
                 let result = Self.state { try session.register(model) }
                 if result == .registered { registered = model }
                 return result
