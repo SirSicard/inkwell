@@ -118,6 +118,23 @@ public final class InkSession: Sendable {
         try InkEngineTable.register(engine)
     }
 
+    /// Registers a live-partials engine. From here meetings may open streams on it, on worker
+    /// threads.
+    public func register(_ engine: some InkStreamingEngine) throws {
+        try StreamingTable.register(engine)
+    }
+
+    /// Registers a language model. From here dictation polish may call it, on worker threads.
+    public func register(_ model: some InkLanguageModel) throws {
+        try ModelTable.register(model)
+    }
+
+    /// Lets go of an engine registered under `id`, of any kind: its release runs once no call or
+    /// stream holds it ("engine.unregistered" follows).
+    public func unregister(id: String) throws {
+        try command(["cmd": "engine.unregister", "engine": id])
+    }
+
     /// The latest bands of the live audio, copied out. Any thread, any rate: it never blocks.
     public static func bands() -> InkBands {
         var out = InkBands()
@@ -157,15 +174,18 @@ public struct InkSegment: Sendable, Equatable {
     }
 }
 
-/// Why an engine did not answer with segments. There is no free text: the core reads a kind and
-/// an optional code, so nothing an engine says can carry what it heard into a log or an event.
+/// Why an engine did not answer. There is no free text: the core reads a kind and an optional
+/// code, so nothing an engine says can carry what it heard into a log or an event.
 public enum InkEngineError: Error, Sendable, Equatable {
     /// It failed; `code` is the engine's own, shown in the core's error.
     case failed(code: Int)
     case cancelled
     case modelMissing
-    /// The request could not be read (its samples or options).
+    /// The request could not be read (its samples, options or request).
     case badRequest
+    /// The engine cannot run on this Mac now: a system feature is off, unsupported or not ready.
+    /// `code` is the engine's own reason.
+    case unavailable(code: Int)
 }
 
 /// An offline engine the shell owns (dictation and meeting finals).
@@ -226,8 +246,8 @@ struct EngineRequest: Equatable {
     }
 }
 
-/// `info_json`, as the header gives it.
-private struct EngineInfo: Encodable {
+/// `info_json` of an offline or streaming engine, as the header gives it.
+struct EngineInfo: Encodable {
     struct Score: Encodable {
         let job: String
         let wer: Double
@@ -249,30 +269,28 @@ private enum InkEngineTable {
         // Retained for the core; its release function balances this.
         let ctx = Unmanaged.passRetained(EngineBox(engine)).toOpaque()
         let status = infoJSON.withCString { infoPtr in
-            var table = InkEngineVTable(
-                size: UInt32(MemoryLayout<InkEngineVTable>.size),
-                kind: INK_ENGINE_OFFLINE,
-                info_json: infoPtr,
-                ctx: ctx,
-                transcribe: { ctx, call, samples, len, options in
-                    guard let ctx else { return }
-                    let engine = Unmanaged<EngineBox>.fromOpaque(ctx).takeUnretainedValue().engine
-                    switch EngineRequest.read(samples: samples, count: len, options: options) {
-                    case .failure(let refusal):
-                        // The engine never sees a request it could misread.
-                        InkEngineTable.complete(call, .failure(refusal))
-                    case .success(let request):
-                        engine.transcribe(request.samples, channel: request.channel, context: request.context) { result in
-                            InkEngineTable.complete(call, result)
-                        }
+            var table = InkEngineVTable()
+            table.size = UInt32(MemoryLayout<InkEngineVTable>.size)
+            table.kind = INK_ENGINE_OFFLINE
+            table.info_json = infoPtr
+            table.ctx = ctx
+            table.transcribe = { ctx, call, samples, len, options in
+                guard let ctx else { return }
+                let engine = Unmanaged<EngineBox>.fromOpaque(ctx).takeUnretainedValue().engine
+                switch EngineRequest.read(samples: samples, count: len, options: options) {
+                case .failure(let refusal):
+                    // The engine never sees a request it could misread.
+                    InkEngineTable.complete(call, .failure(refusal))
+                case .success(let request):
+                    engine.transcribe(request.samples, channel: request.channel, context: request.context) { result in
+                        InkEngineTable.complete(call, result)
                     }
-                },
-                cancel: nil,
-                release: { ctx in
-                    guard let ctx else { return }
-                    Unmanaged<EngineBox>.fromOpaque(ctx).release()
                 }
-            )
+            }
+            table.release = { ctx in
+                guard let ctx else { return }
+                Unmanaged<EngineBox>.fromOpaque(ctx).release()
+            }
             return ink_register_engine(&table)
         }
         if status != INK_OK {
@@ -283,23 +301,13 @@ private enum InkEngineTable {
     }
 
     static func complete(_ call: UInt64, _ result: Result<[InkSegment], InkEngineError>) {
-        let object: [String: Any]
         switch result {
         case .success(let segments):
-            object = ["segments": segments.map {
+            InkAnswer.send(call, ["segments": segments.map {
                 ["start_ms": $0.startMs, "end_ms": $0.endMs, "text": $0.text] as [String: Any]
-            }]
+            }])
         case .failure(let error):
-            let fields: [String: Any] = switch error {
-            case .failed(let code): ["kind": "failed", "code": code]
-            case .cancelled: ["kind": "cancelled"]
-            case .modelMissing: ["kind": "model_missing"]
-            case .badRequest: ["kind": "bad_request"]
-            }
-            object = ["error": fields]
+            InkAnswer.send(call, ["error": error.fields])
         }
-        let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
-        // INK_ERR_UNKNOWN_CALL means the core gave up on this call (cancelled, shut down): fine.
-        _ = String(decoding: data, as: UTF8.self).withCString { ink_engine_complete(call, $0) }
     }
 }

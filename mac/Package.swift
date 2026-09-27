@@ -19,6 +19,11 @@ let package = Package(
     products: [
         .executable(name: "Inkwell", targets: ["Inkwell"]),
     ],
+    dependencies: [
+        // Parakeet on the Neural Engine, for live partials (AppleEngines). Apache-2.0; pinned to
+        // the version the engine choice was measured with.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.5"),
+    ],
     targets: [
         .binaryTarget(name: "InkCore", path: "build/InkCore.xcframework"),
         .target(
@@ -40,7 +45,7 @@ let package = Package(
         ),
         .target(
             name: "AppleEngines",
-            dependencies: ["InkBridge"],
+            dependencies: ["InkBridge", .product(name: "FluidAudio", package: "FluidAudio")],
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AVFoundation"),
@@ -66,6 +71,7 @@ let package = Package(
             ]
         ),
         .testTarget(name: "InkBridgeTests", dependencies: ["InkBridge"]),
+        .testTarget(name: "AppleEnginesTests", dependencies: ["AppleEngines", "InkBridge"]),
     ],
     swiftLanguageModes: [.v6]
 )
