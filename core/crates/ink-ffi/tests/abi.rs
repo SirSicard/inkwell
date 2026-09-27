@@ -90,6 +90,7 @@ fn table(engine: &AsyncEngine, info: &CString) -> InkEngineVTable {
         transcribe: Some(async_transcribe),
         cancel: None,
         release: Some(async_release),
+        ..Default::default()
     }
 }
 
@@ -150,7 +151,7 @@ fn every_function_in_the_header_works_through_the_c_abi() {
             INK_ERR_ALREADY_INITIALIZED
         );
         let ready = recorder.wait_type("core.ready", Duration::from_secs(5));
-        assert_eq!(ready["abi"], 1, "INK_ABI_VERSION");
+        assert_eq!(ready["abi"], 2, "INK_ABI_VERSION");
 
         // ink_init installed the core's logger: nobody else can.
         struct Other;

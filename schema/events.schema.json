@@ -131,6 +131,15 @@
         "far"
       ]
     },
+    "EngineKind": {
+      "type": "string",
+      "description": "What kind of engine the shell registered: offline (finals), streaming (live partials) or llm (a language model, for dictation polish).",
+      "enum": [
+        "offline",
+        "streaming",
+        "llm"
+      ]
+    },
     "Job": {
       "type": "string",
       "description": "A job the router fills with the best installed engine.",
@@ -457,7 +466,7 @@
     },
     "EngineRegistered": {
       "type": "object",
-      "description": "An engine the shell registered is in the router.",
+      "description": "An engine the shell registered is in use: an offline or streaming engine in the router, or a language model for polish.",
       "properties": {
         "type": {
           "const": "engine.registered"
@@ -466,9 +475,13 @@
           "type": "string",
           "description": "Its id."
         },
+        "kind": {
+          "$ref": "#/$defs/EngineKind",
+          "description": "What kind of engine it is."
+        },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills.",
+          "description": "The jobs it fills; empty for a language model.",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."
@@ -478,6 +491,7 @@
       "required": [
         "type",
         "id",
+        "kind",
         "jobs"
       ],
       "additionalProperties": false

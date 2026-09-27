@@ -33,9 +33,10 @@ use serde_json::Value;
 
 use crate::dictation::{DictationInbox, DictationWorker};
 use crate::events::{self, event};
-use crate::external::ExternalOffline;
+use crate::external::Registration;
 use crate::gate::{ModelGate, Routed, refused_event};
 use crate::hub::{EventOut, Events, Hub};
+use crate::llms::{PolishModel, ShellLlms};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureSide, MeetingRun, Replay};
 
@@ -227,7 +228,9 @@ pub struct Shared {
     pub shutdown: CancelToken,
     /// Where meetings' recordings go.
     pub data_dir: PathBuf,
-    /// Ids of the engines the shell registered.
+    /// Language models the shell registered (dictation polish).
+    pub llms: Arc<ShellLlms>,
+    /// Ids of the engines the shell registered, of every kind: one id space.
     externals: Mutex<Vec<String>>,
     /// The ink's bands writer, lent by the C ABI; the pump publishes through it.
     bands: Mutex<Option<BandsWriter>>,
@@ -407,6 +410,7 @@ impl Core {
             installer: parts.installer,
             shutdown: CancelToken::new(),
             data_dir: parts.data_dir,
+            llms: Arc::default(),
             externals: Mutex::default(),
             bands: Mutex::new(None),
         });
@@ -446,21 +450,60 @@ impl Core {
             .map_err(|_| "the command thread has stopped".to_owned())
     }
 
-    /// Registers a shell engine with the router. Returns its id.
-    pub fn register(&self, engine: ExternalOffline) -> Result<String, String> {
-        let engine = Arc::new(engine);
-        let id = engine.info().id;
-        let scores = engine.scores().to_vec();
-        if let Err(e) = self.shared.router.register_offline(engine.clone(), &scores) {
+    /// Registers a shell engine: offline and streaming engines with the router, language models
+    /// with [`Shared::llms`]. Ids are unique across every kind. Returns its id.
+    pub fn register(&self, engine: impl Into<Registration>) -> Result<String, String> {
+        let engine = engine.into();
+        let id = engine.id().to_owned();
+        let refuse = |engine: Registration, why: String| {
             // Nothing is kept, and the header promises release is not called for a refusal.
             engine.disarm();
-            return Err(e.to_string());
+            Err(why)
+        };
+        // Held across the check and the insert, so two registrations of one id cannot both pass.
+        let mut externals = lock(&self.shared.externals);
+        if externals.contains(&id) {
+            return refuse(engine, format!("engine id {id} is already registered"));
         }
-        lock(&self.shared.externals).push(id.clone());
+        let (kind, scores) = match engine {
+            Registration::Offline(e) => {
+                let e = Arc::new(e);
+                let scores = e.scores().to_vec();
+                if let Err(err) = self.shared.router.register_offline(e.clone(), &scores) {
+                    e.disarm();
+                    return Err(err.to_string());
+                }
+                ("offline", scores)
+            }
+            Registration::Streaming(e) => {
+                let e = Arc::new(e);
+                let scores = e.scores().to_vec();
+                if let Err(err) = self.shared.router.register_streaming(e.clone(), &scores) {
+                    e.disarm();
+                    return Err(err.to_string());
+                }
+                ("streaming", scores)
+            }
+            Registration::Llm(e) => {
+                if self.shared.registry.get(&id).is_some() {
+                    return refuse(
+                        Registration::Llm(e),
+                        format!("engine id {id} is a registry model's"),
+                    );
+                }
+                if !self.shared.llms.insert(e) {
+                    return Err(format!("engine id {id} is already registered"));
+                }
+                ("llm", Vec::new())
+            }
+        };
+        externals.push(id.clone());
+        drop(externals);
         self.shared.events.emit(event(
             "engine.registered",
             &[
                 ("id", Some(id.as_str().into())),
+                ("kind", Some(kind.into())),
                 (
                     "jobs",
                     Some(Value::Array(
@@ -492,7 +535,9 @@ impl Core {
     }
 
     /// Starts the dictation worker with the shell's platform pieces, replacing one already
-    /// running. Its engine is whatever the router picks for the dictation job at each take.
+    /// running. Its engine is whatever the router picks for the dictation job at each take. With
+    /// no polish model in `parts`, polish goes to a registered language model, whichever is
+    /// registered when a take is polished ([`PolishModel`]).
     pub fn start_dictation(&self, parts: DictationParts) -> io::Result<DictationInbox> {
         let s = &self.shared;
         let events = s.events.clone();
@@ -505,7 +550,9 @@ impl Core {
                 inserter: parts.inserter,
                 focus: parts.focus,
                 clock: s.clock.clone(),
-                llm: parts.llm,
+                llm: parts
+                    .llm
+                    .or_else(|| Some(Arc::new(PolishModel::new(s.llms.clone())) as Arc<dyn Llm>)),
             },
             parts.settings,
             parts.vad,
@@ -551,7 +598,12 @@ impl Core {
             stop_dictation(dictation);
         }
         let ids = std::mem::take(&mut *lock(&shared.externals));
-        let engines_released = ids.iter().filter(|id| shared.router.unregister(id)).count();
+        // Every stream is closed by now (the meeting's chain, which held them, is joined), so
+        // letting go here runs each engine's release.
+        let engines_released = ids
+            .iter()
+            .filter(|id| shared.router.unregister(id) || shared.llms.remove(id))
+            .count();
         // Every thread that could hold a model has been joined, so no lease is left and these
         // unloads cannot be refused. Done explicitly rather than trusting the drop below: that
         // needs every reference to `shared` gone, and one leaked clone would keep a model loaded.
@@ -657,7 +709,7 @@ fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
                 ids.retain(|i| *i != engine);
                 ids.len() != before
             };
-            if known && shared.router.unregister(&engine) {
+            if known && (shared.router.unregister(&engine) || shared.llms.remove(&engine)) {
                 shared
                     .events
                     .emit(event("engine.unregistered", &[("id", Some(engine.into()))]));

@@ -17,7 +17,7 @@ use ink_pipeline::voicecommand::{CommandAction, RiskLevel};
 use serde_json::{Map, Value, json};
 
 /// The ABI version this core implements (`INK_ABI_VERSION` in `inkwell.h`).
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 /// Builds an event: `type`, then the fields that are present.
 pub(crate) fn event(ty: &str, fields: &[(&str, Option<Value>)]) -> Value {

@@ -30,7 +30,9 @@ use std::time::{Duration, Instant};
 use ink_audio::{BandAnalyzer, Bands, ChunkStore, FileReplaySource, Pacing, capture_ring};
 use ink_core::{
     AudioBlock, AudioSink, AudioSource, CancelToken, Channel, EventSink, Job, RecordId,
+    StreamingEngine,
 };
+use ink_engines::{ExternalEngine, Route};
 use ink_pipeline::capture::{CanonicalBlock, CaptureIssue, SideCapture, SideSummary};
 use ink_pipeline::events::VadUnavailable;
 use ink_pipeline::meeting::events::MeetingEvent;
@@ -364,6 +366,27 @@ fn capture(
     }
 }
 
+/// **Worker.** The router's live-partials engine for a meeting starting now, if one is installed:
+/// a streaming engine the shell registered (on the Mac, FluidAudio's Parakeet). Without one the
+/// meeting has no live transcript, only its final pass.
+fn live_engine(shared: &Shared) -> Option<Arc<dyn StreamingEngine>> {
+    match shared.router.route(Job::LivePartials) {
+        Ok(Route::External {
+            engine: ExternalEngine::Streaming(engine),
+            ..
+        }) => Some(engine),
+        Ok(other) => {
+            // A registry row for live partials: this build has no streaming adapter for one.
+            log::warn!(
+                "live partials route to {}, which this build cannot stream; no live transcript",
+                other.id()
+            );
+            None
+        }
+        Err(_) => None,
+    }
+}
+
 fn worker(
     shared: &Arc<Shared>,
     mailbox: &Box2,
@@ -384,8 +407,7 @@ fn worker(
         })
     };
     let services = MeetingServices {
-        // Live partials come from a streaming engine; none can be registered yet (S2.2).
-        live: None,
+        live: live_engine(shared),
         offline: Arc::new(Routed::new(shared.clone(), Job::MeetingFinal)),
         diarizer: None,
         store: shared.store.clone(),

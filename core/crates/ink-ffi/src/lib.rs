@@ -7,7 +7,8 @@
 //! | [`hub`] | the event thread |
 //! | [`events`] | events as JSON, per `schema/events.schema.json` |
 //! | [`schema`] | the schema's model, its validator and the Swift generator |
-//! | [`external`] | engines the shell registers (`InkEngineVTable`) and their completion calls |
+//! | [`external`] | engines the shell registers (`InkEngineVTable`): offline, live streams, language models; their completion calls and stream events |
+//! | [`llms`] | the language models the shell registered, and the polish model built on them |
 //! | [`gate`] | exclusive holds on models during updates, and the engine every chain calls |
 //! | [`mailbox`] | the bounded queue from the pump to a chain's worker |
 //! | [`meeting`] | a meeting run: capture, the pump, the meeting worker |
@@ -31,6 +32,7 @@ pub mod events;
 pub mod external;
 pub mod gate;
 pub mod hub;
+pub mod llms;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;
@@ -43,7 +45,7 @@ use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 
 use ink_audio::{BandsReader, BandsWriter, bands_channel};
 
-use crate::external::{CompleteError, ExternalOffline, InkEngineVTable};
+use crate::external::{CompleteError, InkEngineVTable, Registration, StreamEventError};
 use crate::runtime::{Config, Core, Parts};
 
 /// `INK_OK`.
@@ -307,7 +309,7 @@ pub unsafe extern "C" fn ink_register_engine(vtable: *const InkEngineVTable) -> 
         };
         // SAFETY: forwarded from this function's own contract.
         let engine =
-            match unsafe { ExternalOffline::from_table(vtable, core.shared().shutdown.clone()) } {
+            match unsafe { Registration::from_table(vtable, core.shared().shutdown.clone()) } {
                 Ok(e) => e,
                 Err(e) => {
                     log::warn!("ink_register_engine: {}", e.0);
@@ -340,6 +342,28 @@ pub unsafe extern "C" fn ink_engine_complete(call: u64, result_json: *const c_ch
         Ok(()) => INK_OK,
         Err(CompleteError::Unknown) => INK_ERR_UNKNOWN_CALL,
         Err(CompleteError::Malformed) => INK_ERR_INVALID_ARGUMENT,
+    })
+}
+
+/// See `inkwell.h`. Any thread; it only queues.
+///
+/// # Safety
+///
+/// `event_json` is NULL or a NUL-terminated string valid for this call.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ink_stream_event(stream: u64, event_json: *const c_char) -> i32 {
+    // SAFETY: forwarded from this function's own contract.
+    let json = unsafe { arg(event_json) };
+    guard(|| {
+        let Some(json) = json else {
+            return INK_ERR_INVALID_ARGUMENT;
+        };
+        match external::stream_event(stream, json) {
+            Ok(()) => INK_OK,
+            Err(StreamEventError::Unknown) => INK_ERR_UNKNOWN_CALL,
+            Err(StreamEventError::Malformed) => INK_ERR_INVALID_ARGUMENT,
+        }
     })
 }
 

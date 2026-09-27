@@ -461,12 +461,23 @@ public enum Discard: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
-/// An engine the shell registered is in the router.
+/// What kind of engine the shell registered: offline (finals), streaming (live partials) or llm
+/// (a language model, for dictation polish).
+public enum EngineKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case offline
+    case streaming
+    case llm
+}
+
+/// An engine the shell registered is in use: an offline or streaming engine in the router, or a
+/// language model for polish.
 public struct EngineRegistered: Codable, Sendable, Equatable {
     /// Its id.
     public let id: String
-    /// The jobs it fills.
+    /// The jobs it fills; empty for a language model.
     public let jobs: [JobScore]
+    /// What kind of engine it is.
+    public let kind: EngineKind
     /// Always `engine.registered`.
     public let type: String
 }
