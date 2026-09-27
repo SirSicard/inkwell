@@ -138,7 +138,7 @@ jobs:
           core/crates/ink-engines/native/build-nemo-speech.sh "$RUNNER_TEMP/nemo-speech-src" "$RUNNER_TEMP/nemo-speech"
           echo "NEMO_SPEECH_DIR=$RUNNER_TEMP/nemo-speech" >>"$GITHUB_ENV"
 
-      # The core with the release's engines (build-mac.sh --engines checks it is exactly this set):
+      # The core with the release's engines (build-mac.sh --engines checks it is exactly this text):
       # llama.cpp built GGML_NATIVE=OFF (build-core.sh reads it back), NeMo linked from its prefix.
       - name: Build the core, with its engines
         env:

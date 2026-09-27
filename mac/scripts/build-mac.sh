@@ -93,6 +93,17 @@ allow_newer="${INK_ALLOW_NEWER_MACOS:-0}"
 # The engines a release ships: the dictation and meeting finals (Qwen3-ASR on llama.cpp), the VAD
 # (Silero on tract) and the far end's diarizer (Nemotron on NeMo-Speech.cpp).
 release_features="engine-llama,ink-engines/engine-silero,ink-engines/engine-nemo"
+# The one check that a core is the release's, for both places its features come from: the
+# caller's INK_CORE_FEATURES, and the link file of a core built earlier (--skip-core, as the release
+# workflow builds). Exactly this text, not merely the same set: cargo takes several spellings of
+# one set (another order, spaces for commas, a feature named through another crate), so a looser
+# comparison would have to resolve features as cargo does, and one that got it wrong would ship a
+# core with other engines. Another spelling fails loudly and costs a rebuild; the workflow and the
+# docs spell it this way.
+check_release_features() {
+  [ "$2" = "$release_features" ] \
+    || fail "--engines builds the core with exactly $release_features, in that order; $1 [$2]${3:+: $3}"
+}
 link_file="$mac/build/InkCore.link"
 
 # A release without its engines would install and start, and transcribe nothing.
@@ -101,9 +112,7 @@ if [ "$timestamp" = 1 ]; then
   [ "$allow_newer" != 1 ] || fail "INK_ALLOW_NEWER_MACOS is for local builds: a release must start on macOS $target"
 fi
 if [ "$engines" = 1 ]; then
-  if [ -n "${INK_CORE_FEATURES:-}" ] && [ "$INK_CORE_FEATURES" != "$release_features" ]; then
-    fail "--engines builds the core with $release_features; INK_CORE_FEATURES asks for $INK_CORE_FEATURES"
-  fi
+  [ -z "${INK_CORE_FEATURES:-}" ] || check_release_features "INK_CORE_FEATURES asks for" "$INK_CORE_FEATURES"
   export INK_CORE_FEATURES="$release_features"
 fi
 
@@ -131,8 +140,8 @@ fi
 # directories its engines' libraries are bundled from (the -L ones).
 [ -f "$link_file" ] || fail "mac/build/InkCore.link is missing: build the core again (without --skip-core)"
 core_features="$(sed -n 's/^# features: //p' "$link_file")"
-if [ "$engines" = 1 ] && [ "$core_features" != "$release_features" ]; then
-  fail "--engines, but the core in mac/build was built with features [$core_features]: build it again"
+if [ "$engines" = 1 ]; then
+  check_release_features "the core in mac/build was built with" "$core_features" "build it again"
 fi
 link_args=()
 dylib_dirs=()
