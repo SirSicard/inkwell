@@ -32,6 +32,8 @@
 set -euo pipefail
 
 mac="$(cd "$(dirname "$0")/.." && pwd)"
+# redact_signing: everything signing-related this script prints goes through it.
+. "$mac/scripts/lib/redact-signing.sh"
 config=release
 skip_core=0
 same_as=""
@@ -90,7 +92,12 @@ find "$bin" -maxdepth 1 -name '*.bundle' -type d -exec cp -R {} "$app/Contents/R
 sign_as=("${identity:--}")
 # --timestamp=none: a local build does not ask Apple's timestamp server. The release pipeline
 # signs with a secure timestamp, which notarisation requires.
-sign() { codesign --force --options runtime --timestamp=none --sign "${sign_as[0]}" "$@"; }
+# codesign's own messages can name the identity and its certificate: they are redacted too
+# (pipefail keeps its exit status).
+sign() {
+  codesign --force --options runtime --timestamp=none --sign "${sign_as[0]}" "$@" 2>&1 \
+    | redact_signing "$identity"
+}
 
 is_macho() { file -b "$1" | grep -q '^Mach-O'; }
 
@@ -118,7 +125,7 @@ done
 sign --entitlements "$mac/Inkwell.entitlements" "$app"
 
 # --- verify -------------------------------------------------------------------------------------
-codesign --verify --deep --strict "$app" || fail "the signature does not verify"
+codesign --verify --deep --strict "$app" 2>&1 | redact_signing "$identity" || fail "the signature does not verify"
 
 info="$(codesign -dv "$app" 2>&1)"
 grep -q "^Identifier=$bundle_id\$" <<<"$info" || fail "the app is not signed as $bundle_id"
@@ -143,16 +150,16 @@ for f in "$app/Contents/MacOS/Inkwell" ${nested[@]+"${nested[@]}"}; do
 done
 
 if [ -n "$same_as" ]; then
-  # Compared, never printed in full: a Developer ID requirement names the team.
-  # An ad-hoc signature's requirement is implicit, printed as "# designated => cdhash ...".
+  # Compared in full, printed only redacted: a Developer ID requirement names the team, and can
+  # name the certificate. An ad-hoc signature's requirement is implicit, printed as
+  # "# designated => cdhash ...".
   requirement() { codesign -d -r- "$1" 2>&1 | sed -nE 's/^(# )?designated => //p'; }
   ours="$(requirement "$app")"
   theirs="$(requirement "$same_as")"
   [ -n "$theirs" ] || fail "no designated requirement read from $same_as"
   if [ "$ours" != "$theirs" ]; then
-    mask() { sed -E 's/(subject\.OU\] = )"?[A-Z0-9]{10}"?/\1<team>/'; }
-    echo "  this build: $(mask <<<"$ours")" >&2
-    echo "  $same_as: $(mask <<<"$theirs")" >&2
+    echo "  this build: $(redact_signing "$identity" <<<"$ours")" >&2
+    echo "  $same_as: $(redact_signing "$identity" <<<"$theirs")" >&2
     fail "the designated requirement differs from $same_as: TCC grants will not carry over"
   fi
   echo "designated requirement: the same as $same_as"
