@@ -14,9 +14,11 @@
 //! | [`summary`] | JSON: headline, body, decisions, actions, open questions. |
 //! | [`commitments`] | JSON per candidate: one of six classes, with a verbatim quote. |
 //! | [`dedup`] | JSON per pair: whether two commitments are the same obligation. |
+//! | [`ask`](mod@ask) | Plain text: a question about a live meeting, answered from its transcript. |
 //!
 //! Every task is a **worker**-thread call and passes the cancel token to the model.
 
+pub mod ask;
 pub mod commitments;
 pub mod dedup;
 pub mod due;

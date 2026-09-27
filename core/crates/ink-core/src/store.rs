@@ -156,6 +156,30 @@ pub struct Summary {
     pub model: String,
     /// When it was written, Unix ms.
     pub created_at_unix_ms: i64,
+    /// Its decisions and actions, each with the line it cites, in the order the text lists them.
+    /// Saved and replaced with the summary, so the record can show each item's cited line even
+    /// after a later pass replaces the transcript's rows (the spans are times, which stay).
+    pub items: Vec<SummaryItem>,
+}
+
+/// What a [`SummaryItem`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SummaryItemKind {
+    /// Something decided.
+    Decision,
+    /// Something to be done.
+    Action,
+}
+
+/// A decision or an action in a summary, with the line it cites.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SummaryItem {
+    /// Decision or action.
+    pub kind: SummaryItemKind,
+    /// The item as the summary states it.
+    pub text: String,
+    /// Where the transcript line it cites was said. Checked like a [`Segment`]'s times.
+    pub span: Span,
 }
 
 /// A stretch of a record. Commitments cite spans rather than segment rows, because a supersede
@@ -177,6 +201,8 @@ pub struct NewCommitment {
     pub text: String,
     /// Who owes it, as said.
     pub owner: Option<String>,
+    /// Who it is owed to, as said ("Dana"), when the transcript says: what Owed groups by.
+    pub recipient: Option<String>,
     /// When, as said ("by Friday"), kept for display.
     pub due: Option<String>,
     /// When, resolved to a time, so "overdue" can be computed. `None` when it could not be
@@ -197,6 +223,8 @@ pub struct Commitment {
     pub text: String,
     /// Who owes it.
     pub owner: Option<String>,
+    /// Who it is owed to.
+    pub recipient: Option<String>,
     /// When, as said.
     pub due: Option<String>,
     /// When, resolved, Unix ms.
@@ -208,6 +236,19 @@ pub struct Commitment {
     pub merged_into: Option<CommitmentId>,
     /// Whether it is done.
     pub done: bool,
+    /// Where a later meeting suggests it is already done ("looks done"), until the user marks it
+    /// done or says not yet ([`Store::set_done_evidence`]).
+    pub looks_done: Option<DoneEvidence>,
+}
+
+/// Where a meeting suggests an open commitment is already done: the user said, in another
+/// record, that they had finished it. A suggestion for the user to confirm, never a change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DoneEvidence {
+    /// The record it was said in.
+    pub record: RecordId,
+    /// Where in that record. Checked like a [`Segment`]'s times.
+    pub span: Span,
 }
 
 /// A search result, with enough of its record to list it without another lookup.
@@ -360,8 +401,19 @@ pub trait Store: Send + Sync {
     /// resolved due time first, undated ones last, ties in the order they were added.
     fn open_commitments(&self, limit: usize) -> Result<Vec<Commitment>, StoreError>;
 
-    /// Marks a commitment done or not done.
+    /// Marks a commitment done or not done. Either way, a "looks done" suggestion on it is
+    /// settled and cleared.
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError>;
+
+    /// Sets (or, with `None`, clears: the user said "not yet") where a meeting suggests the
+    /// commitment is already done. Refused with [`StoreError::NotFound`] for an unknown
+    /// commitment or an unknown evidence record, and [`StoreError::Invalid`] for a bad span. A
+    /// deleted evidence record clears the suggestion with it.
+    fn set_done_evidence(
+        &self,
+        id: &CommitmentId,
+        evidence: Option<&DoneEvidence>,
+    ) -> Result<(), StoreError>;
 
     /// Folds `id` into `into`: the deduplicated "said twice" case.
     ///

@@ -122,6 +122,9 @@
       "$ref": "#/$defs/MeetingCommitments"
     },
     {
+      "$ref": "#/$defs/MeetingLooksDone"
+    },
+    {
       "$ref": "#/$defs/MeetingFinished"
     },
     {
@@ -1719,6 +1722,30 @@
         "record",
         "filed",
         "merged"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingLooksDone": {
+      "type": "object",
+      "description": "In this meeting the user said work was already done that earlier meetings' open commitments promise: each such commitment now carries a \"looks done\" suggestion (commitments.list shows it) for the user to confirm or dismiss. Sent only when there is at least one.",
+      "properties": {
+        "type": {
+          "const": "meeting.looks_done"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "suggested": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Commitments given a suggestion."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "suggested"
       ],
       "additionalProperties": false
     },

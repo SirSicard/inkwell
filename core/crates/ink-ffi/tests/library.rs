@@ -212,6 +212,7 @@ fn record_open_carries_the_whole_record_and_a_missing_one_fails_by_id() {
         .save_summary(
             &r,
             &Summary {
+                items: Vec::new(),
                 text: "We agreed a plan.\n\n## Actions\n- Send the plan (You)".into(),
                 model: "test".into(),
                 created_at_unix_ms: NOON + MINUTE,
@@ -222,6 +223,7 @@ fn record_open_carries_the_whole_record_and_a_missing_one_fails_by_id() {
         .add_commitments(
             &r,
             &[NewCommitment {
+                recipient: None,
                 text: "Send the plan".into(),
                 owner: Some("You".into()),
                 due: Some("Friday".into()),
@@ -536,6 +538,13 @@ impl Store for Counting {
     }
     fn set_commitment_done(&self, id: &CommitmentId, d: bool) -> Result<(), StoreError> {
         self.inner.set_commitment_done(id, d)
+    }
+    fn set_done_evidence(
+        &self,
+        id: &CommitmentId,
+        evidence: Option<&ink_core::DoneEvidence>,
+    ) -> Result<(), StoreError> {
+        self.inner.set_done_evidence(id, evidence)
     }
     fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError> {
         self.inner.merge_commitment(id, into)

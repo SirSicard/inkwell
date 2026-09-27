@@ -210,6 +210,7 @@ fn meeting(store: &dyn Store, title: Option<&str>, started: i64) -> ink_core::Re
 
 fn promise(text: &str, owner: Option<&str>, due_at: Option<i64>, at_ms: u64) -> NewCommitment {
     NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: owner.map(Into::into),
         due: due_at.map(|_| "by Friday".into()),

@@ -48,11 +48,11 @@ use std::sync::mpsc::{self, Receiver};
 use ink_audio::{ChunkError, ChunkStore, VadConfig, WindowError};
 use ink_core::store::check_supersede_explained;
 use ink_core::{
-    AsrEvent, CancelToken, Channel, Clock, Diarizer, EngineError, EventSink, Explained, Llm,
-    LlmError, NewCommitment, NewRecord, OfflineEngine, Record, RecordId, RecordKind, Segment,
-    Store, StoreError, StreamingEngine, SupersedeWith,
+    AsrEvent, CancelToken, Channel, Clock, Diarizer, DoneEvidence, EngineError, EventSink,
+    Explained, Llm, LlmError, NewCommitment, NewRecord, OfflineEngine, Record, RecordId,
+    RecordKind, Segment, Store, StoreError, StreamingEngine, SupersedeWith,
 };
-use ink_llm::tasks::commitments::{RecordContext, harvest};
+use ink_llm::tasks::commitments::{RecordContext, harvest, looks_done};
 use ink_llm::tasks::dedup::{apply_merges, dedup};
 use ink_llm::tasks::due::RecordTime;
 use ink_llm::tasks::summary::{SummaryOptions, summarize};
@@ -1167,7 +1167,10 @@ impl EndedMeeting {
         }
 
         match harvest(segments, &ctx, llm.as_ref(), cancel) {
-            Ok(h) => filed.extend(h.commitments),
+            Ok(h) => {
+                filed.extend(h.commitments);
+                self.suggest_done(&h.already_done);
+            }
             Err(error) => {
                 log::warn!("meeting commitments failed: {error}");
                 let cancelled = error == LlmError::Cancelled;
@@ -1206,6 +1209,50 @@ impl EndedMeeting {
         }
     }
 }
+
+impl EndedMeeting {
+    /// "Looks done": marks the open commitments of other meetings that what the user said here
+    /// suggests are finished ([`looks_done`]). Before this meeting's own are filed, which are
+    /// skipped anyway. A store failure is a warning; the pass goes on.
+    fn suggest_done(&self, already_done: &[ink_llm::tasks::commitments::Candidate]) {
+        if already_done.is_empty() {
+            return;
+        }
+        let core = &self.core;
+        let store = &core.services.store;
+        let open = match store.open_commitments(LOOKS_DONE_OPEN_LIMIT) {
+            Ok(open) => open,
+            Err(error) => {
+                log::warn!(
+                    "meeting: the open commitments could not be read for looks-done: {error}"
+                );
+                core.warn(MeetingWarning::StoreFailed(error));
+                return;
+            }
+        };
+        let mut suggested = 0;
+        for (id, span) in looks_done(already_done, &open, Some(&core.record)) {
+            let evidence = DoneEvidence {
+                record: core.record.clone(),
+                span,
+            };
+            match store.set_done_evidence(&id, Some(&evidence)) {
+                Ok(()) => suggested += 1,
+                Err(error) => {
+                    log::warn!("meeting: a looks-done suggestion could not be saved: {error}");
+                    core.warn(MeetingWarning::StoreFailed(error));
+                }
+            }
+        }
+        if suggested > 0 {
+            log::info!("meeting: {suggested} earlier commitments look done");
+            core.emit(MeetingEvent::LooksDone { suggested });
+        }
+    }
+}
+
+/// How many open commitments "looks done" reads to match against: Owed's own page size.
+pub const LOOKS_DONE_OPEN_LIMIT: usize = 1_000;
 
 /// The report of a path search, before the mic is cancelled.
 fn echo_pass(fit: Option<&PathReport>) -> EchoPass {

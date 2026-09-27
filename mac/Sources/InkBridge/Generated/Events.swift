@@ -87,6 +87,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case meetingSummarized(MeetingSummarized)
     /// `meeting.commitments`
     case meetingCommitments(MeetingCommitments)
+    /// `meeting.looks_done`
+    case meetingLooksDone(MeetingLooksDone)
     /// `meeting.finished`
     case meetingFinished(MeetingFinished)
     /// `meeting.failed`
@@ -185,6 +187,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "meeting.kept_live": self = .meetingKeptLive(try MeetingKeptLive(from: decoder))
             case "meeting.summarized": self = .meetingSummarized(try MeetingSummarized(from: decoder))
             case "meeting.commitments": self = .meetingCommitments(try MeetingCommitments(from: decoder))
+            case "meeting.looks_done": self = .meetingLooksDone(try MeetingLooksDone(from: decoder))
             case "meeting.finished": self = .meetingFinished(try MeetingFinished(from: decoder))
             case "meeting.failed": self = .meetingFailed(try MeetingFailed(from: decoder))
             case "meeting.capture_failed": self = .meetingCaptureFailed(try MeetingCaptureFailed(from: decoder))
@@ -251,6 +254,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .meetingKeptLive(let event): try event.encode(to: encoder)
         case .meetingSummarized(let event): try event.encode(to: encoder)
         case .meetingCommitments(let event): try event.encode(to: encoder)
+        case .meetingLooksDone(let event): try event.encode(to: encoder)
         case .meetingFinished(let event): try event.encode(to: encoder)
         case .meetingFailed(let event): try event.encode(to: encoder)
         case .meetingCaptureFailed(let event): try event.encode(to: encoder)
@@ -1107,6 +1111,18 @@ public struct MeetingKeptLive: Codable, Sendable, Equatable {
         case record
         case type
     }
+}
+
+/// In this meeting the user said work was already done that earlier meetings' open commitments
+/// promise: each such commitment now carries a "looks done" suggestion (commitments.list shows
+/// it) for the user to confirm or dismiss. Sent only when there is at least one.
+public struct MeetingLooksDone: Codable, Sendable, Equatable {
+    /// The meeting's record id.
+    public let record: String
+    /// Commitments given a suggestion.
+    public let suggested: Int64
+    /// Always `meeting.looks_done`.
+    public let type: String
 }
 
 /// Provisional live text; each replaces the last and none is saved. Carries the meeting's

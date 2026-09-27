@@ -17,9 +17,15 @@
 //! The judge's quote must appear verbatim in the candidate sentence ([`quote_holds`]); an answer
 //! that cannot quote is dropped as a hallucination. The judge's answer is validated against the
 //! judge's own shape, never another task's (see [`crate::tasks`]).
+//!
+//! **"Looks done."** A sentence the judge classes `already_done` ("I've already sent Dana the
+//! deck") is kept too ([`Harvest::already_done`]). [`looks_done`] matches such sentences to the
+//! open commitments of earlier meetings, by the words they share, so the user can be asked
+//! whether one is finished. It only suggests; nothing is marked done without the user.
 
 use ink_core::{
-    CancelToken, Channel, Llm, LlmError, LlmRequest, NewCommitment, Segment, Span, SpeakerId,
+    CancelToken, Channel, Commitment, CommitmentId, Llm, LlmError, LlmRequest, NewCommitment,
+    Segment, Span, SpeakerId,
 };
 
 use super::due::{RecordTime, resolve_due};
@@ -50,6 +56,21 @@ pub const TRIGGERS: &[&str] = &[
     "i take",
 ];
 
+/// Phrases of work the user says is finished ("I've already sent it"). Spotted with
+/// [`TRIGGERS`] so the judge can class them `already_done`, which [`looks_done`] matches to
+/// earlier promises.
+pub const DONE_TRIGGERS: &[&str] = &[
+    "already",
+    "i've sent",
+    "i sent",
+    "i've done",
+    "i did",
+    "i've finished",
+    "i finished",
+    "that's done",
+    "it's done",
+];
+
 /// A sentence worth judging.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
@@ -74,7 +95,11 @@ pub fn spot(segments: &[Segment]) -> Vec<Candidate> {
         }
         for sentence in split_sentences(&segment.text) {
             let lowered = sentence.to_lowercase().replace('\u{2019}', "'");
-            if let Some(trigger) = TRIGGERS.iter().find(|t| contains_phrase(&lowered, t)) {
+            if let Some(trigger) = TRIGGERS
+                .iter()
+                .chain(DONE_TRIGGERS)
+                .find(|t| contains_phrase(&lowered, t))
+            {
                 found.push(Candidate {
                     trigger,
                     sentence: sentence.to_owned(),
@@ -171,6 +196,7 @@ pub const JUDGE_SCHEMA: &str = r#"{
     "class": {"type": "string", "enum": ["commitment", "hypothetical", "option_discussion", "declined_or_retracted", "delegated", "already_done"]},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     "task": {"type": ["string", "null"]},
+    "to": {"type": ["string", "null"]},
     "due": {"type": ["string", "null"]},
     "quote": {"type": "string"}
   },
@@ -189,7 +215,7 @@ Pick exactly one class:
 - already_done: refers to work that is already finished
 
 Answer with JSON only, no prose:
-{"class": "one of the six", "confidence": 0.0 to 1.0, "task": "the obligation as an instruction, for example \"Send the draft agenda to the design team\", or null unless the class is commitment", "due": "the deadline exactly as said, or null", "quote": "a verbatim part of the sentence that proves the class"}
+{"class": "one of the six", "confidence": 0.0 to 1.0, "task": "the obligation as an instruction, for example \"Send the draft agenda to the design team\", or null unless the class is commitment", "to": "who the obligation is owed to, a name as the transcript gives it, or null when nobody is named", "due": "the deadline exactly as said, or null", "quote": "a verbatim part of the sentence that proves the class"}
 
 Copy a deadline as said ("Friday"); never work out a date. The quote must appear word for word in the sentence. If you cannot quote it, the class is wrong."#;
 
@@ -245,6 +271,8 @@ pub struct Judgement {
     pub confidence: f64,
     /// The obligation as an instruction, for a commitment.
     pub task: Option<String>,
+    /// Who it is owed to, as named. Optional in the answer (asked for since S2.8).
+    pub to: Option<String>,
     /// The deadline as said.
     pub due: Option<String>,
     /// The judge's proof, from the sentence.
@@ -275,6 +303,7 @@ pub fn parse_judgement(text: &str) -> Result<Judgement, LlmError> {
         ));
     }
     let task = fields.nullable_string("task")?;
+    let to = fields.optional_string("to")?;
     let due = fields.nullable_string("due")?;
     let quote = fields.string("quote")?;
     let owned = |s: Option<&str>| {
@@ -286,6 +315,7 @@ pub fn parse_judgement(text: &str) -> Result<Judgement, LlmError> {
         class,
         confidence,
         task: owned(task),
+        to: owned(to),
         due: owned(due),
         quote: quote.trim().to_owned(),
     })
@@ -310,6 +340,9 @@ pub struct Harvest {
     pub unquoted: usize,
     /// Commitments the judge was not confident enough about to file.
     pub maybes: usize,
+    /// Sentences where the user said something was already done, quoted and confident: what
+    /// [`looks_done`] matches to open commitments.
+    pub already_done: Vec<Candidate>,
 }
 
 /// The confidence a commitment needs to be filed.
@@ -352,6 +385,10 @@ pub fn harvest(
             harvest.unquoted += 1;
             continue;
         }
+        if judgement.class == JudgeClass::AlreadyDone && judgement.confidence >= MIN_CONFIDENCE {
+            harvest.already_done.push(candidate.clone());
+            continue;
+        }
         if judgement.class != JudgeClass::Commitment {
             continue;
         }
@@ -364,6 +401,7 @@ pub fn harvest(
             .as_deref()
             .and_then(|due| resolve_due(due, record.time));
         harvest.commitments.push(NewCommitment {
+            recipient: judgement.to,
             text: judgement.task.unwrap_or_else(|| candidate.sentence.clone()),
             owner: None,
             due: judgement.due,
@@ -372,6 +410,160 @@ pub fn harvest(
         });
     }
     Ok(harvest)
+}
+
+/// Words too common to tell two promises apart. Matching is on the rest.
+const STOP_WORDS: &[&str] = &[
+    "a",
+    "about",
+    "after",
+    "all",
+    "already",
+    "also",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "before",
+    "but",
+    "by",
+    "can",
+    "did",
+    "do",
+    "done",
+    "for",
+    "from",
+    "got",
+    "had",
+    "has",
+    "have",
+    "i",
+    "i'd",
+    "i'll",
+    "i'm",
+    "i've",
+    "in",
+    "into",
+    "is",
+    "it",
+    "it's",
+    "just",
+    "last",
+    "let",
+    "me",
+    "my",
+    "now",
+    "of",
+    "off",
+    "on",
+    "or",
+    "our",
+    "out",
+    "over",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "they",
+    "this",
+    "those",
+    "to",
+    "today",
+    "up",
+    "us",
+    "was",
+    "we",
+    "we've",
+    "were",
+    "will",
+    "with",
+    "yesterday",
+    "you",
+    "your",
+];
+
+/// A sentence's content words: lowercase, apostrophes kept, stop words out, each once.
+fn content_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = text
+        .to_lowercase()
+        .replace('\u{2019}', "'")
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .map(|w| w.trim_matches('\''))
+        .filter(|w| !w.is_empty() && !STOP_WORDS.contains(w))
+        .map(str::to_owned)
+        .collect();
+    words.sort();
+    words.dedup();
+    words
+}
+
+/// Whether two content words are one word: equal, or one begins the other and the shorter has
+/// four letters or more, so "deck" meets "decks" and "book" meets "booked" without a stemmer.
+fn same_word(a: &str, b: &str) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    short == long || (short.chars().count() >= 4 && long.starts_with(short))
+}
+
+/// The fewest content words a "done" sentence and a commitment must share to match.
+pub const LOOKS_DONE_MIN_SHARED: usize = 2;
+
+/// The share of a commitment's content words the "done" sentence must hold to match.
+pub const LOOKS_DONE_MIN_SHARE: f64 = 0.6;
+
+/// **Any thread except realtime.** Matches sentences where the user said something was already
+/// done ([`Harvest::already_done`]) to `open` commitments: each commitment is matched by the
+/// sentence that shares the most of its content words, if it shares at least
+/// [`LOOKS_DONE_MIN_SHARED`] of them and [`LOOKS_DONE_MIN_SHARE`] of all it has. Commitments in
+/// `skip` (the meeting's own record) are left out: a promise and its "already done" in one breath
+/// is the judge's to sort out. Returns the commitment and the span of the sentence that suggests
+/// it is done.
+///
+/// Deterministic and cautious: a suggestion the user answers with "not yet" costs a click, and a
+/// missed one costs nothing that is not there today. "Sent" and "send" do not meet here; a
+/// sentence usually names the thing done as well ("sent Dana the deck"), which is what matches.
+/// Words match whole or by a shared beginning of four letters or more ("decks", "deck").
+pub fn looks_done(
+    already_done: &[Candidate],
+    open: &[Commitment],
+    skip: Option<&ink_core::RecordId>,
+) -> Vec<(CommitmentId, Span)> {
+    let said: Vec<(Vec<String>, Span)> = already_done
+        .iter()
+        .map(|c| (content_words(&c.sentence), c.span))
+        .collect();
+    let mut out = Vec::new();
+    for commitment in open {
+        if skip == Some(&commitment.record) || commitment.looks_done.is_some() {
+            continue;
+        }
+        let wanted = content_words(&commitment.text);
+        if wanted.is_empty() {
+            continue;
+        }
+        let best = said
+            .iter()
+            .map(|(words, span)| {
+                let shared = wanted
+                    .iter()
+                    .filter(|w| words.iter().any(|said| same_word(w, said)))
+                    .count();
+                (shared, span)
+            })
+            .max_by_key(|(shared, _)| *shared);
+        if let Some((shared, span)) = best
+            && shared >= LOOKS_DONE_MIN_SHARED
+            && shared as f64 >= LOOKS_DONE_MIN_SHARE * wanted.len() as f64
+        {
+            out.push((commitment.id.clone(), *span));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

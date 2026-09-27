@@ -22,7 +22,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::codec::Fail;
 
 /// Every migration, in order. The database's `user_version` counts how many have run.
-const MIGRATIONS: &[&str] = &[V1, V2];
+const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// The schema version this build writes: the number of migrations. A database with a higher
 /// `user_version` came from a newer build and is refused rather than guessed at.
@@ -170,6 +170,41 @@ CREATE TABLE removed_line (
     speaker   TEXT
 ) STRICT;
 CREATE INDEX removed_line_by_record ON removed_line (record_id, start_ms, seq);
+";
+
+/// A summary's decisions and actions with the line each cites (S2.8), the person a commitment is
+/// owed to, and where a later meeting suggests an open commitment is already done ("looks done").
+///
+/// - `summary_item` hangs off `summary`, so it goes with the summary and with the record (the
+///   cascade runs through both); saving a summary again replaces its items. Spans are times,
+///   which a supersede leaves meaningful, as for commitments.
+/// - `commitment.recipient` is nullable: commitments filed before it have none.
+/// - `commitment_done_evidence` is one row per commitment at most. It goes with the commitment,
+///   and with the record the evidence was said in (a suggestion never outlives its evidence).
+///   Marking the commitment done or not done settles it (the store deletes the row).
+const V3: &str = "
+ALTER TABLE commitment ADD COLUMN recipient TEXT;
+
+CREATE TABLE summary_item (
+    record_id TEXT NOT NULL REFERENCES summary (record_id) ON DELETE CASCADE,
+    ord       INTEGER NOT NULL CHECK (ord >= 0),
+    kind      TEXT NOT NULL CHECK (kind IN ('decision', 'action')),
+    text      TEXT NOT NULL,
+    channel   TEXT NOT NULL CHECK (channel IN ('mic', 'far')),
+    start_ms  INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms    INTEGER NOT NULL CHECK (end_ms >= start_ms),
+    PRIMARY KEY (record_id, ord)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE commitment_done_evidence (
+    commitment_id TEXT PRIMARY KEY NOT NULL REFERENCES commitment (id) ON DELETE CASCADE,
+    record_id     TEXT NOT NULL REFERENCES record (id) ON DELETE CASCADE,
+    channel       TEXT NOT NULL CHECK (channel IN ('mic', 'far')),
+    start_ms      INTEGER NOT NULL CHECK (start_ms >= 0),
+    end_ms        INTEGER NOT NULL CHECK (end_ms >= start_ms)
+) STRICT, WITHOUT ROWID;
+-- For the cascade from a deleted evidence record.
+CREATE INDEX commitment_done_evidence_by_record ON commitment_done_evidence (record_id);
 ";
 
 /// Brings the database up to [`SCHEMA_VERSION`] in one immediate transaction.

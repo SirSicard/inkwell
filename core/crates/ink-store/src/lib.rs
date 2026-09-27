@@ -32,9 +32,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ink_core::store::{
-    Commitment, CommitmentId, NewCommitment, NewRecord, Note, NoteId, Record, RecordId,
-    RecordQuery, SearchHit, Segment, Span, Store, Summary, SupersedeWith,
-    check_supersede_explained,
+    Commitment, CommitmentId, DoneEvidence, NewCommitment, NewRecord, Note, NoteId, Record,
+    RecordId, RecordQuery, SearchHit, Segment, Span, Store, Summary, SummaryItem, SummaryItemKind,
+    SupersedeWith, check_supersede_explained,
 };
 use ink_core::{SpeakerId, StoreError};
 use rusqlite::types::ValueRef;
@@ -594,8 +594,8 @@ fn insert_commitments(
     rows: &[CommitmentRow<'_>],
 ) -> Result<(), Fail> {
     let mut insert = conn.prepare(
-        "INSERT INTO commitment (id, record_id, text, owner, due, due_at_unix_ms, done)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO commitment (id, record_id, text, owner, due, due_at_unix_ms, done, recipient)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
     let mut insert_span = conn.prepare(
         "INSERT INTO commitment_span (commitment_id, ord, channel, start_ms, end_ms)
@@ -609,7 +609,8 @@ fn insert_commitments(
             row.item.owner,
             row.item.due,
             row.item.due_at_unix_ms,
-            row.done
+            row.done,
+            row.item.recipient
         ])?;
         for (ord, (channel, start, end)) in (0_i64..).zip(&row.spans) {
             insert_span.execute(params![row.id, ord, channel, start, end])?;
@@ -642,7 +643,55 @@ fn upsert_summary(
             revision
         ],
     )?;
+    // The items are the summary's: saving it again replaces them.
+    conn.execute("DELETE FROM summary_item WHERE record_id = ?1", [&id.0])?;
+    let mut insert = conn.prepare(
+        "INSERT INTO summary_item (record_id, ord, kind, text, channel, start_ms, end_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    for (ord, item) in (0_i64..).zip(&summary.items) {
+        let (start, end) = stretch(item.span.start_ms, item.span.end_ms).map_err(Fail::Store)?;
+        let kind = match item.kind {
+            SummaryItemKind::Decision => "decision",
+            SummaryItemKind::Action => "action",
+        };
+        insert.execute(params![
+            id.0,
+            ord,
+            kind,
+            item.text,
+            channel_text(item.span.channel),
+            start,
+            end
+        ])?;
+    }
     Ok(())
+}
+
+/// A record's summary items, in order.
+fn summary_items(conn: &Connection, id: &RecordId) -> Result<Vec<SummaryItem>, Fail> {
+    let mut select = conn.prepare(
+        "SELECT kind, text, channel, start_ms, end_ms FROM summary_item
+         WHERE record_id = ?1 ORDER BY ord",
+    )?;
+    let items = select
+        .query_map([&id.0], |row| {
+            let kind = match row.get_ref(0)?.as_str()? {
+                "decision" => SummaryItemKind::Decision,
+                _ => SummaryItemKind::Action,
+            };
+            Ok(SummaryItem {
+                kind,
+                text: row.get(1)?,
+                span: Span {
+                    channel: channel_at(row, 2)?,
+                    start_ms: ms_at(row, 3)?,
+                    end_ms: ms_at(row, 4)?,
+                },
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(items)
 }
 
 /// Names or renames a speaker in one record. [`Store::set_speaker_name`] and the importer share it.
@@ -665,7 +714,16 @@ fn upsert_speaker(
 macro_rules! commitment_columns {
     () => {
         "c.id, c.record_id, c.text, c.owner, c.due, c.due_at_unix_ms, c.merged_into, c.done, \
-         sp.channel, sp.start_ms, sp.end_ms"
+         sp.channel, sp.start_ms, sp.end_ms, c.recipient, \
+         ev.record_id, ev.channel, ev.start_ms, ev.end_ms"
+    };
+}
+
+/// The joins [`commitment_columns`] reads from, after a `FROM ... AS c`.
+macro_rules! commitment_joins {
+    () => {
+        " LEFT JOIN commitment_span AS sp ON sp.commitment_id = c.id
+          LEFT JOIN commitment_done_evidence AS ev ON ev.commitment_id = c.id"
     };
 }
 
@@ -685,9 +743,21 @@ fn commitments_from(
                 owner: row.get(3)?,
                 due: row.get(4)?,
                 due_at_unix_ms: row.get(5)?,
+                recipient: row.get(11)?,
                 provenance: Vec::new(),
                 merged_into: row.get::<_, Option<String>>(6)?.map(CommitmentId),
                 done: row.get(7)?,
+                looks_done: match row.get::<_, Option<String>>(12)? {
+                    None => None,
+                    Some(record) => Some(DoneEvidence {
+                        record: RecordId(record),
+                        span: Span {
+                            channel: channel_at(row, 13)?,
+                            start_ms: ms_at(row, 14)?,
+                            end_ms: ms_at(row, 15)?,
+                        },
+                    }),
+                },
             });
         }
         if !matches!(row.get_ref(8)?, ValueRef::Null)
@@ -961,7 +1031,7 @@ impl Store for SqliteStore {
     fn summary(&self, id: &RecordId) -> Result<Option<Summary>, StoreError> {
         self.read("summary", |tx| {
             revision(tx, id)?;
-            Ok(tx
+            let summary = tx
                 .query_row(
                     "SELECT text, model, created_at_unix_ms FROM summary WHERE record_id = ?1",
                     [&id.0],
@@ -970,10 +1040,19 @@ impl Store for SqliteStore {
                             text: row.get(0)?,
                             model: row.get(1)?,
                             created_at_unix_ms: row.get(2)?,
+                            items: Vec::new(),
                         })
                     },
                 )
-                .optional()?)
+                .optional()?;
+            summary
+                .map(|summary| {
+                    Ok(Summary {
+                        items: summary_items(tx, id)?,
+                        ..summary
+                    })
+                })
+                .transpose()
         })
     }
 
@@ -1022,9 +1101,9 @@ impl Store for SqliteStore {
             let mut select = tx.prepare(concat!(
                 "SELECT ",
                 commitment_columns!(),
-                " FROM commitment AS c
-                 LEFT JOIN commitment_span AS sp ON sp.commitment_id = c.id
-                 WHERE c.record_id = ?1
+                " FROM commitment AS c",
+                commitment_joins!(),
+                " WHERE c.record_id = ?1
                  ORDER BY c.seq, sp.ord"
             ))?;
             commitments_from(&mut select, [&id.0])
@@ -1043,20 +1122,60 @@ impl Store for SqliteStore {
                  )
                  SELECT ",
                 commitment_columns!(),
-                " FROM owed AS c
-                 LEFT JOIN commitment_span AS sp ON sp.commitment_id = c.id
-                 ORDER BY c.due_at_unix_ms NULLS LAST, c.seq, sp.ord"
+                " FROM owed AS c",
+                commitment_joins!(),
+                " ORDER BY c.due_at_unix_ms NULLS LAST, c.seq, sp.ord"
             ))?;
             commitments_from(&mut select, [sql_limit(limit)])
         })
     }
 
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {
-        self.with("set_commitment_done", |conn| {
-            changed(conn.execute(
+        self.write("set_commitment_done", |tx| {
+            changed(tx.execute(
                 "UPDATE commitment SET done = ?2 WHERE id = ?1",
                 params![id.0, done],
-            )?)
+            )?)?;
+            // Settled either way: a "looks done" suggestion is answered.
+            tx.execute(
+                "DELETE FROM commitment_done_evidence WHERE commitment_id = ?1",
+                [&id.0],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn set_done_evidence(
+        &self,
+        id: &CommitmentId,
+        evidence: Option<&DoneEvidence>,
+    ) -> Result<(), StoreError> {
+        let span = evidence
+            .map(|e| stretch(e.span.start_ms, e.span.end_ms))
+            .transpose()?;
+        self.write("set_done_evidence", |tx| {
+            let known: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM commitment WHERE id = ?1)",
+                [&id.0],
+                |row| row.get(0),
+            )?;
+            if !known {
+                return Err(Fail::Store(StoreError::NotFound));
+            }
+            tx.execute(
+                "DELETE FROM commitment_done_evidence WHERE commitment_id = ?1",
+                [&id.0],
+            )?;
+            if let (Some(e), Some((start, end))) = (evidence, span) {
+                revision(tx, &e.record)?;
+                tx.execute(
+                    "INSERT INTO commitment_done_evidence
+                         (commitment_id, record_id, channel, start_ms, end_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![id.0, e.record.0, channel_text(e.span.channel), start, end],
+                )?;
+            }
+            Ok(())
         })
     }
 

@@ -68,7 +68,7 @@ fn migrations_from_empty_reach_the_current_version() {
     drop(db.open());
     let raw = db.raw();
     assert_eq!(user_version(&raw), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 2);
+    assert_eq!(SCHEMA_VERSION, 3);
 
     let mut stmt = raw
         .prepare(
@@ -87,6 +87,7 @@ fn migrations_from_empty_reach_the_current_version() {
         names,
         [
             "commitment",
+            "commitment_done_evidence",
             "commitment_span",
             "note",
             "record",
@@ -95,6 +96,7 @@ fn migrations_from_empty_reach_the_current_version() {
             "setting",
             "speaker",
             "summary",
+            "summary_item",
         ]
     );
     assert!(
@@ -129,8 +131,12 @@ fn a_database_from_before_removed_lines_is_brought_up_to_date() {
     // As a build of schema 1 left it.
     {
         let raw = db.raw();
-        raw.execute_batch("DROP TABLE removed_line; PRAGMA user_version = 1;")
-            .unwrap();
+        raw.execute_batch(
+            "DROP TABLE removed_line; DROP TABLE summary_item;
+             DROP TABLE commitment_done_evidence; ALTER TABLE commitment DROP COLUMN recipient;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
     }
     let store = db.open();
     assert_eq!(user_version(&db.raw()), SCHEMA_VERSION);
@@ -139,6 +145,73 @@ fn a_database_from_before_removed_lines_is_brought_up_to_date() {
         .save_removed(&id, &[seg(Channel::Mic, 5, "an echo line")])
         .unwrap();
     assert_eq!(store.removed(&id).unwrap().len(), 1);
+}
+
+/// S2.8's migration: a schema-2 library keeps its commitments and summaries, which read back
+/// with no recipient, no items and no suggestion, and takes the new ones.
+#[test]
+fn a_database_from_before_summary_items_is_brought_up_to_date() {
+    let db = TempDb::new("migrate-v2");
+    let (id, commitment) = {
+        let store = db.open();
+        let id = meeting(&store, 1);
+        let ids = store
+            .add_commitments(
+                &id,
+                &[NewCommitment {
+                    text: "kept through the upgrade".into(),
+                    owner: None,
+                    recipient: None,
+                    due: None,
+                    due_at_unix_ms: None,
+                    provenance: vec![],
+                }],
+            )
+            .unwrap();
+        store
+            .save_summary(
+                &id,
+                &Summary {
+                    text: "A summary.".into(),
+                    model: "m".into(),
+                    created_at_unix_ms: 1,
+                    items: vec![],
+                },
+            )
+            .unwrap();
+        (id, ids[0].clone())
+    };
+    // As a build of schema 2 left it.
+    {
+        let raw = db.raw();
+        raw.execute_batch(
+            "DROP TABLE summary_item; DROP TABLE commitment_done_evidence;
+             ALTER TABLE commitment DROP COLUMN recipient; PRAGMA user_version = 2;",
+        )
+        .unwrap();
+    }
+    let store = db.open();
+    assert_eq!(user_version(&db.raw()), SCHEMA_VERSION);
+    let kept = store.commitments(&id).unwrap();
+    assert_eq!(kept[0].text, "kept through the upgrade");
+    assert_eq!(kept[0].recipient, None);
+    assert_eq!(kept[0].looks_done, None);
+    assert!(store.summary(&id).unwrap().unwrap().items.is_empty());
+    let evidence = DoneEvidence {
+        record: id.clone(),
+        span: Span {
+            channel: Channel::Mic,
+            start_ms: 0,
+            end_ms: 1,
+        },
+    };
+    store
+        .set_done_evidence(&commitment, Some(&evidence))
+        .unwrap();
+    assert_eq!(
+        store.commitments(&id).unwrap()[0].looks_done,
+        Some(evidence)
+    );
 }
 
 #[test]
@@ -414,6 +487,7 @@ fn the_schema_refuses_an_end_before_its_start() {
         .add_commitments(
             &id,
             &[NewCommitment {
+                recipient: None,
                 text: "t".into(),
                 owner: None,
                 due: None,
@@ -636,6 +710,7 @@ fn deleting_a_record_removes_everything_it_owns() {
             .save_summary(
                 id,
                 &Summary {
+                    items: Vec::new(),
                     text: "sum".into(),
                     model: "m".into(),
                     created_at_unix_ms: 1,
@@ -655,6 +730,7 @@ fn deleting_a_record_removes_everything_it_owns() {
         end_ms: 10,
     };
     let owe = |text: &str| NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: None,
         due: None,
@@ -767,6 +843,7 @@ fn a_deleted_record_leaves_no_text_on_disk() {
         .save_summary(
             &doomed,
             &Summary {
+                items: Vec::new(),
                 text: "zqxsummarymarker".into(),
                 model: "m".into(),
                 created_at_unix_ms: 1,
@@ -780,6 +857,7 @@ fn a_deleted_record_leaves_no_text_on_disk() {
         .add_commitments(
             &doomed,
             &[NewCommitment {
+                recipient: None,
                 text: "zqxcommitmentmarker".into(),
                 owner: None,
                 due: None,
@@ -818,6 +896,7 @@ fn superseded_and_replaced_text_leaves_no_trace_on_disk() {
     neighbour(&store);
     let id = meeting(&store, 9);
     let summary = |text: &str| Summary {
+        items: Vec::new(),
         text: text.into(),
         model: "m".into(),
         created_at_unix_ms: 1,

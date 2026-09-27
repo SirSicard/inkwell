@@ -1592,3 +1592,92 @@ fn an_interrupted_meeting_is_ended_and_finalized_from_its_recovered_chunks() {
     assert!(segments.iter().any(|s| s.channel == Channel::Far));
     assert_monotonic(&segments);
 }
+
+/// S2.8: the final pass saves the summary's actions with their cited line (the record shows it),
+/// and a meeting in which the user says an earlier promise is done marks that promise "looks
+/// done", with this meeting as the evidence.
+#[test]
+fn the_summary_keeps_cited_items_and_an_earlier_promise_looks_done() {
+    struct DoneLlm;
+    impl ink_core::Llm for DoneLlm {
+        fn info(&self) -> ink_core::LlmInfo {
+            ink_core::LlmInfo {
+                provider: "scripted".into(),
+                model: "test".into(),
+                endpoint: ink_core::Endpoint::InProcess,
+            }
+        }
+        fn complete(
+            &self,
+            request: &LlmRequest,
+            _: &CancelToken,
+        ) -> Result<ink_core::LlmResponse, LlmError> {
+            let text = if request.system.contains("meeting record") {
+                r#"{"headline": "The report went out.", "body": "Done.", "decisions": [{"text": "The report is finished", "line": 0, "quote": "already sent the quarterly report"}], "actions": []}"#
+            } else {
+                r#"{"class": "already_done", "confidence": 0.9, "task": null, "due": null, "quote": "I already sent the quarterly report"}"#
+            };
+            Ok(ink_core::LlmResponse { text: text.into() })
+        }
+    }
+    let answer: Answer = Arc::new(|channel, n, audio| match channel {
+        Channel::Mic => Ok(words(
+            "I already sent the quarterly report to the team",
+            audio.len(),
+        )),
+        Channel::Far => Ok(words(&format!("Thanks for that {n}"), audio.len())),
+    });
+    let mut rig = RigBuilder {
+        answer,
+        llm: Some(Arc::new(DoneLlm)),
+        ..RigBuilder::default()
+    }
+    .build();
+    // An earlier meeting's open promise, in the same library.
+    let earlier = rig
+        .store
+        .create_record(ink_core::NewRecord {
+            kind: ink_core::RecordKind::Meeting,
+            title: Some("Last week".into()),
+            started_at_unix_ms: T0_UNIX_MS - 7 * 86_400_000,
+            source_app: None,
+            audio_dir: None,
+        })
+        .unwrap();
+    let promised = rig
+        .store
+        .add_commitments(
+            &earlier,
+            &[ink_core::NewCommitment {
+                text: "Send the quarterly report to the team".into(),
+                owner: None,
+                recipient: Some("the team".into()),
+                due: None,
+                due_at_unix_ms: None,
+                provenance: vec![],
+            }],
+        )
+        .unwrap();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(0.5), speech(2.0, -30.0, 81), silence(4.0)]);
+    let far = join(&[silence(3.0), speech(2.0, -30.0, 82), silence(1.5)]);
+    rig.feed(&mic, &far);
+    rig.finish().unwrap();
+
+    let summary = rig.store.summary(&record).unwrap().expect("saved");
+    assert_eq!(summary.items.len(), 1);
+    assert_eq!(summary.items[0].kind, ink_core::SummaryItemKind::Decision);
+    assert_eq!(summary.items[0].span.channel, Channel::Mic);
+    let earlier_now = rig.store.commitments(&earlier).unwrap();
+    let evidence = earlier_now
+        .iter()
+        .find(|c| c.id == promised[0])
+        .and_then(|c| c.looks_done.clone())
+        .expect("the earlier promise looks done");
+    assert_eq!(evidence.record, record);
+    assert_eq!(evidence.span.channel, Channel::Mic);
+    assert!(
+        rig.events()
+            .contains(&MeetingEvent::LooksDone { suggested: 1 })
+    );
+}

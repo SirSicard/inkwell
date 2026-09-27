@@ -224,6 +224,7 @@ fn the_dedup_fixture_merges_said_twice() {
     let mut all = summary.actions.clone();
     all.push(harvested.commitments[1].clone());
     all.push(ink_core::NewCommitment {
+        recipient: None,
         text: "Order two more desks for the new office".into(),
         owner: None,
         due: None,
@@ -267,6 +268,7 @@ fn different_obligations_are_not_merged() {
         Ok(r#"{"same": false, "keep": "A", "why": "different steps"}"#.to_owned())
     });
     let item = |text: &str| ink_core::NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: None,
         due: None,
@@ -287,6 +289,7 @@ fn merges_never_chain() {
     // Every pair is "the same, keep B": a naive fold would chain 0 -> 1 -> 2.
     let llm = ScriptedLlm::new(|_| Ok(r#"{"same": true, "keep": "B"}"#.to_owned()));
     let item = |text: &str| ink_core::NewCommitment {
+        recipient: None,
         text: text.into(),
         owner: None,
         due: None,
@@ -410,6 +413,7 @@ fn a_long_meeting_is_summarised_in_windows_then_combined() {
         single_pass_chars: 100,
         window_ms: 15_000,
         overlap_ms: 5_000,
+        ..SummaryOptions::default()
     };
     let out = summarize(
         &meeting(),
@@ -562,4 +566,189 @@ fn a_short_line_cannot_be_cited() {
     assert_eq!(out.unverified, 1);
     assert!(out.actions.is_empty());
     assert!(!out.summary.text.contains("Wire"));
+}
+
+/// S2.8: a summary keeps its decisions and actions with the line each cites (the record shows a
+/// decision's line), and an action says who it is owed to (Owed groups by that person). Items
+/// whose citation does not check out are in neither the text nor the items.
+#[test]
+fn summary_items_keep_their_cited_lines_and_actions_their_recipient() {
+    let llm = ScriptedLlm::new(|_| {
+        Ok(r#"{"headline": "Planned onboarding.", "body": "The checklist.",
+            "decisions": [{"text": "Onboarding starts with a checklist", "line": 0, "quote": "pull together the onboarding checklist"},
+                          {"text": "Buy a boat", "line": 2, "quote": "we will buy a boat"}],
+            "actions": [{"text": "Send the onboarding checklist", "owner": "You", "to": "the hiring team", "due": "Friday", "line": 1, "quote": "I'll send the onboarding checklist"}]}"#
+            .to_owned())
+    });
+    let out = summarize(
+        &meeting(),
+        &record(),
+        &SummaryOptions::default(),
+        0,
+        &llm,
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert_eq!(out.unverified, 1, "the boat is nowhere in line 2");
+    use ink_core::{SummaryItem, SummaryItemKind};
+    assert_eq!(
+        out.summary.items,
+        vec![
+            SummaryItem {
+                kind: SummaryItemKind::Decision,
+                text: "Onboarding starts with a checklist".into(),
+                span: Span {
+                    channel: Channel::Far,
+                    start_ms: 0,
+                    end_ms: 4_000
+                },
+            },
+            SummaryItem {
+                kind: SummaryItemKind::Action,
+                text: "Send the onboarding checklist".into(),
+                span: Span {
+                    channel: Channel::Mic,
+                    start_ms: 5_000,
+                    end_ms: 9_000
+                },
+            },
+        ]
+    );
+    assert_eq!(out.actions[0].recipient.as_deref(), Some("the hiring team"));
+}
+
+/// S2.8: on a small model (the on-device model's 4,096 tokens) every summary request fits its
+/// context: windows are cut by size, and the parts are combined in groups, then combined again.
+#[test]
+fn a_long_meeting_on_a_small_model_sends_requests_that_fit_its_context() {
+    const CONTEXT: u32 = 4_096;
+    let options = SummaryOptions::for_context(CONTEXT);
+    assert!(options.single_pass_chars < SummaryOptions::default().single_pass_chars);
+    assert_eq!(
+        SummaryOptions::for_context(200_000),
+        SummaryOptions::default(),
+        "a large context changes nothing"
+    );
+    // Sixty minutes of talk: a line every 4 s, each about 20 words.
+    let segments: Vec<Segment> = (0..900)
+        .map(|i| {
+            seg(
+                if i % 2 == 0 { Channel::Mic } else { Channel::Far },
+                i * 4_000,
+                &format!(
+                    "Line {i}: we went over the plan for the rollout and the order of the next steps in some detail"
+                ),
+            )
+        })
+        .collect();
+    let llm = ScriptedLlm::new(|request: &LlmRequest| {
+        // Each part cites its first line, as a model would cite something it saw.
+        let first = request
+            .user
+            .split("\nL")
+            .nth(1)
+            .and_then(|l| l.split(' ').next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(0);
+        // A part's body long enough that the parts do not all fit one combining request.
+        let body = "The team went through the rollout steps in order. ".repeat(20);
+        Ok(format!(
+            r#"{{"headline": "Rollout plan.", "body": "{body}", "decisions": [{{"text": "Roll out in order", "line": {first}, "quote": "we went over the plan"}}], "actions": []}}"#
+        ))
+    });
+    let out = summarize(&segments, &record(), &options, 0, &llm, &CancelToken::new()).unwrap();
+    let requests = llm.requests.lock().unwrap();
+    let parts = requests
+        .iter()
+        .filter(|r| r.user.contains("This is PART"))
+        .count();
+    let combines = requests
+        .iter()
+        .filter(|r| r.user.contains("## Combining"))
+        .count();
+    assert!(parts > 10, "{parts} parts");
+    assert!(
+        combines >= 2,
+        "the parts are combined in groups: {combines}"
+    );
+    assert_eq!(out.calls, requests.len());
+    for r in requests.iter() {
+        let tokens = (r.system.len() + r.user.len()) as u32 / 3 + r.max_tokens;
+        assert!(
+            tokens <= CONTEXT,
+            "a request of about {tokens} tokens: {} + {} bytes, {} to answer",
+            r.system.len(),
+            r.user.len(),
+            r.max_tokens
+        );
+    }
+    assert!(!out.summary.items.is_empty());
+}
+
+/// S2.8: the judge names who a promise is owed to, and keeps what the user said is already done;
+/// "looks done" matches those sentences to earlier open commitments by the words they share.
+#[test]
+fn already_done_sentences_suggest_earlier_commitments_are_done() {
+    use ink_core::{Commitment, CommitmentId, RecordId};
+    use ink_llm::tasks::commitments::looks_done;
+
+    let segments = vec![
+        seg(Channel::Far, 0, "Did the deck reach you?"),
+        seg(
+            Channel::Mic,
+            5_000,
+            "Yes, I've already sent Dana the pilot deck.",
+        ),
+        seg(
+            Channel::Mic,
+            9_000,
+            "I'll book the room for Dana on Monday.",
+        ),
+    ];
+    let llm = ScriptedLlm::new(|request: &LlmRequest| {
+        let sentence = judged_sentence(request);
+        Ok(if sentence.contains("already sent") {
+            r#"{"class": "already_done", "confidence": 0.9, "task": null, "due": null, "quote": "I've already sent Dana the pilot deck"}"#
+        } else {
+            r#"{"class": "commitment", "confidence": 0.9, "task": "Book the room", "to": "Dana", "due": "Monday", "quote": "I'll book the room for Dana"}"#
+        }
+        .to_owned())
+    });
+    let harvest = harvest(&segments, &record(), &llm, &CancelToken::new()).unwrap();
+    assert_eq!(harvest.commitments.len(), 1);
+    assert_eq!(harvest.commitments[0].recipient.as_deref(), Some("Dana"));
+    assert_eq!(harvest.already_done.len(), 1);
+    assert_eq!(harvest.already_done[0].span.start_ms, 5_000);
+
+    let open = |id: &str, record: &str, text: &str| Commitment {
+        id: CommitmentId(id.into()),
+        record: RecordId(record.into()),
+        text: text.into(),
+        owner: None,
+        recipient: None,
+        due: None,
+        due_at_unix_ms: None,
+        provenance: vec![],
+        merged_into: None,
+        done: false,
+        looks_done: None,
+    };
+    let earlier = [
+        open("c1", "r-old", "Send the pilot decks to Dana"),
+        open("c2", "r-old", "Share the hiring scorecard draft"),
+        open("c3", "r-now", "Send the pilot deck to Dana"),
+        open("c4", "r-old", "Send Dana a note"),
+    ];
+    let now = RecordId("r-now".into());
+    let found = looks_done(&harvest.already_done, &earlier, Some(&now));
+    assert_eq!(
+        found
+            .iter()
+            .map(|(id, _)| id.0.as_str())
+            .collect::<Vec<_>>(),
+        ["c1"],
+        "the deck matches (decks, deck); the scorecard shares nothing; this meeting's own is \
+         skipped; 'Dana' alone is one word of two"
+    );
+    assert_eq!(found[0].1.start_ms, 5_000);
 }

@@ -622,6 +622,10 @@ pub fn meeting(record: &RecordId, e: &MeetingEvent) -> Value {
             "meeting.commitments",
             &[rec, ("filed", some(*filed)), ("merged", some(*merged))],
         ),
+        MeetingEvent::LooksDone { suggested } => event(
+            "meeting.looks_done",
+            &[rec, ("suggested", some(*suggested))],
+        ),
         MeetingEvent::Finished { revision } => event(
             "meeting.finished",
             &[rec, ("revision", revision.map(Value::from))],
@@ -817,6 +821,7 @@ mod tests {
                 filed: 3,
                 merged: 1,
             },
+            MeetingEvent::LooksDone { suggested: 2 },
             MeetingEvent::Finished { revision: Some(2) },
             MeetingEvent::Finished { revision: None },
             MeetingEvent::Echo(EchoState::Searching {

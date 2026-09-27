@@ -366,8 +366,7 @@ fn a_replay_started_at_a_set_time_stamps_its_first_frame_with_it() {
                 .starting_at(at);
         source.start(Box::new(First(seen.clone()))).unwrap();
         source.wait().unwrap();
-        let first = *seen.lock().unwrap();
-        first
+        *seen.lock().unwrap()
     };
     assert_eq!(run(Some(7_000_000_000)), Some(7_000_000_000));
     assert_eq!(run(Some(0)), Some(0), "host time 0 is a real start");

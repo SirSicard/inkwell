@@ -74,6 +74,7 @@ fn full(started: i64) -> RecordImport {
             line(Channel::Mic, 6_000, 6_000, "Great.", None),
         ],
         summary: Some(Summary {
+            items: Vec::new(),
             text: "Reviewed the widget counts.\n\nThe counts arrived.".into(),
             model: "local/example".into(),
             created_at_unix_ms: started + 1_900_000,
@@ -82,6 +83,7 @@ fn full(started: i64) -> RecordImport {
         commitments: vec![
             ImportedCommitment {
                 commitment: NewCommitment {
+                    recipient: None,
                     text: "Send the summary".into(),
                     owner: Some("Robin".into()),
                     due: Some("by Friday".into()),
@@ -92,6 +94,7 @@ fn full(started: i64) -> RecordImport {
             },
             ImportedCommitment {
                 commitment: NewCommitment {
+                    recipient: None,
                     text: "Book the room".into(),
                     owner: None,
                     due: None,
@@ -254,6 +257,7 @@ fn an_import_leaves_the_records_already_there_untouched() {
         .add_commitments(
             &kept,
             &[NewCommitment {
+                recipient: None,
                 text: "an existing promise".into(),
                 owner: None,
                 due: None,

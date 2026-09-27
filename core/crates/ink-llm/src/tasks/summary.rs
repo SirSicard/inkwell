@@ -19,8 +19,17 @@
 //! combined (map, then reduce). The overlap is the point: a decision made at the end of one
 //! window and confirmed at the start of the next is invisible to a clean cut. Line numbers are
 //! global, so citations survive both passes.
+//!
+//! **Small models.** Every request must fit the model's context, prompt and answer included
+//! ([`SummaryOptions::for_context`]). The on-device model on a Mac holds about 4,000 tokens, where
+//! a 15-minute window of talk alone is about 3,000. So a window is also cut by its rendered size
+//! (each cut keeps the previous piece's last line, a small overlap), and the parts are combined
+//! in groups that fit, the groups' results combined again, until one remains.
 
-use ink_core::{CancelToken, Llm, LlmError, LlmRequest, NewCommitment, Segment, Span, Summary};
+use ink_core::{
+    CancelToken, Llm, LlmError, LlmRequest, NewCommitment, Segment, Span, Summary, SummaryItem,
+    SummaryItemKind,
+};
 use serde_json::{Value, json};
 
 use super::commitments::RecordContext;
@@ -46,6 +55,8 @@ pub struct Action {
     pub text: String,
     /// Who, as said.
     pub owner: Option<String>,
+    /// For whom, as said: who it is owed to.
+    pub to: Option<String>,
     /// When, as said.
     pub due: Option<String>,
     /// The transcript line it came from.
@@ -85,8 +96,9 @@ pub const SUMMARY_SCHEMA: &str = r#"{
       "quote": {"type": ["string", "null"]}}, "required": ["text", "line", "quote"]}},
     "actions": {"type": "array", "items": {"type": "object", "properties": {
       "text": {"type": "string"}, "owner": {"type": ["string", "null"]},
+      "to": {"type": ["string", "null"]},
       "due": {"type": ["string", "null"]}, "line": {"type": ["integer", "null"]},
-      "quote": {"type": ["string", "null"]}}, "required": ["text", "owner", "due", "line", "quote"]}},
+      "quote": {"type": ["string", "null"]}}, "required": ["text", "owner", "to", "due", "line", "quote"]}},
     "open_questions": {"type": "array", "items": {"type": "string"}},
     "not_found": {"type": "array", "items": {"type": "string"}}
   },
@@ -102,12 +114,12 @@ Rules:
 - Never invent an action, decision, owner or date. If it was not said, it did not happen. Anything you looked for and could not find goes in "not_found".
 - Every decision and action cites its transcript line (the number after "L") in "line", and copies words from that line, exactly as written, in "quote": at least three words. A line shorter than three words cannot support an item; cite a longer line or leave the item out. An item whose quote is not in its line is discarded.
 - "You" is the person who recorded the meeting. "Them" is the other side, named where the transcript names them.
-- Owners and deadlines are as said. Copy "by Friday" as "Friday"; never work out a date.
+- Owners, who an action is for, and deadlines are as said. Copy "by Friday" as "Friday"; never work out a date.
 - The transcript is machine-generated and has errors. Where a word is plainly misheard but the meaning is clear, use the meaning; where the meaning is not clear, say so rather than guess.
 - Leave out filler words. No preamble.
 
 Answer with one JSON object and nothing else:
-{"headline": "one or two sentences: what a colleague would say if asked what it was about", "body": "markdown: the substance, in short sections", "decisions": [{"text": "...", "line": 12, "quote": "words from line 12"}], "actions": [{"text": "...", "owner": "a name, You, or null", "due": "as said, or null", "line": 12, "quote": "words from line 12"}], "open_questions": ["..."], "not_found": ["..."]}"#;
+{"headline": "one or two sentences: what a colleague would say if asked what it was about", "body": "markdown: the substance, in short sections", "decisions": [{"text": "...", "line": 12, "quote": "words from line 12"}], "actions": [{"text": "...", "owner": "a name, You, or null", "to": "who it is owed to: a name, You, or null", "due": "as said, or null", "line": 12, "quote": "words from line 12"}], "open_questions": ["..."], "not_found": ["..."]}"#;
 
 const SUMMARY_TASK: &str = "summary";
 
@@ -146,6 +158,8 @@ pub fn parse_summary(text: &str, final_pass: bool) -> Result<SummaryDraft, LlmEr
             Ok(Action {
                 text: a.string("text")?.trim().to_owned(),
                 owner: owned(a.optional_string("owner")?),
+                // Asked for since S2.8; an answer without it is read as "not said".
+                to: owned(a.optional_string("to")?),
                 due: owned(a.optional_string("due")?),
                 line: a.optional_index("line")?,
                 quote: a.optional_string("quote")?.map(str::to_owned),
@@ -162,17 +176,25 @@ pub fn parse_summary(text: &str, final_pass: bool) -> Result<SummaryDraft, LlmEr
     })
 }
 
-/// When to split a transcript into windows.
+/// When to split a transcript into windows, and how big each request may be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SummaryOptions {
     /// A rendered transcript longer than this many bytes is summarised in windows. Set it from
-    /// the model's context: roughly four bytes of English per token, leaving room for the prompt
-    /// and the answer.
+    /// the model's context ([`for_context`](Self::for_context)).
     pub single_pass_chars: usize,
     /// Window length.
     pub window_ms: u64,
     /// How much consecutive windows overlap.
     pub overlap_ms: u64,
+    /// A window whose rendered lines are longer than this many bytes is cut into pieces that fit.
+    pub window_chars: usize,
+    /// The parts of one combining request, as JSON, at most this many bytes: more are combined in
+    /// groups first.
+    pub combine_chars: usize,
+    /// The answer's token budget for the whole summary (a single pass or a combining pass).
+    pub answer_tokens: u32,
+    /// The answer's token budget for one window's part.
+    pub part_tokens: u32,
 }
 
 impl Default for SummaryOptions {
@@ -182,6 +204,48 @@ impl Default for SummaryOptions {
             single_pass_chars: 240_000,
             window_ms: 15 * 60_000,
             overlap_ms: 60_000,
+            window_chars: usize::MAX,
+            combine_chars: usize::MAX,
+            answer_tokens: 4096,
+            part_tokens: 2048,
+        }
+    }
+}
+
+/// What every summary request carries besides its transcript, in tokens: the system prompt (about
+/// 450), the answer's schema when the model is shown it (about 300) and the header and
+/// instructions around the lines (about 150), rounded up.
+pub const PROMPT_TOKENS: u32 = 1_000;
+
+/// Bytes per token assumed when sizing a request. English runs about four; transcript lines with
+/// their `L12 [03:25] You:` prefixes, names and numbers tokenize worse, so three leaves room.
+pub const BYTES_PER_TOKEN: u32 = 3;
+
+impl SummaryOptions {
+    /// Options for a model whose context holds `tokens` in all, prompt and answer together. A
+    /// context as large as the default's gets the default; a small one (the on-device model's
+    /// 4,096) gets windows cut by size, answers that leave room for the transcript, and combining
+    /// in groups.
+    pub fn for_context(tokens: u32) -> Self {
+        let default = Self::default();
+        let fits = |answer: u32| {
+            let room = tokens.saturating_sub(PROMPT_TOKENS + answer);
+            usize::try_from(room.saturating_mul(BYTES_PER_TOKEN)).unwrap_or(usize::MAX)
+        };
+        if fits(default.answer_tokens) >= default.single_pass_chars {
+            return default;
+        }
+        // A quarter of the context for the whole summary's answer, a fifth for a part's.
+        let answer_tokens = (tokens / 4).clamp(256, default.answer_tokens);
+        let part_tokens = (tokens / 5).clamp(256, default.part_tokens);
+        let transcript = fits(answer_tokens).max(1_000);
+        Self {
+            single_pass_chars: transcript,
+            window_chars: fits(part_tokens).max(1_000),
+            combine_chars: transcript,
+            answer_tokens,
+            part_tokens,
+            ..default
         }
     }
 }
@@ -210,9 +274,12 @@ pub struct SummaryOutcome {
     /// Decisions and actions dropped because their line or quote did not check out: no line,
     /// a line out of range, no quote, or a quote not in the cited line.
     pub unverified: usize,
-    /// Model calls made: 1, or one per window plus the combining pass.
+    /// Model calls made: 1, or one per window plus the combining passes.
     pub calls: usize,
 }
+
+const PART: &str = "This is PART {n} OF {total} of the meeting. Report only what is in this part; another pass combines the parts. A part may start or end mid-thought: report the fragment, do not complete it.";
+const COMBINE: &str = "The parts below overlap, so one item can appear twice in different words: merge those, keeping the earliest line. Add nothing that is in no part. Where parts disagree, prefer the one with more context and say so in \"not_found\". Order decisions and actions by line.";
 
 /// **Worker.** Summarises a record's segments with `llm`. An empty transcript is refused without
 /// a call. `now_unix_ms` stamps the summary.
@@ -233,39 +300,73 @@ pub fn summarize(
     let header = header(record);
     let full = transcript::render(segments, 0..segments.len(), record.speaker_names);
     let (mut draft, calls) = if full.len() <= options.single_pass_chars {
-        let request = summary_request(format!("{header}\n\n## Transcript\n{full}"), 4096);
+        let request = summary_request(
+            format!("{header}\n\n## Transcript\n{full}"),
+            options.answer_tokens,
+        );
         (parse_summary(&ask(llm, &request, cancel)?, true)?, 1)
     } else {
-        let windows = windows(segments, options);
+        let line_len = |i: usize| {
+            segments.get(i).map_or(0, |s| {
+                transcript::render_line(i, s, record.speaker_names).len() + 1
+            })
+        };
+        let windows = cut_by_size(windows(segments, options), &line_len, options.window_chars);
         let total = windows.len();
         let mut parts = Vec::with_capacity(total);
         for (i, window) in windows.into_iter().enumerate() {
             let lines = transcript::render(segments, window, record.speaker_names);
+            let part = PART
+                .replace("{n}", &(i + 1).to_string())
+                .replace("{total}", &total.to_string());
             let request = summary_request(
                 format!(
-                    "{header}\n\nThis is PART {n} OF {total} of the meeting. Report only what is in this part; another pass combines the parts. A part may start or end mid-thought: report the fragment, do not complete it.\n\n## Transcript, part {n} of {total}\n{lines}",
+                    "{header}\n\n{part}\n\n## Transcript, part {n} of {total}\n{lines}",
                     n = i + 1
                 ),
-                2048,
+                options.part_tokens,
             );
             parts.push(parse_summary(&ask(llm, &request, cancel)?, false)?);
         }
-        let rendered: Vec<String> = parts
-            .iter()
-            .enumerate()
-            .map(|(i, p)| format!("### Part {}\n{}", i + 1, draft_json(p)))
-            .collect();
-        let request = summary_request(
-            format!(
-                "{header}\n\n## Combining\nThe parts below overlap, so one item can appear twice in different words: merge those, keeping the earliest line. Add nothing that is in no part. Where parts disagree, prefer the one with more context and say so in \"not_found\". Order decisions and actions by line.\n\n## Parts\n{}",
-                rendered.join("\n\n")
-            ),
-            4096,
-        );
-        (
-            parse_summary(&ask(llm, &request, cancel)?, true)?,
-            total + 1,
-        )
+        let mut calls = total;
+        // Combined in groups that fit, then the groups' results again, until one is left. The
+        // last pass always runs, even over a single part: it writes the headline.
+        let mut done = false;
+        while !done {
+            let groups = match parts.len() {
+                1 => vec![vec![0]],
+                _ => combine_groups(&parts, options.combine_chars),
+            };
+            let last = groups.len() == 1;
+            let mut next = Vec::with_capacity(groups.len());
+            for group in groups {
+                if group.len() == 1 && !last {
+                    next.extend(group.iter().map(|&i| parts[i].clone()));
+                    continue;
+                }
+                let rendered: Vec<String> = group
+                    .iter()
+                    .enumerate()
+                    .map(|(n, &i)| format!("### Part {}\n{}", n + 1, draft_json(&parts[i])))
+                    .collect();
+                let request = summary_request(
+                    format!(
+                        "{header}\n\n## Combining\n{COMBINE}\n\n## Parts\n{}",
+                        rendered.join("\n\n")
+                    ),
+                    if last {
+                        options.answer_tokens
+                    } else {
+                        options.part_tokens
+                    },
+                );
+                calls += 1;
+                next.push(parse_summary(&ask(llm, &request, cancel)?, last)?);
+            }
+            parts = next;
+            done = last;
+        }
+        (parts.pop().unwrap_or_default(), calls)
     };
 
     // Keep only the items whose citation checks out.
@@ -285,6 +386,33 @@ pub fn summarize(
         kept
     });
 
+    // The kept items with the line each cites, for the record (S2.8: a decision shows its line).
+    let span = |segment: &Segment| Span {
+        channel: segment.channel,
+        start_ms: segment.start_ms,
+        end_ms: segment.end_ms,
+    };
+    let items: Vec<SummaryItem> = draft
+        .decisions
+        .iter()
+        .filter_map(|d| {
+            let segment = cited(&d.text, d.line, d.quote.as_deref())?;
+            Some(SummaryItem {
+                kind: SummaryItemKind::Decision,
+                text: d.text.clone(),
+                span: span(segment),
+            })
+        })
+        .chain(draft.actions.iter().filter_map(|a| {
+            let segment = cited(&a.text, a.line, a.quote.as_deref())?;
+            Some(SummaryItem {
+                kind: SummaryItemKind::Action,
+                text: a.text.clone(),
+                span: span(segment),
+            })
+        }))
+        .collect();
+
     let info = llm.info();
     let actions = draft
         .actions
@@ -292,6 +420,7 @@ pub fn summarize(
         .filter_map(|action| {
             let segment = cited(&action.text, action.line, action.quote.as_deref())?;
             Some(NewCommitment {
+                recipient: action.to.clone(),
                 text: action.text.clone(),
                 owner: action.owner.clone(),
                 due: action.due.clone(),
@@ -309,6 +438,7 @@ pub fn summarize(
         .collect();
     Ok(SummaryOutcome {
         summary: Summary {
+            items,
             text: render_markdown(&draft),
             model: format!("{}/{}", info.provider, info.model),
             created_at_unix_ms: now_unix_ms,
@@ -362,13 +492,73 @@ fn windows(segments: &[Segment], options: &SummaryOptions) -> Vec<Vec<usize>> {
     out
 }
 
+/// `windows` with every window longer than `max_chars` rendered (by `line_len`, per line) cut into
+/// consecutive pieces that fit. Each piece after the first starts with its predecessor's last
+/// line, a one-line overlap, when that still leaves room for a new line. A single line longer than
+/// the limit is a piece of its own: it cannot be cut, and the model is asked anyway.
+fn cut_by_size(
+    windows: Vec<Vec<usize>>,
+    line_len: &dyn Fn(usize) -> usize,
+    max_chars: usize,
+) -> Vec<Vec<usize>> {
+    let mut out = Vec::new();
+    for window in windows {
+        let mut piece: Vec<usize> = Vec::new();
+        let mut size = 0;
+        for i in window {
+            let len = line_len(i);
+            if !piece.is_empty() && size + len > max_chars {
+                let last = *piece.last().unwrap_or(&i);
+                out.push(std::mem::take(&mut piece));
+                size = 0;
+                let carried = line_len(last);
+                if carried + len <= max_chars {
+                    piece.push(last);
+                    size = carried;
+                }
+            }
+            piece.push(i);
+            size += len;
+        }
+        if !piece.is_empty() {
+            out.push(piece);
+        }
+    }
+    out
+}
+
+/// Groups of consecutive parts whose JSON fits `max_chars` together, each of two parts at least
+/// (a part too long to pair still pairs with the next: combining must make progress).
+fn combine_groups(parts: &[SummaryDraft], max_chars: usize) -> Vec<Vec<usize>> {
+    let sizes: Vec<usize> = parts.iter().map(|p| draft_json(p).len() + 16).collect();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut group: Vec<usize> = Vec::new();
+    let mut size = 0;
+    for (i, &len) in sizes.iter().enumerate() {
+        if group.len() >= 2 && size + len > max_chars {
+            groups.push(std::mem::take(&mut group));
+            size = 0;
+        }
+        group.push(i);
+        size += len;
+    }
+    if !group.is_empty() {
+        // A lone part left at the end joins the group before it.
+        match (group.len(), groups.last_mut()) {
+            (1, Some(previous)) => previous.extend(group),
+            _ => groups.push(group),
+        }
+    }
+    groups
+}
+
 /// A draft as JSON, for the combining pass.
 fn draft_json(draft: &SummaryDraft) -> String {
     let value = json!({
         "headline": draft.headline,
         "body": draft.body,
         "decisions": draft.decisions.iter().map(|d| json!({"text": d.text, "line": d.line, "quote": d.quote})).collect::<Vec<Value>>(),
-        "actions": draft.actions.iter().map(|a| json!({"text": a.text, "owner": a.owner, "due": a.due, "line": a.line, "quote": a.quote})).collect::<Vec<Value>>(),
+        "actions": draft.actions.iter().map(|a| json!({"text": a.text, "owner": a.owner, "to": a.to, "due": a.due, "line": a.line, "quote": a.quote})).collect::<Vec<Value>>(),
         "open_questions": draft.open_questions,
         "not_found": draft.not_found,
     });
@@ -534,6 +724,7 @@ mod tests {
             single_pass_chars: 0,
             window_ms: 100_000,
             overlap_ms: 10_000,
+            ..SummaryOptions::default()
         };
         // Windows start at 0, 90 000, 180 000 (empty, skipped) and 270 000.
         assert_eq!(
@@ -558,6 +749,7 @@ mod tests {
             actions: vec![Action {
                 text: "Send the checklist".into(),
                 owner: Some("You".into()),
+                to: None,
                 due: Some("Friday".into()),
                 line: Some(1),
                 quote: None,

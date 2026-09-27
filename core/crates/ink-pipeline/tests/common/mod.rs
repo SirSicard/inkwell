@@ -527,6 +527,13 @@ impl Store for FaultyStore {
     fn set_commitment_done(&self, id: &CommitmentId, done: bool) -> Result<(), StoreError> {
         self.inner.set_commitment_done(id, done)
     }
+    fn set_done_evidence(
+        &self,
+        id: &CommitmentId,
+        evidence: Option<&ink_core::DoneEvidence>,
+    ) -> Result<(), StoreError> {
+        self.inner.set_done_evidence(id, evidence)
+    }
     fn merge_commitment(&self, id: &CommitmentId, into: &CommitmentId) -> Result<(), StoreError> {
         self.inner.merge_commitment(id, into)
     }

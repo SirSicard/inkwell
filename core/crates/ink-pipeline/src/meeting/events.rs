@@ -533,6 +533,13 @@ pub enum MeetingEvent {
         /// Of those, folded into another ("said twice").
         merged: usize,
     },
+    /// The user said in this meeting that work was already done which earlier meetings' open
+    /// commitments promise: each such commitment now carries a "looks done" suggestion for the
+    /// user to confirm or dismiss. Sent only when there is at least one.
+    LooksDone {
+        /// Commitments given a suggestion.
+        suggested: usize,
+    },
     /// Everything is done. Sent by every final pass that got as far as the supersede.
     Finished {
         /// The transcript's revision now; `None` only when the live one was kept and the record
