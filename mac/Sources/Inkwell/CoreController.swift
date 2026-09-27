@@ -155,6 +155,10 @@ final class CoreController {
         Task {
             let report = await engines.register()
             polish.appleEnginesReported(report.polish)
+            // After the engines, so a replayed meeting has its live words.
+            if let replay = ReplayOnLaunch.command(from: ProcessInfo.processInfo.environment) {
+                self.send(replay)
+            }
             self.log.notice("Apple engines: live \(String(describing: report.livePartials), privacy: .public), finals \(String(describing: report.finals), privacy: .public), polish \(String(describing: report.polish), privacy: .public)")
         }
     }

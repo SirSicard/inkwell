@@ -522,7 +522,7 @@ SOFTWARE.
 """#),
         ThirdPartyNotice(
             id: "sentencepiece", name: "SentencePiece, by Google",
-            role: "Loaded by NeMo-Speech.cpp. Licensed under the Apache License 2.0 (below).",
+            role: "Loaded by NeMo-Speech.cpp.",
             licence: "Apache-2.0",
             text: apache2),
         ThirdPartyNotice(
@@ -592,7 +592,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """#),
         ThirdPartyNotice(
             id: "abseil", name: "Abseil, by Google",
-            role: "Loaded by NeMo-Speech.cpp and SentencePiece. Licensed under the Apache License 2.0 (below).",
+            role: "Loaded by NeMo-Speech.cpp and SentencePiece.",
             licence: "Apache-2.0",
             text: apache2),
         ThirdPartyNotice(
@@ -722,7 +722,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """#),
         ThirdPartyNotice(
             id: "fluidaudio", name: "FluidAudio, by FluidInference",
-            role: "Runs Parakeet for the live words on the Neural Engine. Licensed under the Apache License 2.0 (below).",
+            role: "Runs Parakeet for the live words on the Neural Engine.",
             licence: "Apache-2.0",
             text: apache2),
         ThirdPartyNotice(
@@ -744,7 +744,7 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 """#),
         ThirdPartyNotice(
             id: "vbx", name: "VBx clustering, by BUT Speech@FIT",
-            role: "Compiled in with FluidAudio (ported to Swift); not called by Inkwell. Licensed under the Apache License 2.0 (below).",
+            role: "Compiled in with FluidAudio (ported to Swift); not called by Inkwell.",
             licence: "Apache-2.0",
             text: #"""
 Copyright 2021-2024 BUT Speech@FIT (original VBx project)

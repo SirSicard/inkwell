@@ -167,7 +167,9 @@ final class OwedModel {
                 titles[key] = titles[key] ?? (owner, nil)
             } else {
                 key = "record:" + item.record
-                titles[key] = titles[key] ?? (meetingTitle(item), meetingDay(item, now: now))
+                // An untitled meeting is already named by its day: no second date beside it.
+                let titled = item.recordTitle?.trimmingCharacters(in: .whitespaces).isEmpty == false
+                titles[key] = titles[key] ?? (meetingTitle(item), titled ? meetingDay(item, now: now) : nil)
             }
             if rows[key] == nil { order.append(key) }
             rows[key, default: []].append(OwedRow(

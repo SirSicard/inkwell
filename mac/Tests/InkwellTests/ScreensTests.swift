@@ -5,6 +5,7 @@ import AppleEngines
 import Foundation
 import Synchronization
 import InkBridge
+import SwiftUI
 import XCTest
 
 @testable import Inkwell
@@ -327,6 +328,7 @@ final class OwedModelTests: XCTestCase {
         XCTAssertEqual(groups[1].rows[0].mergedText, "Said 3 times · merged")
         XCTAssertEqual(groups[1].rows[0].meeting, "A meeting on " + Date(timeIntervalSince1970: Double(nowMs - 5 * Self.day) / 1_000).formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
         XCTAssertEqual(groups[2].rows[0].due, .undated)
+        XCTAssertNil(groups[2].subtitle, "an untitled meeting is named by its day once")
         XCTAssertEqual(owed.summary(now: now), "4 open · 1 due this week · 1 overdue")
     }
 
@@ -362,6 +364,15 @@ final class LiveModelTests: XCTestCase {
         ])
         let lines = LiveLine.ledger(store.meeting!)
         XCTAssertEqual(lines.map(\.wet), [false, true], "a blank partial is not a line")
+        // The far end settles a line said earlier than the last one of yours: it goes in its place.
+        let mixed = CoreStore()
+        mixed.apply([
+            event(#"{"type":"meeting.started","record":"r"}"#),
+            event(#"{"type":"meeting.final","record":"r","channel":"mic","start_ms":9000,"end_ms":9500,"text":"b"}"#),
+            event(#"{"type":"meeting.final","record":"r","channel":"far","start_ms":5000,"end_ms":6000,"text":"a"}"#),
+            event(#"{"type":"meeting.final","record":"r","channel":"far","start_ms":9000,"end_ms":9900,"text":"c"}"#),
+        ])
+        XCTAssertEqual(LiveLine.ledger(mixed.meeting!).map(\.text), ["a", "b", "c"], "by time, ties in arrival order")
         XCTAssertEqual(lines[0].atMs, 738_000)
         XCTAssertNil(lines[1].atMs)
         store.apply([event(#"{"type":"meeting.final","record":"rec","channel":"far","start_ms":741000,"end_ms":744000,"text":"So realistically the fourteenth."}"#)])
@@ -571,5 +582,54 @@ final class ScreensCoreContractTests: XCTestCase {
         XCTAssertFalse(refused?.message.contains("private") ?? true, "the error never quotes the note")
         let undecodable = events.withLock { $0 }.filter { if case .undecodable = $0 { true } else { false } }
         XCTAssertEqual(undecodable, [])
+    }
+}
+
+final class ReplayOnLaunchTests: XCTestCase {
+    func testAReplayIsAskedForOnlyWithAbsolutePaths() {
+        XCTAssertNil(ReplayOnLaunch.command(from: [:]))
+        XCTAssertNil(ReplayOnLaunch.command(from: ["INK_REPLAY_MEETING": "relative.wav"]))
+        XCTAssertNil(ReplayOnLaunch.command(from: ["INK_REPLAY_MEETING": "/m.wav,far.wav"]))
+        XCTAssertEqual(ReplayOnLaunch.command(from: ["INK_REPLAY_MEETING": "/m.wav"])?["mic"], "/m.wav")
+        let both = ReplayOnLaunch.command(from: ["INK_REPLAY_MEETING": "/m.wav, /f.wav"])
+        XCTAssertEqual(both?["far"], "/f.wav")
+        XCTAssertEqual(both?["cmd"], "replay_meeting")
+    }
+}
+
+/// The window follows its content's minimum size (MainWindowController's hosting controller), so a
+/// screen whose minimum grows with its content grows the window off the screen.
+@MainActor
+final class LiveLayoutTests: XCTestCase {
+    func testALongMeetingAndLongNotesNeverRaiseTheLiveScreensMinimumSize() throws {
+        let store = CoreStore()
+        var batch = [event(#"{"type":"meeting.started","record":"rec"}"#)]
+        for i in 0..<80 {
+            let channel = i % 2 == 0 ? "far" : "mic"
+            batch.append(event(#"{"type":"meeting.final","record":"rec","channel":"\#(channel)","start_ms":\#(i * 4000),"end_ms":\#(i * 4000 + 3000),"text":"A settled line of speech, number \#(i), long enough to wrap onto a second line in the ledger."}"#))
+        }
+        store.apply(batch)
+        let live = LiveModel(send: { _ in })
+        live.apply(batch[0])
+        live.notesEdited(Array(repeating: "A note line", count: 60).joined(separator: "\n"), caretParagraph: 59)
+        let meeting = try XCTUnwrap(store.meeting)
+        let hosting = NSHostingController(rootView: LiveMeetingView(meeting: meeting, live: live))
+        let minimum = hosting.sizeThatFits(in: .zero)
+        XCTAssertLessThan(minimum.height, 460, "the window's minimum content height is 460")
+        XCTAssertLessThan(minimum.width, 720)
+    }
+
+    func testOwedAndSettingsNeverRaiseTheWindowsMinimumSizeEither() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.owed.apply(event(#"{"type":"commitments.listed","items":[{"id":"a","record":"r","record_started_at_unix_ms":0,"text":"A promise long enough to wrap onto more than one line when the window is narrow","merged":1}]}"#))
+        for view in [
+            AnyView(OwedScreen()), AnyView(SettingsScreen()), AnyView(LiveScreen()),
+        ] {
+            let hosting = NSHostingController(
+                rootView: view.environment(screens).environment(CoreStore()).environment(Updates(infoDictionary: nil)))
+            let minimum = hosting.sizeThatFits(in: .zero)
+            XCTAssertLessThan(minimum.height, 460)
+            XCTAssertLessThan(minimum.width, 720)
+        }
     }
 }

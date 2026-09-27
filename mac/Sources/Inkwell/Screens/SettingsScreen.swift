@@ -244,27 +244,29 @@ private struct ModesSection: View {
                 Text("Your modes could not be read.").foregroundStyle(Theme.alert)
             }
             ForEach(modes.rows) { row in
-                HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(row.isDefault && modes.rows.count > 1 ? "Everywhere else" : row.name)
                         .font(.system(.body, weight: .semibold))
                         .frame(width: 150, alignment: .leading)
-                    HStack(spacing: 6) {
-                        ForEach(row.traits, id: \.self) { Paper.Chip(text: $0) }
-                    }
-                    Spacer(minLength: 0)
-                    if row.apps.isEmpty {
-                        Text(row.isDefault ? "Default" : "No apps")
-                            .font(Typography.caption).foregroundStyle(Theme.secondaryText)
-                    } else {
+                    VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
-                            ForEach(row.apps) { app in
-                                AppIcon(app: app)
-                            }
-                            Text(row.apps.map(\.name).joined(separator: ", "))
+                            ForEach(row.traits, id: \.self) { Paper.Chip(text: $0) }
+                        }
+                        if row.apps.isEmpty {
+                            Text(row.isDefault ? "Every app no other mode names" : "No apps")
                                 .font(Typography.caption).foregroundStyle(Theme.secondaryText)
-                                .lineLimit(1)
+                        } else {
+                            HStack(spacing: 6) {
+                                ForEach(row.apps) { app in
+                                    AppIcon(app: app)
+                                }
+                                Text(row.apps.map(\.name).joined(separator: ", "))
+                                    .font(Typography.caption).foregroundStyle(Theme.secondaryText)
+                                    .lineLimit(2)
+                            }
                         }
                     }
+                    Spacer(minLength: 0)
                 }
                 .padding(.vertical, 10)
                 .accessibilityElement(children: .combine)
@@ -308,19 +310,24 @@ private struct AISection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "AI")
-            HStack(spacing: 12) {
-                Toggle(
-                    "Polish my words",
-                    isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0) }))
-                    .toggleStyle(.switch)
-                    .disabled(!polish.canToggle)
-                    .frame(width: 220, alignment: .leading)
-                Text(polish.status)
-                    .font(Typography.caption)
-                    .foregroundStyle(polish.keepsTimingOut ? Theme.alert : Theme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Polish my words").frame(width: 150, alignment: .leading)
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle(
+                        "Polish my words",
+                        isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0) }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!polish.canToggle)
+                        .accessibilityHint(polish.status)
+                    Text(polish.status)
+                        .font(Typography.caption)
+                        .foregroundStyle(polish.keepsTimingOut ? Theme.alert : Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityHidden(true)
+                }
             }
-            .accessibilityElement(children: .contain)
+            .font(Typography.body)
             Text("Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
@@ -337,10 +344,10 @@ private struct MeetingsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Meetings")
             VStack(alignment: .leading, spacing: 8) {
-                fact("You", "your microphone, as \"Hear you\" allows.")
-                fact("Them", "the sound of the call from this Mac, as \"Hear the others\" allows.")
-                fact("Headphones", "with Bluetooth headphones, Inkwell records the Mac's own microphone: a headset microphone carries only call-quality sound.")
-                fact("Where", "recordings and transcripts stay on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
+                fact("You", "Your microphone, as \u{201C}Hear you\u{201D} allows.")
+                fact("Them", "The sound of the call from this Mac, as \u{201C}Hear the others\u{201D} allows.")
+                fact("Headphones", "With Bluetooth headphones, Inkwell records the Mac's own microphone: a headset microphone carries only call-quality sound.")
+                fact("Where", "Recordings and transcripts stay on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
             }
             if permissions.state(.hearTheOthers).isAlert {
                 Text(PermissionCard.hearTheOthers.offDetail)
@@ -432,10 +439,18 @@ private struct StorageSection: View {
         }
     }
 
+    /// "0 KB" rather than the formatter's "Zero KB".
+    static func size(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowsNonnumericFormatting = false
+        return formatter.string(fromByteCount: bytes)
+    }
+
     private func row(_ label: String, _ bytes: Int64) -> some View {
         HStack(spacing: 12) {
             Text(label).frame(width: 150, alignment: .leading)
-            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+            Text(Self.size(bytes))
                 .foregroundStyle(Theme.secondaryText)
         }
         .font(Typography.body)

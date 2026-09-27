@@ -24,11 +24,16 @@ struct LiveLine: Equatable, Identifiable {
     /// Still settling: a partial.
     let wet: Bool
 
-    /// Everything the core has for the live meeting, finals first, then each side's partial.
+    /// Everything the core has for the live meeting: the finals in the order they were said (each
+    /// side settles at its own pace, so they arrive out of order), then each side's partial.
     static func ledger(_ meeting: CoreStore.LiveMeeting) -> [LiveLine] {
         var lines = meeting.finals.enumerated().map { index, final in
             LiveLine(id: "final-\(index)", channel: final.channel, atMs: final.startMs, text: final.text, wet: false)
         }
+        // Stable: lines said at the same moment keep their arrival order.
+        lines = lines.enumerated()
+            .sorted { ($0.element.atMs ?? 0, $0.offset) < ($1.element.atMs ?? 0, $1.offset) }
+            .map(\.element)
         for channel in [Channel.mic, .far] {
             if let partial = meeting.partials[channel], !partial.trimmingCharacters(in: .whitespaces).isEmpty {
                 lines.append(LiveLine(id: "partial-\(channel.rawValue)", channel: channel, atMs: nil, text: partial, wet: true))

@@ -29,7 +29,7 @@ struct LiveScreen: View {
     }
 }
 
-private struct LiveMeetingView: View {
+struct LiveMeetingView: View {
     let meeting: CoreStore.LiveMeeting
     @Bindable var live: LiveModel
 
@@ -38,13 +38,15 @@ private struct LiveMeetingView: View {
         VStack(alignment: .leading, spacing: 18) {
             header
             HStack(alignment: .top, spacing: 0) {
+                // Minimum widths: a text squeezed to no width would be as tall as its letters, and
+                // the window follows this screen's minimum size.
                 notes
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(minWidth: 200, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.trailing, 26)
                 Rectangle().fill(PaperPalette.border).frame(width: 1)
                     .accessibilityHidden(true)
                 LedgerView(lines: lines)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .layoutPriority(1.25)
                     .padding(.leading, 26)
             }
@@ -150,13 +152,13 @@ private struct LiveMeetingView: View {
             Text("Each line is kept with the moment you wrote it. After the call your notes lead the record, filled in from what was said.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(3)
         }
     }
 }
 
 /// What is being said: dry lines are settled, the wet line at the end is still settling.
-private struct LedgerView: View {
+struct LedgerView: View {
     let lines: [LiveLine]
 
     var body: some View {
@@ -226,7 +228,7 @@ private struct LedgerRow: View {
 }
 
 /// Ask: the far end's questions (⌘1 to ⌘4 answers one) and a field for anything else.
-private struct AskPanel: View {
+struct AskPanel: View {
     @Bindable var live: LiveModel
     let context: [LiveLine]
     @FocusState private var fieldFocused: Bool
@@ -331,6 +333,13 @@ struct NotesEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.onEdit = onEdit
         context.coordinator.onLeave = onLeave
+    }
+
+    /// Takes whatever room it is offered and asks for none: the text scrolls inside. Without this
+    /// SwiftUI sizes it from the text view's full height, and the window's minimum size (which the
+    /// hosting controller follows) grows with every line typed.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 240, height: proposal.height ?? 160)
     }
 
     /// The text view, on TextKit 2.
