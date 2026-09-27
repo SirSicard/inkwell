@@ -4,9 +4,9 @@
 // the measurement adds no timer to what it measures.
 //
 // INK_MEASURE names the state to hold: "idle", or "live": the ink held in the meeting state with no
-// audio, so the Drop and the window's rail both draw at 60 fps (a meeting with the window open,
-// the most the ink draws at once). Every frame either surface presents is counted, so "frames"
-// grows by about 120 a second while live. Live also records the GPU time of each frame, and the
+// audio, so the Drop and the window's rail both draw at 60 fps from the one display link they
+// share (a meeting with the window open, the most the ink draws at once). Every frame either
+// surface presents is counted, so "frames" grows by about 120 a second while live. Live also records the GPU time of each frame, and the
 // SIGUSR1 mark adds its spread since the previous mark.
 import AppKit
 import Foundation

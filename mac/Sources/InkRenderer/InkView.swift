@@ -1,7 +1,8 @@
 // The ink on screen: a view backed by a CAMetalLayer that draws the shared pipeline.
 //
-// It draws only while something is live (InkSchedule decides): a display link steps the ink and
-// draws one frame per vsync, reading the live levels at each tick. Idle, covered, or with Reduce
+// It draws only while something is live (InkSchedule decides): the display link every live ink
+// shares (InkClock) steps the ink and draws one frame per vsync, reading the live levels at each
+// tick. Idle, covered, or with Reduce
 // Motion on, it draws one still frame at most and then nothing. Every frame it presents is counted
 // in InkRenderer.frames, which the shell budget (scripts/idle-budget.sh) reads.
 //
@@ -59,8 +60,8 @@ public final class InkView: NSView {
     /// Frames this view has presented.
     public private(set) var framesDrawn = 0
 
-    /// Whether the display link is running.
-    public var isAnimating: Bool { link != nil }
+    /// Whether the view is on the shared display link (live, on screen, motion allowed).
+    public var isAnimating: Bool { clock.contains(self) }
 
     /// Why the ink cannot draw, if it cannot. The view then shows plain paper.
     public private(set) var failure: InkRendererError?
@@ -77,7 +78,7 @@ public final class InkView: NSView {
     private var pipeline: InkPipeline?
     private var simulation = InkSimulation()
     private var schedule = InkSchedule()
-    private var link: CADisplayLink?
+    private let clock: InkClock
     private var lastTimestamp: CFTimeInterval = 0
     private var firstTick = true
     private var markTexture: (any MTLTexture)?
@@ -86,9 +87,11 @@ public final class InkView: NSView {
     /// Paper, #F2EEE6: the layer's colour until its first frame, and where the ink cannot draw.
     private static let paper = CGColor(srgbRed: 0xF2 / 255, green: 0xEE / 255, blue: 0xE6 / 255, alpha: 1)
 
-    /// A view that draws with `loader`'s pipeline. It never waits for the compile: made before it
-    /// finishes, the view shows paper and starts drawing when the pipeline arrives.
-    public init(frame: NSRect = .zero, loader: InkPipelineLoader = .shared) {
+    /// A view that draws with `loader`'s pipeline, driven by `clock` while live. It never waits
+    /// for the compile: made before it finishes, the view shows paper and starts drawing when the
+    /// pipeline arrives.
+    public init(frame: NSRect = .zero, loader: InkPipelineLoader = .shared, clock: InkClock = .shared) {
+        self.clock = clock
         super.init(frame: frame)
         wantsLayer = true
         // The layer's content is the Metal drawable; AppKit never redraws it.
@@ -269,23 +272,18 @@ public final class InkView: NSView {
     }
 
     private func startClock() {
-        guard link == nil else { return }
+        guard !clock.contains(self) else { return }
         firstTick = true
-        let displayLink = displayLink(target: self, selector: #selector(tick(_:)))
-        displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
-        displayLink.add(to: .main, forMode: .common)
-        link = displayLink
+        clock.add(self)
     }
 
     private func stopClock() {
-        link?.invalidate()
-        link = nil
+        clock.remove(self)
     }
 
-    /// One live frame: the prototype's `_frame`. dt is 1/60 s on the first tick, then the time
-    /// since the last, clamped to 0...0.05 s.
-    @objc private func tick(_ displayLink: CADisplayLink) {
-        let now = displayLink.timestamp
+    /// One live frame, on the shared clock's tick: the prototype's `_frame`. dt is 1/60 s on the
+    /// view's first tick, then the time since its last, clamped to 0...0.05 s.
+    func clockTicked(at now: CFTimeInterval) {
         let dt = firstTick ? 0.016 : min(0.05, max(0, now - lastTimestamp))
         lastTimestamp = now
         firstTick = false
