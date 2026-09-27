@@ -11,6 +11,11 @@ struct OwedScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 Paper.Header(title: "Owed", subtitle: owed.loaded ? owed.summary(now: Date()) : nil)
+                if let failure = owed.failure {
+                    Text(failure)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                }
                 ForEach(owed.suggestions) { suggestion in
                     LooksDoneCard(suggestion: suggestion, owed: owed)
                 }

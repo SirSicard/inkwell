@@ -113,6 +113,9 @@ final class OwedModel {
     /// Nothing has been listed yet.
     private(set) var loaded = false
     private(set) var suggestions: [LooksDone] = []
+    /// The last answer the core refused, in words, until the next answer: the promise is back in
+    /// the list as the core has it.
+    private(set) var failure: String?
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let calendar: Calendar
@@ -128,6 +131,7 @@ final class OwedModel {
 
     /// Marks a promise done: it leaves the list at once, and the core's list replaces it.
     func markDone(_ id: String) {
+        failure = nil
         items.removeAll { $0.id == id }
         suggestions.removeAll { $0.commitment == id }
         send(.commitmentSetDone(id: id, done: true))
@@ -135,6 +139,7 @@ final class OwedModel {
 
     /// The user says a suggestion is wrong: it goes, the promise stays.
     func notYet(_ suggestion: LooksDone) {
+        failure = nil
         suggestions.removeAll { $0.id == suggestion.id }
         send(.commitmentNotYet(id: suggestion.commitment))
     }
@@ -238,8 +243,11 @@ final class OwedModel {
             // A promise changed, a meeting filed new ones or found some done, or old ones went:
             // list again.
             load()
-        case .commandFailed(let failure) where ["commitment.set_done", "commitment.not_yet"].contains(failure.command):
-            // Put it back as the core has it.
+        case .commandFailed(let failed) where ["commitment.set_done", "commitment.not_yet"].contains(failed.command):
+            // Put it back as the core has it, and say why it came back.
+            failure = failed.command == "commitment.set_done"
+                ? "Couldn't mark it done: \(failed.message)"
+                : "Couldn't keep it open: \(failed.message)"
             load()
         default:
             break

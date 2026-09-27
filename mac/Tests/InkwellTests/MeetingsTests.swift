@@ -309,6 +309,23 @@ final class OwedRecipientTests: XCTestCase {
         owed.apply(event(#"{"type":"meeting.looks_done","record":"r9","suggested":1}"#))
         XCTAssertEqual(sent.commands.last, .commitmentsList, "a meeting found some done: list again")
     }
+
+    /// Review (S2.8): a "Mark done" or "Not yet" the core refused puts the promise back and says
+    /// so, until the next answer; it is never only a silent reload.
+    func testAnAnswerTheCoreRefusedIsSaidAndThePromiseComesBack() {
+        let sent = Sent()
+        let owed = OwedModel(send: sent.send)
+        owed.markDone("c1")
+        owed.apply(event(#"{"type":"command.failed","command":"commitment.set_done","message":"the library is read-only"}"#))
+        XCTAssertEqual(owed.failure, "Couldn't mark it done: the library is read-only")
+        XCTAssertEqual(sent.commands.last, .commitmentsList, "put back as the core has it")
+        owed.apply(event(#"{"type":"commitments.listed","items":[]}"#))
+        XCTAssertNotNil(owed.failure, "the reload does not hide it")
+        owed.notYet(LooksDone(id: "looks-done:c2", commitment: "c2", text: "", source: ""))
+        XCTAssertNil(owed.failure, "the next answer clears it")
+        owed.apply(event(#"{"type":"command.failed","command":"commitment.not_yet","message":"no such commitment"}"#))
+        XCTAssertEqual(owed.failure, "Couldn't keep it open: no such commitment")
+    }
 }
 
 final class CitedDecisionTests: XCTestCase {
