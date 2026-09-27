@@ -229,6 +229,8 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     // Wet sheen: a highlight off the slope of the drop, gone once the ink is dry.
     let e = 0.0025 * k.SS;
     let hA = clamp(fA - 1.0, 0.0, 1.2);
+    // The slope's two samples reuse this pixel's fade on purpose: they sit 0.0025 SS away, where
+    // the fade differs by a negligible amount, and one fade keeps the slope the field's own.
     let hx = clamp(fence(fieldA(wp + vec2<f32>(e, 0.0), k), fade) - 1.0, 0.0, 1.2) - hA;
     let hy = clamp(fence(fieldA(wp + vec2<f32>(0.0, e), k), fade) - 1.0, 0.0, 1.2) - hA;
     let nrm = normalize(vec3<f32>(-hx / e * 0.035 * k.SS, -hy / e * 0.035 * k.SS, 1.0));
