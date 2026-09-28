@@ -5310,7 +5310,7 @@ DEALINGS IN THE SOFTWARE.
             name: "realfft", version: "3.5.0", licence: "MIT", shown: "MIT",
             text: #"""
 --- MIT ---
-[The published crate carries no text of this licence. Supplied by Inkwell: the MIT licence's text; the crate is MIT.]
+[The published crate carries no text of this licence. Supplied by Inkwell: the MIT licence's text; the crate is MIT (its manifest and README say so; its repository has no licence file).]
 [The file names no copyright holder; the line below names the crate's authors, from its manifest.]
 Copyright (c) HEnquist
 

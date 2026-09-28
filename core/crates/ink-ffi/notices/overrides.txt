@@ -25,9 +25,10 @@
 # repository at the commit its version was published from (the package's .cargo_vcs_info.json).
 # The objc2 repository's LICENSE.md names the licences and links their standard texts, with no
 # copyright line; anymap3's COPYING does the same, with one. realfft's repository has no licence
-# file at all (its README says "License: MIT"), so its line stays `no` until one exists or the
-# maintainer accepts that. On a version bump, compare again, replace a text that differs, and set
-# the date (docs/RELEASING.md, "Release day").
+# file at all: its README ends "License: MIT" and its manifest says `license = "MIT"` and names its
+# author, which the maintainer accepted as the evidence (the MIT text under the manifest's author,
+# as for any MIT crate that names no holder). On a version bump, compare again, replace a text that
+# differs, and set the date (docs/RELEASING.md, "Release day").
 
 anymap3                 1.1.0    MIT-anymap3.txt                  verified=2026-09-28  its COPYING names the copyright holder and offers BlueOak-1.0.0, MIT or Apache-2.0; this is the MIT licence's text under that COPYING's copyright line
 block2                  0.6.2    MIT.txt                          verified=2026-09-28  the MIT licence's text; the crate is MIT
@@ -42,5 +43,5 @@ objc2-core-foundation   0.3.2    Apache-2.0.txt                   verified=2026-
 objc2-core-graphics     0.3.2    Apache-2.0.txt                   verified=2026-09-28  the Apache License 2.0, which the crate offers beside Zlib and MIT
 objc2-encode            4.1.0    MIT.txt                          verified=2026-09-28  the MIT licence's text; the crate is MIT
 objc2-foundation        0.3.2    MIT-objc2.txt                    verified=2026-09-28  the MIT licence's text, under the author the other objc2 crates name; the crate is MIT and names none
-realfft                 3.5.0    MIT.txt                          verified=no  the MIT licence's text; the crate is MIT
+realfft                 3.5.0    MIT.txt                          verified=2026-09-28  the MIT licence's text; the crate is MIT (its manifest and README say so; its repository has no licence file)
 tract-extra             0.23.8   MIT.txt                          verified=2026-09-28  the MIT licence's text as the other tract crates ship it; the crate offers MIT or Apache-2.0
