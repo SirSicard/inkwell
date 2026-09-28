@@ -292,6 +292,13 @@
         "other"
       ]
     },
+    "FailureCode": {
+      "type": "string",
+      "description": "A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save refused because the stored list cannot be read; send it again with replace_unreadable to start over).",
+      "enum": [
+        "list_unreadable"
+      ]
+    },
     "Refusal": {
       "type": "string",
       "description": "Why a job's model was refused.",
@@ -589,6 +596,10 @@
         "message": {
           "type": "string",
           "description": "Why. Names what failed, never what was said."
+        },
+        "code": {
+          "$ref": "#/$defs/FailureCode",
+          "description": "Which failure, for the few a shell acts on; absent for the rest. Match on this, never on the message."
         }
       },
       "required": [

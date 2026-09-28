@@ -505,6 +505,9 @@ public enum CommandAction: String, Codable, Sendable, Equatable, CaseIterable {
 
 /// A command was read and could not be carried out.
 public struct CommandFailed: Codable, Sendable, Equatable {
+    /// Which failure, for the few a shell acts on; absent for the rest. Match on this, never on
+    /// the message.
+    public let code: FailureCode?
     /// The command's "cmd".
     public let command: String
     /// The command's "id", when it had one.
@@ -1076,6 +1079,13 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
     case transcription
     case insert
     case other
+}
+
+/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
+/// refused because the stored list cannot be read; send it again with replace_unreadable to
+/// start over).
+public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
+    case listUnreadable = "list_unreadable"
 }
 
 /// What a meeting records as the other side: the sound of its app alone (a call recorded from

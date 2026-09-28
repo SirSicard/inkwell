@@ -458,6 +458,23 @@ fn modes_come_from_the_store_then_the_import_then_the_default() {
     rig.core.command(r#"{"cmd":"modes.list"}"#).unwrap();
     let failed = rig.events.wait_type("command.failed", WAIT);
     assert_eq!(failed["message"], "the stored modes cannot be read");
+    assert!(failed.get("code").is_none(), "{failed}");
+    rig.finish();
+}
+
+#[test]
+fn a_save_refused_over_an_unreadable_list_says_so_by_its_code() {
+    let rig = rig("list-unreadable");
+    rig.store
+        .set_setting(ink_pipeline::snippets::SETTING_KEY, "damaged")
+        .unwrap();
+    rig.core
+        .command(r#"{"cmd":"snippets.save","id":"s","snippets":[]}"#)
+        .unwrap();
+    let failed = rig.events.wait_type("command.failed", WAIT);
+    assert_eq!(failed["id"], "s");
+    assert_eq!(failed["code"], ink_ffi::phrases::LIST_UNREADABLE);
+    assert_eq!(failed["message"], ink_ffi::phrases::REFUSED_SNIPPETS);
     rig.finish();
 }
 
