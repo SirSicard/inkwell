@@ -132,6 +132,13 @@ cp "$work/deps.keep" "$deps/share/inkwell/engine-deps.manifest"
 run "no pinned prefix's manifest" 1 "$work/good.manifest" --deps "$work/missing.manifest"
 assert_contains "... says why" "$out" "no SentencePiece/Abseil manifest"
 
+# A copy of the manifest outside its prefix: the prefix it names cannot be found from it.
+mkdir -p "$work/flat"
+cp "$deps/share/inkwell/engine-deps.manifest" "$work/flat/engine-deps.manifest"
+run "a pinned prefix's manifest outside <prefix>/share/inkwell" 1 "$work/good.manifest" \
+  --deps "$work/flat/engine-deps.manifest"
+assert_contains "... says why" "$out" "is not in <prefix>/share/inkwell/"
+
 nemo "$work/odd.manifest" "${good_origins[@]}" "ggml_native"
 run "an unreadable manifest line" 1 "$work/odd.manifest"
 assert_contains "... says why" "$out" "unreadable line"

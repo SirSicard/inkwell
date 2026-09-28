@@ -65,7 +65,13 @@ done
 
 # The pinned prefix's manifest, as build-sentencepiece-abseil.sh writes it: its sources must be the
 # pins, and each library is known by its file name, with its project and SHA-256.
-deps_prefix="$(cd "$(dirname "$deps")/../.." && pwd -P)"
+# The manifest sits in <prefix>/share/inkwell/, where build-sentencepiece-abseil.sh writes it; the
+# libraries are checked against that prefix, so a manifest anywhere else is refused.
+deps_dir="$(cd "$(dirname "$deps")" 2>/dev/null && pwd -P)" || fail "cannot resolve the directory of $deps"
+case "$deps_dir" in
+  */share/inkwell) deps_prefix="${deps_dir%/share/inkwell}" ;;
+  *) fail "$deps is not in <prefix>/share/inkwell/, where build-sentencepiece-abseil.sh writes it" ;;
+esac
 sources=()
 deps_libs=()
 while IFS= read -r line; do
