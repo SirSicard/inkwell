@@ -53,6 +53,7 @@ pub mod llms;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;
+pub mod phrases;
 pub mod queries;
 pub mod recovery;
 pub mod retention;

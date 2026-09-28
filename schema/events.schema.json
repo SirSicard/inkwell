@@ -212,6 +212,15 @@
       "$ref": "#/$defs/ModesListed"
     },
     {
+      "$ref": "#/$defs/SnippetsListed"
+    },
+    {
+      "$ref": "#/$defs/VoiceCommandsListed"
+    },
+    {
+      "$ref": "#/$defs/ImportNotes"
+    },
+    {
       "$ref": "#/$defs/LibraryRecords"
     },
     {
@@ -306,7 +315,7 @@
     },
     "CommandAction": {
       "type": "string",
-      "description": "A voice command. change_style and toggle_polish are already applied by the core; the rest are the shell's to carry out.",
+      "description": "A voice command. The core carries out change_style, toggle_polish and insert_text itself; the others are recognised and not carried out in this build.",
       "enum": [
         "undo",
         "change_style",
@@ -958,6 +967,10 @@
         "value": {
           "type": "string",
           "description": "Its argument: a style, a model id, a URL, an app path, or fixed text."
+        },
+        "carried_out": {
+          "type": "boolean",
+          "description": "Whether the core carried it out (change_style, toggle_polish and insert_text); the rest are recognised, so their words are not typed, but this build does not do them yet: say so. Absent from a core before 1.0."
         }
       },
       "required": [
@@ -2823,6 +2836,217 @@
         "modes"
       ],
       "additionalProperties": false
+    },
+    "SnippetsListed": {
+      "type": "object",
+      "description": "The user's snippets, in answer to snippets.list or snippets.save. Carries the user's words: never log it.",
+      "properties": {
+        "type": {
+          "const": "snippets.listed"
+        },
+        "snippets": {
+          "type": "array",
+          "description": "The snippets, in the user's order.",
+          "items": {
+            "$ref": "#/$defs/SnippetInfo",
+            "description": "A snippet."
+          }
+        },
+        "from_import": {
+          "type": "boolean",
+          "description": "They are the ones the Inkwell 0.2 import brought, not yet saved in 1.0."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's id."
+        }
+      },
+      "required": [
+        "type",
+        "snippets",
+        "from_import"
+      ],
+      "additionalProperties": false
+    },
+    "SnippetInfo": {
+      "type": "object",
+      "description": "A snippet: a spoken trigger that dictation replaces with its expansion.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "trigger": {
+          "type": "string",
+          "description": "What the user says, matched as whole words in any case."
+        },
+        "expansion": {
+          "type": "string",
+          "description": "What it becomes; {date}, {time} and {clipboard} are filled in."
+        },
+        "category": {
+          "type": "string",
+          "description": "A grouping, possibly empty."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether it expands."
+        }
+      },
+      "required": [
+        "id",
+        "trigger",
+        "expansion",
+        "category",
+        "enabled"
+      ],
+      "additionalProperties": false
+    },
+    "VoiceCommandsListed": {
+      "type": "object",
+      "description": "The voice commands, in answer to voice_commands.list or voice_commands.save. Carries the user's words: never log it.",
+      "properties": {
+        "type": {
+          "const": "voice_commands.listed"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether any dictation can be a command."
+        },
+        "wake_prefix": {
+          "type": "string",
+          "description": "The word a command starts with."
+        },
+        "commands": {
+          "type": "array",
+          "description": "The commands, in order of precedence.",
+          "items": {
+            "$ref": "#/$defs/VoiceCommandInfo",
+            "description": "A command."
+          }
+        },
+        "from_import": {
+          "type": "boolean",
+          "description": "They are the ones the Inkwell 0.2 import brought, not yet saved in 1.0."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's id."
+        }
+      },
+      "required": [
+        "type",
+        "enabled",
+        "wake_prefix",
+        "commands",
+        "from_import"
+      ],
+      "additionalProperties": false
+    },
+    "VoiceCommandInfo": {
+      "type": "object",
+      "description": "A voice command and the phrases that trigger it.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id."
+        },
+        "triggers": {
+          "type": "array",
+          "description": "The phrases, any of which triggers it after the wake word.",
+          "items": {
+            "type": "string",
+            "description": "A phrase."
+          }
+        },
+        "action": {
+          "$ref": "#/$defs/CommandAction",
+          "description": "What it does."
+        },
+        "value": {
+          "type": "string",
+          "description": "Its argument: a style, a model id, a URL, an app path, or fixed text."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether it can match."
+        },
+        "carried_out": {
+          "type": "boolean",
+          "description": "Whether this build carries the action out."
+        }
+      },
+      "required": [
+        "id",
+        "triggers",
+        "action",
+        "enabled",
+        "carried_out"
+      ],
+      "additionalProperties": false
+    },
+    "ImportNotes": {
+      "type": "object",
+      "description": "What the Inkwell 0.2 import has to tell the user once, in answer to import.notes.",
+      "properties": {
+        "type": {
+          "const": "import.notes"
+        },
+        "key": {
+          "$ref": "#/$defs/ImportKeyNote",
+          "description": "What became of 0.2's dictation hotkey; absent when there is nothing to say or the user dismissed it."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's id."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "ImportKeyNote": {
+      "type": "object",
+      "description": "0.2's dictation hotkey, and what the import made of it.",
+      "properties": {
+        "hotkey": {
+          "type": "string",
+          "description": "0.2's hotkey as it stored it: a modifier token (fn, right_cmd, ...) or a combination such as super+shift+space."
+        },
+        "outcome": {
+          "$ref": "#/$defs/ImportKeyOutcome",
+          "description": "Whether it carried over."
+        },
+        "key": {
+          "type": "string",
+          "description": "The 1.0 dictation key it became, when it did."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "The import set it as the dictation key (a key already chosen in 1.0 is kept)."
+        },
+        "toggle": {
+          "type": "boolean",
+          "description": "0.2 started and stopped on separate presses; 1.0 is hold to talk."
+        }
+      },
+      "required": [
+        "hotkey",
+        "outcome",
+        "applied",
+        "toggle"
+      ],
+      "additionalProperties": false
+    },
+    "ImportKeyOutcome": {
+      "type": "string",
+      "description": "What became of 0.2's dictation hotkey: mapped to a 1.0 key, or not, because it is a combination or another key 1.0 cannot hold on its own.",
+      "enum": [
+        "mapped",
+        "combination",
+        "other_key"
+      ]
     },
     "CatalogueEntry": {
       "type": "object",

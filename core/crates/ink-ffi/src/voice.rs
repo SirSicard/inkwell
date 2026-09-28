@@ -476,7 +476,7 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
         unreadable.push("the dictionary");
         Dictionary::default()
     });
-    Loaded {
+    let mut loaded = Loaded {
         key,
         edit_key,
         settings: DictationSettings {
@@ -489,6 +489,28 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
             ..DictationSettings::default()
         },
         unreadable,
+    };
+    load_phrases(store, &mut loaded);
+    loaded
+}
+
+/// The snippets and voice commands, as Settings lists them ([`phrases`](crate::phrases)): the
+/// user's own, else the 0.2 import's, else the defaults. One that cannot be read is named in
+/// `dictation.ready`, and dictation runs without it (no snippets; commands off).
+fn load_phrases(store: &dyn Store, loaded: &mut Loaded) {
+    match crate::phrases::load_snippets(store) {
+        Ok((snippets, _)) => loaded.settings.snippets = snippets,
+        Err(e) => {
+            log::error!("dictation: the snippets could not be read: {e}");
+            loaded.unreadable.push("the snippets");
+        }
+    }
+    match crate::phrases::load_commands(store) {
+        Ok((commands, _)) => loaded.settings.commands = commands,
+        Err(e) => {
+            log::error!("dictation: the voice commands could not be read: {e}");
+            loaded.unreadable.push("the voice commands");
+        }
     }
 }
 

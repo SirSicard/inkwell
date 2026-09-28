@@ -165,6 +165,7 @@ pub fn dictation(e: &DictationEvent) -> Value {
                     ("action", some(name)),
                     ("risk", some(risk)),
                     ("value", value),
+                    ("carried_out", some(action.carried_out())),
                 ],
             )
         }
