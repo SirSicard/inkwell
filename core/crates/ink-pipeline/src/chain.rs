@@ -992,8 +992,9 @@ impl DictationChain {
         // Stage 5.
         if let Some(command) = self.settings.commands.detect(&raw) {
             let action = command.action.clone();
-            self.apply_command(&action);
-            self.emit(DictationEvent::Command(action));
+            if self.apply_command(&action) {
+                self.emit(DictationEvent::Command(action));
+            }
             return;
         }
 
@@ -1182,9 +1183,29 @@ impl DictationChain {
         Ok(half.keep())
     }
 
-    /// The chain's part of a voice command: style and polish. The rest is the shell's.
-    fn apply_command(&mut self, action: &CommandAction) {
+    /// The chain's part of a voice command: style, polish and fixed text
+    /// ([`CommandAction::carried_out`]). The rest reach the shell as the event only. `false` when
+    /// the command failed and said so (fixed text that could not be inserted), so no
+    /// [`DictationEvent::Command`] follows.
+    fn apply_command(&mut self, action: &CommandAction) -> bool {
         match action {
+            CommandAction::InsertText { text } => {
+                // Inserted as a dictation's text is (with its trailing space), and not saved: it is
+                // the user's own fixed text, not something said.
+                let insert = if self.settings.append_space {
+                    // i5-allow: the command's fixed text, on its way into the focused app
+                    format!("{text} ")
+                } else {
+                    text.clone()
+                };
+                match self.services.inserter.insert(&insert) {
+                    Ok(outcome) => log::info!("voice command's text inserted ({outcome:?})"),
+                    Err(error) => {
+                        self.emit(DictationEvent::Failed(TakeFailure::Insert(error)));
+                        return false;
+                    }
+                }
+            }
             CommandAction::ChangeStyle { style } => {
                 let modes = &self.settings.modes;
                 let target = Style::parse(style)
@@ -1208,6 +1229,7 @@ impl DictationChain {
             }
             _ => {}
         }
+        true
     }
 }
 

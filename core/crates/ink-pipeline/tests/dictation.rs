@@ -485,6 +485,61 @@ fn a_style_command_changes_how_the_next_dictation_is_written() {
 }
 
 #[test]
+fn a_snippet_the_0_2_import_brought_expands_in_a_dictation() {
+    // The document the 0.2 import writes, read as dictation reads it.
+    let imported = r#"[{"id":"s1","trigger":"my sig","expansion":"Kind regards","category":"","enabled":true}]"#;
+    let snippets = ink_pipeline::snippets::SnippetStore::from_json(imported).unwrap();
+    let rig = Rig::builder()
+        .settings(move |s| s.snippets = snippets.clone())
+        .build();
+    rig.dictate_fixture("send it with my sig", 2.0, -30.0);
+    assert_eq!(
+        rig.inserted(),
+        vec!["Send it with Kind regards. ".to_owned()]
+    );
+}
+
+#[test]
+fn an_insert_text_command_types_its_text_and_saves_nothing() {
+    let rig = Rig::builder()
+        .settings(|s| {
+            s.commands.enabled = true;
+            s.commands
+                .commands
+                .push(ink_pipeline::voicecommand::VoiceCommand {
+                    id: "sig".into(),
+                    triggers: vec!["sign off".into()],
+                    action: CommandAction::InsertText {
+                        text: "Best, A. Writer".into(),
+                    },
+                    enabled: true,
+                });
+        })
+        .build();
+    rig.dictate_fixture("inkwell sign off", 2.0, -30.0);
+    assert_eq!(rig.inserted(), vec!["Best, A. Writer ".to_owned()]);
+    assert!(has(&rig.events(), |e| matches!(
+        e,
+        DictationEvent::Command(CommandAction::InsertText { .. })
+    )));
+    assert!(
+        rig.dictation_records().is_empty(),
+        "a command is not a dictation"
+    );
+}
+
+#[test]
+fn a_command_this_build_does_not_carry_out_still_types_nothing() {
+    let rig = Rig::builder()
+        .settings(|s| s.commands.enabled = true)
+        .build();
+    rig.dictate_fixture("inkwell scratch that", 2.0, -30.0);
+    assert!(rig.inserted().is_empty());
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::Command(CommandAction::Undo)));
+}
+
+#[test]
 fn polish_uses_the_model_and_a_failure_keeps_the_local_text() {
     let polishing = |s: &mut ink_pipeline::chain::DictationSettings| {
         s.modes.modes[0].polish_enabled = true;
