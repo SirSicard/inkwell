@@ -165,9 +165,14 @@ swift build --package-path "$mac" -c "$config" --product Inkwell --only-use-vers
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks ${link_args[@]+"${link_args[@]}"}
 bin="$(swift build --package-path "$mac" -c "$config" --show-bin-path --only-use-versions-from-resolved-file)"
 # Development hooks are compiled out of a release build (`#if DEBUG`): a replayed meeting would write
-# a meeting nobody had into the user's library. A release binary that still names one is refused.
-if [ "$config" = release ] && strings "$bin/Inkwell" | grep -q 'INK_REPLAY_MEETING'; then
-  fail "the release binary carries INK_REPLAY_MEETING, a debug-only hook"
+# a meeting nobody had into the user's library, and a stand-in cloud model would sit where polish
+# sends. A release binary that still names one is refused.
+if [ "$config" = release ]; then
+  for hook in INK_REPLAY_MEETING INK_DEBUG_CLOUD_MODEL; do
+    if strings "$bin/Inkwell" | grep -q "$hook"; then
+      fail "the release binary carries $hook, a debug-only hook"
+    fi
+  done
 fi
 
 # --- bundle -------------------------------------------------------------------------------------

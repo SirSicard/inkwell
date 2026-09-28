@@ -1,6 +1,7 @@
 // The first-run state: a sheet over the window until the user finishes or skips it. What Inkwell
-// does, the four permissions (each asked for only when the user presses Allow), whether polish can
-// run on this Mac, and how to dictate. Remembered in the core's store (onboarding.done).
+// does, the four permissions (each asked for only when the user presses Allow), polish (off, and
+// turned on only through its consent step), and how to dictate. Remembered in the core's store
+// (onboarding.done).
 import SwiftUI
 
 struct OnboardingView: View {
@@ -79,15 +80,18 @@ struct OnboardingView: View {
         let polish = screens.polish
         return VStack(alignment: .leading, spacing: 12) {
             Text("Polish").font(Typography.heading).accessibilityAddTraits(.isHeader)
-            Text("Polish tidies a dictation's wording before it is typed. It runs on this Mac with Apple Intelligence.")
+            Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
             Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0) }))
                 .toggleStyle(.switch)
                 .disabled(!polish.canToggle)
+                .accessibilityHint(polish.status)
             Text(polish.status)
                 .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
+                .accessibilityHidden(true)
         }
         .foregroundStyle(Theme.text)
+        .polishConsent(polish)
     }
 
     private var ready: some View {

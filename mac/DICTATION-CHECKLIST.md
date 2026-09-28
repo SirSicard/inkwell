@@ -6,9 +6,12 @@ and how it feels. Note the date, the macOS version and the commit at the top of 
 
 Automated checks cover the logic behind each line: the chain on mocks (`cargo test -p
 ink-pipeline --test dictation_takes`: a second press never wipes the take, the 180 s watchdog,
-voice edit, the polish switch, live words, the mic let go of while idle), the warm-up
-(`--test warm`), dictation through the core on the mock platform (`cargo test -p ink-ffi --test
-voice`), and the shell (`swift test --package-path mac --filter Dictation`).
+voice edit, the polish switch, live words, the mic let go of while idle), polish's consent on
+every path (`--test polish_consent`, and through the core `cargo test -p ink-ffi --test voice`:
+the switch, a Polish mode, the default mode, a voice command, a 0.2 import, a model that moves to
+the cloud), the warm-up (`--test warm`), dictation through the core on the mock platform
+(`cargo test -p ink-ffi --test voice`), and the shell (`swift test --package-path mac --filter
+"Dictation|Polish"`).
 
 ## Setup
 
@@ -74,8 +77,39 @@ voice`), and the shell (`swift test --package-path mac --filter Dictation`).
 - [ ] Settings > Modes shows the modes; with none stored, one "Default" row with Polish.
 - [ ] If you have 0.2's modes imported (a Chat mode naming Slack): dictate in Slack. The Drop
       reads "Dictating · Slack · Chat" and the text is written casually.
-- [ ] Settings > AI > Polish my words: on (needs Apple Intelligence). Dictate "um so the the
-      meeting is at noon": the fillers go and the sentence is tidied. Off: it goes in as said.
+- [ ] A fresh library: Settings > AI > Polish my words reads off ("Off. Your words go in as you
+      said them."), with Apple Intelligence on.
+- [ ] **Cancel.** Switch it on: a dialog "Turn on polish?" says polish sends what you dictate to
+      a language model, that it uses Apple's on-device model, and that your words stay on this
+      Mac. Press Cancel (and, separately, Escape): the switch stays off. Dictate "um so the the
+      meeting is at noon": it goes in as said (fillers gone, wording not tidied).
+- [ ] **Grant.** Switch it on again and press Turn On Polish: the switch reads on, and the line
+      under it says "On, with Apple's on-device model. Your words stay on this Mac." Dictate the
+      same sentence: the fillers go and it is tidied.
+- [ ] Quit and start again on the same library: polish is still on (the core kept the consent).
+- [ ] Off, then on again: the dialog asks again (turning it off withdrew the consent).
+- [ ] VoiceOver (Command-F5) on Settings > AI: the switch reads "Polish my words", its state and
+      the line under it; in the dialog the message is read, then "Cancel, and leave polish off"
+      and "Turn on polish with Apple's on-device model".
+- [ ] First-run sheet (a fresh library): the Polish step's switch is off, and switching it on
+      shows the same dialog; Cancel leaves it off.
+- [ ] **A cloud model.** 1.0 registers only Apple's on-device model, so this needs the debug
+      build's stand-in (it sends nothing anywhere; it answers with your own words). On the library
+      where polish is on (from Grant):
+
+          mac/scripts/build-mac.sh --debug
+          INK_DATA_DIR=<that library> INK_DEBUG_CLOUD_MODEL="Example Cloud" \
+            mac/build/Inkwell.app/Contents/MacOS/Inkwell
+
+      Settings > AI: the switch reads off, and the line says "Paused: polish would now send your
+      words to Example Cloud. Turn it on again to allow it." Dictate: the text goes in as said and
+      the Drop says "Not polished / Polish needs your OK again in Settings". Switch it on: the
+      dialog now says your words leave this Mac and go to Example Cloud, with a "Send to Example
+      Cloud" button. Cancel: still paused. (Allowing it turns polish on, and local-only mode, on by
+      default, then refuses the stand-in: the take goes in as said.)
+- [ ] **A 0.2 import with polish on.** Import a 0.2 library whose Settings had AI polish on (and a
+      mode with polish): after the import, Settings > AI reads off and nothing is polished until
+      you switch it on and agree in the dialog.
 - [ ] If polish is ever slow, the Drop says "Polish took too long / Typed as you said it" and the
       text goes in as said (never waits more than 10 s).
 

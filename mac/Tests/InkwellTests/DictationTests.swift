@@ -259,6 +259,8 @@ final class DictationModelTests: XCTestCase {
         // Polish that ran out of its budget: the take went in as said, and the Drop says so.
         XCTAssertEqual(note(#"{"type":"dictation.warning","kind":"polish_timed_out"}"#), DropText(title: "Polish took too long", detail: "Typed as you said it"))
         XCTAssertEqual(note(#"{"type":"dictation.warning","kind":"release_missed"}"#)?.title, "Stopped after 3 minutes")
+        // Polish on, but its model now sends somewhere the user has not agreed to.
+        XCTAssertEqual(note(#"{"type":"dictation.warning","kind":"polish_not_allowed","message":"Example Cloud"}"#)?.title, "Not polished")
         XCTAssertNil(note(#"{"type":"dictation.warning","kind":"tail_cut_short"}"#))
         // Every note is words the shell wrote: never the user's.
         let dictation = DictationModel(send: { _ in })
@@ -270,22 +272,23 @@ final class DictationModelTests: XCTestCase {
 
 @MainActor
 final class PolishSettingFailureTests: XCTestCase {
-    /// §6 carried item: a failed dictation.polish read or write gets UI, not only the log.
+    /// §6 carried item: a failed polish read or write gets UI, not only the log.
     func testAPolishSettingThatCouldNotBeReadOrSavedSaysSoAndTheToggleGoesBack() {
         let polish = PolishModel(send: { _ in })
         polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
-        polish.apply(event(#"{"type":"command.failed","command":"setting.get","id":"setting:dictation.polish","message":"the library could not be read"}"#))
+        polish.apply(event(#"{"type":"command.failed","command":"polish.get","id":"polish.get","message":"the library could not be read"}"#))
         XCTAssertEqual(polish.failure, .read)
         XCTAssertEqual(polish.status, "Couldn't read your polish setting. Open Settings again to retry.")
         XCTAssertFalse(polish.canToggle, "unknown, so not switchable")
         XCTAssertTrue(polish.isProblem)
-        polish.apply(event(#"{"type":"setting.value","key":"dictation.polish","value":"off"}"#))
+        polish.apply(event(#"{"type":"polish.state","on":true,"allowed":true,"to":"on_device","name":"SystemLanguageModel.default","allowed_to":"on_device"}"#))
         XCTAssertNil(polish.failure)
-        polish.setOn(true)
         XCTAssertTrue(polish.isOn)
+        polish.setOn(false)
+        XCTAssertFalse(polish.isOn)
         polish.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:dictation.polish","message":"the library could not be written"}"#))
         XCTAssertEqual(polish.failure, .write)
-        XCTAssertFalse(polish.isOn, "back where it was: the change was not saved")
+        XCTAssertTrue(polish.isOn, "back where it was: the change was not saved")
         XCTAssertEqual(polish.status, "Couldn't save the change, so polish stays as it was.")
         // The screens show it, so the controller does not log it as unshown.
         let screens = ScreenModels(send: { _ in })

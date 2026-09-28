@@ -42,6 +42,12 @@ enum CoreCommand: Equatable, Sendable {
     case dictationEnable(utcOffsetMinutes: Int, ref: String)
     /// Lets go of the keys and the mic: `dictation.off` with `ref`.
     case dictationDisable(ref: String)
+    /// Polish's switch, where it would send now, and the user's consent: `polish.state`.
+    case polishGet
+    /// The user agreed, in the consent step, that polish may send to `to` (for a cloud model, the
+    /// `endpoint` polish.state named): the core records it and turns polish on, or fails if the
+    /// model has moved since.
+    case polishAllow(to: PolishDestination, endpoint: String?)
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -85,6 +91,10 @@ enum CoreCommand: Equatable, Sendable {
         case .commitmentNotYet(let id): ["cmd": "commitment.not_yet", "commitment": id]
         case .dictationEnable(let offset, let ref): ["cmd": "dictation.enable", "utc_offset_minutes": offset, "id": ref]
         case .dictationDisable(let ref): ["cmd": "dictation.disable", "id": ref]
+        case .polishGet: ["cmd": "polish.get", "id": "polish.get"]
+        case .polishAllow(let to, let endpoint):
+            ["cmd": "polish.allow", "to": to.rawValue, "id": "polish.allow"]
+                .merging(endpoint.map { ["endpoint": $0] } ?? [:]) { a, _ in a }
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -118,6 +128,8 @@ enum CoreCommand: Equatable, Sendable {
         case .commitmentNotYet: "commitment.not_yet"
         case .dictationEnable: "dictation.enable"
         case .dictationDisable: "dictation.disable"
+        case .polishGet: "polish.get"
+        case .polishAllow: "polish.allow"
         }
     }
 }
@@ -126,7 +138,8 @@ enum CoreCommand: Equatable, Sendable {
 enum ShellSetting: String, Sendable {
     /// "true" once the first-run state was completed or skipped.
     case onboardingDone = "onboarding.done"
-    /// "on" or "off": the user's wish for dictation polish.
+    /// "on" or "off": the user's switch for dictation polish. Only "off" is set this way: polish
+    /// turns on through the consent step (`polishAllow`).
     case dictationPolish = "dictation.polish"
     /// "on" (the default) or "off": listen for calls and offer to record them.
     case meetingsDetect = "meetings.detect"

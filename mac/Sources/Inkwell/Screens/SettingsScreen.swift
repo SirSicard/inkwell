@@ -396,10 +396,12 @@ private struct AISection: View {
                 }
             }
             .font(Typography.body)
-            Text("Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything.")
+            Text("Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything. It sends what you dictate to a language model, so it stays off until you turn it on and agree to where that is.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .polishConsent(polish)
     }
 }
 

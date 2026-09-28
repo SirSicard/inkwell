@@ -264,6 +264,9 @@ final class ScreenModels {
                 || dictation.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
+        case "polish.get", "polish.allow":
+            // Shown under the Polish toggle.
+            true
         default:
             false
         }

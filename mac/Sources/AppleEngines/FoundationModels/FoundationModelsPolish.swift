@@ -87,7 +87,10 @@ public final class FoundationModelsPolish: InkLanguageModel {
     public let id = "apple-foundation-models"
     /// Apple's system model, used through the OS under its terms; nothing is redistributed.
     public let licence = "Apple system model"
-    public let model = "SystemLanguageModel.default"
+    public let model = FoundationModelsPolish.modelName
+    /// The model name it registers under: the core reports it back as where polish sends, and the
+    /// consent step names it "Apple's on-device model".
+    public static let modelName = "SystemLanguageModel.default"
     /// It runs on this Mac: nothing leaves it.
     public let isLocal = true
 
