@@ -485,6 +485,86 @@ fn a_style_command_changes_how_the_next_dictation_is_written() {
 }
 
 #[test]
+fn a_snippet_the_0_2_import_brought_expands_in_a_dictation() {
+    // The document the 0.2 import writes, read as dictation reads it.
+    let imported = r#"[{"id":"s1","trigger":"my sig","expansion":"Kind regards","category":"","enabled":true}]"#;
+    let snippets = ink_pipeline::snippets::SnippetStore::from_json(imported).unwrap();
+    let rig = Rig::builder()
+        .settings(move |s| s.snippets = snippets.clone())
+        .build();
+    rig.dictate_fixture("send it with my sig", 2.0, -30.0);
+    assert_eq!(
+        rig.inserted(),
+        vec!["Send it with Kind regards. ".to_owned()]
+    );
+}
+
+#[test]
+fn an_insert_text_command_types_its_text_and_saves_nothing() {
+    let rig = Rig::builder()
+        .settings(|s| {
+            s.commands.enabled = true;
+            s.commands
+                .commands
+                .push(ink_pipeline::voicecommand::VoiceCommand {
+                    id: "sig".into(),
+                    triggers: vec!["sign off".into()],
+                    action: CommandAction::InsertText {
+                        text: "Best, A. Writer".into(),
+                    },
+                    enabled: true,
+                });
+        })
+        .build();
+    rig.dictate_fixture("inkwell sign off", 2.0, -30.0);
+    assert_eq!(rig.inserted(), vec!["Best, A. Writer ".to_owned()]);
+    assert!(has(&rig.events(), |e| matches!(
+        e,
+        DictationEvent::Command(CommandAction::InsertText { .. })
+    )));
+    assert!(
+        rig.dictation_records().is_empty(),
+        "a command is not a dictation"
+    );
+}
+
+#[test]
+fn a_command_this_build_does_not_carry_out_still_types_nothing() {
+    let rig = Rig::builder()
+        .settings(|s| s.commands.enabled = true)
+        .build();
+    rig.dictate_fixture("inkwell scratch that", 2.0, -30.0);
+    assert!(rig.inserted().is_empty());
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::Command(CommandAction::Undo)));
+}
+
+/// An imported (or default) "toggle polish" voice command flips the switch, but a take is sent to
+/// the model only with the user's consent: without it, nothing goes out.
+#[test]
+fn an_imported_toggle_polish_command_sends_nothing_without_consent() {
+    let imported = r#"{"enabled":true,"wake_prefix":"inkwell","commands":[
+        {"id":"p","triggers":["toggle polish"],"action":{"type":"toggle_polish"},"enabled":true}]}"#;
+    let commands = ink_pipeline::voicecommand::VoiceCommandStore::from_json(imported).unwrap();
+    let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Polished text."));
+    let rig = Rig::builder()
+        .settings(move |s| {
+            s.commands = commands.clone();
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_wish = false;
+            s.polish_consent = None;
+        })
+        .llm(llm.clone())
+        .build();
+    rig.dictate_fixture("inkwell toggle polish", 2.0, -30.0);
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::Command(CommandAction::TogglePolish)));
+    rig.dictate_fixture("raw text", 2.0, -30.0);
+    assert_eq!(rig.inserted(), vec!["Raw text. ".to_owned()]);
+    assert_eq!(llm.calls(), 0, "nothing sent without consent");
+}
+
+#[test]
 fn polish_uses_the_model_and_a_failure_keeps_the_local_text() {
     let polishing = |s: &mut ink_pipeline::chain::DictationSettings| {
         s.modes.modes[0].polish_enabled = true;

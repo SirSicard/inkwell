@@ -12,8 +12,8 @@
 //!   --no-keychain    do not ask the keychain which providers have a key
 //! ```
 //!
-//! It prints counts, file names, sizes and sha256 digests: never a transcript, a setting's value
-//! or a key. The keychain is asked through ink-llm's existence check, which reads an item's
+//! It prints counts, file names, sizes and sha256 digests: never a transcript or a key, and of the
+//! settings only the dictation hotkey, with what the import makes of it. The keychain is asked through ink-llm's existence check, which reads an item's
 //! attributes and never its secret. Exit status 0 means every count matched and every source file
 //! is byte-identical afterwards.
 
@@ -27,8 +27,9 @@ use ink_llm::provider::configured_providers;
 use ink_llm::{KeyStore, OsKeyStore};
 use ink_store::SqliteStore;
 use ink_store::import::{
-    APP_STYLES_KEY, Counts, DICTIONARY_KEY, Inkwell02, KeyProbe, KeyProbeError, MARKER_KEY,
-    MODES_KEY, NoKeychain, SETTINGS_PREFIX, SNIPPETS_KEY, VOICE_COMMANDS_KEY,
+    APP_STYLES_KEY, Counts, DICTATION_KEY_SETTING, DICTIONARY_KEY, Inkwell02, KeyImport, KeyProbe,
+    KeyProbeError, MARKER_KEY, MODES_KEY, NoKeychain, SETTINGS_PREFIX, SNIPPETS_KEY, Unmappable,
+    VOICE_COMMANDS_KEY,
 };
 use sha2::{Digest, Sha256};
 
@@ -165,6 +166,8 @@ fn run() -> Result<bool, String> {
         report.keys_unchecked
     );
 
+    print_key(source.key());
+
     let mut pass = true;
     if !args.dry_run {
         let store = SqliteStore::open(&args.store).map_err(|e| e.to_string())?;
@@ -189,6 +192,13 @@ fn run() -> Result<bool, String> {
             let mark = if ok { "ok" } else { "MISMATCH" };
             println!("  {kind:<20} {source_n:>7} {written_n:>7} {store_n:>7}  {mark}");
         }
+        let key = store
+            .setting(DICTATION_KEY_SETTING)
+            .map_err(|e| e.to_string())?;
+        println!(
+            "  dictation key in the new store: {}",
+            key.as_deref().unwrap_or("not set (1.0's default, fn)")
+        );
     }
 
     println!("\nSource files after (sha256):");
@@ -209,6 +219,40 @@ fn run() -> Result<bool, String> {
         if identical { "yes" } else { "NO" }
     );
     Ok(pass)
+}
+
+/// What becomes of 0.2's dictation hotkey. An unmappable key is said here and, once, in
+/// Settings > Voice: never dropped silently.
+fn print_key(key: Option<&KeyImport>) {
+    let Some(key) = key else {
+        println!("\nDictation key: no settings.json, so 1.0 keeps its default (fn).");
+        return;
+    };
+    match key.outcome {
+        Ok(token) => println!(
+            "\nDictation key: 0.2's `{}` becomes 1.0's `{token}` (a key already chosen in 1.0 is \
+             kept).",
+            key.hotkey
+        ),
+        Err(why) => {
+            let what = match why {
+                Unmappable::Combination => "a key combination",
+                Unmappable::OtherKey => "not a modifier key held on its own",
+            };
+            println!(
+                "\nDictation key: NOT carried over. 0.2's `{}` is {what}; 1.0 listens for one \
+                 modifier held on its own (fn, right Option, right Command, right Control or right \
+                 Shift), so it keeps its default (fn). Settings > Voice says so once.",
+                key.hotkey
+            );
+        }
+    }
+    if key.was_toggle {
+        println!(
+            "  0.2 started and stopped on separate presses; 1.0 is hold to talk (Settings > Voice \
+             says so once)."
+        );
+    }
 }
 
 /// Counts every kind in the store without the importer: the records, the documents' items, the

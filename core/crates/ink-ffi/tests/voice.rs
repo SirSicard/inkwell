@@ -35,6 +35,9 @@ struct VoiceRig {
     edit: Arc<MockPlatform>,
     loader: Arc<MockLoader>,
     bands: BandsReader,
+    /// The library, when it is the SQLite store ([`build`](Self::build)): what an import writes
+    /// before dictation reads it.
+    sqlite: Option<Arc<ink_store::SqliteStore>>,
     _dir: TempDir,
 }
 
@@ -44,11 +47,15 @@ impl VoiceRig {
     }
 
     fn build(label: &str, with_platform: bool) -> Self {
-        Self::build_with(
-            label,
-            with_platform,
-            Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
-        )
+        let sqlite = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+        let mut rig = Self::build_with(label, with_platform, sqlite.clone());
+        rig.sqlite = Some(sqlite);
+        rig
+    }
+
+    /// The SQLite library (rigs made by [`build`](Self::build)).
+    fn sqlite(&self) -> &ink_store::SqliteStore {
+        self.sqlite.as_deref().expect("a rig on the SQLite store")
     }
 
     /// A rig whose core keeps its settings in `store` (a failing one, say).
@@ -101,6 +108,7 @@ impl VoiceRig {
             edit,
             loader,
             bands,
+            sqlite: None,
             _dir: dir,
         }
     }
@@ -1326,5 +1334,134 @@ fn an_edit_model_that_moves_to_the_cloud_gets_nothing() {
     assert_eq!(outcome["message"], "remote");
     assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
     assert!(rig.platform.inserted().is_empty());
+}
+// ---------------------------------------------------------------------------------------------
+// Inkwell 0.2's snippets, voice commands and hotkey, imported and then used
+// ---------------------------------------------------------------------------------------------
+
+/// Imports a synthetic 0.2 folder holding these files into the rig's store, as the import check
+/// binary does.
+fn import_0_2(rig: &VoiceRig, files: &[(&str, &str)]) {
+    let dir = TempDir::new("legacy-0.2");
+    for (name, text) in files {
+        std::fs::write(dir.path().join(name), text).unwrap();
+    }
+    let source =
+        ink_store::import::Inkwell02::read(dir.path(), &ink_store::import::NoKeychain).unwrap();
+    rig.sqlite().import_inkwell02(&source).unwrap();
+}
+
+const SNIPPETS_0_2: &str =
+    r#"{"snippets":[{"id":"s1","trigger":"hello","expansion":"Greetings"}]}"#;
+
+#[test]
+fn an_imported_modifier_hotkey_is_the_key_held_and_imported_snippets_expand() {
+    let rig = VoiceRig::new("import-used");
+    import_0_2(
+        &rig,
+        &[
+            (
+                "settings.json",
+                r#"{"hotkey":"right_opt","recording_mode":"ptt","polish_enabled":true}"#,
+            ),
+            ("snippets.json", SNIPPETS_0_2),
+        ],
+    );
+    let ready = rig.enable();
+    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert!(ready.get("settings_error").is_none(), "{ready}");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_option")
+    );
+    // The mock engine hears "hello world"; the imported snippet expands "hello".
+    let inserted = rig.dictate(1.2, 1);
+    assert_eq!(inserted["text"], "Greetings world.");
+    // Nothing turned polish on: the import's polish_enabled stays under the import's prefix.
+    assert_eq!(
+        ink_core::Store::setting(rig.sqlite(), "dictation.polish").unwrap(),
+        None
+    );
+    // Nothing to say about a key that carried over.
+    let notes = rig.ask(r#"{"cmd":"import.notes","id":"n"}"#, "n");
+    assert!(notes.get("key").is_none(), "{notes}");
+    rig.events.assert_valid();
+}
+
+#[test]
+fn an_unmappable_hotkey_keeps_the_default_and_settings_says_so_once() {
+    let rig = VoiceRig::new("import-unmapped");
+    import_0_2(
+        &rig,
+        &[(
+            "settings.json",
+            r#"{"hotkey":"super+shift+space","recording_mode":"toggle"}"#,
+        )],
+    );
+    assert_eq!(rig.enable()["key"], "fn");
+    let notes = rig.ask(r#"{"cmd":"import.notes","id":"n1"}"#, "n1");
+    assert_eq!(notes["key"]["hotkey"], "super+shift+space");
+    assert_eq!(notes["key"]["outcome"], "combination");
+    assert_eq!(notes["key"]["toggle"], true);
+    rig.command(r#"{"cmd":"setting.set","key":"import.key_note","value":"dismissed"}"#);
+    let set = rig.events.wait_type("setting.value", WAIT);
+    assert_eq!(set["value"], "dismissed");
+    let again = rig.ask(r#"{"cmd":"import.notes","id":"n2"}"#, "n2");
+    assert!(again.get("key").is_none(), "said once: {again}");
+    rig.events.assert_valid();
+}
+
+#[test]
+fn an_imported_voice_command_is_carried_out() {
+    let rig = VoiceRig::new("import-command");
+    import_0_2(
+        &rig,
+        &[(
+            "voice-commands.json",
+            r#"{"enabled":true,"wake_prefix":"hello","commands":[
+                {"id":"c1","triggers":["world"],"action":{"type":"insert_text","text":"Typed by voice"},"enabled":true}]}"#,
+        )],
+    );
+    rig.enable();
+    // "hello world" is now the wake word and a trigger.
+    assert!(rig.platform.press());
+    rig.feed(&VoiceRig::speech(1.2, 1));
+    assert!(rig.platform.release());
+    rig.silence(0.6);
+    let command = rig.events.wait_type("dictation.command", WAIT);
+    assert_eq!(command["action"], "insert_text");
+    assert_eq!(command["carried_out"], true);
+    assert_eq!(rig.platform.inserted(), ["Typed by voice "]);
+    assert_eq!(rig.events.count("dictation.inserted"), 0, "not a dictation");
+    let listed = rig.ask(r#"{"cmd":"voice_commands.list","id":"l"}"#, "l");
+    assert_eq!(listed["from_import"], true);
+    assert_eq!(listed["commands"][0]["value"], "Typed by voice");
+    rig.events.assert_valid();
+}
+
+#[test]
+fn a_snippet_saved_in_settings_reaches_a_running_dictation_at_once() {
+    let rig = VoiceRig::new("snippet-saved");
+    import_0_2(&rig, &[("snippets.json", SNIPPETS_0_2)]);
+    rig.enable();
+    let listed = rig.ask(r#"{"cmd":"snippets.list","id":"l"}"#, "l");
+    assert_eq!(listed["from_import"], true);
+    let saved = rig.ask(
+        r#"{"cmd":"snippets.save","id":"s","snippets":[
+            {"id":"s1","trigger":"hello","expansion":"Hi there","category":"","enabled":true}]}"#,
+        "s",
+    );
+    assert_eq!(saved["type"], "snippets.listed");
+    assert_eq!(saved["from_import"], false);
+    // The save rebinds nothing and hands the running chain its new list.
+    rig.events.wait_count("dictation.ready", 2, WAIT);
+    assert_eq!(rig.dictate(1.2, 1)["text"], "Hi there world.");
+    // A save that cannot be read is refused before it is queued, and changes nothing.
+    let refused = rig.core().command(
+        r#"{"cmd":"snippets.save","id":"bad","snippets":[{"id":"x","trigger":"a","expansion":"y"},{"id":"x","trigger":"b","expansion":"z"}]}"#,
+    );
+    assert!(refused.is_err());
+    let listed = rig.ask(r#"{"cmd":"snippets.list","id":"l2"}"#, "l2");
+    assert_eq!(listed["snippets"][0]["expansion"], "Hi there");
     rig.events.assert_valid();
 }

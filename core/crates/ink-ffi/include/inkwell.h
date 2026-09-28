@@ -215,7 +215,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       summaries or Ask, and the call fails saying so) and "retention.days"
  *       (forever|7|30|90|365: meetings and dictations older than that are deleted, never
  *       imports; at launch, after each meeting and when it changes, on the core's own thread;
- *       "library.swept" says how many). A change to the keys or to dictation.polish reaches a
+ *       "library.swept" says how many), "import.key_note" (dismissed: import.notes stops
+ *       saying what became of 0.2's hotkey). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
  *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
@@ -247,6 +248,26 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
+ *   {"cmd":"snippets.list","id":"<ref>"}
+ *   {"cmd":"snippets.save","snippets":[{"id":"...","trigger":"...","expansion":"...",
+ *    "category":"...","enabled":true}],"id":"<ref>"}
+ *       "snippets.listed": the snippets dictation expands, in order ("from_import" while they are
+ *       still the Inkwell 0.2 import's). A save replaces the whole list and reaches a running
+ *       dictation at once. Ids must be present and unique. A save over a stored list the core
+ *       cannot read is refused (command.failed) unless it says "replace_unreadable":true: the
+ *       user chose to start over. At most 2000 items; an id, trigger, category or wake word at
+ *       most 256 characters, an expansion or a command's value at most 16384.
+ *   {"cmd":"voice_commands.list","id":"<ref>"}
+ *   {"cmd":"voice_commands.save","enabled":false,"wake_prefix":"inkwell","commands":[{"id":"...",
+ *    "triggers":["..."],"action":"insert_text","value":"...","enabled":true}],"id":"<ref>"}
+ *       "voice_commands.listed": the switch, the wake word and the commands, each with
+ *       "carried_out" (the core does change_style, toggle_polish and insert_text; the rest are
+ *       recognised but not done in this build). A save replaces them all, at once, and takes
+ *       "replace_unreadable" as snippets.save does.
+ *   {"cmd":"import.notes","id":"<ref>"}
+ *       "import.notes": what became of Inkwell 0.2's dictation hotkey ("key"), while there is
+ *       something to say and until setting.set import.key_note dismissed.
+ *       These five answer with the command's "id" as "ref"; a failure is "command.failed".
  *   {"cmd":"records.list","kind":"meeting","limit":50,"before":{"started_at_unix_ms":0,"id":"..."}}
  *       "library.records": records newest first (by start time, then id). All fields optional:
  *       "kind" is meeting, dictation or file_import; "limit" 1-500 (default 50); "before" is the

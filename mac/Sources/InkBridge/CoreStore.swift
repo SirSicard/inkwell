@@ -159,6 +159,8 @@ public final class CoreStore {
             case detectionUnavailable
             /// The retention setting deleted records (a count).
             case librarySwept(deleted: Int64, failed: Int64)
+            /// A voice command was heard that this build recognises but does not carry out.
+            case voiceCommandNotCarriedOut(CommandAction)
             /// An event this shell cannot read: the core and the shell come from different builds.
             case mismatchedBuild(type: String)
         }
@@ -298,10 +300,14 @@ public final class CoreStore {
             endDictation()
             lastDictation = .failed(failed.stage)
             notice(.dictationFailed(failed.stage), failed.message)
-        case .dictationCommand:
+        case .dictationCommand(let command):
             // A voice command ends its take like any other outcome (the Drop would otherwise
             // stay on "Transcribing").
             endDictation()
+            // Heard, and nothing typed: never silently.
+            if command.carriedOut == false {
+                notice(.voiceCommandNotCarriedOut(command.action))
+            }
         case .dictationEdited, .dictationEditFailed, .dictationMicFailed:
             // The Drop says how an edit or a failed mic went (DictationModel).
             endDictation()

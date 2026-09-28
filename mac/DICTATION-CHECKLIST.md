@@ -114,6 +114,20 @@ key without consent, a model that moves to the cloud, a store that refuses the w
 - [ ] If polish is ever slow, the Drop says "Polish took too long / Typed as you said it" and the
       text goes in as said (never waits more than 10 s).
 
+## 3b. Snippets and voice commands
+
+- [ ] Settings > Snippets: add `my sig` → `Kind regards`. In TextEdit, dictate "send it with my
+      sig": "Send it with Kind regards." goes in. Switch the snippet off and dictate it again: the
+      words go in as said.
+- [ ] Settings > Voice commands: turn them on and add `sign off` → Type text `Best, A. Writer`.
+      Dictate "inkwell, sign off": exactly "Best, A. Writer " goes in, and nothing appears in the
+      Library for it (a command is not a dictation).
+- [ ] Dictate "inkwell, scratch that" (an undo, which this version does not do): nothing is typed,
+      the Drop ends, and Today shows "Inkwell heard a voice command it can't do yet".
+- [ ] Dictate "inkwell, casual mode", then an ordinary sentence: it is written casually (no final
+      full stop) until the app restarts.
+- [ ] Turn voice commands off again: "inkwell, sign off" goes in as the words said.
+
 ## 4. Voice edit
 
 - [ ] **Cancel.** Settings > Voice > Edit a selection: **Right Command**. A dialog "Turn on voice

@@ -68,6 +68,8 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
         crate::retention::RETENTION_KEY,
         crate::retention::RETENTION_VALUES,
     ),
+    // The 0.2 import's note about the dictation key has been read (crate::phrases): said once.
+    (crate::phrases::KEY_NOTE_SETTING, &["dismissed"]),
 ];
 
 /// The most commitments `commitments.list` returns when the command names no limit.
@@ -150,6 +152,8 @@ pub enum Query {
     ConsentAllow(crate::consent::Allow),
     /// The library's records, a search, one record, or counts ([`library`](crate::library)).
     Library(crate::library::LibraryQuery),
+    /// Snippets, voice commands and the import's key note ([`phrases`](crate::phrases)).
+    Phrases(crate::phrases::PhrasesQuery),
 }
 
 /// A query with the command's name and id, for its events.
@@ -208,6 +212,9 @@ pub fn read(json: &str) -> Result<Option<Read>, String> {
 pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     if let Some(query) = crate::library::parse(name, v) {
         return Some(query.map(Query::Library));
+    }
+    if let Some(query) = crate::phrases::parse(name, v) {
+        return Some(query.map(Query::Phrases));
     }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
@@ -631,6 +638,19 @@ impl Ctx<'_> {
             Query::Library(query) => {
                 match crate::library::answer(self.shared, query, id.as_deref()) {
                     Ok(e) => emit(e),
+                    Err(e) => fail(e),
+                }
+            }
+            Query::Phrases(query) => {
+                let saves = query.saves();
+                match crate::phrases::answer(store, query, id.as_deref()) {
+                    Ok(e) => {
+                        emit(e);
+                        // A running dictation takes the new list at once.
+                        if saves {
+                            crate::voice::settings_changed(self.shared);
+                        }
+                    }
                     Err(e) => fail(e),
                 }
             }

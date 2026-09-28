@@ -27,7 +27,7 @@
 //! | `dictionary.json` | setting [`DICTIONARY_KEY`]: a JSON array of `{find, replace}` |
 //! | `snippets.json` | setting [`SNIPPETS_KEY`]: a JSON array of `{id, trigger, expansion, category, enabled}` |
 //! | `modes.json` | setting [`MODES_KEY`]: `{default_id, modes: [{id, name, style, model, polish_prompt, polish_enabled, apps, remove_fillers}]}` |
-//! | `settings.json` | one setting per field under [`SETTINGS_PREFIX`], holding the field's JSON value |
+//! | `settings.json` | one setting per field under [`SETTINGS_PREFIX`], holding the field's JSON value; its `hotkey` also sets 1.0's dictation key when 1.0 can hold it ([`KeyImport`]) |
 //! | `voice-commands.json` | setting [`VOICE_COMMANDS_KEY`]: `{enabled, wake_prefix, commands: [{id, triggers, action: {type, ...}, enabled}]}` |
 //! | `app-styles.json` | setting [`APP_STYLES_KEY`]: `{enabled, rules: [{process_name, style}]}` |
 //! | API keys in the keychain | nothing copied: see below |
@@ -36,7 +36,17 @@
 //! read them unchanged. They sit under an `import.inkwell-0.2` prefix rather than in 1.0's own keys:
 //! 1.0's settings do not exist yet, a value written under a guessed name would be read with a
 //! guessed meaning, and the prefix never collides with a setting the user already has. The screens
-//! that own each setting adopt these values.
+//! that own each setting adopt these values: dictation reads the imported dictionary, snippets,
+//! modes and voice commands until the user saves 1.0's own.
+//!
+//! **The dictation hotkey** is the one value written under a 1.0 name, because 1.0's
+//! ([`DICTATION_KEY_SETTING`]) exists and means the same thing. 1.0 listens for one modifier held
+//! on its own, hold to talk. 0.2's modifier-only keys (`fn`, `right_cmd`, `right_opt`,
+//! `right_ctrl`) map to it; a key combination such as 0.2's default `super+shift+space`, or any
+//! other key, cannot, and the default key stays. Either way the outcome is recorded under
+//! [`KEY_NOTE_KEY`], so Settings can say once what became of the old key (never silently), and a
+//! dictation key the user already chose in 1.0 is never replaced. 0.2's voice-edit key is not
+//! carried over: 1.0's is off until the user picks one.
 //!
 //! **Not carried over**, and left untouched in the source: a transcript's raw (pre-cleanup) text,
 //! its style and its model name, which the 1.0 schema has no place for;
@@ -139,6 +149,102 @@ pub const VOICE_COMMANDS_KEY: &str = "import.inkwell-0.2.voice-commands";
 /// The imported per-app style rules (0.2 folded them into modes on first launch of a build with
 /// modes, but kept the file): `{enabled, rules: [{process_name, style}]}`.
 pub const APP_STYLES_KEY: &str = "import.inkwell-0.2.app-styles";
+
+/// 1.0's setting holding the dictation key (ink-ffi's `dictation.key`): one of the tokens
+/// [`map_hotkey`] returns.
+pub const DICTATION_KEY_SETTING: &str = "dictation.key";
+
+/// What became of 0.2's dictation hotkey: `{"hotkey", "key", "outcome", "applied", "toggle"}`
+/// ([`KeyImport::note`]). Written whenever `settings.json` was imported.
+pub const KEY_NOTE_KEY: &str = "import.inkwell-0.2.key-note";
+
+/// 0.2's macOS default dictation hotkey, in force when `settings.json` names none (`settings.rs`).
+pub const DEFAULT_HOTKEY_0_2: &str = "super+shift+space";
+
+/// Why a 0.2 hotkey has no 1.0 equivalent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unmappable {
+    /// A key with modifiers (`super+shift+space`): 1.0 holds one key on its own.
+    Combination,
+    /// A single ordinary key, a blank, or a name 0.2 never wrote: not a modifier 1.0 listens for.
+    OtherKey,
+}
+
+impl Unmappable {
+    /// The name the key note records.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Combination => "combination",
+            Self::OtherKey => "other_key",
+        }
+    }
+}
+
+/// 0.2's `hotkey` setting as 1.0's dictation key token, when 1.0 can hold it.
+///
+/// 0.2 had two kinds of hotkey (`modkey.rs`): a modifier held on its own, written as a token, and
+/// a key combination parsed by its global-shortcut plugin. Only the first kind exists in 1.0.
+pub fn map_hotkey(hotkey: &str) -> Result<&'static str, Unmappable> {
+    match hotkey.trim() {
+        "fn" => Ok("fn"),
+        "right_cmd" => Ok("right_command"),
+        "right_opt" => Ok("right_option"),
+        "right_ctrl" => Ok("right_control"),
+        other if other.contains('+') => Err(Unmappable::Combination),
+        _ => Err(Unmappable::OtherKey),
+    }
+}
+
+/// What the import does with 0.2's dictation hotkey.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyImport {
+    /// 0.2's hotkey, as `settings.json` held it, or [`DEFAULT_HOTKEY_0_2`] when it held none.
+    pub hotkey: String,
+    /// The 1.0 key it becomes, or why it cannot.
+    pub outcome: Result<&'static str, Unmappable>,
+    /// 0.2 was set to start and stop a take with separate presses (`recording_mode` `toggle`);
+    /// 1.0 is hold to talk only.
+    pub was_toggle: bool,
+}
+
+impl KeyImport {
+    fn from_settings(settings: &[(&'static str, String)]) -> Self {
+        let text = |field: &str| {
+            settings
+                .iter()
+                .find(|(f, _)| *f == field)
+                .and_then(|(_, json)| serde_json::from_str::<String>(json).ok())
+        };
+        let hotkey = text("hotkey").unwrap_or_else(|| DEFAULT_HOTKEY_0_2.to_owned());
+        Self {
+            outcome: map_hotkey(&hotkey),
+            was_toggle: text("recording_mode").as_deref() == Some("toggle"),
+            hotkey,
+        }
+    }
+
+    /// Whether Settings should say something about it: the key did not carry over, or it did but
+    /// no longer starts and stops on separate presses.
+    pub fn needs_note(&self) -> bool {
+        self.outcome.is_err() || self.was_toggle
+    }
+
+    /// The document under [`KEY_NOTE_KEY`]. `applied` says whether the import set 1.0's key (it
+    /// does not replace one the user already chose).
+    pub fn note(&self, applied: bool) -> String {
+        json!({
+            "hotkey": self.hotkey,
+            "key": self.outcome.ok(),
+            "outcome": match self.outcome {
+                Ok(_) => "mapped",
+                Err(why) => why.name(),
+            },
+            "applied": applied,
+            "toggle": self.was_toggle,
+        })
+        .to_string()
+    }
+}
 
 /// The largest JSON file the import reads: 8 MiB. 0.2's files are small documents: a settings
 /// file of about 1 KB, modes with a few polish prompts, and a dictionary or snippet list that
@@ -420,6 +526,8 @@ pub struct Inkwell02 {
     app_styles: Option<Document>,
     /// `(field, JSON value)`, in 0.2's field order.
     settings: Vec<(&'static str, String)>,
+    /// The dictation hotkey, when `settings.json` was there to say it.
+    key: Option<KeyImport>,
     linked_keys: Vec<&'static str>,
     report: SourceReport,
 }
@@ -474,7 +582,9 @@ impl Inkwell02 {
         let app_styles = read_json(dir, APP_STYLES)?
             .map(|v| app_styles_document(&v))
             .transpose()?;
+        let settings_file = std::fs::symlink_metadata(dir.join(SETTINGS)).is_ok();
         let settings = read_settings(dir, &mut report)?;
+        let key = settings_file.then(|| KeyImport::from_settings(&settings));
 
         // Asked last, so a source that fails validation never reaches the keychain.
         let mut linked_keys = Vec::new();
@@ -494,6 +604,7 @@ impl Inkwell02 {
             voice_commands,
             app_styles,
             settings,
+            key,
             linked_keys,
             report,
         })
@@ -517,6 +628,11 @@ impl Inkwell02 {
     /// What was found and is left behind.
     pub fn report(&self) -> &SourceReport {
         &self.report
+    }
+
+    /// What becomes of 0.2's dictation hotkey; `None` without a `settings.json`.
+    pub fn key(&self) -> Option<&KeyImport> {
+        self.key.as_ref()
     }
 }
 
@@ -588,6 +704,17 @@ impl SqliteStore {
             }
             for (key, value) in &documents {
                 put_setting(tx, key, value)?;
+            }
+            if let Some(key) = &source.key {
+                // A key the user already chose in 1.0 stays theirs.
+                let applied = match key.outcome {
+                    Ok(token) if get_setting(tx, DICTATION_KEY_SETTING)?.is_none() => {
+                        put_setting(tx, DICTATION_KEY_SETTING, token)?;
+                        true
+                    }
+                    _ => false,
+                };
+                put_setting(tx, KEY_NOTE_KEY, &key.note(applied))?;
             }
             put_setting(tx, MARKER_KEY, &marker)?;
             Ok(Ok(()))
@@ -1338,6 +1465,24 @@ mod tests {
             assert!(!same_file(&db, &json));
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn modifier_tokens_map_and_everything_else_does_not() {
+        for (old, new) in [
+            ("fn", "fn"),
+            ("right_cmd", "right_command"),
+            ("right_opt", "right_option"),
+            ("right_ctrl", "right_control"),
+        ] {
+            assert_eq!(map_hotkey(old), Ok(new), "{old}");
+        }
+        for combination in [DEFAULT_HOTKEY_0_2, "ctrl+space", "super+shift+e", "alt+f"] {
+            assert_eq!(map_hotkey(combination), Err(Unmappable::Combination));
+        }
+        for other in ["", "f13", "space", "right_shift", "left_cmd"] {
+            assert_eq!(map_hotkey(other), Err(Unmappable::OtherKey), "{other:?}");
+        }
     }
 
     #[test]

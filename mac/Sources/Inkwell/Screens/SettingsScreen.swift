@@ -1,5 +1,6 @@
-// Settings: permissions with their live state, the voice key, modes, AI (polish), meetings,
-// models (read-only, with measured accuracy), storage, and About with every notice the app ships.
+// Settings: permissions with their live state, the voice key, modes, snippets and voice commands
+// (PhrasesSections), AI (polish), meetings, models (read-only, with measured accuracy), storage,
+// and About with every notice the app ships.
 import AppleEngines
 import InkBridge
 import SwiftUI
@@ -8,6 +9,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case permissions
     case voice
     case modes
+    case snippets
+    case voiceCommands
     case ai
     case meetings
     case models
@@ -21,6 +24,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .permissions: "Permissions"
         case .voice: "Voice"
         case .modes: "Modes"
+        case .snippets: "Snippets"
+        case .voiceCommands: "Voice commands"
         case .ai: "AI"
         case .meetings: "Meetings"
         case .models: "Models"
@@ -51,6 +56,8 @@ struct SettingsScreen: View {
                         VoiceSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
                             .id(SettingsSection.voice)
                         ModesSection(modes: screens.modes).id(SettingsSection.modes)
+                        SnippetsSection(snippets: screens.snippets).id(SettingsSection.snippets)
+                        VoiceCommandsSection(commands: screens.voiceCommands).id(SettingsSection.voiceCommands)
                         AISection(polish: screens.polish).id(SettingsSection.ai)
                         MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
                             .id(SettingsSection.meetings)
@@ -74,6 +81,9 @@ struct SettingsScreen: View {
             screens.modes.load()
             screens.polish.load()
             screens.dictation.load()
+            screens.snippets.load()
+            screens.voiceCommands.load()
+            screens.importNote.load()
             screens.catalogue.requery()
             screens.storage.measure()
         }
@@ -82,7 +92,7 @@ struct SettingsScreen: View {
 }
 
 /// A section's heading.
-private struct SectionTitle: View {
+struct SectionTitle: View {
     let text: String
     var note: String?
 
@@ -282,6 +292,7 @@ private struct VoiceSection: View {
             }
             .font(Typography.caption)
             .fixedSize(horizontal: false, vertical: true)
+            ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
             Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)

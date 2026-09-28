@@ -16,9 +16,15 @@
 //!   word, and never expanded at all.
 
 use aho_corasick::{AhoCorasick, MatchKind};
+use serde_json::{Map, Value, json};
 
 use crate::civil::CivilTime;
-use crate::dictionary::is_whole_word;
+use crate::dictionary::{SettingsError, is_whole_word};
+
+/// The settings key the user's snippets are stored under, in the stored form of
+/// [`SnippetStore::to_json`]. Until it is set, dictation reads the snippets an Inkwell 0.2 import
+/// brought (the same form).
+pub const SETTING_KEY: &str = "dictation.snippets";
 
 /// One snippet.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +84,67 @@ impl SnippetVars {
 }
 
 impl SnippetStore {
+    /// The stored form: a JSON array of `{id, trigger, expansion, category, enabled}`, the shape
+    /// of 0.2's `snippets.json` list (and of what the 0.2 import writes), so the importer's
+    /// document reads with [`from_json`](Self::from_json) unchanged.
+    pub fn to_json(&self) -> String {
+        let items: Vec<Value> = self
+            .snippets
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id,
+                    "trigger": s.trigger,
+                    "expansion": s.expansion,
+                    "category": s.category,
+                    "enabled": s.enabled,
+                })
+            })
+            .collect();
+        Value::Array(items).to_string()
+    }
+
+    /// Parses the stored form. `category` may be absent (empty) and `enabled` too (on), as 0.2's
+    /// serde defaults had it; anything else out of shape is [`SettingsError::Malformed`], never an
+    /// empty list (the next save would then erase the user's snippets).
+    pub fn from_json(text: &str) -> Result<Self, SettingsError> {
+        let malformed = |what| SettingsError::Malformed {
+            key: SETTING_KEY,
+            what,
+        };
+        let value: Value = serde_json::from_str(text).map_err(|_| malformed("not JSON"))?;
+        let items = value.as_array().ok_or_else(|| malformed("not a list"))?;
+        let snippets = items
+            .iter()
+            .map(|item| {
+                let item = item
+                    .as_object()
+                    .ok_or_else(|| malformed("a snippet that is not an object"))?;
+                Self::snippet(item).ok_or_else(|| {
+                    malformed("a snippet without `id`, `trigger` and `expansion` strings")
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { snippets })
+    }
+
+    fn snippet(item: &Map<String, Value>) -> Option<Snippet> {
+        let text = |name: &str| item.get(name).and_then(Value::as_str).map(str::to_owned);
+        Some(Snippet {
+            id: text("id")?,
+            trigger: text("trigger")?,
+            expansion: text("expansion")?,
+            category: match item.get("category") {
+                None => String::new(),
+                Some(c) => c.as_str()?.to_owned(),
+            },
+            enabled: match item.get("enabled") {
+                None => true,
+                Some(e) => e.as_bool()?,
+            },
+        })
+    }
+
     /// `text` with every enabled trigger that stands as a whole word or phrase replaced by its
     /// expansion. Pure.
     pub fn expand(&self, text: &str, vars: &SnippetVars) -> String {
@@ -192,5 +259,41 @@ mod tests {
     fn a_character_that_grows_when_lowercased_does_not_break_matching() {
         let vars = SnippetVars::at(LATE_UTC, 0);
         assert_eq!(store("sig", "S").expand("İİİ sig", &vars), "İİİ S");
+    }
+
+    #[test]
+    fn the_stored_form_reads_back_and_takes_the_import_s_shape() {
+        let mut s = store("my sig", "Best,\nA. Writer");
+        s.snippets[0].category = "Email".into();
+        s.snippets[0].enabled = false;
+        assert_eq!(SnippetStore::from_json(&s.to_json()), Ok(s));
+        // What the 0.2 import writes, and 0.2's own list with its serde defaults left out.
+        let imported = r#"[{"id":"a","trigger":"brb","expansion":"be right back"}]"#;
+        let read = SnippetStore::from_json(imported).unwrap();
+        assert_eq!(read.snippets[0].category, "");
+        assert!(read.snippets[0].enabled);
+    }
+
+    #[test]
+    fn a_damaged_setting_is_an_error_not_an_empty_list() {
+        for bad in [
+            "",
+            "{}",
+            r#"[3]"#,
+            r#"[{"id":"a","trigger":"x"}]"#,
+            r#"[{"id":"a","trigger":"x","expansion":"y","enabled":"yes"}]"#,
+            r#"[{"id":"a","trigger":"x","expansion":"y","category":7}]"#,
+        ] {
+            assert!(
+                matches!(
+                    SnippetStore::from_json(bad),
+                    Err(SettingsError::Malformed {
+                        key: SETTING_KEY,
+                        ..
+                    })
+                ),
+                "{bad:?}"
+            );
+        }
     }
 }

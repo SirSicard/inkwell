@@ -147,6 +147,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case consentState(ConsentState)
     /// `modes.listed`
     case modesListed(ModesListed)
+    /// `snippets.listed`
+    case snippetsListed(SnippetsListed)
+    /// `voice_commands.listed`
+    case voiceCommandsListed(VoiceCommandsListed)
+    /// `import.notes`
+    case importNotes(ImportNotes)
     /// `library.records`
     case libraryRecords(LibraryRecords)
     /// `library.search`
@@ -249,6 +255,9 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
             case "modes.listed": self = .modesListed(try ModesListed(from: decoder))
+            case "snippets.listed": self = .snippetsListed(try SnippetsListed(from: decoder))
+            case "voice_commands.listed": self = .voiceCommandsListed(try VoiceCommandsListed(from: decoder))
+            case "import.notes": self = .importNotes(try ImportNotes(from: decoder))
             case "library.records": self = .libraryRecords(try LibraryRecords(from: decoder))
             case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
             case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
@@ -332,6 +341,9 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .settingValue(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
         case .modesListed(let event): try event.encode(to: encoder)
+        case .snippetsListed(let event): try event.encode(to: encoder)
+        case .voiceCommandsListed(let event): try event.encode(to: encoder)
+        case .importNotes(let event): try event.encode(to: encoder)
         case .libraryRecords(let event): try event.encode(to: encoder)
         case .librarySearch(let event): try event.encode(to: encoder)
         case .libraryRecord(let event): try event.encode(to: encoder)
@@ -477,8 +489,8 @@ public struct ChannelPass: Codable, Sendable, Equatable {
     }
 }
 
-/// A voice command. change_style and toggle_polish are already applied by the core; the rest
-/// are the shell's to carry out.
+/// A voice command. The core carries out change_style, toggle_polish and insert_text itself;
+/// the others are recognised and not carried out in this build.
 public enum CommandAction: String, Codable, Sendable, Equatable, CaseIterable {
     case undo
     case changeStyle = "change_style"
@@ -628,12 +640,24 @@ public struct CoreStopped: Codable, Sendable, Equatable {
 public struct DictationCommand: Codable, Sendable, Equatable {
     /// Which.
     public let action: CommandAction
+    /// Whether the core carried it out (change_style, toggle_polish and insert_text); the rest
+    /// are recognised, so their words are not typed, but this build does not do them yet: say
+    /// so. Absent from a core before 1.0.
+    public let carriedOut: Bool?
     /// How much confirmation it needs.
     public let risk: Risk
     /// Always `dictation.command`.
     public let type: String
     /// Its argument: a style, a model id, a URL, an app path, or fixed text.
     public let value: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case carriedOut = "carried_out"
+        case risk
+        case type
+        case value
+    }
 }
 
 /// The take ended without an insertion.
@@ -1061,6 +1085,40 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
 public enum FarEnd: String, Codable, Sendable, Equatable, CaseIterable {
     case app
     case everything
+}
+
+/// 0.2's dictation hotkey, and what the import made of it.
+public struct ImportKeyNote: Codable, Sendable, Equatable {
+    /// The import set it as the dictation key (a key already chosen in 1.0 is kept).
+    public let applied: Bool
+    /// 0.2's hotkey as it stored it: a modifier token (fn, right_cmd, ...) or a combination
+    /// such as super+shift+space.
+    public let hotkey: String
+    /// The 1.0 dictation key it became, when it did.
+    public let key: String?
+    /// Whether it carried over.
+    public let outcome: ImportKeyOutcome
+    /// 0.2 started and stopped on separate presses; 1.0 is hold to talk.
+    public let toggle: Bool
+}
+
+/// What became of 0.2's dictation hotkey: mapped to a 1.0 key, or not, because it is a
+/// combination or another key 1.0 cannot hold on its own.
+public enum ImportKeyOutcome: String, Codable, Sendable, Equatable, CaseIterable {
+    case mapped
+    case combination
+    case otherKey = "other_key"
+}
+
+/// What the Inkwell 0.2 import has to tell the user once, in answer to import.notes.
+public struct ImportNotes: Codable, Sendable, Equatable {
+    /// What became of 0.2's dictation hotkey; absent when there is nothing to say or the user
+    /// dismissed it.
+    public let key: ImportKeyNote?
+    /// The command's id.
+    public let ref: String?
+    /// Always `import.notes`.
+    public let type: String
 }
 
 /// How a dictation went in. blocked: Secure Input or an elevated target refused synthetic
@@ -2299,6 +2357,40 @@ public enum SideState: String, Codable, Sendable, Equatable, CaseIterable {
     case zeros
 }
 
+/// A snippet: a spoken trigger that dictation replaces with its expansion.
+public struct SnippetInfo: Codable, Sendable, Equatable {
+    /// A grouping, possibly empty.
+    public let category: String
+    /// Whether it expands.
+    public let enabled: Bool
+    /// What it becomes; {date}, {time} and {clipboard} are filled in.
+    public let expansion: String
+    /// Its id.
+    public let id: String
+    /// What the user says, matched as whole words in any case.
+    public let trigger: String
+}
+
+/// The user's snippets, in answer to snippets.list or snippets.save. Carries the user's words:
+/// never log it.
+public struct SnippetsListed: Codable, Sendable, Equatable {
+    /// They are the ones the Inkwell 0.2 import brought, not yet saved in 1.0.
+    public let fromImport: Bool
+    /// The command's id.
+    public let ref: String?
+    /// The snippets, in the user's order.
+    public let snippets: [SnippetInfo]
+    /// Always `snippets.listed`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case fromImport = "from_import"
+        case ref
+        case snippets
+        case type
+    }
+}
+
 /// A stretch of a record: where something was said.
 public struct Span: Codable, Sendable, Equatable {
     /// Which side said it.
@@ -2346,4 +2438,55 @@ public enum VadUnavailable: String, Codable, Sendable, Equatable, CaseIterable {
     case loadFailed = "load_failed"
     case failed
     case other
+}
+
+/// A voice command and the phrases that trigger it.
+public struct VoiceCommandInfo: Codable, Sendable, Equatable {
+    /// What it does.
+    public let action: CommandAction
+    /// Whether this build carries the action out.
+    public let carriedOut: Bool
+    /// Whether it can match.
+    public let enabled: Bool
+    /// Its id.
+    public let id: String
+    /// The phrases, any of which triggers it after the wake word.
+    public let triggers: [String]
+    /// Its argument: a style, a model id, a URL, an app path, or fixed text.
+    public let value: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case carriedOut = "carried_out"
+        case enabled
+        case id
+        case triggers
+        case value
+    }
+}
+
+/// The voice commands, in answer to voice_commands.list or voice_commands.save. Carries the
+/// user's words: never log it.
+public struct VoiceCommandsListed: Codable, Sendable, Equatable {
+    /// The commands, in order of precedence.
+    public let commands: [VoiceCommandInfo]
+    /// Whether any dictation can be a command.
+    public let enabled: Bool
+    /// They are the ones the Inkwell 0.2 import brought, not yet saved in 1.0.
+    public let fromImport: Bool
+    /// The command's id.
+    public let ref: String?
+    /// Always `voice_commands.listed`.
+    public let type: String
+    /// The word a command starts with.
+    public let wakePrefix: String
+
+    private enum CodingKeys: String, CodingKey {
+        case commands
+        case enabled
+        case fromImport = "from_import"
+        case ref
+        case type
+        case wakePrefix = "wake_prefix"
+    }
 }
