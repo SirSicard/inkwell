@@ -92,6 +92,9 @@ final class SnippetsModel {
     static let loadFailedText = "Couldn\u{2019}t read your snippets."
     static let saveFailedText = "Couldn\u{2019}t save that change. The list shows what is saved."
     static let refPrefix = "snippets:"
+    /// How the core's refusal to save over an unreadable list begins (`REFUSED_SNIPPETS` in
+    /// core/crates/ink-ffi/src/phrases.rs, whose tests hold it to this prefix).
+    static let refusedUnreadable = "the stored snippets cannot be read"
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var nextRef = 0
@@ -170,7 +173,16 @@ final class SnippetsModel {
             unreadable = true
             failure = Self.loadFailedText
         case .commandFailed(let failed) where failed.command == "snippets.save":
-            failure = Self.saveFailedText
+            if failed.message.hasPrefix(Self.refusedUnreadable) {
+                // The stored list became unreadable after it was read: say so, and offer Start
+                // over, at once (the read below fails the same way).
+                rows = []
+                loaded = false
+                unreadable = true
+                failure = Self.loadFailedText
+            } else {
+                failure = Self.saveFailedText
+            }
             send(.snippetsList(ref: ref()))
         default:
             break
@@ -193,6 +205,8 @@ final class VoiceCommandsModel {
     static let loadFailedText = "Couldn\u{2019}t read your voice commands."
     static let saveFailedText = "Couldn\u{2019}t save that change. The list shows what is saved."
     static let refPrefix = "voice_commands:"
+    /// As SnippetsModel.refusedUnreadable (`REFUSED_COMMANDS` in phrases.rs).
+    static let refusedUnreadable = "the stored voice commands cannot be read"
     /// The kinds a new command can be: the ones this build carries out, bar polish (which has its
     /// own switch and consent in Settings > AI).
     static let addable: [CommandAction] = [.insertText, .changeStyle]
@@ -309,7 +323,16 @@ final class VoiceCommandsModel {
             unreadable = true
             failure = Self.loadFailedText
         case .commandFailed(let failed) where failed.command == "voice_commands.save":
-            failure = Self.saveFailedText
+            if failed.message.hasPrefix(Self.refusedUnreadable) {
+                // The stored list became unreadable after it was read: say so, and offer Start
+                // over, at once (the read below fails the same way).
+                rows = []
+                loaded = false
+                unreadable = true
+                failure = Self.loadFailedText
+            } else {
+                failure = Self.saveFailedText
+            }
             send(.voiceCommandsList(ref: ref()))
         default:
             break

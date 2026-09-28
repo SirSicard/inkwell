@@ -150,6 +150,33 @@ final class SnippetsModelTests: XCTestCase {
         XCTAssertNil((try JSONSerialization.jsonObject(with: Data(CoreCommand.snippetsSave([], replaceUnreadable: false, ref: "r").json.utf8)) as? [String: Any])?["replace_unreadable"], "sent only when chosen")
     }
 
+    /// The stored list became unreadable between reading it and saving: the core refuses the save,
+    /// and Start over appears at once, not only a generic "couldn't save".
+    func testASaveRefusedOverAListThatBecameUnreadableOffersStartOver() {
+        let sent = Sent()
+        let model = SnippetsModel(send: sent.send)
+        model.load()
+        model.apply(event(importedSnippets))
+        model.delete("s1")
+        model.apply(event(#"{"type":"command.failed","command":"snippets.save","id":"snippets:2","message":"the stored snippets cannot be read, so a save would replace them; send replace_unreadable to start over"}"#))
+        XCTAssertTrue(model.unreadable)
+        XCTAssertFalse(model.loaded)
+        XCTAssertEqual(model.rows, [])
+        XCTAssertEqual(model.failure, SnippetsModel.loadFailedText)
+        guard case .snippetsList = sent.commands.last else { return XCTFail("\(sent.commands)") }
+        model.startOver()
+        guard case .snippetsSave(_, true, _) = sent.commands.last else { return XCTFail("\(sent.commands)") }
+
+        let commands = VoiceCommandsModel(send: sent.send)
+        commands.load()
+        commands.apply(event(importedCommands.replacingOccurrences(of: #""from_import":true"#, with: #""from_import":true,"ref":"voice_commands:1""#)))
+        commands.setEnabled(false)
+        commands.apply(event(#"{"type":"command.failed","command":"voice_commands.save","id":"voice_commands:2","message":"the stored voice commands cannot be read, so a save would replace them; send replace_unreadable to start over"}"#))
+        XCTAssertTrue(commands.unreadable)
+        commands.startOver()
+        guard case .voiceCommandsSave(_, _, _, true, _) = sent.commands.last else { return XCTFail("\(sent.commands)") }
+    }
+
     func testTheSaveCommandCarriesEveryField() throws {
         let json = CoreCommand.snippetsSave(
             [SnippetDraft(id: "a", trigger: "brb", expansion: "be right back", category: "", enabled: false)], replaceUnreadable: false, ref: "snippets:9"

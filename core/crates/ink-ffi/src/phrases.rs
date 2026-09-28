@@ -555,6 +555,9 @@ mod tests {
                 None,
             );
             assert_eq!(refused, Err(REFUSED_SNIPPETS.to_owned()), "{key}");
+            // The Mac shell tells this refusal apart by its start (PhrasesModel.refusedUnreadable).
+            assert!(REFUSED_SNIPPETS.starts_with("the stored snippets cannot be read"));
+            assert!(REFUSED_COMMANDS.starts_with("the stored voice commands cannot be read"));
             assert_eq!(store.setting(key).unwrap().as_deref(), Some("damaged"));
             answer(
                 &store,
