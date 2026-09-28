@@ -87,6 +87,20 @@ the real core.
 - [ ] Modes: each mode with its style and the apps it is for, each app by its name and icon. No
       bundle id (com.something.app) anywhere; an app that is not installed reads by its known name
       or "An app not on this Mac".
+- [ ] Snippets: "No snippets yet." on a fresh library. Add one (trigger `my sig`, text `Kind
+      regards`, category `Email`): it appears at once, with its category as a chip. Edit it (Edit,
+      change the text, Save), switch it off and on, delete it: each change stays after you leave
+      Settings and come back, and after a restart. Add stays greyed with a blank trigger. Text
+      that looks like a link (`https://example.com`) reads as plain text: nothing is clickable.
+- [ ] Voice commands: off on a fresh library, with the defaults listed ("scratch that · undo that
+      …"). Those Inkwell does not do yet ("Undo the last dictation", "Pause or resume dictation")
+      say "Not available in this version". Turn the switch on: the line reads "Say “inkwell”, then
+      a command". Change the wake word (Return or Save), add a command (`sign off`, Type text,
+      `Best, A. Writer`), switch one off, delete one: each stays after a restart.
+- [ ] On a library made by the 0.2 import (`core/crates/ink-store/IMPORT-CHECKLIST.md`, section
+      D): Snippets and Voice commands say "Brought over from Inkwell 0.2." until the first change.
+      Voice shows the note about 0.2's key when it did not carry over (or when 0.2 started and
+      stopped on separate presses); "Got it" removes it, and it does not come back after a restart.
 - [ ] AI: "Polish my words" is off on a fresh library and turns on only through its dialog (see
       DICTATION-CHECKLIST section 3). Once on, it reads On only while Apple Intelligence can
       polish. Turn Apple Intelligence off in System Settings, come back: the switch reads off, is

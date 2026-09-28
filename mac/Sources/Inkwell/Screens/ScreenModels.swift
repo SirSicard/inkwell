@@ -185,6 +185,9 @@ final class ScreenModels {
     let dictation: DictationModel
     /// Voice edit's consent (the key is the dictation model's).
     let editConsent: ConsentModel
+    let snippets: SnippetsModel
+    let voiceCommands: VoiceCommandsModel
+    let importNote: ImportNoteModel
 
     init(
         send: @escaping SendCommand,
@@ -207,6 +210,9 @@ final class ScreenModels {
         dictation = DictationModel(send: send)
         editConsent = ConsentModel(feature: .edit, switchSettingID: DictationModel.editKeySettingID, send: send)
         dictation.hasLanguageModel = { [polish] in polish.hasWorkingEngine }
+        snippets = SnippetsModel(send: send)
+        voiceCommands = VoiceCommandsModel(send: send)
+        importNote = ImportNoteModel(send: send)
     }
 
     /// A batch of the core's events, after the CoreStore has applied it.
@@ -225,6 +231,9 @@ final class ScreenModels {
             onboarding.apply(event)
             dictation.apply(event)
             editConsent.apply(event)
+            snippets.apply(event)
+            voiceCommands.apply(event)
+            importNote.apply(event)
         }
     }
 
@@ -287,6 +296,10 @@ final class ScreenModels {
             dictation.handles(failed)
         case "consent.get", "consent.allow":
             // Shown under the Polish toggle, or in the Voice section for voice edit.
+            true
+        // Settings > Snippets and Voice commands say so. The key note that could not be read is
+        // not shown (there is nothing to say then); it is logged.
+        case "snippets.list", "snippets.save", "voice_commands.list", "voice_commands.save":
             true
         default:
             false
