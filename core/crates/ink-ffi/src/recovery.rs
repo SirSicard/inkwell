@@ -228,6 +228,8 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
     };
     let (services, settings) = services(shared);
     let vad = crate::engines::vad_source(shared);
+    // Before the record is marked ended: retention must not take it before its pass is done.
+    let hold = shared.hold_from_sweep(record);
     let ended = EndedMeeting::interrupted(
         services,
         settings,
@@ -251,6 +253,7 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
     } else if !cancelled {
         log::warn!("meeting recovery: the record could not be marked ended; the marker stays");
     }
+    drop(hold);
     match result {
         // As after a live meeting's pass: the library changed, and the setting applies now.
         Ok(_) => shared.sweep_soon(),

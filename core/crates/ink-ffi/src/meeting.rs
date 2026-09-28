@@ -650,6 +650,9 @@ fn worker(
         if let Err(e) = crate::library::write_timeline(chunks.dir(), chain.start_ns()) {
             log::warn!("meeting: the timeline start could not be written: {e}");
         }
+        // Until the final pass has run: retention leaves it alone (the record reads as ended from
+        // chain.stop, before the pass), with or without the marker below.
+        let hold = shared.hold_from_sweep(chain.record());
         // Until the final pass has run: a launch after a crash finds it and finishes the meeting.
         let live = crate::recovery::mark_live(chunks.dir(), chain.record());
         if let Err(e) = &live {
@@ -689,6 +692,7 @@ fn worker(
         if live.is_ok() && crate::recovery::marker_goes(ended.record_ended(), cancelled) {
             crate::recovery::clear_live(chunks.dir());
         }
+        drop(hold);
         if result.is_ok() {
             // The library changed: a retention setting applies to it now, not at next launch.
             // Asked of the retention thread: a sweep here would keep this meeting "running".

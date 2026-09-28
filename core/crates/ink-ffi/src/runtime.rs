@@ -329,6 +329,9 @@ pub struct Shared {
     pub(crate) control: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<Msg>>>,
     /// The retention thread, once it has started ([`Shared::sweep_soon`]).
     pub(crate) sweeps: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<crate::retention::Ask>>>,
+    /// Records a meeting or a recovery is finishing in this process: retention never sweeps them
+    /// ([`crate::retention::Hold`]).
+    pub(crate) finishing: Mutex<std::collections::BTreeSet<ink_core::RecordId>>,
     /// Dictation, live ([`voice`](crate::voice)): the platform it may use and what runs.
     pub(crate) voice: Mutex<crate::voice::VoiceSlot>,
 }
@@ -547,6 +550,7 @@ impl Core {
             far_bands: Mutex::new(None),
             control: std::sync::OnceLock::new(),
             sweeps: std::sync::OnceLock::new(),
+            finishing: Mutex::default(),
             voice: Mutex::default(),
         });
         let runs = Arc::new(Mutex::new(Runs::default()));

@@ -464,14 +464,40 @@ pub fn speech_wav(path: &Path, seconds: f64, seed: u64) {
 pub struct FailingStore {
     pub inner: Arc<dyn ink_core::Store>,
     failing: Mutex<Vec<&'static str>>,
+    /// Run once after the named method next succeeds (see [`after`](Self::after)).
+    after: Mutex<Vec<(&'static str, Then)>>,
 }
+
+/// What [`FailingStore::after`] runs.
+type Then = Box<dyn FnOnce() + Send>;
 
 impl FailingStore {
     pub fn new(inner: Arc<dyn ink_core::Store>) -> Arc<Self> {
         Arc::new(Self {
             inner,
             failing: Mutex::default(),
+            after: Mutex::default(),
         })
+    }
+
+    /// Runs `then` right after `method` next succeeds, on the thread that called it: to put
+    /// something else exactly into the moment after a store call.
+    pub fn after(&self, method: &'static str, then: impl FnOnce() + Send + 'static) {
+        self.after.lock().unwrap().push((method, Box::new(then)));
+    }
+
+    fn succeeded(&self, method: &'static str) {
+        let due: Vec<_> = {
+            let mut after = self.after.lock().unwrap();
+            let (due, rest) = std::mem::take(&mut *after)
+                .into_iter()
+                .partition(|(m, _)| *m == method);
+            *after = rest;
+            due
+        };
+        for (_, then) in due {
+            then();
+        }
     }
 
     /// From now on, the methods named fail.
@@ -499,7 +525,11 @@ macro_rules! failing {
     ($($name:ident($($arg:ident: $ty:ty),*) -> $out:ty;)*) => {
         $(fn $name(&self, $($arg: $ty),*) -> Result<$out, ink_core::StoreError> {
             self.check(stringify!($name))?;
-            self.inner.$name($($arg),*)
+            let out = self.inner.$name($($arg),*);
+            if out.is_ok() {
+                self.succeeded(stringify!($name));
+            }
+            out
         })*
     };
 }

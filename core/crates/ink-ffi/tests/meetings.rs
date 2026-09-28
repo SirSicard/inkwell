@@ -988,6 +988,74 @@ fn a_recovered_meeting_is_followed_by_a_retention_sweep() {
     core.shutdown();
 }
 
+/// PR #86 (Windows CI): a sweep that runs after recovery has marked the meeting ended but before its
+/// pass is done (the launch's sweep, running late) leaves it alone; the recovered meeting finishes,
+/// and only the sweep after its pass takes it. Made deterministic here: the sweep runs on the
+/// recovery's own thread, right after the store marks the record ended.
+#[test]
+fn a_sweep_during_recovery_never_takes_the_meeting_being_recovered() {
+    let dir = TempDir::new("recover-sweep-first");
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let clock = clock();
+    let (record, audio) = interrupted_meeting(dir.path(), store.as_ref(), clock.as_ref(), 40);
+    store.set_setting("retention.days", "30").unwrap();
+    let (core, events) = recovery_core(dir.path(), store.clone(), clock);
+    let shared = core.shared().clone();
+    let in_the_window = Arc::new(Mutex::new(None));
+    {
+        let (store, record, in_the_window) = (store.clone(), record.clone(), in_the_window.clone());
+        store.clone().after("finish_record", move || {
+            let ended = store.record(&record).unwrap().unwrap().ended_at_unix_ms;
+            assert!(
+                ended.is_some(),
+                "the record reads as ended: the window is open"
+            );
+            *in_the_window.lock().unwrap() = Some(ink_ffi::retention::sweep(&shared));
+        });
+    }
+    core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
+    let finished = events.wait_type("meeting.finished", WAIT);
+    assert_eq!(finished["record"], record.0.as_str());
+    let swept_then = in_the_window
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the sweep ran in the window")
+        .expect("the setting keeps 30 days");
+    assert_eq!(swept_then.deleted, 0, "kept while its pass ran");
+    assert_eq!(events.count("meeting.failed"), 0, "{:?}", events.types());
+    // Then the sweep after its pass takes it.
+    let swept = events
+        .wait_for(WAIT, |v| v["type"] == "library.swept" && v["deleted"] == 1)
+        .expect("swept after its pass");
+    assert_eq!(swept["failed"], 0);
+    assert_eq!(store.record(&record).unwrap(), None);
+    assert!(!audio.exists(), "its audio went too");
+    events.assert_valid();
+    core.shutdown();
+}
+
+/// A meeting whose record reads as ended but whose crash marker is still there (a pass cancelled
+/// by the app quitting, after the record was ended) is kept until recovery has finished it.
+#[test]
+fn an_ended_meeting_with_its_crash_marker_is_never_swept() {
+    let dir = TempDir::new("marker-kept");
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    let clock = clock();
+    let (record, audio) = interrupted_meeting(dir.path(), store.as_ref(), clock.as_ref(), 40);
+    store
+        .finish_record(&record, clock.unix_ms() - 40 * 86_400_000 + 3_000)
+        .unwrap();
+    store.set_setting("retention.days", "30").unwrap();
+    let (core, events) = recovery_core(dir.path(), store.clone(), clock);
+    let swept = ink_ffi::retention::sweep(core.shared()).expect("30 days");
+    assert_eq!(swept.deleted, 0);
+    assert!(store.record(&record).unwrap().is_some());
+    assert!(audio.join(ink_ffi::recovery::LIVE_FILE).is_file());
+    events.assert_valid();
+    core.shutdown();
+}
+
 /// Review (S2.8): when the store will not mark a recovered meeting ended, its pass still runs, but
 /// the marker stays (the record still reads as live, and is never swept): the next launch tries
 /// again, and once the record is ended, the marker goes.
