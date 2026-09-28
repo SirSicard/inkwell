@@ -147,6 +147,12 @@ nemo "$work/abs.manifest" "${good_origins[@]}" "sha256 3333333333333333333333333
 run "a library hash of a file outside the prefix" 1 "$work/abs.manifest"
 assert_contains "... says why" "$out" "unreadable line"
 
+# Every input is checked on its own, but the last guard stands behind them: a value no earlier
+# check reads (NeMo's commit here) that names a path stops the file from being written.
+sed 's|^commit .*|commit /opt/build/nemo|' "$work/good.manifest" >"$work/pathcommit.manifest"
+run "an input that would put an absolute path in the public file" 1 "$work/pathcommit.manifest"
+assert_contains "... the last guard says why" "$out" "the manifest would name an absolute path"
+
 grep -v '^commit ' "$work/good.manifest" >"$work/nocommit.manifest"
 run "a manifest without NeMo's commit" 1 "$work/nocommit.manifest"
 assert_contains "... says why" "$out" "no commit"
