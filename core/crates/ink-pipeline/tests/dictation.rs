@@ -539,6 +539,31 @@ fn a_command_this_build_does_not_carry_out_still_types_nothing() {
         == DictationEvent::Command(CommandAction::Undo)));
 }
 
+/// An imported (or default) "toggle polish" voice command flips the switch, but a take is sent to
+/// the model only with the user's consent: without it, nothing goes out.
+#[test]
+fn an_imported_toggle_polish_command_sends_nothing_without_consent() {
+    let imported = r#"{"enabled":true,"wake_prefix":"inkwell","commands":[
+        {"id":"p","triggers":["toggle polish"],"action":{"type":"toggle_polish"},"enabled":true}]}"#;
+    let commands = ink_pipeline::voicecommand::VoiceCommandStore::from_json(imported).unwrap();
+    let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Polished text."));
+    let rig = Rig::builder()
+        .settings(move |s| {
+            s.commands = commands.clone();
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_wish = false;
+            s.polish_consent = None;
+        })
+        .llm(llm.clone())
+        .build();
+    rig.dictate_fixture("inkwell toggle polish", 2.0, -30.0);
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::Command(CommandAction::TogglePolish)));
+    rig.dictate_fixture("raw text", 2.0, -30.0);
+    assert_eq!(rig.inserted(), vec!["Raw text. ".to_owned()]);
+    assert_eq!(llm.calls(), 0, "nothing sent without consent");
+}
+
 #[test]
 fn polish_uses_the_model_and_a_failure_keeps_the_local_text() {
     let polishing = |s: &mut ink_pipeline::chain::DictationSettings| {
