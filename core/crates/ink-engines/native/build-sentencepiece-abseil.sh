@@ -52,6 +52,10 @@ SENTENCEPIECE_SHA256=3d2b5e824b5622038dc7b490897efe05ebbbb9e7350fc142f3ecc8789ef
 
 fail() { echo "build-sentencepiece-abseil: $*" >&2; exit 1; }
 
+# safe_extract: lists a tarball, refuses an entry that would land outside its directory, then
+# extracts it without its owners.
+. "$(cd "$(dirname "$0")" && pwd)/lib/safe-extract.sh"
+
 if [ "$#" -ne 2 ]; then
     sed -n '6,15p' "$0" >&2
     exit 2
@@ -108,8 +112,8 @@ src="${work}/src"
 build="${work}/build"
 rm -rf "${src}" "${build}"
 mkdir -p "${src}" "${build}"
-tar -xzf "${downloads}/${ABSEIL_TARBALL}" -C "${src}"
-tar -xzf "${downloads}/${SENTENCEPIECE_TARBALL}" -C "${src}"
+safe_extract "${downloads}/${ABSEIL_TARBALL}" "${src}" || fail "${ABSEIL_TARBALL} refused (above)"
+safe_extract "${downloads}/${SENTENCEPIECE_TARBALL}" "${src}" || fail "${SENTENCEPIECE_TARBALL} refused (above)"
 absl_src="${src}/abseil-cpp-${ABSEIL_VERSION}"
 spm_src="${src}/sentencepiece-${SENTENCEPIECE_VERSION}/sentencepiece"
 [ -f "${absl_src}/CMakeLists.txt" ] || fail "${ABSEIL_TARBALL} has no abseil-cpp-${ABSEIL_VERSION}/CMakeLists.txt"
