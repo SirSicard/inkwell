@@ -186,7 +186,7 @@ find "$bin" -maxdepth 1 -name '*.bundle' -type d -exec cp -R {} "$app/Contents/R
 # there is followed: the file goes in, under the name it is loaded by), then whatever it loads
 # through @rpath in turn. Only the libraries THIRD_PARTY.md covers, by name.
 bundle_dylib() {
-  local name="$1" dir src="" ref
+  local name="$1" dir src="" ref refs
   [ -e "$app/Contents/Frameworks/$name" ] && return 0
   case "$name" in
     # NeMo-Speech.cpp, its ggml, SentencePiece (with protobuf-lite and Darts-clone) and Abseil.
@@ -203,16 +203,22 @@ bundle_dylib() {
   mkdir -p "$app/Contents/Frameworks"
   cp "$src" "$app/Contents/Frameworks/$name"
   chmod u+w "$app/Contents/Frameworks/$name"
+  # Read into a variable, not through a process substitution: this recurses once per library
+  # (SentencePiece alone loads 80 of Abseil's), and with a process substitution still open at each
+  # level, macOS's bash 3.2 died of a SIGTRAP in the bundle check that follows (in
+  # both runs before this read changed; in neither after).
+  refs="$(otool -L "$app/Contents/Frameworks/$name" | sed -nE '2,$ s/^[[:space:]]+([^ ]+) \(.*/\1/p')"
   while IFS= read -r ref; do
     case "$ref" in
       @rpath/*.dylib) bundle_dylib "${ref#@rpath/}" ;;
     esac
-  done < <(otool -L "$app/Contents/Frameworks/$name" | sed -nE '2,$ s/^[[:space:]]+([^ ]+) \(.*/\1/p')
+  done <<<"$refs"
 }
 
 # The frameworks the executable links through its rpath, as SwiftPM unpacked them from their
 # XCFrameworks next to it. Read from the executable, so a framework left in the build directory by
 # an earlier dependency is not shipped. ditto keeps the symlinks a framework's signature covers.
+app_refs="$(otool -L "$bin/Inkwell" | sed -nE '2,$ s/^[[:space:]]+([^ ]+) \(.*/\1/p')"
 while IFS= read -r ref; do
   case "$ref" in
     @rpath/*.framework/*)
@@ -224,7 +230,7 @@ while IFS= read -r ref; do
     @rpath/*.dylib) bundle_dylib "${ref#@rpath/}" ;;
     @rpath/*) fail "the app links $ref through its rpath, which is neither a framework nor a dylib" ;;
   esac
-done < <(otool -L "$bin/Inkwell" | sed -nE '2,$ s/^[[:space:]]+([^ ]+) \(.*/\1/p')
+done <<<"$app_refs"
 bundled=0
 if [ -d "$app/Contents/Frameworks" ]; then
   bundled="$(find "$app/Contents/Frameworks" -maxdepth 1 -name '*.dylib' -type f | wc -l | tr -d ' ')"
