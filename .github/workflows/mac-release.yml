@@ -3,7 +3,8 @@ name: Mac release
 # Releases the Mac app (docs/RELEASING.md). On a v1.X.Y tag: build, sign with the Developer ID,
 # notarize and staple the app and then the dmg, check both with Gatekeeper, sign Sparkle's appcast,
 # and draft a GitHub release holding the dmg, the appcast and the build manifest (what the app
-# bundles, and from which Homebrew versions). A person publishes the draft; nothing here does.
+# bundles, and the pinned versions it was built from). A person publishes the draft; nothing here
+# does.
 #
 # A manual run is the dry run (RELEASING.md, step 0): the same build, signing, notarization and
 # Gatekeeper check, the notarized dmg and the build manifest kept as run artifacts, the appcast
@@ -104,20 +105,29 @@ jobs:
       # build code (CMake scripts, cargo build scripts), which never shares a job step, or a
       # moment, with an unlocked Developer ID key.
       #
-      # Homebrew serves the diarizer's build tools and its two libraries, SentencePiece and Abseil
-      # (Apache-2.0). It is a build-time source only: build-nemo-speech.sh copies both libraries
-      # into its prefix and loads them by @rpath, and build-mac.sh fails if anything in the app
-      # still loads a path outside the bundle and the OS. Their versions are whatever Homebrew
-      # serves today: kept for the build manifest the release carries (build-manifest.sh), which
-      # outlives this log.
-      - name: Engine build tools and libraries (Homebrew)
+      # Homebrew serves the diarizer's build tools only, CMake and Ninja: nothing it installs goes
+      # into the app. Their versions are kept for the build manifest the release carries
+      # (build-manifest.sh), which outlives this log.
+      - name: Engine build tools (Homebrew)
         env:
           HOMEBREW_NO_ANALYTICS: '1'
         run: |
-          brew install cmake ninja sentencepiece abseil
+          brew install cmake ninja
           # To a file, not through a pipe: the default shell has no pipefail.
-          brew list --versions cmake ninja sentencepiece abseil >"$RUNNER_TEMP/homebrew-versions.txt"
+          brew list --versions cmake ninja >"$RUNNER_TEMP/homebrew-versions.txt"
           cat "$RUNNER_TEMP/homebrew-versions.txt"
+
+      # The diarizer's two libraries, SentencePiece and Abseil (Apache-2.0), pinned: the script
+      # fetches their release tarballs, refuses either unless its SHA-256 is the one committed in
+      # the script, and builds both for arm64 and macOS 26, installed by @rpath. Built here, every
+      # run, like everything else this job signs: no cache is restored (a cache any main-branch
+      # job could write would reach the signing step).
+      - name: SentencePiece and Abseil (pinned)
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '26.0'
+        run: |
+          core/crates/ink-engines/native/build-sentencepiece-abseil.sh "$RUNNER_TEMP/engine-deps" "$RUNNER_TEMP/engine-deps-work"
+          echo "ENGINE_DEPS_DIR=$RUNNER_TEMP/engine-deps" >>"$GITHUB_ENV"
 
       # NeMo-Speech.cpp (the diarizer) at the commit the adapter is written against, read from the
       # build script, with only the ggml submodule. build-nemo-speech.sh checks both commits.
@@ -132,8 +142,9 @@ jobs:
           git -C "$src" submodule update -q --init --depth 1 ggml
           echo "NeMo-Speech.cpp $(git -C "$src" rev-parse HEAD), ggml $(git -C "$src/ggml" rev-parse HEAD)"
 
-      # GGML_NATIVE=OFF and macOS 26 (the script's defaults); a prefix that loads nothing from
-      # Homebrew.
+      # GGML_NATIVE=OFF and macOS 26 (the script's defaults), against the pinned SentencePiece and
+      # Abseil (ENGINE_DEPS_DIR, set above): the script stops if any library it copies into its
+      # prefix came from anywhere else.
       - name: Build NeMo-Speech.cpp
         env:
           MACOSX_DEPLOYMENT_TARGET: '26.0'
@@ -249,10 +260,11 @@ jobs:
             mac/scripts/verify-release.sh "mac/build/$DMG" --notarized --version "$VERSION"
           fi
 
-      # The record a release keeps of what it bundles: NeMo-Speech.cpp's commit and each library's
-      # Homebrew formula and version, the Homebrew versions above, the dmg's SHA-256. A log expires;
-      # this goes into the release beside the dmg (a dry run keeps it as an artifact). It names no
-      # path on this machine, and refuses a library that came from anywhere but a Homebrew keg.
+      # The record a release keeps of what it bundles: NeMo-Speech.cpp's commit, SentencePiece's and
+      # Abseil's pinned versions and tarball SHA-256s, each bundled library's project and version,
+      # the build tools' versions, the dmg's SHA-256. A log expires; this goes into the release
+      # beside the dmg (a dry run keeps it as an artifact). It names no path on this machine, and
+      # refuses a library that did not come from the pinned prefix, unchanged.
       - name: The build manifest
         env:
           DMG: ${{ steps.version.outputs.dmg }}
@@ -261,6 +273,7 @@ jobs:
         run: |
           mac/scripts/build-manifest.sh --version "$VERSION" --commit "$GITHUB_SHA" --dmg "mac/build/$DMG" \
             --nemo "$NEMO_SPEECH_DIR/share/inkwell/nemo-speech.manifest" \
+            --deps "$ENGINE_DEPS_DIR/share/inkwell/engine-deps.manifest" \
             --homebrew "$RUNNER_TEMP/homebrew-versions.txt" --out "mac/build/$MANIFEST"
           cat "mac/build/$MANIFEST"
 

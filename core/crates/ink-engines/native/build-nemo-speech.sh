@@ -12,6 +12,12 @@
 #           GGML_NATIVE and each library's SHA-256. Point NEMO_SPEECH_DIR at it when building
 #           ink-engines with `--features engine-nemo`.
 #
+# ENGINE_DEPS_DIR   the prefix build-sentencepiece-abseil.sh installed SentencePiece and Abseil to,
+#                   at their pinned versions: NeMo is built against those, and every library the
+#                   prefix copies in must come from there, or the script stops. A release sets it.
+#                   Unset, CMake finds SentencePiece and Abseil wherever they are installed
+#                   (Homebrew): fine for this Mac's tests, refused by the release's build manifest.
+#
 # Why a script and an environment variable, not a vendored copy or a submodule: the repository
 # stays free of C++ sources and of anyone's local paths, cargo never runs CMake or reaches the
 # network, and the Rust side checks what it links against: build.rs compares the installed
@@ -30,7 +36,7 @@
 #   without it CMake targets the building Mac's own macOS, and dyld refuses the library on older
 #   ones.
 # - The prefix is self-contained (macOS): every library NeMo loads from outside the OS
-#   (SentencePiece and Abseil, from Homebrew) is copied into <prefix>/lib, and every library there
+#   (SentencePiece and Abseil, from ENGINE_DEPS_DIR) is copied into <prefix>/lib, and every library there
 #   is loaded by @rpath, with `@loader_path` as its only rpath. A copy was signed by its builder;
 #   after its load commands change it is signed again, ad hoc (the app re-signs it with its own
 #   identity). Nothing in the prefix names Homebrew or any other absolute path outside /usr/lib
@@ -38,9 +44,11 @@
 # - CMake is configured afresh (`--fresh`), so no cached value from an earlier configuration of
 #   the same build directory (a GGML_NATIVE=ON, a CPU feature probe) carries over.
 #
-# Needs CMake 3.24 or later, Ninja, and SentencePiece and abseil (Apache-2.0; on macOS
-# `brew install cmake ninja sentencepiece abseil`). The configuration is the upstream
-# `metal-diar` preset (Metal, standalone diarization, unpatched-ggml code paths) with the CLI off.
+# Needs CMake 3.24 or later, Ninja (on macOS `brew install cmake ninja`), and SentencePiece and
+# Abseil (Apache-2.0): pinned, from build-sentencepiece-abseil.sh through ENGINE_DEPS_DIR, or for a
+# local build whatever is installed (`brew install sentencepiece abseil`). The configuration is the
+# upstream `metal-diar` preset (Metal, standalone diarization, unpatched-ggml code paths) with the
+# CLI off.
 set -euo pipefail
 
 NEMO_COMMIT=97a15afa5caa9bce5baaa86c1184103877af4101
@@ -53,7 +61,7 @@ GGML_COMMIT=c03b4e2bcece5134827881af90242086daf75be5
 . "$(cd "$(dirname "$0")" && pwd)/lib/self-contained-prefix.sh"
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
-    sed -n '2,13p' "$0" >&2
+    sed -n '2,20p' "$0" >&2
     exit 2
 fi
 src="$(cd "$1" && pwd)"
@@ -84,12 +92,73 @@ if [ "$(uname -s)" = Darwin ]; then
     platform+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment_target}")
 fi
 
+# SentencePiece and Abseil: the pinned builds, named outright so that no other install is found
+# first, by the names NeMo-Speech.cpp's src/asr/CMakeLists.txt reads at the pinned commit (on
+# macOS: find_package(unofficial-sentencepiece) first, a vcpkg config, turned off here; then
+# find_library(SENTENCEPIECE_LIB) and find_path(SENTENCEPIECE_INCLUDE_DIR), which a cached value
+# skips; then find_package(absl CONFIG), from absl_DIR). What CMake used is read back from its
+# cache after configuring. Their libraries load each other by @rpath, so NeMo's installed libraries
+# get their directory as an rpath (CMAKE_INSTALL_RPATH_USE_LINK_PATH), by which make_self_contained
+# finds them; it then leaves `@loader_path` as the only rpath.
+deps=()
+deps_lib=""
+if [ -n "${ENGINE_DEPS_DIR:-}" ]; then
+    deps_dir="$(cd "${ENGINE_DEPS_DIR}" && pwd -P)"
+    deps_lib="${deps_dir}/lib"
+    for f in share/inkwell/engine-deps.manifest lib/cmake/absl/abslConfig.cmake \
+        lib/libsentencepiece.dylib include/sentencepiece_processor.h; do
+        [ -e "${deps_dir}/${f}" ] || {
+            echo "error: ENGINE_DEPS_DIR has no ${f}: install it with build-sentencepiece-abseil.sh" >&2
+            exit 1
+        }
+    done
+    deps+=(
+        "-DCMAKE_PREFIX_PATH=${deps_dir}"
+        "-Dabsl_DIR=${deps_dir}/lib/cmake/absl"
+        "-DSENTENCEPIECE_LIB=${deps_lib}/libsentencepiece.dylib"
+        "-DSENTENCEPIECE_INCLUDE_DIR=${deps_dir}/include"
+        -DCMAKE_DISABLE_FIND_PACKAGE_unofficial-sentencepiece=ON
+        -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
+    )
+    sed -n 's/^source \([^ ]*\) \([^ ]*\) .*/using \1 \2 (pinned) from ENGINE_DEPS_DIR/p' \
+        "${deps_dir}/share/inkwell/engine-deps.manifest"
+elif [ "${macos}" = 1 ]; then
+    echo "warning: ENGINE_DEPS_DIR is not set: SentencePiece and Abseil are whatever CMake finds" >&2
+    echo "         (Homebrew). Fine for this Mac's tests; a release bundles the pinned builds." >&2
+fi
+
 cmake --fresh -S "${src}" -B "${build}" --preset metal-diar \
     -DNEMO_SPEECH_BUILD_CLI=OFF \
     -DNEMO_SPEECH_BUILD_MIC_CAPTURE=OFF \
     -DGGML_NATIVE=OFF \
     ${platform[@]+"${platform[@]}"} \
+    ${deps[@]+"${deps[@]}"} \
     -DCMAKE_INSTALL_PREFIX="${prefix}"
+# With the pinned builds: the SentencePiece and Abseil CMake settled on are theirs, read back
+# rather than assumed (a vcpkg config, or a static archive, would take their place silently).
+if [ -n "${deps_lib}" ]; then
+    cached() { sed -n "s/^$1:[A-Z]*=//p" "${build}/CMakeCache.txt"; }
+    for var in SENTENCEPIECE_LIB SENTENCEPIECE_INCLUDE_DIR absl_DIR; do
+        value="$(cached "${var}")"
+        case "${value}" in
+            "${deps_dir}"/*) ;;
+            *)
+                echo "error: CMake configured ${var}='${value}', not a path in ENGINE_DEPS_DIR" >&2
+                exit 1
+                ;;
+        esac
+    done
+    for var in unofficial-sentencepiece_DIR SENTENCEPIECE_STATIC_LIB; do
+        value="$(cached "${var}")"
+        case "${value}" in
+            "" | *-NOTFOUND) ;;
+            *)
+                echo "error: CMake configured ${var}='${value}': another SentencePiece than ENGINE_DEPS_DIR's" >&2
+                exit 1
+                ;;
+        esac
+    done
+fi
 cmake --build "${build}"
 cmake --install "${build}"
 
@@ -113,6 +182,10 @@ if [ "${macos}" = 1 ]; then
     done <"${build}/install_manifest.txt"
     [ "${#installed[@]}" -gt 0 ] || { echo "error: the install put no library in ${lib}" >&2; exit 1; }
     make_self_contained "${lib}" "${deployment_target}" "${installed[@]}"
+    # With the pinned builds: SentencePiece and Abseil were copied in, and every copy is theirs.
+    if [ -n "${deps_lib}" ]; then
+        check_pinned_origins "${deps_lib}"
+    fi
 fi
 
 sha256() {
