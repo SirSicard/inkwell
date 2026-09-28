@@ -1186,6 +1186,68 @@ fn an_ended_meeting_with_its_crash_marker_is_never_swept() {
     core.shutdown();
 }
 
+/// PR #86 (macOS CI): a `meetings.recover` that arrives while a recovery runs is never refused
+/// ("recovery is already running" once answered one that came just after `meetings.recovered`,
+/// while the finished run's thread was still returning). It makes the run go one more round.
+/// Deterministic: the second ask is sent from inside the first round, and the round waits until
+/// the meetings thread has handled it (a later command on that thread has been answered).
+#[test]
+fn a_recover_sent_during_a_recovery_is_one_more_round_not_refused() {
+    let dir = TempDir::new("recover-during");
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let clock = clock();
+    let (record, audio) = interrupted_meeting(dir.path(), store.as_ref(), clock.as_ref(), 0);
+    let (core, events) = recovery_core(dir.path(), store.clone(), clock);
+    let core = Arc::new(core);
+    {
+        let (core, events) = (core.clone(), events.clone());
+        store.after("record", move || {
+            core.command(r#"{"cmd":"meetings.recover","id":"second"}"#)
+                .unwrap();
+            // Handled in order on the meetings thread: once this one is answered, so was the ask.
+            core.command(r#"{"cmd":"meeting.stop","id":"probe"}"#)
+                .unwrap();
+            events
+                .wait_for(WAIT, |v| {
+                    v["type"] == "command.failed" && v["id"] == "probe"
+                })
+                .expect("the probe was answered");
+        });
+    }
+    core.command(r#"{"cmd":"meetings.recover","id":"first"}"#)
+        .unwrap();
+    assert!(
+        events.wait_count("meetings.recovered", 2, WAIT),
+        "{:?}",
+        events.types()
+    );
+    let rounds: Vec<_> = events
+        .all()
+        .into_iter()
+        .filter(|v| v["type"] == "meetings.recovered")
+        .map(|v| v["meetings"].clone())
+        .collect();
+    assert_eq!(
+        rounds,
+        [serde_json::json!(1), serde_json::json!(0)],
+        "the second found nothing left"
+    );
+    assert!(
+        !events
+            .all()
+            .iter()
+            .any(|v| v["type"] == "command.failed" && v["command"] == "meetings.recover"),
+        "never refused: {:?}",
+        events.types()
+    );
+    assert!(!audio.join(ink_ffi::recovery::LIVE_FILE).exists());
+    assert!(store.record(&record).unwrap().is_some());
+    events.assert_valid();
+    Arc::into_inner(core)
+        .expect("the hook let go of the core")
+        .shutdown();
+}
+
 /// Review (S2.8): when the store will not mark a recovered meeting ended, its pass still runs, but
 /// the marker stays (the record still reads as live, and is never swept): the next launch tries
 /// again, and once the record is ended, the marker goes.

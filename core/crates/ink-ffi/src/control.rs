@@ -92,7 +92,19 @@ pub enum Msg {
 pub struct Control {
     tx: Sender<Msg>,
     thread: JoinHandle<()>,
-    recovery: Arc<Mutex<Option<JoinHandle<()>>>>,
+    recovery: Arc<Mutex<Recovery>>,
+}
+
+/// Recovery's thread and whether it is (or must go on) running, under one lock, so a
+/// `meetings.recover` is never refused for a run that is ending: `running` clears under the lock
+/// only once no ask is waiting, and an ask while it is set is one more round ([`State::recover`]).
+#[derive(Default)]
+struct Recovery {
+    handle: Option<JoinHandle<()>>,
+    /// A round is running, or about to.
+    running: bool,
+    /// A `meetings.recover` arrived during the round: run one more (asks coalesce into it).
+    again: bool,
 }
 
 /// What the thread owns.
@@ -109,7 +121,7 @@ struct State {
     /// Whether the current meeting is being ended by the user rather than its app.
     by_hand: bool,
     tx: Sender<Msg>,
-    recovery: Arc<Mutex<Option<JoinHandle<()>>>>,
+    recovery: Arc<Mutex<Recovery>>,
 }
 
 impl Control {
@@ -121,7 +133,7 @@ impl Control {
         detector: Option<Arc<dyn MeetingDetector>>,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
-        let recovery: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::default();
+        let recovery: Arc<Mutex<Recovery>> = Arc::default();
         let state = State {
             shared,
             runs,
@@ -163,7 +175,8 @@ impl Control {
         if self.thread.join().is_err() {
             log::error!("the meetings thread panicked outside its per-message boundary");
         }
-        if let Some(recovery) = lock(&self.recovery).take()
+        let handle = lock(&self.recovery).handle.take();
+        if let Some(recovery) = handle
             && recovery.join().is_err()
         {
             log::error!("the recovery thread panicked");
@@ -429,73 +442,50 @@ impl State {
         }
     }
 
+    /// `meetings.recover`. One run at a time, on `ink-recovery`; one that arrives during a run is
+    /// never refused: it makes the run go one more round (asks during a round coalesce), which
+    /// finds what is still marked then. Each round ends with `meetings.recovered`.
     fn recover(&mut self, id: Option<&str>) {
-        let mut slot = lock(&self.recovery);
-        if slot.as_ref().is_some_and(|h| !h.is_finished()) {
-            drop(slot);
-            return self.failed("meetings.recover", id, "recovery is already running");
+        let mut state = lock(&self.recovery);
+        if state.running {
+            state.again = true;
+            return;
         }
-        if let Some(done) = slot.take() {
-            let _ = done.join();
+        // The last run has cleared `running` and is at most returning: wait it out.
+        if let Some(done) = state.handle.take()
+            && done.join().is_err()
+        {
+            log::error!("the recovery thread panicked");
         }
+        state.running = true;
         let shared = self.shared.clone();
-        let live: Option<RecordId> = lock(&self.runs)
-            .meeting
-            .as_ref()
-            .and_then(|m| m.record().cloned());
+        let runs = self.runs.clone();
+        let recovery = self.recovery.clone();
         let spawned = thread::Builder::new()
             .name("ink-recovery".into())
             .spawn(move || {
-                let found = match crate::recovery::interrupted(&shared.data_dir) {
-                    Ok(found) => found,
-                    Err(e) => {
-                        // Said once, here: a meeting a crash interrupted may be waiting, and
-                        // the next launch looks again.
-                        log::warn!("meeting recovery: the meetings could not be listed: {e}");
-                        shared.events.emit(event(
-                            "meetings.recovered",
-                            &[
-                                ("meetings", Some(0.into())),
-                                (
-                                    "message",
-                                    Some(
-                                        format!(
-                                            "couldn't look for meetings a crash interrupted: {e}"
-                                        )
-                                        .into(),
-                                    ),
-                                ),
-                            ],
-                        ));
-                        return;
-                    }
-                };
-                let mut recovered = 0usize;
-                for (dir, record) in found {
-                    if shared.shutdown.is_cancelled() {
-                        break;
-                    }
-                    // Never the meeting live in this process (its marker is its own).
-                    if live.as_ref() == Some(&record) {
+                loop {
+                    // The meeting live in this process now, read at each round.
+                    let live: Option<RecordId> = lock(&runs)
+                        .meeting
+                        .as_ref()
+                        .and_then(|m| m.record().cloned());
+                    recovery_round(&shared, live.as_ref());
+                    let mut state = lock(&recovery);
+                    if state.again && !shared.shutdown.is_cancelled() {
+                        state.again = false;
                         continue;
                     }
-                    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        crate::recovery::recover(&shared, &dir, &record, &shared.shutdown);
-                    }));
-                    if ran.is_err() {
-                        log::error!("meeting recovery panicked; the next meeting still runs");
-                    }
-                    recovered += 1;
+                    state.again = false;
+                    state.running = false;
+                    break;
                 }
-                shared.events.emit(event(
-                    "meetings.recovered",
-                    &[("meetings", Some(recovered.into()))],
-                ));
             });
         match spawned {
-            Ok(handle) => *slot = Some(handle),
+            Ok(handle) => state.handle = Some(handle),
             Err(e) => {
-                drop(slot);
+                state.running = false;
+                drop(state);
                 self.failed(
                     "meetings.recover",
                     id,
@@ -504,4 +494,49 @@ impl State {
             }
         }
     }
+}
+
+/// **Worker** (`ink-recovery`). One round: finds every meeting a crash interrupted and recovers
+/// each (never `live`, the meeting recording in this process), then `meetings.recovered`.
+fn recovery_round(shared: &Arc<Shared>, live: Option<&RecordId>) {
+    let found = match crate::recovery::interrupted(&shared.data_dir) {
+        Ok(found) => found,
+        Err(e) => {
+            // Said once, here: a meeting a crash interrupted may be waiting, and the next launch
+            // looks again.
+            log::warn!("meeting recovery: the meetings could not be listed: {e}");
+            shared.events.emit(event(
+                "meetings.recovered",
+                &[
+                    ("meetings", Some(0.into())),
+                    (
+                        "message",
+                        Some(format!("couldn't look for meetings a crash interrupted: {e}").into()),
+                    ),
+                ],
+            ));
+            return;
+        }
+    };
+    let mut recovered = 0usize;
+    for (dir, record) in found {
+        if shared.shutdown.is_cancelled() {
+            break;
+        }
+        // Never the meeting live in this process (its marker is its own).
+        if live == Some(&record) {
+            continue;
+        }
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::recovery::recover(shared, &dir, &record, &shared.shutdown);
+        }));
+        if ran.is_err() {
+            log::error!("meeting recovery panicked; the next meeting still runs");
+        }
+        recovered += 1;
+    }
+    shared.events.emit(event(
+        "meetings.recovered",
+        &[("meetings", Some(recovered.into()))],
+    ));
 }

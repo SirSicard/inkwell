@@ -165,7 +165,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"meetings.recover"}
  *       Finishes the meetings a crash interrupted (their audio repaired, their final pass run):
  *       "meeting.recovered" and the pass's events per meeting, then "meetings.recovered". Send it
- *       once the shell's own engines are registered, so a recovered meeting gets them too.
+ *       once the shell's own engines are registered, so a recovered meeting gets them too. Sent
+ *       while a recovery runs, it is never refused: that recovery goes one more round (asks
+ *       during a round count as one), ending with its own "meetings.recovered".
  *   Detection follows the "meetings.detect" setting (on unless turned off): "meeting.detection"
  *   says whether it listens, "meeting.detected" offers an app that has held the microphone for
  *   3 s, "meeting.detection_ended" takes the offer back.
