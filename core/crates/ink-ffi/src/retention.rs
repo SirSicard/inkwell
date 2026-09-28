@@ -128,8 +128,12 @@ impl Shared {
 }
 
 /// A record this process is finishing (a meeting from its start to the end of its final pass, a
-/// recovered meeting from before its record is marked ended to the end of its pass): retention
-/// leaves it alone while this is held. Dropping it lets go.
+/// recovered meeting for the whole of its recovery, from before any path can mark it ended):
+/// retention leaves it alone while this is held. Dropping it lets go.
+///
+/// Taking a hold and the sweep's check-then-delete of a record run under the same lock
+/// (`Shared::finishing`), so they never interleave: a hold taken first keeps the record; a hold
+/// taken after the delete finds the record gone (recovery then only clears its marker).
 pub struct Hold<'a> {
     shared: &'a Shared,
     record: RecordId,
@@ -139,11 +143,19 @@ impl Shared {
     /// **Worker.** Keeps retention away from `record` until the hold is dropped. Taken before the
     /// record can read as ended.
     pub fn hold_from_sweep(&self, record: &RecordId) -> Hold<'_> {
+        // Waits out a sweep's check-then-delete of this very record, if one is under way.
         lock(&self.finishing).insert(record.clone());
         Hold {
             shared: self,
             record: record.clone(),
         }
+    }
+}
+
+impl Shared {
+    /// Whether this process holds `record` from retention now ([`Shared::hold_from_sweep`]).
+    pub fn held_from_sweep(&self, record: &RecordId) -> bool {
+        lock(&self.finishing).contains(record)
     }
 }
 
@@ -153,32 +165,33 @@ impl Drop for Hold<'_> {
     }
 }
 
-/// Whether `record`'s final pass has not finished: this process holds it, or its crash-recovery
-/// marker is still beside its audio. A marker that cannot be looked for counts as there: a record
-/// kept one sweep too long costs nothing; one deleted under its pass costs the meeting.
-fn unfinished(shared: &Shared, record: &Record) -> bool {
-    if lock(&shared.finishing).contains(&record.id) {
-        return true;
+/// Why `record`'s final pass has not finished, if it has not: this process holds it (`held`, the
+/// set under its lock), or its crash-recovery marker is still beside its audio. A marker that
+/// cannot be looked for counts as there: a record kept one sweep too long costs nothing; one
+/// deleted under its pass costs the meeting.
+fn unfinished(
+    held: &std::collections::BTreeSet<RecordId>,
+    shared: &Shared,
+    record: &Record,
+) -> Option<&'static str> {
+    if held.contains(&record.id) {
+        return Some("this process is finishing it");
     }
-    let Some(relative) = &record.audio_dir else {
-        return false;
-    };
+    let relative = record.audio_dir.as_ref()?;
     match crate::library::audio_dir(&shared.data_dir, relative) {
         Ok(Some(dir)) => match std::fs::symlink_metadata(dir.join(crate::recovery::LIVE_FILE)) {
-            Ok(_) => true,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            Ok(_) => Some("its crash-recovery marker is there"),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
             Err(e) => {
-                log::warn!(
-                    "retention: a meeting's crash marker could not be looked for: {e}; kept"
-                );
-                true
+                log::warn!("retention: a meeting's crash marker could not be looked for: {e}");
+                Some("its crash-recovery marker could not be looked for")
             }
         },
         // No audio directory on disk: no marker either.
-        Ok(None) => false,
+        Ok(None) => None,
         Err(e) => {
-            log::warn!("retention: a meeting's audio directory could not be checked: {e}; kept");
-            true
+            log::warn!("retention: a meeting's audio directory could not be checked: {e}");
+            Some("its audio directory could not be checked")
         }
     }
 }
@@ -263,13 +276,19 @@ pub fn sweep(shared: &Shared) -> Option<Swept> {
             if record.ended_at_unix_ms.is_none() || record.kind == RecordKind::FileImport {
                 continue;
             }
-            // Read after the listing: a record that listed as ended was ended before, so a hold
-            // on it was already taken (see Hold), and is still there unless its pass is done.
-            if unfinished(shared, &record) {
-                log::info!("retention: a meeting whose final pass has not finished was kept");
-                continue;
-            }
-            match shared.store.delete_record(&record.id) {
+            // Checked and deleted under the holds' lock, so no hold is taken in between (see
+            // Hold). Read after the listing: a record that listed as ended was ended under a hold,
+            // which is still there unless its pass is done.
+            let deleted = {
+                let held = lock(&shared.finishing);
+                if let Some(why) = unfinished(&held, shared, &record) {
+                    // By id only: a record kept sweep after sweep (a pass that hangs) shows here.
+                    log::info!("retention: meeting {} kept: {why}", record.id.0);
+                    continue;
+                }
+                shared.store.delete_record(&record.id)
+            };
+            match deleted {
                 Ok(()) | Err(StoreError::NotFound) => {}
                 Err(e) => {
                     log::warn!("retention: a record could not be deleted: {e}");
