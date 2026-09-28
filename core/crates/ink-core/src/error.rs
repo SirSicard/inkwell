@@ -142,8 +142,8 @@ pub enum LlmError {
     ///
     /// [`Llm::complete_if`]: crate::llm::Llm::complete_if
     NotAllowed {
-        /// Where the model would have sent the text, for the UI to name.
-        endpoint: String,
+        /// The model refused: where it would have sent the text, for the UI to name.
+        refused: crate::llm::LlmInfo,
     },
 }
 
@@ -163,9 +163,11 @@ impl fmt::Display for LlmError {
             Self::Cancelled => f.write_str("cancelled"),
             Self::BadResponse(msg) => write!(f, "unexpected response: {msg}"),
             Self::Engine(msg) => write!(f, "local model failed: {msg}"),
-            Self::NotAllowed { endpoint } => {
-                write!(f, "not allowed to send to {endpoint}; nothing was sent")
-            }
+            Self::NotAllowed { refused } => write!(
+                f,
+                "not allowed to send to {}; nothing was sent",
+                refused.endpoint.describe()
+            ),
         }
     }
 }

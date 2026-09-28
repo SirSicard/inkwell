@@ -549,7 +549,7 @@ fn the_polish_model_checks_the_model_it_picked_before_sending() {
     assert_eq!(
         refused,
         Err(ink_core::LlmError::NotAllowed {
-            endpoint: "shell engine cloud-model".into()
+            refused: polish.info()
         })
     );
     assert!(model.requests.lock().unwrap().is_empty(), "nothing sent");

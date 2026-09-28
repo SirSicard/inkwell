@@ -202,9 +202,7 @@ impl Llm for PicksAgain {
             endpoint: cloud("shell engine cloud-a"),
         };
         if !allow(&picked) {
-            return Err(LlmError::NotAllowed {
-                endpoint: picked.endpoint.describe(),
-            });
+            return Err(LlmError::NotAllowed { refused: picked });
         }
         self.complete(request, cancel)
     }

@@ -137,9 +137,7 @@ impl Llm for PolishModel {
         };
         let info = llm.info();
         if !allow(&info) {
-            return Err(LlmError::NotAllowed {
-                endpoint: info.endpoint.describe(),
-            });
+            return Err(LlmError::NotAllowed { refused: info });
         }
         GuardedLlm::new(llm, self.local_only.clone()).complete(request, cancel)
     }

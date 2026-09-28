@@ -91,9 +91,7 @@ pub trait Llm: Send + Sync {
     ) -> Result<LlmResponse, LlmError> {
         let info = self.info();
         if !allow(&info) {
-            return Err(LlmError::NotAllowed {
-                endpoint: info.endpoint.describe(),
-            });
+            return Err(LlmError::NotAllowed { refused: info });
         }
         self.complete(request, cancel)
     }
@@ -122,8 +120,12 @@ mod tests {
         assert_eq!(
             refused,
             Err(LlmError::NotAllowed {
-                endpoint: "https://api.example.com/v1".into()
+                refused: llm.info()
             })
+        );
+        assert_eq!(
+            refused.unwrap_err().to_string(),
+            "not allowed to send to https://api.example.com/v1; nothing was sent"
         );
         assert_eq!(llm.calls(), 0, "a refused call sends nothing");
         let allowed = llm.complete_if(&request(), &CancelToken::new(), &|_| true);

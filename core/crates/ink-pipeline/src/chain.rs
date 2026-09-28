@@ -1100,13 +1100,14 @@ impl DictationChain {
                 )));
                 written
             }
-            Err(LlmError::NotAllowed { .. }) => {
-                // The model reached is not where the user agreed: nothing was sent.
+            Err(LlmError::NotAllowed { refused }) => {
+                // The model reached is not where the user agreed: nothing was sent. The consent
+                // named is the one that model needs, from the info of the model refused.
                 log::warn!(
                     "dictation: polish's model is not where the user agreed to send words; the text goes out as written"
                 );
                 self.emit(DictationEvent::Warning(Warning::PolishNotAllowed(
-                    PolishConsent::for_model(&llm.info()),
+                    PolishConsent::for_model(&refused),
                 )));
                 written
             }

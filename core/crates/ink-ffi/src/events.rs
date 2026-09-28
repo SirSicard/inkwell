@@ -205,7 +205,7 @@ pub fn dictation(e: &DictationEvent) -> Value {
                     None,
                     some(match needs {
                         PolishConsent::Cloud { name, .. } => name.clone(),
-                        _ => "a model on this machine".to_owned(),
+                        PolishConsent::OnDevice => "a model on this machine".to_owned(),
                     }),
                 ),
                 Warning::NoModeForStyle => ("no_mode_for_style", None, None),

@@ -24,18 +24,6 @@ use crate::events::event;
 use crate::runtime::Shared;
 use crate::voice::{POLISH_CONSENT_SETTING, POLISH_SETTING};
 
-/// What `polish.allow` names: the destination the user agreed to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Allow {
-    /// A model on this machine.
-    OnDevice,
-    /// The cloud provider at this endpoint (`polish.state`'s `endpoint`).
-    Cloud {
-        /// The destination, as `polish.state` gave it.
-        endpoint: String,
-    },
-}
-
 /// The model polish would use now, if one is registered: the consent it needs and its name.
 fn current(shared: &Shared) -> Option<(ink_core::LlmInfo, PolishConsent, String)> {
     shared.llms.pick().map(|llm| {
@@ -117,20 +105,20 @@ pub fn state(shared: &Shared, reference: Option<&str>) -> Value {
     )
 }
 
-/// **Queries thread.** `polish.allow`: records the user's consent for `asked` and turns polish
-/// on, if `asked` is where the model polish would use goes now. Answers `polish.state`, or an
+/// **Queries thread.** `polish.allow`: records the user's consent for `asked` (the destination
+/// the shell showed; a cloud one's name is not needed) and turns polish on, if `asked` is where
+/// the model polish would use goes now. What is recorded is the model's own destination and name. Answers `polish.state`, or an
 /// error for `command.failed`: no model to agree to, the model changed while the user read (the
 /// shell asks again), or the store refused.
-pub fn allow(shared: &Shared, asked: &Allow, reference: Option<&str>) -> Result<Value, String> {
+pub fn allow(
+    shared: &Shared,
+    asked: &PolishConsent,
+    reference: Option<&str>,
+) -> Result<Value, String> {
     let Some((_, needed, _)) = current(shared) else {
         return Err("no language model is set up for polish".into());
     };
-    let matches = match (asked, &needed) {
-        (Allow::OnDevice, PolishConsent::OnDevice) => true,
-        (Allow::Cloud { endpoint }, PolishConsent::Cloud { endpoint: now, .. }) => endpoint == now,
-        _ => false,
-    };
-    if !matches {
+    if !asked.same_destination(&needed) {
         // Nothing recorded: the user agreed to something that is no longer where polish goes.
         shared.events.emit(state(shared, None));
         return Err("polish's model changed before you agreed; look again".into());

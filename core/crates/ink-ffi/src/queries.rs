@@ -145,7 +145,7 @@ pub enum Query {
     /// `polish.get`: polish's switch, destination and consent ([`crate::polish::state`]).
     PolishGet,
     /// `polish.allow`: the user agreed polish may send where it goes now.
-    PolishAllow(crate::polish::Allow),
+    PolishAllow(ink_pipeline::consent::PolishConsent),
     /// The library's records, a search, one record, or counts ([`library`](crate::library)).
     Library(crate::library::LibraryQuery),
 }
@@ -312,9 +312,13 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         "dictation.disable" => Query::DictationDisable,
         "polish.get" => Query::PolishGet,
         "polish.allow" => Query::PolishAllow(match text("to")?.as_str() {
-            "on_device" if !obj.contains_key("endpoint") => crate::polish::Allow::OnDevice,
-            "cloud" => crate::polish::Allow::Cloud {
+            "on_device" if !obj.contains_key("endpoint") => {
+                ink_pipeline::consent::PolishConsent::OnDevice
+            }
+            "cloud" => ink_pipeline::consent::PolishConsent::Cloud {
                 endpoint: text("endpoint")?,
+                // Not needed to compare: what is recorded is the model's own name.
+                name: String::new(),
             },
             _ => {
                 return Err(format!(
@@ -863,13 +867,18 @@ mod tests {
         );
         assert_eq!(
             p(r#"{"cmd":"polish.allow","to":"on_device","id":"a"}"#),
-            Some(Ok(Query::PolishAllow(crate::polish::Allow::OnDevice)))
+            Some(Ok(Query::PolishAllow(
+                ink_pipeline::consent::PolishConsent::OnDevice
+            )))
         );
         assert_eq!(
             p(r#"{"cmd":"polish.allow","to":"cloud","endpoint":"shell engine x"}"#),
-            Some(Ok(Query::PolishAllow(crate::polish::Allow::Cloud {
-                endpoint: "shell engine x".into()
-            })))
+            Some(Ok(Query::PolishAllow(
+                ink_pipeline::consent::PolishConsent::Cloud {
+                    endpoint: "shell engine x".into(),
+                    name: String::new()
+                }
+            )))
         );
         assert_eq!(p(r#"{"cmd":"polish.get"}"#), Some(Ok(Query::PolishGet)));
         for bad in [
