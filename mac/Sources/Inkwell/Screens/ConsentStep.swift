@@ -38,7 +38,8 @@ private struct ConsentStep: ViewModifier {
                 .keyboardShortcut(.defaultAction)
                 .accessibilityLabel(destination.isOnDevice
                     ? "Turn on \(what) with \(destination.label)"
-                    : "Turn on \(what) and send your words to \(destination.label)")
+                    // Meetings send the whole transcript (everyone's words), as the message says.
+                    : "Turn on \(what) and send \(feature == .meetings ? "the transcript" : "your words") to \(destination.label)")
         } message: { destination in
             Text(ConsentModel.message(feature, destination))
         }
