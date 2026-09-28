@@ -57,8 +57,9 @@ use crate::mailbox::{DEFAULT_AUDIO_CAPACITY, Pushed};
 use crate::meeting::PUMP_INTERVAL;
 use crate::runtime::Shared;
 
-/// How long the mic stays open after a take before it is let go of.
-pub const MIC_IDLE: Duration = Duration::from_secs(180);
+/// How long the mic stays open after a take before it is let go of: one minute, so the
+/// microphone indicator goes out soon after the user stops dictating.
+pub const MIC_IDLE: Duration = Duration::from_secs(60);
 
 /// The store setting naming the dictation key.
 pub const KEY_SETTING: &str = "dictation.key";

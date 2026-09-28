@@ -216,7 +216,7 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       follows the "setting.value".
  *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
  *       Dictation live: the core holds the keys (the dictation key, and the edit key if one is
- *       set), opens the mic at the first press and lets it go after 3 minutes without a take.
+ *       set), opens the mic at the first press and lets it go after 1 minute without a take.
  *       Sent again while live, it reads the settings and binds the keys again (after the user
  *       granted Accessibility, say). "dictation.ready" names the keys held; "dictation.off" says
  *       why dictation is not live (needs_accessibility, key_refused, unsupported, ...). Both carry

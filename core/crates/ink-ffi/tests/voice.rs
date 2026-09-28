@@ -396,12 +396,18 @@ fn an_edit_without_a_language_model_leaves_the_selection_alone() {
 #[test]
 fn the_mic_is_let_go_of_when_idle_and_opened_again_at_the_next_press() {
     let rig = VoiceRig::new("mic-idle");
+    // The owner's decision (2026-09-28): one minute, not three.
+    assert_eq!(MIC_IDLE, Duration::from_secs(60));
     rig.enable();
     rig.dictate(1.0, 5);
     assert!(rig.mic_open(), "open for the next take's lead");
+    // Short of the minute it stays open (the mic thread wakes every 10 ms; give it several).
     rig.platform
         .clock()
-        .advance_ns(MIC_IDLE.as_nanos() as u64 + 1_000_000_000);
+        .advance_ns(MIC_IDLE.as_nanos() as u64 - 2_000_000_000);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(rig.mic_open(), "still open before the minute is up");
+    rig.platform.clock().advance_ns(3_000_000_000);
     let until = Instant::now() + WAIT;
     while rig.mic_open() {
         assert!(Instant::now() < until, "the mic was never let go of");

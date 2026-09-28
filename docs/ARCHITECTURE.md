@@ -248,7 +248,7 @@ settings the shell owns (`onboarding.done`, `dictation.polish` (only ever set to
   `dictation.edit_key`); a change rebinds at once. Without Accessibility the answer is
   `dictation.off` with `needs_accessibility`, never a prompt.
 - **The mic.** It opens at the first press, not at launch, and stays open so each take keeps the
-  300 ms said before its press; after 3 minutes without a take it is let go of (an open input keeps
+  300 ms said before its press; after 1 minute without a take it is let go of (an open input keeps
   the Mac awake and the microphone indicator on). The first take after that starts when the device
   does. The ink's bands follow the voice while a take is open.
 - **A take.** Live words go to the router's live-partials engine through a live gain stage and

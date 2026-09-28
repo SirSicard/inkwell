@@ -63,11 +63,12 @@ the cloud), the warm-up (`--test warm`), dictation through the core on the mock 
 - [ ] Typing in TextEdit while the Drop shows still goes to TextEdit (the Drop never takes focus).
 - [ ] Let go: "Transcribing", then the sentence appears at the caret with a trailing space, and
       the Drop goes away. The clipboard still holds the sentinel.
-- [ ] The microphone indicator (orange dot) stays on after the take. Dictate again within a
-      minute, starting to speak exactly as you press: the first word is complete (the take keeps
+- [ ] The microphone indicator (orange dot) stays on after the take. Dictate again within 30
+      seconds, starting to speak exactly as you press: the first word is complete (the take keeps
       the 300 ms before the press).
-- [ ] Leave it alone for 3 minutes: the microphone indicator goes off (the mic is let go of). The
-      next dictation works; its very first syllable may be clipped (the mic starts at the press).
+- [ ] Leave it alone for 1 minute (give it 70 seconds): the microphone indicator goes off (the mic
+      is let go of). The next dictation works; its very first syllable may be clipped (the mic
+      starts at the press).
 - [ ] Hold fn for about 0.25 s saying "hi": the Drop says "Too short / Try again". Nothing typed.
 - [ ] Hold fn in silence for two seconds: "No speech heard" (never made-up words).
 - [ ] Two takes back to back: let go and at once hold again: both go in, the first complete.
