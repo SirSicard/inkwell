@@ -148,6 +148,15 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
             ],
         ));
     };
+    // For the whole recovery, before any path below can mark the record ended: retention must not
+    // take it until its pass (or its early end) is done. Released on every return, and before
+    // the sweep that follows the pass is asked for (a hold still there would keep it from it).
+    let hold = match shared.hold_from_sweep(record) {
+        Ok(hold) => hold,
+        // Logged by name there. Retention is deleting the record: nothing to finish, and its
+        // marker goes with its audio.
+        Err(e) => return fail(format!("the meeting could not be recovered: {e}")),
+    };
     let stored = match shared.store.record(record) {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -251,6 +260,7 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
     } else if !cancelled {
         log::warn!("meeting recovery: the record could not be marked ended; the marker stays");
     }
+    drop(hold);
     match result {
         // As after a live meeting's pass: the library changed, and the setting applies now.
         Ok(_) => shared.sweep_soon(),

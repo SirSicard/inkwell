@@ -1,18 +1,22 @@
-// The Polish toggle (Settings > AI): the user's wish, and whether a language model can do it.
+// The Polish toggle (Settings > AI, and the first-run sheet): the user's switch, the consent that
+// turns it on (ConsentModel, feature polish), and whether a language model can do it.
 //
-// The toggle reads "on" only when both hold: the user turned it on, and the core has a working
-// language model registered for polish (engine.registered, kind llm, and not let go of since).
-// With no working model it reads off, cannot be switched, and says why, from what the Apple
-// engines found (Apple Intelligence off, not ready, or not on this Mac). A toggle that read "on"
-// while nothing could polish would promise what the app cannot do.
+// Polish sends what the user dictates to a language model before it is typed, so it is off until
+// the user turns it on through a consent step that says where the words go (ConsentModel has the
+// flow). Switching the toggle on only asks (`pendingConsent`); Allow sends `consent.allow`, Cancel
+// sends nothing. Off sends `setting.set dictation.polish off`, which withdraws the consent in the
+// same write.
+//
+// The toggle reads "on" only when the switch is on, the consent covers the model, and the core has
+// a working language model registered (engine.registered, kind llm, not let go of since). With no
+// working model it reads off, cannot be switched, and says why, from what the Apple engines found.
 //
 // It also tells "polish keeps timing out" from an ordinary failure: a take whose polish ran out of
 // its time budget arrives as the dictation warning polish_timed_out, while a polish cancelled for
 // another reason (the core shutting down) stays polish_failed.
 //
-// A wish that could not be read or saved says so under the toggle ("couldn't …"), never reads as
-// off: a failed read leaves the toggle unknown (and unswitchable until read), a failed save puts
-// the toggle back where it was.
+// A state that could not be read, a consent that could not be recorded and a switch that could not
+// be saved each say so under the toggle ("couldn't …"), never read as off.
 import AppleEngines
 import InkBridge
 import Observation
@@ -20,63 +24,77 @@ import Observation
 @MainActor
 @Observable
 final class PolishModel {
+    typealias Destination = ConsentModel.Destination
+    typealias ConsentHost = ConsentModel.Host
+
+    /// Polish's consent and switch, from the core.
+    let consent: ConsentModel
     /// What the Apple engines found for polish, once they registered (nil before).
     private(set) var appleState: AppleEngineState?
-    /// The user's wish, from the core's store (nil until read).
-    private(set) var preference: Bool?
     /// Language models the core confirmed and still holds, by id.
     private(set) var models: Set<String> = []
     /// Polish timeouts in a row, across takes; a take that polished resets it.
     private(set) var timeoutsInARow = 0
-    /// The wish could not be read or saved.
-    private(set) var failure: Failure?
-
-    enum Failure: Equatable, Sendable {
-        case read
-        case write
-    }
 
     /// Timeouts in a row at which the toggle warns.
     static let timeoutWarning = 2
 
-    /// The id of this model's setting commands (CoreCommand.json gives each setting command one).
+    /// The id of this model's switch command (a `command.failed` carries it).
     static let settingID = "setting:\(ShellSetting.dictationPolish.rawValue)"
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var takeTimedOut = false
-    /// The wish before a switch the core has not confirmed, to put back if saving it fails.
-    @ObservationIgnored private var beforeSwitch: Bool??
 
     init(send: @escaping SendCommand) {
         self.send = send
+        consent = ConsentModel(feature: .polish, switchSettingID: Self.settingID, send: send)
     }
 
     /// Whether a language model can polish now.
     var hasWorkingEngine: Bool { !models.isEmpty }
 
-    /// What the toggle shows: on only with the wish and a working engine.
-    var isOn: Bool { preference == true && hasWorkingEngine }
+    /// The core's state (nil until read).
+    var state: ConsentModel.Snapshot? { consent.state }
+    /// The user's switch, from the core (nil until read).
+    var preference: Bool? { consent.state?.on }
+    /// Where polish would send now, if the core named a model.
+    var destination: Destination? { consent.destination }
+    /// Something could not be read, recorded or saved.
+    var failure: ConsentModel.Failure? { consent.failure }
+    /// The consent step on screen.
+    var pendingConsent: Destination? { consent.pending }
+    /// Which screen asked for the consent step.
+    var consentHost: ConsentHost? { consent.host }
+
+    /// What the toggle shows: on only with the switch, a consent that covers the model, and a
+    /// working engine.
+    var isOn: Bool { consent.isAllowedOn && hasWorkingEngine }
+
+    /// On, but the model now sends somewhere the user has not agreed to: nothing is polished.
+    var isPaused: Bool { consent.isPaused && hasWorkingEngine }
 
     /// Whether the toggle can be switched.
-    var canToggle: Bool { hasWorkingEngine && preference != nil }
+    var canToggle: Bool { hasWorkingEngine && consent.state != nil && destination != nil }
 
     /// Polish has timed out on several takes in a row.
     var keepsTimingOut: Bool { timeoutsInARow >= Self.timeoutWarning }
 
     /// The line under the toggle.
     var status: String {
-        switch failure {
-        case .read: return "Couldn't read your polish setting. Open Settings again to retry."
-        case .write: return "Couldn't save the change, so polish stays as it was."
-        case nil: break
+        // A failure, or a part of the state the core could not read, is said whether or not polish
+        // is on and whether or not a model works: an unread switch must never read as plain off.
+        if consent.failure != nil || consent.state?.error != nil, let problem = consent.problem {
+            return problem
         }
         guard hasWorkingEngine else { return Self.unavailable(appleState) }
+        if let problem = consent.problem { return problem }
         if keepsTimingOut {
             return "Polish keeps timing out, so your words go in as you said them."
         }
-        return isOn
-            ? "On this Mac, with Apple Intelligence. Nothing leaves it."
-            : "Off. Your words go in as you said them."
+        guard isOn, let destination else { return "Off. Your words go in as you said them." }
+        return destination.isOnDevice
+            ? "On, with \(destination.label). Your words stay on this Mac."
+            : "On. Your words go to \(destination.label) before they are typed."
     }
 
     /// Why nothing can polish, in the user's terms.
@@ -102,9 +120,23 @@ final class PolishModel {
         }
     }
 
-    /// Reads the wish from the core's store.
+    // MARK: - The consent step's words
+
+    static let consentTitle = ConsentModel.title(.polish)
+
+    static func consentMessage(_ destination: Destination) -> String {
+        ConsentModel.message(.polish, destination)
+    }
+
+    static func consentButton(_ destination: Destination) -> String {
+        ConsentModel.button(.polish, destination)
+    }
+
+    // MARK: - Commands
+
+    /// Reads the state from the core.
     func load() {
-        send(.settingGet(.dictationPolish))
+        consent.load()
     }
 
     /// The Apple engines registered polish, or found it could not run.
@@ -112,19 +144,23 @@ final class PolishModel {
         appleState = state
     }
 
-    /// The user switched the toggle. Does nothing without a working engine.
-    func setOn(_ on: Bool) {
+    /// The user switched the toggle. On shows the consent step (nothing is sent until Allow); off
+    /// turns polish off, which also withdraws the consent. Does nothing without a working engine.
+    func setOn(_ on: Bool, from host: ConsentHost = .settings) {
         guard canToggle else { return }
-        if beforeSwitch == nil {
-            beforeSwitch = .some(preference)
+        if on {
+            consent.ask(from: host)
+            return
         }
-        preference = on
-        failure = nil
-        send(.settingSet(.dictationPolish, on ? "on" : "off"))
+        consent.switchedOff()
+        send(.settingSet(.dictationPolish, "off"))
     }
 
+    func allowConsent() { consent.allow() }
+    func cancelConsent() { consent.cancel() }
+
     /// Whether the status is a problem to show in the alert colour.
-    var isProblem: Bool { failure != nil || keepsTimingOut }
+    var isProblem: Bool { consent.isProblem || keepsTimingOut }
 
     func apply(_ event: InkEvent) {
         switch event {
@@ -134,21 +170,6 @@ final class PolishModel {
             models.remove(engine.id)
         case .coreStopped:
             models = []
-        case .settingValue(let value) where value.key == ShellSetting.dictationPolish.rawValue:
-            // Never set: off, as a mode's polish is by default.
-            preference = value.value == "on"
-            failure = nil
-            beforeSwitch = nil
-        case .commandFailed(let failed) where failed.id == Self.settingID:
-            if failed.command == "setting.set" {
-                failure = .write
-                if let before = beforeSwitch {
-                    preference = before
-                }
-                beforeSwitch = nil
-            } else {
-                failure = .read
-            }
         case .dictationStarted:
             takeTimedOut = false
         case .dictationWarningEvent(let warning) where warning.kind == .polishTimedOut:
@@ -162,5 +183,6 @@ final class PolishModel {
         default:
             break
         }
+        consent.apply(event)
     }
 }

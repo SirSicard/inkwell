@@ -39,6 +39,7 @@ use ink_core::{
 };
 use ink_engines::{ExternalEngine, ModelDir, Route};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
+use ink_pipeline::consent::{Feature, LlmConsent};
 use ink_pipeline::dictionary::Dictionary;
 use ink_pipeline::events::DictationEvent;
 use ink_pipeline::mic::MicPath;
@@ -56,17 +57,26 @@ use crate::mailbox::{DEFAULT_AUDIO_CAPACITY, Pushed};
 use crate::meeting::PUMP_INTERVAL;
 use crate::runtime::Shared;
 
-/// How long the mic stays open after a take before it is let go of.
-pub const MIC_IDLE: Duration = Duration::from_secs(180);
+/// How long the mic stays open after a take before it is let go of: one minute, so the
+/// microphone indicator goes out soon after the user stops dictating.
+pub const MIC_IDLE: Duration = Duration::from_secs(60);
 
 /// The store setting naming the dictation key.
 pub const KEY_SETTING: &str = "dictation.key";
 /// The store setting naming the voice-edit key, or `off`.
 pub const EDIT_KEY_SETTING: &str = "dictation.edit_key";
-/// The store setting holding the "Polish my words" switch (`on` or `off`).
+/// The store setting holding the "Polish my words" switch (`on` or `off`). Only `consent.allow`
+/// turns it on ([`crate::consent`]).
 pub const POLISH_SETTING: &str = "dictation.polish";
 /// The settings a running dictation reads: a change to one reaches it at once.
-pub const DICTATION_SETTINGS: &[&str] = &[KEY_SETTING, EDIT_KEY_SETTING, POLISH_SETTING];
+pub const DICTATION_SETTINGS: &[&str] = &[
+    KEY_SETTING,
+    EDIT_KEY_SETTING,
+    POLISH_SETTING,
+    // The consents (the core's own settings: no shell writes them through setting.set).
+    Feature::Polish.setting_key(),
+    Feature::Edit.setting_key(),
+];
 /// The dictation key until the user picks another.
 pub const DEFAULT_KEY: &str = "fn";
 /// The keys a shell may offer (modifiers held on their own; see ink-platform-mac's bindings).
@@ -319,7 +329,9 @@ pub fn shutdown(shared: &Shared) {
 }
 
 /// The modes dictation writes in with no modes stored: the built-in default, polished whenever
-/// the user's switch is on (so "Polish my words" alone decides on a fresh install).
+/// the user's switch is on (so "Polish my words" alone decides on a fresh install). The switch
+/// turns on only with the user's consent, and polish runs only where that consent covers
+/// ([`LlmConsent`]).
 pub fn default_modes() -> ModeStore {
     ModeStore {
         default_id: Mode::builtin_default().id,
@@ -436,6 +448,24 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
     let edit_key = read(EDIT_KEY_SETTING, "the edit key")
         .filter(|k| k != "off" && EDIT_KEYS.contains(&k.as_str()));
     let polish_wish = read(POLISH_SETTING, "the polish switch").as_deref() == Some("on");
+    // Unreadable consent is no consent: the feature fails closed, and the shell hears why.
+    let mut consent = |feature: Feature, name: &'static str| {
+        let stored = match store.setting(feature.setting_key()) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("dictation: {name} could not be read: {e}");
+                unreadable.push(name);
+                return None;
+            }
+        };
+        LlmConsent::from_setting(stored.as_deref()).unwrap_or_else(|e| {
+            log::error!("dictation: {e} ({name}); nothing is sent until the user agrees again");
+            unreadable.push(name);
+            None
+        })
+    };
+    let polish_consent = consent(Feature::Polish, "the polish consent");
+    let edit_consent = consent(Feature::Edit, "the voice edit consent");
     let modes = load_modes(store).unwrap_or_else(|e| {
         log::error!("dictation: the modes could not be read: {e}");
         unreadable.push("the modes");
@@ -453,6 +483,8 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
             modes,
             dictionary,
             polish_wish,
+            polish_consent,
+            edit_consent,
             utc_offset_minutes,
             ..DictationSettings::default()
         },

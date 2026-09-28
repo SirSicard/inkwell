@@ -19,20 +19,28 @@
 //! dictations").
 //!
 //! **When.** Never on a timer (nothing ticks while idle): at launch, after each meeting's final
-//! pass (a recovered meeting's too), and when the setting changes. A record without an end (a
-//! meeting live now, or one a crash interrupted, which recovery finishes first) is never swept.
+//! pass (a recovered meeting's too), and when the setting changes.
+//!
+//! **Never a meeting that is not finished.** A record without an end (a meeting live now, or one
+//! a crash interrupted) is never swept; nor is one whose final pass has not finished, although
+//! its record already reads as ended (a meeting is marked ended when its live phase stops, and a
+//! recovered one when recovery takes it up, before the pass runs): one this process is finishing
+//! ([`Hold`]), or one with a crash-recovery marker beside its audio (its pass has not run to the
+//! end; recovery finishes it, and the sweep after that takes it). Otherwise a sweep that happened
+//! to run in that window (the launch's, running late) would delete the record under its own pass.
 //!
 //! **Where.** On its own thread, `ink-retention` ([`Sweeper`]), which sleeps until a sweep is
 //! asked for: never on a meeting's worker (a new meeting must be able to start the moment the last
 //! one's final pass is over) nor on the screens' thread. Asks that arrive during a sweep are one
 //! more sweep, not one each.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use ink_core::{RecordCursor, RecordId, RecordKind, RecordQuery, StoreError};
+use ink_core::{Record, RecordCursor, RecordId, RecordKind, RecordQuery, StoreError};
 
 use crate::events::event;
 use crate::runtime::{Shared, lock};
@@ -120,6 +128,107 @@ impl Shared {
     }
 }
 
+/// The records retention must leave alone, and the ones it is deleting now, under one lock
+/// (`Shared::finishing`) that is never held across I/O.
+#[derive(Default)]
+pub(crate) struct Holds {
+    /// Records this process is finishing ([`Hold`]).
+    held: BTreeSet<RecordId>,
+    /// Records a sweep has checked and is deleting now (marked under the lock, deleted outside it).
+    sweeping: BTreeSet<RecordId>,
+}
+
+/// A record this process is finishing (a meeting from its start to the end of its final pass, a
+/// recovered meeting for the whole of its recovery, from before any path can mark it ended):
+/// retention leaves it alone while this is held. Dropping it lets go.
+///
+/// Taking a hold and the sweep's decision to delete a record never interleave: both run under the
+/// same lock, and the sweep marks the record as being swept before it lets go of the lock to
+/// delete it. A hold taken first keeps the record; a hold on a record being swept is refused
+/// ([`BeingSwept`]); a hold taken after the delete finds the record gone. No hold ever waits on a
+/// delete: the lock is only held to read and change the two sets.
+pub struct Hold<'a> {
+    shared: &'a Shared,
+    record: RecordId,
+}
+
+/// A hold refused: retention is deleting that record now. Record ids are never reused and a
+/// record is only swept once its pass is done, so this means a bug, and it is logged by name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BeingSwept(pub RecordId);
+
+impl std::fmt::Display for BeingSwept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "retention is deleting record {} now", self.0.0)
+    }
+}
+
+impl Shared {
+    /// **Worker.** Keeps retention away from `record` until the hold is dropped. Taken before the
+    /// record can read as ended. Never waits on a sweep's delete. Refused, and logged, when a
+    /// sweep is deleting that very record.
+    pub fn hold_from_sweep(&self, record: &RecordId) -> Result<Hold<'_>, BeingSwept> {
+        let mut holds = lock(&self.finishing);
+        if holds.sweeping.contains(record) {
+            log::error!(
+                "retention: a hold on record {} was refused: it is being deleted",
+                record.0
+            );
+            return Err(BeingSwept(record.clone()));
+        }
+        holds.held.insert(record.clone());
+        Ok(Hold {
+            shared: self,
+            record: record.clone(),
+        })
+    }
+
+    /// Whether this process holds `record` from retention now ([`Shared::hold_from_sweep`]).
+    pub fn held_from_sweep(&self, record: &RecordId) -> bool {
+        lock(&self.finishing).held.contains(record)
+    }
+}
+
+impl Drop for Hold<'_> {
+    fn drop(&mut self) {
+        lock(&self.shared.finishing).held.remove(&self.record);
+    }
+}
+
+/// Whether `record`'s crash-recovery marker says its pass has not finished: the marker is there,
+/// or cannot be looked for (a record kept one sweep too long costs nothing; one deleted under its
+/// pass costs the meeting). Read outside the holds' lock: a marker only goes (its pass is done),
+/// and a new one is only ever written for a new record.
+fn marker(shared: &Shared, record: &Record) -> Option<&'static str> {
+    let relative = record.audio_dir.as_ref()?;
+    match crate::library::audio_dir(&shared.data_dir, relative) {
+        Ok(Some(dir)) => match std::fs::symlink_metadata(dir.join(crate::recovery::LIVE_FILE)) {
+            Ok(_) => Some("its crash-recovery marker is there"),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => {
+                log::warn!("retention: a meeting's crash marker could not be looked for: {e}");
+                Some("its crash-recovery marker could not be looked for")
+            }
+        },
+        // No audio directory on disk: no marker either.
+        Ok(None) => None,
+        Err(e) => {
+            log::warn!("retention: a meeting's audio directory could not be checked: {e}");
+            Some("its audio directory could not be checked")
+        }
+    }
+}
+
+/// Under the holds' lock: `record` is held (kept), or it is marked as being swept (returns true).
+fn claim(shared: &Shared, record: &RecordId) -> bool {
+    let mut holds = lock(&shared.finishing);
+    if holds.held.contains(record) {
+        return false;
+    }
+    holds.sweeping.insert(record.clone());
+    true
+}
+
 /// What a sweep did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Swept {
@@ -150,7 +259,8 @@ fn days(shared: &Shared) -> Result<Option<i64>, StoreError> {
 }
 
 /// **Worker** (the retention thread's). Deletes every ended meeting and dictation that started
-/// before the setting's cut-off. `None` when the setting keeps everything; otherwise what it did,
+/// before the setting's cut-off, except a meeting whose final pass has not finished (see the
+/// module docs). `None` when the setting keeps everything; otherwise what it did,
 /// also sent as `library.swept` when it did anything. It stops early at shutdown.
 pub fn sweep(shared: &Shared) -> Option<Swept> {
     let _one = SWEEPING
@@ -199,7 +309,27 @@ pub fn sweep(shared: &Shared) -> Option<Swept> {
             if record.ended_at_unix_ms.is_none() || record.kind == RecordKind::FileImport {
                 continue;
             }
-            match shared.store.delete_record(&record.id) {
+            // Checked and deleted under the holds' lock, so no hold is taken in between (see
+            // Hold). Read after the listing: a record that listed as ended was ended under a hold,
+            // which is still there unless its pass is done.
+            // By id only: a record kept sweep after sweep (a pass that hangs) shows here.
+            if let Some(why) = marker(shared, &record) {
+                log::info!("retention: meeting {} kept: {why}", record.id.0);
+                continue;
+            }
+            // Checked and marked under the holds' lock, deleted outside it (see Hold). Read after
+            // the listing: a record that listed as ended was ended under a hold, which is still
+            // there unless its pass is done.
+            if !claim(shared, &record.id) {
+                log::info!(
+                    "retention: meeting {} kept: this process is finishing it",
+                    record.id.0
+                );
+                continue;
+            }
+            let deleted = shared.store.delete_record(&record.id);
+            lock(&shared.finishing).sweeping.remove(&record.id);
+            match deleted {
                 Ok(()) | Err(StoreError::NotFound) => {}
                 Err(e) => {
                     log::warn!("retention: a record could not be deleted: {e}");

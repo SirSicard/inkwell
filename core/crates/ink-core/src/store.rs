@@ -442,6 +442,10 @@ pub trait Store: Send + Sync {
 
     /// Sets a setting.
     fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError>;
+
+    /// Sets several settings in one transaction: all of them, or (on an error) none. For settings
+    /// that must never be seen half-changed (a feature's switch and the user's consent for it).
+    fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), StoreError>;
 }
 
 /// Where each of `n` new commitments ends up after `merges` (`(from, into)` by index, applied in

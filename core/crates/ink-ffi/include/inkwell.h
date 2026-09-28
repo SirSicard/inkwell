@@ -165,7 +165,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"meetings.recover"}
  *       Finishes the meetings a crash interrupted (their audio repaired, their final pass run):
  *       "meeting.recovered" and the pass's events per meeting, then "meetings.recovered". Send it
- *       once the shell's own engines are registered, so a recovered meeting gets them too.
+ *       once the shell's own engines are registered, so a recovered meeting gets them too. Sent
+ *       while a recovery runs, it is never refused: that recovery goes one more round (asks
+ *       during a round count as one), ending with its own "meetings.recovered".
  *   Detection follows the "meetings.detect" setting (on unless turned off): "meeting.detection"
  *   says whether it listens, "meeting.detected" offers an app that has held the microphone for
  *   3 s, "meeting.detection_ended" takes the offer back.
@@ -200,8 +202,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
- *       "dictation.polish" (on|off), "dictation.key" (fn|right_option|right_command|
- *       right_control|right_shift), "dictation.edit_key" (off or one of those),
+ *       "dictation.polish" (on|off; setting.set takes only off, which also withdraws polish's
+ *       consent in the same write, and answers "consent.state" too: consent.allow turns it on),
+ *       "dictation.key" (fn|right_option|right_command|right_control|right_shift),
+ *       "dictation.edit_key" (off or one of those; voice edit turns on with its consent through
+ *       consent.allow, and off withdraws that consent in the same write, answering
+ *       "consent.state" too; an edit key set without a consent edits nothing),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
  *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a
@@ -214,13 +220,30 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       follows the "setting.value".
  *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
  *       Dictation live: the core holds the keys (the dictation key, and the edit key if one is
- *       set), opens the mic at the first press and lets it go after 3 minutes without a take.
+ *       set), opens the mic at the first press and lets it go after 1 minute without a take.
  *       Sent again while live, it reads the settings and binds the keys again (after the user
  *       granted Accessibility, say). "dictation.ready" names the keys held; "dictation.off" says
  *       why dictation is not live (needs_accessibility, key_refused, unsupported, ...). Both carry
  *       the command's "id" as "ref". "utc_offset_minutes" (optional) is for {date} and {time}.
  *   {"cmd":"dictation.disable","id":"<ref>"}
  *       Lets go of the keys and the mic: "dictation.off" with reason disabled.
+ *   {"cmd":"consent.get","feature":"polish|edit","id":"<ref>"}
+ *       "consent.state" for a feature that sends the user's words to a language model (polish:
+ *       the dictation; edit: the selection and the instruction): its switch, where the model it
+ *       would use now sends them ("to": on_device or cloud, with its "name", and for cloud the
+ *       "endpoint"), and where the user agreed it may ("allowed_to"); "allowed" says whether
+ *       that consent covers the model now. Each consent is its own. A feature runs only when on
+ *       and allowed: a model that changed destination since the user agreed gets nothing, and
+ *       each take says so (dictation.warning polish_not_allowed, dictation.edit_failed
+ *       not_allowed). Send it again after an engine.registered or engine.unregistered of a
+ *       language model.
+ *   {"cmd":"consent.allow","feature":"polish|edit","to":"on_device|cloud","endpoint":"<for cloud>",
+ *    "key":"<for edit: its key>","id":"<ref>"}
+ *       The user agreed, after the shell told them plainly where the feature sends their words:
+ *       records that consent and turns the feature on (polish's switch, or edit's key), both in
+ *       one write. Name what "consent.state" showed; if the model changed meanwhile, nothing is
+ *       recorded and it fails ("command.failed", with a fresh "consent.state" first), so the
+ *       shell asks again. Answers "consent.state" with the "id".
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).

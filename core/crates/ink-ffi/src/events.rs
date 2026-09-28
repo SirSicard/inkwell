@@ -9,6 +9,7 @@
 //! was said (I5).
 
 use ink_core::{Channel, InsertOutcome, Job, RecordId};
+use ink_pipeline::consent::LlmConsent;
 use ink_pipeline::events::{
     DictationEvent, Discard, EditFailure, TakeFailure, VadUnavailable, VoiceDetection, Warning,
 };
@@ -199,6 +200,9 @@ pub fn dictation(e: &DictationEvent) -> Value {
                 Warning::PolishUnavailable => ("polish_unavailable", None, None),
                 Warning::PolishFailed(e) => ("polish_failed", None, some(e.to_string())),
                 Warning::PolishTimedOut => ("polish_timed_out", None, None),
+                Warning::PolishNotAllowed(needs) => {
+                    ("polish_not_allowed", None, some(destination_name(needs)))
+                }
                 Warning::NoModeForStyle => ("no_mode_for_style", None, None),
                 Warning::SaveFailed(e) => ("save_failed", None, some(e.to_string())),
                 Warning::DeletedTextNotScrubbed => ("deleted_text_not_scrubbed", None, None),
@@ -233,6 +237,7 @@ pub fn dictation(e: &DictationEvent) -> Value {
                 EditFailure::TimedOut => ("timed_out", None),
                 EditFailure::Model(e) => ("model", some(e.to_string())),
                 EditFailure::Insert(e) => ("insert", some(e.to_string())),
+                EditFailure::NotAllowed(needs) => ("not_allowed", some(destination_name(needs))),
                 _ => (unmapped("edit failure"), None),
             };
             event(
@@ -683,6 +688,15 @@ pub fn meeting(record: &RecordId, e: &MeetingEvent) -> Value {
     }
 }
 
+/// Where a refused call would have gone, for a message: the provider's name, or "a model on this
+/// machine". Never the user's words.
+fn destination_name(needs: &LlmConsent) -> String {
+    match needs {
+        LlmConsent::Cloud { name, .. } => name.clone(),
+        LlmConsent::OnDevice => "a model on this machine".to_owned(),
+    }
+}
+
 /// `command.failed`.
 pub fn command_failed(command: &str, id: Option<&str>, message: &str) -> Value {
     event(
@@ -767,6 +781,7 @@ mod tests {
             DictationEvent::Warning(Warning::AudioLost { frames: 480 }),
             DictationEvent::Warning(Warning::PolishFailed(LlmError::NoKey)),
             DictationEvent::Warning(Warning::PolishTimedOut),
+            DictationEvent::Warning(Warning::PolishNotAllowed(LlmConsent::OnDevice)),
             DictationEvent::Warning(Warning::SaveFailed(StoreError::NotFound)),
             DictationEvent::Warning(Warning::DeletedTextNotScrubbed),
             DictationEvent::Warning(Warning::DeletedTextScrubbed),
@@ -784,6 +799,10 @@ mod tests {
             DictationEvent::EditFailed(EditFailure::Transcription(e())),
             DictationEvent::EditFailed(EditFailure::NoModel),
             DictationEvent::EditFailed(EditFailure::TimedOut),
+            DictationEvent::EditFailed(EditFailure::NotAllowed(LlmConsent::Cloud {
+                endpoint: "shell engine x".into(),
+                name: "Example".into(),
+            })),
             DictationEvent::EditFailed(EditFailure::Model(LlmError::Cancelled)),
             DictationEvent::EditFailed(EditFailure::Insert(PlatformError::Failed("x".into()))),
             DictationEvent::WorkerFailed { recovered: true },

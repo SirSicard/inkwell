@@ -44,9 +44,12 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // The first-run state has been completed (or skipped).
     ("onboarding.done", &["true", "false"]),
     // The user's wish for dictation polish. Whether polish runs also needs a working language
-    // model; the shell shows the two apart.
-    ("dictation.polish", &["on", "off"]),
-    // The dictation key and the voice-edit key (S2.7). A change rebinds them at once.
+    // model; the shell shows the two apart. `setting.set` takes only `off` (which withdraws the
+    // consent too): polish turns on through `consent.allow` (crate::consent).
+    (crate::voice::POLISH_SETTING, &["on", "off"]),
+    // The dictation key and the voice-edit key (S2.7). A change rebinds them at once. The edit key
+    // turns on with its consent through `consent.allow`; `off` withdraws that consent too, and a
+    // key set without one edits nothing (crate::consent).
     (crate::voice::KEY_SETTING, crate::voice::KEYS),
     (crate::voice::EDIT_KEY_SETTING, crate::voice::EDIT_KEYS),
     // Whether the shell turns dictation on at launch (Settings > Voice). The shell reads it and
@@ -141,6 +144,10 @@ pub enum Query {
     },
     /// `dictation.disable`.
     DictationDisable,
+    /// `consent.get`: a feature's switch, destination and consent ([`crate::consent::state`]).
+    ConsentGet(ink_pipeline::consent::Feature),
+    /// `consent.allow`: the user agreed a feature may send where its model goes now.
+    ConsentAllow(crate::consent::Allow),
     /// The library's records, a search, one record, or counts ([`library`](crate::library)).
     Library(crate::library::LibraryQuery),
 }
@@ -167,6 +174,8 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "setting.set" => &["key", "value"],
         "dictation.enable" => &["utc_offset_minutes"],
         "dictation.disable" => &[],
+        "consent.get" => &["feature"],
+        "consent.allow" => &["feature", "to", "endpoint", "key"],
         _ => return None,
     })
 }
@@ -280,6 +289,12 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
                     accepted.join(", ")
                 ));
             }
+            if key == crate::voice::POLISH_SETTING && value != "off" {
+                // Only the user's consent turns polish on (crate::consent).
+                return Err(format!(
+                    "{name}: \"{key}\" turns on only through consent.allow, once the user agreed where polish sends"
+                ));
+            }
             Query::SettingSet { key, value }
         }
         "modes.list" => Query::ModesList,
@@ -297,8 +312,44 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             },
         },
         "dictation.disable" => Query::DictationDisable,
+        "consent.get" => Query::ConsentGet(feature(name, &text("feature")?)?),
+        "consent.allow" => {
+            let feature = feature(name, &text("feature")?)?;
+            let asked = match text("to")?.as_str() {
+                "on_device" if !obj.contains_key("endpoint") => {
+                    ink_pipeline::consent::LlmConsent::OnDevice
+                }
+                "cloud" => ink_pipeline::consent::LlmConsent::Cloud {
+                    endpoint: text("endpoint")?,
+                    // Not needed to compare: what is recorded is the model's own name.
+                    name: String::new(),
+                },
+                _ => {
+                    return Err(format!(
+                        "{name}: \"to\" is on_device, or cloud with the \"endpoint\" consent.state gave"
+                    ));
+                }
+            };
+            let key = match obj.get("key") {
+                None => None,
+                Some(_) => Some(text("key")?),
+            };
+            Query::ConsentAllow(crate::consent::Allow {
+                feature,
+                asked,
+                key: crate::consent::check_key(feature, key.as_deref())
+                    .map_err(|e| format!("{name}: {e}"))?,
+            })
+        }
         _ => unreachable!("fields() lists every query"),
     })
+}
+
+/// A feature the consent commands serve: one with a switch ([`crate::consent::switch`]).
+fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, String> {
+    ink_pipeline::consent::Feature::parse(feature)
+        .filter(|f| crate::consent::switch(*f).is_some())
+        .ok_or_else(|| format!("{name}: \"feature\" is polish or edit"))
 }
 
 /// `key` if the shell may use it.
@@ -525,28 +576,41 @@ impl Ctx<'_> {
                 Ok(value) => emit(setting(&key, value)),
                 Err(e) => fail(e.to_string()),
             },
-            Query::SettingSet { key, value } => match store.set_setting(&key, &value) {
-                Ok(()) => {
-                    if key == crate::llms::LOCAL_ONLY_KEY {
-                        self.shared.local_only.set(value != "off");
+            Query::SettingSet { key, value } => {
+                match match crate::consent::feature_switched_by(&key) {
+                    // A feature's switch turned off: with its consent withdrawn, in one write. (Polish
+                    // is only ever set to off: the parser refuses on.)
+                    Some(feature) if value == "off" => {
+                        crate::consent::turn_off(self.shared, feature)
                     }
-                    if key == crate::control::DETECT_KEY {
-                        self.shared.tell_meetings(crate::control::Msg::Detect {
-                            on: value == "on",
-                            why_off: None,
-                        });
+                    _ => store.set_setting(&key, &value).map_err(|e| e.to_string()),
+                } {
+                    Ok(()) => {
+                        if key == crate::llms::LOCAL_ONLY_KEY {
+                            self.shared.local_only.set(value != "off");
+                        }
+                        if key == crate::control::DETECT_KEY {
+                            self.shared.tell_meetings(crate::control::Msg::Detect {
+                                on: value == "on",
+                                why_off: None,
+                            });
+                        }
+                        let sweep = key == crate::retention::RETENTION_KEY;
+                        let switched = crate::consent::feature_switched_by(&key);
+                        emit(setting(&key, Some(value)));
+                        if let Some(feature) = switched {
+                            emit(crate::consent::state(self.shared, feature, None));
+                        }
+                        if sweep {
+                            self.shared.sweep_soon();
+                        }
+                        if crate::voice::DICTATION_SETTINGS.contains(&key.as_str()) {
+                            crate::voice::settings_changed(self.shared);
+                        }
                     }
-                    let sweep = key == crate::retention::RETENTION_KEY;
-                    emit(setting(&key, Some(value)));
-                    if sweep {
-                        self.shared.sweep_soon();
-                    }
-                    if crate::voice::DICTATION_SETTINGS.contains(&key.as_str()) {
-                        crate::voice::settings_changed(self.shared);
-                    }
+                    Err(e) => fail(e),
                 }
-                Err(e) => fail(e.to_string()),
-            },
+            }
             Query::ModesList => match modes(store) {
                 Ok(e) => emit(e),
                 Err(e) => fail(e),
@@ -555,6 +619,15 @@ impl Ctx<'_> {
                 crate::voice::enable(self.shared, self.models, utc_offset_minutes, id.as_deref())
             }
             Query::DictationDisable => crate::voice::disable(self.shared, id.as_deref()),
+            Query::ConsentGet(feature) => {
+                emit(crate::consent::state(self.shared, feature, id.as_deref()))
+            }
+            Query::ConsentAllow(asked) => {
+                match crate::consent::allow(self.shared, &asked, id.as_deref()) {
+                    Ok(e) => emit(e),
+                    Err(e) => fail(e),
+                }
+            }
             Query::Library(query) => {
                 match crate::library::answer(self.shared, query, id.as_deref()) {
                     Ok(e) => emit(e),
@@ -604,6 +677,11 @@ impl Ctx<'_> {
             .collect();
         event("models.listed", &[("models", Some(Value::Array(models)))])
     }
+}
+
+/// `setting.value`.
+pub(crate) fn setting_value(key: &str, value: Option<String>) -> Value {
+    setting(key, value)
 }
 
 fn setting(key: &str, value: Option<String>) -> Value {
@@ -810,13 +888,54 @@ mod tests {
             }))
         );
         assert_eq!(
-            p(r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#),
+            p(r#"{"cmd":"setting.set","key":"dictation.polish","value":"off"}"#),
             Some(Ok(Query::SettingSet {
                 key: "dictation.polish".into(),
-                value: "on".into()
+                value: "off".into()
             }))
         );
+        use crate::consent::Allow;
+        use ink_pipeline::consent::{Feature, LlmConsent};
+        assert_eq!(
+            p(r#"{"cmd":"consent.allow","feature":"polish","to":"on_device","id":"a"}"#),
+            Some(Ok(Query::ConsentAllow(Allow {
+                feature: Feature::Polish,
+                asked: LlmConsent::OnDevice,
+                key: None
+            })))
+        );
+        assert_eq!(
+            p(
+                r#"{"cmd":"consent.allow","feature":"edit","to":"cloud","endpoint":"shell engine x","key":"right_command"}"#
+            ),
+            Some(Ok(Query::ConsentAllow(Allow {
+                feature: Feature::Edit,
+                asked: LlmConsent::Cloud {
+                    endpoint: "shell engine x".into(),
+                    name: String::new()
+                },
+                key: Some("right_command".into())
+            })))
+        );
+        assert_eq!(
+            p(r#"{"cmd":"consent.get","feature":"edit"}"#),
+            Some(Ok(Query::ConsentGet(Feature::Edit)))
+        );
         for bad in [
+            // Only the user's consent turns polish on: consent.allow, never setting.set.
+            r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#,
+            r#"{"cmd":"setting.set","key":"llm.consent.polish","value":"{\"to\":\"on_device\"}"}"#,
+            r#"{"cmd":"setting.set","key":"llm.consent.edit","value":"none"}"#,
+            r#"{"cmd":"consent.get"}"#,
+            r#"{"cmd":"consent.get","feature":"summary"}"#,
+            r#"{"cmd":"consent.allow","feature":"polish"}"#,
+            r#"{"cmd":"consent.allow","feature":"polish","to":"cloud"}"#,
+            r#"{"cmd":"consent.allow","feature":"polish","to":"everywhere"}"#,
+            r#"{"cmd":"consent.allow","feature":"polish","to":"on_device","endpoint":"https://api.example.com"}"#,
+            r#"{"cmd":"consent.allow","feature":"polish","to":"on_device","key":"fn"}"#,
+            r#"{"cmd":"consent.allow","feature":"edit","to":"on_device"}"#,
+            r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"off"}"#,
+            r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"left_shift"}"#,
             r#"{"cmd":"permissions.check","deep":true}"#,
             r#"{"cmd":"permission.request","permission":"camera"}"#,
             r#"{"cmd":"permission.request"}"#,

@@ -1065,3 +1065,45 @@ fn one_store_serves_many_worker_threads() {
     );
     fts_is_consistent(&db.raw());
 }
+
+/// `set_settings` is one transaction: when a later write fails, the earlier ones are rolled back
+/// and neither key changes. The failure is SQLite's own: a trigger (created on a second
+/// connection, so the store's code is untouched) that aborts any insert or update of key "b".
+#[test]
+fn set_settings_rolls_back_every_write_when_a_later_one_fails() {
+    let db = TempDb::new("set-settings-rollback");
+    let store = db.open();
+    store.set_setting("a", "old").unwrap();
+    store.set_setting("b", "kept").unwrap();
+    db.raw()
+        .execute_batch(
+            "CREATE TRIGGER refuse_b_insert BEFORE INSERT ON setting WHEN NEW.key = 'b'
+               BEGIN SELECT RAISE(ABORT, 'refused'); END;
+             CREATE TRIGGER refuse_b_update BEFORE UPDATE ON setting WHEN NEW.key = 'b'
+               BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )
+        .unwrap();
+    // The trigger does refuse "b" on its own, so the pair below fails at its second write.
+    assert!(store.set_setting("b", "changed").is_err());
+
+    assert!(
+        store
+            .set_settings(&[("a", "new"), ("b", "changed")])
+            .is_err(),
+        "the second write fails"
+    );
+    assert_eq!(
+        store.setting("a").unwrap().as_deref(),
+        Some("old"),
+        "the first write was rolled back"
+    );
+    assert_eq!(store.setting("b").unwrap().as_deref(), Some("kept"));
+
+    // A key new to the store is not left behind either.
+    assert!(
+        store
+            .set_settings(&[("c", "new"), ("b", "changed")])
+            .is_err()
+    );
+    assert_eq!(store.setting("c").unwrap(), None);
+}

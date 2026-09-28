@@ -789,6 +789,16 @@ fn same_time_segments_and_notes_keep_a_stable_order(store: &dyn Store) {
     assert_eq!(listed, notes);
 }
 
+/// Several settings written together are all there, each replacing its previous value.
+fn several_settings_are_written_together(store: &dyn Store) {
+    store.set_setting("a", "old").unwrap();
+    store.set_settings(&[("a", "new"), ("b", "set")]).unwrap();
+    assert_eq!(store.setting("a").unwrap().as_deref(), Some("new"));
+    assert_eq!(store.setting("b").unwrap().as_deref(), Some("set"));
+    store.set_settings(&[]).unwrap();
+    assert_eq!(store.setting("a").unwrap().as_deref(), Some("new"));
+}
+
 /// Setting a value twice keeps the second; so do speaker names and summaries.
 fn upserts_replace_the_previous_value(store: &dyn Store) {
     let id = meeting(store, 1);
@@ -1338,6 +1348,7 @@ contract!(
     open_commitment_ties_keep_the_order_they_were_added,
     same_time_segments_and_notes_keep_a_stable_order,
     upserts_replace_the_previous_value,
+    several_settings_are_written_together,
     search_follows_supersede_and_delete,
     removed_lines_are_kept_apart_from_the_transcript,
     a_supersede_may_drop_only_what_the_pass_explained,

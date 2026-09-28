@@ -526,4 +526,13 @@ impl Store for MemStore {
         lock(&self.inner).settings.insert(key.into(), value.into());
         Ok(())
     }
+
+    fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), StoreError> {
+        // One lock: no reader sees some written and not others.
+        let mut inner = lock(&self.inner);
+        for (key, value) in settings {
+            inner.settings.insert((*key).into(), (*value).into());
+        }
+        Ok(())
+    }
 }

@@ -8,7 +8,7 @@
 //! | 4 transcribe | the [`OfflineEngine`] the caller routed to [`Job::DictationFinal`](ink_core::Job) |
 //! | 5 voice commands | [`VoiceCommandStore::detect`](crate::voicecommand::VoiceCommandStore::detect) |
 //! | 6–8 cleanup, style, dictionary, snippets | [`text::write`], under the resolved [mode](crate::modes) |
-//! | 9 polish | `ink-llm`'s polish task, when the mode asks for it |
+//! | 9 polish | `ink-llm`'s polish task, when the mode asks for it and the user [consented](crate::consent) to where the model sends it |
 //! | 10 persist | a [`RecordKind::Dictation`] record in the [`Store`] |
 //! | 11 output | the platform's [`TextInserter`] |
 //!
@@ -55,9 +55,12 @@ use ink_audio::take::{TAIL, Take};
 use ink_audio::{Agc, TakeRecorder, VadConfig};
 use ink_core::{
     AsrEvent, CANONICAL_RATE, CancelToken, Channel, Clock, EngineStream, EventSink, FocusReader,
-    HotkeyEvent, Llm, LlmError, NewRecord, OfflineEngine, RecordId, RecordKind, Segment, Store,
-    StoreError, StreamingEngine, TextInserter, TranscribeOptions,
+    HotkeyEvent, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse, NewRecord, OfflineEngine,
+    RecordId, RecordKind, Segment, Store, StoreError, StreamingEngine, TextInserter,
+    TranscribeOptions,
 };
+
+use crate::consent::LlmConsent;
 
 use crate::dictionary::Dictionary;
 use crate::events::{DictationEvent, Discard, EditFailure, TakeFailure, VoiceDetection, Warning};
@@ -142,6 +145,13 @@ pub struct DictationSettings {
     /// The user's switch for polish ("Polish my words"). Off, nothing is polished; on, the modes
     /// that polish do. A voice command overrides both until the chain restarts.
     pub polish_wish: bool,
+    /// Where the user agreed polish may send their words ([`LlmConsent`]). Nothing is polished
+    /// without a consent that covers the model a call reaches, whatever the switch, the mode or a
+    /// voice command says. `None` (the default) polishes nothing.
+    pub polish_consent: Option<LlmConsent>,
+    /// Where the user agreed voice edit may send the selection and the instruction. No edit
+    /// reaches a model without a consent that covers it. `None` (the default) edits nothing.
+    pub edit_consent: Option<LlmConsent>,
     /// How long a voice edit's rewrite may run ([`EDIT_BUDGET`]). Tests shorten it.
     pub edit_budget: Duration,
     /// How long a push-to-talk hold may last before its release is taken as missed
@@ -166,6 +176,8 @@ impl Default for DictationSettings {
             tail: TailConfig::default(),
             polish_budget: POLISH_BUDGET,
             polish_wish: true,
+            polish_consent: None,
+            edit_consent: None,
             edit_budget: EDIT_BUDGET,
             stuck_after: DEFAULT_STUCK_AFTER,
         }
@@ -910,16 +922,32 @@ impl DictationChain {
             self.emit(DictationEvent::EditFailed(EditFailure::NoModel));
             return;
         };
+        // Consent: the selection and the instruction go only where the user agreed voice edit
+        // may send them, checked on the model the call reaches (as polish is). Without a consent
+        // every model is refused.
+        let consented = Consented {
+            inner: llm.as_ref(),
+            consent: self.settings.edit_consent.as_ref(),
+        };
         let budget = self.settings.edit_budget;
         let deadline = Instant::now().checked_add(budget);
         let token = deadline.map_or_else(CancelToken::new, CancelToken::with_deadline);
         let rewritten = match ink_llm::tasks::voice_edit::apply_edit(
-            llm.as_ref(),
+            &consented,
             selection.as_str(),
             &instruction,
             &token,
         ) {
             Ok(text) => text,
+            Err(LlmError::NotAllowed { refused }) => {
+                log::warn!(
+                    "dictation: voice edit's model is not where the user agreed to send text; the selection was left alone"
+                );
+                self.emit(DictationEvent::EditFailed(EditFailure::NotAllowed(
+                    LlmConsent::for_model(&refused),
+                )));
+                return;
+            }
             Err(LlmError::Cancelled) if deadline.is_some_and(|d| Instant::now() >= d) => {
                 log::warn!("dictation: the edit gave no answer within its {budget:?} budget");
                 self.emit(DictationEvent::EditFailed(EditFailure::TimedOut));
@@ -1041,6 +1069,11 @@ impl DictationChain {
     /// as written, and says so. A blank answer is a failure, never an empty dictation (ink-llm's
     /// task refuses one; this checks again rather than rely on it).
     ///
+    /// **Consent.** The call goes out only when [`polish_consent`](DictationSettings::polish_consent)
+    /// covers the model it reaches, checked by that model at the call ([`Llm::complete_if`]), so a
+    /// model that changed destination since the user agreed never receives the text. Without it
+    /// the text goes out as written with [`Warning::PolishNotAllowed`], naming the consent needed.
+    ///
     /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out.
     /// The budget is a deadline the token carries, so no thread or timer fires it: the model sees
     /// it at its next check of the token (a shell engine's wait checks every 20 ms). A polish that
@@ -1060,6 +1093,12 @@ impl DictationChain {
             self.emit(DictationEvent::Warning(Warning::PolishUnavailable));
             return written;
         };
+        // Without a consent every model is refused at the call (nothing is sent); the model
+        // itself says first if there is none at all.
+        let consented = Consented {
+            inner: llm.as_ref(),
+            consent: self.settings.polish_consent.as_ref(),
+        };
         let prompt = if mode.polish_prompt.trim().is_empty() {
             &self.settings.polish_prompt
         } else {
@@ -1068,11 +1107,22 @@ impl DictationChain {
         let budget = self.settings.polish_budget;
         let deadline = Instant::now().checked_add(budget);
         let token = deadline.map_or_else(CancelToken::new, CancelToken::with_deadline);
-        match ink_llm::tasks::polish::polish(llm.as_ref(), prompt, &written, &token) {
+        match ink_llm::tasks::polish::polish(&consented, prompt, &written, &token) {
             Ok(polished) if !polished.trim().is_empty() => polished,
             Ok(_) => {
                 self.emit(DictationEvent::Warning(Warning::PolishFailed(
                     LlmError::BadResponse("polish: the answer was blank".into()),
+                )));
+                written
+            }
+            Err(LlmError::NotAllowed { refused }) => {
+                // The model reached is not where the user agreed: nothing was sent. The consent
+                // named is the one that model needs, from the info of the model refused.
+                log::warn!(
+                    "dictation: polish's model is not where the user agreed to send words; the text goes out as written"
+                );
+                self.emit(DictationEvent::Warning(Warning::PolishNotAllowed(
+                    LlmConsent::for_model(&refused),
                 )));
                 written
             }
@@ -1158,6 +1208,31 @@ impl DictationChain {
             }
             _ => {}
         }
+    }
+}
+
+/// A feature's model, bound to the user's consent for that feature: every call goes through
+/// [`Llm::complete_if`], so the model that answers is checked against where the user agreed the
+/// words may go.
+struct Consented<'a> {
+    inner: &'a dyn Llm,
+    /// `None`: never agreed, so no model is allowed.
+    consent: Option<&'a LlmConsent>,
+}
+
+impl Llm for Consented<'_> {
+    fn info(&self) -> LlmInfo {
+        self.inner.info()
+    }
+
+    fn complete(
+        &self,
+        request: &LlmRequest,
+        cancel: &ink_core::CancelToken,
+    ) -> Result<LlmResponse, LlmError> {
+        self.inner.complete_if(request, cancel, &|info| {
+            self.consent.is_some_and(|c| c.covers(info))
+        })
     }
 }
 

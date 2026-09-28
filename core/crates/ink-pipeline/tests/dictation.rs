@@ -488,6 +488,7 @@ fn a_style_command_changes_how_the_next_dictation_is_written() {
 fn polish_uses_the_model_and_a_failure_keeps_the_local_text() {
     let polishing = |s: &mut ink_pipeline::chain::DictationSettings| {
         s.modes.modes[0].polish_enabled = true;
+        s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
     };
     let rig = Rig::builder()
         .settings(polishing)
@@ -537,7 +538,10 @@ impl Llm for DownLlm {
 fn a_take_of_only_fillers_is_nothing_left_not_nothing_heard() {
     let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Should not be asked."));
     let rig = Rig::builder()
-        .settings(|s| s.modes.modes[0].polish_enabled = true)
+        .settings(|s| {
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+        })
         .llm(llm.clone())
         .build();
     rig.dictate_fixture("um uh hmm", 2.0, -30.0);
@@ -557,7 +561,10 @@ fn a_take_of_only_fillers_is_nothing_left_not_nothing_heard() {
 #[test]
 fn a_blank_polish_answer_keeps_the_text_instead_of_emptying_it() {
     let rig = Rig::builder()
-        .settings(|s| s.modes.modes[0].polish_enabled = true)
+        .settings(|s| {
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+        })
         .llm(Arc::new(MockLlm::new(Endpoint::InProcess, "   ")))
         .build();
     rig.dictate_fixture("keep me", 2.0, -30.0);
@@ -577,8 +584,15 @@ const HANG_CAP: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct HangingLlm {
     hang_next: AtomicBool,
-    /// How long the hung call waited before it saw its token cancelled.
-    hung_for: Mutex<Option<Duration>>,
+    /// The hung call: when it started, its token's deadline, and when it saw the token cancelled.
+    hung: Mutex<Option<Hung>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Hung {
+    started: Instant,
+    deadline: Option<Instant>,
+    saw_cancel: Instant,
 }
 
 impl Llm for HangingLlm {
@@ -599,7 +613,11 @@ impl Llm for HangingLlm {
         let started = Instant::now();
         while started.elapsed() < HANG_CAP {
             if cancel.is_cancelled() {
-                *self.hung_for.lock().unwrap() = Some(started.elapsed());
+                *self.hung.lock().unwrap() = Some(Hung {
+                    started,
+                    deadline: cancel.deadline(),
+                    saw_cancel: Instant::now(),
+                });
                 return Err(LlmError::Cancelled);
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -615,6 +633,7 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
             s.polish_budget = BUDGET;
         })
         .llm(llm.clone())
@@ -626,14 +645,32 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
 
     llm.hang_next.store(true, Ordering::SeqCst);
     rig.dictate(&first);
-    let hung_for = llm
-        .hung_for
+    let hung = llm
+        .hung
         .lock()
         .unwrap()
         .expect("the hung call saw its token cancelled");
+    // Measured against the deadline the chain set, not the call's own start: the chain sets it
+    // (now + BUDGET) a moment before the model's call begins, so a wait timed from the call's
+    // start falls short of BUDGET by that moment (once 1 µs, which failed an exact bound). The
+    // token cannot read cancelled before its deadline, so the first bound needs no slack.
+    let deadline = hung.deadline.expect("polish's token carries its budget");
     assert!(
-        hung_for >= BUDGET && hung_for < BUDGET + Duration::from_secs(1),
-        "cancelled at the budget, not before or long after: {hung_for:?}"
+        hung.saw_cancel >= deadline,
+        "cancelled before the budget ran out"
+    );
+    assert!(
+        hung.saw_cancel < deadline + Duration::from_secs(1),
+        "cancelled long after the budget: {:?} late",
+        hung.saw_cancel - deadline
+    );
+    // The deadline is the budget from when the chain started the call: before the model's start,
+    // by no more than the chain's own few steps.
+    assert!(
+        deadline <= hung.started + BUDGET
+            && hung.started + BUDGET - deadline < Duration::from_millis(100),
+        "the deadline is the budget from the call: {:?} from the model's start",
+        deadline.saturating_duration_since(hung.started)
     );
     assert_eq!(
         rig.inserted(),
@@ -679,6 +716,7 @@ fn a_polish_cancelled_before_its_budget_is_a_cancel_not_a_timeout() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
             s.polish_budget = Duration::from_secs(60);
         })
         .llm(Arc::new(StopsItself))

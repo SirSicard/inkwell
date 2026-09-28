@@ -27,7 +27,8 @@ the real core.
 - [ ] Permissions step: four cards, "Hear you", "Hear the others", "Type for you", "Know your
       meetings", each with its state. Nothing is asked for until you press Allow.
 - [ ] Polish step: the switch is off and cannot be turned on if Apple Intelligence is off or not
-      on this Mac, and the line under it says why.
+      on this Mac, and the line under it says why. With Apple Intelligence on, switching it on
+      asks first ("Turn on polish?", naming Apple's on-device model); Cancel leaves it off.
 - [ ] Start (or Skip) closes it. Quit and start again on the same library: it does not come back.
 - [ ] On a fresh library, with the sheet up, press Command-Q (and, separately, choose Quit Inkwell
       from the menu-bar item): Inkwell quits at once. Start it again on the same library: the
@@ -86,10 +87,11 @@ the real core.
 - [ ] Modes: each mode with its style and the apps it is for, each app by its name and icon. No
       bundle id (com.something.app) anywhere; an app that is not installed reads by its known name
       or "An app not on this Mac".
-- [ ] AI: "Polish my words" reads On only while Apple Intelligence can polish. Turn Apple
-      Intelligence off in System Settings, come back: the switch reads off, is greyed, and says
-      why. Turn it back on (and wait for it to be ready): the switch is usable again and remembers
-      your choice.
+- [ ] AI: "Polish my words" is off on a fresh library and turns on only through its dialog (see
+      DICTATION-CHECKLIST section 3). Once on, it reads On only while Apple Intelligence can
+      polish. Turn Apple Intelligence off in System Settings, come back: the switch reads off, is
+      greyed, and says why. Turn it back on (and wait for it to be ready): the switch is usable
+      again and remembers your choice (Apple's model again: no new dialog).
 - [ ] Models: Dictation, Meeting transcript and Live words, each with the engine that serves it now
       and its measured accuracy. After a model finishes installing, the line changes to it without
       a restart.

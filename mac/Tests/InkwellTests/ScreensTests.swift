@@ -151,18 +151,35 @@ final class PermissionsModelTests: XCTestCase {
 
 // MARK: - Polish
 
+/// `consent.state` for polish (or `feature`) as the core sends it.
+private func polishState(
+    on: Bool, allowed: Bool, to: String? = "on_device", name: String = "SystemLanguageModel.default",
+    endpoint: String? = nil, allowedTo: String? = nil, error: String? = nil, feature: String = "polish"
+) -> InkEvent {
+    var fields: [String: Any] = ["type": "consent.state", "feature": feature, "on": on, "allowed": allowed]
+    if let to { fields["to"] = to; fields["name"] = name }
+    if let endpoint { fields["endpoint"] = endpoint }
+    if let allowedTo { fields["allowed_to"] = allowedTo }
+    if let error { fields["error"] = error }
+    let data = try! JSONSerialization.data(withJSONObject: fields)
+    return event(String(decoding: data, as: UTF8.self))
+}
+
+private let appleLLM = #"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#
+
 @MainActor
 final class PolishModelTests: XCTestCase {
     /// Verify: the Polish toggle can't read "on" without a working engine.
     func testTheToggleNeverReadsOnWithoutAWorkingEngine() {
         let sent = Sent()
         let polish = PolishModel(send: sent.send)
-        polish.apply(event(#"{"type":"setting.value","key":"dictation.polish","value":"on"}"#))
+        polish.apply(polishState(on: true, allowed: true, allowedTo: "on_device"))
         XCTAssertEqual(polish.preference, true)
         XCTAssertFalse(polish.isOn, "wished for, but nothing can polish")
         XCTAssertFalse(polish.canToggle)
         polish.setOn(true)
-        XCTAssertEqual(sent.commands, [], "a toggle with no engine sends nothing")
+        XCTAssertNil(polish.pendingConsent, "a toggle with no engine asks nothing")
+        XCTAssertEqual(sent.commands, [], "and sends nothing")
 
         // Apple Intelligence is off: the engines say why, and it still reads off.
         polish.appleEnginesReported(.unavailable(code: AppleIntelligence.Reason.notEnabled.rawValue))
@@ -172,39 +189,138 @@ final class PolishModelTests: XCTestCase {
         polish.appleEnginesReported(.registered)
         XCTAssertFalse(polish.isOn)
 
-        polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
+        polish.apply(event(appleLLM))
         XCTAssertTrue(polish.isOn)
         XCTAssertTrue(polish.canToggle)
+        XCTAssertEqual(sent.commands, [.consentGet(.polish, ref: "consent.get:polish:1")], "a new model: where polish sends is read again")
 
         // A speech engine is not a language model.
         polish.apply(event(#"{"type":"engine.unregistered","id":"apple-foundation-models"}"#))
         polish.apply(event(#"{"type":"engine.registered","id":"parakeet","kind":"streaming","jobs":[{"job":"live_partials","wer":21.3}]}"#))
         XCTAssertFalse(polish.isOn, "let go of when Apple Intelligence went away")
 
-        polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
+        polish.apply(event(appleLLM))
         polish.apply(event(#"{"type":"core.stopped"}"#))
         XCTAssertFalse(polish.isOn, "a stopped core holds no engine")
     }
 
-    func testSwitchingItSavesTheWishAndAnUnsetWishIsOff() {
+    /// Owner decision: turning polish on asks first, naming where the words go; Cancel sends
+    /// nothing and leaves it off; Allow asks the core to record the consent.
+    func testTurningItOnAsksFirstAndCancelLeavesItOff() {
         let sent = Sent()
         let polish = PolishModel(send: sent.send)
         polish.load()
-        XCTAssertEqual(sent.commands, [.settingGet(.dictationPolish)])
-        polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
-        polish.apply(event(#"{"type":"setting.value","key":"dictation.polish"}"#))
-        XCTAssertEqual(polish.preference, false)
+        XCTAssertEqual(sent.commands, [.consentGet(.polish, ref: "consent.get:polish:1")])
+        polish.apply(event(appleLLM))
+        polish.apply(polishState(on: false, allowed: false))
         XCTAssertFalse(polish.isOn)
+        XCTAssertEqual(polish.status, "Off. Your words go in as you said them.")
+
         polish.setOn(true)
+        let asked = try? XCTUnwrap(polish.pendingConsent)
+        XCTAssertEqual(asked?.label, "Apple's on-device model")
+        XCTAssertEqual(sent.commands, [.consentGet(.polish, ref: "consent.get:polish:1"), .consentGet(.polish, ref: "consent.get:polish:2")], "asking sends nothing")
+        let message = asked.map(PolishModel.consentMessage) ?? ""
+        XCTAssertTrue(message.contains("sends what you dictate to a language model"), message)
+        XCTAssertTrue(message.contains("Apple's on-device model, so your words stay on this Mac"), message)
+        XCTAssertFalse(message.lowercased().contains("invisible") || message.lowercased().contains("undetectable"))
+
+        polish.cancelConsent()
+        XCTAssertNil(polish.pendingConsent)
+        XCTAssertFalse(polish.isOn, "cancel leaves it off")
+        XCTAssertEqual(sent.commands, [.consentGet(.polish, ref: "consent.get:polish:1"), .consentGet(.polish, ref: "consent.get:polish:2")], "and sends nothing")
+
+        polish.setOn(true)
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.last, .consentAllow(feature: .polish, to: .onDevice, endpoint: nil, key: nil, ref: "consent.allow:polish:3"))
+        XCTAssertFalse(polish.isOn, "on only once the core has recorded it")
+        polish.apply(polishState(on: true, allowed: true, allowedTo: "on_device"))
         XCTAssertTrue(polish.isOn)
-        XCTAssertEqual(sent.commands.last, .settingSet(.dictationPolish, "on"))
+        XCTAssertEqual(polish.status, "On, with Apple's on-device model. Your words stay on this Mac.")
+    }
+
+    /// A cloud model is named, and the step says the words leave this Mac for it.
+    func testACloudModelIsNamedAndTheStepSaysTheWordsLeaveThisMac() throws {
+        let sent = Sent()
+        let polish = PolishModel(send: sent.send)
+        polish.apply(event(#"{"type":"engine.registered","id":"cloud","kind":"llm","jobs":[]}"#))
+        polish.apply(polishState(on: false, allowed: false, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud"))
+        polish.setOn(true)
+        let asked = try XCTUnwrap(polish.pendingConsent)
+        let message = PolishModel.consentMessage(asked)
+        XCTAssertTrue(message.contains("your words leave this Mac and go to Example Cloud"), message)
+        XCTAssertEqual(PolishModel.consentButton(asked), "Send to Example Cloud")
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.last, .consentAllow(feature: .polish, to: .cloud, endpoint: "shell engine cloud", key: nil, ref: "consent.allow:polish:2"))
+        polish.apply(polishState(on: true, allowed: true, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud", allowedTo: "cloud"))
+        XCTAssertEqual(polish.status, "On. Your words go to Example Cloud before they are typed.")
+    }
+
+    /// The model moves from this Mac to a cloud provider while polish is on: it reads off, says
+    /// why, and turning it on asks about the new destination.
+    func testAModelThatMovesPausesPolishAndSaysWhy() throws {
+        let polish = PolishModel(send: { _ in })
+        polish.apply(event(appleLLM))
+        polish.apply(polishState(on: true, allowed: true, allowedTo: "on_device"))
+        XCTAssertTrue(polish.isOn)
+        polish.apply(event(#"{"type":"engine.registered","id":"cloud","kind":"llm","jobs":[]}"#))
+        polish.apply(polishState(on: true, allowed: false, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud", allowedTo: "on_device"))
+        XCTAssertFalse(polish.isOn, "nothing is polished")
+        XCTAssertTrue(polish.isPaused)
+        XCTAssertTrue(polish.isProblem)
+        XCTAssertEqual(polish.status, "Paused: polish would now send your words to Example Cloud. Turn it on again to allow it.")
+        polish.setOn(true)
+        XCTAssertEqual(try XCTUnwrap(polish.pendingConsent).kind, .cloud(endpoint: "shell engine cloud"))
+        // A consent that could not be read is none, and says so.
+        polish.cancelConsent()
+        polish.apply(polishState(on: true, allowed: false, allowedTo: nil, error: "couldn't read your polish consent"))
+        XCTAssertEqual(polish.status, "Couldn't read your polish consent, so polish is off or paused. Turn it on again to allow it.")
+    }
+
+    /// The step asked about one destination and the model moved before Allow: the step closes
+    /// (its words are never swapped under the user), nothing is sent, and asking again names the
+    /// new destination.
+    func testTheStepClosesIfTheModelMovesWhileItIsShown() throws {
+        let sent = Sent()
+        let polish = PolishModel(send: sent.send)
+        polish.apply(event(appleLLM))
+        polish.apply(polishState(on: false, allowed: false))
+        polish.setOn(true, from: .onboarding)
+        XCTAssertEqual(polish.consentHost, .onboarding, "shown where it was asked")
+        polish.apply(polishState(on: false, allowed: false, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud"))
+        XCTAssertNil(polish.pendingConsent)
+        XCTAssertNil(polish.consentHost)
+        polish.allowConsent()
+        XCTAssertFalse(sent.commands.contains { if case .consentAllow = $0 { true } else { false } }, "nothing sent")
+        polish.setOn(true)
+        XCTAssertEqual(try XCTUnwrap(polish.pendingConsent).name, "Example Cloud")
+        XCTAssertEqual(polish.consentHost, .settings)
+    }
+
+    func testSwitchingOffSendsOffAndAFailedSavePutsItBack() {
+        let sent = Sent()
+        let polish = PolishModel(send: sent.send)
+        polish.apply(event(appleLLM))
+        polish.apply(polishState(on: true, allowed: true, allowedTo: "on_device"))
+        polish.setOn(false)
+        XCTAssertEqual(sent.commands.last, .settingSet(.dictationPolish, "off"))
+        XCTAssertFalse(polish.isOn)
+        polish.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:dictation.polish","message":"x"}"#))
+        XCTAssertTrue(polish.isOn, "put back")
+        XCTAssertEqual(polish.status, "Couldn't save the change, so polish stays as it was.")
+        // A consent the core could not record says so.
+        polish.apply(polishState(on: false, allowed: false))
+        polish.setOn(true)
+        polish.allowConsent()
+        polish.apply(event(#"{"type":"command.failed","command":"consent.allow","id":"consent.allow:polish:2","message":"x"}"#))
+        XCTAssertEqual(polish.status, "Couldn't turn polish on, so it stays off. Try again.")
     }
 
     /// The §6 point: a timeout reads apart from an ordinary cancel or failure.
     func testPolishThatKeepsTimingOutSaysSoAndAPlainFailureDoesNot() {
         let polish = PolishModel(send: { _ in })
-        polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
-        polish.apply(event(#"{"type":"setting.value","key":"dictation.polish","value":"on"}"#))
+        polish.apply(event(appleLLM))
+        polish.apply(polishState(on: true, allowed: true, allowedTo: "on_device"))
         func take(_ warning: String?) {
             polish.apply(event(#"{"type":"dictation.started","take":0,"edit":false}"#))
             if let warning { polish.apply(event(warning)) }
@@ -221,6 +337,137 @@ final class PolishModelTests: XCTestCase {
         XCTAssertTrue(polish.isOn, "still on: the engine works, it is slow")
         take(nil)
         XCTAssertFalse(polish.keepsTimingOut, "a take that polished in time ends the run")
+    }
+
+    /// Answers can arrive out of order: only the answer to the newest request is applied, and a
+    /// failure counts only for the request that is still the newest of its kind.
+    func testOnlyTheAnswerToTheNewestRequestIsApplied() {
+        let sent = Sent()
+        let polish = PolishModel(send: sent.send)
+        polish.apply(event(appleLLM))  // consent.get:polish:1
+        polish.load()                   // consent.get:polish:2
+        XCTAssertEqual(sent.commands, [.consentGet(.polish, ref: "consent.get:polish:1"), .consentGet(.polish, ref: "consent.get:polish:2")])
+        func answer(_ ref: String, on: Bool) -> InkEvent {
+            event(#"{"type":"consent.state","feature":"polish","on":\#(on),"allowed":\#(on),"to":"on_device","name":"SystemLanguageModel.default","ref":"\#(ref)"}"#)
+        }
+        polish.apply(answer("consent.get:polish:2", on: true))
+        XCTAssertTrue(polish.isOn)
+        polish.apply(answer("consent.get:polish:1", on: false))
+        XCTAssertTrue(polish.isOn, "the older answer, arriving late, is not applied")
+        polish.apply(event(#"{"type":"command.failed","command":"consent.get","id":"consent.get:polish:1","message":"x"}"#))
+        XCTAssertNil(polish.failure, "nor is an older request's failure")
+        // A state with no ref (the core's own, after a switch-off) always applies.
+        polish.apply(polishState(on: false, allowed: false))
+        XCTAssertFalse(polish.isOn)
+    }
+
+    /// A part of the state the core could not read is said whenever it is there: with polish off
+    /// (an unread switch reads as off in the core) and with no working model.
+    func testAReadErrorIsShownWhetherOrNotPolishIsOn() {
+        let polish = PolishModel(send: { _ in })
+        polish.apply(polishState(on: false, allowed: false, error: "couldn't read the switch"))
+        XCTAssertEqual(polish.status, "Couldn't read the switch, so polish is off or paused. Turn it on again to allow it.")
+        XCTAssertTrue(polish.isProblem)
+        polish.apply(event(appleLLM))
+        XCTAssertEqual(polish.status, "Couldn't read the switch, so polish is off or paused. Turn it on again to allow it.")
+        polish.apply(polishState(on: false, allowed: false))
+        XCTAssertEqual(polish.status, "Off. Your words go in as you said them.")
+    }
+
+    /// A take the core refused to polish says so in the Drop, and the toggle reads the state again.
+    func testATakeRefusedForConsentSaysSo() {
+        let sent = Sent()
+        let polish = PolishModel(send: sent.send)
+        let refused = event(#"{"type":"dictation.warning","kind":"polish_not_allowed","message":"Example Cloud"}"#)
+        polish.apply(refused)
+        XCTAssertEqual(sent.commands, [.consentGet(.polish, ref: "consent.get:polish:1")])
+        let note = DictationModel.note(for: refused, hasLanguageModel: true)
+        XCTAssertEqual(note?.title, "Not polished")
+    }
+}
+
+// MARK: - Voice edit's consent
+
+@MainActor
+final class EditConsentTests: XCTestCase {
+    private func screens(_ sent: Sent) -> ScreenModels {
+        let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.apply([
+            event(appleLLM),
+            polishState(on: false, allowed: false, feature: "edit"),
+        ])
+        return screens
+    }
+
+    /// Picking an edit key from Off asks first, naming where the selection goes; Cancel sends
+    /// nothing; Allow sends the consent with the key.
+    func testPickingAKeyAsksFirstAndCancelChangesNothing() throws {
+        let sent = Sent()
+        let screens = screens(sent)
+        let before = sent.commands.count
+        screens.chooseEditKey("right_command")
+        let asked = try XCTUnwrap(screens.editConsent.pending)
+        XCTAssertEqual(screens.editConsent.host, .settings)
+        XCTAssertEqual(sent.commands.count, before, "asking sends nothing")
+        let message = ConsentModel.message(.edit, asked)
+        XCTAssertTrue(message.contains("sends the text you select and what you say to a language model"), message)
+        XCTAssertTrue(message.contains("Apple's on-device model, so your words stay on this Mac"), message)
+        XCTAssertEqual(ConsentModel.button(.edit, asked), "Turn On Voice Edit")
+        XCTAssertNil(screens.dictation.editKey, "asking changes no key")
+        screens.editConsent.cancel()
+        XCTAssertNil(screens.editConsent.pending)
+        XCTAssertEqual(sent.commands.count, before, "cancel sends nothing")
+        XCTAssertNil(screens.dictation.editKey, "cancel leaves voice edit off")
+
+        screens.chooseEditKey("right_command")
+        screens.editConsent.allow()
+        XCTAssertEqual(sent.commands.last, .consentAllow(feature: .edit, to: .onDevice, endpoint: nil, key: "right_command", ref: "consent.allow:edit:2"))
+    }
+
+    /// On and allowed: another key only changes the key. Off sends off (the core withdraws the
+    /// consent with it).
+    func testAKeyChangeWhileAllowedAsksNothingAndOffTurnsItOff() {
+        let sent = Sent()
+        let screens = screens(sent)
+        screens.apply([
+            event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#),
+            polishState(on: true, allowed: true, allowedTo: "on_device", feature: "edit"),
+        ])
+        screens.chooseEditKey("right_option")
+        XCTAssertNil(screens.editConsent.pending)
+        XCTAssertEqual(sent.commands.last, .settingSet(.dictationEditKey, "right_option"))
+        screens.chooseEditKey(nil)
+        XCTAssertEqual(sent.commands.last, .settingSet(.dictationEditKey, "off"))
+        XCTAssertFalse(screens.editConsent.isAllowedOn)
+    }
+
+    /// The model moved to a cloud provider: voice edit is paused and says so, a key pick asks about
+    /// the new destination, and a refused edit shows in the Drop and reads the state again.
+    func testAMovedModelPausesVoiceEditAndAKeyPickAsksAgain() throws {
+        let sent = Sent()
+        let screens = screens(sent)
+        screens.apply([
+            event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#),
+            polishState(on: true, allowed: false, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud", allowedTo: "on_device", feature: "edit"),
+        ])
+        XCTAssertEqual(screens.editConsent.problem, "Paused: voice edit would now send your words to Example Cloud. Turn it on again to allow it.")
+        screens.chooseEditKey("right_option")
+        XCTAssertEqual(try XCTUnwrap(screens.editConsent.pending).kind, .cloud(endpoint: "shell engine cloud"))
+        XCTAssertEqual(ConsentModel.button(.edit, try XCTUnwrap(screens.editConsent.pending)), "Send to Example Cloud")
+        let refused = event(#"{"type":"dictation.edit_failed","reason":"not_allowed","message":"Example Cloud"}"#)
+        let before = sent.commands.count
+        screens.apply([refused])
+        XCTAssertEqual(sent.commands.dropFirst(before).first, .consentGet(.edit, ref: "consent.get:edit:2"))
+        XCTAssertEqual(DictationModel.note(for: refused, hasLanguageModel: true)?.title, "Not edited")
+    }
+
+    /// Polish's state never moves voice edit's, nor the reverse.
+    func testEachFeatureReadsOnlyItsOwnState() {
+        let sent = Sent()
+        let screens = screens(sent)
+        screens.apply([polishState(on: true, allowed: true, allowedTo: "on_device")])
+        XCTAssertTrue(screens.polish.consent.isAllowedOn)
+        XCTAssertFalse(screens.editConsent.isAllowedOn)
     }
 }
 
@@ -750,8 +997,16 @@ final class ScreensCoreContractTests: XCTestCase {
             }
             return nil
         }
-        let polish = try answer(.settingSet(.dictationPolish, "on")) { if case .settingValue(let v) = $0 { v } else { nil } }
-        XCTAssertEqual(polish?.value, "on")
+        let polish = try answer(.settingSet(.dictationPolish, "off")) { if case .settingValue(let v) = $0 { v } else { nil } }
+        XCTAssertEqual(polish?.value, "off")
+        let state = try answer(.consentGet(.polish, ref: "consent.get:polish:1")) { if case .consentState(let v) = $0 { v } else { nil } }
+        XCTAssertEqual(state?.on, false)
+        XCTAssertEqual(state?.allowed, false)
+        // No language model here, so there is nothing to agree to: refused, matched by its id.
+        let allow = try answer(.consentAllow(feature: .polish, to: .onDevice, endpoint: nil, key: nil, ref: "allow-1")) { if case .commandFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(allow?.id, "allow-1")
+        XCTAssertThrowsError(try session.command(#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#),
+                             "only the consent step turns polish on")
         let onboarding = try answer(.settingGet(.onboardingDone)) { if case .settingValue(let v) = $0 { v } else { nil } }
         XCTAssertEqual(onboarding?.key, "onboarding.done")
         XCTAssertNil(onboarding?.value, "a fresh library has not onboarded")
@@ -840,7 +1095,7 @@ final class PolishTimeoutPathTests: XCTestCase {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
         screens.apply([
             event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#),
-            event(#"{"type":"setting.value","key":"dictation.polish","value":"on"}"#),
+            event(#"{"type":"consent.state","feature":"polish","on":true,"allowed":true,"to":"on_device","name":"SystemLanguageModel.default","allowed_to":"on_device"}"#),
         ])
         for _ in 0..<PolishModel.timeoutWarning {
             screens.apply([

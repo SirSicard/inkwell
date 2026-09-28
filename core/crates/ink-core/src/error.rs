@@ -137,6 +137,14 @@ pub enum LlmError {
     /// context, or hit the answer's token budget before ending its turn. The string names the step
     /// and never holds user or model text.
     Engine(String),
+    /// The caller's check refused where this model sends text ([`Llm::complete_if`]): dictation
+    /// polish without the user's consent for that destination. Nothing was sent.
+    ///
+    /// [`Llm::complete_if`]: crate::llm::Llm::complete_if
+    NotAllowed {
+        /// The model refused: where it would have sent the text, for the UI to name.
+        refused: crate::llm::LlmInfo,
+    },
 }
 
 impl fmt::Display for LlmError {
@@ -155,6 +163,11 @@ impl fmt::Display for LlmError {
             Self::Cancelled => f.write_str("cancelled"),
             Self::BadResponse(msg) => write!(f, "unexpected response: {msg}"),
             Self::Engine(msg) => write!(f, "local model failed: {msg}"),
+            Self::NotAllowed { refused } => write!(
+                f,
+                "not allowed to send to {}; nothing was sent",
+                refused.endpoint.describe()
+            ),
         }
     }
 }

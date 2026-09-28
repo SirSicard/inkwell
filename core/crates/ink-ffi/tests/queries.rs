@@ -399,19 +399,22 @@ fn shell_settings_are_whitelisted_and_round_trip() {
     assert_eq!(unset["key"], "onboarding.done");
     assert!(unset.get("value").is_none());
     let set = rig.ask(
-        json!({"cmd": "setting.set", "key": "dictation.polish", "value": "on"}),
+        json!({"cmd": "setting.set", "key": "dictation.polish", "value": "off"}),
         "setting.value",
         2,
     );
-    assert_eq!(set["value"], "on");
+    assert_eq!(set["value"], "off");
     assert_eq!(
         rig.store.setting("dictation.polish").unwrap().as_deref(),
-        Some("on")
+        Some("off")
     );
-    // The core's own settings are not the shell's to write.
+    // The core's own settings are not the shell's to write, and polish turns on only with the
+    // user's consent (consent.allow).
     for bad in [
         json!({"cmd": "setting.set", "key": SYSTEM_AUDIO_ASKED_KEY, "value": "true"}),
         json!({"cmd": "setting.set", "key": "dictation.polish", "value": "yes"}),
+        json!({"cmd": "setting.set", "key": "dictation.polish", "value": "on"}),
+        json!({"cmd": "setting.set", "key": "llm.consent.polish", "value": "none"}),
         json!({"cmd": "setting.get", "key": MODES_KEY}),
     ] {
         assert!(rig.core.command(&bad.to_string()).is_err(), "{bad}");

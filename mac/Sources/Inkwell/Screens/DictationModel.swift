@@ -356,6 +356,9 @@ final class DictationModel {
                     : DropText(title: "Editing needs Apple Intelligence", detail: "The selection was left alone", tone: .alert)
             case .timedOut:
                 return DropText(title: "The rewrite took too long", detail: "The selection was left alone", tone: .alert)
+            case .notAllowed:
+                // Its model now sends somewhere the user has not agreed to (or never agreed).
+                return DropText(title: "Not edited", detail: "Voice edit needs your OK again in Settings", tone: .alert)
             case .insert:
                 return DropText(title: "Couldn't replace the selection", detail: "It was left alone", tone: .alert)
             case .other:
@@ -369,6 +372,9 @@ final class DictationModel {
             switch warning.kind {
             case .polishTimedOut:
                 return DropText(title: "Polish took too long", detail: "Typed as you said it")
+            case .polishNotAllowed:
+                // Polish is on, but its model now sends somewhere the user has not agreed to.
+                return DropText(title: "Not polished", detail: "Polish needs your OK again in Settings", tone: .alert)
             case .releaseMissed:
                 return DropText(title: "Stopped after 3 minutes", detail: "The key's release never arrived")
             // Shown elsewhere (Today's notices, Settings) or nothing the user acts on at once.

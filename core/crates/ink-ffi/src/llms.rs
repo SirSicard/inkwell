@@ -121,4 +121,24 @@ impl Llm for PolishModel {
         };
         GuardedLlm::new(llm, self.local_only.clone()).complete(request, cancel)
     }
+
+    /// Checks the model picked for this call: a model registered or let go of since the caller
+    /// looked can never receive text `allow` would refuse (dictation polish's consent).
+    fn complete_if(
+        &self,
+        request: &LlmRequest,
+        cancel: &CancelToken,
+        allow: &dyn Fn(&LlmInfo) -> bool,
+    ) -> Result<LlmResponse, LlmError> {
+        let Some(llm) = self.llms.pick() else {
+            return Err(LlmError::Engine(
+                "no language model is registered for polish".into(),
+            ));
+        };
+        let info = llm.info();
+        if !allow(&info) {
+            return Err(LlmError::NotAllowed { refused: info });
+        }
+        GuardedLlm::new(llm, self.local_only.clone()).complete(request, cancel)
+    }
 }

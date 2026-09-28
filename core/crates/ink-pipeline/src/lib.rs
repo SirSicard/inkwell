@@ -15,6 +15,7 @@
 //! | [`voicecommand`] | Stage 5. |
 //! | [`cleanup`], [`style`], [`dictionary`], [`snippets`], [`text`] | Stages 6–8, pure. |
 //! | [`modes`] | Which style, cleanup and polish apply, per app. |
+//! | [`consent`] | Where the user agreed polish may send their words. |
 //! | [`events`] | Everything the chain reports. |
 //! | [`worker`] | The thread that owns a chain. |
 //! | [`update`] | Replacing a model's files only after it is unloaded. |
@@ -44,6 +45,7 @@ pub mod capture;
 pub mod chain;
 pub mod civil;
 pub mod cleanup;
+pub mod consent;
 pub mod dictionary;
 pub mod events;
 pub mod export;

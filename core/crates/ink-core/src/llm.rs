@@ -22,6 +22,14 @@ impl Endpoint {
     pub fn is_local(&self) -> bool {
         matches!(self, Self::InProcess | Self::Loopback(_))
     }
+
+    /// Where it is, for a message: the URL or the remote's name, or "this process".
+    pub fn describe(&self) -> String {
+        match self {
+            Self::InProcess => "this process".to_owned(),
+            Self::Loopback(url) | Self::Remote(url) => url.clone(),
+        }
+    }
 }
 
 /// What a model is.
@@ -67,11 +75,63 @@ pub trait Llm: Send + Sync {
     /// keychain refuses access to a key, nothing is sent ([`LlmError::KeychainDenied`]).
     fn complete(&self, request: &LlmRequest, cancel: &CancelToken)
     -> Result<LlmResponse, LlmError>;
+
+    /// **Worker.** [`complete`](Self::complete), only if `allow` accepts the model that answers.
+    /// For a caller that must know where the text goes (dictation polish sends only where the user
+    /// consented): the check is on the model called, never on one looked up a moment earlier.
+    /// Refused, nothing is sent ([`LlmError::NotAllowed`]).
+    ///
+    /// A model that picks among others at each call overrides this, to check the one it picked;
+    /// a wrapper around one model forwards it. The default suits a model that is always itself.
+    fn complete_if(
+        &self,
+        request: &LlmRequest,
+        cancel: &CancelToken,
+        allow: &dyn Fn(&LlmInfo) -> bool,
+    ) -> Result<LlmResponse, LlmError> {
+        let info = self.info();
+        if !allow(&info) {
+            return Err(LlmError::NotAllowed { refused: info });
+        }
+        self.complete(request, cancel)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::mock::MockLlm;
+
+    fn request() -> LlmRequest {
+        LlmRequest {
+            system: String::new(),
+            user: "hi".into(),
+            max_tokens: 8,
+            temperature: 0.0,
+            json_schema: None,
+        }
+    }
+
+    #[test]
+    fn complete_if_sends_only_what_the_check_allows() {
+        let llm = MockLlm::new(Endpoint::Remote("https://api.example.com/v1".into()), "ok");
+        let refused = llm.complete_if(&request(), &CancelToken::new(), &|i| i.endpoint.is_local());
+        assert_eq!(
+            refused,
+            Err(LlmError::NotAllowed {
+                refused: llm.info()
+            })
+        );
+        assert_eq!(
+            refused.unwrap_err().to_string(),
+            "not allowed to send to https://api.example.com/v1; nothing was sent"
+        );
+        assert_eq!(llm.calls(), 0, "a refused call sends nothing");
+        let allowed = llm.complete_if(&request(), &CancelToken::new(), &|_| true);
+        assert_eq!(allowed.map(|r| r.text), Ok("ok".to_owned()));
+        assert_eq!(llm.calls(), 1);
+    }
 
     #[test]
     fn only_in_process_and_loopback_are_local() {

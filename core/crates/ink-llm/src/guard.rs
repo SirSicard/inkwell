@@ -246,6 +246,17 @@ impl Llm for GuardedLlm {
         self.local_only.check(&self.inner.info().endpoint)?;
         self.inner.complete(request, cancel)
     }
+
+    /// Forwarded, so a caller's check reaches the model the inner one calls.
+    fn complete_if(
+        &self,
+        request: &LlmRequest,
+        cancel: &CancelToken,
+        allow: &dyn Fn(&LlmInfo) -> bool,
+    ) -> Result<LlmResponse, LlmError> {
+        self.local_only.check(&self.inner.info().endpoint)?;
+        self.inner.complete_if(request, cancel, allow)
+    }
 }
 
 #[cfg(test)]

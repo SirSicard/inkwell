@@ -870,6 +870,10 @@ impl Store for FlakyStore {
         self.check("set_setting")?;
         self.inner.set_setting(key, value)
     }
+    fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), StoreError> {
+        self.check("set_settings")?;
+        self.inner.set_settings(settings)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

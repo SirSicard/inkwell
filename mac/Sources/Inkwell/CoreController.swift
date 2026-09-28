@@ -208,6 +208,14 @@ final class CoreController {
                 if let replay = ReplayOnLaunch.command(from: ProcessInfo.processInfo.environment) {
                     self.send(replay)
                 }
+                // A stand-in cloud model for checking polish's consent step (DebugCloudModel).
+                if let cloud = DebugCloudModel.fromEnvironment(ProcessInfo.processInfo.environment) {
+                    do {
+                        try self.session?.register(cloud)
+                    } catch {
+                        self.log.error("the debug cloud model was not registered: \(String(describing: error), privacy: .public)")
+                    }
+                }
             #endif
             self.log.notice("Apple engines: live \(String(describing: report.livePartials), privacy: .public), finals \(String(describing: report.finals), privacy: .public), polish \(String(describing: report.polish), privacy: .public)")
         }
