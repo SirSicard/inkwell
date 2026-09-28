@@ -255,7 +255,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       still the Inkwell 0.2 import's). A save replaces the whole list and reaches a running
  *       dictation at once. Ids must be present and unique. A save over a stored list the core
  *       cannot read is refused (command.failed) unless it says "replace_unreadable":true: the
- *       user chose to start over.
+ *       user chose to start over. At most 2000 items; an id, trigger, category or wake word at
+ *       most 256 characters, an expansion or a command's value at most 16384.
  *   {"cmd":"voice_commands.list","id":"<ref>"}
  *   {"cmd":"voice_commands.save","enabled":false,"wake_prefix":"inkwell","commands":[{"id":"...",
  *    "triggers":["..."],"action":"insert_text","value":"...","enabled":true}],"id":"<ref>"}

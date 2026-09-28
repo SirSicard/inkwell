@@ -38,6 +38,28 @@ pub const KEY_NOTE_SETTING: &str = "import.key_note";
 /// bound on what one command can make the store and every take's matcher hold.
 pub const MAX_ITEMS: usize = 2_000;
 
+/// The longest id, trigger (each of a command's too), category or wake word one save may hold, in
+/// characters.
+pub const MAX_SHORT_CHARS: usize = 256;
+
+/// The longest expansion or command value one save may hold, in characters.
+///
+/// [`INK_MAX_JSON`](crate::INK_MAX_JSON) (1 MiB) bounds a whole command, and with it what
+/// [`MAX_ITEMS`] items can add up to; these caps bound each field on its own, so one entry can
+/// never grow to the whole budget, whatever that limit becomes. Both are far above anything typed
+/// by hand (Inkwell 0.2 had no caps; a 0.2 list over them is refused with the field named).
+pub const MAX_TEXT_CHARS: usize = 16_384;
+
+/// `text` fits `max` characters.
+fn fits(name: &str, what: &str, field: &str, text: &str, max: usize) -> Result<(), String> {
+    if text.chars().count() > max {
+        return Err(format!(
+            "{name}: {what}'s \"{field}\" is longer than {max} characters"
+        ));
+    }
+    Ok(())
+}
+
 /// A query of this module, read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PhrasesQuery {
@@ -186,6 +208,10 @@ fn read_snippets(name: &str, obj: &Map<String, Value>) -> Result<SnippetStore, S
             .next()
             .ok_or_else(|| format!("{name}: {what} was not read"))?;
         check_id(name, &what, &snippet.id, &mut seen)?;
+        fits(name, &what, "id", &snippet.id, MAX_SHORT_CHARS)?;
+        fits(name, &what, "trigger", &snippet.trigger, MAX_SHORT_CHARS)?;
+        fits(name, &what, "category", &snippet.category, MAX_SHORT_CHARS)?;
+        fits(name, &what, "expansion", &snippet.expansion, MAX_TEXT_CHARS)?;
         // A blank trigger is kept (it never expands): an imported list may hold one, and refusing
         // it would make every later save of that list fail.
         out.push(snippet);
@@ -205,6 +231,13 @@ fn read_commands(name: &str, obj: &Map<String, Value>) -> Result<VoiceCommandSto
         .trim()
         .to_owned();
     // A blank wake word is kept, as 0.2 let the user leave it: it matches nothing.
+    fits(
+        name,
+        "the list",
+        "wake_prefix",
+        &wake_prefix,
+        MAX_SHORT_CHARS,
+    )?;
     let items = list(name, obj, "commands")?;
     let mut seen = HashSet::new();
     let mut commands = Vec::with_capacity(items.len());
@@ -216,6 +249,7 @@ fn read_commands(name: &str, obj: &Map<String, Value>) -> Result<VoiceCommandSto
         let text = |k: &str| c.get(k).and_then(Value::as_str);
         let id = text("id").ok_or_else(|| format!("{name}: {what} needs a string \"id\""))?;
         check_id(name, &what, id, &mut seen)?;
+        fits(name, &what, "id", id, MAX_SHORT_CHARS)?;
         let triggers: Vec<String> = c
             .get("triggers")
             .and_then(Value::as_array)
@@ -228,6 +262,12 @@ fn read_commands(name: &str, obj: &Map<String, Value>) -> Result<VoiceCommandSto
             .into_iter()
             .filter(|t| !t.is_empty())
             .collect();
+        for trigger in &triggers {
+            fits(name, &what, "triggers", trigger, MAX_SHORT_CHARS)?;
+        }
+        if let Some(value) = text("value") {
+            fits(name, &what, "value", value, MAX_TEXT_CHARS)?;
+        }
         let kind = text("action").ok_or_else(|| format!("{name}: {what} needs an \"action\""))?;
         let action = CommandAction::from_parts(kind, text("value")).ok_or_else(|| {
             format!("{name}: {what} has an unknown action, or lacks the \"value\" it needs")
@@ -452,6 +492,50 @@ mod tests {
             c.detect("undo").is_none(),
             "a blank wake word matches nothing"
         );
+    }
+
+    #[test]
+    fn every_field_is_capped_on_its_own() {
+        let long = |n: usize| "x".repeat(n);
+        let snippet = |trigger: &str, expansion: &str| {
+            json!({"cmd":"snippets.save","snippets":[
+                {"id":"a","trigger":trigger,"expansion":expansion}]})
+            .to_string()
+        };
+        assert!(matches!(
+            p(&snippet(&long(MAX_SHORT_CHARS), &long(MAX_TEXT_CHARS))),
+            Some(Ok(_))
+        ));
+        assert!(matches!(
+            p(&snippet(&long(MAX_SHORT_CHARS + 1), "x")),
+            Some(Err(_))
+        ));
+        assert!(matches!(
+            p(&snippet("x", &long(MAX_TEXT_CHARS + 1))),
+            Some(Err(_))
+        ));
+        let command = |trigger: &str, value: &str| {
+            json!({"cmd":"voice_commands.save","enabled":true,"wake_prefix":"inkwell","commands":[
+                {"id":"a","triggers":["ok", trigger],"action":"insert_text","value":value,"enabled":true}]})
+            .to_string()
+        };
+        assert!(matches!(
+            p(&command("x", &long(MAX_TEXT_CHARS))),
+            Some(Ok(_))
+        ));
+        assert!(matches!(
+            p(&command(&long(MAX_SHORT_CHARS + 1), "x")),
+            Some(Err(_))
+        ));
+        let Some(Err(e)) = p(&command("x", &long(MAX_TEXT_CHARS + 1))) else {
+            panic!("a value over the cap is refused");
+        };
+        assert!(e.contains("\"value\""), "{e}");
+        // Characters, not bytes: a trigger of 256 two-byte letters fits.
+        assert!(matches!(
+            p(&snippet(&"é".repeat(MAX_SHORT_CHARS), "x")),
+            Some(Ok(_))
+        ));
     }
 
     #[test]
