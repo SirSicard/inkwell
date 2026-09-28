@@ -152,17 +152,9 @@ if [ "${macos}" = 1 ]; then
     done <"${build}/install_manifest.txt"
     [ "${#installed[@]}" -gt 0 ] || { echo "error: the install put no library in ${lib}" >&2; exit 1; }
     make_self_contained "${lib}" "${deployment_target}" "${installed[@]}"
-    # With the pinned builds, every copy is one of theirs.
+    # With the pinned builds: SentencePiece and Abseil were copied in, and every copy is theirs.
     if [ -n "${deps_lib}" ]; then
-        for o in ${origins[@]+"${origins[@]}"}; do
-            case "${o#* }" in
-                "${deps_lib}"/*) ;;
-                *)
-                    echo "error: ${o%% *} was copied from ${o#* }, not from ENGINE_DEPS_DIR" >&2
-                    exit 1
-                    ;;
-            esac
-        done
+        check_pinned_origins "${deps_lib}"
     fi
 fi
 

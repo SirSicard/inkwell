@@ -165,3 +165,33 @@ make_self_contained() {
         fi
     done
 }
+
+# check_pinned_origins <deps lib>: after make_self_contained, with the pinned SentencePiece and
+# Abseil (build-nemo-speech.sh's ENGINE_DEPS_DIR). The prefix must have copied in SentencePiece and
+# at least one Abseil library, and every copy must have come from <deps lib>. An empty `origins`
+# fails too: had NeMo stopped loading them (linked statically after an upstream change, say), the
+# pinned libraries would not be what the app ships, and a loop over no copies checks nothing.
+# A problem is printed to stderr and returns 1.
+check_pinned_origins() {
+    local deps_lib="$1" o name from spm=0 absl=0
+    for o in ${origins[@]+"${origins[@]}"}; do
+        name="${o%% *}"
+        from="${o#* }"
+        case "${from}" in
+            "${deps_lib}"/*) ;;
+            *)
+                echo "error: ${name} was copied from ${from}, not from ENGINE_DEPS_DIR" >&2
+                return 1
+                ;;
+        esac
+        case "${name}" in
+            libsentencepiece*) spm=1 ;;
+            libabsl_*) absl=1 ;;
+        esac
+    done
+    if [ "${spm}" = 0 ] || [ "${absl}" = 0 ]; then
+        echo "error: the prefix copied in no SentencePiece or no Abseil library from ENGINE_DEPS_DIR" >&2
+        echo "       (copied: ${copied[*]-none}): NeMo no longer loads the pinned libraries" >&2
+        return 1
+    fi
+}
