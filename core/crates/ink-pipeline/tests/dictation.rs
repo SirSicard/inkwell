@@ -584,8 +584,15 @@ const HANG_CAP: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct HangingLlm {
     hang_next: AtomicBool,
-    /// How long the hung call waited before it saw its token cancelled.
-    hung_for: Mutex<Option<Duration>>,
+    /// The hung call: when it started, its token's deadline, and when it saw the token cancelled.
+    hung: Mutex<Option<Hung>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Hung {
+    started: Instant,
+    deadline: Option<Instant>,
+    saw_cancel: Instant,
 }
 
 impl Llm for HangingLlm {
@@ -606,7 +613,11 @@ impl Llm for HangingLlm {
         let started = Instant::now();
         while started.elapsed() < HANG_CAP {
             if cancel.is_cancelled() {
-                *self.hung_for.lock().unwrap() = Some(started.elapsed());
+                *self.hung.lock().unwrap() = Some(Hung {
+                    started,
+                    deadline: cancel.deadline(),
+                    saw_cancel: Instant::now(),
+                });
                 return Err(LlmError::Cancelled);
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -634,19 +645,32 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
 
     llm.hang_next.store(true, Ordering::SeqCst);
     rig.dictate(&first);
-    let hung_for = llm
-        .hung_for
+    let hung = llm
+        .hung
         .lock()
         .unwrap()
         .expect("the hung call saw its token cancelled");
-    // The token cannot fire before its deadline, but the model's clock starts inside the call, a
-    // moment after the chain set that deadline: the wait it sees falls short of the budget by that
-    // moment (once 1 µs, which failed an exact bound). SLACK allows for it and still tells a
-    // cancel at the budget from one well before it.
-    const SLACK: Duration = Duration::from_millis(10);
+    // Measured against the deadline the chain set, not the call's own start: the chain sets it
+    // (now + BUDGET) a moment before the model's call begins, so a wait timed from the call's
+    // start falls short of BUDGET by that moment (once 1 µs, which failed an exact bound). The
+    // token cannot read cancelled before its deadline, so the first bound needs no slack.
+    let deadline = hung.deadline.expect("polish's token carries its budget");
     assert!(
-        hung_for + SLACK >= BUDGET && hung_for < BUDGET + Duration::from_secs(1),
-        "cancelled at the budget, not before or long after: {hung_for:?}"
+        hung.saw_cancel >= deadline,
+        "cancelled before the budget ran out"
+    );
+    assert!(
+        hung.saw_cancel < deadline + Duration::from_secs(1),
+        "cancelled long after the budget: {:?} late",
+        hung.saw_cancel - deadline
+    );
+    // The deadline is the budget from when the chain started the call: before the model's start,
+    // by no more than the chain's own few steps.
+    assert!(
+        deadline <= hung.started + BUDGET
+            && hung.started + BUDGET - deadline < Duration::from_millis(100),
+        "the deadline is the budget from the call: {:?} from the model's start",
+        deadline.saturating_duration_since(hung.started)
     );
     assert_eq!(
         rig.inserted(),

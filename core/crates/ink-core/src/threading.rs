@@ -66,6 +66,11 @@ impl CancelToken {
         self.flag.store(true, Ordering::Release);
     }
 
+    /// The deadline this token carries, if any: when a holder will first see it cancelled.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+
     /// Whether [`cancel`](Self::cancel) has been called on any clone, or the deadline has passed.
     pub fn is_cancelled(&self) -> bool {
         self.flag.load(Ordering::Acquire) || self.deadline.is_some_and(|d| Instant::now() >= d)
@@ -94,6 +99,12 @@ mod tests {
         let future = CancelToken::with_deadline(now + std::time::Duration::from_secs(3_600));
         let clone = future.clone();
         assert!(!clone.is_cancelled());
+        assert_eq!(
+            clone.deadline(),
+            Some(now + std::time::Duration::from_secs(3_600)),
+            "clones carry the deadline"
+        );
+        assert_eq!(CancelToken::new().deadline(), None);
         // `cancel` still works before the deadline, on any clone.
         future.cancel();
         assert!(clone.is_cancelled());
