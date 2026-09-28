@@ -563,6 +563,9 @@ impl Store for Counting {
     fn set_setting(&self, k: &str, v: &str) -> Result<(), StoreError> {
         self.inner.set_setting(k, v)
     }
+    fn set_settings(&self, s: &[(&str, &str)]) -> Result<(), StoreError> {
+        self.inner.set_settings(s)
+    }
 }
 
 /// Review fix: `record.open` read an untitled record's transcript twice (once for the record,

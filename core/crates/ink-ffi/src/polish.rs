@@ -10,8 +10,8 @@
 //!   recorded only if it is where the model polish would use goes now; otherwise the model changed
 //!   while the user read, and the command fails so the shell can ask again. `setting.set` refuses
 //!   `dictation.polish` = `on`.
-//! - **Off** through `setting.set` (`off`): the consent is withdrawn with it, so turning polish on
-//!   again always asks.
+//! - **Off** through `setting.set` (`off`): the consent is withdrawn in the same write, so turning
+//!   polish on again always asks, and no stale consent can outlive the switch.
 //! - Whatever turned polish on, the chain polishes only where the consent covers, checked by the
 //!   model each call reaches (`ink_pipeline::chain`): a model that changed destination since gets
 //!   nothing until the user agrees again, and the take says so (`polish_not_allowed`).
@@ -123,17 +123,18 @@ pub fn allow(
         shared.events.emit(state(shared, None));
         return Err("polish's model changed before you agreed; look again".into());
     }
-    let store = shared.store.as_ref();
-    store
-        .set_setting(POLISH_CONSENT_SETTING, &needed.to_setting())
+    // The consent and the switch together, or neither: a consent saved without the switch (or
+    // the reverse) is a state the user never chose.
+    shared
+        .store
+        .set_settings(&[
+            (POLISH_CONSENT_SETTING, &needed.to_setting()),
+            (POLISH_SETTING, "on"),
+        ])
         .map_err(|e| {
-            log::error!("polish: the consent could not be saved: {e}");
+            log::error!("polish: the consent and the switch could not be saved: {e}");
             "couldn't save your consent, so polish stays off".to_owned()
         })?;
-    store.set_setting(POLISH_SETTING, "on").map_err(|e| {
-        log::error!("polish: the switch could not be saved: {e}");
-        "couldn't turn polish on".to_owned()
-    })?;
     shared.events.emit(crate::queries::setting_value(
         POLISH_SETTING,
         Some("on".into()),
@@ -142,11 +143,18 @@ pub fn allow(
     Ok(state(shared, reference))
 }
 
-/// **Queries thread.** After `dictation.polish` was set to `off`: withdraws the consent, so polish
-/// asks again before it next turns on. A failure is logged; polish is off either way, and
-/// `polish.state` shows what is stored.
-pub fn withdraw(shared: &Shared) {
-    if let Err(e) = shared.store.set_setting(POLISH_CONSENT_SETTING, NO_CONSENT) {
-        log::error!("polish: the consent could not be withdrawn: {e}");
-    }
+/// **Queries thread.** `setting.set` of `dictation.polish` to `off`: the switch off and the
+/// consent withdrawn in one write, so turning polish on again always asks. A failure changes
+/// neither, and is the command's to report.
+pub fn turn_off(shared: &Shared) -> Result<(), String> {
+    shared
+        .store
+        .set_settings(&[
+            (POLISH_SETTING, "off"),
+            (POLISH_CONSENT_SETTING, NO_CONSENT),
+        ])
+        .map_err(|e| {
+            log::error!("polish: could not be turned off: {e}");
+            format!("couldn't turn polish off: {e}")
+        })
 }

@@ -1247,6 +1247,15 @@ impl Store for SqliteStore {
         self.write_scrubbed("set_setting", |conn| put_setting(conn, key, value))
     }
 
+    fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), StoreError> {
+        // One transaction: a failure part way rolls back what it wrote.
+        self.write_scrubbed("set_settings", |conn| {
+            settings
+                .iter()
+                .try_for_each(|(key, value)| put_setting(conn, key, value))
+        })
+    }
+
     fn unscrubbed(&self) -> bool {
         self.unscrubbed.load(Ordering::Acquire)
     }

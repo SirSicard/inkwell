@@ -591,4 +591,7 @@ impl Store for FaultyStore {
     fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
         self.inner.set_setting(key, value)
     }
+    fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), StoreError> {
+        self.inner.set_settings(settings)
+    }
 }

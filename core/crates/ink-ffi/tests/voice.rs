@@ -44,6 +44,19 @@ impl VoiceRig {
     }
 
     fn build(label: &str, with_platform: bool) -> Self {
+        Self::build_with(
+            label,
+            with_platform,
+            Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+        )
+    }
+
+    /// A rig whose core keeps its settings in `store` (a failing one, say).
+    fn with_store(label: &str, store: Arc<dyn ink_core::Store>) -> Self {
+        Self::build_with(label, true, store)
+    }
+
+    fn build_with(label: &str, with_platform: bool, store: Arc<dyn ink_core::Store>) -> Self {
         let dir = TempDir::new(label);
         let platform = Arc::new(MockPlatform::new());
         let edit = Arc::new(MockPlatform::new());
@@ -52,7 +65,7 @@ impl VoiceRig {
         install(&models, &row);
         let loader = MockLoader::new(Behaviour::Say("hello world".into()));
         let parts = Parts {
-            store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+            store,
             clock: platform.clock(),
             registry: Registry::new(vec![row]).unwrap(),
             models,
@@ -1069,5 +1082,53 @@ fn an_unreadable_consent_is_no_consent_and_says_so() {
     );
     rig.dictate(1.0, 55);
     assert_eq!(model.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    rig.events.assert_valid();
+}
+
+/// The switch and the consent are written together: a store that refuses the write leaves both
+/// as they were, and the command fails where the shell sees it. Turning polish on saves neither
+/// the consent nor the switch; turning it off leaves polish on with its consent, never off with a
+/// stale consent.
+#[test]
+fn the_switch_and_the_consent_are_saved_together_or_not_at_all() {
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let rig = VoiceRig::with_store("polish-atomic", store.clone());
+    rig.register_local();
+
+    store.fail(&["set_settings"]);
+    let failed = rig.fails(r#"{"cmd":"polish.allow","to":"on_device","id":"t1"}"#, "t1");
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("couldn't")),
+        "{failed}"
+    );
+    assert_eq!(rig.setting("dictation.polish"), None, "switch not saved");
+    assert_eq!(
+        rig.setting("dictation.polish_consent"),
+        None,
+        "nor the consent"
+    );
+
+    store.heal();
+    rig.allow_on_device("t2");
+    store.fail(&["set_settings"]);
+    let failed = rig.fails(
+        r#"{"cmd":"setting.set","key":"dictation.polish","value":"off","id":"t3"}"#,
+        "t3",
+    );
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("couldn't turn polish off")),
+        "{failed}"
+    );
+    assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
+    assert_eq!(
+        rig.setting("dictation.polish_consent").as_deref(),
+        Some(r#"{"to":"on_device"}"#),
+        "both as they were"
+    );
+    store.heal();
     rig.events.assert_valid();
 }

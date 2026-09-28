@@ -534,6 +534,7 @@ impl ink_core::Store for FailingStore {
         merge_commitment(id: &ink_core::CommitmentId, into: &ink_core::CommitmentId) -> ();
         setting(key: &str) -> Option<String>;
         set_setting(key: &str, value: &str) -> ();
+        set_settings(settings: &[(&str, &str)]) -> ();
     }
 
     fn supersede_with(

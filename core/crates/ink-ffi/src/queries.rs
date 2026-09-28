@@ -554,7 +554,12 @@ impl Ctx<'_> {
                 Ok(value) => emit(setting(&key, value)),
                 Err(e) => fail(e.to_string()),
             },
-            Query::SettingSet { key, value } => match store.set_setting(&key, &value) {
+            Query::SettingSet { key, value } => match if key == crate::voice::POLISH_SETTING {
+                // Only ever `off` (the parser refuses `on`): with the consent, in one write.
+                crate::polish::turn_off(self.shared)
+            } else {
+                store.set_setting(&key, &value).map_err(|e| e.to_string())
+            } {
                 Ok(()) => {
                     if key == crate::llms::LOCAL_ONLY_KEY {
                         self.shared.local_only.set(value != "off");
@@ -567,10 +572,6 @@ impl Ctx<'_> {
                     }
                     let sweep = key == crate::retention::RETENTION_KEY;
                     let polish_off = key == crate::voice::POLISH_SETTING;
-                    if polish_off {
-                        // Off withdraws the consent: turning polish on again asks again.
-                        crate::polish::withdraw(self.shared);
-                    }
                     emit(setting(&key, Some(value)));
                     if polish_off {
                         emit(crate::polish::state(self.shared, None));
@@ -582,7 +583,7 @@ impl Ctx<'_> {
                         crate::voice::settings_changed(self.shared);
                     }
                 }
-                Err(e) => fail(e.to_string()),
+                Err(e) => fail(e),
             },
             Query::ModesList => match modes(store) {
                 Ok(e) => emit(e),
