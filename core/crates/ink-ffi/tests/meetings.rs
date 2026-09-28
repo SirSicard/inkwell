@@ -1089,9 +1089,9 @@ fn recovery_holds_a_meeting_from_retention_on_its_early_end_too() {
         "let go once recovery was over"
     );
     assert!(!audio.join(ink_ffi::recovery::LIVE_FILE).exists());
-    let swept = ink_ffi::retention::sweep(&shared).expect("30 days");
-    assert_eq!(swept.deleted, 1, "then swept");
-    assert_eq!(store.record(&record).unwrap(), None);
+    // This sweep takes it, or the launch's did already if it ran late (sweeps are serialised).
+    ink_ffi::retention::sweep(&shared).expect("30 days");
+    assert_eq!(store.record(&record).unwrap(), None, "then swept");
     events.assert_valid();
     core.shutdown();
 }
@@ -1116,9 +1116,7 @@ fn a_sweep_deleting_a_record_blocks_no_hold_and_refuses_one_on_that_record() {
         })
         .unwrap();
     store.finish_record(&record, old + 1_000).unwrap();
-    // No setting yet, so the launch's sweep keeps everything; set afterwards, with no sweep asked.
     let (core, events) = recovery_core(dir.path(), store.clone(), clock);
-    store.set_setting("retention.days", "30").unwrap();
     let shared = core.shared().clone();
     let during = Arc::new(Mutex::new(None));
     {
@@ -1139,8 +1137,12 @@ fn a_sweep_deleting_a_record_blocks_no_hold_and_refuses_one_on_that_record() {
             *during.lock().unwrap() = Some((other, same));
         });
     }
-    let swept = ink_ffi::retention::sweep(&shared).expect("30 days");
-    assert_eq!(swept.deleted, 1);
+    // Set once the hook is in place: the launch's sweep keeps everything unless it runs late,
+    // and then it is the one that runs the hook.
+    store.set_setting("retention.days", "30").unwrap();
+    // This sweep, or the launch's if it runs late (sweeps are serialised): whichever deletes the
+    // record runs the hook inside its delete, once.
+    ink_ffi::retention::sweep(&shared).expect("30 days");
     let (other, same) = during
         .lock()
         .unwrap()
