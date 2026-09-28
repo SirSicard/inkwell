@@ -1458,7 +1458,7 @@ fn a_snippet_saved_in_settings_reaches_a_running_dictation_at_once() {
     assert_eq!(rig.dictate(1.2, 1)["text"], "Hi there world.");
     // A save that cannot be read is refused before it is queued, and changes nothing.
     let refused = rig.core().command(
-        r#"{"cmd":"snippets.save","id":"bad","snippets":[{"id":"x","trigger":" ","expansion":"y"}]}"#,
+        r#"{"cmd":"snippets.save","id":"bad","snippets":[{"id":"x","trigger":"a","expansion":"y"},{"id":"x","trigger":"b","expansion":"z"}]}"#,
     );
     assert!(refused.is_err());
     let listed = rig.ask(r#"{"cmd":"snippets.list","id":"l2"}"#, "l2");

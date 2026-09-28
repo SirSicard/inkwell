@@ -163,9 +163,8 @@ fn read_snippets(name: &str, obj: &Map<String, Value>) -> Result<SnippetStore, S
             .next()
             .ok_or_else(|| format!("{name}: {what} was not read"))?;
         check_id(name, &what, &snippet.id, &mut seen)?;
-        if snippet.trigger.trim().is_empty() {
-            return Err(format!("{name}: {what} has a blank trigger"));
-        }
+        // A blank trigger is kept (it never expands): an imported list may hold one, and refusing
+        // it would make every later save of that list fail.
         out.push(snippet);
     }
     Ok(SnippetStore { snippets: out })
@@ -182,9 +181,7 @@ fn read_commands(name: &str, obj: &Map<String, Value>) -> Result<VoiceCommandSto
         .ok_or_else(|| format!("{name}: needs a string \"wake_prefix\""))?
         .trim()
         .to_owned();
-    if wake_prefix.is_empty() {
-        return Err(format!("{name}: the wake word is blank"));
-    }
+    // A blank wake word is kept, as 0.2 let the user leave it: it matches nothing.
     let items = list(name, obj, "commands")?;
     let mut seen = HashSet::new();
     let mut commands = Vec::with_capacity(items.len());
@@ -208,9 +205,6 @@ fn read_commands(name: &str, obj: &Map<String, Value>) -> Result<VoiceCommandSto
             .into_iter()
             .filter(|t| !t.is_empty())
             .collect();
-        if triggers.is_empty() {
-            return Err(format!("{name}: {what} has no trigger"));
-        }
         let kind = text("action").ok_or_else(|| format!("{name}: {what} needs an \"action\""))?;
         let action = CommandAction::from_parts(kind, text("value")).ok_or_else(|| {
             format!("{name}: {what} has an unknown action, or lacks the \"value\" it needs")
@@ -383,18 +377,39 @@ mod tests {
         assert_eq!(c.commands[1].action, CommandAction::Undo);
         for bad in [
             r#"{"cmd":"snippets.save"}"#,
-            r#"{"cmd":"snippets.save","snippets":[{"id":"a","trigger":" ","expansion":"x"}]}"#,
+            r#"{"cmd":"snippets.save","snippets":[{"id":" ","trigger":"x","expansion":"x"}]}"#,
             r#"{"cmd":"snippets.save","snippets":[{"id":"a","trigger":"x","expansion":"y"},{"id":"a","trigger":"z","expansion":"y"}]}"#,
             r#"{"cmd":"snippets.save","snippets":[{"id":"a","trigger":"x"}]}"#,
             r#"{"cmd":"snippets.save","snippets":[],"extra":1}"#,
-            r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"","commands":[]}"#,
-            r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"inkwell","commands":[{"id":"a","triggers":[],"action":"undo","enabled":true}]}"#,
+            r#"{"cmd":"voice_commands.save","enabled":true,"commands":[]}"#,
+            r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"inkwell","commands":[{"id":"a","triggers":"x","action":"undo","enabled":true}]}"#,
+            r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"inkwell","commands":[{"id":"a","triggers":["x"],"action":"undo","enabled":true},{"id":"a","triggers":["y"],"action":"undo","enabled":true}]}"#,
             r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"inkwell","commands":[{"id":"a","triggers":["x"],"action":"open_url","enabled":true}]}"#,
             r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"inkwell","commands":[{"id":"a","triggers":["x"],"action":"dance","enabled":true}]}"#,
             r#"{"cmd":"voice_commands.save","enabled":"yes","wake_prefix":"inkwell","commands":[]}"#,
         ] {
             assert!(matches!(p(bad), Some(Err(_))), "{bad} must be refused");
         }
+    }
+
+    /// What an import may hold and 0.2 allowed is saved back as it is, so a list never becomes
+    /// unsaveable: a blank wake word, a blank trigger, a command left without one.
+    #[test]
+    fn blanks_the_0_2_app_allowed_can_be_saved_back() {
+        assert!(matches!(
+            p(r#"{"cmd":"snippets.save","snippets":[{"id":"a","trigger":"","expansion":"x"}]}"#),
+            Some(Ok(_))
+        ));
+        let Some(Ok(PhrasesQuery::CommandsSave(c))) = p(
+            r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"","commands":[{"id":"a","triggers":[" "],"action":"undo","enabled":true}]}"#,
+        ) else {
+            panic!("saved as it is");
+        };
+        assert!(c.commands[0].triggers.is_empty());
+        assert!(
+            c.detect("undo").is_none(),
+            "a blank wake word matches nothing"
+        );
     }
 
     #[test]

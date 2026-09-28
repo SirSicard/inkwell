@@ -253,7 +253,7 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *    "category":"...","enabled":true}],"id":"<ref>"}
  *       "snippets.listed": the snippets dictation expands, in order ("from_import" while they are
  *       still the Inkwell 0.2 import's). A save replaces the whole list and reaches a running
- *       dictation at once. Ids must be unique and triggers not blank.
+ *       dictation at once. Ids must be present and unique.
  *   {"cmd":"voice_commands.list","id":"<ref>"}
  *   {"cmd":"voice_commands.save","enabled":false,"wake_prefix":"inkwell","commands":[{"id":"...",
  *    "triggers":["..."],"action":"insert_text","value":"...","enabled":true}],"id":"<ref>"}
