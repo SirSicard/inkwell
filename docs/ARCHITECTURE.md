@@ -151,8 +151,8 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
 - **Checked in the bundle.** `build-mac.sh` reads every Mach-O's load commands
   (`mac/scripts/lib/bundle-check.sh`) and fails the build if any loads a path outside the bundle
   and the OS, has an rpath that is not relative to itself or the executable, cannot resolve a
-  library it loads inside the bundle, or was built for a newer macOS than 26. A Homebrew built for
-  a newer macOS than the app's (on a Mac running one) fails that last check; `INK_ALLOW_NEWER_MACOS=1`
+  library it loads inside the bundle, or was built for a newer macOS than 26. A local build with
+  Homebrew's SentencePiece and Abseil (built for a Mac's own, newer macOS) fails that last check; `INK_ALLOW_NEWER_MACOS=1`
   lets a local build through with a warning, and a release (`--timestamp`) refuses it. Every
   bundled library must also be one `THIRD_PARTY.md` covers, by name.
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
@@ -160,11 +160,13 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
 - **Its dependencies**, SentencePiece and Abseil, are listed in [THIRD_PARTY.md](../THIRD_PARTY.md)
   with NeMo-Speech.cpp and its ggml; `cargo deny` cannot see them. They ship inside the app now,
-  so their notices go in its About screen. They come from Homebrew at build time: Homebrew's
-  Abseil has no static libraries, and its SentencePiece archive was built against a different
-  Abseil than the one it installs beside it, so they are bundled as the shared libraries Homebrew
-  built (SentencePiece's carries its own Abseil inside). Their versions are whatever Homebrew
-  serves when the release is built; the build manifest published with each release records them.
+  so their notices go in its About screen. They are pinned: `native/build-sentencepiece-abseil.sh`
+  builds SentencePiece 0.2.2 and Abseil 20260817.0 from release tarballs whose SHA-256s it holds,
+  SentencePiece against that Abseil (its `sentencepiece_processor.h` passes `absl::Status` across
+  the library boundary, so NeMo-Speech.cpp and SentencePiece must be compiled against one Abseil),
+  as shared libraries installed by `@rpath`; `build-nemo-speech.sh` builds against them when
+  `ENGINE_DEPS_DIR` names their prefix, as the release does. The build manifest published with each
+  release records their versions and hashes.
 
 ## Threads
 

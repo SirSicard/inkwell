@@ -43,37 +43,45 @@ weights are never in the app: it downloads them when they are first needed
   `build-nemo-speech.sh`, and goes in `Contents/Frameworks` with the SentencePiece and Abseil
   libraries it loads, each signed like the app
   ([ARCHITECTURE.md](ARCHITECTURE.md), "The diarizer's native library").
-- **Homebrew at build time only.** The workflow installs CMake, Ninja, SentencePiece and Abseil
-  from Homebrew. `build-nemo-speech.sh` copies the two libraries into its prefix and loads them by
-  `@rpath`, and `build-mac.sh` fails if any Mach-O in the app loads a path outside the bundle and
-  the OS, has an absolute rpath, or loads a library it cannot find inside the bundle. Their
-  versions are Homebrew's of the day, and the build manifest records them.
+- **SentencePiece and Abseil, pinned.** `core/crates/ink-engines/native/build-sentencepiece-abseil.sh`
+  fetches SentencePiece 0.2.2 and Abseil 20260817.0 as their release tarballs, refuses either unless
+  its SHA-256 is the one committed in the script, and builds both for arm64 and macOS 26 with no
+  host-specific flags, SentencePiece against that Abseil, every library installed as `@rpath/<name>`
+  with `@loader_path` as its only rpath. The workflow builds them on every run (no cache) and hands
+  the prefix to `build-nemo-speech.sh` as `ENGINE_DEPS_DIR`, which builds NeMo-Speech.cpp against
+  them, copies them into its own prefix, and stops if any copy came from anywhere else. Homebrew
+  serves CMake and Ninja only. `build-mac.sh` fails if any Mach-O in the app loads a path outside the
+  bundle and the OS, has an absolute rpath, or loads a library it cannot find inside the bundle.
+  To move to a new version: change the version, URL and SHA-256 in the script (read the hash from
+  the release, never retype it), check the licences again, and run a dry run.
 - **The build manifest.** `Inkwell_X.Y.Z_build-manifest.txt` is an asset of every release, beside
   the dmg (a dry run keeps it as the artifact `inkwell-build-manifest`), so what a shipped dmg
   contains outlives the run's log: the source commit and the dmg's SHA-256; NeMo-Speech.cpp's
-  commit, its `GGML_NATIVE` and each prefix library's SHA-256; each library bundled from Homebrew,
-  by formula, version and file in its keg; and `brew list --versions` of the four packages.
-  `build-manifest.sh` writes no path of the build machine: it refuses a library copied from
-  anywhere but a Homebrew keg, and a keg version Homebrew did not list.
+  commit, its `GGML_NATIVE` and each prefix library's SHA-256; SentencePiece's and Abseil's pinned
+  versions and tarball SHA-256s; each bundled library, by project, version and file; and
+  `brew list --versions` of the build tools. `build-manifest.sh` writes no path of the build
+  machine: it refuses a library that was not copied from the pinned prefix, one that changed after
+  that prefix was built, and a prefix built from any tarball but the pinned ones.
 - **Every Apple silicon Mac on macOS 26.** Both ggml copies are built with `GGML_NATIVE=OFF` and no
   `-march`, the M1's instruction set: `build-core.sh` reads llama.cpp's value back from its CMake
   cache, and ink-engines' `build.rs` refuses a NeMo prefix whose manifest does not record it.
   Everything is built for macOS 26, and `build-mac.sh` fails on any Mach-O built for a newer one.
-  The workflow runs on `macos-26`, whose Homebrew builds for macOS 26; on a Mac running a newer
-  macOS, Homebrew's libraries are built for that one, so a local build of the engines needs
-  `INK_ALLOW_NEWER_MACOS=1` (a warning instead of a failure; `--timestamp` refuses it), and that
-  build will not start on macOS 26.
+  The pinned SentencePiece and Abseil are built for macOS 26 wherever they are built. A local build
+  that uses Homebrew's instead (no `ENGINE_DEPS_DIR`) on a Mac running a newer macOS gets libraries
+  built for that one, and needs `INK_ALLOW_NEWER_MACOS=1` (a warning instead of a failure;
+  `--timestamp` refuses it); that build will not start on macOS 26.
 - **The diarizer's source.** The workflow fetches NeMo-Speech.cpp at the commit
   `build-nemo-speech.sh` pins, with its ggml submodule; the script checks both commits.
 
-The same build on a Mac with Homebrew (for a local check; the release is CI's):
+The same build on a Mac (for a local check; the release is CI's):
 
 ```bash
-brew install cmake ninja sentencepiece abseil
+brew install cmake ninja
+core/crates/ink-engines/native/build-sentencepiece-abseil.sh ~/engine-deps ~/engine-deps-work
 commit="$(sed -n 's/^NEMO_COMMIT=//p' core/crates/ink-engines/native/build-nemo-speech.sh)"
 git clone https://github.com/NVIDIA/NeMo-Speech.cpp ~/src/NeMo-Speech.cpp
 git -C ~/src/NeMo-Speech.cpp checkout "$commit" && git -C ~/src/NeMo-Speech.cpp submodule update --init ggml
-core/crates/ink-engines/native/build-nemo-speech.sh ~/src/NeMo-Speech.cpp ~/nemo-speech
+ENGINE_DEPS_DIR=~/engine-deps core/crates/ink-engines/native/build-nemo-speech.sh ~/src/NeMo-Speech.cpp ~/nemo-speech
 NEMO_SPEECH_DIR=~/nemo-speech mac/scripts/build-mac.sh --engines
 ```
 
@@ -226,8 +234,9 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
 - **Pinned inputs.** Actions by commit; Sparkle's framework by URL and SHA-256 in `mac/Package.swift`
   (and in the Swift licence audit's vetted list); Sparkle's tools by size and SHA-256 in
   `sparkle-tools.sh`; llama.cpp by the exact `llama-cpp-2` version in `Cargo.lock`; NeMo-Speech.cpp
-  and its ggml by commit. Not pinned: SentencePiece and Abseil, Homebrew's current builds
-  (recorded in the release's build manifest). The release build restores no cache.
+  and its ggml by commit; SentencePiece 0.2.2 and Abseil 20260817.0 by tarball SHA-256 in
+  `build-sentencepiece-abseil.sh` (recorded in the release's build manifest). Not pinned: CMake and
+  Ninja, Homebrew's current builds (recorded too). The release build restores no cache.
 - **Third-party build code runs before the key is there.** The engines (NeMo-Speech.cpp's CMake
   build, the core's cargo build scripts) are built before the signing keychain is created, so no
   build script ever runs next to an unlocked Developer ID key.
