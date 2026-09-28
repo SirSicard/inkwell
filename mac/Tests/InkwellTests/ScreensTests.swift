@@ -471,6 +471,116 @@ final class EditConsentTests: XCTestCase {
     }
 }
 
+// MARK: - Summaries and Ask's consent
+
+@MainActor
+final class MeetingsConsentTests: XCTestCase {
+    private func screens(_ sent: Sent) -> ScreenModels {
+        let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.apply([
+            event(appleLLM),
+            polishState(on: false, allowed: false, feature: "meetings"),
+        ])
+        return screens
+    }
+
+    /// Owner decision: summaries and Ask are off until the user turns them on in Settings > AI
+    /// through the consent step, which names where the transcript goes; Cancel sends nothing;
+    /// Allow asks the core to record it; off sends off (the core withdraws the consent with it).
+    /// While off, a record without a summary says why.
+    func testTurningThemOnAsksFirstAndARecordSaysTheyAreOff() throws {
+        let sent = Sent()
+        let screens = screens(sent)
+        XCTAssertFalse(screens.meetingsAIOn)
+        XCTAssertTrue(screens.canToggleMeetingsAI)
+        XCTAssertEqual(screens.meetingsAIStatus, "Off. Meetings are recorded and transcribed, with no summary, and Ask stays off.")
+        XCTAssertEqual(screens.summaryOffNote, "Summaries are off until you allow them in Settings > AI. Meetings are still recorded and transcribed.")
+
+        let before = sent.commands.count
+        screens.setMeetingsAI(true)
+        let asked = try XCTUnwrap(screens.meetingsConsent.pending)
+        XCTAssertEqual(screens.meetingsConsent.host, .settings)
+        XCTAssertEqual(sent.commands.count, before, "asking sends nothing")
+        XCTAssertEqual(ConsentModel.title(.meetings), "Turn on summaries and Ask?")
+        let message = ConsentModel.message(.meetings, asked)
+        XCTAssertTrue(message.contains("send a meeting's transcript, what everyone in it said, to a language model"), message)
+        XCTAssertTrue(message.contains("Apple's on-device model, so the transcript stays on this Mac"), message)
+        XCTAssertEqual(ConsentModel.button(.meetings, asked), "Turn On Summaries and Ask")
+        screens.meetingsConsent.cancel()
+        XCTAssertNil(screens.meetingsConsent.pending)
+        XCTAssertEqual(sent.commands.count, before, "cancel sends nothing")
+        XCTAssertFalse(screens.meetingsAIOn, "cancel leaves them off")
+
+        screens.setMeetingsAI(true)
+        screens.meetingsConsent.allow()
+        XCTAssertEqual(sent.commands.last, .consentAllow(feature: .meetings, to: .onDevice, endpoint: nil, key: nil, ref: "consent.allow:meetings:2"))
+        XCTAssertFalse(screens.meetingsAIOn, "on only once the core has recorded it")
+        screens.apply([polishState(on: true, allowed: true, allowedTo: "on_device", feature: "meetings")])
+        XCTAssertTrue(screens.meetingsAIOn)
+        XCTAssertNil(screens.summaryOffNote)
+        XCTAssertEqual(screens.meetingsAIStatus, "On, with Apple's on-device model. Meeting transcripts stay on this Mac.")
+
+        screens.setMeetingsAI(false)
+        XCTAssertEqual(sent.commands.last, .settingSet(.meetingsLLM, "off"))
+        XCTAssertFalse(screens.meetingsAIOn)
+        XCTAssertNotNil(screens.summaryOffNote)
+    }
+
+    /// A cloud model is named, and the step says the transcript leaves this Mac for it.
+    func testACloudModelIsNamedAndTheTranscriptLeavesThisMac() throws {
+        let sent = Sent()
+        let screens = screens(sent)
+        screens.apply([polishState(on: false, allowed: false, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud", feature: "meetings")])
+        screens.setMeetingsAI(true)
+        let asked = try XCTUnwrap(screens.meetingsConsent.pending)
+        let message = ConsentModel.message(.meetings, asked)
+        XCTAssertTrue(message.contains("the transcript leaves this Mac and goes to Example Cloud"), message)
+        XCTAssertEqual(ConsentModel.button(.meetings, asked), "Send to Example Cloud")
+        screens.meetingsConsent.allow()
+        XCTAssertEqual(sent.commands.last, .consentAllow(feature: .meetings, to: .cloud, endpoint: "shell engine cloud", key: nil, ref: "consent.allow:meetings:2"))
+        screens.apply([polishState(on: true, allowed: true, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud", allowedTo: "cloud", feature: "meetings")])
+        XCTAssertEqual(screens.meetingsAIStatus, "On. Meeting transcripts go to Example Cloud for summaries and Ask.")
+    }
+
+    /// A meeting that ended without a summary for want of consent reads the state again; a
+    /// switch-off the core refused is shown and put back.
+    func testARefusedSummaryReadsTheStateAgainAndAFailedOffIsShown() {
+        let sent = Sent()
+        let screens = screens(sent)
+        let before = sent.commands.count
+        screens.apply([event(#"{"type":"meeting.warning","record":"r1","kind":"summary_not_allowed","message":"a model on this machine"}"#)])
+        XCTAssertEqual(sent.commands.dropFirst(before).first, .consentGet(.meetings, ref: "consent.get:meetings:2"))
+
+        screens.apply([polishState(on: true, allowed: true, allowedTo: "on_device", feature: "meetings")])
+        screens.setMeetingsAI(false)
+        XCTAssertFalse(screens.meetingsAIOn)
+        let failed = event(#"{"type":"command.failed","command":"setting.set","id":"setting:meetings.llm","message":"x"}"#)
+        guard case .commandFailed(let value) = failed else { return XCTFail("not a failure") }
+        XCTAssertTrue(screens.handles(value), "shown under the switch, not only logged")
+        screens.apply([failed])
+        XCTAssertTrue(screens.meetingsAIOn, "put back")
+        XCTAssertEqual(screens.meetingsAIStatus, "Couldn't save the change, so summaries and Ask stay as they were.")
+    }
+
+    /// Each feature reads only its own state: summaries and Ask allowed allows neither polish nor
+    /// voice edit, nor the reverse.
+    func testEachFeatureReadsOnlyItsOwnState() {
+        let sent = Sent()
+        let screens = screens(sent)
+        screens.apply([polishState(on: true, allowed: true, allowedTo: "on_device", feature: "meetings")])
+        XCTAssertTrue(screens.meetingsAIOn)
+        XCTAssertFalse(screens.polish.consent.isAllowedOn)
+        XCTAssertFalse(screens.editConsent.isAllowedOn)
+        screens.apply([
+            polishState(on: false, allowed: false, feature: "meetings"),
+            polishState(on: true, allowed: true, allowedTo: "on_device"),
+            polishState(on: true, allowed: true, allowedTo: "on_device", feature: "edit"),
+        ])
+        XCTAssertFalse(screens.meetingsAIOn)
+        XCTAssertNotNil(screens.summaryOffNote)
+    }
+}
+
 // MARK: - Models
 
 @MainActor

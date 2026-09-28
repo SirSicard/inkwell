@@ -1,5 +1,6 @@
 // The user's consent for one feature that sends their words to a language model: polish (the
-// dictation) or voice edit (the selection and the instruction). Each has its own.
+// dictation), voice edit (the selection and the instruction), or summaries and Ask (a meeting's
+// transcript). Each has its own.
 //
 // The feature is off until the user turns it on through a consent step that says where the words
 // go: Apple's on-device model (they stay on this Mac) or a named cloud provider (they leave it).
@@ -15,7 +16,9 @@
 // That is also why engine churn (every engine.registered or engine.unregistered reads the state
 // again) needs no debounce: each read is a short store query, and only the last answer counts.
 //
-// A later feature (a meeting's summary, Ask) is one more ConsentModel with its own words below.
+// Summaries and Ask are off until allowed too: the core then sends no transcript, a meeting ends
+// with meeting.warning summary_not_allowed (the state is read again), and Ask answers that it
+// needs the user's OK.
 import AppleEngines
 import InkBridge
 import Observation
@@ -144,20 +147,25 @@ final class ConsentModel {
     /// The line to show for a failure or a pause, if there is one (nil: nothing wrong).
     var problem: String? {
         let what = Self.featureName(feature)
+        // "Summaries and Ask" are two things.
+        let (it, stays, isOff, uses, was) = feature == .meetings
+            ? ("them", "stay", "are", "use", "they were")
+            : ("it", "stays", "is", "uses", "it was")
         switch failure {
         case .read: return "Couldn't read your \(what) setting. Open Settings again to retry."
-        case .write: return "Couldn't save the change, so \(what) stays as it was."
-        case .allow: return "Couldn't turn \(what) on, so it stays off. Try again."
+        case .write: return "Couldn't save the change, so \(what) \(stays) as \(was)."
+        case .allow: return "Couldn't turn \(what) on, so \(feature == .meetings ? "they" : "it") \(stays) off. Try again."
         case nil: break
         }
         if let error = state?.error {
             // An unread switch counts as off, an unread consent as none.
-            return "\(Self.sentence(error)), so \(what) is off or paused. Turn it on again to allow it."
+            return "\(Self.sentence(error)), so \(what) \(isOff) off or paused. Turn \(it) on again to allow \(it)."
         }
         if isPaused, let destination {
+            let words = feature == .meetings ? "meeting transcripts" : "your words"
             return destination.isOnDevice
-                ? "Paused: \(what) now uses \(destination.label). Turn it on again to allow it."
-                : "Paused: \(what) would now send your words to \(destination.label). Turn it on again to allow it."
+                ? "Paused: \(what) now \(uses) \(destination.label). Turn \(it) on again to allow \(it)."
+                : "Paused: \(what) would now send \(words) to \(destination.label). Turn \(it) on again to allow \(it)."
         }
         return nil
     }
@@ -168,6 +176,7 @@ final class ConsentModel {
         switch feature {
         case .polish: "polish"
         case .edit: "voice edit"
+        case .meetings: "summaries and Ask"
         }
     }
 
@@ -175,6 +184,7 @@ final class ConsentModel {
         switch feature {
         case .polish: "Turn on polish?"
         case .edit: "Turn on voice edit?"
+        case .meetings: "Turn on summaries and Ask?"
         }
     }
 
@@ -183,10 +193,15 @@ final class ConsentModel {
         let what = switch feature {
         case .polish: "Polish sends what you dictate to a language model, which tidies the wording before it is typed."
         case .edit: "Voice edit sends the text you select and what you say to a language model, which rewrites the selection."
+        case .meetings: "Summaries and Ask send a meeting's transcript, what everyone in it said, to a language model, which writes the summary and what was promised, and answers your questions."
         }
+        // A meeting's transcript holds everyone's words, not only the user's.
+        let (words, stay, leave) = feature == .meetings
+            ? ("the transcript", "stays", "leaves this Mac and goes")
+            : ("your words", "stay", "leave this Mac and go")
         return destination.isOnDevice
-            ? "\(what) It uses \(destination.label), so your words stay on this Mac."
-            : "\(what) It uses \(destination.label), a cloud provider: your words leave this Mac and go to \(destination.label)."
+            ? "\(what) It uses \(destination.label), so \(words) \(stay) on this Mac."
+            : "\(what) It uses \(destination.label), a cloud provider: \(words) \(leave) to \(destination.label)."
     }
 
     /// The button that agrees.
@@ -195,6 +210,7 @@ final class ConsentModel {
         return switch feature {
         case .polish: "Turn On Polish"
         case .edit: "Turn On Voice Edit"
+        case .meetings: "Turn On Summaries and Ask"
         }
     }
 
@@ -288,6 +304,8 @@ final class ConsentModel {
             // The core refused to send: read where the feature goes now, so the screen says why.
             load()
         case .dictationEditFailed(let failed) where failed.reason == .notAllowed && feature == .edit:
+            load()
+        case .meetingWarningEvent(let warning) where warning.kind == .summaryNotAllowed && feature == .meetings:
             load()
         default:
             break

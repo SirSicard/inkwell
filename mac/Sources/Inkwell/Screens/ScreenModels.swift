@@ -185,9 +185,16 @@ final class ScreenModels {
     let dictation: DictationModel
     /// Voice edit's consent (the key is the dictation model's).
     let editConsent: ConsentModel
+    /// The consent and switch for a meeting's summary and Ask (Settings > AI).
+    let meetingsConsent: ConsentModel
     let snippets: SnippetsModel
     let voiceCommands: VoiceCommandsModel
     let importNote: ImportNoteModel
+
+    /// The id of the meetings switch's command (a `command.failed` carries it).
+    static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
+
+    @ObservationIgnored private let send: SendCommand
 
     init(
         send: @escaping SendCommand,
@@ -209,6 +216,8 @@ final class ScreenModels {
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
         dictation = DictationModel(send: send)
         editConsent = ConsentModel(feature: .edit, switchSettingID: DictationModel.editKeySettingID, send: send)
+        meetingsConsent = ConsentModel(feature: .meetings, switchSettingID: Self.meetingsAISettingID, send: send)
+        self.send = send
         dictation.hasLanguageModel = { [polish] in polish.hasWorkingEngine }
         snippets = SnippetsModel(send: send)
         voiceCommands = VoiceCommandsModel(send: send)
@@ -231,6 +240,7 @@ final class ScreenModels {
             onboarding.apply(event)
             dictation.apply(event)
             editConsent.apply(event)
+            meetingsConsent.apply(event)
             snippets.apply(event)
             voiceCommands.apply(event)
             importNote.apply(event)
@@ -249,6 +259,7 @@ final class ScreenModels {
         // Accessibility it answers dictation.off, and coming back to the app tries again.
         dictation.load()
         editConsent.load()
+        meetingsConsent.load()
     }
 
     /// The Voice section's edit picker. Off turns voice edit off (the core withdraws its consent in
@@ -265,6 +276,51 @@ final class ScreenModels {
         } else {
             editConsent.ask(from: .settings, key: token)
         }
+    }
+
+    // MARK: - Summaries and Ask (Settings > AI)
+
+    /// Their switch reads on only with a consent that covers the model now and a working model.
+    var meetingsAIOn: Bool { meetingsConsent.isAllowedOn && polish.hasWorkingEngine }
+
+    /// Whether their switch can be used: a working model, and the core has said where it sends.
+    var canToggleMeetingsAI: Bool {
+        polish.hasWorkingEngine && meetingsConsent.state != nil && meetingsConsent.destination != nil
+    }
+
+    /// The line under their switch. A failure or an unread state is said first, never read as off.
+    var meetingsAIStatus: String {
+        if meetingsConsent.failure != nil || meetingsConsent.state?.error != nil, let problem = meetingsConsent.problem {
+            return problem
+        }
+        guard polish.hasWorkingEngine else {
+            return "No language model is available on this Mac, so meetings get no summary."
+        }
+        if let problem = meetingsConsent.problem { return problem }
+        guard meetingsAIOn, let destination = meetingsConsent.destination else {
+            return "Off. Meetings are recorded and transcribed, with no summary, and Ask stays off."
+        }
+        return destination.isOnDevice
+            ? "On, with \(destination.label). Meeting transcripts stay on this Mac."
+            : "On. Meeting transcripts go to \(destination.label) for summaries and Ask."
+    }
+
+    /// The user switched summaries and Ask. On shows the consent step (nothing is sent until
+    /// Allow); off turns them off, and the core withdraws the consent in the same write.
+    func setMeetingsAI(_ on: Bool) {
+        guard canToggleMeetingsAI else { return }
+        if on {
+            meetingsConsent.ask(from: .settings)
+            return
+        }
+        meetingsConsent.switchedOff()
+        send(.settingSet(.meetingsLLM, "off"))
+    }
+
+    /// What a record without a summary says while summaries are off (nil: on, or not read yet).
+    var summaryOffNote: String? {
+        guard meetingsConsent.state != nil, !meetingsConsent.isAllowedOn else { return nil }
+        return "Summaries are off until you allow them in Settings > AI. Meetings are still recorded and transcribed."
     }
 
     /// The app became active again.
@@ -291,11 +347,11 @@ final class ScreenModels {
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
             failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
-                || dictation.handles(failed)
+                || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
         case "consent.get", "consent.allow":
-            // Shown under the Polish toggle, or in the Voice section for voice edit.
+            // Shown under the Polish or the summaries toggle, or in the Voice section for voice edit.
             true
         // Settings > Snippets and Voice commands say so. The key note that could not be read is
         // not shown (there is nothing to say then); it is logged.
