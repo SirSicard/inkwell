@@ -44,11 +44,22 @@ pub enum PhrasesQuery {
     /// `snippets.list`.
     SnippetsList,
     /// `snippets.save`.
-    SnippetsSave(SnippetStore),
+    SnippetsSave {
+        /// The whole list.
+        snippets: SnippetStore,
+        /// Replace a stored list that cannot be read (the user chose to start over). Without it
+        /// such a list is never overwritten.
+        replace_unreadable: bool,
+    },
     /// `voice_commands.list`.
     CommandsList,
     /// `voice_commands.save`.
-    CommandsSave(VoiceCommandStore),
+    CommandsSave {
+        /// The switch, the wake word and every command.
+        commands: VoiceCommandStore,
+        /// As for [`SnippetsSave`](Self::SnippetsSave).
+        replace_unreadable: bool,
+    },
     /// `import.notes`.
     ImportNotes,
 }
@@ -56,7 +67,7 @@ pub enum PhrasesQuery {
 impl PhrasesQuery {
     /// Whether it changes what dictation reads.
     pub fn saves(&self) -> bool {
-        matches!(self, Self::SnippetsSave(_) | Self::CommandsSave(_))
+        matches!(self, Self::SnippetsSave { .. } | Self::CommandsSave { .. })
     }
 }
 
@@ -99,8 +110,8 @@ fn stored(store: &dyn Store, own: &str, imported: &str) -> Result<Option<(String
 pub fn parse(name: &str, v: &Value) -> Option<Result<PhrasesQuery, String>> {
     let fields: &[&str] = match name {
         "snippets.list" | "voice_commands.list" | "import.notes" => &[],
-        "snippets.save" => &["snippets"],
-        "voice_commands.save" => &["enabled", "wake_prefix", "commands"],
+        "snippets.save" => &["snippets", "replace_unreadable"],
+        "voice_commands.save" => &["enabled", "wake_prefix", "commands", "replace_unreadable"],
         _ => return None,
     };
     Some(parse_known(name, fields, v))
@@ -114,12 +125,24 @@ fn parse_known(name: &str, fields: &[&str], v: &Value) -> Result<PhrasesQuery, S
     {
         return Err(format!("{name}: unknown field \"{k}\""));
     }
+    let replace_unreadable = match obj.get("replace_unreadable") {
+        None => false,
+        Some(b) => b
+            .as_bool()
+            .ok_or_else(|| format!("{name}: \"replace_unreadable\" is true or false"))?,
+    };
     Ok(match name {
         "snippets.list" => PhrasesQuery::SnippetsList,
         "voice_commands.list" => PhrasesQuery::CommandsList,
         "import.notes" => PhrasesQuery::ImportNotes,
-        "snippets.save" => PhrasesQuery::SnippetsSave(read_snippets(name, obj)?),
-        "voice_commands.save" => PhrasesQuery::CommandsSave(read_commands(name, obj)?),
+        "snippets.save" => PhrasesQuery::SnippetsSave {
+            snippets: read_snippets(name, obj)?,
+            replace_unreadable,
+        },
+        "voice_commands.save" => PhrasesQuery::CommandsSave {
+            commands: read_commands(name, obj)?,
+            replace_unreadable,
+        },
         _ => unreachable!("parse() lists every command"),
     })
 }
@@ -226,6 +249,13 @@ fn read_commands(name: &str, obj: &Map<String, Value>) -> Result<VoiceCommandSto
     })
 }
 
+/// Why a save is refused over a stored list that cannot be read: saving would replace it unseen.
+pub const REFUSED_SNIPPETS: &str = "the stored snippets cannot be read, so a save would replace \
+     them; send replace_unreadable to start over";
+/// As [`REFUSED_SNIPPETS`], for the voice commands.
+pub const REFUSED_COMMANDS: &str = "the stored voice commands cannot be read, so a save would \
+     replace them; send replace_unreadable to start over";
+
 /// **Queries thread.** Answers a query. A save writes 1.0's key; the caller then hands the
 /// running dictation its new settings ([`PhrasesQuery::saves`]).
 pub fn answer(store: &dyn Store, query: PhrasesQuery, id: Option<&str>) -> Result<Value, String> {
@@ -235,7 +265,13 @@ pub fn answer(store: &dyn Store, query: PhrasesQuery, id: Option<&str>) -> Resul
             let (s, imported) = load_snippets(store)?;
             snippets_listed(&s, imported, reference)
         }
-        PhrasesQuery::SnippetsSave(s) => {
+        PhrasesQuery::SnippetsSave {
+            snippets: s,
+            replace_unreadable,
+        } => {
+            if !replace_unreadable && load_snippets(store).is_err() {
+                return Err(REFUSED_SNIPPETS.into());
+            }
             store
                 .set_setting(snippets::SETTING_KEY, &s.to_json())
                 .map_err(|e| e.to_string())?;
@@ -245,7 +281,13 @@ pub fn answer(store: &dyn Store, query: PhrasesQuery, id: Option<&str>) -> Resul
             let (c, imported) = load_commands(store)?;
             commands_listed(&c, imported, reference)
         }
-        PhrasesQuery::CommandsSave(c) => {
+        PhrasesQuery::CommandsSave {
+            commands: c,
+            replace_unreadable,
+        } => {
+            if !replace_unreadable && load_commands(store).is_err() {
+                return Err(REFUSED_COMMANDS.into());
+            }
             store
                 .set_setting(voicecommand::SETTING_KEY, &c.to_json())
                 .map_err(|e| e.to_string())?;
@@ -358,14 +400,14 @@ mod tests {
             p(r#"{"cmd":"snippets.list","id":"x"}"#),
             Some(Ok(PhrasesQuery::SnippetsList))
         );
-        let Some(Ok(PhrasesQuery::SnippetsSave(s))) = p(
+        let Some(Ok(PhrasesQuery::SnippetsSave { snippets: s, .. })) = p(
             r#"{"cmd":"snippets.save","snippets":[{"id":"a","trigger":"brb","expansion":"be right back"}]}"#,
         ) else {
             panic!("a snippet list reads");
         };
         assert_eq!(s.snippets[0].trigger, "brb");
         assert!(s.snippets[0].enabled, "0.2's default");
-        let Some(Ok(PhrasesQuery::CommandsSave(c))) = p(
+        let Some(Ok(PhrasesQuery::CommandsSave { commands: c, .. })) = p(
             r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":" inkwell ","commands":[
                 {"id":"sig","triggers":["sign off",""],"action":"insert_text","value":"Best","enabled":true},
                 {"id":"undo","triggers":["scratch that"],"action":"undo","enabled":false}]}"#,
@@ -400,7 +442,7 @@ mod tests {
             p(r#"{"cmd":"snippets.save","snippets":[{"id":"a","trigger":"","expansion":"x"}]}"#),
             Some(Ok(_))
         ));
-        let Some(Ok(PhrasesQuery::CommandsSave(c))) = p(
+        let Some(Ok(PhrasesQuery::CommandsSave { commands: c, .. })) = p(
             r#"{"cmd":"voice_commands.save","enabled":true,"wake_prefix":"","commands":[{"id":"a","triggers":[" "],"action":"undo","enabled":true}]}"#,
         ) else {
             panic!("saved as it is");
@@ -410,6 +452,56 @@ mod tests {
             c.detect("undo").is_none(),
             "a blank wake word matches nothing"
         );
+    }
+
+    #[test]
+    fn a_save_never_replaces_a_list_that_cannot_be_read_unless_told_to() {
+        let store = MemStore::new();
+        let one =
+            SnippetStore::from_json(r#"[{"id":"a","trigger":"brb","expansion":"back"}]"#).unwrap();
+        for key in [snippets::SETTING_KEY, SNIPPETS_KEY] {
+            let store = MemStore::new();
+            store.set_setting(key, "damaged").unwrap();
+            let refused = answer(
+                &store,
+                PhrasesQuery::SnippetsSave {
+                    snippets: one.clone(),
+                    replace_unreadable: false,
+                },
+                None,
+            );
+            assert_eq!(refused, Err(REFUSED_SNIPPETS.to_owned()), "{key}");
+            assert_eq!(store.setting(key).unwrap().as_deref(), Some("damaged"));
+            answer(
+                &store,
+                PhrasesQuery::SnippetsSave {
+                    snippets: one.clone(),
+                    replace_unreadable: true,
+                },
+                None,
+            )
+            .unwrap();
+            assert_eq!(load_snippets(&store).unwrap().0, one, "started over");
+        }
+        store
+            .set_setting(voicecommand::SETTING_KEY, "damaged")
+            .unwrap();
+        let save = |replace_unreadable| PhrasesQuery::CommandsSave {
+            commands: VoiceCommandStore::default(),
+            replace_unreadable,
+        };
+        assert_eq!(
+            answer(&store, save(false), None),
+            Err(REFUSED_COMMANDS.to_owned())
+        );
+        answer(&store, save(true), None).unwrap();
+        assert!(load_commands(&store).is_ok());
+        // A readable list is saved over without the flag, as always.
+        answer(&store, save(false), None).unwrap();
+        assert!(matches!(
+            p(r#"{"cmd":"snippets.save","snippets":[],"replace_unreadable":"yes"}"#),
+            Some(Err(_))
+        ));
     }
 
     #[test]
@@ -444,7 +536,15 @@ mod tests {
 
         let mut edited = load_snippets(&store).unwrap().0;
         edited.snippets[0].expansion = "back soon".into();
-        answer(&store, PhrasesQuery::SnippetsSave(edited), None).unwrap();
+        answer(
+            &store,
+            PhrasesQuery::SnippetsSave {
+                snippets: edited,
+                replace_unreadable: false,
+            },
+            None,
+        )
+        .unwrap();
         let (now, imported) = load_snippets(&store).unwrap();
         assert_eq!(now.snippets[0].expansion, "back soon");
         assert!(!imported, "saved in 1.0's own key");

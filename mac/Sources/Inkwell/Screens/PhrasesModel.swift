@@ -6,7 +6,10 @@
 // voice_commands.listed) and a change sends the whole list back (snippets.save,
 // voice_commands.save), which a running dictation takes at once. The row changes at once on screen;
 // the core's answer then replaces it. A save that fails says so and reads the list again, so the
-// screen never shows what was not saved. The user's words travel in these lists: never log them.
+// screen never shows what was not saved. Nothing can be changed until a list has been read: a
+// stored list the core cannot read is never replaced by an edit, only by "Start over", which the
+// user chooses (and the core refuses any other save over it). The user's words travel in these
+// lists: never log them.
 import Foundation
 import InkBridge
 import Observation
@@ -79,8 +82,10 @@ final class SnippetsModel {
     private(set) var rows: [SnippetDraft] = []
     /// The list is the one the 0.2 import brought, not yet saved in 1.0.
     private(set) var fromImport = false
-    /// The core answered at least once.
+    /// The list has been read: until then, and after a read fails, nothing can be changed.
     private(set) var loaded = false
+    /// The stored list could not be read: only "Start over" can replace it.
+    private(set) var unreadable = false
     /// What went wrong, in words.
     private(set) var failure: String?
 
@@ -112,7 +117,7 @@ final class SnippetsModel {
     /// Adds a snippet; a blank trigger adds nothing (the caller keeps Add disabled then).
     func add(trigger: String, expansion: String, category: String) {
         let trigger = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trigger.isEmpty else { return }
+        guard loaded, !trigger.isEmpty else { return }
         save(rows + [SnippetDraft(id: newID("snip"), trigger: trigger, expansion: expansion, category: category.trimmingCharacters(in: .whitespaces))])
     }
 
@@ -120,7 +125,7 @@ final class SnippetsModel {
     func update(_ draft: SnippetDraft) {
         var draft = draft
         draft.trigger = draft.trigger.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !draft.trigger.isEmpty, let i = rows.firstIndex(where: { $0.id == draft.id }) else { return }
+        guard loaded, !draft.trigger.isEmpty, let i = rows.firstIndex(where: { $0.id == draft.id }) else { return }
         var next = rows
         next[i] = draft
         save(next)
@@ -133,13 +138,21 @@ final class SnippetsModel {
     }
 
     func delete(_ id: String) {
+        guard loaded else { return }
         save(rows.filter { $0.id != id })
     }
 
+    /// Replaces a stored list that cannot be read with an empty one: only when the user chooses it.
+    func startOver() {
+        guard unreadable else { return }
+        send(.snippetsSave([], replaceUnreadable: true, ref: ref()))
+    }
+
     private func save(_ next: [SnippetDraft]) {
+        guard loaded else { return }
         rows = next
         failure = nil
-        send(.snippetsSave(next, ref: ref()))
+        send(.snippetsSave(next, replaceUnreadable: false, ref: ref()))
     }
 
     func apply(_ event: InkEvent) {
@@ -148,8 +161,13 @@ final class SnippetsModel {
             rows = listed.snippets.map(SnippetDraft.init)
             fromImport = listed.fromImport
             loaded = true
+            unreadable = false
             failure = nil
-        case .commandFailed(let failed) where failed.command == "snippets.list":
+        case .commandFailed(let failed) where failed.command == "snippets.list" && (failed.id == nil || failed.id == latest):
+            // Not known what is stored: nothing is shown, and nothing can be changed.
+            rows = []
+            loaded = false
+            unreadable = true
             failure = Self.loadFailedText
         case .commandFailed(let failed) where failed.command == "snippets.save":
             failure = Self.saveFailedText
@@ -167,7 +185,9 @@ final class VoiceCommandsModel {
     private(set) var wakePrefix = "inkwell"
     private(set) var rows: [VoiceCommandDraft] = []
     private(set) var fromImport = false
+    /// As in SnippetsModel.
     private(set) var loaded = false
+    private(set) var unreadable = false
     private(set) var failure: String?
 
     static let loadFailedText = "Couldn\u{2019}t read your voice commands."
@@ -199,17 +219,26 @@ final class VoiceCommandsModel {
     }
 
     func setEnabled(_ on: Bool) {
+        guard loaded else { return }
         save(enabled: on, wakePrefix: wakePrefix, rows: rows)
+    }
+
+    /// Replaces stored commands that cannot be read with none, switched off: only when the user
+    /// chooses it.
+    func startOver() {
+        guard unreadable else { return }
+        send(.voiceCommandsSave(enabled: false, wakePrefix: "inkwell", commands: [], replaceUnreadable: true, ref: ref()))
     }
 
     /// A blank wake word changes nothing (it would match nothing).
     func setWakePrefix(_ word: String) {
         let word = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !word.isEmpty, word != wakePrefix else { return }
+        guard loaded, !word.isEmpty, word != wakePrefix else { return }
         save(enabled: enabled, wakePrefix: word, rows: rows)
     }
 
     func setCommandEnabled(_ id: String, _ on: Bool) {
+        guard loaded else { return }
         save(enabled: enabled, wakePrefix: wakePrefix, rows: rows.map { row in
             var row = row
             if row.id == id { row.enabled = on }
@@ -218,6 +247,7 @@ final class VoiceCommandsModel {
     }
 
     func delete(_ id: String) {
+        guard loaded else { return }
         save(enabled: enabled, wakePrefix: wakePrefix, rows: rows.filter { $0.id != id })
     }
 
@@ -226,7 +256,7 @@ final class VoiceCommandsModel {
     func add(triggers: String, action: CommandAction, value: String) {
         let phrases = Self.phrases(triggers)
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !phrases.isEmpty, !value.isEmpty, Self.addable.contains(action) else { return }
+        guard loaded, !phrases.isEmpty, !value.isEmpty, Self.addable.contains(action) else { return }
         let row = VoiceCommandDraft(id: newID("custom"), triggers: phrases, action: action, value: value)
         save(enabled: enabled, wakePrefix: wakePrefix, rows: rows + [row])
     }
@@ -239,11 +269,12 @@ final class VoiceCommandsModel {
     }
 
     private func save(enabled: Bool, wakePrefix: String, rows: [VoiceCommandDraft]) {
+        guard loaded else { return }
         self.enabled = enabled
         self.wakePrefix = wakePrefix
         self.rows = rows
         failure = nil
-        send(.voiceCommandsSave(enabled: enabled, wakePrefix: wakePrefix, commands: rows, ref: ref()))
+        send(.voiceCommandsSave(enabled: enabled, wakePrefix: wakePrefix, commands: rows, replaceUnreadable: false, ref: ref()))
     }
 
     /// What a command does, in words. Its text is shown as text, never as a link.
@@ -270,8 +301,12 @@ final class VoiceCommandsModel {
             rows = listed.commands.map(VoiceCommandDraft.init)
             fromImport = listed.fromImport
             loaded = true
+            unreadable = false
             failure = nil
-        case .commandFailed(let failed) where failed.command == "voice_commands.list":
+        case .commandFailed(let failed) where failed.command == "voice_commands.list" && (failed.id == nil || failed.id == latest):
+            rows = []
+            loaded = false
+            unreadable = true
             failure = Self.loadFailedText
         case .commandFailed(let failed) where failed.command == "voice_commands.save":
             failure = Self.saveFailedText

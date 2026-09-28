@@ -19,7 +19,7 @@ struct SnippetsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Snippets", note: "Say a trigger, get the text")
             if let failure = snippets.failure {
-                Text(failure).font(Typography.caption).foregroundStyle(Theme.alert)
+                FailureLine(text: failure, canStartOver: snippets.unreadable, startOver: { snippets.startOver() })
             }
             if snippets.fromImport {
                 Text("Brought over from Inkwell 0.2.").font(Typography.caption).foregroundStyle(Theme.secondaryText)
@@ -36,6 +36,7 @@ struct SnippetsSection: View {
                         setEnabled: { snippets.setEnabled(row.id, $0) },
                         edit: { editing = row },
                         delete: { snippets.delete(row.id) })
+                        .disabled(!snippets.loaded)
                 }
                 Rectangle().fill(PaperPalette.separator).frame(height: 1).accessibilityHidden(true)
             }
@@ -86,6 +87,8 @@ struct SnippetsSection: View {
         .textFieldStyle(.roundedBorder)
         .font(Typography.body)
         .padding(.top, 4)
+        // Nothing is added to a list that has not been read (SnippetsModel refuses too).
+        .disabled(!snippets.loaded)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Add a snippet")
     }
@@ -142,7 +145,7 @@ struct VoiceCommandsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Voice commands")
             if let failure = commands.failure {
-                Text(failure).font(Typography.caption).foregroundStyle(Theme.alert)
+                FailureLine(text: failure, canStartOver: commands.unreadable, startOver: { commands.startOver() })
             }
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Voice commands").frame(width: 150, alignment: .leading)
@@ -179,6 +182,7 @@ struct VoiceCommandsSection: View {
                     row: row,
                     setEnabled: { commands.setCommandEnabled(row.id, $0) },
                     delete: { commands.delete(row.id) })
+                    .disabled(!commands.loaded)
                 Rectangle().fill(PaperPalette.separator).frame(height: 1).accessibilityHidden(true)
             }
             addForm
@@ -246,6 +250,23 @@ private struct CommandRow: View {
             "Voice command \(row.triggers.joined(separator: ", ")): \(VoiceCommandsModel.describe(row))"
                 + (row.enabled ? "" : ", off")
                 + (row.carriedOut ? "" : ". Not available in this version: it types nothing"))
+    }
+}
+
+/// A list's failure, and, when the stored list cannot be read, the one way to replace it.
+private struct FailureLine: View {
+    let text: String
+    let canStartOver: Bool
+    let startOver: @MainActor () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(text).font(Typography.caption).foregroundStyle(Theme.alert)
+            if canStartOver {
+                Button("Start over (replaces the damaged list)") { startOver() }
+                    .help("The stored list can\u{2019}t be read. This replaces it with an empty one.")
+            }
+        }
     }
 }
 

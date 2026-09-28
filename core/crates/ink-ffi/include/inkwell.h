@@ -253,13 +253,16 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *    "category":"...","enabled":true}],"id":"<ref>"}
  *       "snippets.listed": the snippets dictation expands, in order ("from_import" while they are
  *       still the Inkwell 0.2 import's). A save replaces the whole list and reaches a running
- *       dictation at once. Ids must be present and unique.
+ *       dictation at once. Ids must be present and unique. A save over a stored list the core
+ *       cannot read is refused (command.failed) unless it says "replace_unreadable":true: the
+ *       user chose to start over.
  *   {"cmd":"voice_commands.list","id":"<ref>"}
  *   {"cmd":"voice_commands.save","enabled":false,"wake_prefix":"inkwell","commands":[{"id":"...",
  *    "triggers":["..."],"action":"insert_text","value":"...","enabled":true}],"id":"<ref>"}
  *       "voice_commands.listed": the switch, the wake word and the commands, each with
  *       "carried_out" (the core does change_style, toggle_polish and insert_text; the rest are
- *       recognised but not done in this build). A save replaces them all, at once.
+ *       recognised but not done in this build). A save replaces them all, at once, and takes
+ *       "replace_unreadable" as snippets.save does.
  *   {"cmd":"import.notes","id":"<ref>"}
  *       "import.notes": what became of Inkwell 0.2's dictation hotkey ("key"), while there is
  *       something to say and until setting.set import.key_note dismissed.

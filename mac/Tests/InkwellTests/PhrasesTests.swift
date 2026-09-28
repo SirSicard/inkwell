@@ -27,14 +27,14 @@ private final class Sent {
 
     var lastSnippets: [SnippetDraft]? {
         for command in commands.reversed() {
-            if case .snippetsSave(let rows, _) = command { return rows }
+            if case .snippetsSave(let rows, _, _) = command { return rows }
         }
         return nil
     }
 
     var lastCommands: (enabled: Bool, wake: String, rows: [VoiceCommandDraft])? {
         for command in commands.reversed() {
-            if case .voiceCommandsSave(let enabled, let wake, let rows, _) = command { return (enabled, wake, rows) }
+            if case .voiceCommandsSave(let enabled, let wake, let rows, _, _) = command { return (enabled, wake, rows) }
         }
         return nil
     }
@@ -119,9 +119,40 @@ final class SnippetsModelTests: XCTestCase {
         XCTAssertEqual(model.failure, SnippetsModel.loadFailedText)
     }
 
+    /// A list that could not be read (a damaged stored document) can't be changed: Add and every
+    /// edit are inert, and only "Start over" replaces it, saying so to the core.
+    func testNothingChangesAListThatWasNotReadButStartOver() throws {
+        let sent = Sent()
+        let model = SnippetsModel(send: sent.send)
+        model.startOver()
+        model.add(trigger: "brb", expansion: "be right back", category: "")
+        XCTAssertTrue(sent.commands.isEmpty, "not loaded yet: Add is inert")
+        model.load()
+        model.apply(event(#"{"type":"command.failed","command":"snippets.list","id":"snippets:1","message":"the stored snippets cannot be read"}"#))
+        XCTAssertFalse(model.loaded)
+        XCTAssertTrue(model.unreadable)
+        XCTAssertEqual(model.failure, SnippetsModel.loadFailedText)
+        model.add(trigger: "brb", expansion: "be right back", category: "")
+        model.update(SnippetDraft(id: "s1", trigger: "x", expansion: "y"))
+        model.setEnabled("s1", false)
+        model.delete("s1")
+        XCTAssertEqual(sent.lastSnippets, nil, "no save over a list that was not read")
+        model.startOver()
+        guard case .snippetsSave(let rows, let replace, let ref) = sent.commands.last else { return XCTFail("\(sent.commands)") }
+        XCTAssertEqual(rows, [])
+        XCTAssertTrue(replace)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(sent.commands.last!.json.utf8)) as? [String: Any])
+        XCTAssertEqual(json["replace_unreadable"] as? Bool, true)
+        model.apply(event(#"{"type":"snippets.listed","from_import":false,"ref":"\#(ref)","snippets":[]}"#))
+        XCTAssertTrue(model.loaded)
+        XCTAssertFalse(model.unreadable)
+        XCTAssertNil(model.failure)
+        XCTAssertNil((try JSONSerialization.jsonObject(with: Data(CoreCommand.snippetsSave([], replaceUnreadable: false, ref: "r").json.utf8)) as? [String: Any])?["replace_unreadable"], "sent only when chosen")
+    }
+
     func testTheSaveCommandCarriesEveryField() throws {
         let json = CoreCommand.snippetsSave(
-            [SnippetDraft(id: "a", trigger: "brb", expansion: "be right back", category: "", enabled: false)], ref: "snippets:9"
+            [SnippetDraft(id: "a", trigger: "brb", expansion: "be right back", category: "", enabled: false)], replaceUnreadable: false, ref: "snippets:9"
         ).json
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         XCTAssertEqual(object["cmd"] as? String, "snippets.save")
@@ -179,7 +210,7 @@ final class VoiceCommandsModelTests: XCTestCase {
             enabled: true, wakePrefix: "inkwell",
             commands: [VoiceCommandDraft(id: "u", triggers: ["scratch that"], action: .undo, value: nil),
                        VoiceCommandDraft(id: "t", triggers: ["sign off"], action: .insertText, value: "Best")],
-            ref: "voice_commands:3"
+            replaceUnreadable: false, ref: "voice_commands:3"
         ).json
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let commands = try XCTUnwrap(object["commands"] as? [[String: Any]])
@@ -187,6 +218,26 @@ final class VoiceCommandsModelTests: XCTestCase {
         XCTAssertNil(commands[0]["value"])
         XCTAssertEqual(commands[1]["value"] as? String, "Best")
         XCTAssertEqual(object["wake_prefix"] as? String, "inkwell")
+    }
+
+    func testNothingChangesCommandsThatWereNotReadButStartOver() {
+        let sent = Sent()
+        let model = VoiceCommandsModel(send: sent.send)
+        model.setEnabled(true)
+        model.add(triggers: "sign off", action: .insertText, value: "Best")
+        XCTAssertTrue(sent.commands.isEmpty, "not loaded yet: inert")
+        model.load()
+        model.apply(event(#"{"type":"command.failed","command":"voice_commands.list","id":"voice_commands:1","message":"the stored voice commands cannot be read"}"#))
+        XCTAssertTrue(model.unreadable)
+        model.setEnabled(true)
+        model.setWakePrefix("computer")
+        model.add(triggers: "sign off", action: .insertText, value: "Best")
+        XCTAssertNil(sent.lastCommands)
+        model.startOver()
+        guard case .voiceCommandsSave(let enabled, _, let rows, let replace, _) = sent.commands.last else { return XCTFail("\(sent.commands)") }
+        XCTAssertEqual(enabled, false)
+        XCTAssertEqual(rows, [])
+        XCTAssertTrue(replace)
     }
 
     func testAFailedSaveSaysSoAndReadsAgain() {
@@ -279,7 +330,7 @@ final class PhrasesCoreContractTests: XCTestCase {
         let empty = try answer(.snippetsList(ref: "snippets:1")) { if case .snippetsListed(let l) = $0 { l } else { nil } }
         XCTAssertEqual(empty?.snippets, [])
         XCTAssertEqual(empty?.fromImport, false)
-        let saved = try answer(.snippetsSave([SnippetDraft(id: "a", trigger: "brb", expansion: "be right back")], ref: "snippets:2")) {
+        let saved = try answer(.snippetsSave([SnippetDraft(id: "a", trigger: "brb", expansion: "be right back")], replaceUnreadable: false, ref: "snippets:2")) {
             if case .snippetsListed(let l) = $0, l.ref == "snippets:2" { l } else { nil }
         }
         XCTAssertEqual(saved?.snippets.first?.expansion, "be right back")
@@ -289,7 +340,7 @@ final class PhrasesCoreContractTests: XCTestCase {
         let commands = try answer(.voiceCommandsSave(
             enabled: true, wakePrefix: "inkwell",
             commands: [VoiceCommandDraft(id: "t", triggers: ["sign off"], action: .insertText, value: "Best")],
-            ref: "voice_commands:2")) {
+            replaceUnreadable: false, ref: "voice_commands:2")) {
             if case .voiceCommandsListed(let l) = $0, l.ref == "voice_commands:2" { l } else { nil }
         }
         XCTAssertEqual(commands?.commands.first?.carriedOut, true)

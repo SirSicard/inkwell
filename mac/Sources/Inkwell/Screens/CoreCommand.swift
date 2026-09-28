@@ -51,11 +51,12 @@ enum CoreCommand: Equatable, Sendable {
     /// `ref` comes back in its `consent.state`, or as the id of a `command.failed`.
     case consentAllow(feature: LlmFeature, to: LlmDestination, endpoint: String?, key: String?, ref: String)
     /// Settings > Snippets and Voice commands: each answered by its `.listed` with `ref`, or a
-    /// `command.failed` with that id. A save sends the whole list.
+    /// `command.failed` with that id. A save sends the whole list; the core refuses it over a
+    /// stored list it cannot read unless `replaceUnreadable` (the user chose to start over).
     case snippetsList(ref: String)
-    case snippetsSave([SnippetDraft], ref: String)
+    case snippetsSave([SnippetDraft], replaceUnreadable: Bool, ref: String)
     case voiceCommandsList(ref: String)
-    case voiceCommandsSave(enabled: Bool, wakePrefix: String, commands: [VoiceCommandDraft], ref: String)
+    case voiceCommandsSave(enabled: Bool, wakePrefix: String, commands: [VoiceCommandDraft], replaceUnreadable: Bool, ref: String)
     /// What the Inkwell 0.2 import has to say about the dictation key: `import.notes`.
     case importNotes
 
@@ -108,11 +109,14 @@ enum CoreCommand: Equatable, Sendable {
                 .merging(endpoint.map { ["endpoint": $0] } ?? [:]) { a, _ in a }
                 .merging(key.map { ["key": $0] } ?? [:]) { a, _ in a }
         case .snippetsList(let ref): ["cmd": "snippets.list", "id": ref]
-        case .snippetsSave(let snippets, let ref): ["cmd": "snippets.save", "snippets": snippets.map(\.fields), "id": ref]
+        case .snippetsSave(let snippets, let replace, let ref):
+            ["cmd": "snippets.save", "snippets": snippets.map(\.fields), "id": ref]
+                .merging(replace ? ["replace_unreadable": true] : [:]) { a, _ in a }
         case .voiceCommandsList(let ref): ["cmd": "voice_commands.list", "id": ref]
-        case .voiceCommandsSave(let enabled, let wakePrefix, let commands, let ref):
+        case .voiceCommandsSave(let enabled, let wakePrefix, let commands, let replace, let ref):
             ["cmd": "voice_commands.save", "enabled": enabled, "wake_prefix": wakePrefix,
              "commands": commands.map(\.fields), "id": ref]
+                .merging(replace ? ["replace_unreadable": true] : [:]) { a, _ in a }
         case .importNotes: ["cmd": "import.notes", "id": "import.notes"]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
