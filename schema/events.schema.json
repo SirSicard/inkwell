@@ -206,7 +206,7 @@
       "$ref": "#/$defs/SettingValue"
     },
     {
-      "$ref": "#/$defs/PolishState"
+      "$ref": "#/$defs/ConsentState"
     },
     {
       "$ref": "#/$defs/ModesListed"
@@ -351,7 +351,7 @@
     },
     "DictationWarning": {
       "type": "string",
-      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed. polish_not_allowed: polish is on, but the user has not agreed to send dictations where its model goes now (never agreed, or the model changed destination since): nothing was sent, the text went in as said, and message names the model; polish.get says more.",
+      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed. polish_not_allowed: polish is on, but the user has not agreed to send dictations where its model goes now (never agreed, or the model changed destination since): nothing was sent, the text went in as said, and message names the model; consent.get says more.",
       "enum": [
         "vad_failed",
         "audio_lost",
@@ -1082,7 +1082,7 @@
     },
     "EditFailure": {
       "type": "string",
-      "description": "Why a voice edit left the selection alone. None of these changed the user's text. secure_input: Secure Input was on, so the selection was never read.",
+      "description": "Why a voice edit left the selection alone. None of these changed the user's text. secure_input: Secure Input was on, so the selection was never read. not_allowed: the user has not agreed to send the selection where the model goes now (never agreed, or it changed destination since); nothing was sent, and message names the model.",
       "enum": [
         "no_selection",
         "secure_input",
@@ -1092,6 +1092,7 @@
         "timed_out",
         "model",
         "insert",
+        "not_allowed",
         "other"
       ]
     },
@@ -2724,28 +2725,40 @@
       ],
       "additionalProperties": false
     },
-    "PolishDestination": {
+    "LlmFeature": {
       "type": "string",
-      "description": "Where polish sends a dictation: on_device (a model on this machine; the words stay on it) or cloud (a model elsewhere; the words leave this machine for its provider).",
+      "description": "A feature that sends the user's words to a language model, each with its own consent: polish (the dictation, before it is typed) or edit (voice edit: the selection and the spoken instruction).",
+      "enum": [
+        "polish",
+        "edit"
+      ]
+    },
+    "LlmDestination": {
+      "type": "string",
+      "description": "Where a feature sends the user's words: on_device (a model on this machine; the words stay on it) or cloud (a model elsewhere; the words leave this machine for its provider).",
       "enum": [
         "on_device",
         "cloud"
       ]
     },
-    "PolishState": {
+    "ConsentState": {
       "type": "object",
-      "description": "Dictation polish: the user's switch, where the model polish would use now sends a dictation, and where the user agreed it may. Polish runs only when on and allowed. In answer to polish.get and polish.allow, and after dictation.polish is set.",
+      "description": "A feature that sends the user's words to a language model: its switch, where the model it would use now sends them, and where the user agreed it may. The feature runs only when on and allowed. In answer to consent.get and consent.allow, and after the feature's switch is set to off.",
       "properties": {
         "type": {
-          "const": "polish.state"
+          "const": "consent.state"
+        },
+        "feature": {
+          "$ref": "#/$defs/LlmFeature",
+          "description": "Which feature."
         },
         "on": {
           "type": "boolean",
-          "description": "The user's switch (dictation.polish)."
+          "description": "Its switch: dictation.polish on, or a voice-edit key set."
         },
         "to": {
-          "$ref": "#/$defs/PolishDestination",
-          "description": "Where the model polish would use now sends; absent when no language model is registered."
+          "$ref": "#/$defs/LlmDestination",
+          "description": "Where the model it would use now sends; absent when no language model is registered."
         },
         "name": {
           "type": "string",
@@ -2753,11 +2766,11 @@
         },
         "endpoint": {
           "type": "string",
-          "description": "For cloud, the destination polish.allow must name; absent otherwise."
+          "description": "For cloud, the destination consent.allow must name; absent otherwise."
         },
         "allowed_to": {
-          "$ref": "#/$defs/PolishDestination",
-          "description": "Where the user agreed polish may send; absent when never agreed (or turned off since)."
+          "$ref": "#/$defs/LlmDestination",
+          "description": "Where the user agreed it may send; absent when never agreed (or turned off since)."
         },
         "allowed_name": {
           "type": "string",
@@ -2765,11 +2778,11 @@
         },
         "allowed": {
           "type": "boolean",
-          "description": "Whether that consent covers the model now: false while polish is on means polish is paused until the user agrees again."
+          "description": "Whether that consent covers the model now: false while the feature is on means it is paused until the user agrees again."
         },
         "error": {
           "type": "string",
-          "description": "Why part of this could not be read (the switch or the consent), as a sentence starting \"couldn't\". Unread consent counts as none."
+          "description": "Why part of this could not be read (the switch or the consent), as a sentence starting \"couldn't\". An unread switch counts as off, an unread consent as none."
         },
         "ref": {
           "type": "string",
@@ -2778,6 +2791,7 @@
       },
       "required": [
         "type",
+        "feature",
         "on",
         "allowed"
       ],

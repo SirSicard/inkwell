@@ -763,10 +763,10 @@ fn dictation_polish_refuses_a_model_that_is_not_local() {
     let remote = rig.register_remote();
     // The user agreed to send to this provider: what refuses it here is local-only mode alone.
     let state = rig.ask(
-        r#"{"cmd":"polish.allow","to":"cloud","endpoint":"shell engine remote-llm","id":"allow"}"#,
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"allow"}"#,
         "allow",
     );
-    assert_eq!(state["type"], "polish.state", "{state}");
+    assert_eq!(state["type"], "consent.state", "{state}");
     assert_eq!(state["allowed"], true, "{state}");
     rig.enable();
     rig.dictate(1.0, 11);
@@ -800,7 +800,12 @@ fn a_voice_edit_refuses_a_model_that_is_not_local() {
     let rig = VoiceRig::new("local-only-edit");
     let remote = rig.register_remote();
     rig.enable();
-    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"right_command"}"#);
+    // The user agreed to send edits to this provider: what refuses it here is local-only alone.
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"edit","to":"cloud","endpoint":"shell engine remote-llm","key":"right_command","id":"e0"}"#,
+        "e0",
+    );
+    assert_eq!(state["allowed"], true, "{state}");
     rig.events
         .wait_for(WAIT, |v| v["edit_key"] == "right_command")
         .expect("bound");
@@ -832,13 +837,16 @@ fn a_voice_edit_refuses_a_model_that_is_not_local() {
 // --- Polish consent (owner decision, 2026-09-28) ----------------------------------------------
 //
 // Polish sends a dictation to a language model, so it is off until the user agrees to where it
-// goes: polish.allow records that consent in the core's store and turns polish on; nothing else
+// goes: consent.allow records that consent in the core's store and turns polish on; nothing else
 // does. A model that changes destination since gets nothing until the user agrees again.
 
 impl VoiceRig {
     fn polish_state(&self, id: &str) -> Value {
-        let state = self.ask(&format!(r#"{{"cmd":"polish.get","id":"{id}"}}"#), id);
-        assert_eq!(state["type"], "polish.state", "{state}");
+        let state = self.ask(
+            &format!(r#"{{"cmd":"consent.get","feature":"polish","id":"{id}"}}"#),
+            id,
+        );
+        assert_eq!(state["type"], "consent.state", "{state}");
         state
     }
 
@@ -860,10 +868,12 @@ impl VoiceRig {
 
     fn allow_on_device(&self, id: &str) -> Value {
         let state = self.ask(
-            &format!(r#"{{"cmd":"polish.allow","to":"on_device","id":"{id}"}}"#),
+            &format!(
+                r#"{{"cmd":"consent.allow","feature":"polish","to":"on_device","id":"{id}"}}"#
+            ),
             id,
         );
-        assert_eq!(state["type"], "polish.state", "{state}");
+        assert_eq!(state["type"], "consent.state", "{state}");
         state
     }
 }
@@ -887,7 +897,7 @@ fn polish_starts_off_with_no_consent_and_names_where_it_would_send() {
     rig.events.assert_valid();
 }
 
-/// polish.allow records the consent in the core's store and turns polish on; the next take is
+/// consent.allow records the consent in the core's store and turns polish on; the next take is
 /// polished.
 #[test]
 fn polish_allow_records_the_consent_and_turns_polish_on() {
@@ -899,7 +909,7 @@ fn polish_allow_records_the_consent_and_turns_polish_on() {
     assert_eq!(state["allowed_to"], "on_device", "{state}");
     assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
     assert_eq!(
-        rig.setting("dictation.polish_consent").as_deref(),
+        rig.setting("llm.consent.polish").as_deref(),
         Some(r#"{"to":"on_device"}"#)
     );
     rig.enable();
@@ -921,7 +931,10 @@ fn polish_allow_records_the_consent_and_turns_polish_on() {
 #[test]
 fn polish_allow_refuses_a_destination_that_is_not_the_models() {
     let rig = VoiceRig::new("polish-mismatch");
-    let failed = rig.fails(r#"{"cmd":"polish.allow","to":"on_device","id":"f1"}"#, "f1");
+    let failed = rig.fails(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"on_device","id":"f1"}"#,
+        "f1",
+    );
     assert!(
         failed["message"]
             .as_str()
@@ -930,15 +943,11 @@ fn polish_allow_refuses_a_destination_that_is_not_the_models() {
     );
     rig.register_local();
     rig.fails(
-        r#"{"cmd":"polish.allow","to":"cloud","endpoint":"shell engine elsewhere","id":"f2"}"#,
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine elsewhere","id":"f2"}"#,
         "f2",
     );
     assert_eq!(rig.setting("dictation.polish"), None, "polish stays off");
-    assert_eq!(
-        rig.setting("dictation.polish_consent"),
-        None,
-        "nothing recorded"
-    );
+    assert_eq!(rig.setting("llm.consent.polish"), None, "nothing recorded");
     rig.events.assert_valid();
 }
 
@@ -952,19 +961,16 @@ fn turning_polish_off_withdraws_the_consent() {
     rig.command(r#"{"cmd":"setting.set","key":"dictation.polish","value":"off","id":"o2"}"#);
     let state = rig
         .events
-        .wait_for(WAIT, |v| v["type"] == "polish.state" && v["on"] == false)
-        .expect("polish.state after off");
+        .wait_for(WAIT, |v| v["type"] == "consent.state" && v["on"] == false)
+        .expect("consent.state after off");
     assert_eq!(state["allowed"], false, "{state}");
     assert!(state.get("allowed_to").is_none(), "{state}");
-    assert_eq!(
-        rig.setting("dictation.polish_consent").as_deref(),
-        Some("none")
-    );
+    assert_eq!(rig.setting("llm.consent.polish").as_deref(), Some("none"));
     assert!(
         rig.core()
             .command(r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#)
             .is_err(),
-        "only polish.allow turns polish on"
+        "only consent.allow turns polish on"
     );
     rig.events.assert_valid();
 }
@@ -1063,7 +1069,7 @@ fn an_unreadable_consent_is_no_consent_and_says_so() {
     let store = &rig.core().shared().store;
     store.set_setting("dictation.polish", "on").unwrap();
     store
-        .set_setting("dictation.polish_consent", "{not json")
+        .set_setting("llm.consent.polish", "{not json")
         .unwrap();
     let ready = rig.enable();
     assert!(
@@ -1096,7 +1102,10 @@ fn the_switch_and_the_consent_are_saved_together_or_not_at_all() {
     rig.register_local();
 
     store.fail(&["set_settings"]);
-    let failed = rig.fails(r#"{"cmd":"polish.allow","to":"on_device","id":"t1"}"#, "t1");
+    let failed = rig.fails(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"on_device","id":"t1"}"#,
+        "t1",
+    );
     assert!(
         failed["message"]
             .as_str()
@@ -1104,11 +1113,7 @@ fn the_switch_and_the_consent_are_saved_together_or_not_at_all() {
         "{failed}"
     );
     assert_eq!(rig.setting("dictation.polish"), None, "switch not saved");
-    assert_eq!(
-        rig.setting("dictation.polish_consent"),
-        None,
-        "nor the consent"
-    );
+    assert_eq!(rig.setting("llm.consent.polish"), None, "nor the consent");
 
     store.heal();
     rig.allow_on_device("t2");
@@ -1125,10 +1130,201 @@ fn the_switch_and_the_consent_are_saved_together_or_not_at_all() {
     );
     assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
     assert_eq!(
-        rig.setting("dictation.polish_consent").as_deref(),
+        rig.setting("llm.consent.polish").as_deref(),
         Some(r#"{"to":"on_device"}"#),
         "both as they were"
     );
     store.heal();
+    rig.events.assert_valid();
+}
+
+// --- Voice edit consent (PR #86 review) --------------------------------------------------------
+//
+// Voice edit sends the selection and the spoken instruction to a language model, so it has a
+// consent of its own: consent.allow with feature "edit" records it and sets the edit key in one
+// write; the edit key set to off withdraws it; an edit without a covering consent sends nothing
+// and changes nothing, and says so.
+
+impl VoiceRig {
+    /// Holds the edit key over a selection, says an instruction, and waits for the outcome.
+    fn voice_edit(&self, seed: u64) -> Value {
+        let outcomes = |r: &Recorder| -> Vec<Value> {
+            r.all()
+                .into_iter()
+                .filter(|v| v["type"] == "dictation.edited" || v["type"] == "dictation.edit_failed")
+                .collect()
+        };
+        let before = outcomes(&self.events).len();
+        self.platform.set_selection(Some("teh cat"));
+        self.sync_edit_clock();
+        assert!(self.edit.press());
+        self.feed(&VoiceRig::speech(1.0, seed));
+        self.sync_edit_clock();
+        assert!(self.edit.release());
+        self.silence(0.6);
+        let until = Instant::now() + WAIT;
+        loop {
+            if let Some(v) = outcomes(&self.events).into_iter().nth(before) {
+                return v;
+            }
+            assert!(
+                Instant::now() < until,
+                "no edit outcome: {:?}",
+                self.events.types()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn edit_state(&self, id: &str) -> Value {
+        let state = self.ask(
+            &format!(r#"{{"cmd":"consent.get","feature":"edit","id":"{id}"}}"#),
+            id,
+        );
+        assert_eq!(state["type"], "consent.state", "{state}");
+        assert_eq!(state["feature"], "edit", "{state}");
+        state
+    }
+}
+
+/// The edit key set without a consent (an older build's store, or a shell that skipped the step):
+/// the edit sends nothing, the selection is left alone, and the reason is not_allowed.
+#[test]
+fn an_edit_key_without_consent_edits_nothing() {
+    let rig = VoiceRig::new("edit-no-consent");
+    let model = rig.register_local();
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"right_command"}"#);
+    rig.events
+        .wait_for(WAIT, |v| v["edit_key"] == "right_command")
+        .expect("bound");
+    let state = rig.edit_state("s1");
+    assert_eq!(state["on"], true);
+    assert_eq!(state["allowed"], false);
+    let outcome = rig.voice_edit(71);
+    assert_eq!(outcome["type"], "dictation.edit_failed", "{outcome}");
+    assert_eq!(outcome["reason"], "not_allowed", "{outcome}");
+    assert_eq!(outcome["message"], "a model on this machine");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    assert!(
+        rig.platform.inserted().is_empty(),
+        "the selection is left alone"
+    );
+    rig.events.assert_valid();
+}
+
+/// consent.allow for edit records the consent and sets the key in one write; the edit then goes
+/// through. Polish stays off: its consent is its own.
+#[test]
+fn edit_consent_turns_voice_edit_on_and_leaves_polish_alone() {
+    let rig = VoiceRig::new("edit-allow");
+    let model = rig.register_local();
+    rig.enable();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"right_command","id":"a1"}"#,
+        "a1",
+    );
+    assert_eq!(state["feature"], "edit", "{state}");
+    assert_eq!(state["on"], true, "{state}");
+    assert_eq!(state["allowed"], true, "{state}");
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.setting("llm.consent.edit").as_deref(),
+        Some(r#"{"to":"on_device"}"#)
+    );
+    assert_eq!(rig.setting("llm.consent.polish"), None);
+    assert_eq!(
+        rig.polish_state("a2")["allowed"],
+        false,
+        "polish not allowed by it"
+    );
+    rig.events
+        .wait_for(WAIT, |v| v["edit_key"] == "right_command")
+        .expect("bound");
+    let outcome = rig.voice_edit(72);
+    assert_eq!(outcome["type"], "dictation.edited", "{outcome}");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    rig.events.assert_valid();
+}
+
+/// A key the edit consent refuses (none, or off) is refused before anything is written.
+#[test]
+fn edit_consent_needs_its_key() {
+    let rig = VoiceRig::new("edit-key");
+    rig.register_local();
+    for bad in [
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device"}"#,
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"off"}"#,
+    ] {
+        assert!(rig.core().command(bad).is_err(), "{bad}");
+    }
+    assert_eq!(rig.setting("llm.consent.edit"), None);
+}
+
+/// The edit key set to off withdraws the edit consent in the same write, so choosing a key again
+/// asks again; a store that refuses the write leaves both as they were.
+#[test]
+fn turning_voice_edit_off_withdraws_its_consent_or_changes_nothing() {
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let rig = VoiceRig::with_store("edit-off", store.clone());
+    rig.register_local();
+    rig.ask(
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"right_option","id":"o1"}"#,
+        "o1",
+    );
+    store.fail(&["set_settings"]);
+    rig.fails(
+        r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"off","id":"o2"}"#,
+        "o2",
+    );
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("right_option")
+    );
+    assert_eq!(
+        rig.setting("llm.consent.edit").as_deref(),
+        Some(r#"{"to":"on_device"}"#)
+    );
+    store.heal();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"off","id":"o3"}"#);
+    let state = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "consent.state" && v["feature"] == "edit" && v["on"] == false
+        })
+        .expect("consent.state after off");
+    assert_eq!(state["allowed"], false, "{state}");
+    assert_eq!(rig.setting("llm.consent.edit").as_deref(), Some("none"));
+    rig.events.assert_valid();
+}
+
+/// Edit consent for this Mac, then the model becomes a cloud one: the state says paused and names
+/// the provider, and an edit sends nothing and changes nothing.
+#[test]
+fn an_edit_model_that_moves_to_the_cloud_gets_nothing() {
+    let rig = VoiceRig::new("edit-moved");
+    rig.register_local();
+    rig.enable();
+    rig.ask(
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"right_command","id":"m1"}"#,
+        "m1",
+    );
+    rig.events
+        .wait_for(WAIT, |v| v["edit_key"] == "right_command")
+        .expect("bound");
+    rig.unregister("local-llm");
+    let remote = rig.register_remote();
+    let state = rig.edit_state("m2");
+    assert_eq!(state["on"], true);
+    assert_eq!(state["allowed"], false);
+    assert_eq!(state["to"], "cloud");
+    let outcome = rig.voice_edit(73);
+    assert_eq!(outcome["reason"], "not_allowed", "{outcome}");
+    assert_eq!(outcome["message"], "remote");
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    assert!(rig.platform.inserted().is_empty());
     rig.events.assert_valid();
 }

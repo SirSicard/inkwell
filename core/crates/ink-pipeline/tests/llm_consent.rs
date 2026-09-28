@@ -1,7 +1,10 @@
-//! Polish's consent gate (owner decision, 2026-09-28): polish sends a dictation to a language model
-//! only where the user agreed it may go. No path turns it on without that consent: the switch, a
-//! mode marked Polish, the default mode, a voice command. A model that changed destination since
-//! the user agreed gets nothing, and the take says why. Every refusal types the text as said.
+//! The consent gates for the features that send the user's words to a language model (owner
+//! decision, 2026-09-28, and the PR #86 review): polish sends a dictation, and voice edit the
+//! selection and the instruction, only where the user agreed that feature may send them. No path
+//! turns polish on without that consent: the switch, a mode marked Polish, the default mode, a
+//! voice command. A model that changed destination since the user agreed gets nothing, and the
+//! take says why. A refused polish types the text as said; a refused edit changes nothing. Each
+//! feature's consent is its own.
 
 mod common;
 
@@ -11,11 +14,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use common::{Rig, speech_48k};
 use ink_core::mock::MockLlm;
 use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
-use ink_pipeline::consent::PolishConsent;
-use ink_pipeline::events::{DictationEvent, Warning};
+use ink_pipeline::consent::LlmConsent;
+use ink_pipeline::events::{DictationEvent, EditFailure, Warning};
 use ink_pipeline::modes::{Mode, ModeStore};
 
-fn not_allowed(rig: &Rig) -> Vec<PolishConsent> {
+fn not_allowed(rig: &Rig) -> Vec<LlmConsent> {
     rig.events()
         .into_iter()
         .filter_map(|e| match e {
@@ -55,7 +58,7 @@ fn without_consent_the_switch_and_a_polish_mode_send_nothing() {
     rig.dictate_fixture("as said", 1.5, -25.0);
     assert_eq!(rig.inserted(), ["As said. "]);
     assert_eq!(llm.calls(), 0, "nothing was sent");
-    assert_eq!(not_allowed(&rig), [PolishConsent::OnDevice]);
+    assert_eq!(not_allowed(&rig), [LlmConsent::OnDevice]);
 }
 
 /// Consent for this machine, and a model on it: polished.
@@ -66,7 +69,7 @@ fn with_on_device_consent_an_on_device_model_polishes() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(PolishConsent::OnDevice);
+            s.polish_consent = Some(LlmConsent::OnDevice);
         })
         .build();
     rig.dictate_fixture("as said", 1.5, -25.0);
@@ -121,7 +124,7 @@ fn a_model_moved_to_the_cloud_gets_nothing_until_the_user_agrees_again() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(PolishConsent::OnDevice);
+            s.polish_consent = Some(LlmConsent::OnDevice);
         })
         .build();
     rig.answer_anything("as said");
@@ -139,7 +142,7 @@ fn a_model_moved_to_the_cloud_gets_nothing_until_the_user_agrees_again() {
     assert_eq!(rig.inserted().last().unwrap(), "As said. ");
     assert_eq!(
         not_allowed(&rig),
-        [PolishConsent::Cloud {
+        [LlmConsent::Cloud {
             endpoint: "shell engine cloud-a".into(),
             name: "Some Cloud".into()
         }]
@@ -154,7 +157,7 @@ fn consent_for_one_provider_does_not_cover_another() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(PolishConsent::Cloud {
+            s.polish_consent = Some(LlmConsent::Cloud {
                 endpoint: "shell engine cloud-a".into(),
                 name: "Cloud A".into(),
             });
@@ -217,7 +220,7 @@ fn the_consent_is_checked_on_the_model_the_call_reaches() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(PolishConsent::OnDevice);
+            s.polish_consent = Some(LlmConsent::OnDevice);
         })
         .build();
     rig.dictate_fixture("as said", 1.5, -25.0);
@@ -233,7 +236,7 @@ fn the_consent_is_checked_on_the_model_the_call_reaches() {
 /// sends nothing; with it, it polishes (the command still works for a user who agreed).
 #[test]
 fn a_voice_command_turns_polish_on_only_where_the_user_agreed() {
-    for (consent, polished) in [(None, false), (Some(PolishConsent::OnDevice), true)] {
+    for (consent, polished) in [(None, false), (Some(LlmConsent::OnDevice), true)] {
         let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Polished."));
         let rig = Rig::builder()
             .llm(llm.clone())
@@ -255,7 +258,129 @@ fn a_voice_command_turns_polish_on_only_where_the_user_agreed() {
         } else {
             assert_eq!(rig.inserted(), ["As said. "]);
             assert_eq!(llm.calls(), 0, "the command sent nothing without consent");
-            assert_eq!(not_allowed(&rig), [PolishConsent::OnDevice]);
+            assert_eq!(not_allowed(&rig), [LlmConsent::OnDevice]);
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Voice edit
+// ---------------------------------------------------------------------------------------------
+
+fn edit_refusals(rig: &Rig) -> Vec<LlmConsent> {
+    rig.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            DictationEvent::EditFailed(EditFailure::NotAllowed(needs)) => Some(needs),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Select, hold the edit key, say what to change.
+fn edit(rig: &Rig, seed: u64) {
+    rig.answer_anything("make it formal");
+    rig.platform.set_selection(Some("hey all"));
+    rig.silence(0.5);
+    rig.edit_press();
+    rig.feed(&speech_48k(1.2, -25.0, seed));
+    rig.edit_release();
+    rig.silence(0.6);
+}
+
+/// No edit consent: the selection and the instruction are never sent, the selection is left
+/// alone, and the Drop hears why.
+#[test]
+fn without_consent_a_voice_edit_sends_nothing_and_changes_nothing() {
+    let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Dear team,"));
+    let rig = Rig::builder()
+        .llm(llm.clone())
+        .settings(|s| s.edit_consent = None)
+        .build();
+    edit(&rig, 61);
+    assert_eq!(llm.calls(), 0, "nothing was sent");
+    assert!(rig.inserted().is_empty(), "the selection is left alone");
+    assert_eq!(edit_refusals(&rig), [LlmConsent::OnDevice]);
+}
+
+/// Each feature's consent is its own: polish's consent does not let voice edit send, and edit's
+/// does not let polish send.
+#[test]
+fn polish_consent_is_not_edit_consent_nor_the_reverse() {
+    let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Rewritten."));
+    let rig = Rig::builder()
+        .llm(llm.clone())
+        .settings(|s| {
+            s.modes = polishing_mode();
+            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.edit_consent = None;
+        })
+        .build();
+    edit(&rig, 62);
+    assert_eq!(llm.calls(), 0);
+    assert_eq!(edit_refusals(&rig).len(), 1);
+
+    let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Polished."));
+    let rig = Rig::builder()
+        .llm(llm.clone())
+        .settings(|s| {
+            s.modes = polishing_mode();
+            s.polish_consent = None;
+            s.edit_consent = Some(LlmConsent::OnDevice);
+        })
+        .build();
+    rig.dictate_fixture("as said", 1.5, -25.0);
+    assert_eq!(llm.calls(), 0);
+    assert_eq!(rig.inserted(), ["As said. "]);
+    assert_eq!(not_allowed(&rig).len(), 1);
+}
+
+/// Edit consent for this machine, then the model becomes a cloud one: the next edit sends
+/// nothing, changes nothing, and names the provider.
+#[test]
+fn an_edit_model_moved_to_the_cloud_gets_nothing_until_the_user_agrees_again() {
+    let llm = Arc::new(Moving::new(Endpoint::InProcess));
+    let rig = Rig::builder()
+        .llm(llm.clone())
+        .settings(|s| s.edit_consent = Some(LlmConsent::OnDevice))
+        .build();
+    edit(&rig, 63);
+    assert_eq!(llm.calls.load(Ordering::SeqCst), 1, "edited on this Mac");
+    assert_eq!(rig.inserted(), ["Polished."]);
+
+    llm.move_to(cloud("shell engine cloud-a"));
+    rig.clear_events();
+    edit(&rig, 64);
+    assert_eq!(
+        llm.calls.load(Ordering::SeqCst),
+        1,
+        "nothing sent to the cloud"
+    );
+    assert_eq!(rig.inserted(), ["Polished."], "the selection is left alone");
+    assert_eq!(
+        edit_refusals(&rig),
+        [LlmConsent::Cloud {
+            endpoint: "shell engine cloud-a".into(),
+            name: "Some Cloud".into()
+        }]
+    );
+}
+
+/// The edit's consent is checked on the model the call reaches, too.
+#[test]
+fn the_edit_consent_is_checked_on_the_model_the_call_reaches() {
+    let llm = Arc::new(PicksAgain {
+        sent: AtomicBool::new(false),
+    });
+    let rig = Rig::builder()
+        .llm(llm.clone())
+        .settings(|s| s.edit_consent = Some(LlmConsent::OnDevice))
+        .build();
+    edit(&rig, 65);
+    assert!(
+        !llm.sent.load(Ordering::SeqCst),
+        "nothing reached the cloud"
+    );
+    assert!(rig.inserted().is_empty());
+    assert_eq!(edit_refusals(&rig).len(), 1);
 }

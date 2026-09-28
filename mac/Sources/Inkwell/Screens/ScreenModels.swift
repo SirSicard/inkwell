@@ -183,6 +183,8 @@ final class ScreenModels {
     let onboarding: OnboardingModel
     let storage: StorageModel
     let dictation: DictationModel
+    /// Voice edit's consent (the key is the dictation model's).
+    let editConsent: ConsentModel
 
     init(
         send: @escaping SendCommand,
@@ -203,6 +205,7 @@ final class ScreenModels {
         onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
         dictation = DictationModel(send: send)
+        editConsent = ConsentModel(feature: .edit, switchSettingID: DictationModel.editKeySettingID, send: send)
         dictation.hasLanguageModel = { [polish] in polish.hasWorkingEngine }
     }
 
@@ -221,6 +224,7 @@ final class ScreenModels {
             meetings.apply(event)
             onboarding.apply(event)
             dictation.apply(event)
+            editConsent.apply(event)
         }
     }
 
@@ -235,6 +239,23 @@ final class ScreenModels {
         // Reads the switch, then (unless it is off) the core holds the keys; without
         // Accessibility it answers dictation.off, and coming back to the app tries again.
         dictation.load()
+        editConsent.load()
+    }
+
+    /// The Voice section's edit picker. Off turns voice edit off (the core withdraws its consent in
+    /// the same write). A key while voice edit is on and allowed only changes the key; otherwise
+    /// the consent step asks first (Allow sends the key with the consent; Cancel changes nothing).
+    func chooseEditKey(_ token: String?) {
+        guard let token else {
+            editConsent.switchedOff()
+            dictation.setEditKey(nil)
+            return
+        }
+        if dictation.editKey != nil && editConsent.isAllowedOn {
+            dictation.setEditKey(token)
+        } else {
+            editConsent.ask(from: .settings, key: token)
+        }
     }
 
     /// The app became active again.
@@ -264,8 +285,8 @@ final class ScreenModels {
                 || dictation.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
-        case "polish.get", "polish.allow":
-            // Shown under the Polish toggle.
+        case "consent.get", "consent.allow":
+            // Shown under the Polish toggle, or in the Voice section for voice edit.
             true
         default:
             false

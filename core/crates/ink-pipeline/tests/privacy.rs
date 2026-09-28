@@ -94,7 +94,7 @@ fn no_dictated_word_reaches_a_log_an_event_or_an_error() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
         })
         .llm(Arc::new(EmptyLlm))
         .store(Arc::new(FaultyStore::new(Fault::AppendFails)))

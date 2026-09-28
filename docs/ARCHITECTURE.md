@@ -210,13 +210,17 @@ Each table is one kind:
 - Language models are kept by the core apart from the router (whose jobs are speech jobs); dictation
   polish goes to the one registered. Foundation Models is registered only while Apple Intelligence
   is available.
-- Polish sends a dictation to that model, so it runs only with the user's consent for where it goes:
-  this machine, or one named cloud provider (`ink_pipeline::consent`). The core keeps the consent
-  (`dictation.polish_consent`); `polish.allow` records it, for the destination the model has at
-  that moment, and turns polish on, and nothing else turns it on. Each polish call checks the
-  consent against the model that call reaches (`Llm::complete_if`), so a model that moved from this
-  machine to a cloud provider, or between providers, gets nothing until the user agrees again; the
-  take goes in as said with `polish_not_allowed`.
+- Polish sends a dictation, and voice edit the selection and the instruction, to that model, so
+  each runs only with the user's consent for where it goes: this machine, or one named cloud
+  provider (`ink_pipeline::consent`, one consent per feature). The core keeps each consent
+  (`llm.consent.polish`, `llm.consent.edit`); `consent.allow` records it, for the destination the
+  model has at that moment, and turns the feature on (polish's switch, edit's key) in the same
+  write; turning the feature off withdraws it in the same write. Each call checks the consent
+  against the model that call reaches (`Llm::complete_if`), so a model that moved from this machine
+  to a cloud provider, or between providers, gets nothing until the user agrees again: a polish
+  goes in as said with `polish_not_allowed`, an edit changes nothing (`not_allowed`). A meeting's
+  summary and Ask are not gated yet; they would join as another feature with the same record,
+  commands and check.
 - A table the size of ABI 1's still registers an offline engine; newer kinds need the full table.
 
 ## The screens' commands
@@ -224,9 +228,9 @@ Each table is one kind:
 The screens read and change the library and the permissions through commands too
 ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): permission checks and
 requests, the open commitments ("owed"), a live meeting's notes, the model catalogue, the user's
-modes, polish's state and consent (`polish.get`, `polish.allow`), and a short whitelist of
-settings the shell owns (`onboarding.done`, `dictation.polish` (only ever set to off),
-`dictation.key`, `dictation.edit_key`).
+modes, each language-model feature's state and consent (`consent.get`, `consent.allow`), and a
+short whitelist of settings the shell owns (`onboarding.done`, `dictation.polish` (only ever set
+to off), `dictation.key`, `dictation.edit_key`).
 
 - They run on their own core thread, `ink-queries`, in order among themselves. The command thread
   can be held for minutes by a model download; a note or a permission card never waits for it.

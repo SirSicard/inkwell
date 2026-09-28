@@ -7,9 +7,9 @@ and how it feels. Note the date, the macOS version and the commit at the top of 
 Automated checks cover the logic behind each line: the chain on mocks (`cargo test -p
 ink-pipeline --test dictation_takes`: a second press never wipes the take, the 180 s watchdog,
 voice edit, the polish switch, live words, the mic let go of while idle), polish's consent on
-every path (`--test polish_consent`, and through the core `cargo test -p ink-ffi --test voice`:
-the switch, a Polish mode, the default mode, a voice command, a 0.2 import, a model that moves to
-the cloud), the warm-up (`--test warm`), dictation through the core on the mock platform
+every path, and voice edit's (`--test llm_consent`, and through the core `cargo test -p ink-ffi
+--test voice`: the switch, a Polish mode, the default mode, a voice command, a 0.2 import, an edit
+key without consent, a model that moves to the cloud, a store that refuses the write), the warm-up (`--test warm`), dictation through the core on the mock platform
 (`cargo test -p ink-ffi --test voice`), and the shell (`swift test --package-path mac --filter
 "Dictation|Polish"`).
 
@@ -116,7 +116,15 @@ the cloud), the warm-up (`--test warm`), dictation through the core on the mock 
 
 ## 4. Voice edit
 
-- [ ] Settings > Voice > Edit a selection: **Right Command**. Settings shows it held.
+- [ ] **Cancel.** Settings > Voice > Edit a selection: **Right Command**. A dialog "Turn on voice
+      edit?" says voice edit sends the text you select and what you say to a language model, that
+      it uses Apple's on-device model, and that your words stay on this Mac. Press Cancel (and,
+      separately, Escape): the picker stays Off and right Command is an ordinary key.
+- [ ] **Grant.** Pick **Right Command** again and press Turn On Voice Edit: Settings shows it held.
+- [ ] Pick **Right Option** while it is on: no dialog (the consent is kept); it moves to that key.
+      Set it back to Right Command.
+- [ ] VoiceOver on the dialog: the message is read, then "Cancel, and leave voice edit off" and
+      "Turn on voice edit with Apple's on-device model".
 - [ ] In TextEdit select a sentence. Hold right Command, say "make it more formal", let go. The
       Drop reads "Editing the selection", "Say what to change", then "Rewriting"; the selection
       is replaced by the rewrite (no extra space). The Library has no new entry for it.
@@ -124,7 +132,12 @@ the cloud), the warm-up (`--test warm`), dictation through the core on the mock 
 - [ ] Right Command in shortcuts (right ⌘ + C / V) still copies and pastes, and shows nothing.
 - [ ] With Apple Intelligence off: an edit says "Editing needs Apple Intelligence" and leaves the
       selection alone.
-- [ ] Set it back to Off: right Command is an ordinary key again.
+- [ ] Set it back to Off: right Command is an ordinary key again. Pick a key again: the dialog asks
+      again (Off withdrew the consent).
+- [ ] **A cloud model** (the debug build's stand-in, as in section 3), with voice edit on: the
+      Voice section says "Paused: voice edit would now send your words to Example Cloud…"; an edit
+      leaves the selection alone and the Drop says "Not edited / Voice edit needs your OK again in
+      Settings". Picking a key shows the dialog naming Example Cloud; Cancel: still paused.
 
 ## 5. Where it cannot type, and permissions taken away
 

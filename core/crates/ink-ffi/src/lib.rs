@@ -12,7 +12,7 @@
 //! | [`gate`] | exclusive holds on models during updates, and the engine every chain calls |
 //! | [`mailbox`] | the bounded queue from the pump to a chain's worker |
 //! | [`meeting`] | a meeting run: capture, the pump, the meeting worker |
-//! | [`polish`] | dictation polish's switch and the user's consent for where it sends, as the screens see them |
+//! | [`consent`] | the user's consent for each feature that sends words to a language model (polish, voice edit), and their switches, as the screens see them |
 //! | [`queries`] | the screens' commands (permissions, owed, notes, settings, modes, models), on their own thread |
 //! | [`dictation`] | the dictation worker |
 //! | [`voice`] | dictation, live: the keys, the mic, the worker and the engine's warm-up |
@@ -38,6 +38,7 @@
 
 pub mod asking;
 pub mod capture;
+pub mod consent;
 pub mod control;
 pub mod detection;
 pub mod dictation;
@@ -52,7 +53,6 @@ pub mod llms;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;
-pub mod polish;
 pub mod queries;
 pub mod recovery;
 pub mod retention;

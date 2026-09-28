@@ -186,7 +186,10 @@ fn a_long_toggle_take_is_not_stopped_by_the_watchdog() {
 #[test]
 fn a_voice_edit_replaces_the_selection_with_the_rewrite() {
     let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "```\nDear team,\n```"));
-    let rig = Rig::builder().llm(llm.clone()).build();
+    let rig = Rig::builder()
+        .llm(llm.clone())
+        .settings(|s| s.edit_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice))
+        .build();
     rig.answer_anything("make it formal");
     rig.platform.set_selection(Some("hey all"));
     rig.silence(0.5);
@@ -307,7 +310,10 @@ impl Llm for NeverAnswers {
 fn an_edit_whose_model_never_answers_times_out_and_leaves_the_selection() {
     let rig = Rig::builder()
         .llm(Arc::new(NeverAnswers))
-        .settings(|s| s.edit_budget = Duration::from_millis(100))
+        .settings(|s| {
+            s.edit_budget = Duration::from_millis(100);
+            s.edit_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+        })
         .build();
     rig.answer_anything("shorten it");
     rig.platform.set_selection(Some("a long paragraph"));
@@ -360,7 +366,7 @@ fn with_the_polish_switch_off_nothing_is_polished() {
         .settings(|s| {
             s.modes = polishing_modes();
             s.polish_wish = false;
-            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
         })
         .build();
     rig.answer_anything("as said");
@@ -377,7 +383,7 @@ fn with_the_polish_switch_on_the_modes_that_polish_do() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_modes();
-            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
         })
         .build();
     rig.answer_anything("as said");
@@ -539,7 +545,10 @@ fn without_a_live_engine_there_are_no_live_words_and_the_take_is_unchanged() {
 #[test]
 fn an_edit_opens_no_live_stream() {
     let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "rewritten"));
-    let rig = Rig::builder().llm(llm).build();
+    let rig = Rig::builder()
+        .llm(llm)
+        .settings(|s| s.edit_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice))
+        .build();
     rig.answer_anything("rewrite it");
     rig.platform.set_selection(Some("text"));
     let listener = Arc::new(Listener {
@@ -588,7 +597,10 @@ fn after_the_mic_was_let_go_of_the_next_press_starts_with_the_new_audio() {
 #[test]
 fn dictations_are_saved_and_edits_are_not() {
     let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Rewritten."));
-    let rig = Rig::builder().llm(llm).build();
+    let rig = Rig::builder()
+        .llm(llm)
+        .settings(|s| s.edit_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice))
+        .build();
     rig.answer_anything("words");
     rig.platform.set_selection(Some("old"));
     rig.dictate(&speech_48k(1.0, -25.0, 25));

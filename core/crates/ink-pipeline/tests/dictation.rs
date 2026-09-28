@@ -488,7 +488,7 @@ fn a_style_command_changes_how_the_next_dictation_is_written() {
 fn polish_uses_the_model_and_a_failure_keeps_the_local_text() {
     let polishing = |s: &mut ink_pipeline::chain::DictationSettings| {
         s.modes.modes[0].polish_enabled = true;
-        s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+        s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
     };
     let rig = Rig::builder()
         .settings(polishing)
@@ -540,7 +540,7 @@ fn a_take_of_only_fillers_is_nothing_left_not_nothing_heard() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
         })
         .llm(llm.clone())
         .build();
@@ -563,7 +563,7 @@ fn a_blank_polish_answer_keeps_the_text_instead_of_emptying_it() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
         })
         .llm(Arc::new(MockLlm::new(Endpoint::InProcess, "   ")))
         .build();
@@ -622,7 +622,7 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
             s.polish_budget = BUDGET;
         })
         .llm(llm.clone())
@@ -692,7 +692,7 @@ fn a_polish_cancelled_before_its_budget_is_a_cancel_not_a_timeout() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
             s.polish_budget = Duration::from_secs(60);
         })
         .llm(Arc::new(StopsItself))

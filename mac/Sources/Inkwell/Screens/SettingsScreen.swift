@@ -48,7 +48,7 @@ struct SettingsScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 30) {
                         PermissionsSection(permissions: screens.permissions).id(SettingsSection.permissions)
-                        VoiceSection(dictation: screens.dictation, permissions: screens.permissions)
+                        VoiceSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
                             .id(SettingsSection.voice)
                         ModesSection(modes: screens.modes).id(SettingsSection.modes)
                         AISection(polish: screens.polish).id(SettingsSection.ai)
@@ -207,6 +207,7 @@ private struct PermissionRow: View {
 
 /// The dictation key and the voice-edit key, each held by the core: a change rebinds it at once.
 private struct VoiceSection: View {
+    let screens: ScreenModels
     let dictation: DictationModel
     let permissions: PermissionsModel
 
@@ -243,7 +244,7 @@ private struct VoiceSection: View {
                 Text("Edit a selection").frame(width: 150, alignment: .leading)
                 Picker("Edit a selection", selection: Binding(
                     get: { dictation.editKey ?? "off" },
-                    set: { dictation.setEditKey($0 == "off" ? nil : $0) }
+                    set: { screens.chooseEditKey($0 == "off" ? nil : $0) }
                 )) {
                     Text("Off").tag("off")
                     ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
@@ -272,17 +273,21 @@ private struct VoiceSection: View {
                     Text(problem == DictationModel.editKeyLostText ? problem : "The edit key isn't held: \(problem)")
                         .foregroundStyle(Theme.alert)
                 }
+                if let problem = screens.editConsent.problem, dictation.editKey != nil || screens.editConsent.failure != nil {
+                    Text(problem).foregroundStyle(Theme.alert)
+                }
                 if let problem = dictation.settingsProblem {
                     Text("Dictation \(problem), so it uses the defaults for them.").foregroundStyle(Theme.alert)
                 }
             }
             .font(Typography.caption)
             .fixedSize(horizontal: false, vertical: true)
-            Text("Editing sends the selection and what you say to Apple Intelligence on this Mac, and replaces the selection with the answer. Edits are not saved in the Library.")
+            Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .consentStep(screens.editConsent, host: .settings)
     }
 }
 

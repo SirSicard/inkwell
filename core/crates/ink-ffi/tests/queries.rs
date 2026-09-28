@@ -409,12 +409,12 @@ fn shell_settings_are_whitelisted_and_round_trip() {
         Some("off")
     );
     // The core's own settings are not the shell's to write, and polish turns on only with the
-    // user's consent (polish.allow).
+    // user's consent (consent.allow).
     for bad in [
         json!({"cmd": "setting.set", "key": SYSTEM_AUDIO_ASKED_KEY, "value": "true"}),
         json!({"cmd": "setting.set", "key": "dictation.polish", "value": "yes"}),
         json!({"cmd": "setting.set", "key": "dictation.polish", "value": "on"}),
-        json!({"cmd": "setting.set", "key": "dictation.polish_consent", "value": "none"}),
+        json!({"cmd": "setting.set", "key": "llm.consent.polish", "value": "none"}),
         json!({"cmd": "setting.get", "key": MODES_KEY}),
     ] {
         assert!(rig.core.command(&bad.to_string()).is_err(), "{bad}");

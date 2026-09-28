@@ -552,7 +552,8 @@ fn an_import_with_polish_on_turns_no_1_0_setting_on() {
         rows.keys().collect::<Vec<_>>()
     );
     assert!(!rows.contains_key("dictation.polish"));
-    assert!(!rows.contains_key("dictation.polish_consent"));
+    assert!(!rows.contains_key("llm.consent.polish"));
+    assert!(!rows.contains_key("llm.consent.edit"));
 }
 
 #[test]

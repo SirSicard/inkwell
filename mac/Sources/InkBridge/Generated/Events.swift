@@ -143,8 +143,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case modelsListed(ModelsListed)
     /// `setting.value`
     case settingValue(SettingValue)
-    /// `polish.state`
-    case polishState(PolishState)
+    /// `consent.state`
+    case consentState(ConsentState)
     /// `modes.listed`
     case modesListed(ModesListed)
     /// `library.records`
@@ -247,7 +247,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "note.deleted": self = .noteDeleted(try NoteDeleted(from: decoder))
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
-            case "polish.state": self = .polishState(try PolishState(from: decoder))
+            case "consent.state": self = .consentState(try ConsentState(from: decoder))
             case "modes.listed": self = .modesListed(try ModesListed(from: decoder))
             case "library.records": self = .libraryRecords(try LibraryRecords(from: decoder))
             case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
@@ -330,7 +330,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .noteDeleted(let event): try event.encode(to: encoder)
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
-        case .polishState(let event): try event.encode(to: encoder)
+        case .consentState(let event): try event.encode(to: encoder)
         case .modesListed(let event): try event.encode(to: encoder)
         case .libraryRecords(let event): try event.encode(to: encoder)
         case .librarySearch(let event): try event.encode(to: encoder)
@@ -563,6 +563,51 @@ public struct CommitmentsListed: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A feature that sends the user's words to a language model: its switch, where the model it
+/// would use now sends them, and where the user agreed it may. The feature runs only when on
+/// and allowed. In answer to consent.get and consent.allow, and after the feature's switch is
+/// set to off.
+public struct ConsentState: Codable, Sendable, Equatable {
+    /// Whether that consent covers the model now: false while the feature is on means it is
+    /// paused until the user agrees again.
+    public let allowed: Bool
+    /// For a cloud consent, the provider's name the user agreed to.
+    public let allowedName: String?
+    /// Where the user agreed it may send; absent when never agreed (or turned off since).
+    public let allowedTo: LlmDestination?
+    /// For cloud, the destination consent.allow must name; absent otherwise.
+    public let endpoint: String?
+    /// Why part of this could not be read (the switch or the consent), as a sentence starting
+    /// "couldn't". An unread switch counts as off, an unread consent as none.
+    public let error: String?
+    /// Which feature.
+    public let feature: LlmFeature
+    /// That model's name, as the shell registered it (a cloud provider's name); absent with to.
+    public let name: String?
+    /// Its switch: dictation.polish on, or a voice-edit key set.
+    public let on: Bool
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Where the model it would use now sends; absent when no language model is registered.
+    public let to: LlmDestination?
+    /// Always `consent.state`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case allowed
+        case allowedName = "allowed_name"
+        case allowedTo = "allowed_to"
+        case endpoint
+        case error
+        case feature
+        case name
+        case on
+        case ref
+        case to
+        case type
+    }
+}
+
 /// The core started. The first event after ink_init.
 public struct CoreReady: Codable, Sendable, Equatable {
     /// The core's ABI version; must equal INK_ABI_VERSION in inkwell.h.
@@ -782,7 +827,7 @@ public struct DictationVoiceDetection: Codable, Sendable, Equatable {
 /// push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped
 /// there and processed. polish_not_allowed: polish is on, but the user has not agreed to send
 /// dictations where its model goes now (never agreed, or the model changed destination since):
-/// nothing was sent, the text went in as said, and message names the model; polish.get says
+/// nothing was sent, the text went in as said, and message names the model; consent.get says
 /// more.
 public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
@@ -935,7 +980,9 @@ public enum EchoState: String, Codable, Sendable, Equatable, CaseIterable {
 }
 
 /// Why a voice edit left the selection alone. None of these changed the user's text.
-/// secure_input: Secure Input was on, so the selection was never read.
+/// secure_input: Secure Input was on, so the selection was never read. not_allowed: the user
+/// has not agreed to send the selection where the model goes now (never agreed, or it changed
+/// destination since); nothing was sent, and message names the model.
 public enum EditFailure: String, Codable, Sendable, Equatable, CaseIterable {
     case noSelection = "no_selection"
     case secureInput = "secure_input"
@@ -945,6 +992,7 @@ public enum EditFailure: String, Codable, Sendable, Equatable, CaseIterable {
     case timedOut = "timed_out"
     case model
     case insert
+    case notAllowed = "not_allowed"
     case other
 }
 
@@ -1168,6 +1216,21 @@ public struct LibrarySwept: Codable, Sendable, Equatable {
         case failed
         case type
     }
+}
+
+/// Where a feature sends the user's words: on_device (a model on this machine; the words stay
+/// on it) or cloud (a model elsewhere; the words leave this machine for its provider).
+public enum LlmDestination: String, Codable, Sendable, Equatable, CaseIterable {
+    case onDevice = "on_device"
+    case cloud
+}
+
+/// A feature that sends the user's words to a language model, each with its own consent: polish
+/// (the dictation, before it is typed) or edit (voice edit: the selection and the spoken
+/// instruction).
+public enum LlmFeature: String, Codable, Sendable, Equatable, CaseIterable {
+    case polish
+    case edit
 }
 
 /// An answer to meeting.ask about the live meeting: the model's words. Render them as text only
@@ -2030,54 +2093,6 @@ public struct PermissionsChecked: Codable, Sendable, Equatable {
 public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
     case live
     case `final`
-}
-
-/// Where polish sends a dictation: on_device (a model on this machine; the words stay on it) or
-/// cloud (a model elsewhere; the words leave this machine for its provider).
-public enum PolishDestination: String, Codable, Sendable, Equatable, CaseIterable {
-    case onDevice = "on_device"
-    case cloud
-}
-
-/// Dictation polish: the user's switch, where the model polish would use now sends a dictation,
-/// and where the user agreed it may. Polish runs only when on and allowed. In answer to
-/// polish.get and polish.allow, and after dictation.polish is set.
-public struct PolishState: Codable, Sendable, Equatable {
-    /// Whether that consent covers the model now: false while polish is on means polish is
-    /// paused until the user agrees again.
-    public let allowed: Bool
-    /// For a cloud consent, the provider's name the user agreed to.
-    public let allowedName: String?
-    /// Where the user agreed polish may send; absent when never agreed (or turned off since).
-    public let allowedTo: PolishDestination?
-    /// For cloud, the destination polish.allow must name; absent otherwise.
-    public let endpoint: String?
-    /// Why part of this could not be read (the switch or the consent), as a sentence starting
-    /// "couldn't". Unread consent counts as none.
-    public let error: String?
-    /// That model's name, as the shell registered it (a cloud provider's name); absent with to.
-    public let name: String?
-    /// The user's switch (dictation.polish).
-    public let on: Bool
-    /// The command's "id", when it had one.
-    public let ref: String?
-    /// Where the model polish would use now sends; absent when no language model is registered.
-    public let to: PolishDestination?
-    /// Always `polish.state`.
-    public let type: String
-
-    private enum CodingKeys: String, CodingKey {
-        case allowed
-        case allowedName = "allowed_name"
-        case allowedTo = "allowed_to"
-        case endpoint
-        case error
-        case name
-        case on
-        case ref
-        case to
-        case type
-    }
 }
 
 /// Where a record's audio is: its chunks per side, placed on its timeline.

@@ -356,6 +356,9 @@ final class DictationModel {
                     : DropText(title: "Editing needs Apple Intelligence", detail: "The selection was left alone", tone: .alert)
             case .timedOut:
                 return DropText(title: "The rewrite took too long", detail: "The selection was left alone", tone: .alert)
+            case .notAllowed:
+                // Its model now sends somewhere the user has not agreed to (or never agreed).
+                return DropText(title: "Not edited", detail: "Voice edit needs your OK again in Settings", tone: .alert)
             case .insert:
                 return DropText(title: "Couldn't replace the selection", detail: "It was left alone", tone: .alert)
             case .other:
