@@ -12,9 +12,9 @@ use common::TempDb;
 use ink_core::*;
 use ink_store::SqliteStore;
 use ink_store::import::{
-    APP_STYLES_KEY, Counts, DICTIONARY_KEY, ImportError, Inkwell02, KeyProbe, KeyProbeError,
-    MARKER_KEY, MAX_JSON_BYTES, MODES_KEY, NoKeychain, SETTINGS_PREFIX, SNIPPETS_KEY,
-    VOICE_COMMANDS_KEY,
+    APP_STYLES_KEY, Counts, DICTATION_KEY_SETTING, DICTIONARY_KEY, ImportError, Inkwell02,
+    KEY_NOTE_KEY, KeyProbe, KeyProbeError, MARKER_KEY, MAX_JSON_BYTES, MODES_KEY, NoKeychain,
+    SETTINGS_PREFIX, SNIPPETS_KEY, Unmappable, VOICE_COMMANDS_KEY,
 };
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -600,6 +600,138 @@ fn missing_optional_files_import_as_nothing() {
             settings: 1,
             ..Counts::default()
         }
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The dictation hotkey
+// ---------------------------------------------------------------------------------------------
+
+/// A full folder whose settings hold `hotkey` (absent when `None`) and `recording_mode`.
+fn with_hotkey(name: &str, hotkey: Option<&str>, recording_mode: &str) -> Legacy {
+    let legacy = Legacy::full(name);
+    let mut s = settings();
+    match hotkey {
+        Some(h) => s["hotkey"] = json!(h),
+        None => {
+            s.as_object_mut().unwrap().remove("hotkey");
+        }
+    }
+    s["recording_mode"] = json!(recording_mode);
+    legacy.write_json("settings.json", &s);
+    legacy
+}
+
+#[test]
+fn a_modifier_hotkey_becomes_the_dictation_key() {
+    let legacy = with_hotkey("key-mapped", Some("right_opt"), "ptt");
+    let source = legacy.read().unwrap();
+    let key = source.key().unwrap();
+    assert_eq!(key.outcome, Ok("right_option"));
+    assert!(!key.needs_note(), "nothing to say");
+    let db = TempDb::new("import-key-mapped");
+    let store = db.open();
+    store.import_inkwell02(&source).unwrap();
+    assert_eq!(
+        store.setting(DICTATION_KEY_SETTING).unwrap().as_deref(),
+        Some("right_option")
+    );
+    let note = document(&store, KEY_NOTE_KEY).unwrap();
+    assert_eq!(note["outcome"], "mapped");
+    assert_eq!(note["applied"], true);
+    // The import writes no 1.0 setting but the key: in particular never polish, whatever 0.2's
+    // `polish_enabled` said (it was on in this folder).
+    let rows = setting_rows(&db);
+    let own: Vec<&String> = rows.keys().filter(|k| !k.starts_with("import.")).collect();
+    assert_eq!(own, vec![DICTATION_KEY_SETTING]);
+    // The voice-edit key stays off: 0.2's is not carried over.
+    assert!(!rows.contains_key("dictation.edit_key"));
+}
+
+#[test]
+fn a_combination_hotkey_keeps_the_default_and_says_so() {
+    // 0.2's own default, as in `settings()`.
+    let legacy = Legacy::full("key-combination");
+    let source = legacy.read().unwrap();
+    let key = source.key().unwrap();
+    assert_eq!(key.hotkey, "super+shift+space");
+    assert_eq!(key.outcome, Err(Unmappable::Combination));
+    assert!(key.needs_note());
+    let db = TempDb::new("import-key-combination");
+    let store = db.open();
+    store.import_inkwell02(&source).unwrap();
+    assert_eq!(store.setting(DICTATION_KEY_SETTING).unwrap(), None);
+    let note = document(&store, KEY_NOTE_KEY).unwrap();
+    assert_eq!(
+        note,
+        json!({"hotkey": "super+shift+space", "key": null, "outcome": "combination",
+               "applied": false, "toggle": false})
+    );
+}
+
+#[test]
+fn a_settings_file_without_a_hotkey_had_0_2_s_default_combination() {
+    let legacy = with_hotkey("key-absent", None, "ptt");
+    let key = legacy.read().unwrap().key().cloned().unwrap();
+    assert_eq!(key.hotkey, "super+shift+space");
+    assert_eq!(key.outcome, Err(Unmappable::Combination));
+    // No settings.json at all: nothing is known, and nothing is written or said.
+    let only_db = Legacy::empty("key-no-settings");
+    only_db.transcripts(&rows()[..1], false);
+    assert!(only_db.read().unwrap().key().is_none());
+}
+
+#[test]
+fn an_unknown_key_keeps_the_default_and_says_so() {
+    let legacy = with_hotkey("key-other", Some("f13"), "ptt");
+    let source = legacy.read().unwrap();
+    assert_eq!(source.key().unwrap().outcome, Err(Unmappable::OtherKey));
+    let db = TempDb::new("import-key-other");
+    let store = db.open();
+    store.import_inkwell02(&source).unwrap();
+    assert_eq!(store.setting(DICTATION_KEY_SETTING).unwrap(), None);
+    assert_eq!(
+        document(&store, KEY_NOTE_KEY).unwrap()["outcome"],
+        "other_key"
+    );
+}
+
+#[test]
+fn a_toggle_hotkey_maps_and_says_it_is_now_held() {
+    let legacy = with_hotkey("key-toggle", Some("fn"), "toggle");
+    let source = legacy.read().unwrap();
+    let key = source.key().unwrap();
+    assert_eq!(key.outcome, Ok("fn"));
+    assert!(key.was_toggle);
+    assert!(key.needs_note(), "hold to talk replaces press to start");
+    let db = TempDb::new("import-key-toggle");
+    let store = db.open();
+    store.import_inkwell02(&source).unwrap();
+    assert_eq!(
+        store.setting(DICTATION_KEY_SETTING).unwrap().as_deref(),
+        Some("fn")
+    );
+    assert_eq!(document(&store, KEY_NOTE_KEY).unwrap()["toggle"], true);
+}
+
+#[test]
+fn a_dictation_key_chosen_in_1_0_is_never_replaced() {
+    let legacy = with_hotkey("key-kept", Some("right_cmd"), "ptt");
+    let source = legacy.read().unwrap();
+    let db = TempDb::new("import-key-kept");
+    let store = db.open();
+    store
+        .set_setting(DICTATION_KEY_SETTING, "right_shift")
+        .unwrap();
+    store.import_inkwell02(&source).unwrap();
+    assert_eq!(
+        store.setting(DICTATION_KEY_SETTING).unwrap().as_deref(),
+        Some("right_shift")
+    );
+    let note = document(&store, KEY_NOTE_KEY).unwrap();
+    assert_eq!(
+        (note["outcome"].clone(), note["applied"].clone()),
+        (json!("mapped"), json!(false))
     );
 }
 
