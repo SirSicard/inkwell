@@ -1214,6 +1214,7 @@ fn the_summary_and_commitments_follow_the_supersede() {
     });
     let mut rig = RigBuilder {
         answer: promise(),
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(llm.clone()),
         title: None,
         ..RigBuilder::default()
@@ -1265,6 +1266,7 @@ fn record_reads_that_fail_are_reported_and_the_pass_still_finishes() {
     });
     let mut rig = RigBuilder {
         answer: promise(),
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(llm),
         store: Some(flaky.clone()),
         title: None,
@@ -1325,6 +1327,7 @@ fn a_cancellation_after_the_supersede_still_finishes() {
     }
     let cancel = CancelToken::new();
     let mut rig = RigBuilder {
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(Arc::new(Cancels(cancel.clone()))),
         ..RigBuilder::default()
     }
@@ -1360,12 +1363,135 @@ fn no_model_means_no_summary_and_says_so() {
     assert_eq!(rig.store.summary(&record).unwrap(), None);
 }
 
+/// Owner decision (2026-09-28): a meeting's summary sends its transcript to a language model, so
+/// it runs only with the user's `meetings` consent for where that model goes. Without it (never
+/// given, given only for polish and voice edit, given for another provider, or unreadable) nothing
+/// is sent, the meeting finishes normally with no summary and no commitments, and says why,
+/// naming the consent that model needs.
+#[test]
+fn the_summary_sends_nothing_without_the_meetings_consent() {
+    use ink_core::Endpoint;
+    use ink_core::mock::MockLlm;
+    let cloud = |endpoint: &str| LlmConsent::Cloud {
+        endpoint: endpoint.into(),
+        name: "Cloud".into(),
+    };
+    let cases = [
+        (
+            "never given",
+            Endpoint::InProcess,
+            Vec::<(&str, String)>::new(),
+            LlmConsent::OnDevice,
+        ),
+        (
+            "given for polish and voice edit only",
+            Endpoint::InProcess,
+            vec![
+                (
+                    Feature::Polish.setting_key(),
+                    LlmConsent::OnDevice.to_setting(),
+                ),
+                (
+                    Feature::Edit.setting_key(),
+                    LlmConsent::OnDevice.to_setting(),
+                ),
+            ],
+            LlmConsent::OnDevice,
+        ),
+        (
+            "given for another provider",
+            Endpoint::Remote("https://b.example.com/v1".into()),
+            vec![(
+                Feature::Meetings.setting_key(),
+                cloud("https://a.example.com/v1").to_setting(),
+            )],
+            LlmConsent::Cloud {
+                endpoint: "https://b.example.com/v1".into(),
+                name: "mock (mock)".into(),
+            },
+        ),
+        (
+            "unreadable",
+            Endpoint::InProcess,
+            vec![(Feature::Meetings.setting_key(), "on".into())],
+            LlmConsent::OnDevice,
+        ),
+    ];
+    for (why, endpoint, settings, needs) in cases {
+        let llm = Arc::new(MockLlm::new(endpoint, "{}"));
+        let mut rig = RigBuilder {
+            llm: Some(llm.clone()),
+            ..RigBuilder::default()
+        }
+        .build();
+        for (key, value) in &settings {
+            rig.store.set_setting(key, value).unwrap();
+        }
+        let record = rig.chain().record().clone();
+        let (mic, far) = conversation();
+        rig.feed(&mic, &far);
+        let outcome = rig.finish().unwrap();
+        assert_eq!(outcome.revision, Some(2), "{why}: the pass itself is whole");
+        assert_eq!(llm.calls(), 0, "{why}: nothing was sent");
+        assert!(
+            rig.warnings()
+                .contains(&MeetingWarning::SummaryNotAllowed(needs.clone())),
+            "{why}: {:?}",
+            rig.warnings()
+        );
+        assert!(
+            !rig.warnings()
+                .iter()
+                .any(|w| matches!(w, MeetingWarning::CommitmentsFailed(_))),
+            "{why}: commitments are not tried either"
+        );
+        assert_eq!(rig.store.summary(&record).unwrap(), None, "{why}");
+        assert_eq!(rig.store.commitments(&record).unwrap(), vec![], "{why}");
+        assert_eq!(
+            rig.events().last(),
+            Some(&MeetingEvent::Finished { revision: Some(2) }),
+            "{why}: finished normally"
+        );
+    }
+}
+
+/// With the `meetings` consent for where the model goes, the summary is sent; consent given once
+/// the meeting is running counts, since it is read when the summary is written.
+#[test]
+fn the_summary_is_sent_with_the_meetings_consent_read_when_it_is_written() {
+    use ink_core::mock::MockLlm;
+    let llm = Arc::new(MockLlm::new(ink_core::Endpoint::InProcess, "{}"));
+    let mut rig = RigBuilder {
+        llm: Some(llm.clone()),
+        ..RigBuilder::default()
+    }
+    .build();
+    let (mic, far) = conversation();
+    rig.feed(&mic, &far);
+    rig.store
+        .set_setting(
+            Feature::Meetings.setting_key(),
+            &LlmConsent::OnDevice.to_setting(),
+        )
+        .unwrap();
+    rig.finish().unwrap();
+    assert!(llm.calls() > 0, "sent with consent");
+    assert!(
+        !rig.warnings()
+            .iter()
+            .any(|w| matches!(w, MeetingWarning::SummaryNotAllowed(_))),
+        "{:?}",
+        rig.warnings()
+    );
+}
+
 #[test]
 fn a_silent_meeting_keeps_its_empty_live_transcript_and_asks_no_model() {
     let llm = Arc::new(Scripted {
         calls: AtomicUsize::new(0),
     });
     let mut rig = RigBuilder {
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(llm.clone()),
         ..RigBuilder::default()
     }
@@ -1629,6 +1755,7 @@ fn the_summary_keeps_cited_items_and_an_earlier_promise_looks_done() {
     });
     let mut rig = RigBuilder {
         answer,
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(Arc::new(DoneLlm)),
         ..RigBuilder::default()
     }
@@ -1695,6 +1822,7 @@ fn a_final_pass_that_runs_again_files_no_commitment_twice() {
     });
     let mut rig = RigBuilder {
         answer: promise(),
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(llm.clone()),
         title: None,
         ..RigBuilder::default()
@@ -1838,6 +1966,7 @@ fn commitments_and_their_merges_are_filed_together() {
     let flaky = Arc::new(FlakyStore::default());
     let mut rig = RigBuilder {
         answer: promise(),
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(llm),
         title: None,
         store: Some(flaky.clone()),
@@ -1871,6 +2000,7 @@ fn commitments_and_their_merges_are_filed_together() {
     let flaky2 = Arc::new(FlakyStore::default());
     let mut rig = RigBuilder {
         answer: promise(),
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(Arc::new(Scripted {
             calls: AtomicUsize::new(0),
         })),

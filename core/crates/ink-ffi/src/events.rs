@@ -532,6 +532,9 @@ fn meeting_warning(w: &MeetingWarning) -> Vec<(&'static str, Option<Value>)> {
         MeetingWarning::ClockWentBack => vec![kind("clock_went_back")],
         MeetingWarning::SummaryUnavailable => vec![kind("summary_unavailable")],
         MeetingWarning::SummaryFailed(e) => vec![kind("summary_failed"), msg(e.to_string())],
+        MeetingWarning::SummaryNotAllowed(needs) => {
+            vec![kind("summary_not_allowed"), msg(destination_name(needs))]
+        }
         MeetingWarning::CommitmentsFailed(e) => {
             vec![kind("commitments_failed"), msg(e.to_string())]
         }
@@ -865,6 +868,7 @@ mod tests {
             MeetingWarning::StoreFailed(StoreError::NotFound),
             MeetingWarning::ClockWentBack,
             MeetingWarning::SummaryUnavailable,
+            MeetingWarning::SummaryNotAllowed(LlmConsent::OnDevice),
             MeetingWarning::CommitmentsFailed(LlmError::Cancelled),
             MeetingWarning::EchoOnlyFinal {
                 start_ms: 2_000,

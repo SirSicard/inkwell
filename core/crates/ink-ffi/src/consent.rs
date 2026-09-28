@@ -2,27 +2,27 @@
 //! them (`consent.get`, `consent.allow`, and `setting.set` of a feature's switch to `off`),
 //! answered on `queries`' thread.
 //!
-//! Dictation polish sends a dictation, and voice edit the selection and the instruction, to a
-//! language model, so each runs only with the user's consent for where that model sends it
-//! ([`LlmConsent`], per [`Feature`]): this machine, or one named cloud provider. The core keeps
-//! each consent ([`Feature::setting_key`]) and is the only one that writes it:
+//! Dictation polish sends a dictation, voice edit the selection and the instruction, and a
+//! meeting's summary and Ask the meeting's transcript, to a language model, so each runs only with
+//! the user's consent for where that model sends it ([`LlmConsent`], per [`Feature`]): this
+//! machine, or one named cloud provider. The core keeps each consent ([`Feature::setting_key`])
+//! and is the only one that writes it:
 //!
 //! - **On** only through `consent.allow`, which names the feature and the destination the user
 //!   agreed to. It is recorded only if it is where the model the feature would use goes now;
 //!   otherwise the model changed while the user read, and the command fails so the shell can ask
 //!   again. The consent and the feature's switch are written together, or neither: polish's switch
-//!   (`dictation.polish` = `on`; `setting.set` refuses `on`), or voice edit's key
-//!   (`dictation.edit_key`, named by the command).
-//! - **Off** through `setting.set` (`dictation.polish` = `off`, `dictation.edit_key` = `off`): the
-//!   consent is withdrawn in the same write, so turning the feature on again always asks, and no
-//!   stale consent can outlive the switch. A failure changes neither.
+//!   (`dictation.polish` = `on`; `setting.set` refuses `on`), voice edit's key
+//!   (`dictation.edit_key`, named by the command), or the meetings switch ([`MEETINGS_SETTING`] =
+//!   `on`; `setting.set` refuses `on`).
+//! - **Off** through `setting.set` (`dictation.polish` = `off`, `dictation.edit_key` = `off`,
+//!   `meetings.llm` = `off`): the consent is withdrawn in the same write, so turning the feature
+//!   on again always asks, and no stale consent can outlive the switch. A failure changes neither.
 //! - Whatever turned a feature on, the chain sends only where its consent covers, checked by the
 //!   model each call reaches (`ink_pipeline::chain`): a model that changed destination since gets
 //!   nothing until the user agrees again, and the take says so (`polish_not_allowed`, or an edit's
-//!   `not_allowed`).
-//!
-//! A later feature (a meeting's summary, Ask) adds a [`Feature`], a switch in [`switch`], and a
-//! `complete_if` check on its calls; these commands and the event serve it unchanged.
+//!   `not_allowed`); a meeting's final pass says `summary_not_allowed`, and Ask fails asking for
+//!   the user's OK (`crate::asking`).
 
 use ink_core::Llm as _;
 use ink_pipeline::consent::{Feature, LlmConsent, NO_CONSENT};
@@ -31,6 +31,10 @@ use serde_json::Value;
 use crate::events::event;
 use crate::runtime::Shared;
 use crate::voice::{EDIT_KEY_SETTING, EDIT_KEYS, POLISH_SETTING};
+
+/// The store setting holding the meetings switch (`on` or `off`): a meeting's summary (with its
+/// commitments) and Ask send its transcript to a language model. Only `consent.allow` turns it on.
+pub const MEETINGS_SETTING: &str = "meetings.llm";
 
 /// A feature's switch: its store key, and whether a stored value means on.
 pub type Switch = (&'static str, fn(Option<&str>) -> bool);
@@ -41,6 +45,7 @@ pub fn switch(feature: Feature) -> Option<Switch> {
     match feature {
         Feature::Polish => Some((POLISH_SETTING, |v| v == Some("on"))),
         Feature::Edit => Some((EDIT_KEY_SETTING, |v| v.is_some_and(|k| k != "off"))),
+        Feature::Meetings => Some((MEETINGS_SETTING, |v| v == Some("on"))),
         _ => None,
     }
 }
@@ -145,7 +150,7 @@ pub struct Allow {
     pub key: Option<String>,
 }
 
-/// Reads `consent.allow`'s feature and key: voice edit needs a key, polish takes none.
+/// Reads `consent.allow`'s feature and key: voice edit needs a key, the others take none.
 pub fn check_key(feature: Feature, key: Option<&str>) -> Result<Option<String>, String> {
     match (feature, key) {
         (Feature::Edit, Some(k)) if k != "off" && EDIT_KEYS.contains(&k) => Ok(Some(k.to_owned())),

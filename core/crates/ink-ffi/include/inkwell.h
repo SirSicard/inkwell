@@ -210,6 +210,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "consent.state" too; an edit key set without a consent edits nothing),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
  *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
+ *       "meetings.llm" (on|off: a meeting's summary and Ask; as for dictation.polish, setting.set
+ *       takes only off, which also withdraws their consent, and consent.allow turns it on),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a
  *       language model whose info says "local":false is never called, for polish, voice edit,
  *       summaries or Ask, and the call fails saying so) and "retention.days"
@@ -228,20 +230,22 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       the command's "id" as "ref". "utc_offset_minutes" (optional) is for {date} and {time}.
  *   {"cmd":"dictation.disable","id":"<ref>"}
  *       Lets go of the keys and the mic: "dictation.off" with reason disabled.
- *   {"cmd":"consent.get","feature":"polish|edit","id":"<ref>"}
+ *   {"cmd":"consent.get","feature":"polish|edit|meetings","id":"<ref>"}
  *       "consent.state" for a feature that sends the user's words to a language model (polish:
- *       the dictation; edit: the selection and the instruction): its switch, where the model it
+ *       the dictation; edit: the selection and the instruction; meetings: a meeting's transcript,
+ *       for its summary, its commitments and Ask): its switch, where the model it
  *       would use now sends them ("to": on_device or cloud, with its "name", and for cloud the
  *       "endpoint"), and where the user agreed it may ("allowed_to"); "allowed" says whether
  *       that consent covers the model now. Each consent is its own. A feature runs only when on
  *       and allowed: a model that changed destination since the user agreed gets nothing, and
  *       each take says so (dictation.warning polish_not_allowed, dictation.edit_failed
- *       not_allowed). Send it again after an engine.registered or engine.unregistered of a
+ *       not_allowed; a meeting finishes with meeting.warning summary_not_allowed and no summary,
+ *       and meeting.ask fails asking for the user's OK). Send it again after an engine.registered or engine.unregistered of a
  *       language model.
- *   {"cmd":"consent.allow","feature":"polish|edit","to":"on_device|cloud","endpoint":"<for cloud>",
+ *   {"cmd":"consent.allow","feature":"polish|edit|meetings","to":"on_device|cloud","endpoint":"<for cloud>",
  *    "key":"<for edit: its key>","id":"<ref>"}
  *       The user agreed, after the shell told them plainly where the feature sends their words:
- *       records that consent and turns the feature on (polish's switch, or edit's key), both in
+ *       records that consent and turns the feature on (its switch, or edit's key), both in
  *       one write. Name what "consent.state" showed; if the model changed meanwhile, nothing is
  *       recorded and it fails ("command.failed", with a fresh "consent.state" first), so the
  *       shell asks again. Answers "consent.state" with the "id".

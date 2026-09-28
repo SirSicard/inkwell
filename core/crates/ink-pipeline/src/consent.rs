@@ -3,22 +3,21 @@
 //! Each feature that sends text to a language model runs only with the user's consent for that
 //! feature ([`Feature`]), given for a destination: **this machine** (a model in this process, such
 //! as Apple's on-device model, or a server on a loopback address), or **one named cloud provider**
-//! (a model whose endpoint is elsewhere). Today that is dictation polish (the dictation) and voice
-//! edit (the selection and the spoken instruction). The call is checked against the model it
-//! reaches ([`ink_core::Llm::complete_if`] with [`LlmConsent::covers`]), so a model that changed
-//! from on-device to a cloud provider, or from one provider to another, never receives a word
-//! until the user agrees again. Without a covering consent nothing is sent and the chain says why
+//! (a model whose endpoint is elsewhere). That is dictation polish (the dictation), voice edit
+//! (the selection and the spoken instruction), and a meeting's summary and Ask (the meeting's
+//! transcript). The call is checked against the model it reaches ([`ink_core::Llm::complete_if`]
+//! with [`LlmConsent::covers`], through [`Consented`]), so a model that changed from on-device to
+//! a cloud provider, or from one provider to another, never receives a word until the user agrees
+//! again. Without a covering consent nothing is sent and the chain says why
 //! ([`Warning::PolishNotAllowed`](crate::events::Warning::PolishNotAllowed),
-//! [`EditFailure::NotAllowed`](crate::events::EditFailure::NotAllowed)).
-//!
-//! A later feature (a meeting's summary, Ask) joins by adding a [`Feature`] and checking its calls
-//! the same way; the record, its setting and the shell's commands need nothing new.
+//! [`EditFailure::NotAllowed`](crate::events::EditFailure::NotAllowed),
+//! [`MeetingWarning::SummaryNotAllowed`](crate::meeting::events::MeetingWarning::SummaryNotAllowed)).
 //!
 //! The store keeps each feature's consent as a setting ([`Feature::setting_key`]), written by
 //! [`LlmConsent::to_setting`] and read by [`LlmConsent::from_setting`]. A value that does not read
 //! is no consent: the feature fails closed.
 
-use ink_core::{Endpoint, LlmInfo};
+use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse, Store};
 use serde_json::{Value, json};
 
 /// A feature that sends the user's words to a language model, each with a consent of its own.
@@ -29,17 +28,21 @@ pub enum Feature {
     Polish,
     /// Voice edit: the selected text and the spoken instruction.
     Edit,
+    /// A meeting's summary (with its commitments) and Ask: the meeting's transcript. One consent
+    /// for both: they send the same transcript to the same model.
+    Meetings,
 }
 
 impl Feature {
     /// Every feature.
-    pub const ALL: [Self; 2] = [Self::Polish, Self::Edit];
+    pub const ALL: [Self; 3] = [Self::Polish, Self::Edit, Self::Meetings];
 
     /// Its name in commands and events.
     pub fn name(self) -> &'static str {
         match self {
             Self::Polish => "polish",
             Self::Edit => "edit",
+            Self::Meetings => "meetings",
         }
     }
 
@@ -53,6 +56,7 @@ impl Feature {
         match self {
             Self::Polish => "llm.consent.polish",
             Self::Edit => "llm.consent.edit",
+            Self::Meetings => "llm.consent.meetings",
         }
     }
 }
@@ -165,6 +169,48 @@ impl LlmConsent {
     }
 }
 
+/// **Worker.** `feature`'s consent as stored, read at the moment of use. One that cannot be read
+/// is none (logged by name, never by value): the feature fails closed.
+pub fn stored(store: &dyn Store, feature: Feature) -> Option<LlmConsent> {
+    let key = feature.setting_key();
+    match store.setting(key) {
+        Ok(value) => LlmConsent::from_setting(value.as_deref()).unwrap_or_else(|e| {
+            log::error!("consent: {key}: {e}; nothing is sent");
+            None
+        }),
+        Err(e) => {
+            log::error!("consent: {key} could not be read ({e}); nothing is sent");
+            None
+        }
+    }
+}
+
+/// A feature's model, bound to the user's consent for that feature: every call goes through
+/// [`Llm::complete_if`], so the model that answers is checked against where the user agreed the
+/// words may go. Refused, nothing is sent ([`LlmError::NotAllowed`]).
+pub struct Consented<'a> {
+    /// The model.
+    pub inner: &'a dyn Llm,
+    /// `None`: never agreed, so no model is allowed.
+    pub consent: Option<&'a LlmConsent>,
+}
+
+impl Llm for Consented<'_> {
+    fn info(&self) -> LlmInfo {
+        self.inner.info()
+    }
+
+    fn complete(
+        &self,
+        request: &LlmRequest,
+        cancel: &CancelToken,
+    ) -> Result<LlmResponse, LlmError> {
+        self.inner.complete_if(request, cancel, &|info| {
+            self.consent.is_some_and(|c| c.covers(info))
+        })
+    }
+}
+
 /// A model's name for the user: its provider and model, or the model alone for a shell engine
 /// (whose provider is the shell, which names the model itself).
 fn display_name(info: &LlmInfo) -> String {
@@ -244,8 +290,13 @@ mod tests {
         for f in Feature::ALL {
             assert_eq!(Feature::parse(f.name()), Some(f));
         }
-        assert_ne!(Feature::Polish.setting_key(), Feature::Edit.setting_key());
-        assert_eq!(Feature::parse("summary"), None, "not gated yet");
+        let keys: std::collections::HashSet<_> = Feature::ALL.map(Feature::setting_key).into();
+        assert_eq!(keys.len(), Feature::ALL.len(), "each its own setting");
+        assert_eq!(
+            Feature::parse("summary"),
+            None,
+            "summary and Ask are `meetings`"
+        );
     }
 
     #[test]

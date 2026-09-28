@@ -212,17 +212,19 @@ Each table is one kind:
 - Language models are kept by the core apart from the router (whose jobs are speech jobs); dictation
   polish goes to the one registered. Foundation Models is registered only while Apple Intelligence
   is available.
-- Polish sends a dictation, and voice edit the selection and the instruction, to that model, so
-  each runs only with the user's consent for where it goes: this machine, or one named cloud
-  provider (`ink_pipeline::consent`, one consent per feature). The core keeps each consent
-  (`llm.consent.polish`, `llm.consent.edit`); `consent.allow` records it, for the destination the
-  model has at that moment, and turns the feature on (polish's switch, edit's key) in the same
-  write; turning the feature off withdraws it in the same write. Each call checks the consent
-  against the model that call reaches (`Llm::complete_if`), so a model that moved from this machine
-  to a cloud provider, or between providers, gets nothing until the user agrees again: a polish
-  goes in as said with `polish_not_allowed`, an edit changes nothing (`not_allowed`). A meeting's
-  summary and Ask are not gated yet; they would join as another feature with the same record,
-  commands and check.
+- Polish sends a dictation, voice edit the selection and the instruction, and a meeting's summary
+  (with its commitments) and Ask the meeting's transcript, to that model, so each runs only with
+  the user's consent for where it goes: this machine, or one named cloud provider
+  (`ink_pipeline::consent`, one consent per feature). The core keeps each consent
+  (`llm.consent.polish`, `llm.consent.edit`, `llm.consent.meetings`); `consent.allow` records it,
+  for the destination the model has at that moment, and turns the feature on (polish's switch,
+  edit's key, the meetings switch) in the same write; turning the feature off withdraws it in the
+  same write. Each call checks the consent against the model that call reaches
+  (`Llm::complete_if`), so a model that moved from this machine to a cloud provider, or between
+  providers, gets nothing until the user agrees again: a polish goes in as said with
+  `polish_not_allowed`, an edit changes nothing (`not_allowed`), a meeting finishes with no
+  summary or commitments (`summary_not_allowed`), and Ask answers that it needs the user's OK. The
+  meeting's consent is read when the summary is written, not when the meeting starts.
 - A table the size of ABI 1's still registers an offline engine; newer kinds need the full table.
 
 ## The screens' commands

@@ -397,7 +397,7 @@
     },
     "MeetingWarning": {
       "type": "string",
-      "description": "Something went wrong in a meeting, and it went on without it. deleted_text_not_scrubbed: text the library deleted or replaced could not yet be cleared from its files (another process is reading the database; the change is saved, and the store keeps trying); deleted_text_scrubbed: it now is. Each is sent once per change. not_crash_protected: the crash-recovery marker could not be written when the meeting started, so if the app quits unexpectedly this meeting is not finished at the next launch (its audio is still saved).",
+      "description": "Something went wrong in a meeting, and it went on without it. deleted_text_not_scrubbed: text the library deleted or replaced could not yet be cleared from its files (another process is reading the database; the change is saved, and the store keeps trying); deleted_text_scrubbed: it now is. Each is sent once per change. not_crash_protected: the crash-recovery marker could not be written when the meeting started, so if the app quits unexpectedly this meeting is not finished at the next launch (its audio is still saved). summary_not_allowed: the user has not agreed to send meeting transcripts where the language model goes now (the meetings consent: never agreed, or the model changed destination since): nothing was sent, so the meeting has no summary and no commitments, and message names the model; consent.get says more.",
       "enum": [
         "vad_failed",
         "capture",
@@ -421,6 +421,7 @@
         "clock_went_back",
         "summary_unavailable",
         "summary_failed",
+        "summary_not_allowed",
         "commitments_failed",
         "echo_only_final",
         "echo_gate_vad_failed",
@@ -2740,10 +2741,11 @@
     },
     "LlmFeature": {
       "type": "string",
-      "description": "A feature that sends the user's words to a language model, each with its own consent: polish (the dictation, before it is typed) or edit (voice edit: the selection and the spoken instruction).",
+      "description": "A feature that sends the user's words to a language model, each with its own consent: polish (the dictation, before it is typed), edit (voice edit: the selection and the spoken instruction) or meetings (a meeting's summary, its commitments and Ask: the meeting's transcript).",
       "enum": [
         "polish",
-        "edit"
+        "edit",
+        "meetings"
       ]
     },
     "LlmDestination": {
@@ -2767,7 +2769,7 @@
         },
         "on": {
           "type": "boolean",
-          "description": "Its switch: dictation.polish on, or a voice-edit key set."
+          "description": "Its switch: dictation.polish on, a voice-edit key set, or meetings.llm on."
         },
         "to": {
           "$ref": "#/$defs/LlmDestination",

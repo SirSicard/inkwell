@@ -27,6 +27,7 @@ use ink_core::{
     StreamingEngine, TimedText, TranscribeOptions, Transcript,
 };
 use ink_pipeline::capture::{CaptureIssue, SideCapture};
+pub use ink_pipeline::consent::{Feature, LlmConsent};
 use ink_pipeline::events::VadUnavailable;
 use ink_pipeline::meeting::events::{MeetingEvent, MeetingWarning};
 use ink_pipeline::meeting::{
@@ -399,6 +400,9 @@ pub struct RigBuilder {
     pub no_live_engine: bool,
     /// A final-pass engine in place of the rig's scripted one (a real model, locally).
     pub offline: Option<Arc<dyn OfflineEngine>>,
+    /// The user's consent for sending the transcript to `llm` (the `meetings` feature), written
+    /// to the store before the meeting starts. None: never agreed, so nothing is sent.
+    pub meetings_consent: Option<LlmConsent>,
 }
 
 impl Default for RigBuilder {
@@ -419,6 +423,7 @@ impl Default for RigBuilder {
             moving_clock: false,
             no_live_engine: false,
             offline: None,
+            meetings_consent: None,
         }
     }
 }
@@ -451,6 +456,11 @@ impl RigBuilder {
         let chunks = ChunkStore::open(dir.path().join("record")).unwrap();
         let mem = Arc::new(MemStore::new());
         let store: Arc<dyn Store> = self.store.clone().unwrap_or_else(|| mem.clone());
+        if let Some(consent) = &self.meetings_consent {
+            store
+                .set_setting(Feature::Meetings.setting_key(), &consent.to_setting())
+                .unwrap();
+        }
         let moving = self
             .moving_clock
             .then(|| Arc::new(MockClock::new(T0_NS, T0_UNIX_MS)));

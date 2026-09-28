@@ -69,6 +69,7 @@ use self::live::{LiveChannel, Settled};
 use self::offline::{EchoReader, Pass, RegionWindows, SideRead, SideReader, Stop};
 use self::watchdog::{Routing, SideState, Watch, Watchdog};
 use crate::capture::SideSummary;
+use crate::consent::{Consented, Feature, LlmConsent, stored};
 use crate::redact::Spoken;
 use crate::speech::{RegionConfig, SpeechPass, VadSource, little_speech_heard};
 
@@ -1139,6 +1140,15 @@ impl EndedMeeting {
             return;
         };
         let store = &core.services.store;
+        // Consent, read now (not at the start: the user may have changed it since): the
+        // transcript goes only where the user agreed, checked on the model each call reaches.
+        // Without a consent (or one that cannot be read) every model is refused.
+        let consent = stored(store.as_ref(), Feature::Meetings);
+        let consented = Consented {
+            inner: llm.as_ref(),
+            consent: consent.as_ref(),
+        };
+        let llm = &consented;
         let ctx = RecordContext {
             title: record.and_then(|r| r.title.as_deref()),
             time: RecordTime {
@@ -1150,14 +1160,7 @@ impl EndedMeeting {
 
         let mut filed: Vec<NewCommitment> = Vec::new();
         let now = core.services.clock.unix_ms();
-        match summarize(
-            segments,
-            &ctx,
-            &core.settings.summary,
-            now,
-            llm.as_ref(),
-            cancel,
-        ) {
+        match summarize(segments, &ctx, &core.settings.summary, now, llm, cancel) {
             Ok(outcome) => {
                 let untitled = record.is_some_and(|r| r.title.is_none());
                 let saved = store
@@ -1173,6 +1176,17 @@ impl EndedMeeting {
                     Err(error) => core.warn(MeetingWarning::StoreFailed(error)),
                 }
                 filed = outcome.actions;
+            }
+            Err(LlmError::NotAllowed { refused }) => {
+                // Nothing was sent. Commitments would send the same transcript to the same
+                // model, so they are skipped too.
+                log::warn!(
+                    "meeting: the model is not where the user agreed to send the transcript; no summary"
+                );
+                core.warn(MeetingWarning::SummaryNotAllowed(LlmConsent::for_model(
+                    &refused,
+                )));
+                return;
             }
             Err(error) => {
                 log::warn!("meeting summary failed: {error}");
@@ -1212,7 +1226,7 @@ impl EndedMeeting {
             }
         }
 
-        match harvest(segments, &ctx, llm.as_ref(), cancel) {
+        match harvest(segments, &ctx, llm, cancel) {
             Ok(h) => {
                 filed.extend(h.commitments);
                 self.suggest_done(&h.already_done);
@@ -1233,7 +1247,7 @@ impl EndedMeeting {
             });
             return;
         }
-        let merges = match dedup(&filed, llm.as_ref(), cancel) {
+        let merges = match dedup(&filed, llm, cancel) {
             Ok(d) => d.merges,
             Err(error) => {
                 // Filed apart: a promise listed twice beats one lost. A cancellation files them

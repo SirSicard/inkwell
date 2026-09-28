@@ -596,7 +596,7 @@ public struct ConsentState: Codable, Sendable, Equatable {
     public let feature: LlmFeature
     /// That model's name, as the shell registered it (a cloud provider's name); absent with to.
     public let name: String?
-    /// Its switch: dictation.polish on, or a voice-edit key set.
+    /// Its switch: dictation.polish on, a voice-edit key set, or meetings.llm on.
     public let on: Bool
     /// The command's "id", when it had one.
     public let ref: String?
@@ -1284,11 +1284,13 @@ public enum LlmDestination: String, Codable, Sendable, Equatable, CaseIterable {
 }
 
 /// A feature that sends the user's words to a language model, each with its own consent: polish
-/// (the dictation, before it is typed) or edit (voice edit: the selection and the spoken
-/// instruction).
+/// (the dictation, before it is typed), edit (voice edit: the selection and the spoken
+/// instruction) or meetings (a meeting's summary, its commitments and Ask: the meeting's
+/// transcript).
 public enum LlmFeature: String, Codable, Sendable, Equatable, CaseIterable {
     case polish
     case edit
+    case meetings
 }
 
 /// An answer to meeting.ask about the live meeting: the model's words. Render them as text only
@@ -1743,6 +1745,10 @@ public struct MeetingVoiceDetection: Codable, Sendable, Equatable {
 /// deleted_text_scrubbed: it now is. Each is sent once per change. not_crash_protected: the
 /// crash-recovery marker could not be written when the meeting started, so if the app quits
 /// unexpectedly this meeting is not finished at the next launch (its audio is still saved).
+/// summary_not_allowed: the user has not agreed to send meeting transcripts where the language
+/// model goes now (the meetings consent: never agreed, or the model changed destination since):
+/// nothing was sent, so the meeting has no summary and no commitments, and message names the
+/// model; consent.get says more.
 public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case capture
@@ -1766,6 +1772,7 @@ public enum MeetingWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case clockWentBack = "clock_went_back"
     case summaryUnavailable = "summary_unavailable"
     case summaryFailed = "summary_failed"
+    case summaryNotAllowed = "summary_not_allowed"
     case commitmentsFailed = "commitments_failed"
     case echoOnlyFinal = "echo_only_final"
     case echoGateVadFailed = "echo_gate_vad_failed"

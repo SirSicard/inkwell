@@ -55,12 +55,11 @@ use ink_audio::take::{TAIL, Take};
 use ink_audio::{Agc, TakeRecorder, VadConfig};
 use ink_core::{
     AsrEvent, CANONICAL_RATE, CancelToken, Channel, Clock, EngineStream, EventSink, FocusReader,
-    HotkeyEvent, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse, NewRecord, OfflineEngine,
-    RecordId, RecordKind, Segment, Store, StoreError, StreamingEngine, TextInserter,
-    TranscribeOptions,
+    HotkeyEvent, Llm, LlmError, NewRecord, OfflineEngine, RecordId, RecordKind, Segment, Store,
+    StoreError, StreamingEngine, TextInserter, TranscribeOptions,
 };
 
-use crate::consent::LlmConsent;
+use crate::consent::{Consented, LlmConsent};
 
 use crate::dictionary::Dictionary;
 use crate::events::{DictationEvent, Discard, EditFailure, TakeFailure, VoiceDetection, Warning};
@@ -1236,31 +1235,6 @@ impl DictationChain {
             | CommandAction::OpenApp { .. } => debug_assert!(!action.carried_out()),
         }
         true
-    }
-}
-
-/// A feature's model, bound to the user's consent for that feature: every call goes through
-/// [`Llm::complete_if`], so the model that answers is checked against where the user agreed the
-/// words may go.
-struct Consented<'a> {
-    inner: &'a dyn Llm,
-    /// `None`: never agreed, so no model is allowed.
-    consent: Option<&'a LlmConsent>,
-}
-
-impl Llm for Consented<'_> {
-    fn info(&self) -> LlmInfo {
-        self.inner.info()
-    }
-
-    fn complete(
-        &self,
-        request: &LlmRequest,
-        cancel: &ink_core::CancelToken,
-    ) -> Result<LlmResponse, LlmError> {
-        self.inner.complete_if(request, cancel, &|info| {
-            self.consent.is_some_and(|c| c.covers(info))
-        })
     }
 }
 
