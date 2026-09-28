@@ -369,6 +369,9 @@ final class DictationModel {
             switch warning.kind {
             case .polishTimedOut:
                 return DropText(title: "Polish took too long", detail: "Typed as you said it")
+            case .polishNotAllowed:
+                // Polish is on, but its model now sends somewhere the user has not agreed to.
+                return DropText(title: "Not polished", detail: "Polish needs your OK again in Settings", tone: .alert)
             case .releaseMissed:
                 return DropText(title: "Stopped after 3 minutes", detail: "The key's release never arrived")
             // Shown elsewhere (Today's notices, Settings) or nothing the user acts on at once.

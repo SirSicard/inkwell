@@ -39,6 +39,7 @@ use ink_core::{
 };
 use ink_engines::{ExternalEngine, ModelDir, Route};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
+use ink_pipeline::consent::PolishConsent;
 use ink_pipeline::dictionary::Dictionary;
 use ink_pipeline::events::DictationEvent;
 use ink_pipeline::mic::MicPath;
@@ -63,10 +64,19 @@ pub const MIC_IDLE: Duration = Duration::from_secs(180);
 pub const KEY_SETTING: &str = "dictation.key";
 /// The store setting naming the voice-edit key, or `off`.
 pub const EDIT_KEY_SETTING: &str = "dictation.edit_key";
-/// The store setting holding the "Polish my words" switch (`on` or `off`).
+/// The store setting holding the "Polish my words" switch (`on` or `off`). Only `polish.allow`
+/// turns it on ([`crate::polish`]).
 pub const POLISH_SETTING: &str = "dictation.polish";
+/// The store setting holding where the user agreed polish may send dictations
+/// ([`PolishConsent::to_setting`]). The core's own: no shell writes it through `setting.set`.
+pub const POLISH_CONSENT_SETTING: &str = "dictation.polish_consent";
 /// The settings a running dictation reads: a change to one reaches it at once.
-pub const DICTATION_SETTINGS: &[&str] = &[KEY_SETTING, EDIT_KEY_SETTING, POLISH_SETTING];
+pub const DICTATION_SETTINGS: &[&str] = &[
+    KEY_SETTING,
+    EDIT_KEY_SETTING,
+    POLISH_SETTING,
+    POLISH_CONSENT_SETTING,
+];
 /// The dictation key until the user picks another.
 pub const DEFAULT_KEY: &str = "fn";
 /// The keys a shell may offer (modifiers held on their own; see ink-platform-mac's bindings).
@@ -319,7 +329,9 @@ pub fn shutdown(shared: &Shared) {
 }
 
 /// The modes dictation writes in with no modes stored: the built-in default, polished whenever
-/// the user's switch is on (so "Polish my words" alone decides on a fresh install).
+/// the user's switch is on (so "Polish my words" alone decides on a fresh install). The switch
+/// turns on only with the user's consent, and polish runs only where that consent covers
+/// ([`PolishConsent`]).
 pub fn default_modes() -> ModeStore {
     ModeStore {
         default_id: Mode::builtin_default().id,
@@ -436,6 +448,14 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
     let edit_key = read(EDIT_KEY_SETTING, "the edit key")
         .filter(|k| k != "off" && EDIT_KEYS.contains(&k.as_str()));
     let polish_wish = read(POLISH_SETTING, "the polish switch").as_deref() == Some("on");
+    // Unreadable consent is no consent: polish fails closed, and the shell hears why.
+    let polish_consent =
+        PolishConsent::from_setting(read(POLISH_CONSENT_SETTING, "the polish consent").as_deref())
+            .unwrap_or_else(|e| {
+                log::error!("dictation: {e}; polish sends nothing until the user agrees again");
+                unreadable.push("the polish consent");
+                None
+            });
     let modes = load_modes(store).unwrap_or_else(|e| {
         log::error!("dictation: the modes could not be read: {e}");
         unreadable.push("the modes");
@@ -453,6 +473,7 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
             modes,
             dictionary,
             polish_wish,
+            polish_consent,
             utc_offset_minutes,
             ..DictationSettings::default()
         },

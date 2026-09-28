@@ -19,6 +19,7 @@ use ink_ffi::external::{InkEngineVTable, KIND_LLM, Registration};
 use ink_ffi::llms::PolishModel;
 use ink_ffi::runtime::{Core, DictationParts};
 use ink_pipeline::chain::DictationSettings;
+use ink_pipeline::consent::PolishConsent;
 use ink_pipeline::events::VadUnavailable;
 use ink_pipeline::gain_stage::Vad;
 
@@ -190,6 +191,7 @@ fn dictation_polish_goes_to_the_registered_model_and_never_fakes_an_answer() {
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
+    settings.polish_consent = Some(PolishConsent::OnDevice);
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),
@@ -306,6 +308,7 @@ fn polishing(
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
+    settings.polish_consent = Some(PolishConsent::OnDevice);
     settings.polish_budget = budget;
     let inbox = core
         .start_dictation(DictationParts {
@@ -474,6 +477,11 @@ fn dictation_polish_never_calls_a_model_that_is_not_local_while_local_only_is_on
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
+    // The user agreed to this provider: what refuses it here is local-only mode alone.
+    settings.polish_consent = Some(PolishConsent::Cloud {
+        endpoint: "shell engine remote-model".into(),
+        name: "remote".into(),
+    });
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),
@@ -503,5 +511,53 @@ fn dictation_polish_never_calls_a_model_that_is_not_local_while_local_only_is_on
         "{warning}"
     );
     events.assert_valid();
+    core.shutdown();
+}
+
+/// The polish model picks among the registered models at each call, so a caller's consent check
+/// runs on the model that call picked (`complete_if`): with only a cloud model registered, a check
+/// that allows this machine alone sends nothing, and the refusal names where it would have gone.
+#[test]
+fn the_polish_model_checks_the_model_it_picked_before_sending() {
+    let dir = TempDir::new("llm-consent-pick");
+    let loader = MockLoader::new(Behaviour::Say("synthetic words".into()));
+    let installer = Arc::new(MockInstaller {
+        generation: loader.generation.clone(),
+        gate: None,
+        installs: AtomicUsize::new(0),
+    });
+    let (core, events) = start(&dir, &[test_row(ROW_ID)], loader, installer);
+    let model = Model::new(Says::Polished);
+    let info =
+        CString::new(r#"{"id":"cloud-model","licence":"MIT","model":"cloud","local":false}"#)
+            .unwrap();
+    register(&core, &model, &info).unwrap();
+    events.wait_type("engine.registered", Duration::from_secs(5));
+    // Local-only off, so the only thing that can refuse is the check.
+    core.shared().local_only.set(false);
+    let polish = PolishModel::new(core.shared().llms.clone(), core.shared().local_only.clone());
+    let request = ink_core::LlmRequest {
+        system: "Polish.".into(),
+        user: "synthetic words".into(),
+        max_tokens: 64,
+        temperature: 0.0,
+        json_schema: None,
+    };
+    let refused = polish.complete_if(&request, &ink_core::CancelToken::new(), &|i| {
+        PolishConsent::OnDevice.covers(i)
+    });
+    assert_eq!(
+        refused,
+        Err(ink_core::LlmError::NotAllowed {
+            endpoint: "shell engine cloud-model".into()
+        })
+    );
+    assert!(model.requests.lock().unwrap().is_empty(), "nothing sent");
+    let cloud = PolishConsent::for_model(&polish.info());
+    let sent = polish.complete_if(&request, &ink_core::CancelToken::new(), &|i| {
+        cloud.covers(i)
+    });
+    assert!(sent.is_ok(), "{sent:?}");
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
     core.shutdown();
 }

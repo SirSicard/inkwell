@@ -9,6 +9,7 @@
 
 use ink_core::{EngineError, InsertOutcome, LlmError, PlatformError, RecordId, StoreError};
 
+use crate::consent::PolishConsent;
 use crate::redact::Spoken;
 use crate::voicecommand::CommandAction;
 
@@ -96,6 +97,10 @@ pub enum Warning {
     PolishUnavailable,
     /// Polish failed; the text went out unpolished.
     PolishFailed(LlmError),
+    /// Polish is on, but the user has not agreed to send dictations where the model goes now
+    /// (never agreed, or the model changed to another destination since): the text went out
+    /// unpolished and nothing was sent. Holds the consent it would need.
+    PolishNotAllowed(PolishConsent),
     /// Polish gave no answer within its budget ([`POLISH_BUDGET`](crate::chain::POLISH_BUDGET));
     /// the text went out unpolished. Apart from [`PolishFailed`](Self::PolishFailed) with
     /// `Cancelled`, which is a model stopped for its own reasons (the core shutting down), so a

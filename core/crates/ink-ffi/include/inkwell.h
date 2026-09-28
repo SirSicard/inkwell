@@ -200,7 +200,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
- *       "dictation.polish" (on|off), "dictation.key" (fn|right_option|right_command|
+ *       "dictation.polish" (on|off; setting.set takes only off, which also withdraws the
+ *       consent, and answers "polish.state" too: polish.allow turns it on), "dictation.key"
+ *       (fn|right_option|right_command|
  *       right_control|right_shift), "dictation.edit_key" (off or one of those),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
  *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
@@ -221,6 +223,19 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       the command's "id" as "ref". "utc_offset_minutes" (optional) is for {date} and {time}.
  *   {"cmd":"dictation.disable","id":"<ref>"}
  *       Lets go of the keys and the mic: "dictation.off" with reason disabled.
+ *   {"cmd":"polish.get","id":"<ref>"}
+ *       "polish.state": the polish switch, where the model polish would use now sends a
+ *       dictation ("to": on_device or cloud, with its "name", and for cloud the "endpoint"), and
+ *       where the user agreed it may ("allowed_to"); "allowed" says whether that consent covers
+ *       the model now. Polish runs only when on and allowed: a model that changed destination
+ *       since the user agreed gets nothing, and each take says so (dictation.warning
+ *       polish_not_allowed). Send it again after an engine.registered or engine.unregistered of
+ *       a language model.
+ *   {"cmd":"polish.allow","to":"on_device|cloud","endpoint":"<for cloud>","id":"<ref>"}
+ *       The user agreed, after the shell told them plainly where polish sends their words:
+ *       records that consent and turns polish on. Name what "polish.state" showed; if the model
+ *       changed meanwhile, nothing is recorded and it fails ("command.failed", with a fresh
+ *       "polish.state" first), so the shell asks again. Answers "polish.state" with the "id".
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).

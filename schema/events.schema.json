@@ -206,6 +206,9 @@
       "$ref": "#/$defs/SettingValue"
     },
     {
+      "$ref": "#/$defs/PolishState"
+    },
+    {
       "$ref": "#/$defs/ModesListed"
     },
     {
@@ -348,7 +351,7 @@
     },
     "DictationWarning": {
       "type": "string",
-      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed.",
+      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed. polish_not_allowed: polish is on, but the user has not agreed to send dictations where its model goes now (never agreed, or the model changed destination since): nothing was sent, the text went in as said, and message names the model; polish.get says more.",
       "enum": [
         "vad_failed",
         "audio_lost",
@@ -357,6 +360,7 @@
         "polish_unavailable",
         "polish_failed",
         "polish_timed_out",
+        "polish_not_allowed",
         "no_mode_for_style",
         "save_failed",
         "deleted_text_not_scrubbed",
@@ -2717,6 +2721,65 @@
       "required": [
         "type",
         "key"
+      ],
+      "additionalProperties": false
+    },
+    "PolishDestination": {
+      "type": "string",
+      "description": "Where polish sends a dictation: on_device (a model on this machine; the words stay on it) or cloud (a model elsewhere; the words leave this machine for its provider).",
+      "enum": [
+        "on_device",
+        "cloud"
+      ]
+    },
+    "PolishState": {
+      "type": "object",
+      "description": "Dictation polish: the user's switch, where the model polish would use now sends a dictation, and where the user agreed it may. Polish runs only when on and allowed. In answer to polish.get and polish.allow, and after dictation.polish is set.",
+      "properties": {
+        "type": {
+          "const": "polish.state"
+        },
+        "on": {
+          "type": "boolean",
+          "description": "The user's switch (dictation.polish)."
+        },
+        "to": {
+          "$ref": "#/$defs/PolishDestination",
+          "description": "Where the model polish would use now sends; absent when no language model is registered."
+        },
+        "name": {
+          "type": "string",
+          "description": "That model's name, as the shell registered it (a cloud provider's name); absent with to."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "For cloud, the destination polish.allow must name; absent otherwise."
+        },
+        "allowed_to": {
+          "$ref": "#/$defs/PolishDestination",
+          "description": "Where the user agreed polish may send; absent when never agreed (or turned off since)."
+        },
+        "allowed_name": {
+          "type": "string",
+          "description": "For a cloud consent, the provider's name the user agreed to."
+        },
+        "allowed": {
+          "type": "boolean",
+          "description": "Whether that consent covers the model now: false while polish is on means polish is paused until the user agrees again."
+        },
+        "error": {
+          "type": "string",
+          "description": "Why part of this could not be read (the switch or the consent), as a sentence starting \"couldn't\". Unread consent counts as none."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "on",
+        "allowed"
       ],
       "additionalProperties": false
     },

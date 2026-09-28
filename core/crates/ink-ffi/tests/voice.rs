@@ -645,9 +645,11 @@ fn a_mic_that_fails_mid_take_says_so_ends_the_take_and_the_next_press_reopens_it
 
 // --- Local-only mode (S2.8 review) ------------------------------------------------------------
 
-/// A registered language model that says it is not on this machine, counting its calls.
+/// A registered language model, counting its calls: one that says it is not on this machine
+/// ([`VoiceRig::register_remote`]), or one on it ([`VoiceRig::register_local`]).
 struct RemoteModel {
     calls: std::sync::atomic::AtomicUsize,
+    answer: &'static str,
 }
 
 unsafe extern "C" fn remote_generate(
@@ -658,8 +660,9 @@ unsafe extern "C" fn remote_generate(
     // SAFETY: ctx is the test's leaked model, alive for the process.
     let me = unsafe { &*(ctx as *const RemoteModel) };
     me.calls.fetch_add(1, Ordering::SeqCst);
+    let answer = me.answer;
     std::thread::spawn(move || {
-        let answer = std::ffi::CString::new(r#"{"text":"Rewritten by a remote model."}"#).unwrap();
+        let answer = std::ffi::CString::new(format!(r#"{{"text":"{answer}"}}"#)).unwrap();
         // SAFETY: a NUL-terminated string valid for the call.
         unsafe { ink_ffi::ink_engine_complete(call, answer.as_ptr()) };
     });
@@ -670,13 +673,34 @@ unsafe extern "C" fn remote_release(_: *mut std::ffi::c_void) {}
 impl VoiceRig {
     /// Registers a model whose info says `"local": false`.
     fn register_remote(&self) -> &'static RemoteModel {
+        self.register_model(
+            "remote-llm",
+            "remote",
+            false,
+            "Rewritten by a remote model.",
+        )
+    }
+
+    /// Registers a model on this machine, as the Mac registers Apple's on-device model.
+    fn register_local(&self) -> &'static RemoteModel {
+        self.register_model("local-llm", "on-device", true, "Polished on this machine.")
+    }
+
+    fn register_model(
+        &self,
+        id: &str,
+        name: &str,
+        local: bool,
+        answer: &'static str,
+    ) -> &'static RemoteModel {
         use ink_ffi::external::{InkEngineVTable, KIND_LLM, Registration};
         let model: &'static RemoteModel = Box::leak(Box::new(RemoteModel {
             calls: Default::default(),
+            answer,
         }));
-        let info = std::ffi::CString::new(
-            r#"{"id":"remote-llm","licence":"MIT","model":"remote","local":false}"#,
-        )
+        let info = std::ffi::CString::new(format!(
+            r#"{{"id":"{id}","licence":"MIT","model":"{name}","local":{local}}}"#
+        ))
         .unwrap();
         let table = InkEngineVTable {
             kind: KIND_LLM,
@@ -691,8 +715,24 @@ impl VoiceRig {
             unsafe { Registration::from_table(&table, self.core().shared().shutdown.clone()) }
                 .unwrap();
         self.core().register(registration).unwrap();
-        self.events.wait_type("engine.registered", WAIT);
+        self.events
+            .wait_for(WAIT, |v| v["type"] == "engine.registered" && v["id"] == id)
+            .expect("registered");
         model
+    }
+
+    /// Lets go of a registered model.
+    fn unregister(&self, id: &str) {
+        self.command(&format!(r#"{{"cmd":"engine.unregister","engine":"{id}"}}"#));
+        self.events
+            .wait_for(WAIT, |v| {
+                v["type"] == "engine.unregistered" && v["id"] == id
+            })
+            .expect("unregistered");
+    }
+
+    fn setting(&self, key: &str) -> Option<String> {
+        self.core().shared().store.setting(key).unwrap()
     }
 }
 
@@ -702,12 +742,13 @@ impl VoiceRig {
 fn dictation_polish_refuses_a_model_that_is_not_local() {
     let rig = VoiceRig::new("local-only-polish");
     let remote = rig.register_remote();
-    rig.command(r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#);
-    rig.events
-        .wait_for(WAIT, |v| {
-            v["type"] == "setting.value" && v["key"] == "dictation.polish"
-        })
-        .unwrap();
+    // The user agreed to send to this provider: what refuses it here is local-only mode alone.
+    let state = rig.ask(
+        r#"{"cmd":"polish.allow","to":"cloud","endpoint":"shell engine remote-llm","id":"allow"}"#,
+        "allow",
+    );
+    assert_eq!(state["type"], "polish.state", "{state}");
+    assert_eq!(state["allowed"], true, "{state}");
     rig.enable();
     rig.dictate(1.0, 11);
     assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "never called");
@@ -767,4 +808,260 @@ fn a_voice_edit_refuses_a_model_that_is_not_local() {
         rig.platform.inserted().is_empty(),
         "the selection is left alone"
     );
+}
+
+// --- Polish consent (owner decision, 2026-09-28) ----------------------------------------------
+//
+// Polish sends a dictation to a language model, so it is off until the user agrees to where it
+// goes: polish.allow records that consent in the core's store and turns polish on; nothing else
+// does. A model that changes destination since gets nothing until the user agrees again.
+
+impl VoiceRig {
+    fn polish_state(&self, id: &str) -> Value {
+        let state = self.ask(&format!(r#"{{"cmd":"polish.get","id":"{id}"}}"#), id);
+        assert_eq!(state["type"], "polish.state", "{state}");
+        state
+    }
+
+    /// Sends `json` (with id `id`) and waits for its command.failed.
+    fn fails(&self, json: &str, id: &str) -> Value {
+        self.command(json);
+        self.events
+            .wait_for(WAIT, |v| v["type"] == "command.failed" && v["id"] == id)
+            .unwrap_or_else(|| panic!("{json} did not fail: {:?}", self.events.types()))
+    }
+
+    fn warnings(&self, kind: &str) -> Vec<Value> {
+        self.events
+            .all()
+            .into_iter()
+            .filter(|v| v["type"] == "dictation.warning" && v["kind"] == kind)
+            .collect()
+    }
+
+    fn allow_on_device(&self, id: &str) -> Value {
+        let state = self.ask(
+            &format!(r#"{{"cmd":"polish.allow","to":"on_device","id":"{id}"}}"#),
+            id,
+        );
+        assert_eq!(state["type"], "polish.state", "{state}");
+        state
+    }
+}
+
+/// A fresh install: polish off, no consent; the state names where polish would send.
+#[test]
+fn polish_starts_off_with_no_consent_and_names_where_it_would_send() {
+    let rig = VoiceRig::new("polish-fresh");
+    let none = rig.polish_state("p1");
+    assert_eq!(none["on"], false);
+    assert_eq!(none["allowed"], false);
+    assert!(none.get("to").is_none(), "no model, no destination: {none}");
+    assert!(none.get("allowed_to").is_none(), "{none}");
+
+    rig.register_local();
+    let local = rig.polish_state("p2");
+    assert_eq!(local["to"], "on_device", "{local}");
+    assert_eq!(local["name"], "on-device", "{local}");
+    assert!(local.get("endpoint").is_none(), "{local}");
+    assert_eq!(local["allowed"], false);
+    rig.events.assert_valid();
+}
+
+/// polish.allow records the consent in the core's store and turns polish on; the next take is
+/// polished.
+#[test]
+fn polish_allow_records_the_consent_and_turns_polish_on() {
+    let rig = VoiceRig::new("polish-allow");
+    let model = rig.register_local();
+    let state = rig.allow_on_device("a1");
+    assert_eq!(state["on"], true, "{state}");
+    assert_eq!(state["allowed"], true, "{state}");
+    assert_eq!(state["allowed_to"], "on_device", "{state}");
+    assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
+    assert_eq!(
+        rig.setting("dictation.polish_consent").as_deref(),
+        Some(r#"{"to":"on_device"}"#)
+    );
+    rig.enable();
+    rig.dictate(1.0, 51);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        rig.platform
+            .inserted()
+            .last()
+            .is_some_and(|s| s.contains("Polished on this machine")),
+        "{:?}",
+        rig.platform.inserted()
+    );
+    rig.events.assert_valid();
+}
+
+/// Consent is for what the user was shown: a destination that is not the model's now (it changed
+/// while they read), or no model at all, records nothing and fails, so the shell asks again.
+#[test]
+fn polish_allow_refuses_a_destination_that_is_not_the_models() {
+    let rig = VoiceRig::new("polish-mismatch");
+    let failed = rig.fails(r#"{"cmd":"polish.allow","to":"on_device","id":"f1"}"#, "f1");
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("no language model")),
+        "{failed}"
+    );
+    rig.register_local();
+    rig.fails(
+        r#"{"cmd":"polish.allow","to":"cloud","endpoint":"shell engine elsewhere","id":"f2"}"#,
+        "f2",
+    );
+    assert_eq!(rig.setting("dictation.polish"), None, "polish stays off");
+    assert_eq!(
+        rig.setting("dictation.polish_consent"),
+        None,
+        "nothing recorded"
+    );
+    rig.events.assert_valid();
+}
+
+/// Off withdraws the consent, so turning polish on again asks again; and setting.set can never
+/// turn it on.
+#[test]
+fn turning_polish_off_withdraws_the_consent() {
+    let rig = VoiceRig::new("polish-off");
+    rig.register_local();
+    rig.allow_on_device("o1");
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.polish","value":"off","id":"o2"}"#);
+    let state = rig
+        .events
+        .wait_for(WAIT, |v| v["type"] == "polish.state" && v["on"] == false)
+        .expect("polish.state after off");
+    assert_eq!(state["allowed"], false, "{state}");
+    assert!(state.get("allowed_to").is_none(), "{state}");
+    assert_eq!(
+        rig.setting("dictation.polish_consent").as_deref(),
+        Some("none")
+    );
+    assert!(
+        rig.core()
+            .command(r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#)
+            .is_err(),
+        "only polish.allow turns polish on"
+    );
+    rig.events.assert_valid();
+}
+
+/// Consent for this Mac, then the model becomes a cloud one: the state says polish is paused and
+/// names the provider, and a take sends nothing, goes in as said, and says why.
+#[test]
+fn a_model_that_moves_to_the_cloud_gets_nothing_until_the_user_agrees_again() {
+    let rig = VoiceRig::new("polish-moved");
+    rig.register_local();
+    rig.allow_on_device("m1");
+    rig.enable();
+    rig.unregister("local-llm");
+    let remote = rig.register_remote();
+
+    let state = rig.polish_state("m2");
+    assert_eq!(state["on"], true, "{state}");
+    assert_eq!(state["allowed"], false, "paused: {state}");
+    assert_eq!(state["to"], "cloud", "{state}");
+    assert_eq!(state["name"], "remote", "{state}");
+    assert_eq!(state["endpoint"], "shell engine remote-llm", "{state}");
+    assert_eq!(state["allowed_to"], "on_device", "{state}");
+
+    rig.dictate(1.0, 52);
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    assert!(
+        rig.platform
+            .inserted()
+            .last()
+            .is_some_and(|s| !s.contains("Rewritten")),
+        "{:?}",
+        rig.platform.inserted()
+    );
+    let warnings = rig.warnings("polish_not_allowed");
+    assert_eq!(warnings.len(), 1, "{:?}", rig.events.types());
+    assert_eq!(warnings[0]["message"], "remote", "names the provider");
+    rig.events.assert_valid();
+}
+
+/// "Polish my words" stored on without a consent (a store an older build wrote) and no modes
+/// stored, so the default mode polishes: nothing is sent, and the take says why.
+#[test]
+fn neither_the_default_mode_nor_a_stored_switch_polishes_without_consent() {
+    let rig = VoiceRig::new("polish-default-mode");
+    let model = rig.register_local();
+    rig.core()
+        .shared()
+        .store
+        .set_setting("dictation.polish", "on")
+        .unwrap();
+    rig.enable();
+    rig.dictate(1.0, 53);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    assert_eq!(rig.warnings("polish_not_allowed").len(), 1);
+    let state = rig.polish_state("d1");
+    assert_eq!(state["on"], true);
+    assert_eq!(state["allowed"], false);
+    rig.events.assert_valid();
+}
+
+/// A 0.2 import where polish was on (the global switch and a mode marked Polish) turns nothing on:
+/// the importer writes only its own keys, and neither is the switch or a consent.
+#[test]
+fn a_02_import_with_polish_on_turns_nothing_on() {
+    let rig = VoiceRig::new("polish-import");
+    let model = rig.register_local();
+    let store = &rig.core().shared().store;
+    // What the importer writes for a 0.2 install with polish on.
+    store
+        .set_setting(
+            &format!("{}polish_enabled", ink_store::import::SETTINGS_PREFIX),
+            "true",
+        )
+        .unwrap();
+    store
+        .set_setting(
+            ink_store::import::MODES_KEY,
+            r#"{"default_id":"d","modes":[{"id":"d","name":"Default","style":"formal","polish_enabled":true,"apps":[]}]}"#,
+        )
+        .unwrap();
+    let state = rig.polish_state("i1");
+    assert_eq!(state["on"], false, "{state}");
+    assert!(state.get("allowed_to").is_none(), "{state}");
+    rig.enable();
+    rig.dictate(1.0, 54);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    rig.events.assert_valid();
+}
+
+/// A stored consent that does not read is no consent: polish sends nothing, and both dictation
+/// and the polish state say what could not be read.
+#[test]
+fn an_unreadable_consent_is_no_consent_and_says_so() {
+    let rig = VoiceRig::new("polish-unreadable");
+    let model = rig.register_local();
+    let store = &rig.core().shared().store;
+    store.set_setting("dictation.polish", "on").unwrap();
+    store
+        .set_setting("dictation.polish_consent", "{not json")
+        .unwrap();
+    let ready = rig.enable();
+    assert!(
+        ready["settings_error"]
+            .as_str()
+            .is_some_and(|e| e.contains("the polish consent")),
+        "{ready}"
+    );
+    let state = rig.polish_state("u1");
+    assert_eq!(state["allowed"], false);
+    assert!(
+        state["error"]
+            .as_str()
+            .is_some_and(|e| e.starts_with("couldn't read")),
+        "{state}"
+    );
+    rig.dictate(1.0, 55);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    rig.events.assert_valid();
 }

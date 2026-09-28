@@ -44,8 +44,9 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // The first-run state has been completed (or skipped).
     ("onboarding.done", &["true", "false"]),
     // The user's wish for dictation polish. Whether polish runs also needs a working language
-    // model; the shell shows the two apart.
-    ("dictation.polish", &["on", "off"]),
+    // model; the shell shows the two apart. `setting.set` takes only `off` (which withdraws the
+    // consent too): polish turns on through `polish.allow` (crate::polish).
+    (crate::voice::POLISH_SETTING, &["on", "off"]),
     // The dictation key and the voice-edit key (S2.7). A change rebinds them at once.
     (crate::voice::KEY_SETTING, crate::voice::KEYS),
     (crate::voice::EDIT_KEY_SETTING, crate::voice::EDIT_KEYS),
@@ -141,6 +142,10 @@ pub enum Query {
     },
     /// `dictation.disable`.
     DictationDisable,
+    /// `polish.get`: polish's switch, destination and consent ([`crate::polish::state`]).
+    PolishGet,
+    /// `polish.allow`: the user agreed polish may send where it goes now.
+    PolishAllow(crate::polish::Allow),
     /// The library's records, a search, one record, or counts ([`library`](crate::library)).
     Library(crate::library::LibraryQuery),
 }
@@ -167,6 +172,8 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "setting.set" => &["key", "value"],
         "dictation.enable" => &["utc_offset_minutes"],
         "dictation.disable" => &[],
+        "polish.get" => &[],
+        "polish.allow" => &["to", "endpoint"],
         _ => return None,
     })
 }
@@ -280,6 +287,12 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
                     accepted.join(", ")
                 ));
             }
+            if key == crate::voice::POLISH_SETTING && value != "off" {
+                // Only the user's consent turns polish on (crate::polish).
+                return Err(format!(
+                    "{name}: \"{key}\" turns on only through polish.allow, once the user agreed where polish sends"
+                ));
+            }
             Query::SettingSet { key, value }
         }
         "modes.list" => Query::ModesList,
@@ -297,6 +310,18 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             },
         },
         "dictation.disable" => Query::DictationDisable,
+        "polish.get" => Query::PolishGet,
+        "polish.allow" => Query::PolishAllow(match text("to")?.as_str() {
+            "on_device" if !obj.contains_key("endpoint") => crate::polish::Allow::OnDevice,
+            "cloud" => crate::polish::Allow::Cloud {
+                endpoint: text("endpoint")?,
+            },
+            _ => {
+                return Err(format!(
+                    "{name}: \"to\" is on_device, or cloud with the \"endpoint\" polish.state gave"
+                ));
+            }
+        }),
         _ => unreachable!("fields() lists every query"),
     })
 }
@@ -537,7 +562,15 @@ impl Ctx<'_> {
                         });
                     }
                     let sweep = key == crate::retention::RETENTION_KEY;
+                    let polish_off = key == crate::voice::POLISH_SETTING;
+                    if polish_off {
+                        // Off withdraws the consent: turning polish on again asks again.
+                        crate::polish::withdraw(self.shared);
+                    }
                     emit(setting(&key, Some(value)));
+                    if polish_off {
+                        emit(crate::polish::state(self.shared, None));
+                    }
                     if sweep {
                         self.shared.sweep_soon();
                     }
@@ -555,6 +588,13 @@ impl Ctx<'_> {
                 crate::voice::enable(self.shared, self.models, utc_offset_minutes, id.as_deref())
             }
             Query::DictationDisable => crate::voice::disable(self.shared, id.as_deref()),
+            Query::PolishGet => emit(crate::polish::state(self.shared, id.as_deref())),
+            Query::PolishAllow(asked) => {
+                match crate::polish::allow(self.shared, &asked, id.as_deref()) {
+                    Ok(e) => emit(e),
+                    Err(e) => fail(e),
+                }
+            }
             Query::Library(query) => {
                 match crate::library::answer(self.shared, query, id.as_deref()) {
                     Ok(e) => emit(e),
@@ -604,6 +644,11 @@ impl Ctx<'_> {
             .collect();
         event("models.listed", &[("models", Some(Value::Array(models)))])
     }
+}
+
+/// `setting.value`.
+pub(crate) fn setting_value(key: &str, value: Option<String>) -> Value {
+    setting(key, value)
 }
 
 fn setting(key: &str, value: Option<String>) -> Value {
@@ -810,13 +855,31 @@ mod tests {
             }))
         );
         assert_eq!(
-            p(r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#),
+            p(r#"{"cmd":"setting.set","key":"dictation.polish","value":"off"}"#),
             Some(Ok(Query::SettingSet {
                 key: "dictation.polish".into(),
-                value: "on".into()
+                value: "off".into()
             }))
         );
+        assert_eq!(
+            p(r#"{"cmd":"polish.allow","to":"on_device","id":"a"}"#),
+            Some(Ok(Query::PolishAllow(crate::polish::Allow::OnDevice)))
+        );
+        assert_eq!(
+            p(r#"{"cmd":"polish.allow","to":"cloud","endpoint":"shell engine x"}"#),
+            Some(Ok(Query::PolishAllow(crate::polish::Allow::Cloud {
+                endpoint: "shell engine x".into()
+            })))
+        );
+        assert_eq!(p(r#"{"cmd":"polish.get"}"#), Some(Ok(Query::PolishGet)));
         for bad in [
+            // Only the user's consent turns polish on: polish.allow, never setting.set.
+            r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#,
+            r#"{"cmd":"setting.set","key":"dictation.polish_consent","value":"{\"to\":\"on_device\"}"}"#,
+            r#"{"cmd":"polish.allow"}"#,
+            r#"{"cmd":"polish.allow","to":"cloud"}"#,
+            r#"{"cmd":"polish.allow","to":"everywhere"}"#,
+            r#"{"cmd":"polish.allow","to":"on_device","endpoint":"https://api.example.com"}"#,
             r#"{"cmd":"permissions.check","deep":true}"#,
             r#"{"cmd":"permission.request","permission":"camera"}"#,
             r#"{"cmd":"permission.request"}"#,

@@ -92,7 +92,10 @@ fn no_dictated_word_reaches_a_log_an_event_or_an_error() {
     // Every failure the chain reports after transcription, in one take: polish refuses the
     // answer, the store fails half way, and insertion is not permitted.
     let rig = Rig::builder()
-        .settings(|s| s.modes.modes[0].polish_enabled = true)
+        .settings(|s| {
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+        })
         .llm(Arc::new(EmptyLlm))
         .store(Arc::new(FaultyStore::new(Fault::AppendFails)))
         .build();

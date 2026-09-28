@@ -9,6 +9,7 @@
 //! was said (I5).
 
 use ink_core::{Channel, InsertOutcome, Job, RecordId};
+use ink_pipeline::consent::PolishConsent;
 use ink_pipeline::events::{
     DictationEvent, Discard, EditFailure, TakeFailure, VadUnavailable, VoiceDetection, Warning,
 };
@@ -199,6 +200,14 @@ pub fn dictation(e: &DictationEvent) -> Value {
                 Warning::PolishUnavailable => ("polish_unavailable", None, None),
                 Warning::PolishFailed(e) => ("polish_failed", None, some(e.to_string())),
                 Warning::PolishTimedOut => ("polish_timed_out", None, None),
+                Warning::PolishNotAllowed(needs) => (
+                    "polish_not_allowed",
+                    None,
+                    some(match needs {
+                        PolishConsent::Cloud { name, .. } => name.clone(),
+                        _ => "a model on this machine".to_owned(),
+                    }),
+                ),
                 Warning::NoModeForStyle => ("no_mode_for_style", None, None),
                 Warning::SaveFailed(e) => ("save_failed", None, some(e.to_string())),
                 Warning::DeletedTextNotScrubbed => ("deleted_text_not_scrubbed", None, None),

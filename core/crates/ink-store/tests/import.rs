@@ -535,6 +535,26 @@ fn settings_documents_carry_0_2_values_with_its_defaults_filled_in() {
     assert_eq!(rows[&format!("{SETTINGS_PREFIX}vad_threshold")], "0.45");
 }
 
+/// 0.2 had polish on (the settings fixture says so), but polish in 1.0 turns on only with the
+/// user's consent for where it sends: the import writes its own keys and nothing else, so neither
+/// the polish switch nor a consent can arrive this way.
+#[test]
+fn an_import_with_polish_on_turns_no_1_0_setting_on() {
+    let legacy = Legacy::full("polish-on");
+    let db = TempDb::new("import-polish");
+    let store = db.open();
+    store.import_inkwell02(&legacy.read().unwrap()).unwrap();
+    let rows = setting_rows(&db);
+    assert_eq!(rows[&format!("{SETTINGS_PREFIX}polish_enabled")], "true");
+    assert!(
+        rows.keys().all(|k| k.starts_with(MARKER_KEY)),
+        "only the import's own keys: {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+    assert!(!rows.contains_key("dictation.polish"));
+    assert!(!rows.contains_key("dictation.polish_consent"));
+}
+
 #[test]
 fn a_dry_run_reads_everything_and_writes_nothing() {
     let legacy = Legacy::full("dry-run");

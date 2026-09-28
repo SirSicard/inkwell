@@ -503,6 +503,7 @@ fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it
     let llm = Arc::new(SlowLlm::default());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
+    settings.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
     let sink_events = events.clone();
     let chain = DictationChain::new(
         Services {

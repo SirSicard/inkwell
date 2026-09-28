@@ -360,6 +360,7 @@ fn with_the_polish_switch_off_nothing_is_polished() {
         .settings(|s| {
             s.modes = polishing_modes();
             s.polish_wish = false;
+            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
         })
         .build();
     rig.answer_anything("as said");
@@ -374,7 +375,10 @@ fn with_the_polish_switch_on_the_modes_that_polish_do() {
     let llm = Arc::new(MockLlm::new(Endpoint::InProcess, "Polished."));
     let rig = Rig::builder()
         .llm(llm.clone())
-        .settings(|s| s.modes = polishing_modes())
+        .settings(|s| {
+            s.modes = polishing_modes();
+            s.polish_consent = Some(ink_pipeline::consent::PolishConsent::OnDevice);
+        })
         .build();
     rig.answer_anything("as said");
     rig.dictate(&speech_48k(1.0, -25.0, 18));

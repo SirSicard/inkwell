@@ -143,6 +143,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case modelsListed(ModelsListed)
     /// `setting.value`
     case settingValue(SettingValue)
+    /// `polish.state`
+    case polishState(PolishState)
     /// `modes.listed`
     case modesListed(ModesListed)
     /// `library.records`
@@ -245,6 +247,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "note.deleted": self = .noteDeleted(try NoteDeleted(from: decoder))
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
+            case "polish.state": self = .polishState(try PolishState(from: decoder))
             case "modes.listed": self = .modesListed(try ModesListed(from: decoder))
             case "library.records": self = .libraryRecords(try LibraryRecords(from: decoder))
             case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
@@ -327,6 +330,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .noteDeleted(let event): try event.encode(to: encoder)
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
+        case .polishState(let event): try event.encode(to: encoder)
         case .modesListed(let event): try event.encode(to: encoder)
         case .libraryRecords(let event): try event.encode(to: encoder)
         case .librarySearch(let event): try event.encode(to: encoder)
@@ -776,7 +780,10 @@ public struct DictationVoiceDetection: Codable, Sendable, Equatable {
 /// Something went wrong during a dictation, and it went on without it.
 /// deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a
 /// push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped
-/// there and processed.
+/// there and processed. polish_not_allowed: polish is on, but the user has not agreed to send
+/// dictations where its model goes now (never agreed, or the model changed destination since):
+/// nothing was sent, the text went in as said, and message names the model; polish.get says
+/// more.
 public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case audioLost = "audio_lost"
@@ -785,6 +792,7 @@ public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable
     case polishUnavailable = "polish_unavailable"
     case polishFailed = "polish_failed"
     case polishTimedOut = "polish_timed_out"
+    case polishNotAllowed = "polish_not_allowed"
     case noModeForStyle = "no_mode_for_style"
     case saveFailed = "save_failed"
     case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
@@ -2022,6 +2030,54 @@ public struct PermissionsChecked: Codable, Sendable, Equatable {
 public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
     case live
     case `final`
+}
+
+/// Where polish sends a dictation: on_device (a model on this machine; the words stay on it) or
+/// cloud (a model elsewhere; the words leave this machine for its provider).
+public enum PolishDestination: String, Codable, Sendable, Equatable, CaseIterable {
+    case onDevice = "on_device"
+    case cloud
+}
+
+/// Dictation polish: the user's switch, where the model polish would use now sends a dictation,
+/// and where the user agreed it may. Polish runs only when on and allowed. In answer to
+/// polish.get and polish.allow, and after dictation.polish is set.
+public struct PolishState: Codable, Sendable, Equatable {
+    /// Whether that consent covers the model now: false while polish is on means polish is
+    /// paused until the user agrees again.
+    public let allowed: Bool
+    /// For a cloud consent, the provider's name the user agreed to.
+    public let allowedName: String?
+    /// Where the user agreed polish may send; absent when never agreed (or turned off since).
+    public let allowedTo: PolishDestination?
+    /// For cloud, the destination polish.allow must name; absent otherwise.
+    public let endpoint: String?
+    /// Why part of this could not be read (the switch or the consent), as a sentence starting
+    /// "couldn't". Unread consent counts as none.
+    public let error: String?
+    /// That model's name, as the shell registered it (a cloud provider's name); absent with to.
+    public let name: String?
+    /// The user's switch (dictation.polish).
+    public let on: Bool
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Where the model polish would use now sends; absent when no language model is registered.
+    public let to: PolishDestination?
+    /// Always `polish.state`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case allowed
+        case allowedName = "allowed_name"
+        case allowedTo = "allowed_to"
+        case endpoint
+        case error
+        case name
+        case on
+        case ref
+        case to
+        case type
+    }
 }
 
 /// Where a record's audio is: its chunks per side, placed on its timeline.
