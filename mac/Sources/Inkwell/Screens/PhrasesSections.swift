@@ -124,7 +124,7 @@ private struct SnippetRow: View {
         .font(Typography.body)
         .padding(.vertical, 8)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Snippet \(row.trigger)\(row.enabled ? "" : ", off")")
+        .accessibilityLabel("Snippet \(row.trigger)\(row.enabled ? "" : ", off"): \(row.expansion)\(row.category.isEmpty ? "" : ", \(row.category)")")
     }
 }
 
@@ -242,7 +242,10 @@ private struct CommandRow: View {
         .font(Typography.body)
         .padding(.vertical, 8)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Voice command \(row.triggers.first ?? ""): \(VoiceCommandsModel.describe(row))")
+        .accessibilityLabel(
+            "Voice command \(row.triggers.joined(separator: ", ")): \(VoiceCommandsModel.describe(row))"
+                + (row.enabled ? "" : ", off")
+                + (row.carriedOut ? "" : ". Not available in this version: it types nothing"))
     }
 }
 

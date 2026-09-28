@@ -1227,7 +1227,13 @@ impl DictationChain {
                     .unwrap_or(self.settings.polish_wish && mode.polish_enabled);
                 self.polish_override = Some(!now);
             }
-            _ => {}
+            // Exhaustive on purpose, as `CommandAction::carried_out` is: the two must agree, or a
+            // command would be reported carried out and do nothing.
+            CommandAction::Undo
+            | CommandAction::SwitchModel { .. }
+            | CommandAction::ToggleDictation
+            | CommandAction::OpenUrl { .. }
+            | CommandAction::OpenApp { .. } => debug_assert!(!action.carried_out()),
         }
         true
     }

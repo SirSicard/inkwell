@@ -485,6 +485,18 @@ mod tests {
         assert_eq!(commands[1]["carried_out"], false);
     }
 
+    /// The importer (ink-store, below this crate) writes the dictation key under its own copy of
+    /// the setting's name, with its own list of tokens: both must be dictation's.
+    #[test]
+    fn the_importer_writes_the_key_dictation_reads_with_tokens_it_holds() {
+        use ink_store::import::{DICTATION_KEY_SETTING, map_hotkey};
+        assert_eq!(DICTATION_KEY_SETTING, crate::voice::KEY_SETTING);
+        for old in ["fn", "right_cmd", "right_opt", "right_ctrl"] {
+            let key = map_hotkey(old).unwrap();
+            assert!(crate::voice::KEYS.contains(&key), "{key}");
+        }
+    }
+
     #[test]
     fn the_key_note_is_said_until_dismissed_and_only_when_there_is_something_to_say() {
         let store = MemStore::new();

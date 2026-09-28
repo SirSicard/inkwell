@@ -90,6 +90,9 @@ final class SnippetsModel {
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var nextRef = 0
+    /// The newest list or save sent: only its answer replaces the rows, so an answer to an earlier
+    /// save never shows over a later change for a moment.
+    @ObservationIgnored private var latest: String?
 
     init(send: @escaping SendCommand) {
         self.send = send
@@ -97,7 +100,9 @@ final class SnippetsModel {
 
     private func ref() -> String {
         nextRef += 1
-        return "\(Self.refPrefix)\(nextRef)"
+        let ref = "\(Self.refPrefix)\(nextRef)"
+        latest = ref
+        return ref
     }
 
     func load() {
@@ -139,7 +144,7 @@ final class SnippetsModel {
 
     func apply(_ event: InkEvent) {
         switch event {
-        case .snippetsListed(let listed):
+        case .snippetsListed(let listed) where latest == nil || listed.ref == nil || listed.ref == latest:
             rows = listed.snippets.map(SnippetDraft.init)
             fromImport = listed.fromImport
             loaded = true
@@ -174,6 +179,9 @@ final class VoiceCommandsModel {
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var nextRef = 0
+    /// The newest list or save sent: only its answer replaces the rows, so an answer to an earlier
+    /// save never shows over a later change for a moment.
+    @ObservationIgnored private var latest: String?
 
     init(send: @escaping SendCommand) {
         self.send = send
@@ -181,7 +189,9 @@ final class VoiceCommandsModel {
 
     private func ref() -> String {
         nextRef += 1
-        return "\(Self.refPrefix)\(nextRef)"
+        let ref = "\(Self.refPrefix)\(nextRef)"
+        latest = ref
+        return ref
     }
 
     func load() {
@@ -254,7 +264,7 @@ final class VoiceCommandsModel {
 
     func apply(_ event: InkEvent) {
         switch event {
-        case .voiceCommandsListed(let listed):
+        case .voiceCommandsListed(let listed) where latest == nil || listed.ref == nil || listed.ref == latest:
             enabled = listed.enabled
             wakePrefix = listed.wakePrefix
             rows = listed.commands.map(VoiceCommandDraft.init)

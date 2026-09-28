@@ -86,6 +86,23 @@ final class SnippetsModelTests: XCTestCase {
         XCTAssertEqual(model.rows.count, 2, "shown at once")
     }
 
+    /// Two quick changes: the answer to the first never shows over the second.
+    func testOnlyTheAnswerToTheNewestSaveReplacesTheRows() {
+        let sent = Sent()
+        let model = SnippetsModel(send: sent.send)
+        model.load()
+        model.apply(event(importedSnippets))
+        model.delete("s1")
+        model.delete("s2")
+        XCTAssertEqual(model.rows, [])
+        // The first delete's answer (snippets:2) arrives after the second was sent.
+        model.apply(event(#"{"type":"snippets.listed","from_import":false,"ref":"snippets:2","snippets":[{"id":"s2","trigger":"brb","expansion":"be right back","category":"","enabled":false}]}"#))
+        XCTAssertEqual(model.rows, [], "an earlier answer is not shown")
+        model.apply(event(#"{"type":"snippets.listed","from_import":false,"ref":"snippets:3","snippets":[]}"#))
+        XCTAssertEqual(model.rows, [])
+        XCTAssertFalse(model.fromImport)
+    }
+
     func testAFailedSaveSaysSoAndReadsTheListAgain() {
         let sent = Sent()
         let model = SnippetsModel(send: sent.send)
@@ -94,8 +111,8 @@ final class SnippetsModelTests: XCTestCase {
         let before = sent.commands.count
         model.apply(event(#"{"type":"command.failed","command":"snippets.save","id":"snippets:2","message":"store failed"}"#))
         XCTAssertEqual(model.failure, SnippetsModel.saveFailedText)
-        guard case .snippetsList = sent.commands.dropFirst(before).first else { return XCTFail("\(sent.commands)") }
-        model.apply(event(importedSnippets))
+        guard case .snippetsList(let reload) = sent.commands.dropFirst(before).first else { return XCTFail("\(sent.commands)") }
+        model.apply(event(importedSnippets.replacingOccurrences(of: "snippets:1", with: reload)))
         XCTAssertNil(model.failure)
         XCTAssertEqual(model.rows.count, 2, "the saved list, not the unsaved one")
         model.apply(event(#"{"type":"command.failed","command":"snippets.list","message":"the stored snippets cannot be read"}"#))
