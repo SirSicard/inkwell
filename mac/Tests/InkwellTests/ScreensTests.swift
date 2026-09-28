@@ -361,6 +361,19 @@ final class PolishModelTests: XCTestCase {
         XCTAssertFalse(polish.isOn)
     }
 
+    /// A part of the state the core could not read is said whenever it is there: with polish off
+    /// (an unread switch reads as off in the core) and with no working model.
+    func testAReadErrorIsShownWhetherOrNotPolishIsOn() {
+        let polish = PolishModel(send: { _ in })
+        polish.apply(polishState(on: false, allowed: false, error: "couldn't read the switch"))
+        XCTAssertEqual(polish.status, "Couldn't read the switch, so polish is off or paused. Turn it on again to allow it.")
+        XCTAssertTrue(polish.isProblem)
+        polish.apply(event(appleLLM))
+        XCTAssertEqual(polish.status, "Couldn't read the switch, so polish is off or paused. Turn it on again to allow it.")
+        polish.apply(polishState(on: false, allowed: false))
+        XCTAssertEqual(polish.status, "Off. Your words go in as you said them.")
+    }
+
     /// A take the core refused to polish says so in the Drop, and the toggle reads the state again.
     func testATakeRefusedForConsentSaysSo() {
         let sent = Sent()

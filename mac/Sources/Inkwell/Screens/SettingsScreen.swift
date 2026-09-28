@@ -273,7 +273,7 @@ private struct VoiceSection: View {
                     Text(problem == DictationModel.editKeyLostText ? problem : "The edit key isn't held: \(problem)")
                         .foregroundStyle(Theme.alert)
                 }
-                if let problem = screens.editConsent.problem, dictation.editKey != nil || screens.editConsent.failure != nil {
+                if let problem = screens.editConsent.problem {
                     Text(problem).foregroundStyle(Theme.alert)
                 }
                 if let problem = dictation.settingsProblem {

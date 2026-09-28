@@ -81,7 +81,11 @@ final class PolishModel {
 
     /// The line under the toggle.
     var status: String {
-        if consent.failure != nil, let problem = consent.problem { return problem }
+        // A failure, or a part of the state the core could not read, is said whether or not polish
+        // is on and whether or not a model works: an unread switch must never read as plain off.
+        if consent.failure != nil || consent.state?.error != nil, let problem = consent.problem {
+            return problem
+        }
         guard hasWorkingEngine else { return Self.unavailable(appleState) }
         if let problem = consent.problem { return problem }
         if keepsTimingOut {
