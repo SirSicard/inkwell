@@ -631,8 +631,13 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
         .lock()
         .unwrap()
         .expect("the hung call saw its token cancelled");
+    // The token cannot fire before its deadline, but the model's clock starts inside the call, a
+    // moment after the chain set that deadline: the wait it sees falls short of the budget by that
+    // moment (once 1 µs, which failed an exact bound). SLACK allows for it and still tells a
+    // cancel at the budget from one well before it.
+    const SLACK: Duration = Duration::from_millis(10);
     assert!(
-        hung_for >= BUDGET && hung_for < BUDGET + Duration::from_secs(1),
+        hung_for + SLACK >= BUDGET && hung_for < BUDGET + Duration::from_secs(1),
         "cancelled at the budget, not before or long after: {hung_for:?}"
     );
     assert_eq!(
