@@ -93,9 +93,13 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 
 # SentencePiece and Abseil: the pinned builds, named outright so that no other install is found
-# first. Their libraries load each other by @rpath, so NeMo's installed libraries get their
-# directory as an rpath (CMAKE_INSTALL_RPATH_USE_LINK_PATH), by which make_self_contained finds
-# them; it then leaves `@loader_path` as the only rpath.
+# first, by the names NeMo-Speech.cpp's src/asr/CMakeLists.txt reads at the pinned commit (on
+# macOS: find_package(unofficial-sentencepiece) first, a vcpkg config, turned off here; then
+# find_library(SENTENCEPIECE_LIB) and find_path(SENTENCEPIECE_INCLUDE_DIR), which a cached value
+# skips; then find_package(absl CONFIG), from absl_DIR). What CMake used is read back from its
+# cache after configuring. Their libraries load each other by @rpath, so NeMo's installed libraries
+# get their directory as an rpath (CMAKE_INSTALL_RPATH_USE_LINK_PATH), by which make_self_contained
+# finds them; it then leaves `@loader_path` as the only rpath.
 deps=()
 deps_lib=""
 if [ -n "${ENGINE_DEPS_DIR:-}" ]; then
@@ -113,6 +117,7 @@ if [ -n "${ENGINE_DEPS_DIR:-}" ]; then
         "-Dabsl_DIR=${deps_dir}/lib/cmake/absl"
         "-DSENTENCEPIECE_LIB=${deps_lib}/libsentencepiece.dylib"
         "-DSENTENCEPIECE_INCLUDE_DIR=${deps_dir}/include"
+        -DCMAKE_DISABLE_FIND_PACKAGE_unofficial-sentencepiece=ON
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
     )
     sed -n 's/^source \([^ ]*\) \([^ ]*\) .*/using \1 \2 (pinned) from ENGINE_DEPS_DIR/p' \
@@ -129,6 +134,31 @@ cmake --fresh -S "${src}" -B "${build}" --preset metal-diar \
     ${platform[@]+"${platform[@]}"} \
     ${deps[@]+"${deps[@]}"} \
     -DCMAKE_INSTALL_PREFIX="${prefix}"
+# With the pinned builds: the SentencePiece and Abseil CMake settled on are theirs, read back
+# rather than assumed (a vcpkg config, or a static archive, would take their place silently).
+if [ -n "${deps_lib}" ]; then
+    cached() { sed -n "s/^$1:[A-Z]*=//p" "${build}/CMakeCache.txt"; }
+    for var in SENTENCEPIECE_LIB SENTENCEPIECE_INCLUDE_DIR absl_DIR; do
+        value="$(cached "${var}")"
+        case "${value}" in
+            "${deps_dir}"/*) ;;
+            *)
+                echo "error: CMake configured ${var}='${value}', not a path in ENGINE_DEPS_DIR" >&2
+                exit 1
+                ;;
+        esac
+    done
+    for var in unofficial-sentencepiece_DIR SENTENCEPIECE_STATIC_LIB; do
+        value="$(cached "${var}")"
+        case "${value}" in
+            "" | *-NOTFOUND) ;;
+            *)
+                echo "error: CMake configured ${var}='${value}': another SentencePiece than ENGINE_DEPS_DIR's" >&2
+                exit 1
+                ;;
+        esac
+    done
+fi
 cmake --build "${build}"
 cmake --install "${build}"
 
