@@ -10,6 +10,11 @@
 // the consent no longer covers it: the feature is paused, and turning it on asks again. The core
 // refuses to send meanwhile, so nothing depends on this screen being open.
 //
+// Each request carries a ref of its own (`consent.get:<feature>:<n>`), and only the answer to the
+// newest request is applied: an older answer that arrives late never overwrites a newer state.
+// That is also why engine churn (every engine.registered or engine.unregistered reads the state
+// again) needs no debounce: each read is a short store query, and only the last answer counts.
+//
 // A later feature (a meeting's summary, Ask) is one more ConsentModel with its own words below.
 import AppleEngines
 import InkBridge
@@ -102,6 +107,13 @@ final class ConsentModel {
     @ObservationIgnored private let send: SendCommand
     /// The state before a switch-off the core has not confirmed, to put back if saving fails.
     @ObservationIgnored private var beforeOff: Snapshot??
+    /// Requests sent so far, for their refs.
+    @ObservationIgnored private var requests = 0
+    /// The newest request of either kind: only its answer (or an unsolicited state) is applied.
+    @ObservationIgnored private var newestRef: String?
+    /// The newest `consent.get`, and the newest `consent.allow`, for their failures.
+    @ObservationIgnored private var newestGet: String?
+    @ObservationIgnored private var newestAllow: String?
 
     init(feature: LlmFeature, switchSettingID: String, send: @escaping SendCommand) {
         self.feature = feature
@@ -109,8 +121,13 @@ final class ConsentModel {
         self.send = send
     }
 
-    nonisolated static func getID(_ feature: LlmFeature) -> String { "consent.get:\(feature.rawValue)" }
-    nonisolated static func allowID(_ feature: LlmFeature) -> String { "consent.allow:\(feature.rawValue)" }
+    /// A new ref for a request of `kind` ("get" or "allow"), now the newest.
+    private func nextRef(_ kind: String) -> String {
+        requests += 1
+        let ref = "consent.\(kind):\(feature.rawValue):\(requests)"
+        newestRef = ref
+        return ref
+    }
 
     /// Where the feature would send now, if the core named a model.
     var destination: Destination? { state?.destination }
@@ -185,7 +202,9 @@ final class ConsentModel {
 
     /// Reads the state from the core.
     func load() {
-        send(.consentGet(feature))
+        let ref = nextRef("get")
+        newestGet = ref
+        send(.consentGet(feature, ref: ref))
     }
 
     /// Shows the consent step for the model now (nothing is sent until Allow). `key` is voice
@@ -205,9 +224,12 @@ final class ConsentModel {
         let key = pendingKey
         cancel()
         failure = nil
+        let ref = nextRef("allow")
+        newestAllow = ref
         switch destination.kind {
-        case .onDevice: send(.consentAllow(feature: feature, to: .onDevice, endpoint: nil, key: key))
-        case .cloud(let endpoint): send(.consentAllow(feature: feature, to: .cloud, endpoint: endpoint, key: key))
+        case .onDevice: send(.consentAllow(feature: feature, to: .onDevice, endpoint: nil, key: key, ref: ref))
+        case .cloud(let endpoint):
+            send(.consentAllow(feature: feature, to: .cloud, endpoint: endpoint, key: key, ref: ref))
         }
     }
 
@@ -240,6 +262,10 @@ final class ConsentModel {
         case .coreStopped:
             cancel()
         case .consentState(let value) where value.feature == feature:
+            // The answer to an older request, arriving after a newer one was sent: the newer
+            // answer is the one to show. A state with no ref (after a switch-off, or a refused
+            // allow) is the core's own, sent in order, and always applies.
+            if let ref = value.ref, ref != newestRef { return }
             state = Snapshot(value)
             beforeOff = nil
             if failure == .read || failure == .write { failure = nil }
@@ -254,9 +280,9 @@ final class ConsentModel {
                 state = before
             }
             beforeOff = nil
-        case .commandFailed(let failed) where failed.id == Self.getID(feature):
+        case .commandFailed(let failed) where failed.id != nil && failed.id == newestGet:
             failure = .read
-        case .commandFailed(let failed) where failed.id == Self.allowID(feature):
+        case .commandFailed(let failed) where failed.id != nil && failed.id == newestAllow:
             failure = .allow
         case .dictationWarningEvent(let warning) where warning.kind == .polishNotAllowed && feature == .polish:
             // The core refused to send: read where the feature goes now, so the screen says why.

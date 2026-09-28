@@ -42,12 +42,14 @@ enum CoreCommand: Equatable, Sendable {
     case dictationEnable(utcOffsetMinutes: Int, ref: String)
     /// Lets go of the keys and the mic: `dictation.off` with `ref`.
     case dictationDisable(ref: String)
-    /// A feature's switch, where it would send now, and the user's consent: `consent.state`.
-    case consentGet(LlmFeature)
+    /// A feature's switch, where it would send now, and the user's consent: `consent.state` with
+    /// `ref`, or `command.failed` with it as the id.
+    case consentGet(LlmFeature, ref: String)
     /// The user agreed, in the consent step, that the feature may send to `to` (for a cloud model,
     /// the `endpoint` consent.state named; for voice edit, with its `key`): the core records it and
     /// turns the feature on, or fails if the model has moved since.
-    case consentAllow(feature: LlmFeature, to: LlmDestination, endpoint: String?, key: String?)
+    /// `ref` comes back in its `consent.state`, or as the id of a `command.failed`.
+    case consentAllow(feature: LlmFeature, to: LlmDestination, endpoint: String?, key: String?, ref: String)
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -91,10 +93,10 @@ enum CoreCommand: Equatable, Sendable {
         case .commitmentNotYet(let id): ["cmd": "commitment.not_yet", "commitment": id]
         case .dictationEnable(let offset, let ref): ["cmd": "dictation.enable", "utc_offset_minutes": offset, "id": ref]
         case .dictationDisable(let ref): ["cmd": "dictation.disable", "id": ref]
-        case .consentGet(let feature):
-            ["cmd": "consent.get", "feature": feature.rawValue, "id": ConsentModel.getID(feature)]
-        case .consentAllow(let feature, let to, let endpoint, let key):
-            ["cmd": "consent.allow", "feature": feature.rawValue, "to": to.rawValue, "id": ConsentModel.allowID(feature)]
+        case .consentGet(let feature, let ref):
+            ["cmd": "consent.get", "feature": feature.rawValue, "id": ref]
+        case .consentAllow(let feature, let to, let endpoint, let key, let ref):
+            ["cmd": "consent.allow", "feature": feature.rawValue, "to": to.rawValue, "id": ref]
                 .merging(endpoint.map { ["endpoint": $0] } ?? [:]) { a, _ in a }
                 .merging(key.map { ["key": $0] } ?? [:]) { a, _ in a }
         }

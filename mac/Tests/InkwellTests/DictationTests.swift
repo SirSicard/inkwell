@@ -276,7 +276,7 @@ final class PolishSettingFailureTests: XCTestCase {
     func testAPolishSettingThatCouldNotBeReadOrSavedSaysSoAndTheToggleGoesBack() {
         let polish = PolishModel(send: { _ in })
         polish.apply(event(#"{"type":"engine.registered","id":"apple-foundation-models","kind":"llm","jobs":[]}"#))
-        polish.apply(event(#"{"type":"command.failed","command":"consent.get","id":"consent.get:polish","message":"the library could not be read"}"#))
+        polish.apply(event(#"{"type":"command.failed","command":"consent.get","id":"consent.get:polish:1","message":"the library could not be read"}"#))
         XCTAssertEqual(polish.failure, .read)
         XCTAssertEqual(polish.status, "Couldn't read your polish setting. Open Settings again to retry.")
         XCTAssertFalse(polish.canToggle, "unknown, so not switchable")
