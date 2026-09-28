@@ -1035,6 +1035,67 @@ fn a_sweep_during_recovery_never_takes_the_meeting_being_recovered() {
     core.shutdown();
 }
 
+/// Review of 7ab19de: recovery's early end (no audio can be placed: the record is ended and the
+/// live transcript stands, with no pass) is held from retention too, from before it marks the
+/// record ended; once recovery is over the hold is gone and a sweep takes the record.
+#[test]
+fn recovery_holds_a_meeting_from_retention_on_its_early_end_too() {
+    let dir = TempDir::new("recover-early-end");
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let clock = clock();
+    let record = store
+        .create_record(NewRecord {
+            kind: RecordKind::Meeting,
+            title: Some("Interrupted".into()),
+            started_at_unix_ms: clock.unix_ms() - 40 * 86_400_000,
+            source_app: None,
+            audio_dir: Some("meetings/no-audio".into()),
+        })
+        .unwrap();
+    // A marker and no chunks (and no timeline): nothing to place, so no pass.
+    let audio = dir.path().join("meetings/no-audio");
+    std::fs::create_dir_all(&audio).unwrap();
+    ink_ffi::recovery::mark_live(&audio, &record).unwrap();
+    store.set_setting("retention.days", "30").unwrap();
+    let (core, events) = recovery_core(dir.path(), store.clone(), clock);
+    let shared = core.shared().clone();
+    let in_the_window = Arc::new(Mutex::new(None));
+    {
+        let (record, in_the_window, shared) =
+            (record.clone(), in_the_window.clone(), shared.clone());
+        store.after("finish_record", move || {
+            let held = shared.held_from_sweep(&record);
+            *in_the_window.lock().unwrap() = Some((held, ink_ffi::retention::sweep(&shared)));
+        });
+    }
+    core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
+    let failed = events.wait_type("meeting.failed", WAIT);
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("no recorded audio could be placed")),
+        "{failed}"
+    );
+    events.wait_type("meetings.recovered", WAIT);
+    let (held, swept) = in_the_window
+        .lock()
+        .unwrap()
+        .take()
+        .expect("ended in the window");
+    assert!(held, "held before the record was marked ended");
+    assert_eq!(swept.expect("30 days").deleted, 0, "kept while held");
+    assert!(
+        !shared.held_from_sweep(&record),
+        "let go once recovery was over"
+    );
+    assert!(!audio.join(ink_ffi::recovery::LIVE_FILE).exists());
+    let swept = ink_ffi::retention::sweep(&shared).expect("30 days");
+    assert_eq!(swept.deleted, 1, "then swept");
+    assert_eq!(store.record(&record).unwrap(), None);
+    events.assert_valid();
+    core.shutdown();
+}
+
 /// A meeting whose record reads as ended but whose crash marker is still there (a pass cancelled
 /// by the app quitting, after the record was ended) is kept until recovery has finished it.
 #[test]

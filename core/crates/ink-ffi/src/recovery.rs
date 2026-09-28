@@ -148,6 +148,10 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
             ],
         ));
     };
+    // For the whole recovery, before any path below can mark the record ended: retention must not
+    // take it until its pass (or its early end) is done. Released on every return, and before
+    // the sweep that follows the pass is asked for (a hold still there would keep it from it).
+    let hold = shared.hold_from_sweep(record);
     let stored = match shared.store.record(record) {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -228,8 +232,6 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
     };
     let (services, settings) = services(shared);
     let vad = crate::engines::vad_source(shared);
-    // Before the record is marked ended: retention must not take it before its pass is done.
-    let hold = shared.hold_from_sweep(record);
     let ended = EndedMeeting::interrupted(
         services,
         settings,
