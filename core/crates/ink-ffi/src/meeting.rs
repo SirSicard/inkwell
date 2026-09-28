@@ -652,7 +652,9 @@ fn worker(
         }
         // Until the final pass has run: retention leaves it alone (the record reads as ended from
         // chain.stop, before the pass), with or without the marker below.
-        let hold = shared.hold_from_sweep(chain.record());
+        // A new record can never be being swept; if it somehow were, the refusal is logged by name
+        // and the meeting goes on, protected by its marker alone.
+        let hold = shared.hold_from_sweep(chain.record()).ok();
         // Until the final pass has run: a launch after a crash finds it and finishes the meeting.
         let live = crate::recovery::mark_live(chunks.dir(), chain.record());
         if let Err(e) = &live {

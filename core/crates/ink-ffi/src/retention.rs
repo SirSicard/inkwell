@@ -34,6 +34,7 @@
 //! one's final pass is over) nor on the screens' thread. Asks that arrive during a sweep are one
 //! more sweep, not one each.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
@@ -127,56 +128,78 @@ impl Shared {
     }
 }
 
+/// The records retention must leave alone, and the ones it is deleting now, under one lock
+/// (`Shared::finishing`) that is never held across I/O.
+#[derive(Default)]
+pub(crate) struct Holds {
+    /// Records this process is finishing ([`Hold`]).
+    held: BTreeSet<RecordId>,
+    /// Records a sweep has checked and is deleting now (marked under the lock, deleted outside it).
+    sweeping: BTreeSet<RecordId>,
+}
+
 /// A record this process is finishing (a meeting from its start to the end of its final pass, a
 /// recovered meeting for the whole of its recovery, from before any path can mark it ended):
 /// retention leaves it alone while this is held. Dropping it lets go.
 ///
-/// Taking a hold and the sweep's check-then-delete of a record run under the same lock
-/// (`Shared::finishing`), so they never interleave: a hold taken first keeps the record; a hold
-/// taken after the delete finds the record gone (recovery then only clears its marker).
+/// Taking a hold and the sweep's decision to delete a record never interleave: both run under the
+/// same lock, and the sweep marks the record as being swept before it lets go of the lock to
+/// delete it. A hold taken first keeps the record; a hold on a record being swept is refused
+/// ([`BeingSwept`]); a hold taken after the delete finds the record gone. No hold ever waits on a
+/// delete: the lock is only held to read and change the two sets.
 pub struct Hold<'a> {
     shared: &'a Shared,
     record: RecordId,
 }
 
-impl Shared {
-    /// **Worker.** Keeps retention away from `record` until the hold is dropped. Taken before the
-    /// record can read as ended.
-    pub fn hold_from_sweep(&self, record: &RecordId) -> Hold<'_> {
-        // Waits out a sweep's check-then-delete of this very record, if one is under way.
-        lock(&self.finishing).insert(record.clone());
-        Hold {
-            shared: self,
-            record: record.clone(),
-        }
+/// A hold refused: retention is deleting that record now. Record ids are never reused and a
+/// record is only swept once its pass is done, so this means a bug, and it is logged by name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BeingSwept(pub RecordId);
+
+impl std::fmt::Display for BeingSwept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "retention is deleting record {} now", self.0.0)
     }
 }
 
 impl Shared {
+    /// **Worker.** Keeps retention away from `record` until the hold is dropped. Taken before the
+    /// record can read as ended. Never waits on a sweep's delete. Refused, and logged, when a
+    /// sweep is deleting that very record.
+    pub fn hold_from_sweep(&self, record: &RecordId) -> Result<Hold<'_>, BeingSwept> {
+        let mut holds = lock(&self.finishing);
+        if holds.sweeping.contains(record) {
+            log::error!(
+                "retention: a hold on record {} was refused: it is being deleted",
+                record.0
+            );
+            return Err(BeingSwept(record.clone()));
+        }
+        holds.held.insert(record.clone());
+        Ok(Hold {
+            shared: self,
+            record: record.clone(),
+        })
+    }
+
     /// Whether this process holds `record` from retention now ([`Shared::hold_from_sweep`]).
     pub fn held_from_sweep(&self, record: &RecordId) -> bool {
-        lock(&self.finishing).contains(record)
+        lock(&self.finishing).held.contains(record)
     }
 }
 
 impl Drop for Hold<'_> {
     fn drop(&mut self) {
-        lock(&self.shared.finishing).remove(&self.record);
+        lock(&self.shared.finishing).held.remove(&self.record);
     }
 }
 
-/// Why `record`'s final pass has not finished, if it has not: this process holds it (`held`, the
-/// set under its lock), or its crash-recovery marker is still beside its audio. A marker that
-/// cannot be looked for counts as there: a record kept one sweep too long costs nothing; one
-/// deleted under its pass costs the meeting.
-fn unfinished(
-    held: &std::collections::BTreeSet<RecordId>,
-    shared: &Shared,
-    record: &Record,
-) -> Option<&'static str> {
-    if held.contains(&record.id) {
-        return Some("this process is finishing it");
-    }
+/// Whether `record`'s crash-recovery marker says its pass has not finished: the marker is there,
+/// or cannot be looked for (a record kept one sweep too long costs nothing; one deleted under its
+/// pass costs the meeting). Read outside the holds' lock: a marker only goes (its pass is done),
+/// and a new one is only ever written for a new record.
+fn marker(shared: &Shared, record: &Record) -> Option<&'static str> {
     let relative = record.audio_dir.as_ref()?;
     match crate::library::audio_dir(&shared.data_dir, relative) {
         Ok(Some(dir)) => match std::fs::symlink_metadata(dir.join(crate::recovery::LIVE_FILE)) {
@@ -194,6 +217,16 @@ fn unfinished(
             Some("its audio directory could not be checked")
         }
     }
+}
+
+/// Under the holds' lock: `record` is held (kept), or it is marked as being swept (returns true).
+fn claim(shared: &Shared, record: &RecordId) -> bool {
+    let mut holds = lock(&shared.finishing);
+    if holds.held.contains(record) {
+        return false;
+    }
+    holds.sweeping.insert(record.clone());
+    true
 }
 
 /// What a sweep did.
@@ -279,15 +312,23 @@ pub fn sweep(shared: &Shared) -> Option<Swept> {
             // Checked and deleted under the holds' lock, so no hold is taken in between (see
             // Hold). Read after the listing: a record that listed as ended was ended under a hold,
             // which is still there unless its pass is done.
-            let deleted = {
-                let held = lock(&shared.finishing);
-                if let Some(why) = unfinished(&held, shared, &record) {
-                    // By id only: a record kept sweep after sweep (a pass that hangs) shows here.
-                    log::info!("retention: meeting {} kept: {why}", record.id.0);
-                    continue;
-                }
-                shared.store.delete_record(&record.id)
-            };
+            // By id only: a record kept sweep after sweep (a pass that hangs) shows here.
+            if let Some(why) = marker(shared, &record) {
+                log::info!("retention: meeting {} kept: {why}", record.id.0);
+                continue;
+            }
+            // Checked and marked under the holds' lock, deleted outside it (see Hold). Read after
+            // the listing: a record that listed as ended was ended under a hold, which is still
+            // there unless its pass is done.
+            if !claim(shared, &record.id) {
+                log::info!(
+                    "retention: meeting {} kept: this process is finishing it",
+                    record.id.0
+                );
+                continue;
+            }
+            let deleted = shared.store.delete_record(&record.id);
+            lock(&shared.finishing).sweeping.remove(&record.id);
             match deleted {
                 Ok(()) | Err(StoreError::NotFound) => {}
                 Err(e) => {

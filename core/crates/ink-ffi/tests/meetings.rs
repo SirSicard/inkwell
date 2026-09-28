@@ -1096,6 +1096,73 @@ fn recovery_holds_a_meeting_from_retention_on_its_early_end_too() {
     core.shutdown();
 }
 
+/// Review of 55e6485: the sweep decides under the holds' lock and deletes outside it. While it
+/// deletes a record (here, inside the store's delete_record), a hold on another record is taken at
+/// once (never waits on the delete), and a hold on the record being deleted is refused, not taken.
+#[test]
+fn a_sweep_deleting_a_record_blocks_no_hold_and_refuses_one_on_that_record() {
+    use std::sync::mpsc;
+    let dir = TempDir::new("sweep-holds");
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let clock = clock();
+    let old = clock.unix_ms() - 40 * 86_400_000;
+    let record = store
+        .create_record(NewRecord {
+            kind: RecordKind::Meeting,
+            title: Some("Old".into()),
+            started_at_unix_ms: old,
+            source_app: None,
+            audio_dir: None,
+        })
+        .unwrap();
+    store.finish_record(&record, old + 1_000).unwrap();
+    // No setting yet, so the launch's sweep keeps everything; set afterwards, with no sweep asked.
+    let (core, events) = recovery_core(dir.path(), store.clone(), clock);
+    store.set_setting("retention.days", "30").unwrap();
+    let shared = core.shared().clone();
+    let during = Arc::new(Mutex::new(None));
+    {
+        let (shared, record, during) = (shared.clone(), record.clone(), during.clone());
+        store.after("delete_record", move || {
+            // Each on its own thread, bounded: a hold that waited on this delete would never
+            // return while we are inside it.
+            let try_hold = |id: ink_core::RecordId| {
+                let (tx, rx) = mpsc::channel();
+                let shared = shared.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(shared.hold_from_sweep(&id).map(|_| ()));
+                });
+                rx.recv_timeout(Duration::from_secs(5))
+            };
+            let other = try_hold(ink_core::RecordId("another-meeting".into()));
+            let same = try_hold(record.clone());
+            *during.lock().unwrap() = Some((other, same));
+        });
+    }
+    let swept = ink_ffi::retention::sweep(&shared).expect("30 days");
+    assert_eq!(swept.deleted, 1);
+    let (other, same) = during
+        .lock()
+        .unwrap()
+        .take()
+        .expect("ran inside the delete");
+    assert_eq!(
+        other,
+        Ok(Ok(())),
+        "another record's hold never waits on a delete"
+    );
+    assert_eq!(
+        same,
+        Ok(Err(ink_ffi::retention::BeingSwept(record.clone()))),
+        "a hold on the record being deleted is refused"
+    );
+    // Once deleted, the record is no longer marked: a hold on its id is taken (and it is gone).
+    assert!(shared.hold_from_sweep(&record).is_ok());
+    assert_eq!(store.record(&record).unwrap(), None);
+    events.assert_valid();
+    core.shutdown();
+}
+
 /// A meeting whose record reads as ended but whose crash marker is still there (a pass cancelled
 /// by the app quitting, after the record was ended) is kept until recovery has finished it.
 #[test]

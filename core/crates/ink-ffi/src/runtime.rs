@@ -331,7 +331,7 @@ pub struct Shared {
     pub(crate) sweeps: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<crate::retention::Ask>>>,
     /// Records a meeting or a recovery is finishing in this process: retention never sweeps them
     /// ([`crate::retention::Hold`]).
-    pub(crate) finishing: Mutex<std::collections::BTreeSet<ink_core::RecordId>>,
+    pub(crate) finishing: Mutex<crate::retention::Holds>,
     /// Dictation, live ([`voice`](crate::voice)): the platform it may use and what runs.
     pub(crate) voice: Mutex<crate::voice::VoiceSlot>,
 }
