@@ -5,20 +5,21 @@
 import SwiftUI
 
 extension View {
-    /// Presents `polish`'s consent step while it has one pending.
-    func polishConsent(_ polish: PolishModel) -> some View {
-        modifier(PolishConsentStep(polish: polish))
+    /// Presents `polish`'s consent step while it has one pending that `host` asked for.
+    func polishConsent(_ polish: PolishModel, host: PolishModel.ConsentHost) -> some View {
+        modifier(PolishConsentStep(polish: polish, host: host))
     }
 }
 
 private struct PolishConsentStep: ViewModifier {
     let polish: PolishModel
+    let host: PolishModel.ConsentHost
 
     func body(content: Content) -> some View {
         content.alert(
             PolishModel.consentTitle,
             // Plain closures (the CI runner's Swift 6.3 crashes on some closure forms here).
-            isPresented: Binding(get: { polish.pendingConsent != nil }, set: { shown in
+            isPresented: Binding(get: { polish.pendingConsent != nil && polish.consentHost == host }, set: { shown in
                 if !shown { polish.cancelConsent() }
             }),
             presenting: polish.pendingConsent

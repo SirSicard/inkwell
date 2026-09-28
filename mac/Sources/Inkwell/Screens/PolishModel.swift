@@ -93,6 +93,15 @@ final class PolishModel {
     private(set) var failure: Failure?
     /// The consent step on screen: where polish would send, waiting for Allow or Cancel.
     private(set) var pendingConsent: Destination?
+    /// Which screen asked, so only that one shows the step (the first-run sheet can sit over
+    /// Settings).
+    private(set) var consentHost: ConsentHost?
+
+    /// The screens that can turn polish on.
+    enum ConsentHost: Equatable, Sendable {
+        case settings
+        case onboarding
+    }
 
     enum Failure: Equatable, Sendable {
         case read
@@ -222,14 +231,16 @@ final class PolishModel {
 
     /// The user switched the toggle. On shows the consent step (nothing is sent until Allow); off
     /// turns polish off, which also withdraws the consent. Does nothing without a working engine.
-    func setOn(_ on: Bool) {
+    func setOn(_ on: Bool, from host: ConsentHost = .settings) {
         guard canToggle else { return }
         failure = nil
         if on {
             pendingConsent = destination
+            consentHost = host
             return
         }
         pendingConsent = nil
+        consentHost = nil
         if beforeOff == nil {
             beforeOff = .some(state)
         }
@@ -243,6 +254,7 @@ final class PolishModel {
     func allowConsent() {
         guard let destination = pendingConsent else { return }
         pendingConsent = nil
+        consentHost = nil
         failure = nil
         switch destination.kind {
         case .onDevice: send(.polishAllow(to: .onDevice, endpoint: nil))
@@ -253,6 +265,7 @@ final class PolishModel {
     /// The consent step's Cancel (or the step dismissed): nothing is sent, polish stays as it was.
     func cancelConsent() {
         pendingConsent = nil
+        consentHost = nil
     }
 
     /// Whether the status is a problem to show in the alert colour.
@@ -270,14 +283,16 @@ final class PolishModel {
             }
         case .coreStopped:
             models = []
-            pendingConsent = nil
+            cancelConsent()
         case .polishState(let value):
             state = Snapshot(value)
             beforeOff = nil
             if failure == .read || failure == .write { failure = nil }
-            // The step asked about a destination that is no longer the model's: ask about the new one.
+            // The step names a destination that is no longer the model's: close it rather than
+            // change its words under the user's finger. The line under the toggle says where polish
+            // goes now, and switching it on asks about that.
             if let pending = pendingConsent, pending != destination {
-                pendingConsent = destination
+                cancelConsent()
             }
         case .commandFailed(let failed) where failed.id == Self.settingID:
             if failed.command == "setting.set" {

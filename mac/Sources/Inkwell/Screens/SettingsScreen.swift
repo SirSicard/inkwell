@@ -401,7 +401,7 @@ private struct AISection: View {
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .polishConsent(polish)
+        .polishConsent(polish, host: .settings)
     }
 }
 

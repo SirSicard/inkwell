@@ -277,15 +277,24 @@ final class PolishModelTests: XCTestCase {
         XCTAssertEqual(polish.status, "Couldn't read your polish consent, so polish is paused. Turn it on again to allow it.")
     }
 
-    /// The step asked about one destination and the model moved before Allow: it asks about the
-    /// new one instead (the core would refuse the old one anyway).
-    func testTheStepFollowsTheModelWhileItIsShown() throws {
-        let polish = PolishModel(send: { _ in })
+    /// The step asked about one destination and the model moved before Allow: the step closes
+    /// (its words are never swapped under the user), nothing is sent, and asking again names the
+    /// new destination.
+    func testTheStepClosesIfTheModelMovesWhileItIsShown() throws {
+        let sent = Sent()
+        let polish = PolishModel(send: sent.send)
         polish.apply(event(appleLLM))
         polish.apply(polishState(on: false, allowed: false))
-        polish.setOn(true)
+        polish.setOn(true, from: .onboarding)
+        XCTAssertEqual(polish.consentHost, .onboarding, "shown where it was asked")
         polish.apply(polishState(on: false, allowed: false, to: "cloud", name: "Example Cloud", endpoint: "shell engine cloud"))
+        XCTAssertNil(polish.pendingConsent)
+        XCTAssertNil(polish.consentHost)
+        polish.allowConsent()
+        XCTAssertFalse(sent.commands.contains { if case .polishAllow = $0 { true } else { false } }, "nothing sent")
+        polish.setOn(true)
         XCTAssertEqual(try XCTUnwrap(polish.pendingConsent).name, "Example Cloud")
+        XCTAssertEqual(polish.consentHost, .settings)
     }
 
     func testSwitchingOffSendsOffAndAFailedSavePutsItBack() {

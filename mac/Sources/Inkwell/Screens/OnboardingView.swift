@@ -81,7 +81,7 @@ struct OnboardingView: View {
         return VStack(alignment: .leading, spacing: 12) {
             Text("Polish").font(Typography.heading).accessibilityAddTraits(.isHeader)
             Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
-            Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0) }))
+            Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
                 .toggleStyle(.switch)
                 .disabled(!polish.canToggle)
                 .accessibilityHint(polish.status)
@@ -91,7 +91,7 @@ struct OnboardingView: View {
                 .accessibilityHidden(true)
         }
         .foregroundStyle(Theme.text)
-        .polishConsent(polish)
+        .polishConsent(polish, host: .onboarding)
     }
 
     private var ready: some View {
