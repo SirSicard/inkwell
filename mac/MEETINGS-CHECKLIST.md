@@ -7,7 +7,8 @@ dogfood week (section 6) is five real meetings. Note the date, the macOS version
 Automated checks cover the logic behind each line: `cargo test --workspace` in `core/` (detection's
 rules, meeting start and stop, Ask, the far end's bands, retention's secure delete, the `kill -9`
 recovery with a real child process, replay determinism, the Bluetooth-mic flag, summary items,
-recipients, looks-done) and `swift test --package-path mac` (the consent Drop and its answers, the
+recipients, looks-done, no summary or Ask without the `meetings` consent) and
+`swift test --package-path mac` (the consent Drop and its answers, the summaries-and-Ask switch, the
 watchdog's warning and the probe's reaction, Live, the ledger's window, Owed, cited decisions, the
 meeting settings, Foundation Models' structured answers).
 
@@ -21,6 +22,14 @@ name or a meeting title into this file or a bug: the repository is public.
 - [ ] Models installed (Settings > Models lists Qwen3-ASR, Silero and Nemotron as installed), and
       Apple Intelligence on (Settings > AI: Polish can be turned on). Without Apple Intelligence
       meetings get no summary, and say so.
+- [ ] Settings > AI, before turning anything on: "Summaries and Ask" is off, and says meetings are
+      recorded and transcribed with no summary. Record a short call: it finishes normally, its
+      record's Summary tab says "Summaries are off until you allow them in Settings > AI", and Ask
+      during it answers that it needs your OK in Settings > AI.
+- [ ] Turn "Summaries and Ask" on: a dialog asks first ("Turn on summaries and Ask?"), says the
+      meeting's transcript goes to a language model and names it (Apple's on-device model: "the
+      transcript stays on this Mac"). Cancel leaves it off; "Turn On Summaries and Ask" turns it on.
+      Polish stays as it was (each has its own consent).
 - [ ] Permissions: Settings > Permissions shows "Hear you" and "Hear the others" allowed.
 
 ## 1. A call, from the offer to the record

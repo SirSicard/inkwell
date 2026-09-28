@@ -110,6 +110,7 @@ fn meeting_logs_and_events_carry_no_transcript() {
     });
     let mut rig = RigBuilder {
         answer,
+        meetings_consent: Some(LlmConsent::OnDevice),
         llm: Some(Arc::new(Chatty)),
         ..RigBuilder::default()
     }

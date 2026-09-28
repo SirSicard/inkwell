@@ -171,6 +171,9 @@ enum ShellSetting: String, Sendable {
     case dictationPolish = "dictation.polish"
     /// "on" (the default) or "off": listen for calls and offer to record them.
     case meetingsDetect = "meetings.detect"
+    /// "on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way: they
+    /// turn on through the consent step (`consentAllow`).
+    case meetingsLLM = "meetings.llm"
     /// "on" or "off" (the default): with Bluetooth output, record the headset's own mic.
     case meetingsHeadsetMic = "meetings.headset_mic"
     /// "forever" (the default), or days: how long the library keeps records.

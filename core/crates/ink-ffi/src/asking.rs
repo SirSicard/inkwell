@@ -7,8 +7,10 @@
 //!
 //! The answer is `meeting.answered`, echoing the command's id as `ref`, with the model's text: the
 //! shell renders it as words only (no links: model text can say anything). A failure is
-//! `command.failed` with that id: no meeting, no language model, or the model's error, named
-//! without the question or the transcript (I5).
+//! `command.failed` with that id: no meeting, no language model, no consent (Ask sends the
+//! meeting's transcript only where the user agreed, the `meetings` consent: without it nothing is
+//! sent and the failure asks for the user's OK in Settings), or the model's error, named without
+//! the question or the transcript (I5).
 
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,16 +18,21 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use ink_core::{RecordId, Store};
+use ink_core::{LlmError, RecordId, Store};
 use ink_llm::tasks::RecordContext;
 use ink_llm::tasks::ask::answer;
 use ink_llm::tasks::due::RecordTime;
+use ink_pipeline::consent::{self, Consented, Feature};
 
 use crate::events::{self, event};
 use crate::runtime::{Runs, Shared, lock};
 
 /// Questions that may wait behind the one being answered.
 pub const MAX_WAITING: usize = 4;
+
+/// Ask's answer while the user has not agreed where the model sends the transcript (the
+/// `meetings` consent): nothing was sent.
+pub const NEEDS_CONSENT: &str = "Ask needs your OK to send the meeting to a language model: turn on summaries and Ask in Settings > AI";
 
 struct Question {
     id: Option<String>,
@@ -152,13 +159,23 @@ fn answer_about(shared: &Shared, record: &RecordId, question: &str) -> Result<St
         },
         speaker_names: &names,
     };
+    // Consent, read now: the transcript goes only where the user agreed, checked on the model the
+    // call reaches. Without one every model is refused and nothing is sent.
+    let consent = consent::stored(store, Feature::Meetings);
+    let consented = Consented {
+        inner: llm.as_ref(),
+        consent: consent.as_ref(),
+    };
     answer(
         question,
         &segments,
         &ctx,
         &crate::engines::ask_options(shared),
-        llm.as_ref(),
+        &consented,
         &shared.shutdown,
     )
-    .map_err(|e| format!("the model could not answer: {e}"))
+    .map_err(|e| match e {
+        LlmError::NotAllowed { .. } => NEEDS_CONSENT.to_owned(),
+        e => format!("the model could not answer: {e}"),
+    })
 }

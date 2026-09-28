@@ -55,6 +55,10 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // Whether the shell turns dictation on at launch (Settings > Voice). The shell reads it and
     // sends dictation.enable or not; the core does nothing with it itself.
     ("dictation.enabled", &["on", "off"]),
+    // Whether a meeting's summary (with its commitments) and Ask may send its transcript to a
+    // language model. As for polish, `setting.set` takes only `off` (which withdraws the consent
+    // too): it turns on through `consent.allow` (crate::consent).
+    (crate::consent::MEETINGS_SETTING, &["on", "off"]),
     // Whether the app watches for calls and offers to record them (the consent Drop). On unless
     // turned off; the meetings thread starts or stops detection when it changes.
     (crate::control::DETECT_KEY, &["on", "off"]),
@@ -296,10 +300,16 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
                     accepted.join(", ")
                 ));
             }
-            if key == crate::voice::POLISH_SETTING && value != "off" {
-                // Only the user's consent turns polish on (crate::consent).
+            if [
+                crate::voice::POLISH_SETTING,
+                crate::consent::MEETINGS_SETTING,
+            ]
+            .contains(&key.as_str())
+                && value != "off"
+            {
+                // Only the user's consent turns polish, or summaries and Ask, on (crate::consent).
                 return Err(format!(
-                    "{name}: \"{key}\" turns on only through consent.allow, once the user agreed where polish sends"
+                    "{name}: \"{key}\" turns on only through consent.allow, once the user agreed where it sends"
                 ));
             }
             Query::SettingSet { key, value }
@@ -356,7 +366,7 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
 fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, String> {
     ink_pipeline::consent::Feature::parse(feature)
         .filter(|f| crate::consent::switch(*f).is_some())
-        .ok_or_else(|| format!("{name}: \"feature\" is polish or edit"))
+        .ok_or_else(|| format!("{name}: \"feature\" is polish, edit or meetings"))
 }
 
 /// `key` if the shell may use it.
@@ -947,11 +957,30 @@ mod tests {
             p(r#"{"cmd":"consent.get","feature":"edit"}"#),
             Some(Ok(Query::ConsentGet(Feature::Edit)))
         );
+        assert_eq!(
+            p(r#"{"cmd":"consent.allow","feature":"meetings","to":"on_device"}"#),
+            Some(Ok(Query::ConsentAllow(Allow {
+                feature: Feature::Meetings,
+                asked: LlmConsent::OnDevice,
+                key: None
+            })))
+        );
+        assert_eq!(
+            p(r#"{"cmd":"setting.set","key":"meetings.llm","value":"off"}"#),
+            Some(Ok(Query::SettingSet {
+                key: "meetings.llm".into(),
+                value: "off".into()
+            }))
+        );
         for bad in [
             // Only the user's consent turns polish on: consent.allow, never setting.set.
             r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#,
             r#"{"cmd":"setting.set","key":"llm.consent.polish","value":"{\"to\":\"on_device\"}"}"#,
             r#"{"cmd":"setting.set","key":"llm.consent.edit","value":"none"}"#,
+            // Nor summaries and Ask.
+            r#"{"cmd":"setting.set","key":"meetings.llm","value":"on"}"#,
+            r#"{"cmd":"setting.set","key":"llm.consent.meetings","value":"{\"to\":\"on_device\"}"}"#,
+            r#"{"cmd":"consent.allow","feature":"meetings","to":"on_device","key":"fn"}"#,
             r#"{"cmd":"consent.get"}"#,
             r#"{"cmd":"consent.get","feature":"summary"}"#,
             r#"{"cmd":"consent.allow","feature":"polish"}"#,

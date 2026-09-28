@@ -9,6 +9,7 @@ use ink_core::{Channel, EngineError, LlmError, RecordId, StoreError};
 use ink_echo::EchoError;
 
 use crate::capture::CaptureIssue;
+use crate::consent::LlmConsent;
 use crate::events::VoiceDetection;
 use crate::redact::Spoken;
 
@@ -212,6 +213,10 @@ pub enum MeetingWarning {
     SummaryUnavailable,
     /// The summary failed. Commitments still ran.
     SummaryFailed(LlmError),
+    /// The user has not agreed that the meeting's transcript may go where the model sends it
+    /// (the `meetings` consent, [`Feature::Meetings`](crate::consent::Feature::Meetings)): nothing
+    /// was sent, so no summary and no commitments. Names the consent that model needs.
+    SummaryNotAllowed(LlmConsent),
     /// Harvesting or deduplicating commitments failed.
     CommitmentsFailed(LlmError),
 }

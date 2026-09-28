@@ -380,6 +380,7 @@ struct RecordLedgerRow: View {
 struct SummaryTab: View {
     let document: RecordDocument
     @Environment(LibraryModel.self) private var library
+    @Environment(ScreenModels.self) private var screens
 
     var body: some View {
         ScrollView {
@@ -391,7 +392,7 @@ struct SummaryTab: View {
                     Text("No summary yet")
                         .font(.headline)
                         .foregroundStyle(Theme.text)
-                    Text("A summary is written after a meeting ends, when a language model is set up.")
+                    Text(screens.summaryOffNote ?? "A summary is written after a meeting ends, when a language model is set up.")
                         .font(.callout)
                         .foregroundStyle(Theme.secondaryText)
                 }

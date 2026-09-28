@@ -1,5 +1,5 @@
 // The consent step for a feature that sends the user's words to a language model (polish, voice
-// edit): every place that can turn one on (Settings, the first-run sheet) shows it the same way.
+// edit, summaries and Ask): every place that can turn one on (Settings, the first-run sheet) shows it the same way.
 // The switch only asks; this says plainly what the feature sends and where it goes for the model
 // it would use, and only Allow sends anything to the core. Cancel, Escape or closing it leaves the
 // feature as it was.
@@ -38,7 +38,8 @@ private struct ConsentStep: ViewModifier {
                 .keyboardShortcut(.defaultAction)
                 .accessibilityLabel(destination.isOnDevice
                     ? "Turn on \(what) with \(destination.label)"
-                    : "Turn on \(what) and send your words to \(destination.label)")
+                    // Meetings send the whole transcript (everyone's words), as the message says.
+                    : "Turn on \(what) and send \(feature == .meetings ? "the transcript" : "your words") to \(destination.label)")
         } message: { destination in
             Text(ConsentModel.message(feature, destination))
         }

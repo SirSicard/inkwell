@@ -5,9 +5,9 @@ About twenty minutes, by hand. What a script cannot check is here: permissions t
 to `mac/Sources/Inkwell/Screens/` and note the date, the macOS version and the commit.
 
 Automated checks cover the logic behind each line (`swift test --package-path mac`): the
-permission cards' reaction to a probe change, the Polish toggle, modes without bundle ids, owed
-grouping, the notes' saving, the ledger and the question stack, and every screen command against
-the real core.
+permission cards' reaction to a probe change, the Polish and the summaries-and-Ask toggles, modes
+without bundle ids, owed grouping, the notes' saving, the ledger and the question stack, and every
+screen command against the real core.
 
 ## Setup
 
@@ -106,6 +106,10 @@ the real core.
       polish. Turn Apple Intelligence off in System Settings, come back: the switch reads off, is
       greyed, and says why. Turn it back on (and wait for it to be ready): the switch is usable
       again and remembers your choice (Apple's model again: no new dialog).
+- [ ] AI: "Summaries and Ask" is off on a fresh library, and turns on only through its own dialog,
+      which names where the transcript goes (see MEETINGS-CHECKLIST, Setup). Turning Polish on
+      leaves it off, and the reverse. Turn it off: the switch reads off at once and stays off after
+      a restart; turning it on again asks again.
 - [ ] Models: Dictation, Meeting transcript and Live words, each with the engine that serves it now
       and its measured accuracy. After a model finishes installing, the line changes to it without
       a restart.

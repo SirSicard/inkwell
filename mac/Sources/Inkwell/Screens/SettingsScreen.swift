@@ -1,5 +1,5 @@
 // Settings: permissions with their live state, the voice key, modes, snippets and voice commands
-// (PhrasesSections), AI (polish), meetings, models (read-only, with measured accuracy), storage,
+// (PhrasesSections), AI (polish, summaries and Ask), meetings, models (read-only, with measured accuracy), storage,
 // and About with every notice the app ships.
 import AppleEngines
 import InkBridge
@@ -58,7 +58,7 @@ struct SettingsScreen: View {
                         ModesSection(modes: screens.modes).id(SettingsSection.modes)
                         SnippetsSection(snippets: screens.snippets).id(SettingsSection.snippets)
                         VoiceCommandsSection(commands: screens.voiceCommands).id(SettingsSection.voiceCommands)
-                        AISection(polish: screens.polish).id(SettingsSection.ai)
+                        AISection(polish: screens.polish, screens: screens).id(SettingsSection.ai)
                         MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
                             .id(SettingsSection.meetings)
                         ModelsSection(catalogue: screens.catalogue).id(SettingsSection.models)
@@ -80,6 +80,7 @@ struct SettingsScreen: View {
             screens.permissions.screenAppeared()
             screens.modes.load()
             screens.polish.load()
+            screens.meetingsConsent.load()
             screens.dictation.load()
             screens.snippets.load()
             screens.voiceCommands.load()
@@ -390,6 +391,7 @@ private struct AppIcon: View {
 
 private struct AISection: View {
     let polish: PolishModel
+    let screens: ScreenModels
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -413,6 +415,32 @@ private struct AISection: View {
             }
             .font(Typography.body)
             Text("Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything. It sends what you dictate to a language model, so it stays off until you turn it on and agree to where that is.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Summaries and Ask").frame(width: 150, alignment: .leading)
+                VStack(alignment: .leading, spacing: 4) {
+                    // Plain closures (the CI runner's Swift 6.3 crashes on some closure forms here).
+                    Toggle(
+                        "Summaries and Ask",
+                        isOn: Binding(get: { screens.meetingsAIOn }, set: { screens.setMeetingsAI($0) }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!screens.canToggleMeetingsAI)
+                        .accessibilityHint(screens.meetingsAIStatus)
+                    Text(screens.meetingsAIStatus)
+                        .font(Typography.caption)
+                        .foregroundStyle(screens.meetingsConsent.isProblem ? Theme.alert : Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityHidden(true)
+                }
+            }
+            .font(Typography.body)
+            .padding(.top, 6)
+            // Its own view, so its step and polish's never share one alert.
+            .consentStep(screens.meetingsConsent, host: .settings)
+            Text("A meeting's summary, what was promised in it, and Ask send its transcript to a language model, so they stay off until you turn them on and agree to where that is.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

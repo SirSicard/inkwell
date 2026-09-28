@@ -179,6 +179,33 @@ fn failed_with(events: &Recorder, id: &str) -> Value {
         .unwrap_or_else(|| panic!("command {id} did not fail: {:?}", events.types()))
 }
 
+/// The user agrees, through the consent step's commands, that summaries and Ask may send the
+/// transcript where the registered model goes (`ref` names the commands).
+fn allow_meetings(core: &Core, events: &Recorder, reference: &str) {
+    let get = format!("{reference}-get");
+    core.command(&format!(
+        r#"{{"cmd":"consent.get","feature":"meetings","id":"{get}"}}"#
+    ))
+    .unwrap();
+    let state = events
+        .wait_for(WAIT, |v| v["type"] == "consent.state" && v["ref"] == get)
+        .expect("consent.state");
+    let mut allow = serde_json::json!({
+        "cmd": "consent.allow", "feature": "meetings", "to": state["to"], "id": reference
+    });
+    if let Some(endpoint) = state.get("endpoint") {
+        allow["endpoint"] = endpoint.clone();
+    }
+    core.command(&allow.to_string()).unwrap();
+    let allowed = events
+        .wait_for(WAIT, |v| {
+            v["type"] == "consent.state" && v["ref"] == reference
+        })
+        .expect("allowed");
+    assert_eq!(allowed["allowed"], true, "{allowed}");
+    assert_eq!(allowed["on"], true, "{allowed}");
+}
+
 #[test]
 fn a_meeting_from_the_devices_starts_named_and_stops_by_hand_into_its_final_pass() {
     let r = rig("start-stop", 30.0, clock());
@@ -511,7 +538,8 @@ fn ask_answers_about_the_live_meeting_with_the_registered_model() {
     assert_eq!(answered["record"], started["record"]);
     assert_eq!(answered["text"], "Nothing has been said yet.");
     assert!(model.requests.lock().unwrap().is_empty());
-    // With words in the record, the model is asked and its answer is trimmed.
+    // With words in the record, and the user's OK, the model is asked and its answer is trimmed.
+    allow_meetings(&r.core, &r.events, "allow");
     let record = ink_core::RecordId(started["record"].as_str().unwrap().to_owned());
     r.core
         .shared()
@@ -547,6 +575,207 @@ fn ask_answers_about_the_live_meeting_with_the_registered_model() {
     );
     assert!(requests[0].get("json_schema").is_none(), "plain text");
     drop(requests);
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// Registers a local language model that records what it is sent (answering as for Ask).
+fn register_model(core: &Core) -> &'static Model {
+    let model = Box::leak(Box::new(Model {
+        requests: Mutex::default(),
+    }));
+    let info = CString::new(
+        r#"{"id":"test-llm","licence":"MIT","model":"t","local":true,"context_tokens":4096}"#,
+    )
+    .unwrap();
+    let table = InkEngineVTable {
+        kind: KIND_LLM,
+        info_json: info.as_ptr(),
+        ctx: model as *const Model as *mut c_void,
+        release: Some(release),
+        generate: Some(generate),
+        ..Default::default()
+    };
+    // SAFETY: a valid table whose ctx outlives the core.
+    let registration =
+        unsafe { Registration::from_table(&table, core.shared().shutdown.clone()) }.unwrap();
+    core.register(registration).unwrap();
+    model
+}
+
+/// Starts a meeting whose record already holds a line, and gives its record.
+fn meeting_with_words(r: &Rig) -> ink_core::RecordId {
+    r.core.command(r#"{"cmd":"meeting.start"}"#).unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    let record = ink_core::RecordId(started["record"].as_str().unwrap().to_owned());
+    r.core
+        .shared()
+        .store
+        .append_segments(
+            &record,
+            &[ink_core::Segment {
+                channel: Channel::Far,
+                start_ms: 1_000,
+                end_ms: 2_000,
+                text: "What about the budget for the pilot?".into(),
+                speaker: None,
+            }],
+        )
+        .unwrap();
+    record
+}
+
+/// Owner decision (2026-09-28): a meeting's summary and Ask send its transcript to a language
+/// model, so they run only with the user's consent for where it goes (the `meetings` feature).
+/// Without it nothing is sent: Ask answers that it needs the user's OK in Settings, and the
+/// meeting finishes normally with no summary, saying why. Consent for polish and voice edit does
+/// not cover it.
+#[test]
+fn ask_and_the_summary_send_nothing_without_the_meetings_consent() {
+    let r = rig("meetings-no-consent", 30.0, clock());
+    let model = register_model(&r.core);
+    // Polish and voice edit allowed: not summaries and Ask.
+    r.core
+        .command(r#"{"cmd":"consent.allow","feature":"polish","to":"on_device","id":"p"}"#)
+        .unwrap();
+    r.core
+        .command(
+            r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"right_command","id":"e"}"#,
+        )
+        .unwrap();
+    for id in ["p", "e"] {
+        let state = r
+            .events
+            .wait_for(WAIT, |v| v["type"] == "consent.state" && v["ref"] == id)
+            .unwrap();
+        assert_eq!(state["allowed"], true, "{state}");
+    }
+    r.core
+        .command(r#"{"cmd":"consent.get","feature":"meetings","id":"m"}"#)
+        .unwrap();
+    let meetings = r
+        .events
+        .wait_for(WAIT, |v| v["type"] == "consent.state" && v["ref"] == "m")
+        .unwrap();
+    assert_eq!(meetings["allowed"], false, "{meetings}");
+    assert_eq!(meetings["on"], false, "{meetings}");
+    assert_eq!(meetings["to"], "on_device", "names where it would go");
+
+    let record = meeting_with_words(&r);
+    r.core
+        .command(r#"{"cmd":"meeting.ask","question":"What did they ask?","id":"q1"}"#)
+        .unwrap();
+    let refused = failed_with(&r.events, "q1");
+    assert_eq!(refused["message"], ink_ffi::asking::NEEDS_CONSENT);
+    assert!(
+        ink_ffi::asking::NEEDS_CONSENT.contains("Settings > AI"),
+        "says where to give it"
+    );
+
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    let finished = r.events.wait_type("meeting.finished", WAIT);
+    assert_eq!(finished["record"], record.0.as_str());
+    let warning = r
+        .events
+        .wait_for(Duration::ZERO, |v| {
+            v["type"] == "meeting.warning" && v["kind"] == "summary_not_allowed"
+        })
+        .expect("the missing summary is said");
+    assert_eq!(warning["message"], "a model on this machine", "{warning}");
+    assert_eq!(r.events.count("meeting.summarized"), 0);
+    assert_eq!(
+        r.events.count("meeting.failed"),
+        0,
+        "{:?}",
+        r.events.types()
+    );
+    assert_eq!(r.core.shared().store.summary(&record).unwrap(), None);
+    assert!(
+        model.requests.lock().unwrap().is_empty(),
+        "nothing reached the model"
+    );
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// Owner decision (2026-09-28): allowing summaries and Ask turns them on for that destination
+/// only (not polish or voice edit), and turning them off withdraws the consent in the same
+/// write, so Ask is refused again and `setting.set` cannot turn them back on.
+#[test]
+fn the_meetings_consent_is_given_and_withdrawn() {
+    let r = rig("meetings-consent", 30.0, clock());
+    let model = register_model(&r.core);
+    allow_meetings(&r.core, &r.events, "allow");
+    for feature in ["polish", "edit"] {
+        r.core
+            .command(&format!(
+                r#"{{"cmd":"consent.get","feature":"{feature}","id":"{feature}"}}"#
+            ))
+            .unwrap();
+        let state = r
+            .events
+            .wait_for(WAIT, |v| {
+                v["type"] == "consent.state" && v["ref"] == feature
+            })
+            .unwrap();
+        assert_eq!(state["allowed"], false, "{feature}: {state}");
+    }
+    let _ = meeting_with_words(&r);
+    r.core
+        .command(r#"{"cmd":"meeting.ask","question":"What did they ask?","id":"q1"}"#)
+        .unwrap();
+    r.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "meeting.answered" && v["ref"] == "q1"
+        })
+        .expect("answered with consent");
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
+
+    // Off: the consent goes with the switch.
+    r.core
+        .command(r#"{"cmd":"setting.set","key":"meetings.llm","value":"off","id":"off"}"#)
+        .unwrap();
+    let state = r
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "consent.state" && v["feature"] == "meetings" && v.get("ref").is_none()
+        })
+        .expect("the state after the switch");
+    assert_eq!(state["on"], false, "{state}");
+    assert_eq!(state["allowed"], false, "{state}");
+    assert_eq!(
+        r.core
+            .shared()
+            .store
+            .setting("llm.consent.meetings")
+            .unwrap()
+            .as_deref(),
+        Some("none")
+    );
+    r.core
+        .command(r#"{"cmd":"meeting.ask","question":"What did they ask?","id":"q2"}"#)
+        .unwrap();
+    assert_eq!(
+        failed_with(&r.events, "q2")["message"],
+        ink_ffi::asking::NEEDS_CONSENT
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1, "nothing more sent");
+    // And only the consent step turns it on again.
+    let refused = r
+        .core
+        .command(r#"{"cmd":"setting.set","key":"meetings.llm","value":"on","id":"on"}"#)
+        .expect_err("setting.set cannot turn it on");
+    assert!(refused.contains("consent.allow"), "{refused}");
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
+    assert!(
+        r.events
+            .wait_for(Duration::ZERO, |v| {
+                v["type"] == "meeting.warning" && v["kind"] == "summary_not_allowed"
+            })
+            .is_some()
+    );
+    assert_eq!(model.requests.lock().unwrap().len(), 1, "no summary sent");
     r.events.assert_valid();
     r.core.shutdown();
 }
@@ -794,6 +1023,7 @@ fn a_meeting_is_summarized_by_the_registered_model_and_titled_by_its_headline() 
     let registration =
         unsafe { Registration::from_table(&table, core.shared().shutdown.clone()) }.unwrap();
     core.register(registration).unwrap();
+    allow_meetings(&core, &events, "allow");
     let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));
     speech_wav(&mic, 3.0, 51);
     speech_wav(&far, 2.0, 52);
@@ -1334,6 +1564,8 @@ fn local_only_refuses_a_model_that_is_not_local_for_ask_and_the_summary() {
     let registration =
         unsafe { Registration::from_table(&table, r.core.shared().shutdown.clone()) }.unwrap();
     r.core.register(registration).unwrap();
+    // The user agreed to send meetings to this model: local-only refuses it all the same.
+    allow_meetings(&r.core, &r.events, "allow");
     r.core.command(r#"{"cmd":"meeting.start"}"#).unwrap();
     let started = r.events.wait_type("meeting.started", WAIT);
     let record = ink_core::RecordId(started["record"].as_str().unwrap().to_owned());
