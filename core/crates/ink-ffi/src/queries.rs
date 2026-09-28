@@ -488,10 +488,16 @@ impl Ctx<'_> {
     fn run(&self, job: Job) {
         let Job { name, id, query } = job;
         let emit = |e: Value| self.shared.events.emit(e);
-        let fail = |message: String| {
+        let fail_coded = |message: String, code: Option<&str>| {
             log::warn!("command {name} failed: {message}");
-            emit(events::command_failed(&name, id.as_deref(), &message));
+            emit(events::command_failed_coded(
+                &name,
+                id.as_deref(),
+                &message,
+                code,
+            ));
         };
+        let fail = |message: String| fail_coded(message, None);
         let store = self.shared.store.as_ref();
         match query {
             Query::PermissionsCheck => emit(self.permissions()),
@@ -651,7 +657,7 @@ impl Ctx<'_> {
                             crate::voice::settings_changed(self.shared);
                         }
                     }
-                    Err(e) => fail(e),
+                    Err(e) => fail_coded(e.message, e.code),
                 }
             }
         }

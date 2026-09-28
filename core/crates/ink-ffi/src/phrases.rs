@@ -296,9 +296,40 @@ pub const REFUSED_SNIPPETS: &str = "the stored snippets cannot be read, so a sav
 pub const REFUSED_COMMANDS: &str = "the stored voice commands cannot be read, so a save would \
      replace them; send replace_unreadable to start over";
 
+/// The `code` on the `command.failed` of either refusal above: the shell tells it apart by this,
+/// never by the message.
+pub const LIST_UNREADABLE: &str = "list_unreadable";
+
+/// Why a query failed: the message, and the `code` a shell acts on, when there is one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    /// Why, as `command.failed`'s `message`.
+    pub message: String,
+    /// `command.failed`'s `code` ([`LIST_UNREADABLE`]), or none.
+    pub code: Option<&'static str>,
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            code: None,
+        }
+    }
+}
+
+impl Failure {
+    fn list_unreadable(message: &str) -> Self {
+        Self {
+            message: message.to_owned(),
+            code: Some(LIST_UNREADABLE),
+        }
+    }
+}
+
 /// **Queries thread.** Answers a query. A save writes 1.0's key; the caller then hands the
 /// running dictation its new settings ([`PhrasesQuery::saves`]).
-pub fn answer(store: &dyn Store, query: PhrasesQuery, id: Option<&str>) -> Result<Value, String> {
+pub fn answer(store: &dyn Store, query: PhrasesQuery, id: Option<&str>) -> Result<Value, Failure> {
     let reference = id.map(Value::from);
     Ok(match query {
         PhrasesQuery::SnippetsList => {
@@ -310,7 +341,7 @@ pub fn answer(store: &dyn Store, query: PhrasesQuery, id: Option<&str>) -> Resul
             replace_unreadable,
         } => {
             if !replace_unreadable && load_snippets(store).is_err() {
-                return Err(REFUSED_SNIPPETS.into());
+                return Err(Failure::list_unreadable(REFUSED_SNIPPETS));
             }
             store
                 .set_setting(snippets::SETTING_KEY, &s.to_json())
@@ -326,7 +357,7 @@ pub fn answer(store: &dyn Store, query: PhrasesQuery, id: Option<&str>) -> Resul
             replace_unreadable,
         } => {
             if !replace_unreadable && load_commands(store).is_err() {
-                return Err(REFUSED_COMMANDS.into());
+                return Err(Failure::list_unreadable(REFUSED_COMMANDS));
             }
             store
                 .set_setting(voicecommand::SETTING_KEY, &c.to_json())
@@ -554,10 +585,10 @@ mod tests {
                 },
                 None,
             );
-            assert_eq!(refused, Err(REFUSED_SNIPPETS.to_owned()), "{key}");
-            // The Mac shell tells this refusal apart by its start (PhrasesModel.refusedUnreadable).
-            assert!(REFUSED_SNIPPETS.starts_with("the stored snippets cannot be read"));
-            assert!(REFUSED_COMMANDS.starts_with("the stored voice commands cannot be read"));
+            // The Mac shell tells this refusal apart by its code, never by the message.
+            let refused = refused.unwrap_err();
+            assert_eq!(refused.code, Some(LIST_UNREADABLE), "{key}");
+            assert_eq!(refused.message, REFUSED_SNIPPETS, "{key}");
             assert_eq!(store.setting(key).unwrap().as_deref(), Some("damaged"));
             answer(
                 &store,
@@ -579,7 +610,7 @@ mod tests {
         };
         assert_eq!(
             answer(&store, save(false), None),
-            Err(REFUSED_COMMANDS.to_owned())
+            Err(Failure::list_unreadable(REFUSED_COMMANDS))
         );
         answer(&store, save(true), None).unwrap();
         assert!(load_commands(&store).is_ok());
@@ -648,7 +679,9 @@ mod tests {
             .set_setting(snippets::SETTING_KEY, "not json")
             .unwrap();
         assert!(load_snippets(&store).is_err(), "never quietly empty");
-        assert!(answer(&store, PhrasesQuery::SnippetsList, None).is_err());
+        // A list that cannot be read is a failure without a code: only a save's refusal has one.
+        let failed = answer(&store, PhrasesQuery::SnippetsList, None).unwrap_err();
+        assert_eq!(failed.code, None);
     }
 
     #[test]

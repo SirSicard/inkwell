@@ -700,12 +700,24 @@ fn destination_name(needs: &LlmConsent) -> String {
 
 /// `command.failed`.
 pub fn command_failed(command: &str, id: Option<&str>, message: &str) -> Value {
+    command_failed_coded(command, id, message, None)
+}
+
+/// `command.failed` with the `code` a shell tells this failure apart by (the schema's
+/// `FailureCode`), so it never has to match the message.
+pub fn command_failed_coded(
+    command: &str,
+    id: Option<&str>,
+    message: &str,
+    code: Option<&str>,
+) -> Value {
     event(
         "command.failed",
         &[
             ("command", some(command)),
             ("id", id.map(Value::from)),
             ("message", some(message)),
+            ("code", code.map(Value::from)),
         ],
     )
 }
@@ -735,6 +747,12 @@ mod tests {
         let mut all = vec![
             ready(),
             command_failed("x", Some("7"), "why"),
+            command_failed_coded(
+                "snippets.save",
+                Some("8"),
+                "why",
+                Some(crate::phrases::LIST_UNREADABLE),
+            ),
             worker_failed(false),
         ];
         let dictation_events = vec![

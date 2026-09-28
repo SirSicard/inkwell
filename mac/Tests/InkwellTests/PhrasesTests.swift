@@ -158,7 +158,7 @@ final class SnippetsModelTests: XCTestCase {
         model.load()
         model.apply(event(importedSnippets))
         model.delete("s1")
-        model.apply(event(#"{"type":"command.failed","command":"snippets.save","id":"snippets:2","message":"the stored snippets cannot be read, so a save would replace them; send replace_unreadable to start over"}"#))
+        model.apply(event(#"{"type":"command.failed","command":"snippets.save","id":"snippets:2","code":"list_unreadable","message":"the stored snippets cannot be read, so a save would replace them; send replace_unreadable to start over"}"#))
         XCTAssertTrue(model.unreadable)
         XCTAssertFalse(model.loaded)
         XCTAssertEqual(model.rows, [])
@@ -171,10 +171,30 @@ final class SnippetsModelTests: XCTestCase {
         commands.load()
         commands.apply(event(importedCommands.replacingOccurrences(of: #""from_import":true"#, with: #""from_import":true,"ref":"voice_commands:1""#)))
         commands.setEnabled(false)
-        commands.apply(event(#"{"type":"command.failed","command":"voice_commands.save","id":"voice_commands:2","message":"the stored voice commands cannot be read, so a save would replace them; send replace_unreadable to start over"}"#))
+        commands.apply(event(#"{"type":"command.failed","command":"voice_commands.save","id":"voice_commands:2","code":"list_unreadable","message":"the stored voice commands cannot be read, so a save would replace them; send replace_unreadable to start over"}"#))
         XCTAssertTrue(commands.unreadable)
         commands.startOver()
         guard case .voiceCommandsSave(_, _, _, true, _) = sent.commands.last else { return XCTFail("\(sent.commands)") }
+    }
+
+    /// The refusal is told apart by its code: a reworded message still offers Start over.
+    func testARefusalIsKnownByItsCodeNotItsMessage() {
+        let sent = Sent()
+        let model = SnippetsModel(send: sent.send)
+        model.load()
+        model.apply(event(importedSnippets))
+        model.delete("s1")
+        model.apply(event(#"{"type":"command.failed","command":"snippets.save","id":"snippets:2","code":"list_unreadable","message":"reworded"}"#))
+        XCTAssertTrue(model.unreadable)
+        XCTAssertEqual(model.failure, SnippetsModel.loadFailedText)
+
+        let commands = VoiceCommandsModel(send: sent.send)
+        commands.load()
+        commands.apply(event(importedCommands.replacingOccurrences(of: #""from_import":true"#, with: #""from_import":true,"ref":"voice_commands:1""#)))
+        commands.setEnabled(false)
+        commands.apply(event(#"{"type":"command.failed","command":"voice_commands.save","id":"voice_commands:2","code":"list_unreadable","message":"reworded"}"#))
+        XCTAssertTrue(commands.unreadable)
+        XCTAssertEqual(commands.failure, VoiceCommandsModel.loadFailedText)
     }
 
     func testTheSaveCommandCarriesEveryField() throws {
