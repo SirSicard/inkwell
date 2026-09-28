@@ -413,9 +413,11 @@ final class EditConsentTests: XCTestCase {
         XCTAssertTrue(message.contains("sends the text you select and what you say to a language model"), message)
         XCTAssertTrue(message.contains("Apple's on-device model, so your words stay on this Mac"), message)
         XCTAssertEqual(ConsentModel.button(.edit, asked), "Turn On Voice Edit")
+        XCTAssertNil(screens.dictation.editKey, "asking changes no key")
         screens.editConsent.cancel()
         XCTAssertNil(screens.editConsent.pending)
         XCTAssertEqual(sent.commands.count, before, "cancel sends nothing")
+        XCTAssertNil(screens.dictation.editKey, "cancel leaves voice edit off")
 
         screens.chooseEditKey("right_command")
         screens.editConsent.allow()
