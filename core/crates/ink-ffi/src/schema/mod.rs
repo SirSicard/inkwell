@@ -11,10 +11,11 @@
 //!
 //! [`Schema::parse`] reads it into a small model and refuses anything outside that subset, so a
 //! schema edit the generators cannot express fails at once instead of producing wrong types.
-//! Emitters work from the model: [`swift`] now; a C# emitter joins it for the Windows shell.
+//! Emitters work from the model: [`swift`] for the Mac shell, [`csharp`] for the Windows shell.
 //! [`Schema::validate`] checks an event against the same model, which is how the tests hold the
 //! Rust side to the schema.
 
+pub mod csharp;
 pub mod swift;
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -57,3 +57,7 @@ ink-platform-mac = { path = "../ink-platform-mac" }
 ink-core = { workspace = true, features = ["mock"] }
 # Synthetic test audio (already in the tree).
 hound = "3.5.1"
+# The Windows shell's P/Invoke declarations, generated from this crate's `extern "C"` functions
+# (tests/csharp_binding.rs checks them; the C# lives in windows/). MIT. A dev-dependency: it never
+# reaches the libraries the shells link, nor their licence notices.
+csbindgen = "1.9.8"
