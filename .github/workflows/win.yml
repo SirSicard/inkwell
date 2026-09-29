@@ -37,11 +37,12 @@ jobs:
         with:
           workspaces: core
       # The C# event types (ink-schema) and P/Invoke declarations (csbindgen) match the schema and
-      # the core's C ABI.
+      # the core's C ABI, and About's Rust notices (ink-notices) match the Windows build's crates.
       - name: Generated C# is current
         working-directory: core
         run: |
           cargo run --locked -p ink-ffi --bin ink-schema -- --check
+          cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
           cargo test --locked -p ink-ffi --test csharp_binding --test schema
       # The DLL the shell loads, as the shell links it: engine features off.
       - name: Build the core's DLL
