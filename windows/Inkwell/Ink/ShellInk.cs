@@ -5,8 +5,10 @@
 // (INK_DROP_DEMO). Nothing here polls.
 //
 // When the Drop cannot draw its ink (a lost device it is recovering from, a shader that does not
-// compile, no window at all) the failure goes to the window through the callback the app gives,
-// as the core's failures do (CoreController), as well as to the log; null says it draws again.
+// compile, no plain panel either, no window at all) the problem goes to the callback the app
+// gives (the window's status line and the tray icon, which stays seen while the window is hidden)
+// as well as to the log; null says it is fine again. A Drop window that could not be made is
+// tried again at every change of state.
 using Inkwell.Ink;
 using Microsoft.UI.Dispatching;
 
@@ -14,7 +16,8 @@ namespace Inkwell;
 
 internal sealed class ShellInk : IDisposable
 {
-    private readonly DropWindow? drop;
+    private DropWindow? drop;
+    private readonly Action<string?> report;
     private readonly DropDemo? demo;
     private InkState live = InkState.Idle;
     private InkState? held;
@@ -44,17 +47,8 @@ internal sealed class ShellInk : IDisposable
                 InkLog.Write($"drawing on {p.AdapterName}{(p.IsWarp ? " (WARP, the software rasteriser)" : "")}, shader compiled in {p.CompileTime.TotalMilliseconds:F0} ms");
             }
         });
-        try
-        {
-            drop = new DropWindow(Loader, Clock);
-            drop.Surface.FailureChanged += showFailure;
-        }
-        catch (InkRendererException e)
-        {
-            // Without its window the Drop cannot show; the rest of the app runs on and says so.
-            InkLog.Write(e.Message);
-            showFailure(e.Message);
-        }
+        report = showFailure;
+        MakeDrop();
         if (DropDemo.Interval(Environment.GetEnvironmentVariable("INK_DROP_DEMO")) is { } interval)
         {
             demo = new DropDemo(ui, this, interval);
@@ -89,8 +83,30 @@ internal sealed class ShellInk : IDisposable
         }
     }
 
+    /// <summary>Makes the Drop's window if it is not there; a failure is said, and tried again at the next change.</summary>
+    private void MakeDrop()
+    {
+        if (drop is not null)
+        {
+            return;
+        }
+        try
+        {
+            drop = new DropWindow(Loader, Clock);
+            drop.ProblemChanged += report;
+            report(drop.Problem);
+        }
+        catch (InkRendererException e)
+        {
+            // Without its window the Drop cannot show; the rest of the app runs on and says so.
+            InkLog.Write(e.Message);
+            report($"no Drop at all: {e.Message}");
+        }
+    }
+
     private void Update()
     {
+        MakeDrop();
         drop?.Update(State);
         Changed?.Invoke();
     }

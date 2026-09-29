@@ -43,7 +43,7 @@ public sealed partial class MainWindow : Window
     /// <summary>UI thread. Why the Drop cannot draw its ink (it shows a plain panel meanwhile), or null once it draws again.</summary>
     internal void ShowInkFailure(string? failure)
     {
-        InkStatus.Text = failure is null ? "" : $"The Drop is showing a plain panel: {failure}";
+        InkStatus.Text = failure is null ? "" : $"The Drop: {failure}";
         InkStatus.Visibility = failure is null ? Visibility.Collapsed : Visibility.Visible;
     }
 

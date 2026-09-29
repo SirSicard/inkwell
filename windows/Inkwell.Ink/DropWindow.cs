@@ -67,6 +67,9 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private double dpiScale = 1;
     private bool disposed;
     private DropFallback? fallback;
+    private readonly Func<DropFallback> makeFallback;
+    /// <summary>Why the fallback window could not be made, while it could not.</summary>
+    private string? fallbackFailure;
 
     /// <summary>For tests: an HRESULT to fail the next present with (a lost device), once.</summary>
     internal int FailNextPresent { get; set; }
@@ -95,7 +98,14 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     /// thread. Its Direct3D resources wait for the pipeline.
     /// </summary>
     public DropWindow(InkPipelineLoader loader, InkClock clock)
+        : this(loader, clock, () => new DropFallback())
     {
+    }
+
+    /// <summary>The same, with the fallback window made by <paramref name="makeFallback"/> (tests make it fail).</summary>
+    internal DropWindow(InkPipelineLoader loader, InkClock clock, Func<DropFallback> makeFallback)
+    {
+        this.makeFallback = makeFallback;
         self = GCHandle.Alloc(this);
         var instance = GetModuleHandleW(null);
         fixed (char* name = ClassName)
@@ -129,8 +139,62 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             throw new InkRendererException($"couldn't make the Drop's window (error {error})");
         }
         SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, GCHandle.ToIntPtr(self));
+        // The fallback is made now, not when the ink first fails: a machine that cannot make it
+        // is known (and said) from the start.
+        MakeFallback();
         // The recording indicator must never go blank: its device is checked while it shows.
         Surface = new InkSurface(this, loader, clock) { WatchesDevice = true };
+        Surface.FailureChanged += _ => ProblemMayHaveChanged();
+        ProblemMayHaveChanged();
+    }
+
+    /// <summary>
+    /// What stands between the user and a working Drop, or null: the ink's failure, and whether the
+    /// plain panel could not be made either. The shell shows it where it stays seen while the window
+    /// is hidden (the tray icon).
+    /// </summary>
+    public string? Problem => (Surface?.Failure, fallbackFailure) switch
+    {
+        (null, null) => null,
+        (null, { } f) => $"no plain panel to fall back on: {f}",
+        ({ } s, null) => s,
+        ({ } s, { } f) => $"{s}; no plain panel either: {f}",
+    };
+
+    /// <summary>The problem changed (its new value, or null). UI thread.</summary>
+    public event Action<string?>? ProblemChanged;
+
+    private string? lastProblem;
+
+    private void ProblemMayHaveChanged()
+    {
+        var now = Problem;
+        if (now != lastProblem)
+        {
+            lastProblem = now;
+            ProblemChanged?.Invoke(now);
+        }
+    }
+
+    /// <summary>Makes the fallback window if it is not there yet; a failure is kept and said.</summary>
+    private bool MakeFallback()
+    {
+        if (fallback is not null)
+        {
+            return true;
+        }
+        try
+        {
+            fallback = makeFallback();
+            fallbackFailure = null;
+        }
+        catch (InkRendererException e)
+        {
+            InkLog.Write(e.Message);
+            fallbackFailure = e.Message;
+        }
+        ProblemMayHaveChanged();
+        return fallback is not null;
     }
 
     /// <summary>Shows the Drop for <paramref name="state"/>, or hides it when nothing is live.</summary>
@@ -281,18 +345,14 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     /// <summary>The plain panel over the Drop's rectangle; the Drop's own window stays, transparent, under it.</summary>
     private void ShowFallback()
     {
-        try
+        // Tried again each time it is needed.
+        if (!MakeFallback())
         {
-            fallback ??= new DropFallback();
-        }
-        catch (InkRendererException e)
-        {
-            InkLog.Write(e.Message);
             return;
         }
         RECT bounds;
         GetWindowRect(hwnd, &bounds);
-        fallback.Show(bounds, text, dpiScale);
+        fallback!.Show(bounds, text, dpiScale);
     }
 
     /// <summary>

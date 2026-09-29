@@ -135,6 +135,47 @@ public sealed class DropTests
         Assert.Equal(foreground, GetForegroundWindow());
     }
 
+    /// <summary>
+    /// A Drop whose plain panel cannot be made says so from the start, and says both when the ink
+    /// fails too: the shell shows it where it stays seen (the tray icon).
+    /// </summary>
+    [Fact]
+    public void AFallbackThatCannotBeMadeIsSaidAtOnceAndWithTheInksFailure()
+    {
+        var ui = new UiThread();
+        var loader = new InkPipelineLoader(() => new InkPipeline(InkAdapter.Warp, "not a shader"));
+        Assert.True(loader.Wait().Permanent);
+        var tries = 0;
+        using var drop = new DropWindow(loader, new InkClock(ui.Post), () =>
+        {
+            tries++;
+            throw new InkRendererException("couldn't make the Drop's fallback window (error 8)");
+        });
+        var problems = new List<string?>();
+        drop.ProblemChanged += problems.Add;
+        Assert.Equal(1, tries);
+        Assert.StartsWith("couldn't compile the ink shader", drop.Problem, StringComparison.Ordinal);
+        Assert.EndsWith("; no plain panel either: couldn't make the Drop's fallback window (error 8)", drop.Problem, StringComparison.Ordinal);
+
+        drop.Update(InkState.Meeting);
+        ui.Pump(0.2);
+        Assert.False(drop.ShowsFallback);
+        Assert.True(tries >= 2, "the fallback is tried again when it is needed");
+        Assert.Empty(problems);
+    }
+
+    [Fact]
+    public void AFallbackThatCannotBeMadeIsSaidEvenWhileTheInkIsFine()
+    {
+        var ui = new UiThread();
+        var loader = new InkPipelineLoader(() => new InkPipeline(InkAdapter.Warp));
+        Assert.Null(loader.Wait().Failure);
+        using var drop = new DropWindow(loader, new InkClock(ui.Post),
+            () => throw new InkRendererException("couldn't make the Drop's fallback window (error 8)"));
+        Assert.Equal("no plain panel to fall back on: couldn't make the Drop's fallback window (error 8)", drop.Problem);
+        loader.Outcome!.Pipeline!.Dispose();
+    }
+
     [Fact]
     public void TheDropRecoversFromALostDevice()
     {
