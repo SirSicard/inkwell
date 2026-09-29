@@ -40,9 +40,9 @@ use llama_cpp_2::sampling::LlamaSampler;
 
 use super::{
     GenerateError, Stop, backend, compute, context_params, file_name, generate, model_params,
-    require_file,
+    require_file, with_cpu_fallback,
 };
-use crate::compute::Compute;
+use crate::compute::{Compute, physical_cores};
 use crate::lock;
 use crate::model_dir::ModelDir;
 use crate::registry::{EngineRow, ModelFile, Runtime};
@@ -77,7 +77,7 @@ pub struct QwenAsr {
     mtmd: Mutex<MtmdContext>,
     model: LlamaModel,
     backend: &'static LlamaBackend,
-    compute: &'static Compute,
+    compute: Compute,
 }
 
 impl QwenAsr {
@@ -89,40 +89,45 @@ impl QwenAsr {
         require_file(model, &info.id)?;
         require_file(mmproj, &info.id)?;
         let backend = backend()?;
-        let compute = compute()?;
         let failed = |what: String| EngineError::Failed(format!("{}: {what}", info.id));
-
-        // On a GPU, the defaults are what this was measured with: every layer on the GPU,
-        // memory-mapped.
-        let text_model = LlamaModel::load_from_file(backend, model, &model_params(compute))
-            .map_err(|e| {
-                failed(format!(
-                    "llama.cpp could not load {}: {e}",
-                    file_name(model)
-                ))
-            })?;
         let mmproj_path = mmproj.to_str().ok_or_else(|| {
             failed(format!(
                 "{} has a path that is not UTF-8",
                 file_name(mmproj)
             ))
         })?;
-        // The audio encoder: on the GPU with llama.cpp's defaults, or on the CPU with the same
-        // thread count as the text model.
-        let defaults = MtmdContextParams {
-            print_timings: false,
-            ..MtmdContextParams::default()
+
+        // Both halves on one device; on the CPU if the GPU cannot take them.
+        let load_on = |compute: &Compute| {
+            // On a GPU, the defaults are what this was measured with: every layer on the GPU,
+            // memory-mapped.
+            let text_model = LlamaModel::load_from_file(backend, model, &model_params(compute))
+                .map_err(|e| {
+                    failed(format!(
+                        "llama.cpp could not load {}: {e}",
+                        file_name(model)
+                    ))
+                })?;
+            // The audio encoder: on the GPU with llama.cpp's defaults, or on the CPU with the same
+            // thread count as the text model.
+            let defaults = MtmdContextParams {
+                print_timings: false,
+                ..MtmdContextParams::default()
+            };
+            let params = match compute.cpu_threads() {
+                None => defaults,
+                Some(threads) => MtmdContextParams {
+                    use_gpu: false,
+                    n_threads: i32::try_from(threads.get()).unwrap_or(i32::MAX),
+                    ..defaults
+                },
+            };
+            let mtmd = MtmdContext::init_from_file(mmproj_path, &text_model, &params)
+                .map_err(|e| failed(format!("mtmd could not load {}: {e}", file_name(mmproj))))?;
+            Ok((text_model, mtmd))
         };
-        let params = match compute.cpu_threads() {
-            None => defaults,
-            Some(threads) => MtmdContextParams {
-                use_gpu: false,
-                n_threads: i32::try_from(threads.get()).unwrap_or(i32::MAX),
-                ..defaults
-            },
-        };
-        let mtmd = MtmdContext::init_from_file(mmproj_path, &text_model, &params)
-            .map_err(|e| failed(format!("mtmd could not load {}: {e}", file_name(mmproj))))?;
+        let ((text_model, mtmd), compute) =
+            with_cpu_fallback(compute()?, physical_cores(), &info.id, load_on)?;
         if !mtmd.support_audio() {
             return Err(failed(format!(
                 "{} is not an audio projector",
@@ -148,7 +153,7 @@ impl QwenAsr {
 
     /// **Any thread.** Where this model computes.
     pub fn compute(&self) -> &Compute {
-        self.compute
+        &self.compute
     }
 
     /// **Worker.** How many tokens the prompt for `audio` takes as one window: the text around the
@@ -197,7 +202,7 @@ impl QwenAsr {
                 .and_then(|n| n.checked_add(MAX_NEW_TOKENS))
                 .filter(|&n| n <= self.model.n_ctx_train())
                 .ok_or_else(|| self.failed("the window does not fit the model's context".into()))?;
-            let params = context_params(self.compute, n_ctx);
+            let params = context_params(&self.compute, n_ctx);
             let ctx = self
                 .model
                 .new_context(self.backend, params)

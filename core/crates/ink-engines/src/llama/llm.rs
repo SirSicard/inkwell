@@ -29,9 +29,9 @@ use llama_cpp_2::token::LlamaToken;
 
 use super::{
     GenerateError, Stop, backend, compute, context_params, file_name, generate, model_params,
-    require_file,
+    require_file, with_cpu_fallback,
 };
-use crate::compute::Compute;
+use crate::compute::{Compute, physical_cores};
 
 /// A grammar (llama.cpp's GBNF) for exactly one JSON object, with bounded whitespace so a model
 /// cannot spend its budget on blank lines. Written for this crate from the JSON specification
@@ -57,7 +57,7 @@ pub struct LlamaLlm {
     template: LlamaChatTemplate,
     info: LlmInfo,
     backend: &'static LlamaBackend,
-    compute: &'static Compute,
+    compute: Compute,
 }
 
 impl LlamaLlm {
@@ -67,10 +67,13 @@ impl LlamaLlm {
     pub fn load(path: &Path, model_id: &str) -> Result<Self, EngineError> {
         require_file(path, model_id)?;
         let backend = backend()?;
-        let compute = compute()?;
         let failed = |what: String| EngineError::Failed(format!("{model_id}: {what}"));
-        let model = LlamaModel::load_from_file(backend, path, &model_params(compute))
-            .map_err(|e| failed(format!("llama.cpp could not load {}: {e}", file_name(path))))?;
+        let (model, compute) =
+            with_cpu_fallback(compute()?, physical_cores(), model_id, |compute| {
+                LlamaModel::load_from_file(backend, path, &model_params(compute)).map_err(|e| {
+                    failed(format!("llama.cpp could not load {}: {e}", file_name(path)))
+                })
+            })?;
         let template = model.chat_template(None).map_err(|e| {
             failed(format!(
                 "{} has no usable chat template: {e}",
@@ -92,6 +95,11 @@ impl LlamaLlm {
             backend,
             compute,
         })
+    }
+
+    /// **Any thread.** Where this model computes.
+    pub fn compute(&self) -> &Compute {
+        &self.compute
     }
 }
 
@@ -188,7 +196,7 @@ impl LlamaLlm {
                 ))
             })?;
         self.model
-            .new_context(self.backend, context_params(self.compute, n_ctx))
+            .new_context(self.backend, context_params(&self.compute, n_ctx))
             .map_err(|e| engine(format!("context: {e}")))
     }
 
