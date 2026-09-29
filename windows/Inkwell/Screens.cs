@@ -82,6 +82,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("Meetings", new MeetingsSection(models.Meetings)),
             new("Models", new ModelsSection(models.Catalogue)),
             new("Storage", new StorageSection(models.Storage, models.Meetings)),
+            new("About", new AboutSection(models.About)),
         ];
     }
 
