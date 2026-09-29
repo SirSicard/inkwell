@@ -10,7 +10,10 @@
 //! **Kept out of history.** Three registered formats ride along: `CanIncludeInClipboardHistory`
 //! and `CanUploadToCloudClipboard` set to 0 keep the dictated text out of Win+V history and cloud
 //! clipboard sync, and `ExcludeClipboardContentFromMonitorProcessing` asks clipboard monitors to
-//! ignore it (so a monitor does not render it early, which would read as the paste).
+//! ignore it. **Only the first two are enforced, and only by Windows' own history and sync.** A
+//! third-party clipboard manager or a remote-desktop client (RDP, Parsec) may honour the request
+//! or not; one that does not will read, and may keep, the dictated text. Its read also renders the
+//! text before the paste, which `sequence` does not count as the target's.
 //!
 //! **Saving and restoring.** Every format backed by global memory is copied. Formats that are GDI
 //! handles or private handles (bitmaps, metafiles, palettes, owner-display) cannot be copied this
