@@ -42,7 +42,7 @@
   <!-- The public half of the maintainer's EdDSA release key (32 bytes, base64). Empty until the
        key is generated: the app then starts no updater, and the release workflow refuses to
        publish. -->
-  <key>SUPublicEDKey</key><string></string>
+  <key>SUPublicEDKey</key><string>2zqgoIMo0aYQidpdYGrCNpGY1WB5u4YE3ib2cG8RmJk=</string>
   <!-- An update's EdDSA signature is checked before its archive is unpacked, and the feed itself
        must be signed with the same key. -->
   <key>SUVerifyUpdateBeforeExtraction</key><true/>
