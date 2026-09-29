@@ -9,6 +9,14 @@
 //! [`ACTIVE_MS`] and that input was not the previous heartbeat. A hook can only be removed while
 //! it is handling input, so an idle machine has nothing to check.
 //!
+//! **A miss can be false.** Another low-level hook installed after ours (AutoHotkey, a key
+//! remapper) runs first and may swallow the heartbeat key, so our live hook never sees it. So a
+//! miss counts only if our callback saw no key event at all since the heartbeat went out, and
+//! reinstalls are capped ([`ReinstallBudget`]: three in ten minutes); past the cap the hotkey is
+//! reported lost once, rather than churn. A reinstall puts our hook first again, which ends
+//! the false misses of that kind. A reinstall never cancels a hold: if its release was really
+//! missed, the core's stuck-hold watchdog ends it.
+//!
 //! Pure over tick-counter milliseconds (which wrap every 49.7 days, hence the wrapping maths).
 #![cfg(windows)]
 
@@ -20,6 +28,10 @@ pub(crate) const DEADLINE_MS: u32 = 100;
 pub(crate) const ACTIVE_MS: u32 = 2_000;
 /// Input stamped up to this long after the heartbeat was sent is taken as the heartbeat itself.
 const OURS_MARGIN_MS: u32 = 50;
+/// At most this many reinstalls...
+pub(crate) const MAX_REINSTALLS: usize = 3;
+/// ...within this window.
+pub(crate) const REINSTALL_WINDOW_MS: u32 = 10 * 60 * 1_000;
 
 /// Whether tick `a` is later than tick `b`, across the wrap.
 fn later(a: u32, b: u32) -> bool {
@@ -32,6 +44,8 @@ pub(crate) struct Heartbeat {
     pending: bool,
     /// The last input stamp that may be our own heartbeat.
     ours_until: Option<u32>,
+    /// Our hook callback's count when the pending heartbeat went out.
+    callbacks_at_send: u64,
 }
 
 impl Heartbeat {
@@ -45,9 +59,11 @@ impl Heartbeat {
         !self.pending && recent && not_ours
     }
 
-    /// One was injected; `after_ms` is the tick just after `SendInput` returned.
-    pub(crate) fn sent(&mut self, after_ms: u32) {
+    /// One was injected; `after_ms` is the tick just after `SendInput` returned, `callbacks` our
+    /// hook callback's count then.
+    pub(crate) fn sent(&mut self, after_ms: u32, callbacks: u64) {
         self.pending = true;
+        self.callbacks_at_send = callbacks;
         self.ours_until = Some(after_ms.wrapping_add(OURS_MARGIN_MS));
     }
 
@@ -56,9 +72,30 @@ impl Heartbeat {
         self.pending = false;
     }
 
-    /// At the deadline: whether the hook missed the heartbeat (it is gone). Clears it either way.
-    pub(crate) fn missed(&mut self) -> bool {
-        std::mem::take(&mut self.pending)
+    /// At the deadline: whether the hook missed the heartbeat and saw nothing else either (it is
+    /// gone). `callbacks` is our callback's count now. Clears the heartbeat either way.
+    pub(crate) fn missed(&mut self, callbacks: u64) -> bool {
+        std::mem::take(&mut self.pending) && callbacks == self.callbacks_at_send
+    }
+}
+
+/// Caps reinstalls at [`MAX_REINSTALLS`] per [`REINSTALL_WINDOW_MS`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ReinstallBudget {
+    /// Ticks of the reinstalls inside the window.
+    recent: Vec<u32>,
+}
+
+impl ReinstallBudget {
+    /// Whether one more reinstall is allowed at `now_ms`; if so, it is counted.
+    pub(crate) fn allow(&mut self, now_ms: u32) -> bool {
+        self.recent
+            .retain(|&at| now_ms.wrapping_sub(at) < REINSTALL_WINDOW_MS);
+        if self.recent.len() >= MAX_REINSTALLS {
+            return false;
+        }
+        self.recent.push(now_ms);
+        true
     }
 }
 
@@ -76,7 +113,7 @@ mod tests {
     #[test]
     fn a_heartbeat_does_not_count_as_the_user_being_active() {
         let mut hb = Heartbeat::default();
-        hb.sent(10_000);
+        hb.sent(10_000, 0);
         hb.seen();
         // Five seconds on, the last input is the heartbeat itself (stamped a few ms later).
         assert!(!hb.should_send(15_000, 10_020));
@@ -87,19 +124,51 @@ mod tests {
     #[test]
     fn a_seen_heartbeat_is_not_missed_and_an_unseen_one_is() {
         let mut hb = Heartbeat::default();
-        hb.sent(1_000);
+        hb.sent(1_000, 0);
         assert!(!hb.should_send(1_050, 1_040), "one at a time");
         hb.seen();
-        assert!(!hb.missed());
-        hb.sent(6_000);
-        assert!(hb.missed(), "the hook never saw it");
-        assert!(!hb.missed(), "reported once");
+        assert!(!hb.missed(0));
+        hb.sent(6_000, 0);
+        assert!(hb.missed(0), "the hook never saw it");
+        assert!(!hb.missed(0), "reported once");
+    }
+
+    #[test]
+    fn a_miss_while_our_hook_saw_other_keys_is_not_a_miss() {
+        // Another hook swallowed the heartbeat, but ours saw the user's keys meanwhile: alive.
+        let mut hb = Heartbeat::default();
+        hb.sent(1_000, 40);
+        assert!(!hb.missed(43));
+        // Nothing at all reached our callback: gone.
+        hb.sent(6_000, 43);
+        assert!(hb.missed(43));
+    }
+
+    #[test]
+    fn reinstalls_are_capped_at_three_in_ten_minutes() {
+        let mut budget = ReinstallBudget::default();
+        assert!(budget.allow(1_000));
+        assert!(budget.allow(2_000));
+        assert!(budget.allow(3_000));
+        assert!(
+            !budget.allow(4_000),
+            "a fourth within ten minutes: lost instead"
+        );
+        // Ten minutes after the first, one slot is free again.
+        assert!(budget.allow(1_000 + REINSTALL_WINDOW_MS));
+        assert!(!budget.allow(1_000 + REINSTALL_WINDOW_MS + 1));
+        // Across the tick counter's wrap.
+        let mut wrap = ReinstallBudget::default();
+        assert!(wrap.allow(u32::MAX - 5));
+        assert!(wrap.allow(10));
+        assert!(wrap.allow(20));
+        assert!(!wrap.allow(30));
     }
 
     #[test]
     fn ticks_wrap() {
         let mut hb = Heartbeat::default();
-        hb.sent(u32::MAX - 10);
+        hb.sent(u32::MAX - 10, 0);
         hb.seen();
         // The margin wraps past zero; input at 100 is after it.
         assert!(hb.should_send(200, 100));

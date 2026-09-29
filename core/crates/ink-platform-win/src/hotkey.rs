@@ -12,7 +12,8 @@
 //! held in a `Cell`, calls the core's sink (which only enqueues) and returns. Windows removes a
 //! hook that takes longer than its timeout (about a second) **without telling anyone**, so the
 //! callback takes no locks and does no work beyond that, the thread runs at high priority, and a
-//! heartbeat (`heartbeat`) notices a removed hook and installs it again; if it cannot, `Lost`.
+//! heartbeat (`heartbeat`) notices a removed hook and installs it again; if it cannot, or has
+//! had to three times in ten minutes, `Lost`. The check is sampled: only near real input.
 //!
 //! **Our own keys.** Events this crate injects (the paste keystroke, typed text) carry
 //! [`SYNTHETIC_EVENT_MARK`] in `dwExtraInfo` and pass through untouched. Other injected input
@@ -58,7 +59,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::clock::WinClock;
 use binding::{Binding, modifier, vk};
-use heartbeat::Heartbeat;
+use heartbeat::{Heartbeat, ReinstallBudget};
 use machine::{Edge, HoldMachine, HookInput};
 
 pub use binding::{DEFAULT_BINDING, KEYS};
@@ -130,6 +131,8 @@ thread_local! {
     static CONTEXT: RefCell<Option<HookContext>> = const { RefCell::new(None) };
     /// Set by the callback when the heartbeat key reaches it.
     static HEARTBEAT_SEEN: Cell<bool> = const { Cell::new(false) };
+    /// Every call of the callback, for telling a removed hook from a heartbeat another hook ate.
+    static CALLBACKS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Calls the sink; a panic is caught, counted and recovered (the hold is reset, `Cancelled` sent).
@@ -149,6 +152,7 @@ fn emit(context: &HookContext, event: HotkeyEvent) {
 
 /// The hook. **Hook thread.**
 unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    CALLBACKS.set(CALLBACKS.get().wrapping_add(1));
     let swallow = if code == HC_ACTION as i32 {
         // SAFETY: for HC_ACTION, lparam points at the event's KBDLLHOOKSTRUCT for the call.
         let event = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
@@ -292,6 +296,7 @@ fn last_input_tick() -> Option<u32> {
 fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
     let mut msg = MSG::default();
     let mut heartbeat = Heartbeat::default();
+    let mut budget = ReinstallBudget::default();
     // SAFETY: a thread timer (no window, no callback); it posts WM_TIMER to this thread.
     let tick_timer = unsafe { SetTimer(None, 0, heartbeat::INTERVAL_MS, None) };
     let mut check_timer = 0usize;
@@ -313,7 +318,7 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
                     HEARTBEAT_SEEN.set(false);
                     if crate::insert::send_heartbeat() {
                         // SAFETY: no arguments.
-                        heartbeat.sent(unsafe { GetTickCount() });
+                        heartbeat.sent(unsafe { GetTickCount() }, CALLBACKS.get());
                         // SAFETY: a one-shot thread timer, killed when it fires.
                         check_timer = unsafe { SetTimer(None, 0, heartbeat::DEADLINE_MS, None) };
                     }
@@ -326,9 +331,14 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
                 if HEARTBEAT_SEEN.take() {
                     heartbeat.seen();
                 }
-                if heartbeat.missed() {
-                    // Windows removed the hook. Unhooking the stale handle may fail; either way a
-                    // new one goes in, and a hold in progress may have lost its release.
+                if heartbeat.missed(CALLBACKS.get()) {
+                    // Windows removed the hook, most likely. Past the cap, report it rather than
+                    // churn (a hook that keeps timing out, or one we keep misjudging).
+                    // SAFETY: no arguments.
+                    if !budget.allow(unsafe { GetTickCount() }) {
+                        break true;
+                    }
+                    // Unhooking the stale handle may fail; either way a new one goes in.
                     // SAFETY: the handle this thread installed.
                     let _ = unsafe { UnhookWindowsHookEx(hook) };
                     match install() {
@@ -352,21 +362,13 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
     (hook, lost)
 }
 
-/// After a reinstall: counted, and a hold in progress is cancelled (its release may be lost).
+/// After a reinstall: counted. A hold in progress is kept, because the miss may have been false
+/// (another hook ate the heartbeat); if its release really was lost, the core's stuck-hold
+/// watchdog ends it.
 fn reinstalled() {
-    let held = MACHINE.with(|m| {
-        let mut machine = m.get()?;
-        let held = machine.is_held();
-        machine.reset();
-        m.set(Some(machine));
-        Some(held)
-    });
     CONTEXT.with(|c| {
         if let Some(context) = c.borrow().as_ref() {
             context.reinstalls.fetch_add(1, Ordering::Relaxed);
-            if held == Some(true) {
-                emit(context, HotkeyEvent::Cancelled);
-            }
         }
     });
 }
