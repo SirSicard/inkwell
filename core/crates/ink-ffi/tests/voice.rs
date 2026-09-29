@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ink_engines::{ModelDir, Registry};
 use ink_ffi::runtime::{Core, Parts};
-use ink_ffi::voice::{MIC_IDLE, VoicePlatform};
+use ink_ffi::voice::{DEFAULT_KEY, MIC_IDLE, VoicePlatform};
 use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -220,11 +220,11 @@ impl Drop for VoiceRig {
 fn enabling_holds_the_default_key_and_a_hold_dictates_into_the_focused_app() {
     let rig = VoiceRig::new("dictate");
     let ready = rig.enable();
-    assert_eq!(ready["key"], "fn");
+    assert_eq!(ready["key"], DEFAULT_KEY);
     assert!(ready.get("edit_key").is_none(), "no edit key by default");
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("fn")
+        Some(DEFAULT_KEY)
     );
     assert!(
         !rig.mic_open(),
@@ -341,13 +341,15 @@ fn the_edit_key_is_held_on_its_own_and_never_the_dictation_key() {
             v["type"] == "dictation.ready" && v["edit_key"] == "right_command"
         })
         .expect("edit key bound");
-    assert_eq!(ready["key"], "fn");
+    assert_eq!(ready["key"], DEFAULT_KEY);
     assert_eq!(
         rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
         Some("right_command")
     );
     // The dictation key itself as the edit key: refused, and said so.
-    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"fn"}"#);
+    rig.command(&format!(
+        r#"{{"cmd":"setting.set","key":"dictation.edit_key","value":"{DEFAULT_KEY}"}}"#
+    ));
     let same = rig
         .events
         .wait_for(WAIT, |v| {
@@ -1398,7 +1400,7 @@ fn an_unmappable_hotkey_keeps_the_default_and_settings_says_so_once() {
             r#"{"hotkey":"super+shift+space","recording_mode":"toggle"}"#,
         )],
     );
-    assert_eq!(rig.enable()["key"], "fn");
+    assert_eq!(rig.enable()["key"], DEFAULT_KEY);
     let notes = rig.ask(r#"{"cmd":"import.notes","id":"n1"}"#, "n1");
     assert_eq!(notes["key"]["hotkey"], "super+shift+space");
     assert_eq!(notes["key"]["outcome"], "combination");

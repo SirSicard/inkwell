@@ -53,6 +53,10 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # The platform clock (mach_absolute_time), the timebase of capture.
 ink-platform-mac = { path = "../ink-platform-mac" }
 
+[target.'cfg(windows)'.dependencies]
+# The performance-counter clock, and dictation's keys, mic, insertion and focus (S3.5a).
+ink-platform-win = { path = "../ink-platform-win" }
+
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }
 # Synthetic test audio (already in the tree).

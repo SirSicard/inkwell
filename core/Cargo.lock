@@ -706,6 +706,7 @@ dependencies = [
  "ink-llm",
  "ink-pipeline",
  "ink-platform-mac",
+ "ink-platform-win",
  "ink-store",
  "log",
  "serde_json",

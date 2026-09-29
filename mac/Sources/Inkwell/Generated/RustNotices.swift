@@ -18,7 +18,7 @@ enum RustNotices {
     static let target = "aarch64-apple-darwin"
     /// FNV-1a (64-bit) of the features, a line feed, the target, a line feed and core/Cargo.lock
     /// (line ends normalised) this was generated from.
-    static let lockFingerprint = "814a2df330827661"
+    static let lockFingerprint = "3d1933e8da748d90"
 
     static let crates: [RustCrateNotice] = [
         RustCrateNotice(
