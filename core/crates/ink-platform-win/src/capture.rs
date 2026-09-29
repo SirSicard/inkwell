@@ -335,6 +335,8 @@ pub struct WasapiSource {
     kind: StreamKind,
     name: String,
     format: StreamFormat,
+    /// The speaker mask the stream is opened with (the device's own, or stereo's).
+    mask: u32,
     clock: WinClock,
     guard: RealtimeGuard,
     counters: Arc<Counters>,
@@ -350,7 +352,7 @@ impl WasapiSource {
         clock: WinClock,
         guard: RealtimeGuard,
     ) -> Result<Self, PlatformError> {
-        let format = {
+        let (format, mask) = {
             let _com = ComScope::enter()?;
             stream::probe_format(&kind)?
         };
@@ -359,6 +361,7 @@ impl WasapiSource {
             kind,
             name,
             format,
+            mask,
             clock,
             guard,
             counters: Arc::default(),
@@ -419,6 +422,7 @@ impl AudioSource for WasapiSource {
         self.running = Some(Running::start(
             self.kind.clone(),
             self.format,
+            self.mask,
             sink,
             self.guard.clone(),
             self.clock,

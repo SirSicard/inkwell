@@ -436,8 +436,19 @@ impl Drop for Event {
     }
 }
 
-/// A float `WAVEFORMATEXTENSIBLE` of `format`.
-fn float_format(format: StreamFormat) -> WAVEFORMATEXTENSIBLE {
+/// The speaker mask for a channel count when the device gives none: mono is front centre, stereo
+/// front left and right, more are left unassigned.
+pub(crate) fn default_mask(channels: u16) -> u32 {
+    match channels {
+        1 => 0x4,
+        2 => 0x3,
+        _ => 0,
+    }
+}
+
+/// A float `WAVEFORMATEXTENSIBLE` of `format`, with the device's speaker `mask` (a 5.1 or 7.1
+/// output is refused without its real layout).
+fn float_format(format: StreamFormat, mask: u32) -> WAVEFORMATEXTENSIBLE {
     let channels = format.channels.max(1);
     let block_align = channels * 4;
     WAVEFORMATEXTENSIBLE {
@@ -453,19 +464,13 @@ fn float_format(format: StreamFormat) -> WAVEFORMATEXTENSIBLE {
         Samples: WAVEFORMATEXTENSIBLE_0 {
             wValidBitsPerSample: 32,
         },
-        // Mono is front centre, stereo front left and right; more channels are left unassigned,
-        // which the engine accepts and the core's downmix does not read.
-        dwChannelMask: match channels {
-            1 => 0x4,
-            2 => 0x3,
-            _ => 0,
-        },
+        dwChannelMask: mask,
         SubFormat: KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
     }
 }
 
-/// The shared-mode mix format of `client`, as the core's [`StreamFormat`].
-pub(crate) fn mix_format(client: &IAudioClient) -> Result<StreamFormat, PlatformError> {
+/// The shared-mode mix format of `client`, as the core's [`StreamFormat`] and its speaker mask.
+pub(crate) fn mix_format(client: &IAudioClient) -> Result<(StreamFormat, u32), PlatformError> {
     // SAFETY: a live client; the returned block is freed below.
     let raw = unsafe { client.GetMixFormat() }
         .map_err(|e| device_error("reading the device's format", &e))?;
@@ -474,8 +479,20 @@ pub(crate) fn mix_format(client: &IAudioClient) -> Result<StreamFormat, Platform
             "the device reported no format".into(),
         ));
     }
-    // SAFETY: GetMixFormat returns a valid WAVEFORMATEX (packed; read by value).
-    let (rate, channels) = unsafe { ((*raw).nSamplesPerSec, (*raw).nChannels) };
+    // SAFETY: GetMixFormat returns a valid WAVEFORMATEX (packed; read by value), and a
+    // WAVEFORMATEXTENSIBLE when its tag says so and its extension is long enough.
+    let (rate, channels, mask) = unsafe {
+        let header = *raw;
+        let extensible = u32::from(header.wFormatTag) == WAVE_FORMAT_EXTENSIBLE
+            && usize::from(header.cbSize)
+                >= size_of::<WAVEFORMATEXTENSIBLE>() - size_of::<WAVEFORMATEX>();
+        let mask = if extensible {
+            (*raw.cast::<WAVEFORMATEXTENSIBLE>()).dwChannelMask
+        } else {
+            default_mask(header.nChannels)
+        };
+        (header.nSamplesPerSec, header.nChannels, mask)
+    };
     // SAFETY: allocated by GetMixFormat with CoTaskMemAlloc, freed once.
     unsafe { CoTaskMemFree(Some(raw.cast())) };
     if rate == 0 || channels == 0 {
@@ -483,24 +500,92 @@ pub(crate) fn mix_format(client: &IAudioClient) -> Result<StreamFormat, Platform
             "the device reported {rate} Hz and {channels} channels"
         )));
     }
-    Ok(StreamFormat {
-        sample_rate: rate,
-        channels,
-    })
+    Ok((
+        StreamFormat {
+            sample_rate: rate,
+            channels,
+        },
+        mask,
+    ))
 }
 
-/// The format a stream of `kind` delivers, read without starting it. **Worker**, in a COM scope.
-pub(crate) fn probe_format(kind: &StreamKind) -> Result<StreamFormat, PlatformError> {
+/// The layout to open a device in: its own mix format when the engine takes it, else stereo at the
+/// same rate. Up to two channels are taken as they are; more are tried with `accepts` (an
+/// `Initialize` on a fresh client), because a multichannel output (5.1 HDMI) can refuse a float
+/// stream in its own layout. Pure over `accepts`.
+pub(crate) fn choose_layout(
+    mix: (StreamFormat, u32),
+    mut accepts: impl FnMut(StreamFormat, u32) -> bool,
+) -> Option<(StreamFormat, u32)> {
+    if mix.0.channels <= 2 || accepts(mix.0, mix.1) {
+        return Some(mix);
+    }
+    let stereo = StreamFormat {
+        sample_rate: mix.0.sample_rate,
+        channels: 2,
+    };
+    accepts(stereo, default_mask(2)).then_some((stereo, default_mask(2)))
+}
+
+/// The stream flags for `kind`.
+fn stream_flags(kind: &StreamKind) -> u32 {
+    let mut flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    if !matches!(kind, StreamKind::Mic { .. }) {
+        flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
+    }
+    if kind.event_driven() {
+        flags |= AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+    }
+    flags
+}
+
+/// `Initialize` in shared mode, float, in `format` with speaker `mask`.
+fn initialize(
+    client: &IAudioClient,
+    kind: &StreamKind,
+    format: StreamFormat,
+    mask: u32,
+) -> windows::core::Result<()> {
+    let wave = float_format(format, mask);
+    // SAFETY: `wave` is a complete WAVEFORMATEXTENSIBLE whose header it starts with, live for the
+    // call.
+    unsafe {
+        client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            stream_flags(kind),
+            BUFFER_HNS,
+            0,
+            std::ptr::from_ref(&wave).cast::<WAVEFORMATEX>(),
+            None,
+        )
+    }
+}
+
+/// The format a stream of `kind` delivers and its speaker mask, read without starting it.
+/// **Worker**, in a COM scope.
+pub(crate) fn probe_format(kind: &StreamKind) -> Result<(StreamFormat, u32), PlatformError> {
     match kind {
         StreamKind::Mic { endpoint } | StreamKind::DeviceLoopback { endpoint } => {
             let devices = devices::enumerator()?;
             let device = devices::endpoint_by_id(&devices, endpoint)?;
-            // SAFETY: a live device.
-            let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None) }
-                .map_err(|e| device_error("opening the audio device", &e))?;
-            mix_format(&client)
+            let activate = || -> Result<IAudioClient, PlatformError> {
+                // SAFETY: a live device.
+                unsafe { device.Activate(CLSCTX_ALL, None) }
+                    .map_err(|e| device_error("opening the audio device", &e))
+            };
+            let mix = mix_format(&activate()?)?;
+            // A client initialises once, so each try gets a fresh one; nothing is started.
+            choose_layout(mix, |format, mask| {
+                activate().is_ok_and(|client| initialize(&client, kind, format, mask).is_ok())
+            })
+            .ok_or_else(|| {
+                PlatformError::Device(format!(
+                    "the device takes neither its own {}-channel layout nor stereo",
+                    mix.0.channels
+                ))
+            })
         }
-        StreamKind::ProcessLoopback { .. } => Ok(PROCESS_LOOPBACK_FORMAT),
+        StreamKind::ProcessLoopback { .. } => Ok((PROCESS_LOOPBACK_FORMAT, default_mask(2))),
     }
 }
 
@@ -509,6 +594,7 @@ pub(crate) fn probe_format(kind: &StreamKind) -> Result<StreamFormat, PlatformEr
 fn open_client(
     kind: &StreamKind,
     format: StreamFormat,
+    mask: u32,
     event: &Event,
 ) -> Result<(IAudioClient, IAudioCaptureClient), PlatformError> {
     let client: IAudioClient = match kind {
@@ -521,27 +607,8 @@ fn open_client(
         }
         StreamKind::ProcessLoopback { pid } => loopback::activate(*pid)?,
     };
-    let mut flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-    if !matches!(kind, StreamKind::Mic { .. }) {
-        flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
-    }
-    if kind.event_driven() {
-        flags |= AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
-    }
-    let wave = float_format(format);
-    // SAFETY: `wave` is a complete WAVEFORMATEXTENSIBLE whose header it starts with, live for the
-    // call.
-    unsafe {
-        client.Initialize(
-            AUDCLNT_SHAREMODE_SHARED,
-            flags,
-            BUFFER_HNS,
-            0,
-            std::ptr::from_ref(&wave).cast::<WAVEFORMATEX>(),
-            None,
-        )
-    }
-    .map_err(|e| device_error("initialising the capture stream", &e))?;
+    initialize(&client, kind, format, mask)
+        .map_err(|e| device_error("initialising the capture stream", &e))?;
     if kind.event_driven() {
         // SAFETY: a live event, kept alive by the stream for as long as the client.
         unsafe { client.SetEventHandle(event.handle()) }
@@ -557,6 +624,7 @@ fn open_client(
 struct ThreadSetup {
     kind: StreamKind,
     format: StreamFormat,
+    mask: u32,
     delivery: Delivery,
     guard: RealtimeGuard,
     stop: Arc<Event>,
@@ -569,6 +637,7 @@ fn run(setup: ThreadSetup, ready: mpsc::SyncSender<Result<(), PlatformError>>) -
     let ThreadSetup {
         kind,
         format,
+        mask,
         mut delivery,
         guard,
         stop,
@@ -592,7 +661,7 @@ fn run(setup: ThreadSetup, ready: mpsc::SyncSender<Result<(), PlatformError>>) -
             return delivery;
         }
     };
-    let (client, capture) = match open_client(&kind, format, &event) {
+    let (client, capture) = match open_client(&kind, format, mask, &event) {
         Ok(opened) => opened,
         Err(e) => {
             let _ = ready.send(Err(e));
@@ -642,6 +711,7 @@ impl Running {
     pub(crate) fn start(
         kind: StreamKind,
         format: StreamFormat,
+        mask: u32,
         sink: Box<dyn AudioSink>,
         guard: RealtimeGuard,
         clock: WinClock,
@@ -658,6 +728,7 @@ impl Running {
         let setup = ThreadSetup {
             kind,
             format,
+            mask,
             delivery,
             guard,
             stop: Arc::clone(&stop),
@@ -1028,11 +1099,69 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_float_format_describes_itself_fully() {
-        let wave = float_format(StreamFormat {
-            sample_rate: 32_000,
-            channels: 1,
+    fn a_multichannel_device_keeps_its_layout_or_falls_back_to_stereo() {
+        let surround = StreamFormat {
+            sample_rate: 48_000,
+            channels: 6,
+        };
+        let mix = (surround, 0x3F);
+        // Taken as it is.
+        assert_eq!(choose_layout(mix, |_, _| true), Some(mix));
+        // Refused in 5.1: stereo at the same rate, with the stereo mask.
+        let mut tried = Vec::new();
+        let chosen = choose_layout(mix, |format, mask| {
+            tried.push((format.channels, mask));
+            format.channels == 2
         });
+        assert_eq!(
+            chosen,
+            Some((
+                StreamFormat {
+                    sample_rate: 48_000,
+                    channels: 2
+                },
+                0x3
+            ))
+        );
+        assert_eq!(tried, [(6, 0x3F), (2, 0x3)]);
+        // Refused in both: no layout.
+        assert_eq!(choose_layout(mix, |_, _| false), None);
+        // Mono and stereo are never tried: they are what every shared-mode stream takes.
+        let stereo = (
+            StreamFormat {
+                sample_rate: 44_100,
+                channels: 2,
+            },
+            0x3,
+        );
+        assert_eq!(
+            choose_layout(stereo, |_, _| panic!("not tried")),
+            Some(stereo)
+        );
+    }
+
+    #[test]
+    fn a_float_format_carries_the_devices_mask() {
+        let wave = float_format(
+            StreamFormat {
+                sample_rate: 48_000,
+                channels: 6,
+            },
+            0x3F,
+        );
+        assert_eq!({ wave.dwChannelMask }, 0x3F);
+        assert_eq!({ wave.Format.nBlockAlign }, 24);
+    }
+
+    #[test]
+    fn a_float_format_describes_itself_fully() {
+        let wave = float_format(
+            StreamFormat {
+                sample_rate: 32_000,
+                channels: 1,
+            },
+            default_mask(1),
+        );
         let header = wave.Format;
         assert_eq!({ header.wFormatTag }, WAVE_FORMAT_EXTENSIBLE as u16);
         assert_eq!({ header.nSamplesPerSec }, 32_000);
