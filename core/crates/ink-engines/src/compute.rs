@@ -9,9 +9,10 @@
 //! - **GPU:** every layer offloaded, and llama.cpp's own thread defaults for the little work left on
 //!   the CPU. That is the setup the speeds were measured with, on Metal and on Vulkan.
 //! - **CPU:** nothing offloaded, and the thread count set explicitly to the machine's physical
-//!   cores. llama.cpp's default is 4 threads whatever the machine, which left a 12-core desktop at
-//!   a third of its speed; hyperthreads share a core's arithmetic units, so counting them only adds
-//!   contention.
+//!   cores. llama.cpp's default is 4 threads whatever the machine, which leaves most of a
+//!   desktop's cores idle while the model reads the audio (writing the text is bound by memory
+//!   bandwidth more than by cores). Hyperthreads share a core's arithmetic units, so counting them
+//!   only adds contention.
 //!
 //! [`choose`] is the rule, a pure function tested here on every OS; the llama.cpp adapter feeds it
 //! ggml's device list ([`crate::llama::compute`]).

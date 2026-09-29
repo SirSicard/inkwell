@@ -411,7 +411,8 @@ pub fn builtin_rows() -> Vec<EngineRow> {
 ///
 /// Sizes and hashes are those of the files downloaded from this revision (checked locally by an
 /// ignored test). Windows too: on a desktop's Vulkan GPU it matched the Mac's WER and ran faster;
-/// on the CPU alone it is slower than real time for dictation but fits a meeting's final pass.
+/// on the CPU alone its WER holds, and it fits a meeting's final pass, but a dictation takes
+/// seconds.
 fn qwen3_asr_1_7b_q8() -> EngineRow {
     const REVISION: &str = "36a678687ba7d07a74ca70ccb0e36902e005fb80";
     let file = |name: &str, sha256: &str, size: u64| ModelFile {
