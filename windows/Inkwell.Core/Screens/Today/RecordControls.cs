@@ -17,7 +17,7 @@ public sealed class RecordControlsModel : ObservableModel
     public string? DictationKey { get; private set; }
 
     /// <summary>"Hold Right Ctrl to dictate"; null until the core has bound a key.</summary>
-    public string? DictateText => DictationKey is { } key ? $"Hold {KeyNames.Display(key)} to dictate" : null;
+    public string? DictateText => DictationKey is { } key ? $"Hold {DictationModel.Key(key)?.Name ?? DictationModel.Cap(key)} to dictate" : null;
 
     public void Apply(InkEvent e)
     {
@@ -37,31 +37,4 @@ public sealed class RecordControlsModel : ObservableModel
             false => "Not listening for meetings",
             null => " ",
         };
-}
-
-/// <summary>A hotkey token in Windows' words: right_control is "Right Ctrl", ctrl+shift+space is "Ctrl+Shift+Space", f13 is "F13" (the tokens and aliases ink-platform-win's hotkey binding accepts).</summary>
-public static class KeyNames
-{
-    public static string Display(string token)
-    {
-        ArgumentNullException.ThrowIfNull(token);
-        return string.Join('+', token.Split('+').Select(Part));
-    }
-
-    private static string Part(string part) => part.ToLowerInvariant() switch
-    {
-        "right_control" or "right_ctrl" => "Right Ctrl",
-        "right_alt" or "right_option" or "right_opt" or "altgr" => "Right Alt",
-        "right_shift" => "Right Shift",
-        "right_win" or "right_super" => "Right Windows key",
-        "ctrl" or "control" => "Ctrl",
-        "alt" or "option" or "opt" => "Alt",
-        "shift" => "Shift",
-        "win" or "super" or "meta" => "Windows key",
-        "return" or "enter" => "Enter",
-        "escape" or "esc" => "Esc",
-        "space" => "Space",
-        "" => part,
-        var other => char.ToUpperInvariant(other[0]) + other[1..],
-    };
 }

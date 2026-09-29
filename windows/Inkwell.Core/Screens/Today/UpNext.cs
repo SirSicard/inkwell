@@ -10,8 +10,6 @@
 // is shown and the window is on screen (WindowPresence); hidden, covered or minimised, nothing
 // ticks (architecture rule 9). Moving on to the following event when this one starts is one wake
 // at that moment, through the injected IWakeScheduler, never a timer that polls.
-using System.Globalization;
-
 namespace Inkwell.Core.Screens;
 
 /// <summary>One-shot wakes on the UI thread: the view's implementation uses a DispatcherQueueTimer, the tests a fake.</summary>
@@ -133,15 +131,14 @@ public sealed class UpNextModel : ObservableModel
     };
 
     /// <summary>The event's line under its title: "15:00 · Zoom · in 42 min", at <paramref name="at"/> (the view's minute).</summary>
-    public string? MetaLine(DateTimeOffset at, TimeZoneInfo zone, CultureInfo culture)
+    public string? MetaLine(DateTimeOffset at, LibraryCalendar calendar)
     {
-        ArgumentNullException.ThrowIfNull(zone);
-        ArgumentNullException.ThrowIfNull(culture);
+        ArgumentNullException.ThrowIfNull(calendar);
         if (Event is not { } shown)
         {
             return null;
         }
-        var parts = new List<string> { TodayText.Time(shown.Start, zone, culture) };
+        var parts = new List<string> { LibraryFormat.Time(shown.Start, calendar) };
         if (shown.App is { } app)
         {
             parts.Add(app);

@@ -1,7 +1,7 @@
 // Today's "needs you" banner: what the user must act on, most urgent first, as the Mac's NeedsYou.
 // Fed by the silent-channel watchdog (a live meeting's side states, and the warnings a meeting
 // raised: CoreStore), the permission probes (the Settings screen's cards, passed in), and the
-// library's record of recent meetings that kept no far end (passed in as a FarEnd check): a
+// library's record of recent meetings that kept no far end (LibraryModel's FarEnd): a
 // meeting that recorded one side without saying so is what this banner exists to say.
 //
 // Windows: system audio, Accessibility and input monitoring need no permission (always granted,
@@ -9,7 +9,6 @@
 // Accessibility" items do not exist here. The far end's silence comes from the watchdog (a live
 // meeting's side states, meeting.warning notices) and the library's count, and its button opens
 // Windows' Sound settings, where a muted or misrouted call is fixed.
-using System.Globalization;
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
@@ -37,36 +36,33 @@ public sealed record NeedsYouItem(string Id, string Title, string Detail, string
 
 public static class NeedsYou
 {
-    /// <summary>Whether the far end recorded nothing lately, as far as the library's counts can tell (the Library screen's model answers it).</summary>
-    public abstract record FarEnd
+    /// <summary>What Today's banner lists, from the models Today reads: the permission cards, the watchdog and notices (CoreStore), and the far-end check (LibraryModel), where "could not read" stays apart from "none" (the Mac's TodayScreen.needItems).</summary>
+    public static IReadOnlyList<NeedsYouItem> Items(PermissionsModel permissions, LibraryModel library, CoreStore store)
     {
-        private FarEnd() { }
-
-        /// <summary>Not answered yet: no guess either way.</summary>
-        public sealed record Unknown : FarEnd;
-
-        /// <summary>The counts could not be read: said, never taken as "none".</summary>
-        public sealed record Failed : FarEnd;
-
-        /// <summary>The newest meetings in a row that kept only the user's voice, and since when.</summary>
-        public sealed record Checked(long Meetings, DateTimeOffset? Since) : FarEnd;
+        ArgumentNullException.ThrowIfNull(permissions);
+        ArgumentNullException.ThrowIfNull(library);
+        ArgumentNullException.ThrowIfNull(store);
+        return Items(p => permissions.State(Card(p)), library.FarEnd, store.Meeting, store.Notices, library.Calendar);
     }
+
+    /// <summary>The Settings card that asks for <paramref name="permission"/> (an Allow item's button asks as that card does).</summary>
+    public static PermissionCard Card(PermissionName permission) =>
+        PermissionCards.All.First(card => card.CorePermission() == permission);
 
     /// <summary>Everything that needs the user now, most urgent first.</summary>
     /// <param name="permission">A permission card's state now (the Settings screen's model).</param>
-    /// <param name="zone">The time zone dates are shown in.</param>
-    /// <param name="culture">The locale dates are shown in.</param>
+    /// <param name="calendar">The zone and culture dates are shown in.</param>
     public static IReadOnlyList<NeedsYouItem> Items(
         Func<PermissionName, CardState> permission,
-        FarEnd farEnd,
+        FarEndCheck farEnd,
         LiveMeeting? meeting,
         IReadOnlyList<Notice> notices,
-        TimeZoneInfo zone,
-        CultureInfo culture)
+        LibraryCalendar calendar)
     {
         ArgumentNullException.ThrowIfNull(permission);
         ArgumentNullException.ThrowIfNull(farEnd);
         ArgumentNullException.ThrowIfNull(notices);
+        ArgumentNullException.ThrowIfNull(calendar);
         var items = new List<NeedsYouItem>();
         var sound = new NeedsYouAction.OpenSoundSettings();
         var allowMic = new NeedsYouAction.Allow(PermissionName.Microphone);
@@ -103,8 +99,8 @@ public static class NeedsYou
         // Whether recent meetings kept the far end, and the microphone's permission.
         switch (farEnd)
         {
-            case FarEnd.Checked { Meetings: > 0 } check:
-                var since = check.Since is { } date ? ShortDay(date, zone, culture) : null;
+            case FarEndCheck.Checked { Meetings: > 0 } check:
+                var since = check.Since is { } date ? ShortDay(date, calendar) : null;
                 var count = check.Meetings == 1 ? "Your last meeting" : $"Your last {check.Meetings} meetings";
                 var from = check.Meetings > 1 && since is not null ? $" (since {since})" : "";
                 items.Add(new(
@@ -112,7 +108,7 @@ public static class NeedsYou
                     $"{count}{from} kept only your own voice. Check that your calls' sound isn't muted on this PC.",
                     "Open Sound settings", sound));
                 break;
-            case FarEnd.Failed:
+            case FarEndCheck.Failed:
                 // Not known is not "none": the warning this banner exists for may be the one hidden.
                 items.Add(new(
                     "far-unknown", "Inkwell couldn't check the other side of your calls",
@@ -159,7 +155,7 @@ public static class NeedsYou
         NoticeKind.MeetingFailed or NoticeKind.MeetingCaptureFailed or NoticeKind.MeetingWorkerFailed =>
             ("The last meeting stopped early", "What was recorded up to then is kept."),
         NoticeKind.HotkeyLost =>
-            ("The dictation key stopped working", "Windows stopped sending it to Inkwell. Quit Inkwell and open it again to get it back."),
+            ("The dictation key stopped working", "Windows stopped sending it to Inkwell. Turn dictation on again to get it back."),
         NoticeKind.MeetingRecovered =>
             ("A meeting was finished after Inkwell quit unexpectedly", "It was recording when Inkwell stopped. What was recorded was kept and the record is complete."),
         NoticeKind.RecoveryUnavailable =>
@@ -171,7 +167,7 @@ public static class NeedsYou
         NoticeKind.VoiceCommandNotCarriedOut =>
             ("Inkwell heard a voice command it can’t do yet", "That command isn’t available in this version, so nothing was typed. Settings > Voice commands shows which ones work."),
         NoticeKind.EditKeyLost =>
-            ("The edit key stopped working", "Windows stopped sending it to Inkwell, so editing a selection by voice is off. Quit Inkwell and open it again to get it back."),
+            ("The edit key stopped working", "Windows stopped sending it to Inkwell, so editing a selection by voice is off. Turn dictation on again to get it back."),
         _ => null,
     };
 
@@ -180,10 +176,9 @@ public static class NeedsYou
         count <= 1 ? null : showingAll ? "Show less" : $"{count - 1} more";
 
     /// <summary>A day and abbreviated month in the locale's order: "29 Aug" (en-GB), "Aug 29" (en-US).</summary>
-    internal static string ShortDay(DateTimeOffset date, TimeZoneInfo zone, CultureInfo culture)
+    internal static string ShortDay(DateTimeOffset date, LibraryCalendar calendar)
     {
-        var local = TimeZoneInfo.ConvertTime(date, zone);
-        var pattern = culture.DateTimeFormat.MonthDayPattern.Replace("MMMM", "MMM", StringComparison.Ordinal);
-        return local.ToString(pattern, culture);
+        var pattern = calendar.Culture.DateTimeFormat.MonthDayPattern.Replace("MMMM", "MMM", StringComparison.Ordinal);
+        return calendar.Clock(date).ToString(pattern, calendar.Culture);
     }
 }
