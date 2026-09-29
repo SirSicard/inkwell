@@ -93,9 +93,10 @@ public sealed partial class SnippetsSection : UserControl
                 Model.Update(row with { Trigger = trigger.Text, Expansion = expansion.Text, Category = category.Text.Trim() });
             }
         }
-        catch (System.Runtime.InteropServices.COMException)
+        catch (Exception failure) when (failure is System.Runtime.InteropServices.COMException or InvalidOperationException)
         {
             // Another dialog is open (only one can be): this one is not shown, and nothing changes.
+            ScreenLog.System.Write($"the snippet editor could not open ({failure.GetType().Name})");
         }
     }
 

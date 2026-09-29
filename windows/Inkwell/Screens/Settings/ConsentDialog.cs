@@ -136,7 +136,8 @@ public sealed class ConsentDialog
             PrimaryButtonStyle = allow,
             CloseButtonText = "Cancel",
             CloseButtonStyle = cancel,
-            DefaultButton = ContentDialogButton.Primary,
+            // Enter never agrees to send words off this PC: for a cloud model, Allow is a click.
+            DefaultButton = destination.IsOnDevice ? ContentDialogButton.Primary : ContentDialogButton.None,
         };
     }
 }

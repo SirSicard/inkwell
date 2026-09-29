@@ -183,7 +183,7 @@ public sealed partial class OnboardingSheet : ContentDialog
 
     private void OnPolishToggled(object sender, RoutedEventArgs e)
     {
-        if (!rendering)
+        if (!rendering && PolishSwitch.IsOn != polish.IsOn)
         {
             polish.SetOn(PolishSwitch.IsOn, ConsentHost.Onboarding);
             Render();

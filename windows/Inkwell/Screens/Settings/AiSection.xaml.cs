@@ -25,6 +25,12 @@ public sealed partial class AiSection : UserControl
         Loaded += (_, _) =>
         {
             ai.PropertyChanged += OnChanged;
+            // Read again whenever Settings appears, as the Mac's does: a read that failed is
+            // retried here (its line says so), and a switch changed elsewhere is current.
+            polish.Load();
+            ai.EditConsent.Load();
+            ai.MeetingsConsent.Load();
+            ai.Dictation.Load();
             Render();
         };
         Unloaded += (_, _) => ai.PropertyChanged -= OnChanged;
@@ -59,7 +65,7 @@ public sealed partial class AiSection : UserControl
 
     private void OnPolishToggled(object sender, RoutedEventArgs e)
     {
-        if (!rendering)
+        if (!rendering && PolishSwitch.IsOn != polish.IsOn)
         {
             polish.SetOn(PolishSwitch.IsOn);
             Render();
@@ -68,7 +74,7 @@ public sealed partial class AiSection : UserControl
 
     private void OnEditToggled(object sender, RoutedEventArgs e)
     {
-        if (!rendering)
+        if (!rendering && EditSwitch.IsOn != ai.EditOn)
         {
             ai.SetEdit(EditSwitch.IsOn);
             Render();
@@ -77,7 +83,7 @@ public sealed partial class AiSection : UserControl
 
     private void OnMeetingsToggled(object sender, RoutedEventArgs e)
     {
-        if (!rendering)
+        if (!rendering && MeetingsSwitch.IsOn != ai.MeetingsAIOn)
         {
             ai.SetMeetingsAI(MeetingsSwitch.IsOn);
             Render();
