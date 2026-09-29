@@ -11,6 +11,9 @@ public sealed class InkRendererException : Exception
     /// <summary>The failing HRESULT, or 0 when the failure has none (a shader compile error).</summary>
     public int HResultCode { get; }
 
+    /// <summary>Asking again gives the same answer: the shader does not compile, or is missing.</summary>
+    public bool Permanent { get; init; }
+
     /// <summary>A failure with a message only.</summary>
     public InkRendererException(string message)
         : base(message)

@@ -35,7 +35,7 @@ public partial class App : Application
         };
         core = new CoreController(window.DispatcherQueue, window.ShowStatus);
         // The ink's pipeline compiles off the UI thread from here; the Drop waits, hidden.
-        ink = new ShellInk(window.DispatcherQueue);
+        ink = new ShellInk(window.DispatcherQueue, window.ShowInkFailure);
         InkPanel.Clock = ink.Clock;
         window.ShowInk(ink);
         tray = new TrayIcon(1, Path.Combine(AppContext.BaseDirectory, "Assets", "Inkwell.ico"), "Inkwell");

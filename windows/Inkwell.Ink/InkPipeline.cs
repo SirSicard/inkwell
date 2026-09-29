@@ -134,7 +134,7 @@ public sealed unsafe class InkPipeline : IDisposable
     public static string ShaderSource()
     {
         using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("ink.hlsl")
-            ?? throw new InkRendererException("couldn't find the ink shader (ink.hlsl) in the app");
+            ?? throw new InkRendererException("couldn't find the ink shader (ink.hlsl) in the app") { Permanent = true };
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
@@ -232,7 +232,7 @@ public sealed unsafe class InkPipeline : IDisposable
             {
                 code->Release();
             }
-            throw new InkRendererException($"couldn't compile the ink shader ({entry}, {target}): {message ?? $"0x{hr.Value:X8}"}");
+            throw new InkRendererException($"couldn't compile the ink shader ({entry}, {target}): {message ?? $"0x{hr.Value:X8}"}") { Permanent = true };
         }
         return new Blob(code);
     }

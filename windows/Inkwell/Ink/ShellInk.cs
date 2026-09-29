@@ -3,6 +3,10 @@
 // (mac/Sources/Inkwell/ShellInk.swift). What the core says is live arrives through Live (wired with
 // dictation and meetings end to end); Held pins a state for the Drop's focus check
 // (INK_DROP_DEMO). Nothing here polls.
+//
+// When the Drop cannot draw its ink (a lost device it is recovering from, a shader that does not
+// compile, no window at all) the failure goes to the window through the callback the app gives,
+// as the core's failures do (CoreController), as well as to the log; null says it draws again.
 using Inkwell.Ink;
 using Microsoft.UI.Dispatching;
 
@@ -21,8 +25,8 @@ internal sealed class ShellInk : IDisposable
     /// <summary>The pipeline, compiled once off the UI thread from launch.</summary>
     public static InkPipelineLoader Loader => InkPipelineLoader.Shared;
 
-    /// <summary>UI thread. Starts the pipeline's compile and makes the (hidden) Drop.</summary>
-    public ShellInk(DispatcherQueue ui)
+    /// <summary>UI thread. Starts the pipeline's compile and makes the (hidden) Drop; <paramref name="showFailure"/> shows why the ink cannot draw (null: it draws).</summary>
+    public ShellInk(DispatcherQueue ui, Action<string?> showFailure)
     {
         Clock = new InkClock(work =>
         {
@@ -43,11 +47,13 @@ internal sealed class ShellInk : IDisposable
         try
         {
             drop = new DropWindow(Loader, Clock);
+            drop.Surface.FailureChanged += showFailure;
         }
         catch (InkRendererException e)
         {
-            // Without its window the Drop cannot show; the rest of the app runs on.
+            // Without its window the Drop cannot show; the rest of the app runs on and says so.
             InkLog.Write(e.Message);
+            showFailure(e.Message);
         }
         if (DropDemo.Interval(Environment.GetEnvironmentVariable("INK_DROP_DEMO")) is { } interval)
         {

@@ -42,6 +42,14 @@
                 HorizontalAlignment="Center"
                 FontFamily="{StaticResource InkInterfaceFontFamily}"
                 Text="Starting the core" />
+            <!-- Why the Drop's ink cannot draw (S3.4), when it cannot. -->
+            <TextBlock
+                x:Name="InkStatus"
+                HorizontalAlignment="Center"
+                FontFamily="{StaticResource InkInterfaceFontFamily}"
+                TextWrapping="Wrap"
+                MaxWidth="480"
+                Visibility="Collapsed" />
             <TextBlock
                 x:Name="Version"
                 HorizontalAlignment="Center"

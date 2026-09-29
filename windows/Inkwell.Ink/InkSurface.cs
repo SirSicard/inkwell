@@ -6,6 +6,13 @@
 //
 // The canvas follows the prototype's sizing rule, as on the Mac: the display scale, capped at 1.25
 // for a large canvas (over 180,000 square DIPs) and at 2 otherwise.
+//
+// A frame that fails (a lost device: TDR, driver update, DWM restart; a failed present) is not the
+// end: the surface drops the host's device objects, asks the loader for a new pipeline, and tries
+// again after 0.5, 1 and 2 s, then every 5 s, for as long as the host is on screen (hidden, it
+// waits for the next show: nothing ticks for a hidden ink). While it cannot draw (the pipeline
+// still compiling, lost, or a shader that does not compile) the host shows its fallback, and every
+// change of failure is announced (FailureChanged) so the shell can show it.
 namespace Inkwell.Ink;
 
 /// <summary>What an ink surface draws into.</summary>
@@ -17,6 +24,15 @@ public interface IInkTarget
     /// <see cref="InkRendererException"/> when the device fails.
     /// </summary>
     bool Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark);
+
+    /// <summary>The pipeline is lost or replaced: release every object made on its device.</summary>
+    void ReleaseDeviceResources();
+
+    /// <summary>
+    /// Whether to show what the host shows when the ink cannot draw (the Drop: a plain panel with
+    /// its text). Called on every change.
+    /// </summary>
+    void SetFallback(bool shown);
 }
 
 /// <summary>One ink on screen, drawn into a host.</summary>
@@ -24,6 +40,16 @@ public sealed class InkSurface : IDisposable
 {
     private readonly IInkTarget target;
     private readonly InkClock clock;
+    private readonly InkPipelineLoader loader;
+    private readonly IDisposable subscription;
+    /// <summary>The pipeline whose frame failed, until a new one arrives.</summary>
+    private InkPipeline? lost;
+    /// <summary>Recovery attempts since the last frame that drew.</summary>
+    private int attempts;
+    private bool retryScheduled;
+    private bool retryWhenShown;
+    private Timer? retryTimer;
+    private bool fallbackShown;
     private readonly InkSimulation simulation = new();
     private InkSchedule schedule;
     private InkPipeline? pipeline;
@@ -44,18 +70,18 @@ public sealed class InkSurface : IDisposable
         ArgumentNullException.ThrowIfNull(clock);
         this.target = target;
         this.clock = clock;
+        this.loader = loader;
         // The prototype starts each ink at a random point in its slow motion.
         simulation.T = Random.Shared.NextDouble() * 30;
         schedule.SetReduceMotion(!SystemMotion.AnimationsEnabled);
         SystemMotion.Changed += MotionChanged;
-        if (loader.Outcome is { } outcome)
+        // A pipeline already made is used at once; this and every later outcome also arrive
+        // through the subscription (Adopt ignores the one it already has).
+        if (loader.Outcome is { } known)
         {
-            Adopt(outcome);
+            Adopt(known);
         }
-        else
-        {
-            loader.WhenReady(clock.Post, Adopt);
-        }
+        subscription = loader.Subscribe(clock.Post, Adopt);
     }
 
     /// <summary>What the ink shows.</summary>
@@ -125,6 +151,21 @@ public sealed class InkSurface : IDisposable
     /// <summary>The pipeline, once it has arrived (hosts make their swapchains on its device).</summary>
     public InkPipeline? Pipeline => pipeline;
 
+    /// <summary>A failure began (its message) or ended (null). UI thread.</summary>
+    public event Action<string?>? FailureChanged;
+
+    /// <summary>How a retry waits (tests replace it): by default a one-shot timer, then the UI thread.</summary>
+    internal Action<TimeSpan, Action>? Scheduler { get; set; }
+
+    /// <summary>The waits between recovery attempts: 0.5, 1 and 2 s, then every 5 s.</summary>
+    internal static TimeSpan RetryDelay(int attempt) => TimeSpan.FromSeconds(attempt switch
+    {
+        1 => 0.5,
+        2 => 1,
+        3 => 2,
+        _ => 5,
+    });
+
     /// <summary>For tests: pin the animation setting instead of following Windows'.</summary>
     internal bool? AssumeReduceMotion
     {
@@ -163,6 +204,11 @@ public sealed class InkSurface : IDisposable
     {
         hostOnScreen = onScreen;
         UpdateVisibility();
+        if (onScreen && retryWhenShown)
+        {
+            retryWhenShown = false;
+            ScheduleRetry();
+        }
     }
 
     /// <summary>Something else in the host's frame changed (the Drop's text): the frame on screen is out of date.</summary>
@@ -176,19 +222,132 @@ public sealed class InkSurface : IDisposable
         }
     }
 
-    /// <summary>The schedule sees a surface that cannot draw (no pipeline, no canvas, failed) as off screen.</summary>
-    private void UpdateVisibility() =>
-        Perform(schedule.SetOnScreen(hostOnScreen && pipeline is not null && Failure is null && canvas.Width > 0));
+    /// <summary>
+    /// The schedule sees a surface that cannot draw (no pipeline, no canvas) as off screen; the
+    /// host shows its fallback while it is on screen and the ink cannot draw.
+    /// </summary>
+    private void UpdateVisibility()
+    {
+        var canDraw = pipeline is not null && canvas.Width > 0;
+        var fallback = hostOnScreen && !canDraw && !disposed;
+        if (fallback != fallbackShown)
+        {
+            fallbackShown = fallback;
+            target.SetFallback(fallback);
+        }
+        Perform(schedule.SetOnScreen(hostOnScreen && canDraw));
+    }
 
     private void Adopt(InkPipelineOutcome outcome)
     {
-        if (disposed)
+        if (disposed || (outcome.Pipeline is not null && outcome.Pipeline == pipeline))
         {
             return;
         }
+        if (outcome.Pipeline is null && outcome.Failure is null)
+        {
+            return;
+        }
+        if (pipeline is not null)
+        {
+            // Replaced after another surface lost the device: this one's objects are on it too.
+            target.ReleaseDeviceResources();
+            DropWordmark();
+            pipeline = null;
+            // Off the clock through the schedule, so it knows; no fallback flashes in between.
+            Perform(schedule.SetOnScreen(false));
+        }
         pipeline = outcome.Pipeline;
-        Failure = outcome.Failure;
+        if (pipeline is null)
+        {
+            SetFailure(outcome.Failure);
+            if (!outcome.Permanent)
+            {
+                ScheduleRetry();
+            }
+        }
+        else
+        {
+            lost = null;
+            // The frame on screen is from the old device (or none): draw anew once on screen.
+            Perform(schedule.Invalidate());
+        }
         UpdateVisibility();
+    }
+
+    /// <summary>A frame failed: drop the device's objects, show the fallback, and try again with backoff.</summary>
+    internal void DeviceFailed(string message)
+    {
+        SetFailure(message);
+        clock.Remove(this);
+        target.ReleaseDeviceResources();
+        DropWordmark();
+        lost = pipeline;
+        pipeline = null;
+        UpdateVisibility();
+        ScheduleRetry();
+    }
+
+    private void SetFailure(string? message)
+    {
+        if (message == Failure)
+        {
+            return;
+        }
+        Failure = message;
+        InkLog.Write(message ?? "the ink draws again");
+        FailureChanged?.Invoke(message);
+    }
+
+    private void ScheduleRetry()
+    {
+        if (retryScheduled || disposed)
+        {
+            return;
+        }
+        if (!hostOnScreen)
+        {
+            retryWhenShown = true;
+            return;
+        }
+        attempts++;
+        retryScheduled = true;
+        var delay = RetryDelay(attempts);
+        if (Scheduler is { } scheduler)
+        {
+            scheduler(delay, Retry);
+            return;
+        }
+        retryTimer?.Dispose();
+        retryTimer = new Timer(_ => clock.Post(Retry), null, delay, Timeout.InfiniteTimeSpan);
+    }
+
+    private void Retry()
+    {
+        retryScheduled = false;
+        retryTimer?.Dispose();
+        retryTimer = null;
+        if (disposed || pipeline is not null)
+        {
+            return;
+        }
+        if (!hostOnScreen)
+        {
+            retryWhenShown = true;
+            return;
+        }
+        if (loader.Outcome is { Pipeline: { } current } && current != lost)
+        {
+            // Another surface already has a new one.
+            Adopt(loader.Outcome);
+            return;
+        }
+        if (loader.Outcome is { Permanent: true })
+        {
+            return;
+        }
+        // The new outcome arrives through the subscription; a failed one schedules the next try.
+        loader.Recreate(lost, clock.Post);
     }
 
     private void Perform(InkAction action)
@@ -262,24 +421,20 @@ public sealed class InkSurface : IDisposable
         }
         catch (InkRendererException e)
         {
-            // The device failed (removed, reset, out of memory): stop drawing, say so by name.
-            Fail(e.Message);
+            // The device failed (removed, reset, DWM restarted, out of memory): recover.
+            DeviceFailed(e.Message);
             return;
         }
         if (presented)
         {
             FramesDrawn++;
             InkFrames.Tick();
+            if (Failure is not null)
+            {
+                attempts = 0;
+                SetFailure(null);
+            }
         }
-    }
-
-    /// <summary>The host's pixels failed (a swapchain that would not resize): stop drawing, say so by name.</summary>
-    internal void Fail(string message)
-    {
-        Failure = message;
-        InkLog.Write(message);
-        clock.Remove(this);
-        UpdateVisibility();
     }
 
     private void DropWordmark()
@@ -297,6 +452,9 @@ public sealed class InkSurface : IDisposable
             return;
         }
         disposed = true;
+        subscription.Dispose();
+        retryTimer?.Dispose();
+        retryTimer = null;
         SystemMotion.Changed -= MotionChanged;
         clock.Remove(this);
         DropWordmark();

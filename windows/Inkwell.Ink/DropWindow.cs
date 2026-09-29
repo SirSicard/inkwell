@@ -16,6 +16,12 @@
 // off, one still frame per change; hidden, none.
 //
 // Paper in both themes, like the Mac's: ink on a dark page would vanish.
+//
+// The Drop is the recording indicator, so it never goes blank. A lost device (TDR, driver update),
+// a lost composition device (DWM restarted) or a failed present releases every Direct3D,
+// Direct2D and DirectComposition object here; the surface makes the pipeline again and retries
+// with backoff (InkSurface). Until it draws again, or when the shader does not compile at all,
+// DropFallback, a plain GDI window, shows the panel and the state's lines in its place.
 using System.Runtime.InteropServices;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
@@ -60,6 +66,16 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private IDWriteTextLayout* detailLayout;
     private double dpiScale = 1;
     private bool disposed;
+    private DropFallback? fallback;
+
+    /// <summary>For tests: an HRESULT to fail the next present with (a lost device), once.</summary>
+    internal int FailNextPresent { get; set; }
+
+    /// <summary>Whether the plain fallback is on screen in the Drop's place.</summary>
+    public bool ShowsFallback => fallback?.IsShown == true;
+
+    /// <summary>The fallback window's handle, once made (tests).</summary>
+    internal nint FallbackHandle => fallback?.Handle ?? 0;
 
     /// <summary>The Drop's ink.</summary>
     public InkSurface Surface { get; }
@@ -144,6 +160,10 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             {
                 SetWindowTextW(hwnd, name);
             }
+            if (ShowsFallback)
+            {
+                ShowFallback();
+            }
         }
         // One frame for the change: a new state draws (with the new text); only new text on the
         // same state needs the frame marked out of date.
@@ -218,7 +238,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             // Reached from Show and from the window procedure, where an exception would end the
             // process: the Drop stops drawing and says why, as for a failed frame.
-            Surface.Fail(e.Message);
+            Surface.DeviceFailed(e.Message);
             return;
         }
         var (inkW, inkH) = InkSurface.CanvasPixels(DropLayout.InkWidth, DropLayout.Height, scale);
@@ -229,6 +249,51 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             inkTexture = null;
         }
         Surface.SetCanvas(inkW, inkH, DropLayout.InkWidth);
+    }
+
+    void IInkTarget.SetFallback(bool shown)
+    {
+        if (shown && IsShown)
+        {
+            ShowFallback();
+        }
+        else
+        {
+            fallback?.Hide();
+        }
+    }
+
+    /// <summary>The plain panel over the Drop's rectangle; the Drop's own window stays, transparent, under it.</summary>
+    private void ShowFallback()
+    {
+        try
+        {
+            fallback ??= new DropFallback();
+        }
+        catch (InkRendererException e)
+        {
+            InkLog.Write(e.Message);
+            return;
+        }
+        RECT bounds;
+        GetWindowRect(hwnd, &bounds);
+        fallback.Show(bounds, text, dpiScale);
+    }
+
+    /// <summary>Every object made on the lost (or replaced) device. The window stays.</summary>
+    void IInkTarget.ReleaseDeviceResources()
+    {
+        DropLayouts();
+        Com.Release(ref titleFormat);
+        Com.Release(ref detailFormat);
+        Com.Release(ref inkBitmap);
+        inkTexture?.Dispose();
+        inkTexture = null;
+        Com.Release(ref visual);
+        Com.Release(ref compositionTarget);
+        Com.Release(ref composition);
+        swapChain?.Dispose();
+        swapChain = null;
     }
 
     /// <summary>The Direct3D, Direct2D and DirectComposition objects, made on first draw.</summary>
@@ -344,6 +409,13 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             return false;
         }
         EnsureResources(pipeline);
+        // DWM restarted: the composition device is gone and nothing this window shows would reach
+        // the screen, although every call still succeeds.
+        BOOL valid;
+        if (composition->CheckDeviceState(&valid).FAILED || !valid)
+        {
+            throw new InkRendererException("couldn't keep the Drop's composition device (DWM restarted?)");
+        }
         pipeline.Encode(inkTexture!.View, inkTexture.Width, inkTexture.Height, uniforms, mark);
 
         var d2d = pipeline.D2D;
@@ -445,6 +517,12 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             Com.Release(ref panel);
         }
         InkRendererException.Check(hr, "draw the Drop");
+        if (FailNextPresent != 0)
+        {
+            var injected = FailNextPresent;
+            FailNextPresent = 0;
+            InkRendererException.Check((HRESULT)injected, "present the ink");
+        }
         swapChain.Present();
         return true;
     }
@@ -499,15 +577,9 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         }
         disposed = true;
         Surface.Dispose();
-        DropLayouts();
-        Com.Release(ref titleFormat);
-        Com.Release(ref detailFormat);
-        Com.Release(ref inkBitmap);
-        inkTexture?.Dispose();
-        Com.Release(ref visual);
-        Com.Release(ref compositionTarget);
-        Com.Release(ref composition);
-        swapChain?.Dispose();
+        ((IInkTarget)this).ReleaseDeviceResources();
+        fallback?.Dispose();
+        fallback = null;
         if (hwnd != HWND.NULL)
         {
             SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, 0);

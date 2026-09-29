@@ -89,6 +89,80 @@ public sealed class DropTests
         }
     }
 
+    [Fact]
+    public void WhenTheShaderDoesNotCompileTheDropShowsItsPlainFallback()
+    {
+        var ui = new UiThread();
+        var loader = new InkPipelineLoader(() => new InkPipeline(InkAdapter.Warp, "not a shader"));
+        Assert.True(loader.Wait().Permanent);
+        using var drop = new DropWindow(loader, new InkClock(ui.Post));
+        string? reported = null;
+        drop.Surface.FailureChanged += m => reported = m;
+        ui.Pump(0.2);
+        var foreground = GetForegroundWindow();
+
+        drop.Update(InkState.Meeting);
+        ui.Pump(0.2);
+        Assert.True(drop.ShowsFallback, "the recording indicator is never blank");
+        var fallback = (HWND)drop.FallbackHandle;
+        Assert.True(Visible(fallback));
+        var ex = (uint)GetWindowLongW(fallback, GWL.GWL_EXSTYLE);
+        foreach (var flag in new[] { WS.WS_EX_NOACTIVATE, WS.WS_EX_TOPMOST, WS.WS_EX_TOOLWINDOW })
+        {
+            Assert.True((ex & (uint)flag) != 0, $"fallback extended style 0x{flag:X} is set");
+        }
+        Assert.Equal(foreground, GetForegroundWindow());
+        Assert.NotEqual(fallback, GetActiveWindow());
+        Assert.Equal(0, drop.Surface.FramesDrawn);
+
+        drop.Update(InkState.Problem);
+        Assert.True(drop.ShowsFallback);
+        Assert.Equal(DropText.For(InkState.Problem), drop.ShownText);
+
+        drop.Update(InkState.Idle);
+        Assert.False(drop.ShowsFallback);
+        Assert.False(Visible(fallback));
+        Assert.Equal(foreground, GetForegroundWindow());
+    }
+
+    [Fact]
+    public void TheDropRecoversFromALostDevice()
+    {
+        lock (TestPipeline.Lock)
+        {
+            var ui = new UiThread();
+            var loader = new InkPipelineLoader(() => new InkPipeline(TestPipeline.Adapter));
+            using var drop = new DropWindow(loader, new InkClock(ui.Post));
+            drop.Surface.AssumeReduceMotion = false;
+            ui.Pump(0.5);
+            drop.Update(InkState.Dictating);
+            ui.Pump(0.3);
+            Assert.SkipWhen(drop.Surface.Failure?.Contains(NoCompositor, StringComparison.Ordinal) == true,
+                $"no compositor in this session: {drop.Surface.Failure}");
+            Assert.Null(drop.Surface.Failure);
+            var before = drop.Surface.FramesDrawn;
+
+            // What a TDR does to the next present.
+            drop.FailNextPresent = unchecked((int)0x887A0005);
+            ui.Pump(0.1);
+            Assert.NotNull(drop.Surface.Failure);
+            var until = DateTime.UtcNow.AddSeconds(15);
+            while (drop.Surface.Failure is not null && DateTime.UtcNow < until)
+            {
+                ui.Pump(0.05);
+            }
+            Assert.Null(drop.Surface.Failure);
+            Assert.Equal(2, loader.Compiles);
+            var after = drop.Surface.FramesDrawn;
+            ui.Pump(0.5);
+            Assert.True(drop.Surface.FramesDrawn > after + 5, "live again after the recreate");
+            Assert.True(after > before);
+            Assert.False(drop.ShowsFallback);
+            drop.Update(InkState.Idle);
+            loader.Outcome?.Pipeline?.Dispose();
+        }
+    }
+
     /// <summary>
     /// WS_VISIBLE. IsWindowVisible also asks the desktop, which is never visible in a session
     /// without one (SSH, CI), so it would say no there whatever the window does.

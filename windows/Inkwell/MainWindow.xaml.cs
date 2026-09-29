@@ -20,6 +20,13 @@ public sealed partial class MainWindow : Window
         ink.Changed += () => Ink.State = ink.State;
     }
 
+    /// <summary>UI thread. Why the Drop cannot draw its ink (it shows a plain panel meanwhile), or null once it draws again.</summary>
+    internal void ShowInkFailure(string? failure)
+    {
+        InkStatus.Text = failure is null ? "" : $"The Drop is showing a plain panel: {failure}";
+        InkStatus.Visibility = failure is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     /// <summary>UI thread. What the core's state is: its status line, and its version once ready.</summary>
     public void ShowStatus(CoreStatus status)
     {

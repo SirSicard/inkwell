@@ -112,6 +112,19 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
         UpdateVisibility();
     }
 
+    /// <summary>The pipeline was lost or replaced: the swapchain goes with it and is made again on the next frame.</summary>
+    void IInkTarget.ReleaseDeviceResources()
+    {
+        swapChain?.Dispose();
+        swapChain = null;
+        transform = default;
+    }
+
+    /// <summary>The window's ink has no stand-in: the window says what failed (ShellInk).</summary>
+    void IInkTarget.SetFallback(bool shown)
+    {
+    }
+
     bool IInkTarget.Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark)
     {
         var (w, h) = surface!.Canvas;
