@@ -64,6 +64,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private IDWriteTextFormat* detailFormat;
     private IDWriteTextLayout* titleLayout;
     private IDWriteTextLayout* detailLayout;
+    /// <summary>The live words' wet ones in <see cref="detailLayout"/> (empty unless the text is live words).</summary>
+    private DWRITE_TEXT_RANGE wetWords;
     private double dpiScale = 1;
     private bool disposed;
     private DropFallback? fallback;
@@ -437,15 +439,40 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             var width = (float)(DropLayout.Width - DropLayout.TextLeft - DropLayout.TextRight);
             titleLayout = Layout(pipeline, text.Title, titleFormat, width, 100);
-            // Two lines at most, the tail cut with an ellipsis.
             DWRITE_LINE_METRICS line;
             uint count;
             using (var one = new DisposableLayout(Layout(pipeline, "Ag", detailFormat, width, 100)))
             {
                 InkRendererException.Check(one.Layout->GetLineMetrics(&line, 1, &count), "measure the Drop's text");
             }
-            detailLayout = Layout(pipeline, text.Detail, detailFormat, width, line.height * 2 + 0.5f);
+            if (text.LiveWords)
+            {
+                // One line, the head cut so the newest words show, the last ones wet (italic here;
+                // muted as they are drawn).
+                var cut = DropText.HeadCut(text.Detail, s => Measure(pipeline, s, detailFormat), width);
+                detailLayout = Layout(pipeline, cut, detailFormat, width, line.height + 0.5f);
+                detailLayout->SetWordWrapping(DWRITE_WORD_WRAPPING.DWRITE_WORD_WRAPPING_NO_WRAP);
+                var wet = DropText.WetStart(cut);
+                wetWords = new DWRITE_TEXT_RANGE { startPosition = (uint)wet, length = (uint)(cut.Length - wet) };
+                detailLayout->SetFontStyle(DWRITE_FONT_STYLE.DWRITE_FONT_STYLE_ITALIC, wetWords);
+            }
+            else
+            {
+                // Two lines at most, the tail cut with an ellipsis.
+                detailLayout = Layout(pipeline, text.Detail, detailFormat, width, line.height * 2 + 0.5f);
+                wetWords = default;
+            }
         }
+    }
+
+    /// <summary>The width of <paramref name="s"/> on one line in <paramref name="format"/>, in DIPs.</summary>
+    private static double Measure(InkPipeline pipeline, string s, IDWriteTextFormat* format)
+    {
+        using var layout = new DisposableLayout(Layout(pipeline, s, format, 100_000, 100));
+        layout.Layout->SetWordWrapping(DWRITE_WORD_WRAPPING.DWRITE_WORD_WRAPPING_NO_WRAP);
+        DWRITE_TEXT_METRICS metrics;
+        InkRendererException.Check(layout.Layout->GetMetrics(&metrics), "measure the Drop's text");
+        return metrics.widthIncludingTrailingWhitespace;
     }
 
     private static IDWriteTextFormat* Format(InkPipeline pipeline, float size, DWRITE_FONT_WEIGHT weight, bool wrap)
@@ -512,7 +539,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         d2d->SetDpi(dpi, dpi);
         d2d->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE.D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         d2d->BeginDraw();
-        ID2D1SolidColorBrush* paper = null, border = null, title = null, detail = null;
+        ID2D1SolidColorBrush* paper = null, border = null, title = null, detail = null, wet = null;
         ID2D1GradientStopCollection* stops = null;
         ID2D1LinearGradientBrush* fade = null;
         ID2D1RoundedRectangleGeometry* panel = null;
@@ -582,6 +609,13 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             // The two lines, stacked and centred on the panel's height.
             title = Brush(d2d, text.Tone == DropTone.Plain ? Palette.Muted : Palette.Seal, 1);
             detail = Brush(d2d, Palette.Ink, 1);
+            if (wetWords.length > 0)
+            {
+                // The newest live words in the muted colour (a brush lives on the device, so it
+                // is set per frame).
+                wet = Brush(d2d, Palette.Muted, 1);
+                detailLayout->SetDrawingEffect((IUnknown*)wet, wetWords);
+            }
             DWRITE_TEXT_METRICS tm, dm;
             titleLayout->GetMetrics(&tm);
             detailLayout->GetMetrics(&dm);
@@ -596,6 +630,12 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             hr = d2d->EndDraw(null, null);
             d2d->SetTarget(null);
+            if (wet != null)
+            {
+                // The layout keeps no brush past the frame that drew it.
+                detailLayout->SetDrawingEffect(null, wetWords);
+            }
+            Com.Release(ref wet);
             Com.Release(ref detail);
             Com.Release(ref title);
             Com.Release(ref border);

@@ -1,14 +1,18 @@
 // The ink the shell shows: one state for every surface that draws it (the Drop, an InkPanel in the
 // window), the process's pipeline and frame clock, and the Drop itself. The Mac's ShellInk
-// (mac/Sources/Inkwell/ShellInk.swift). What the core says is live arrives through Live (wired with
-// dictation and meetings end to end); Held pins a state for the Drop's focus check
-// (INK_DROP_DEMO). Nothing here polls.
+// (mac/Sources/Inkwell/ShellInk.swift). What the core says arrives through Show, from the app's
+// DropModel (Inkwell.Core): a take's line with the ink dictating, a note after a take with the
+// ink still, or nothing (the Drop hides). Held pins a state for the Drop's focus check
+// (INK_DROP_DEMO). Every ink reads the live levels (your mic's bands, and the far end's during a
+// meeting) once per frame while it moves. Nothing here polls.
 //
 // When the Drop cannot draw its ink (a lost device it is recovering from, a shader that does not
 // compile, no plain panel either, no window at all) the problem goes to the callback the app
 // gives (the window's status line and the tray icon, which stays seen while the window is hidden)
 // as well as to the log; null says it is fine again. A Drop window that could not be made is
 // tried again at every change of state.
+using Inkwell.Core;
+using Inkwell.Core.Screens;
 using Inkwell.Ink;
 using Microsoft.UI.Dispatching;
 
@@ -20,7 +24,10 @@ internal sealed class ShellInk : IDisposable
     private readonly Action<string?> report;
     private readonly DropDemo? demo;
     private InkState live = InkState.Idle;
+    private DropText? text;
     private InkState? held;
+    /// <summary>Quitting: a note's end or a last batch arriving after it changes nothing (no new Drop is made).</summary>
+    private bool disposed;
 
     /// <summary>The frame clock every ink in the process shares.</summary>
     public InkClock Clock { get; }
@@ -61,15 +68,33 @@ internal sealed class ShellInk : IDisposable
     /// <summary>The state changed (the window's inks follow it).</summary>
     public event Action? Changed;
 
-    /// <summary>What the core says is live.</summary>
-    public InkState Live
+    /// <summary>
+    /// UI thread. What the Drop says (<paramref name="line"/>; null hides it) and whether a take is
+    /// live (the ink dictating) or not (a note, the ink still).
+    /// </summary>
+    public void Show(DropLine? line, bool isLive)
     {
-        get => live;
-        set
-        {
-            live = value;
-            Update();
-        }
+        text = line is null ? null : new DropText(line.Title, line.Detail, Tone(line.Tone), line.LiveWords);
+        live = isLive ? InkState.Dictating : InkState.Idle;
+        Update();
+    }
+
+    private static DropTone Tone(DropLineTone tone) => tone switch
+    {
+        DropLineTone.Recording => DropTone.Recording,
+        DropLineTone.Alert => DropTone.Alert,
+        _ => DropTone.Plain,
+    };
+
+    /// <summary>
+    /// The live levels, read by each ink once per frame while it moves: your mic's bands and the
+    /// far end's, each on the Mac's decibel map. ink_bands_read never locks or allocates.
+    /// </summary>
+    public static InkLevels LiveLevels()
+    {
+        var near = InkSession.Bands();
+        var far = InkSession.FarBands();
+        return new InkLevels(InkLevels.Level(near.Low, near.Mid, near.High), InkLevels.Level(far.Low, far.Mid, far.High));
     }
 
     /// <summary>A state held whatever the core says (the Drop's focus check). Null in ordinary use.</summary>
@@ -93,6 +118,7 @@ internal sealed class ShellInk : IDisposable
         try
         {
             drop = new DropWindow(Loader, Clock);
+            drop.Surface.Levels = LiveLevels;
             drop.ProblemChanged += report;
             report(drop.Problem);
         }
@@ -106,14 +132,30 @@ internal sealed class ShellInk : IDisposable
 
     private void Update()
     {
+        if (disposed)
+        {
+            return;
+        }
         MakeDrop();
-        drop?.Update(State);
+        if (held is { } pinned)
+        {
+            drop?.Update(pinned);
+        }
+        else if (text is not null)
+        {
+            drop?.Show(text, live);
+        }
+        else
+        {
+            drop?.Hide();
+        }
         Changed?.Invoke();
     }
 
     /// <summary>UI thread. Stops the demo and destroys the Drop.</summary>
     public void Dispose()
     {
+        disposed = true;
         demo?.Dispose();
         drop?.Dispose();
     }

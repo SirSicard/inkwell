@@ -48,6 +48,30 @@ public readonly record struct InkLevels(double Near, double Far)
 {
     /// <summary>No audio.</summary>
     public static InkLevels Silent => default;
+
+    /// <summary>Reads 0 at and below this RMS level (dBFS): the room between words.</summary>
+    public const double FloorDb = -55.0;
+
+    /// <summary>Reads 1 at and above this RMS level (dBFS): only the loudest speech.</summary>
+    public const double CeilingDb = -20.0;
+
+    /// <summary>
+    /// The level of one stream's bands (the core's RMS amplitude per band, linear full scale) on a
+    /// decibel scale from <see cref="FloorDb"/> (0) to <see cref="CeilingDb"/> (1): the Mac's map,
+    /// tuned on the core's measured fixture levels (InkLevels.swift). The ink's envelope follower
+    /// smooths it, so this is a plain map; the same one serves your mic and the far end.
+    /// </summary>
+    public static double Level(float low, float mid, float high)
+    {
+        // The bands do not overlap, so their powers add.
+        var power = ((double)low * low) + ((double)mid * mid) + ((double)high * high);
+        if (!double.IsFinite(power) || power <= 0)
+        {
+            return 0;
+        }
+        var db = 10 * Math.Log10(power);
+        return Math.Clamp((db - FloorDb) / (CeilingDb - FloorDb), 0, 1);
+    }
 }
 
 /// <summary>
