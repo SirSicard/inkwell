@@ -46,6 +46,11 @@ internal sealed class FlakyTarget : IInkTarget, IDisposable
 
     public void SetFallback(bool shown) => Fallbacks.Add(shown);
 
+    /// <summary>What the host's own device check reports (null: fine).</summary>
+    public string? DeviceProblem { get; set; }
+
+    public string? CheckDevice() => DeviceProblem;
+
     public void Dispose() => inner.Dispose();
 }
 
@@ -61,11 +66,17 @@ public sealed class RecoveryTests
         public readonly List<TimeSpan> Delays = [];
         public readonly List<string?> Failures = [];
         private readonly Queue<Action> retries = new();
+        private readonly Queue<Action> checks = new();
 
         public Rig(Func<InkPipeline> make)
         {
             Loader = new InkPipelineLoader(make);
-            Surface = new InkSurface(Target, Loader, new InkClock(Ui.Post)) { AssumeReduceMotion = true };
+            Surface = new InkSurface(Target, Loader, new InkClock(Ui.Post))
+            {
+                AssumeReduceMotion = true,
+                HealthScheduler = (_, action) => checks.Enqueue(action),
+                WatchesDevice = true,
+            };
             Surface.Scheduler = (delay, action) =>
             {
                 Delays.Add(delay);
@@ -100,6 +111,15 @@ public sealed class RecoveryTests
         }
 
         public int PendingRetries => retries.Count;
+
+        public int PendingChecks => checks.Count;
+
+        /// <summary>Runs the pending device check.</summary>
+        public void RunCheck()
+        {
+            Assert.NotEmpty(checks);
+            checks.Dequeue()();
+        }
 
         /// <summary>Runs the pending retry on this thread (a retry that needs no compile).</summary>
         public void RunRetry()
@@ -206,6 +226,47 @@ public sealed class RecoveryTests
         Assert.False(rig.Target.Fallback);
         Assert.Null(rig.Surface.Failure);
         Assert.Equal(1, rig.Loader.Compiles);
+    }
+
+    /// <summary>
+    /// Animation effects off and a still frame on screen: nothing draws, yet a DWM restart (the
+    /// host's composition device lost) is noticed by the once-a-second check, the fallback shows,
+    /// and the retry draws again.
+    /// </summary>
+    [Fact]
+    public void ALostCompositionIsNoticedWithAnimationOffAndNothingDrawing()
+    {
+        using var rig = new Rig(() => new InkPipeline(InkAdapter.Warp));
+        rig.PumpUntil(() => rig.Surface.FramesDrawn == 1);
+        rig.Surface.State = InkState.Meeting;
+        Assert.Equal(2, rig.Surface.FramesDrawn);
+        Assert.False(rig.Surface.IsAnimating);
+
+        Assert.Equal(1, rig.PendingChecks);
+        rig.RunCheck();
+        Assert.Equal(2, rig.Surface.FramesDrawn);
+        Assert.Equal(1, rig.PendingChecks);
+
+        rig.Target.DeviceProblem = "couldn't keep the Drop's composition device (DWM restarted?)";
+        rig.RunCheck();
+        Assert.Equal(rig.Target.DeviceProblem, rig.Surface.Failure);
+        Assert.True(rig.Target.Fallback);
+        Assert.Equal(1, rig.Target.Releases);
+        Assert.Equal(0, rig.PendingChecks);
+        Assert.Equal([TimeSpan.FromSeconds(0.5)], rig.Delays);
+
+        rig.Target.DeviceProblem = null;
+        rig.RunRetry();
+        Assert.Equal(3, rig.Surface.FramesDrawn);
+        Assert.False(rig.Target.Fallback);
+        Assert.Null(rig.Surface.Failure);
+        Assert.Equal(1, rig.Loader.Compiles);
+        Assert.Equal(1, rig.PendingChecks);
+
+        // Hidden: the pending check finds nothing to do and none follows.
+        rig.Surface.SetOnScreen(false);
+        rig.RunCheck();
+        Assert.Equal(0, rig.PendingChecks);
     }
 
     [Fact]

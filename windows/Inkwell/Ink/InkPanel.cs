@@ -120,6 +120,9 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
         transform = default;
     }
 
+    /// <summary>Not watched (it would tick while the window idles): its frames find failures.</summary>
+    string? IInkTarget.CheckDevice() => null;
+
     /// <summary>The window's ink has no stand-in: the window says what failed (ShellInk).</summary>
     void IInkTarget.SetFallback(bool shown)
     {

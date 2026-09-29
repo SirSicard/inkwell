@@ -35,6 +35,8 @@ internal sealed unsafe class OffscreenTarget : IInkTarget, IDisposable
     {
     }
 
+    public string? CheckDevice() => null;
+
     public void Dispose() => texture?.Dispose();
 }
 

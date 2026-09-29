@@ -142,10 +142,11 @@ public sealed class DropTests
             Assert.Null(drop.Surface.Failure);
             var before = drop.Surface.FramesDrawn;
 
-            // What a TDR does to the next present.
-            drop.FailNextPresent = unchecked((int)0x887A0005);
+            // What a TDR does: the next Present returns DXGI_ERROR_DEVICE_REMOVED.
+            drop.FailNextPresent = FlakyTarget.DeviceRemoved;
             ui.Pump(0.1);
             Assert.NotNull(drop.Surface.Failure);
+            Assert.True(drop.ShowsFallback, "the plain panel shows while the device comes back");
             var until = DateTime.UtcNow.AddSeconds(15);
             while (drop.Surface.Failure is not null && DateTime.UtcNow < until)
             {

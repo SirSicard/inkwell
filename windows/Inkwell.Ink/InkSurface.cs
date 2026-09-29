@@ -12,7 +12,12 @@
 // the next show: nothing ticks for a hidden ink). Only a lost device (TDR, driver update: the
 // device reports itself removed, or the HRESULT says so) costs a new pipeline; any other failure (a
 // composition device lost to a DWM restart, a swapchain that cannot be made) keeps the pipeline,
-// and a retry only makes the host's objects again. A failure is announced once, not per retry. While it cannot draw (the pipeline
+// and a retry only makes the host's objects again. A failure is announced once, not per retry.
+//
+// A host that must never go blank (the Drop, WatchesDevice) is also checked while it shows and
+// draws nothing (Animation effects off, or a still frame): once a second, the device's removed
+// reason and the host's own objects (IInkTarget.CheckDevice). A lost device or a DWM restart is
+// then noticed without a frame. The check runs only while such a host is on screen: never idle. While it cannot draw (the pipeline
 // still compiling, lost, or a shader that does not compile) the host shows its fallback, and every
 // change of failure is announced (FailureChanged) so the shell can show it.
 namespace Inkwell.Ink;
@@ -35,6 +40,13 @@ public interface IInkTarget
     /// its text). Called on every change.
     /// </summary>
     void SetFallback(bool shown);
+
+    /// <summary>
+    /// Why the host's own device objects no longer reach the screen (a composition device lost to a
+    /// DWM restart), or null when they are fine. Called about once a second while a watched host
+    /// shows and draws nothing.
+    /// </summary>
+    string? CheckDevice();
 }
 
 /// <summary>One ink on screen, drawn into a host.</summary>
@@ -54,6 +66,8 @@ public sealed class InkSurface : IDisposable
     private bool retryWhenShown;
     private Timer? retryTimer;
     private bool fallbackShown;
+    private bool healthScheduled;
+    private Timer? healthTimer;
     private readonly InkSimulation simulation = new();
     private InkSchedule schedule;
     private InkPipeline? pipeline;
@@ -161,6 +175,26 @@ public sealed class InkSurface : IDisposable
     /// <summary>How a retry waits (tests replace it): by default a one-shot timer, then the UI thread.</summary>
     internal Action<TimeSpan, Action>? Scheduler { get; set; }
 
+    /// <summary>How a device check waits (tests replace it): by default a one-shot timer, then the UI thread.</summary>
+    internal Action<TimeSpan, Action>? HealthScheduler { get; set; }
+
+    /// <summary>How often a watched host's device is checked while it shows and draws nothing.</summary>
+    internal static readonly TimeSpan HealthInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Check the device about once a second while the host shows and nothing draws, so a lost
+    /// device or DWM restart is noticed without a frame (the Drop, which must never go blank).
+    /// </summary>
+    public bool WatchesDevice
+    {
+        get;
+        set
+        {
+            field = value;
+            UpdateHealth();
+        }
+    }
+
     /// <summary>The waits between recovery attempts: 0.5, 1 and 2 s, then every 5 s.</summary>
     internal static TimeSpan RetryDelay(int attempt) => TimeSpan.FromSeconds(attempt switch
     {
@@ -235,6 +269,58 @@ public sealed class InkSurface : IDisposable
     {
         UpdateFallback();
         Perform(schedule.SetOnScreen(hostOnScreen && CanDraw));
+        UpdateHealth();
+    }
+
+    private bool HealthWanted => WatchesDevice && hostOnScreen && CanDraw && !schedule.ClockRunning && !disposed;
+
+    /// <summary>Starts the next device check when one is wanted and none is waiting.</summary>
+    private void UpdateHealth()
+    {
+        if (!HealthWanted || healthScheduled)
+        {
+            return;
+        }
+        healthScheduled = true;
+        if (HealthScheduler is { } scheduler)
+        {
+            scheduler(HealthInterval, HealthTick);
+            return;
+        }
+        healthTimer?.Dispose();
+        healthTimer = new Timer(_ => clock.Post(HealthTick), null, HealthInterval, Timeout.InfiniteTimeSpan);
+    }
+
+    private void HealthTick()
+    {
+        healthScheduled = false;
+        healthTimer?.Dispose();
+        healthTimer = null;
+        if (!HealthWanted)
+        {
+            // Hidden, live on the clock (frames find failures), or already failing: no check.
+            return;
+        }
+        if (pipeline!.DeviceRemoved())
+        {
+            DeviceFailed("couldn't keep the Direct3D device (it was removed or reset)", deviceLost: true);
+            return;
+        }
+        string? problem;
+        try
+        {
+            problem = target.CheckDevice();
+        }
+        catch (Exception e)
+        {
+            problem = $"couldn't check the ink's device: {e.GetType().Name}: {e.Message}";
+        }
+        if (problem is not null)
+        {
+            DeviceFailed(problem);
+            return;
+        }
+        UpdateHealth();
     }
 
     private bool CanDraw => pipeline is not null && canvas.Width > 0 && !hostBroken;
@@ -410,6 +496,7 @@ public sealed class InkSurface : IDisposable
             default:
                 break;
         }
+        UpdateHealth();
     }
 
     /// <summary>One live frame: the prototype's <c>_frame</c>. dt is 1/60 s on the first tick, then the time since the last, clamped to 0..0.05 s.</summary>
@@ -498,6 +585,8 @@ public sealed class InkSurface : IDisposable
         subscription.Dispose();
         retryTimer?.Dispose();
         retryTimer = null;
+        healthTimer?.Dispose();
+        healthTimer = null;
         SystemMotion.Changed -= MotionChanged;
         clock.Remove(this);
         DropWordmark();

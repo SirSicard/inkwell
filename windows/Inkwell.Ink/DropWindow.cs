@@ -129,7 +129,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             throw new InkRendererException($"couldn't make the Drop's window (error {error})");
         }
         SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, GCHandle.ToIntPtr(self));
-        Surface = new InkSurface(this, loader, clock);
+        // The recording indicator must never go blank: its device is checked while it shows.
+        Surface = new InkSurface(this, loader, clock) { WatchesDevice = true };
     }
 
     /// <summary>Shows the Drop for <paramref name="state"/>, or hides it when nothing is live.</summary>
@@ -280,6 +281,22 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         fallback.Show(bounds, text, dpiScale);
     }
 
+    /// <summary>
+    /// DWM restarted: the composition device is gone and nothing this window shows would reach the
+    /// screen, although every call still succeeds.
+    /// </summary>
+    string? IInkTarget.CheckDevice()
+    {
+        if (composition == null)
+        {
+            return null;
+        }
+        BOOL valid;
+        return composition->CheckDeviceState(&valid).FAILED || !valid
+            ? "couldn't keep the Drop's composition device (DWM restarted?)"
+            : null;
+    }
+
     /// <summary>Every object made on the lost (or replaced) device. The window stays.</summary>
     void IInkTarget.ReleaseDeviceResources()
     {
@@ -409,12 +426,9 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             return false;
         }
         EnsureResources(pipeline);
-        // DWM restarted: the composition device is gone and nothing this window shows would reach
-        // the screen, although every call still succeeds.
-        BOOL valid;
-        if (composition->CheckDeviceState(&valid).FAILED || !valid)
+        if (((IInkTarget)this).CheckDevice() is { } lostComposition)
         {
-            throw new InkRendererException("couldn't keep the Drop's composition device (DWM restarted?)");
+            throw new InkRendererException(lostComposition);
         }
         pipeline.Encode(inkTexture!.View, inkTexture.Width, inkTexture.Height, uniforms, mark);
 
@@ -517,12 +531,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             Com.Release(ref panel);
         }
         InkRendererException.Check(hr, "draw the Drop");
-        if (FailNextPresent != 0)
-        {
-            var injected = FailNextPresent;
-            FailNextPresent = 0;
-            InkRendererException.Check((HRESULT)injected, "present the ink");
-        }
+        swapChain.InjectedPresentResult = FailNextPresent;
+        FailNextPresent = 0;
         swapChain.Present();
         return true;
     }

@@ -130,10 +130,22 @@ public sealed unsafe class CompositionSwapChain : IDisposable
         Present();
     }
 
+    /// <summary>For tests: an HRESULT the next Present returns instead of presenting (a lost device), once.</summary>
+    internal int InjectedPresentResult { get; set; }
+
     /// <summary>Presents the back buffer at the next frame. A removed or reset device throws.</summary>
     public void Present()
     {
-        var hr = SwapChain->Present(1, 0);
+        HRESULT hr;
+        if (InjectedPresentResult != 0)
+        {
+            hr = InjectedPresentResult;
+            InjectedPresentResult = 0;
+        }
+        else
+        {
+            hr = SwapChain->Present(1, 0);
+        }
         InkRendererException.Check(hr, "present the ink");
     }
 
