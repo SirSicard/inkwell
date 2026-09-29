@@ -172,6 +172,20 @@ internal sealed unsafe class DropFallback : IDisposable
     [UnmanagedCallersOnly]
     private static LRESULT WndProc(HWND hwnd, uint msg, WPARAM wParam, LPARAM lParam)
     {
+        // Nothing may escape an UnmanagedCallersOnly method: that ends the process.
+        try
+        {
+            return Dispatch(hwnd, msg, wParam, lParam);
+        }
+        catch (Exception e)
+        {
+            InkLog.Write($"the Drop's fallback window procedure failed (message 0x{msg:X4}): {e.GetType().Name}: {e.Message}");
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        }
+    }
+
+    private static LRESULT Dispatch(HWND hwnd, uint msg, WPARAM wParam, LPARAM lParam)
+    {
         switch (msg)
         {
             case WM.WM_MOUSEACTIVATE:

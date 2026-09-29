@@ -425,6 +425,13 @@ public sealed class InkSurface : IDisposable
             DeviceFailed(e.Message);
             return;
         }
+        catch (Exception e)
+        {
+            // Anything else from a host's frame is a failure too: named, the fallback shown, and
+            // retried the same way. It never escapes into a clock tick or a window procedure.
+            DeviceFailed($"couldn't draw the ink: {e.GetType().Name}: {e.Message}");
+            return;
+        }
         if (presented)
         {
             FramesDrawn++;
