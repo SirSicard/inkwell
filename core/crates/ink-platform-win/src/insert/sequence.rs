@@ -4,12 +4,18 @@
 //! 1. Nothing to insert: touch nothing.
 //! 2. The target runs above our integrity level (an app run as administrator): Windows would drop
 //!    the keystrokes without a word, so [`InsertOutcome::Blocked`], and nothing is touched.
-//! 3. Paste: save the clipboard, put the text on it **rendered on demand** (delayed rendering, so
+//! 3. A modifier key still held (after a chord hotkey) is waited for, once and briefly; if it stays
+//!    down, nothing is touched and the error says **nothing was inserted**, so the core keeps the
+//!    dictation (it is already in the record) rather than lose it.
+//! 4. Paste: save the clipboard, put the text on it **rendered on demand** (delayed rendering, so
 //!    the moment the target reads it is known) and excluded from clipboard history and cloud
 //!    sync, press Ctrl+V, wait until the target has read it plus a quiet period, then put the saved
 //!    clipboard back, but only if nobody wrote it since. A clipboard that cannot be saved is never
 //!    overwritten.
-//! 4. If nothing read the clipboard in time, type the text as Unicode key events.
+//! 5. If nothing read the clipboard in time, type the text as Unicode key events.
+//!
+//! Every error that leaves the text out says so in words that begin "nothing was inserted"
+//! ([`not_inserted`]).
 #![cfg(windows)]
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -70,6 +76,8 @@ pub(crate) trait Backend {
     type Saved;
     /// Whether the focused window drops our synthetic input (UIPI).
     fn target_blocked(&self) -> bool;
+    /// Waits briefly for held modifier keys to be released. `false` if one is still down.
+    fn wait_for_release(&self) -> bool;
     /// Copies every format on the clipboard.
     fn save_clipboard(&self) -> Result<Self::Saved, PlatformError>;
     /// Replaces the clipboard with `text`, rendered on demand. The backend keeps `saved` for
@@ -128,6 +136,11 @@ pub(crate) fn insert<B: Backend>(
     }
     if backend.target_blocked() {
         return Ok(InsertOutcome::Blocked);
+    }
+    if !backend.wait_for_release() {
+        return Err(not_inserted(
+            "a modifier key is still held, and sending into it would change the keys",
+        ));
     }
     let clipboard_back = match paste(backend, text, timing) {
         Paste::Taken { clipboard_back } => {
@@ -197,6 +210,11 @@ fn paste<B: Backend>(backend: &B, text: &str, timing: PasteTiming) -> Paste {
     }
 }
 
+/// The error for an insertion that left the text out: the core keeps the dictation.
+pub(crate) fn not_inserted(why: &str) -> PlatformError {
+    PlatformError::Failed(format!("nothing was inserted: {why}"))
+}
+
 fn reason(error: &PlatformError) -> String {
     match error {
         PlatformError::Failed(message) => message.clone(),
@@ -238,6 +256,7 @@ mod tests {
         fail_write: Option<bool>,
         fail_post: bool,
         fail_type: bool,
+        held: bool,
         lossy_restore: bool,
         clipboard: RefCell<String>,
         saved: RefCell<Option<String>>,
@@ -256,6 +275,7 @@ mod tests {
                 fail_write: None,
                 fail_post: false,
                 fail_type: false,
+                held: false,
                 lossy_restore: false,
                 clipboard: RefCell::new(ORIGINAL.into()),
                 saved: RefCell::new(None),
@@ -276,6 +296,11 @@ mod tests {
 
         fn target_blocked(&self) -> bool {
             self.blocked
+        }
+
+        fn wait_for_release(&self) -> bool {
+            self.call("wait");
+            !self.held
         }
 
         fn save_clipboard(&self) -> Result<String, PlatformError> {
@@ -358,10 +383,32 @@ mod tests {
     }
 
     #[test]
+    fn a_modifier_held_too_long_leaves_everything_untouched_and_says_nothing_was_inserted() {
+        let mut mock = Mock::new(Target::Reads);
+        mock.held = true;
+        match insert(&mock, TEXT, FAST) {
+            Err(PlatformError::Failed(m)) => {
+                assert!(m.starts_with("nothing was inserted"), "{m}");
+                assert!(!m.contains(TEXT), "the text never reaches an error");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            *mock.calls.borrow(),
+            ["wait"],
+            "waited once, touched nothing"
+        );
+        assert_eq!(*mock.clipboard.borrow(), ORIGINAL);
+    }
+
+    #[test]
     fn a_read_paste_restores_the_clipboard() {
         let mock = Mock::new(Target::Reads);
         assert_eq!(insert(&mock, TEXT, FAST).unwrap(), InsertOutcome::Pasted);
-        assert_eq!(*mock.calls.borrow(), ["save", "write", "paste", "restore"]);
+        assert_eq!(
+            *mock.calls.borrow(),
+            ["wait", "save", "write", "paste", "restore"]
+        );
         assert_eq!(*mock.clipboard.borrow(), ORIGINAL);
         assert!(mock.typed.borrow().is_none(), "never typed on top");
     }
@@ -389,7 +436,7 @@ mod tests {
         assert_eq!(insert(&mock, TEXT, FAST).unwrap(), InsertOutcome::Typed);
         assert_eq!(
             *mock.calls.borrow(),
-            ["save", "write", "paste", "restore", "type"]
+            ["wait", "save", "write", "paste", "restore", "type"]
         );
         assert_eq!(mock.typed.borrow().as_deref(), Some(TEXT));
         assert_eq!(*mock.clipboard.borrow(), ORIGINAL);
@@ -400,7 +447,7 @@ mod tests {
         let mut mock = Mock::new(Target::Reads);
         mock.fail_save = true;
         assert_eq!(insert(&mock, TEXT, FAST).unwrap(), InsertOutcome::Typed);
-        assert_eq!(*mock.calls.borrow(), ["save", "type"]);
+        assert_eq!(*mock.calls.borrow(), ["wait", "save", "type"]);
         assert_eq!(*mock.clipboard.borrow(), ORIGINAL);
     }
 
@@ -424,7 +471,7 @@ mod tests {
         assert_eq!(insert(&mock, TEXT, FAST).unwrap(), InsertOutcome::Typed);
         assert_eq!(
             *mock.calls.borrow(),
-            ["save", "write", "paste", "restore", "type"]
+            ["wait", "save", "write", "paste", "restore", "type"]
         );
     }
 

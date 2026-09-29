@@ -64,6 +64,10 @@ impl Backend for WinBackend {
         integrity::foreground_blocks_input()
     }
 
+    fn wait_for_release(&self) -> bool {
+        keys::wait_for_release()
+    }
+
     fn save_clipboard(&self) -> Result<Saved, PlatformError> {
         clipboard::save()
     }

@@ -4,8 +4,9 @@
 //!
 //! **Held modifiers.** `SendInput` adds to whatever the user is physically holding: Ctrl+V with
 //! Alt held is Ctrl+Alt+V, and typed text with Alt held fires menu accelerators. After a chord
-//! hotkey the user may still hold its modifiers, so both wait (briefly) for every modifier to be
-//! released, and refuse rather than send into a held one.
+//! hotkey the user may still hold its modifiers, so an insertion first waits (once, briefly) for
+//! every modifier to be released ([`wait_for_release`]), and each send refuses at once rather than
+//! go out into a held one.
 #![cfg(windows)]
 
 use std::thread;
@@ -94,18 +95,24 @@ fn modifier_held() -> bool {
         .any(|key| unsafe { GetAsyncKeyState(key as i32) } < 0)
 }
 
-/// Waits until no modifier is held, up to [`RELEASE_WAIT`].
-fn wait_for_release() -> Result<(), PlatformError> {
+/// Waits until no modifier is held, up to [`RELEASE_WAIT`]. `false` if one still is.
+pub(crate) fn wait_for_release() -> bool {
     let deadline = Instant::now() + RELEASE_WAIT;
     while modifier_held() {
         if Instant::now() >= deadline {
-            return Err(PlatformError::Failed(
-                "a modifier key is still held, so nothing was sent (it would have changed the \
-                 keys)"
-                    .into(),
-            ));
+            return false;
         }
         thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+/// Refuses at once, without waiting, when a modifier is held.
+fn refuse_if_held() -> Result<(), PlatformError> {
+    if modifier_held() {
+        return Err(PlatformError::Failed(
+            "a modifier key was pressed, so nothing more was sent".into(),
+        ));
     }
     Ok(())
 }
@@ -153,14 +160,14 @@ pub(crate) fn send_heartbeat() -> bool {
 
 /// Presses Ctrl+V.
 pub(crate) fn post_paste() -> Result<(), PlatformError> {
-    wait_for_release()?;
+    refuse_if_held()?;
     send(&paste_inputs())
 }
 
 /// Types `text`.
 pub(crate) fn type_text(text: &str) -> Result<(), PlatformError> {
-    wait_for_release()?;
     for batch in text_inputs(text).chunks(TYPE_BATCH) {
+        refuse_if_held()?;
         send(batch)?;
     }
     Ok(())
