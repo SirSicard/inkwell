@@ -11,8 +11,8 @@
  *   (ink_register_engine); their answers come back through ink_engine_complete, and a live
  *   stream's words through ink_stream_event. The ink's audio bands are copied out on demand
  *   (ink_bands_read).
- *   The event types are defined once, in schema/events.schema.json; the Swift types are generated
- *   from it (cargo run -p ink-ffi --bin ink-schema).
+ *   The event types are defined once, in schema/events.schema.json; the Swift and C# types are
+ *   generated from it (cargo run -p ink-ffi --bin ink-schema).
  *
  * STRINGS
  *   Every string crossing this ABI is NUL-terminated UTF-8, and at most INK_MAX_JSON bytes. A string passed in is read during the
