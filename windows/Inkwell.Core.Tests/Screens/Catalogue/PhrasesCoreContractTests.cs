@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Inkwell.Core.Tests.Screens;
 
+[Collection(RealCore.Name)]
 public class PhrasesCoreContractTests
 {
     /// <summary>

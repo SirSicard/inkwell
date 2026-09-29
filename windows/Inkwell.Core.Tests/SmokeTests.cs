@@ -41,6 +41,7 @@ internal sealed class Events
     }
 }
 
+[Collection(RealCore.Name)]
 public class SmokeTests
 {
     private static string RepoRoot()

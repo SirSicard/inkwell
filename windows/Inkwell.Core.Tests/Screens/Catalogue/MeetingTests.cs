@@ -81,7 +81,7 @@ public class MeetingFailureTests
     }
 }
 
-public class LiveMeetingTests
+public class RecordNowTests
 {
     [Fact]
     public void RecordNowNamesTheCallFromTheCalendarAndAFailureIsSaid()
