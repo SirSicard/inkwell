@@ -100,7 +100,13 @@ if [ "$rehearsal" = 0 ] && grep -qi 'does not match' "$work/generate.log"; then
 fi
 
 url="$prefix$(basename "$dmg")"
-if [ "$rehearsal" = 1 ] && [ -z "$app_key" ]; then
+# In the rehearsal the throwaway key is never the app's: with no app key Sparkle signs nothing, and
+# with one it refuses to sign an archive whose app trusts another key (and says so). Either way the
+# item is left unsigned, so the throwaway key signs the dmg on its own and that signature is checked.
+if [ "$rehearsal" = 1 ] && [ -n "$app_key" ] && ! grep -qi 'does not match' "$work/generate.log"; then
+  fail "the app carries an update key, but Sparkle did not refuse the throwaway key"
+fi
+if [ "$rehearsal" = 1 ]; then
   "${check[@]}" verify "$work/archives/appcast.xml" "$dmg" "$version" "$url" "$check_key" --allow-unsigned-item
   signature="$(sign_with "$SPARKLE_BIN/sign_update" -p "$dmg")"
   "${check[@]}" signature "$dmg" "$signature" "$check_key"

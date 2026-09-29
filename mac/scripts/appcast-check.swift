@@ -92,7 +92,7 @@ func verify(appcast: String, dmg: String, version: String, url: String, key keyB
     }
     guard let signature = enclosure.attribute(forName: "sparkle:edSignature")?.stringValue else {
         if allowUnsignedItem {
-            print("item \(version): URL and length match; not signed (the app carries no update key)")
+            print("item \(version): URL and length match; not signed (allowed in the rehearsal)")
             return
         }
         throw fail("the item for \(version) has no EdDSA signature: does the app carry SUPublicEDKey?")
