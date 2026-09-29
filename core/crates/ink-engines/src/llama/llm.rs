@@ -15,22 +15,23 @@
 //!   error, not a shorter answer: a cut-off answer must not look like a finished one.
 //! - **Errors.** Failures of this model are [`LlmError::Engine`], naming the step, never the text.
 
-use std::num::NonZeroU32;
 use std::path::Path;
 
 use ink_core::{
     CancelToken, Endpoint, EngineError, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse,
 };
 use llama_cpp_2::context::LlamaContext;
-use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 
-use super::{GenerateError, Stop, backend, file_name, generate, require_file};
+use super::{
+    GenerateError, Stop, backend, compute, context_params, file_name, generate, model_params,
+    require_file, with_cpu_fallback,
+};
+use crate::compute::{Compute, physical_cores};
 
 /// A grammar (llama.cpp's GBNF) for exactly one JSON object, with bounded whitespace so a model
 /// cannot spend its budget on blank lines. Written for this crate from the JSON specification
@@ -56,18 +57,23 @@ pub struct LlamaLlm {
     template: LlamaChatTemplate,
     info: LlmInfo,
     backend: &'static LlamaBackend,
+    compute: Compute,
 }
 
 impl LlamaLlm {
-    /// **Worker.** Loads the model at `path`, all layers on the GPU where there is one. `model_id`
-    /// is what [`Llm::info`] reports. Refuses a model with no chat template, or one llama.cpp
-    /// cannot apply.
+    /// **Worker.** Loads the model at `path`, all layers on the GPU where there is one, else on the
+    /// CPU on every physical core ([`super::compute`]). `model_id` is what [`Llm::info`] reports.
+    /// Refuses a model with no chat template, or one llama.cpp cannot apply.
     pub fn load(path: &Path, model_id: &str) -> Result<Self, EngineError> {
         require_file(path, model_id)?;
         let backend = backend()?;
         let failed = |what: String| EngineError::Failed(format!("{model_id}: {what}"));
-        let model = LlamaModel::load_from_file(backend, path, &LlamaModelParams::default())
-            .map_err(|e| failed(format!("llama.cpp could not load {}: {e}", file_name(path))))?;
+        let (model, compute) =
+            with_cpu_fallback(compute()?, physical_cores(), model_id, |compute| {
+                LlamaModel::load_from_file(backend, path, &model_params(compute)).map_err(|e| {
+                    failed(format!("llama.cpp could not load {}: {e}", file_name(path)))
+                })
+            })?;
         let template = model.chat_template(None).map_err(|e| {
             failed(format!(
                 "{} has no usable chat template: {e}",
@@ -87,7 +93,13 @@ impl LlamaLlm {
                 endpoint: Endpoint::InProcess,
             },
             backend,
+            compute,
         })
+    }
+
+    /// **Any thread.** Where this model computes.
+    pub fn compute(&self) -> &Compute {
+        &self.compute
     }
 }
 
@@ -183,9 +195,8 @@ impl LlamaLlm {
                     self.model.n_ctx_train()
                 ))
             })?;
-        let params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx));
         self.model
-            .new_context(self.backend, params)
+            .new_context(self.backend, context_params(&self.compute, n_ctx))
             .map_err(|e| engine(format!("context: {e}")))
     }
 
