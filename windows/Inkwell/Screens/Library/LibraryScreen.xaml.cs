@@ -21,12 +21,13 @@ public sealed partial class LibraryScreen : UserControl
 
     /// <param name="library">The Library's model (shared with Today, which opens records in it).</param>
     /// <param name="summaryOffNote">The AI settings' "Summaries are off…" note, or null (AiSettings.SummaryOffNote).</param>
-    public LibraryScreen(LibraryModel library, Func<string?> summaryOffNote)
+    /// <param name="presence">Whether the window is on screen (the player's playhead draws only then).</param>
+    public LibraryScreen(LibraryModel library, Func<string?> summaryOffNote, WindowPresence presence)
     {
         ArgumentNullException.ThrowIfNull(library);
         _library = library;
         InitializeComponent();
-        _record = new RecordScreen(library, summaryOffNote);
+        _record = new RecordScreen(library, summaryOffNote, presence);
         SearchBox.PlaceholderText = LibraryModel.SearchPrompt;
         AutomationProperties.SetName(SearchBox, LibraryModel.SearchPrompt);
         ListFailedText.Text = LibraryModel.ListFailedText;

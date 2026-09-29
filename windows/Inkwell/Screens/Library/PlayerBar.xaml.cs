@@ -1,7 +1,9 @@
 // The player bar's code: it shows the RecordPlayer and sends it the user's presses. The playhead
-// moves only while the player plays and the bar is loaded: a DispatcherQueueTimer runs then (30
-// times a second, or once a second with animations off) and stops otherwise, so a paused or idle
-// record draws nothing (architecture rule 9).
+// moves only while the player plays, the bar is loaded and the window is on screen: a
+// DispatcherQueueTimer runs then (30 times a second, or once a second with animations off) and
+// stops otherwise, so a paused or idle record, or one playing behind a hidden window, draws
+// nothing (architecture rule 9). The sound plays on while hidden; shown again, the playhead draws
+// once where it is, then moves.
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Microsoft.UI.Dispatching;
@@ -18,6 +20,7 @@ public sealed partial class PlayerBar : UserControl
     private readonly WaveformLoader _loader = new();
     private readonly WaveformView _wave;
     private readonly DispatcherQueueTimer _timer;
+    private readonly WindowPresence _presence;
     private RecordDocument _document;
     private bool _loaded;
 
@@ -26,10 +29,13 @@ public sealed partial class PlayerBar : UserControl
 
     /// <param name="player">The open record's player (LibraryModel.Player).</param>
     /// <param name="document">The open record (LibraryModel.Document): its audio's caveats and waveform.</param>
-    public PlayerBar(RecordPlayer player, RecordDocument document)
+    /// <param name="presence">Whether the window is on screen: the playhead stops drawing while it is hidden.</param>
+    public PlayerBar(RecordPlayer player, RecordDocument document, WindowPresence presence)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(presence);
+        _presence = presence;
         _player = player;
         _document = document;
         InitializeComponent();
@@ -51,12 +57,14 @@ public sealed partial class PlayerBar : UserControl
         Loaded += (_, _) =>
         {
             _loaded = true;
+            _presence.PropertyChanged += OnPresenceChanged;
             _loader.Load(_document);
             PlayerChanged();
         };
         Unloaded += (_, _) =>
         {
             _loaded = false;
+            _presence.PropertyChanged -= OnPresenceChanged;
             _loader.Cancel();
             _timer.Stop();
         };
@@ -71,6 +79,8 @@ public sealed partial class PlayerBar : UserControl
         ShowNotice();
     }
 
+    private void OnPresenceChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => PlayerChanged();
+
     private void PlayerChanged()
     {
         var playing = _player.IsPlaying;
@@ -79,7 +89,7 @@ public sealed partial class PlayerBar : UserControl
         ToolTipService.SetToolTip(PlayButton, _player.PlayLabel);
         ShowNotice();
         Tick();
-        if (playing && _loaded)
+        if (ScreenClock.Runs(_loaded, _presence, moving: playing))
         {
             // Animations off: the playhead steps once a second (the Mac's reduce motion).
             var animations = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled;

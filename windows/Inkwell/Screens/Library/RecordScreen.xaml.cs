@@ -15,14 +15,18 @@ public sealed partial class RecordScreen : UserControl
 {
     private readonly LibraryModel _library;
     private readonly Func<string?> _summaryOffNote;
+    private readonly WindowPresence _presence;
     private RecordDocument? _shown;
     private RecordPlayer? _barPlayer;
     private PlayerBar? _bar;
 
     /// <param name="library">The Library's model: its open record, player and commands.</param>
     /// <param name="summaryOffNote">The AI settings' "Summaries are off…" note, or null (AiSettings.SummaryOffNote).</param>
-    public RecordScreen(LibraryModel library, Func<string?> summaryOffNote)
+    /// <param name="presence">Whether the window is on screen (the player's playhead draws only then).</param>
+    public RecordScreen(LibraryModel library, Func<string?> summaryOffNote, WindowPresence presence)
     {
+        ArgumentNullException.ThrowIfNull(presence);
+        _presence = presence;
         ArgumentNullException.ThrowIfNull(library);
         ArgumentNullException.ThrowIfNull(summaryOffNote);
         _library = library;
@@ -338,7 +342,7 @@ public sealed partial class RecordScreen : UserControl
             return;
         }
         _barPlayer = player;
-        _bar = player is null || document is null ? null : new PlayerBar(player, document);
+        _bar = player is null || document is null ? null : new PlayerBar(player, document, _presence);
         if (_bar is not null)
         {
             _bar.Ticked += (_, _) => MarkLine();

@@ -79,6 +79,8 @@ public partial class App : Application
         };
         tray.IsVisible = true;
         window.Activate();
+        // On screen from the start: the window's own change events may not come for the first show.
+        made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
         core.Start();
     }
 

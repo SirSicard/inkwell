@@ -30,6 +30,7 @@ public sealed partial class LiveScreen : UserControl
     private readonly ObservableCollection<LiveLine> ledger = [];
     /// <summary>The header's clock: runs only while this screen is loaded and the meeting still records.</summary>
     private readonly DispatcherQueueTimer clock;
+    private readonly WindowPresence presence;
     private string? shownRecord;
     private int? lastParagraph;
     private bool loaded;
@@ -37,8 +38,11 @@ public sealed partial class LiveScreen : UserControl
     private ImmutableList<AskedQuestion>? shownAsked;
 
     /// <param name="meetings">Stop, Record now and their failures (the meetings model, Settings' area).</param>
-    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings)
+    /// <param name="presence">Whether the window is on screen: the clock stops while it is hidden to the tray.</param>
+    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings, WindowPresence presence)
     {
+        ArgumentNullException.ThrowIfNull(presence);
+        this.presence = presence;
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(live);
         ArgumentNullException.ThrowIfNull(meetings);
@@ -77,18 +81,23 @@ public sealed partial class LiveScreen : UserControl
         store.PropertyChanged += (_, _) => Render();
         live.PropertyChanged += (_, _) => Render();
         meetings.PropertyChanged += (_, _) => Render();
+        // Shown again: the header draws once (Render), then the clock runs; hidden, it stops.
         Loaded += (_, _) =>
         {
             loaded = true;
+            presence.PropertyChanged += OnPresenceChanged;
             Render();
         };
         Unloaded += (_, _) =>
         {
             loaded = false;
+            presence.PropertyChanged -= OnPresenceChanged;
             clock.Stop();
         };
         Render();
     }
+
+    private void OnPresenceChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Render();
 
     private void Accelerator(VirtualKey key, Action action)
     {
@@ -144,7 +153,7 @@ public sealed partial class LiveScreen : UserControl
         StopButton.Visibility = meeting.Stopping ? Visibility.Collapsed : Visibility.Visible;
         Show(StopFailure, meetings.FailureOn(MeetingPlace.LiveStop));
         ShowStatus();
-        var ticks = loaded && !meeting.Stopping && live.StartedAt is not null;
+        var ticks = ScreenClock.Runs(loaded, presence, moving: !meeting.Stopping && live.StartedAt is not null);
         if (ticks && !clock.IsRunning)
         {
             clock.Start();
