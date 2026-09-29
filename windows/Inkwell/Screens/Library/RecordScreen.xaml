@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A record (the canvas's meeting record, the Mac's RecordScreen): its title and when, then three
+     tabs: notes and transcript side by side (your notes first, filled in with what was said; the
+     ledger of who said what), the rendered summary, and what is owed. The player sits at the foot.
+     Every timestamp chip and every line plays from its moment. -->
+<UserControl
+    x:Class="Inkwell.Screens.RecordScreen"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens">
+    <Grid>
+        <!-- The record. -->
+        <Grid x:Name="Shown" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel Padding="32,22,32,0" Spacing="14">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="6">
+                        <TextBlock
+                            x:Name="RecordTitle"
+                            AutomationProperties.HeadingLevel="Level2"
+                            FontFamily="{StaticResource InkReadingFontFamily}"
+                            FontSize="27"
+                            FontWeight="Medium"
+                            Foreground="{ThemeResource InkTextBrush}"
+                            MaxLines="3"
+                            TextTrimming="CharacterEllipsis"
+                            TextWrapping="Wrap" />
+                        <TextBlock x:Name="RecordLine" Style="{StaticResource InkTimestampStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                        <Button
+                            x:Name="CopySummaryButton"
+                            Width="32"
+                            Height="32"
+                            Padding="0"
+                            AutomationProperties.Name="Copy summary"
+                            Click="OnCopySummary"
+                            ToolTipService.ToolTip="Copy summary">
+                            <FontIcon FontSize="14" Glyph="&#xE8C8;" />
+                        </Button>
+                        <Button
+                            Width="32"
+                            Height="32"
+                            Padding="0"
+                            AutomationProperties.Name="More"
+                            ToolTipService.ToolTip="More">
+                            <FontIcon FontSize="14" Glyph="&#xE712;" />
+                            <Button.Flyout>
+                                <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                    <MenuFlyoutItem Click="OnCopyTranscript" Text="Copy transcript" />
+                                    <MenuFlyoutItem x:Name="CopySummaryItem" Click="OnCopySummary" Text="Copy summary" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+                <SelectorBar x:Name="Tabs" AutomationProperties.Name="Record" SelectionChanged="OnTabChanged">
+                    <SelectorBarItem x:Name="NotesTab" IsSelected="True" />
+                    <SelectorBarItem x:Name="SummaryTab" />
+                    <SelectorBarItem x:Name="OwedTab" />
+                </SelectorBar>
+            </StackPanel>
+
+            <!-- Notes and transcript: notes 1, transcript 1.12 (the canvas's columns). -->
+            <Grid
+                x:Name="NotesPanel"
+                Grid.Row="1"
+                BorderBrush="{ThemeResource InkBorderBrush}"
+                BorderThickness="0,1,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="1.12*" />
+                </Grid.ColumnDefinitions>
+                <ScrollViewer
+                    AutomationProperties.Name="Notes"
+                    BorderBrush="{ThemeResource InkBorderBrush}"
+                    BorderThickness="0,0,1,0">
+                    <StackPanel x:Name="NotesStack" Padding="32,20,26,20" Spacing="12" />
+                </ScrollViewer>
+                <Grid Grid.Column="1" Padding="0,16,28,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Margin="80,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ContentPresenter x:Name="LedgerEyebrow" />
+                        <TextBlock x:Name="LedgerStatus" Grid.Column="1" Style="{StaticResource InkTimestampStyle}" />
+                    </Grid>
+                    <TextBlock
+                        x:Name="EmptyLedger"
+                        Grid.Row="1"
+                        Margin="80,0,0,0"
+                        Style="{StaticResource InkCaptionStyle}"
+                        Visibility="Collapsed" />
+                    <ListView
+                        x:Name="LedgerList"
+                        Grid.Row="1"
+                        AutomationProperties.Name="Transcript"
+                        IsItemClickEnabled="True"
+                        ItemClick="OnLineClick"
+                        SelectionMode="Single">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:LedgerItem">
+                                <Grid Padding="0,7" ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="18" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Padding="0,3,0,0"
+                                        HorizontalAlignment="Right"
+                                        Style="{StaticResource InkTimestampStyle}"
+                                        Text="{x:Bind Stamp}" />
+                                    <Ellipse
+                                        Grid.Column="1"
+                                        Width="8"
+                                        Height="8"
+                                        Margin="0,7,0,0"
+                                        VerticalAlignment="Top"
+                                        AutomationProperties.AccessibilityView="Raw"
+                                        Fill="{ThemeResource InkTextBrush}"
+                                        Visibility="{x:Bind local:Show.If(IsYou)}" />
+                                    <Ellipse
+                                        Grid.Column="1"
+                                        Width="8"
+                                        Height="8"
+                                        Margin="0,7,0,0"
+                                        VerticalAlignment="Top"
+                                        AutomationProperties.AccessibilityView="Raw"
+                                        Fill="{ThemeResource InkThemBrush}"
+                                        Visibility="{x:Bind local:Show.Unless(IsYou)}" />
+                                    <StackPanel Grid.Column="2" Spacing="2">
+                                        <TextBlock
+                                            FontSize="12"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource InkTextBrush}"
+                                            Text="{x:Bind Who}"
+                                            Visibility="{x:Bind local:Show.If(IsYou)}" />
+                                        <TextBlock
+                                            FontSize="12"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource InkThemBrush}"
+                                            Text="{x:Bind Who}"
+                                            Visibility="{x:Bind local:Show.Unless(IsYou)}" />
+                                        <TextBlock FontSize="15.5" Style="{StaticResource InkReadingStyle}" Text="{x:Bind Text}" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Grid>
+
+            <!-- Summary. -->
+            <ScrollViewer
+                x:Name="SummaryPanel"
+                Grid.Row="1"
+                BorderBrush="{ThemeResource InkBorderBrush}"
+                BorderThickness="0,1,0,0"
+                Visibility="Collapsed">
+                <StackPanel MaxWidth="720" Padding="32,20" HorizontalAlignment="Left" Spacing="12">
+                    <RichTextBlock
+                        x:Name="SummaryText"
+                        FontFamily="{StaticResource InkReadingFontFamily}"
+                        FontSize="16"
+                        Foreground="{ThemeResource InkTextBrush}"
+                        IsTextSelectionEnabled="True"
+                        LineHeight="24"
+                        TextWrapping="Wrap" />
+                    <StackPanel x:Name="NoSummary" Spacing="6" Visibility="Collapsed">
+                        <TextBlock x:Name="NoSummaryTitle" AutomationProperties.HeadingLevel="Level3" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
+                        <TextBlock x:Name="NoSummaryText" Style="{StaticResource InkCaptionStyle}" />
+                    </StackPanel>
+                    <StackPanel x:Name="CitedStack" Spacing="8" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Owed. -->
+            <ScrollViewer
+                x:Name="OwedPanel"
+                Grid.Row="1"
+                BorderBrush="{ThemeResource InkBorderBrush}"
+                BorderThickness="0,1,0,0"
+                Visibility="Collapsed">
+                <StackPanel x:Name="OwedStack" Padding="32,20" Spacing="14" />
+            </ScrollViewer>
+
+            <ContentPresenter x:Name="PlayerHost" Grid.Row="2" HorizontalContentAlignment="Stretch" />
+        </Grid>
+
+        <!-- It could not be opened. -->
+        <StackPanel
+            x:Name="Failed"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="8"
+            Visibility="Collapsed">
+            <TextBlock x:Name="FailedTitle" AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" />
+            <TextBlock x:Name="FailedText" Style="{StaticResource InkAlertTextStyle}" />
+            <HyperlinkButton x:Name="TryAgain" Click="OnTryAgain" />
+        </StackPanel>
+
+        <!-- Being opened. Spins only until the core answers. -->
+        <ProgressRing
+            x:Name="Opening"
+            Width="20"
+            Height="20"
+            AutomationProperties.Name="Opening the record"
+            IsActive="False"
+            Visibility="Collapsed" />
+    </Grid>
+</UserControl>
