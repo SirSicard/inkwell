@@ -10,3 +10,45 @@ publish.workspace = true
 
 [dependencies]
 ink-core.workspace = true
+
+# Windows only. On every other OS the crate builds empty, so none of these reach the Mac build.
+[target.'cfg(windows)'.dependencies]
+# The realtime guard seam (I4); the capture ring in the checklist binary.
+ink-audio = { path = "../ink-audio" }
+# windows-rs (MIT OR Apache-2.0): WASAPI and the session manager are COM, which windows-sys does
+# not bind. Only the namespaces used are enabled.
+windows = { version = "0.62.2", features = [
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# `#[implement]` for the two COM callbacks this crate receives: process-loopback activation, and
+# new audio sessions (detection's wake-up). The version windows-rs itself uses.
+windows-core = "0.62.2"
+
+# I4: the capture thread's per-wake work is proven allocation-free in the unit tests (a scripted
+# packet source) and in the checklist binary (real devices). BSD-1-Clause, test-only (deny.toml has
+# the crate-scoped exception). Warn mode in both profiles, as in ink-audio: a test counts violations.
+[target.'cfg(windows)'.dev-dependencies]
+assert_no_alloc = { version = "1.1.2", default-features = false, features = ["warn_debug", "warn_release"] }
