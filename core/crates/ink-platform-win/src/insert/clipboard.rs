@@ -493,7 +493,15 @@ pub(crate) fn write_delayed(
         // dropped receiver), puts the saved clipboard back and ends, so no promise of the text
         // outlives this answer. Whether that restore will succeed is unknown here.
         Err(_) => {
-            cancelled.store(true, Ordering::Release);
+            if let Some(thread_id) = crate::com::abandon_start(&cancelled, &ready) {
+                // It got going just after the wait ended: stopping it restores the clipboard
+                // and takes the promise away.
+                drop(Owner {
+                    thread: Some(thread),
+                    thread_id,
+                    requests: requests_tx,
+                });
+            }
             Err(WriteFailed {
                 clipboard_back: false,
             })
@@ -550,7 +558,7 @@ fn owner_thread(
             if cancelled.load(Ordering::Acquire) || ready.send(Ok(thread_id)).is_err() {
                 // The writer gave up waiting: nobody will paste or restore, so the promise of
                 // the text must not stay on the clipboard.
-                let _ = restore(window, &saved);
+                let _ = retry(RESTORE_ATTEMPTS, || restore(window, &saved));
                 STATE.with(|s| s.borrow_mut().take());
                 // SAFETY: this thread's window, destroyed once.
                 let _ = unsafe { DestroyWindow(window) };

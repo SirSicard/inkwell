@@ -11,6 +11,8 @@
 #![cfg(windows)]
 
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Receiver;
 
 use ink_core::PlatformError;
 use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
@@ -53,6 +55,20 @@ impl Drop for ComScope {
             // SAFETY: balances the successful CoInitializeEx on this same thread (not `Send`).
             unsafe { CoUninitialize() };
         }
+    }
+}
+
+/// After a thread's start timed out: tells it to stand down (`cancelled`), then takes its ready
+/// message if it arrived in between. `Some` means the thread got going anyway and the caller must
+/// stop it now, so nothing it holds (a hook, a clipboard promise) outlives the failure it reports.
+pub(crate) fn abandon_start<T, E>(
+    cancelled: &AtomicBool,
+    ready: &Receiver<Result<T, E>>,
+) -> Option<T> {
+    cancelled.store(true, Ordering::Release);
+    match ready.try_recv() {
+        Ok(Ok(started)) => Some(started),
+        _ => None,
     }
 }
 
@@ -112,6 +128,31 @@ mod tests {
         let inner = ComScope::enter().expect("nested");
         drop(inner);
         drop(outer);
+    }
+
+    #[test]
+    fn an_abandoned_start_hands_back_a_thread_that_got_going_meanwhile() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Result<u32, ()>>(1);
+        let cancelled = AtomicBool::new(false);
+        assert_eq!(
+            abandon_start(&cancelled, &rx),
+            None,
+            "not ready: nothing to stop"
+        );
+        assert!(cancelled.load(Ordering::Acquire), "told to stand down");
+        // The race: the thread reported ready just after the wait timed out.
+        tx.send(Ok(7)).unwrap();
+        assert_eq!(
+            abandon_start(&cancelled, &rx),
+            Some(7),
+            "the caller stops it"
+        );
+        tx.send(Err(())).unwrap();
+        assert_eq!(
+            abandon_start(&cancelled, &rx),
+            None,
+            "a failed start holds nothing"
+        );
     }
 
     #[test]

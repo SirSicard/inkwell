@@ -409,8 +409,11 @@ impl Hook {
                 Err(e)
             }
             Err(_) => {
-                // The thread unhooks (or never hooks) when it sees this or the dropped receiver.
-                cancelled.store(true, Ordering::Release);
+                // The thread unhooks (or never hooks) when it sees the flag or the dropped
+                // receiver; if it reported ready in between, it is stopped here.
+                if let Some(thread_id) = crate::com::abandon_start(&cancelled, &ready) {
+                    Self { thread, thread_id }.shutdown();
+                }
                 Err(PlatformError::Failed(
                     "the keyboard hook did not start in time".into(),
                 ))
