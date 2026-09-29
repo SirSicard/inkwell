@@ -21,8 +21,9 @@
 #![cfg(windows)]
 
 use std::cell::RefCell;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -389,9 +390,11 @@ pub(crate) fn write_delayed(
     let (reads_tx, reads) = mpsc::channel();
     let (requests_tx, requests) = mpsc::channel::<RestoreRequest>();
     let (ready_tx, ready) = mpsc::sync_channel::<Result<u32, WriteFailed>>(1);
-    let spawned = thread::Builder::new()
-        .name("ink-clipboard".into())
-        .spawn(move || owner_thread(utf16, reads_tx, saved, &requests, &ready_tx));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let spawned = thread::Builder::new().name("ink-clipboard".into()).spawn({
+        let cancelled = Arc::clone(&cancelled);
+        move || owner_thread(utf16, reads_tx, saved, &requests, &ready_tx, &cancelled)
+    });
     let Ok(thread) = spawned else {
         return Err(WriteFailed {
             clipboard_back: true,
@@ -410,10 +413,15 @@ pub(crate) fn write_delayed(
             let _ = thread.join();
             Err(failed)
         }
-        // The thread is stuck opening the clipboard; what it will do is unknown.
-        Err(_) => Err(WriteFailed {
-            clipboard_back: false,
-        }),
+        // The thread is stuck opening the clipboard. When it gets there it sees this (or the
+        // dropped receiver), puts the saved clipboard back and ends, so no promise of the text
+        // outlives this answer. Whether that restore will succeed is unknown here.
+        Err(_) => {
+            cancelled.store(true, Ordering::Release);
+            Err(WriteFailed {
+                clipboard_back: false,
+            })
+        }
     }
 }
 
@@ -424,6 +432,7 @@ fn owner_thread(
     saved: Saved,
     requests: &Receiver<RestoreRequest>,
     ready: &SyncSender<Result<u32, WriteFailed>>,
+    cancelled: &AtomicBool,
 ) {
     let mut msg = MSG::default();
     // SAFETY: a live MSG; makes this thread's queue before anyone posts to it.
@@ -461,7 +470,16 @@ fn owner_thread(
     match write(window, &saved) {
         Ok(()) => {
             // SAFETY: no arguments.
-            let _ = ready.send(Ok(unsafe { GetCurrentThreadId() }));
+            let thread_id = unsafe { GetCurrentThreadId() };
+            if cancelled.load(Ordering::Acquire) || ready.send(Ok(thread_id)).is_err() {
+                // The writer gave up waiting: nobody will paste or restore, so the promise of
+                // the text must not stay on the clipboard.
+                let _ = restore(window, &saved);
+                STATE.with(|s| s.borrow_mut().take());
+                // SAFETY: this thread's window, destroyed once.
+                let _ = unsafe { DestroyWindow(window) };
+                return;
+            }
         }
         Err(failed) => {
             let _ = ready.send(Err(failed));
@@ -584,6 +602,62 @@ mod tests {
         assert_eq!(classify(cf::OWNERDISPLAY, &[]), Class::Lost);
         assert_eq!(classify(0x200, &[]), Class::Lost);
         assert_eq!(classify(0x3FF, &[]), Class::Lost);
+    }
+
+    /// The writer gave up before the owner thread was ready: the thread must put the clipboard
+    /// back and end, leaving no promise of the text. Uses the real clipboard (of the session it
+    /// runs in), so by hand: `cargo test -p ink-platform-win -- --ignored abandoned`.
+    #[test]
+    #[ignore = "uses the real clipboard"]
+    fn an_abandoned_write_restores_and_ends() {
+        let original = "clipboard before an abandoned insertion";
+        let mut bytes: Vec<u8> = original.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        bytes.extend_from_slice(&[0, 0]);
+        let (owner, _) = write_delayed(
+            "placeholder",
+            Saved {
+                formats: vec![(CF_TEXT_ID, bytes)],
+                lost: 0,
+            },
+        )
+        .expect("setup write");
+        assert_eq!(owner.restore().unwrap(), Restore::Restored);
+        drop(owner);
+
+        window_class().unwrap();
+        let (reads_tx, _reads) = mpsc::channel();
+        let (_requests_tx, requests) = mpsc::channel();
+        let (ready_tx, ready) = mpsc::sync_channel(1);
+        drop(ready); // the writer stopped waiting
+        let saved = save().unwrap();
+        let text: Vec<u16> = "Synthetic abandoned text.\0".encode_utf16().collect();
+        let thread = thread::spawn(move || {
+            owner_thread(
+                text,
+                reads_tx,
+                saved,
+                &requests,
+                &ready_tx,
+                &AtomicBool::new(false),
+            )
+        });
+        thread.join().expect("the thread ended by itself");
+        let back = save().unwrap();
+        let (_, bytes) = back
+            .formats
+            .iter()
+            .find(|(f, _)| *f == CF_TEXT_ID)
+            .expect("text back");
+        let text: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
+            .collect();
+        assert_eq!(
+            String::from_utf16_lossy(&text).trim_end_matches('\0'),
+            original
+        );
     }
 
     /// Writes and restores the real clipboard, so it runs by hand: it would clobber a desktop

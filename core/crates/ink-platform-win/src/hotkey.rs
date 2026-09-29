@@ -35,7 +35,7 @@ mod machine;
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -215,6 +215,7 @@ fn run(
     binding: Binding,
     context: HookContext,
     ready: mpsc::SyncSender<Result<u32, PlatformError>>,
+    cancelled: &AtomicBool,
 ) {
     // Make sure this thread has a message queue before anyone posts to it.
     let mut msg = MSG::default();
@@ -225,17 +226,30 @@ fn run(
     // The hook's deadline is wall time: a busy machine must not starve this thread into it.
     // SAFETY: the pseudo-handle of this thread.
     let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) };
+    let forget = || {
+        MACHINE.with(Cell::take);
+        CONTEXT.with(|c| c.borrow_mut().take());
+    };
+    if cancelled.load(Ordering::Acquire) {
+        return forget();
+    }
     let hook = match install() {
         Ok(hook) => hook,
         Err(e) => {
             let _ = ready.send(Err(PlatformError::Failed(format!(
                 "the keyboard hook was refused: {e}"
             ))));
-            return;
+            return forget();
         }
     };
+    // `start` gave up waiting (it said so to its caller): the hook must not outlive that answer.
     // SAFETY: no arguments.
-    let _ = ready.send(Ok(unsafe { GetCurrentThreadId() }));
+    if cancelled.load(Ordering::Acquire) || ready.send(Ok(unsafe { GetCurrentThreadId() })).is_err()
+    {
+        // SAFETY: installed above on this thread, removed once.
+        let _ = unsafe { UnhookWindowsHookEx(hook) };
+        return forget();
+    }
     let (hook, lost) = pump(hook);
     // SAFETY: installed on this thread, removed once.
     let _ = unsafe { UnhookWindowsHookEx(hook) };
@@ -372,6 +386,7 @@ impl Hook {
         reinstalls: Arc<AtomicU64>,
     ) -> Result<Self, PlatformError> {
         let (ready_tx, ready) = mpsc::sync_channel(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
         let context = HookContext {
             sink,
             clock,
@@ -380,7 +395,10 @@ impl Hook {
         };
         let thread = thread::Builder::new()
             .name("ink-hotkey".into())
-            .spawn(move || run(binding, context, ready_tx))
+            .spawn({
+                let cancelled = Arc::clone(&cancelled);
+                move || run(binding, context, ready_tx, &cancelled)
+            })
             .map_err(|e| {
                 PlatformError::Failed(format!("could not start the hotkey thread: {e}"))
             })?;
@@ -390,13 +408,22 @@ impl Hook {
                 let _ = thread.join();
                 Err(e)
             }
-            Err(_) => Err(PlatformError::Failed(
-                "the keyboard hook did not start in time".into(),
-            )),
+            Err(_) => {
+                // The thread unhooks (or never hooks) when it sees this or the dropped receiver.
+                cancelled.store(true, Ordering::Release);
+                Err(PlatformError::Failed(
+                    "the keyboard hook did not start in time".into(),
+                ))
+            }
         }
     }
 
     fn shutdown(self) {
+        if self.thread.is_finished() {
+            // It ended on its own (Lost); nothing to post to.
+            let _ = self.thread.join();
+            return;
+        }
         // SAFETY: posts WM_QUIT to the hook thread's queue, which exists (made before `ready`).
         let posted = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
         if posted.is_ok() {
@@ -508,6 +535,55 @@ mod tests {
     #[test]
     fn our_marker_is_recognisable_ascii() {
         assert_eq!(&(SYNTHETIC_EVENT_MARK as u32).to_be_bytes(), b"inkw");
+    }
+
+    /// `start` timed out: the thread must not keep a global hook. Runs anywhere; where a hook can
+    /// be installed it is removed again at once, and the thread ends either way.
+    #[test]
+    fn a_hook_thread_whose_start_was_abandoned_ends_without_a_hook() {
+        for cancel_first in [false, true] {
+            let (ready_tx, ready) = mpsc::sync_channel(1);
+            drop(ready); // `start` stopped waiting
+            let cancelled = Arc::new(AtomicBool::new(cancel_first));
+            let called = Arc::new(AtomicU64::new(0));
+            let sink: EventSink<HotkeyEvent> = {
+                let called = Arc::clone(&called);
+                Arc::new(move |_| {
+                    called.fetch_add(1, Ordering::Relaxed);
+                })
+            };
+            let context = HookContext {
+                sink,
+                clock: WinClock::new().unwrap(),
+                panics: Arc::default(),
+                reinstalls: Arc::default(),
+            };
+            let thread = thread::spawn({
+                let cancelled = Arc::clone(&cancelled);
+                move || {
+                    run(
+                        Binding::parse(DEFAULT_BINDING).unwrap(),
+                        context,
+                        ready_tx,
+                        &cancelled,
+                    )
+                }
+            });
+            let start = std::time::Instant::now();
+            while !thread.is_finished() {
+                assert!(
+                    start.elapsed() < Duration::from_secs(3),
+                    "the abandoned hook thread kept running"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            thread.join().unwrap();
+            assert_eq!(
+                called.load(Ordering::Relaxed),
+                0,
+                "its sink is never called"
+            );
+        }
     }
 
     #[test]
