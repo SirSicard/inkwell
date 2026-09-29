@@ -139,6 +139,18 @@ fn mask_inputs() -> [INPUT; 2] {
     ]
 }
 
+/// Injects the hook's heartbeat (the mask key's code, down and up, with
+/// [`HEARTBEAT_MARK`](crate::hotkey::HEARTBEAT_MARK)); the live hook swallows it. `false` when
+/// Windows took none of it (an elevated window has focus, say), so nothing is pending.
+pub(crate) fn send_heartbeat() -> bool {
+    let mut inputs = mask_inputs();
+    for input in &mut inputs {
+        input.Anonymous.ki.dwExtraInfo = crate::hotkey::HEARTBEAT_MARK;
+    }
+    // SAFETY: a live slice of keyboard inputs and the struct's size.
+    unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) > 0 }
+}
+
 /// Presses Ctrl+V.
 pub(crate) fn post_paste() -> Result<(), PlatformError> {
     wait_for_release()?;

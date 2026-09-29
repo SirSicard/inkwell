@@ -555,7 +555,11 @@ mod win {
             }
         }
         source.stop();
-        println!("stopped; callback panics {}", source.callback_panics());
+        println!(
+            "stopped; callback panics {}, hook reinstalls {}",
+            source.callback_panics(),
+            source.hook_reinstalls()
+        );
         0
     }
 

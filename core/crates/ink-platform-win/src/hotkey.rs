@@ -11,7 +11,8 @@
 //! calls the hook on that thread. The callback reads the event, updates a `Copy` state machine
 //! held in a `Cell`, calls the core's sink (which only enqueues) and returns. Windows removes a
 //! hook that takes longer than its timeout (about a second) **without telling anyone**, so the
-//! callback takes no locks and does no work beyond that.
+//! callback takes no locks and does no work beyond that, the thread runs at high priority, and a
+//! heartbeat (`heartbeat`) notices a removed hook and installs it again; if it cannot, `Lost`.
 //!
 //! **Our own keys.** Events this crate injects (the paste keystroke, typed text) carry
 //! [`SYNTHETIC_EVENT_MARK`] in `dwExtraInfo` and pass through untouched. Other injected input
@@ -29,6 +30,7 @@
 #![cfg(windows)]
 
 pub(crate) mod binding;
+mod heartbeat;
 mod machine;
 
 use std::cell::{Cell, RefCell};
@@ -42,16 +44,21 @@ use ink_core::{Clock, EventSink, HotkeyBinding, HotkeyEvent, HotkeySource, Platf
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount;
-use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::System::Threading::{
+    GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, PeekMessageW,
-    PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN,
-    WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, GetMessageW, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, KillTimer, MSG, PM_NOREMOVE,
+    PeekMessageW, PostThreadMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx,
+    WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
 };
 
 use crate::clock::WinClock;
 use binding::{Binding, modifier, vk};
+use heartbeat::Heartbeat;
 use machine::{Edge, HoldMachine, HookInput};
 
 pub use binding::{DEFAULT_BINDING, KEYS};
@@ -59,6 +66,10 @@ pub use binding::{DEFAULT_BINDING, KEYS};
 /// The marker in `dwExtraInfo` on every key event this crate injects, so its own hook lets them
 /// through. Arbitrary; ASCII for "inkw".
 pub(crate) const SYNTHETIC_EVENT_MARK: usize = 0x696E_6B77;
+
+/// The marker on the heartbeat key (`heartbeat`): the hook swallows it and notes that it arrived.
+/// ASCII for "inkh".
+pub(crate) const HEARTBEAT_MARK: usize = 0x696E_6B68;
 
 /// The mask key: an unassigned virtual key (`0xE8`), injected while a swallowed chord's modifiers
 /// are down so their release is not a lone tap (see `machine`). It carries
@@ -109,6 +120,7 @@ struct HookContext {
     sink: EventSink<HotkeyEvent>,
     clock: WinClock,
     panics: Arc<AtomicU64>,
+    reinstalls: Arc<AtomicU64>,
 }
 
 thread_local! {
@@ -116,6 +128,8 @@ thread_local! {
     static MACHINE: Cell<Option<HoldMachine>> = const { Cell::new(None) };
     /// Set once before the hook is installed, read by the callback.
     static CONTEXT: RefCell<Option<HookContext>> = const { RefCell::new(None) };
+    /// Set by the callback when the heartbeat key reaches it.
+    static HEARTBEAT_SEEN: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Calls the sink; a panic is caught, counted and recovered (the hold is reset, `Cancelled` sent).
@@ -154,6 +168,10 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
 fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
     if event.dwExtraInfo == SYNTHETIC_EVENT_MARK {
         return false;
+    }
+    if event.dwExtraInfo == HEARTBEAT_MARK {
+        HEARTBEAT_SEEN.set(true);
+        return true; // ours alone: no app sees it
     }
     let input = match message {
         WM_KEYDOWN | WM_SYSKEYDOWN => HookInput::KeyDown {
@@ -204,13 +222,10 @@ fn run(
     let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE) };
     MACHINE.with(|m| m.set(Some(HoldMachine::new(binding))));
     CONTEXT.with(|c| *c.borrow_mut() = Some(context));
-    // SAFETY: this module's handle (the hook procedure lives in it) and a valid hook procedure.
-    let hook = unsafe {
-        GetModuleHandleW(None).and_then(|module| {
-            SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), Some(module.into()), 0)
-        })
-    };
-    let hook = match hook {
+    // The hook's deadline is wall time: a busy machine must not starve this thread into it.
+    // SAFETY: the pseudo-handle of this thread.
+    let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) };
+    let hook = match install() {
         Ok(hook) => hook,
         Err(e) => {
             let _ = ready.send(Err(PlatformError::Failed(format!(
@@ -221,22 +236,8 @@ fn run(
     };
     // SAFETY: no arguments.
     let _ = ready.send(Ok(unsafe { GetCurrentThreadId() }));
-    let mut lost = false;
-    loop {
-        // SAFETY: a live MSG; any window of this thread.
-        let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
-        match got.0 {
-            0 => break, // WM_QUIT: our stop
-            -1 => {
-                lost = true;
-                break;
-            }
-            // The hook runs inside GetMessageW; the only message of ours is the mask request.
-            _ if msg.message == WM_INK_MASK => crate::insert::send_mask_key(),
-            _ => {}
-        }
-    }
-    // SAFETY: installed above on this thread, removed once.
+    let (hook, lost) = pump(hook);
+    // SAFETY: installed on this thread, removed once.
     let _ = unsafe { UnhookWindowsHookEx(hook) };
     let held = MACHINE.with(|m| m.take()).is_some_and(|m| m.is_held());
     if let Some(context) = CONTEXT.with(|c| c.borrow_mut().take()) {
@@ -247,6 +248,113 @@ fn run(
             emit(&context, HotkeyEvent::Lost);
         }
     }
+}
+
+/// Installs the hook on this thread.
+fn install() -> windows::core::Result<HHOOK> {
+    // SAFETY: this module's handle (the hook procedure lives in it) and a valid hook procedure.
+    unsafe {
+        GetModuleHandleW(None).and_then(|module| {
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), Some(module.into()), 0)
+        })
+    }
+}
+
+/// The tick of the last user input, from `GetLastInputInfo`.
+fn last_input_tick() -> Option<u32> {
+    let mut info = LASTINPUTINFO {
+        cbSize: size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    // SAFETY: a live struct with its size set.
+    unsafe { GetLastInputInfo(&mut info) }
+        .as_bool()
+        .then_some(info.dwTime)
+}
+
+/// The hook thread's message loop: the hook runs inside `GetMessageW`; the loop injects the mask
+/// key when asked and runs the heartbeat. Returns the hook (it may have been reinstalled) and
+/// whether the hotkey was lost.
+fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
+    let mut msg = MSG::default();
+    let mut heartbeat = Heartbeat::default();
+    // SAFETY: a thread timer (no window, no callback); it posts WM_TIMER to this thread.
+    let tick_timer = unsafe { SetTimer(None, 0, heartbeat::INTERVAL_MS, None) };
+    let mut check_timer = 0usize;
+    let lost = loop {
+        // SAFETY: a live MSG; any window of this thread.
+        let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
+        match got.0 {
+            0 => break false, // WM_QUIT: our stop
+            -1 => break true,
+            _ => {}
+        }
+        match msg.message {
+            WM_INK_MASK => crate::insert::send_mask_key(),
+            WM_TIMER if tick_timer != 0 && msg.wParam.0 == tick_timer => {
+                // SAFETY: no arguments.
+                let now = unsafe { GetTickCount() };
+                let due = last_input_tick().is_some_and(|last| heartbeat.should_send(now, last));
+                if due && check_timer == 0 {
+                    HEARTBEAT_SEEN.set(false);
+                    if crate::insert::send_heartbeat() {
+                        // SAFETY: no arguments.
+                        heartbeat.sent(unsafe { GetTickCount() });
+                        // SAFETY: a one-shot thread timer, killed when it fires.
+                        check_timer = unsafe { SetTimer(None, 0, heartbeat::DEADLINE_MS, None) };
+                    }
+                }
+            }
+            WM_TIMER if check_timer != 0 && msg.wParam.0 == check_timer => {
+                // SAFETY: the timer made above on this thread.
+                let _ = unsafe { KillTimer(None, check_timer) };
+                check_timer = 0;
+                if HEARTBEAT_SEEN.take() {
+                    heartbeat.seen();
+                }
+                if heartbeat.missed() {
+                    // Windows removed the hook. Unhooking the stale handle may fail; either way a
+                    // new one goes in, and a hold in progress may have lost its release.
+                    // SAFETY: the handle this thread installed.
+                    let _ = unsafe { UnhookWindowsHookEx(hook) };
+                    match install() {
+                        Ok(fresh) => {
+                            hook = fresh;
+                            reinstalled();
+                        }
+                        Err(_) => break true,
+                    }
+                }
+            }
+            _ => {}
+        }
+    };
+    for timer in [tick_timer, check_timer] {
+        if timer != 0 {
+            // SAFETY: timers made on this thread.
+            let _ = unsafe { KillTimer(None, timer) };
+        }
+    }
+    (hook, lost)
+}
+
+/// After a reinstall: counted, and a hold in progress is cancelled (its release may be lost).
+fn reinstalled() {
+    let held = MACHINE.with(|m| {
+        let mut machine = m.get()?;
+        let held = machine.is_held();
+        machine.reset();
+        m.set(Some(machine));
+        Some(held)
+    });
+    CONTEXT.with(|c| {
+        if let Some(context) = c.borrow().as_ref() {
+            context.reinstalls.fetch_add(1, Ordering::Relaxed);
+            if held == Some(true) {
+                emit(context, HotkeyEvent::Cancelled);
+            }
+        }
+    });
 }
 
 /// A running hook thread.
@@ -261,12 +369,14 @@ impl Hook {
         sink: EventSink<HotkeyEvent>,
         clock: WinClock,
         panics: Arc<AtomicU64>,
+        reinstalls: Arc<AtomicU64>,
     ) -> Result<Self, PlatformError> {
         let (ready_tx, ready) = mpsc::sync_channel(1);
         let context = HookContext {
             sink,
             clock,
             panics,
+            reinstalls,
         };
         let thread = thread::Builder::new()
             .name("ink-hotkey".into())
@@ -302,6 +412,7 @@ pub struct WinHotkeySource {
     clock: WinClock,
     hook: Mutex<Option<Hook>>,
     panics: Arc<AtomicU64>,
+    reinstalls: Arc<AtomicU64>,
 }
 
 impl WinHotkeySource {
@@ -312,6 +423,7 @@ impl WinHotkeySource {
             clock,
             hook: Mutex::new(None),
             panics: Arc::new(AtomicU64::new(0)),
+            reinstalls: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -319,6 +431,12 @@ impl WinHotkeySource {
     /// hold was reset and `Cancelled` sent. A non-zero count is a bug to report.
     pub fn callback_panics(&self) -> u64 {
         self.panics.load(Ordering::Relaxed)
+    }
+
+    /// Times the heartbeat found the hook removed by Windows and installed it again. Each is a
+    /// callback that ran past Windows' deadline; a rising count is worth reporting.
+    pub fn hook_reinstalls(&self) -> u64 {
+        self.reinstalls.load(Ordering::Relaxed)
     }
 }
 
@@ -341,6 +459,7 @@ impl HotkeySource for WinHotkeySource {
             on_event,
             self.clock,
             Arc::clone(&self.panics),
+            Arc::clone(&self.reinstalls),
         )?);
         Ok(())
     }
