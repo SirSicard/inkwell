@@ -13,6 +13,13 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Inkwell.ico"));
     }
 
+    /// <summary>UI thread. The window's ink follows the shell's ink state.</summary>
+    internal void ShowInk(ShellInk ink)
+    {
+        Ink.State = ink.State;
+        ink.Changed += () => Ink.State = ink.State;
+    }
+
     /// <summary>UI thread. What the core's state is: its status line, and its version once ready.</summary>
     public void ShowStatus(CoreStatus status)
     {
