@@ -37,7 +37,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use ink_core::{AppRef, EventSink, MeetingDetector, MeetingSignal, PlatformError};
-use windows::Win32::Foundation::WAIT_OBJECT_0;
 use windows::Win32::Media::Audio::{
     IAudioSessionControl, IAudioSessionManager2, IAudioSessionNotification,
     IAudioSessionNotification_Impl, IMMDeviceEnumerator,
@@ -46,7 +45,7 @@ use windows::Win32::System::Threading::WaitForMultipleObjects;
 use windows::core::{Ref, implement};
 
 use crate::capture::devices::{self, Flow};
-use crate::capture::stream::Event;
+use crate::capture::stream::{Event, Woke, woke};
 use crate::com::{ComScope, display_stem};
 use crate::process::ProcessTable;
 use crate::sessions::{self, SessionScan};
@@ -383,8 +382,13 @@ fn watch(
             }
         }
         // SAFETY: two live event handles.
-        if unsafe { WaitForMultipleObjects(&handles, false, timeout) } == WAIT_OBJECT_0 {
-            return; // stopped
+        match woke(unsafe { WaitForMultipleObjects(&handles, false, timeout) }) {
+            Woke::Stop => return,
+            Woke::Look => {}
+            Woke::Failed => {
+                let reason = "waiting for the next poll failed; meeting detection stopped".into();
+                return report_lost(sink, state, counters, reason);
+            }
         }
     }
 }

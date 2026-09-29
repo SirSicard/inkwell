@@ -184,6 +184,27 @@ pub(crate) fn type_text(
     })
 }
 
+/// `inputs` in batches of about [`TYPE_BATCH`], never cut between the two halves of a surrogate
+/// pair (a batch that would end after a high surrogate's key-up takes the low surrogate too).
+fn batches(inputs: &[INPUT]) -> Vec<&[INPUT]> {
+    let is_high_surrogate = |input: &INPUT| {
+        // SAFETY: every INPUT built here is a keyboard input.
+        let ki = unsafe { input.Anonymous.ki };
+        ki.dwFlags.contains(KEYEVENTF_UNICODE) && (0xD800..=0xDBFF).contains(&ki.wScan)
+    };
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < inputs.len() {
+        let mut end = (start + TYPE_BATCH).min(inputs.len());
+        if end < inputs.len() && is_high_surrogate(&inputs[end - 1]) {
+            end = (end + 2).min(inputs.len());
+        }
+        out.push(&inputs[start..end]);
+        start = end;
+    }
+    out
+}
+
 /// The typing loop over `inputs`, in batches: check focus, send; stop at the first failure. The
 /// error says how much went in. Pure over `still_focused` and `send`.
 fn type_batches(
@@ -193,7 +214,7 @@ fn type_batches(
 ) -> Result<(), PlatformError> {
     let total = inputs.len() / 2;
     let mut done = 0;
-    for batch in inputs.chunks(TYPE_BATCH) {
+    for batch in batches(inputs) {
         let result = if still_focused() {
             send(batch)
         } else {
@@ -283,6 +304,30 @@ mod tests {
             matches!(result, Err(PlatformError::Failed(m)) if m.starts_with("nothing was inserted"))
         );
         assert!(type_batches(&inputs, || true, |_| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn a_surrogate_pair_is_never_split_across_batches() {
+        // 31 letters (62 inputs) then an emoji (4 inputs): the first batch would end after the
+        // high surrogate's down and up.
+        let text = format!("{}🙂 tail", "x".repeat(31));
+        let inputs = text_inputs(&text);
+        let cut = batches(&inputs);
+        assert_eq!(cut[0].len(), 66, "the pair stays together");
+        assert_eq!(cut.iter().map(|b| b.len()).sum::<usize>(), inputs.len());
+        for batch in &cut {
+            let last = describe(batch.last().unwrap());
+            assert!(
+                !(0xD800..=0xDBFF).contains(&last.1),
+                "ends after a high surrogate"
+            );
+        }
+        // Plain text still cuts at the batch size.
+        let plain = text_inputs(&"y".repeat(40));
+        assert_eq!(
+            batches(&plain).iter().map(|b| b.len()).collect::<Vec<_>>(),
+            [64, 16]
+        );
     }
 
     #[test]

@@ -29,14 +29,17 @@
 #![cfg(windows)]
 
 use std::cell::RefCell;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
-use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use ink_core::PlatformError;
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{
+    ERROR_CLASS_ALREADY_EXISTS, GetLastError, GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT,
+    WPARAM,
+};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardOwner,
     GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
@@ -368,25 +371,30 @@ unsafe extern "system" fn owner_proc(
 /// The owner window's class name.
 const CLASS_NAME: PCWSTR = w!("InkwellClipboardOwner");
 
-/// The window class, registered once per process.
+/// The window class, registered once per process. A failed registration is not remembered: the
+/// next insertion tries again.
 fn window_class() -> Result<PCWSTR, PlatformError> {
-    static REGISTERED: OnceLock<bool> = OnceLock::new();
+    static REGISTERED: AtomicBool = AtomicBool::new(false);
     let name = CLASS_NAME;
-    let ok = *REGISTERED.get_or_init(|| {
+    let ok = REGISTERED.load(Ordering::Acquire) || {
         // SAFETY: a class with a valid procedure and this module's instance.
-        unsafe {
-            let Ok(module) = GetModuleHandleW(None) else {
-                return false;
-            };
-            let class = WNDCLASSW {
-                lpfnWndProc: Some(owner_proc),
-                hInstance: module.into(),
-                lpszClassName: name,
-                ..Default::default()
-            };
-            RegisterClassW(&class) != 0
+        let registered = unsafe {
+            GetModuleHandleW(None).is_ok_and(|module| {
+                let class = WNDCLASSW {
+                    lpfnWndProc: Some(owner_proc),
+                    hInstance: module.into(),
+                    lpszClassName: name,
+                    ..Default::default()
+                };
+                // Another thread may have won the race to register it: that counts.
+                RegisterClassW(&class) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS
+            })
+        };
+        if registered {
+            REGISTERED.store(true, Ordering::Release);
         }
-    });
+        registered
+    };
     if ok {
         Ok(name)
     } else {
@@ -409,6 +417,11 @@ pub(crate) struct Owner {
 impl Owner {
     /// Puts the restore to the owner thread and waits for its answer.
     pub(crate) fn restore(&self) -> Result<Restore, PlatformError> {
+        if self.thread.as_ref().is_none_or(JoinHandle::is_finished) {
+            return Err(PlatformError::Failed(
+                "the clipboard thread has ended".into(),
+            ));
+        }
         let (reply, answer) = mpsc::sync_channel(1);
         self.requests
             .send(RestoreRequest(reply))
@@ -424,9 +437,16 @@ impl Owner {
 
 impl Drop for Owner {
     fn drop(&mut self) {
-        // SAFETY: as in `restore`. A failed post means the thread already ended.
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        if thread.is_finished() {
+            let _ = thread.join();
+            return;
+        }
+        // SAFETY: as in `restore`. A failed post means the thread ended meanwhile.
         let posted = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
-        if let (Ok(()), Some(thread)) = (posted, self.thread.take()) {
+        if posted.is_ok() || thread.is_finished() {
             let _ = thread.join();
         }
     }

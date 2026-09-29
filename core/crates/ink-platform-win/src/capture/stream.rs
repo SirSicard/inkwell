@@ -36,7 +36,9 @@ use std::time::Duration;
 
 use ink_audio::RealtimeGuard;
 use ink_core::{AudioBlock, AudioSink, Clock, PlatformError, SourceStats, StreamFormat};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{
+    CloseHandle, E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT,
+};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
     AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
@@ -402,6 +404,26 @@ pub(crate) fn wake(
     }
 }
 
+/// What a wait on `[stop, other]` returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Woke {
+    /// The stop event.
+    Stop,
+    /// The other event, or the timeout: time to look.
+    Look,
+    /// The wait itself failed or an event was abandoned: looping would spin, so it ends.
+    Failed,
+}
+
+/// Classifies a `WaitForMultipleObjects` result over `[stop, other]`. Pure.
+pub(crate) fn woke(result: WAIT_EVENT) -> Woke {
+    match result {
+        WAIT_OBJECT_0 => Woke::Stop,
+        r if r.0 == WAIT_OBJECT_0.0 + 1 || r == WAIT_TIMEOUT => Woke::Look,
+        _ => Woke::Failed,
+    }
+}
+
 /// A Win32 event, closed on drop.
 pub(crate) struct Event(HANDLE);
 
@@ -679,9 +701,15 @@ fn run(setup: ThreadSetup, ready: mpsc::SyncSender<Result<(), PlatformError>>) -
     let handles = [stop.handle(), event.handle()];
     loop {
         // SAFETY: two live event handles.
-        let woke = unsafe { WaitForMultipleObjects(&handles, false, timeout_ms) };
-        if woke == WAIT_OBJECT_0 {
-            break; // stop
+        match woke(unsafe { WaitForMultipleObjects(&handles, false, timeout_ms) }) {
+            Woke::Stop => break,
+            Woke::Look => {}
+            Woke::Failed => {
+                let code = windows::core::Error::from_thread().code();
+                let code = if code.0 == 0 { E_FAIL } else { code };
+                counters.ended_by.store(code.0, Ordering::Relaxed);
+                break;
+            }
         }
         if !wake(&guard, &mut packets, &mut delivery) {
             break; // ended: counted in `ended_by` or `panics`
@@ -1096,6 +1124,17 @@ pub(crate) mod tests {
         let stats = counters.snapshot();
         assert_eq!(stats.panics, 1);
         assert!(session_result(stats, "mic").is_err());
+    }
+
+    #[test]
+    fn a_failed_or_abandoned_wait_ends_instead_of_spinning() {
+        use windows::Win32::Foundation::{WAIT_ABANDONED_0, WAIT_FAILED};
+        assert_eq!(woke(WAIT_OBJECT_0), Woke::Stop);
+        assert_eq!(woke(WAIT_EVENT(WAIT_OBJECT_0.0 + 1)), Woke::Look);
+        assert_eq!(woke(WAIT_TIMEOUT), Woke::Look);
+        assert_eq!(woke(WAIT_FAILED), Woke::Failed);
+        assert_eq!(woke(WAIT_ABANDONED_0), Woke::Failed);
+        assert_eq!(woke(WAIT_EVENT(WAIT_ABANDONED_0.0 + 1)), Woke::Failed);
     }
 
     #[test]
