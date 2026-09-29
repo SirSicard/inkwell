@@ -90,7 +90,7 @@ public sealed class DropTests
     }
 
     [Fact]
-    public void WhenTheShaderDoesNotCompileTheDropShowsItsPlainFallback()
+    public unsafe void WhenTheShaderDoesNotCompileTheDropShowsItsPlainFallback()
     {
         var ui = new UiThread();
         var loader = new InkPipelineLoader(() => new InkPipeline(InkAdapter.Warp, "not a shader"));
@@ -118,6 +118,16 @@ public sealed class DropTests
         drop.Update(InkState.Problem);
         Assert.True(drop.ShowsFallback);
         Assert.Equal(DropText.For(InkState.Problem), drop.ShownText);
+
+        // A DPI or display change moves and scales the fallback with the Drop.
+        SetWindowPos(fallback, HWND.NULL, 0, 0, 10, 10, SWP.SWP_NOACTIVATE | SWP.SWP_NOZORDER);
+        drop.DisplayChanged();
+        RECT dropRect, fallbackRect;
+        GetWindowRect((HWND)drop.Handle, &dropRect);
+        GetWindowRect(fallback, &fallbackRect);
+        Assert.Equal((dropRect.left, dropRect.top, dropRect.right, dropRect.bottom),
+            (fallbackRect.left, fallbackRect.top, fallbackRect.right, fallbackRect.bottom));
+        Assert.Equal(foreground, GetForegroundWindow());
 
         drop.Update(InkState.Idle);
         Assert.False(drop.ShowsFallback);

@@ -201,6 +201,20 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     }
 
     /// <summary>
+    /// A DPI or display change while shown: the Drop placed and sized again, and its fallback, if
+    /// it shows, moved and scaled with it.
+    /// </summary>
+    internal void DisplayChanged()
+    {
+        Place();
+        Surface.Invalidate();
+        if (ShowsFallback)
+        {
+            ShowFallback();
+        }
+    }
+
+    /// <summary>
     /// Bottom centre of the work area of the monitor the user is working on (the one with the
     /// foreground window), sized for its DPI.
     /// </summary>
@@ -576,8 +590,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             case WM.WM_DISPLAYCHANGE:
                 if (From(hwnd) is { IsShown: true } drop)
                 {
-                    drop.Place();
-                    drop.Surface.Invalidate();
+                    drop.DisplayChanged();
                 }
                 break;
             default:
