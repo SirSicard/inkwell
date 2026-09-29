@@ -1,0 +1,170 @@
+// The first-run state: a sheet over the window until the user finishes or skips it, remembered in
+// the core's store (onboarding.done). What Inkwell does, the four permission cards (nothing asked
+// for until the user presses a card's button), polish (off, and turned on only through its consent
+// step: the sheet's switch calls PolishModel.SetOn(on, ConsentHost.Onboarding), which only asks),
+// and how to dictate. A port of the Mac's OnboardingModel and OnboardingView's words.
+using Inkwell.Core.Events;
+
+namespace Inkwell.Core.Screens;
+
+public enum OnboardingStep
+{
+    Welcome,
+    Permissions,
+    Polish,
+    Ready,
+}
+
+public sealed class OnboardingModel : ObservableModel
+{
+    private static readonly OnboardingStep[] Steps = Enum.GetValues<OnboardingStep>();
+
+    private readonly Action<CoreCommand> send;
+    private readonly ScreenLog log;
+
+    public OnboardingModel(Action<CoreCommand> send, ScreenLog? log = null)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+        this.send = send;
+        this.log = log ?? ScreenLog.System;
+    }
+
+    /// <summary>The id of this model's setting commands.</summary>
+    public static string SettingId => ShellSetting.OnboardingDone.CommandId();
+
+    /// <summary>Null until the store answers; then whether it was completed.</summary>
+    public bool? Completed { get; private set; }
+
+    /// <summary>The app is quitting: the sheet is ended, and nothing is recorded.</summary>
+    public bool Quitting { get; private set; }
+
+    public OnboardingStep Step { get; private set; } = OnboardingStep.Welcome;
+
+    /// <summary>Whether the window shows it.</summary>
+    public bool Showing => Completed == false && !Quitting;
+
+    public void Load() => send(new CoreCommand.SettingGet(ShellSetting.OnboardingDone));
+
+    public void Next()
+    {
+        if (Step == OnboardingStep.Ready)
+        {
+            Finish();
+            return;
+        }
+        Step++;
+        Changed();
+    }
+
+    public void Back()
+    {
+        if (Step == OnboardingStep.Welcome)
+        {
+            return;
+        }
+        Step--;
+        Changed();
+    }
+
+    /// <summary>The app is quitting: the sheet goes, and the first run stays not completed, so the next launch shows it.</summary>
+    public void AppQuitting()
+    {
+        Quitting = true;
+        Changed();
+    }
+
+    /// <summary>The sheet went away without Start or Skip (Escape): skipped, unless the app is quitting.</summary>
+    public void SheetDismissed()
+    {
+        if (Showing)
+        {
+            Finish();
+        }
+    }
+
+    /// <summary>Done or skipped: not shown again.</summary>
+    public void Finish()
+    {
+        Completed = true;
+        send(new CoreCommand.SettingSet(ShellSetting.OnboardingDone, "true"));
+        Changed();
+    }
+
+    /// <summary>
+    /// Whether this model shows <paramref name="failed"/>: its read (it shows the sheet). A write
+    /// that failed is not shown (the first run shows again next launch), so it is logged.
+    /// </summary>
+    public static bool Handles(CommandFailed failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+        return failed.Command == "setting.get" && failed.Id == SettingId;
+    }
+
+    public void Apply(InkEvent e)
+    {
+        switch (e)
+        {
+            case SettingValue value when value.Key == ShellSetting.OnboardingDone.Key():
+                Completed = value.Value == "true";
+                Changed();
+                break;
+            case CommandFailed { Command: "setting.get" } failed when failed.Id == SettingId:
+                // Not known whether it was completed: show it rather than never show it. Completing it
+                // again costs a click; a first run that never appears costs the permissions.
+                log.Write("setting.get for onboarding.done failed; showing the first run");
+                if (Completed is null)
+                {
+                    Completed = false;
+                    Changed();
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    // The sheet's words and buttons.
+
+    /// <summary>Where the user is, for the step dots' accessible name.</summary>
+    public string StepLabel => $"Step {(int)Step + 1} of {Steps.Length}";
+
+    public bool ShowsSkip => Step != OnboardingStep.Ready;
+
+    public bool ShowsBack => Step != OnboardingStep.Welcome;
+
+    public string NextTitle => Step == OnboardingStep.Ready ? "Start" : "Continue";
+
+    public const string SkipHint = "Closes this; Settings has everything here";
+
+    /// <summary>The welcome step's lines; <paramref name="keyName"/> is the dictation key's name (DictationModel.Key(token).Name).</summary>
+    public static IReadOnlyList<string> WelcomeLines(string keyName) =>
+    [
+        $"Hold {keyName} and speak: your words are typed where your cursor is.",
+        "In a meeting, Inkwell writes down both sides as they talk, then blots the transcript and lists what you promised.",
+        "It all happens on this PC. Nothing is sent anywhere unless you add your own key for a model online.",
+    ];
+
+    public const string PermissionsTitle = "What Inkwell needs";
+
+    public const string PermissionsNote = "Nothing is asked for until you press a card's button, and each can be changed later in Settings.";
+
+    public const string PolishTitle = "Polish";
+
+    public const string PolishNote =
+        "Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.";
+
+    public const string PolishToggle = "Polish my words";
+
+    public const string ReadyTitle = "Ready";
+
+    public static string ReadyLine(string keyName) =>
+        $"Hold {keyName}, say something, and let go. Inkwell lives in the notification area; this window opens from there.";
+
+    /// <summary>The ready step's warning about cards still off, or null when none is.</summary>
+    public static string? StillOff(PermissionsModel permissions)
+    {
+        ArgumentNullException.ThrowIfNull(permissions);
+        var off = permissions.OffCards;
+        return off.Count == 0 ? null : $"Still off: {string.Join(", ", off.Select(c => c.Title()))}. Settings can turn them on.";
+    }
+}
