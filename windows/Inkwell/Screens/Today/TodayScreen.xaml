@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Today (the canvas's Today board, the Mac's TodayScreen): the date and a greeting, what needs
+     the user, the last meeting, what is up next, what is owed soon, and today's and this week's
+     counts at the foot. Every word comes from the models (Inkwell.Core/Screens/Today, Library,
+     Live/OwedModel); the code-behind only places them. Two columns (1.3 : 1) from 624 px of
+     content, else one. -->
+<UserControl
+    x:Class="Inkwell.Screens.TodayScreen"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer x:Name="Scroller" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <Grid x:Name="Page" Padding="48,38,48,28" RowSpacing="26">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <StackPanel Spacing="6">
+                <TextBlock x:Name="DateLine" Style="{StaticResource InkEyebrowStyle}" />
+                <TextBlock
+                    x:Name="Greeting"
+                    AutomationProperties.HeadingLevel="Level1"
+                    FontFamily="{StaticResource InkInterfaceFontFamily}"
+                    Style="{StaticResource InkScreenTitleStyle}" />
+            </StackPanel>
+
+            <!-- Needs you: the first item, and the rest behind "N more". -->
+            <Border
+                x:Name="NeedsYouCard"
+                Grid.Row="1"
+                Padding="18,16"
+                AutomationProperties.Name="Needs you"
+                Background="{ThemeResource InkCardBrush}"
+                BorderBrush="{ThemeResource InkAlertChipBrush}"
+                BorderThickness="1"
+                CornerRadius="14"
+                Visibility="Collapsed">
+                <StackPanel Spacing="10">
+                    <StackPanel x:Name="NeedsYouRows" Spacing="10" />
+                    <HyperlinkButton
+                        x:Name="NeedsYouMore"
+                        Margin="44,0,0,0"
+                        Padding="0"
+                        Click="OnNeedsYouMore"
+                        FontSize="13" />
+                </StackPanel>
+            </Border>
+
+            <!-- Last meeting | Up next and Owed soon -->
+            <Grid x:Name="Columns" Grid.Row="2" ColumnSpacing="40" RowSpacing="26">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.3*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel x:Name="LastMeeting" Spacing="10">
+                    <TextBlock
+                        AutomationProperties.HeadingLevel="Level2"
+                        AutomationProperties.Name="Last meeting"
+                        Style="{StaticResource InkEyebrowStyle}"
+                        Text="LAST MEETING" />
+                    <HyperlinkButton
+                        x:Name="LastMeetingTitleLink"
+                        Padding="0"
+                        AutomationProperties.HelpText="Opens the record"
+                        Click="OnOpenLastMeeting">
+                        <TextBlock
+                            x:Name="LastMeetingTitle"
+                            FontFamily="{StaticResource InkReadingFontFamily}"
+                            FontSize="25"
+                            FontWeight="Medium"
+                            Foreground="{ThemeResource InkTextBrush}"
+                            MaxLines="3"
+                            TextTrimming="CharacterEllipsis"
+                            TextWrapping="Wrap" />
+                    </HyperlinkButton>
+                    <TextBlock x:Name="LastMeetingLine" Style="{StaticResource InkTimestampStyle}" TextWrapping="Wrap" />
+                    <!-- The summary's first paragraph; its headline is already the title above. -->
+                    <TextBlock
+                        x:Name="LastMeetingLede"
+                        Margin="0,4,0,0"
+                        IsTextSelectionEnabled="True"
+                        LineHeight="26"
+                        Style="{StaticResource InkReadingStyle}" />
+                    <StackPanel x:Name="LastMeetingButtons" Margin="0,6,0,0" Orientation="Horizontal" Spacing="10">
+                        <Button Click="OnOpenLastMeeting" Content="Open record" />
+                        <Button x:Name="PlayButton" Click="OnPlayLastMeeting">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon AutomationProperties.AccessibilityView="Raw" FontSize="11" Glyph="&#xE768;" />
+                                <TextBlock x:Name="PlayText" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock x:Name="LastMeetingNote" Style="{StaticResource InkReadingStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" />
+                    <HyperlinkButton
+                        x:Name="LastMeetingRetry"
+                        Padding="0"
+                        Click="OnRetryToday"
+                        Content="Try again" />
+                </StackPanel>
+
+                <StackPanel x:Name="RightColumn" Grid.Column="1" Spacing="26">
+                    <!-- Up next -->
+                    <StackPanel Spacing="6">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            AutomationProperties.Name="Up next"
+                            Style="{StaticResource InkEyebrowStyle}"
+                            Text="UP NEXT" />
+                        <TextBlock x:Name="EventTitle" FontSize="16" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
+                        <TextBlock x:Name="EventLine" Style="{StaticResource InkTimestampStyle}" TextWrapping="Wrap" />
+                        <TextBlock x:Name="EventRecords" Style="{StaticResource InkCaptionStyle}" />
+                        <TextBlock x:Name="UpNextNote" Style="{StaticResource InkCaptionStyle}" />
+                        <Button
+                            x:Name="ConnectButton"
+                            AutomationProperties.HelpText="Asks for access to your calendars"
+                            Click="OnConnect" />
+                    </StackPanel>
+
+                    <!-- Owed soon -->
+                    <StackPanel Spacing="12">
+                        <Grid>
+                            <TextBlock
+                                VerticalAlignment="Center"
+                                AutomationProperties.HeadingLevel="Level2"
+                                AutomationProperties.Name="Owed soon"
+                                Style="{StaticResource InkEyebrowStyle}"
+                                Text="OWED SOON" />
+                            <HyperlinkButton
+                                x:Name="OwedAll"
+                                Padding="0"
+                                HorizontalAlignment="Right"
+                                Click="OnOpenOwed"
+                                FontSize="13" />
+                        </Grid>
+                        <TextBlock x:Name="OwedNote" Style="{StaticResource InkCaptionStyle}" />
+                        <StackPanel x:Name="OwedRows" Spacing="12" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+
+            <!-- The counts: side by side when they fit, one under the other when not. -->
+            <Border
+                Grid.Row="4"
+                Padding="0,16,0,0"
+                BorderBrush="{ThemeResource InkBorderBrush}"
+                BorderThickness="0,1,0,0">
+                <StackPanel x:Name="Stats" Orientation="Horizontal" Spacing="28" />
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</UserControl>
