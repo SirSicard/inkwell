@@ -45,8 +45,17 @@ public partial class App : Application
             models.LogUnshown(batch);
         };
         var made = new AppScreens(core.Store, models, router);
-        window.Attach(core.Store, router, made.Screen, AppScreens.InkZoneFoot());
+        window.Attach(core.Store, router, made.Screen, made.InkZoneFoot());
         made.AttachFirstRun(window.Content as FrameworkElement);
+        // Up next's minute redraws only while the window is on screen (rule 9).
+        window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: true);
+        window.AppWindow.Changed += (sender, e) =>
+        {
+            if (e.DidPresenterChange || e.DidVisibilityChange)
+            {
+                made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: true);
+            }
+        };
         // Coming back to the app re-checks what may have changed outside it (permissions, the keys).
         window.Activated += (_, e) =>
         {
@@ -72,6 +81,9 @@ public partial class App : Application
         window.Activate();
         core.Start();
     }
+
+    private static bool Minimized(Window window) =>
+        window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: Microsoft.UI.Windowing.OverlappedPresenterState.Minimized };
 
     private void ShowWindow()
     {

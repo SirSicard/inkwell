@@ -14,6 +14,9 @@ namespace Inkwell;
 
 internal sealed class AppScreens(CoreStore store, ScreenModels models, Router router)
 {
+    /// <summary>Whether the window is on screen (the window updates it): Up next's minute redraws only then.</summary>
+    public WindowPresence Presence { get; } = new();
+
     /// <summary>The screens' models over the controller, with the app's own services.</summary>
     public static ScreenModels Models(CoreController core, DispatcherQueue ui)
     {
@@ -36,12 +39,14 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             modelsDirectory: modelsDir,
             reveal: FileExplorer.Reveal,
             apps: InstalledApps.Shared,
+            wake: new DispatcherWake(ui),
             log: core.CommandLog);
     }
 
     /// <summary>A route's screen.</summary>
     public UIElement Screen(Route route) => route switch
     {
+        Route.Today => new TodayScreen(store, models.Library, models.Owed, models.Permissions, models.UpNext, Presence, router.Open, OpenRecord),
         Route.Owed => new OwedScreen(models.Owed, (record, ms) => OpenRecord(record, ms, play: true)),
         Route.Live => new LiveScreen(store, models.Live, models.Meetings),
         Route.Settings => new SettingsScreen(SettingsSections()),
@@ -49,7 +54,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     };
 
     /// <summary>The foot of Today's ink zone.</summary>
-    public static UIElement InkZoneFoot() => new StackPanel();
+    public UIElement InkZoneFoot() => new InkZoneFoot(store, models.RecordControls, models.Meetings);
 
     /// <summary>The first-run sheet, over the window while it is not completed.</summary>
     public void AttachFirstRun(FrameworkElement? host)
@@ -70,7 +75,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     /// <summary>Settings' sections, in the canvas's order.</summary>
     private List<SettingsSectionEntry> SettingsSections()
     {
-        var importNote = new ImportKeyNoteView(models.ImportNote, () => KeyNames.Display(models.Dictation.CurrentKey));
+        var importNote = new ImportKeyNoteView(models.ImportNote, () => DictationModel.Key(models.Dictation.CurrentKey)?.Name ?? DictationModel.Cap(models.Dictation.CurrentKey));
         return
         [
             new("Permissions", new PermissionsSection(models.Permissions)),

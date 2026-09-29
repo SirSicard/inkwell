@@ -136,6 +136,8 @@ public sealed class ScreenModels
     {
         Permissions.AppBecameActive();
         Dictation.AppBecameActive();
+        // The calendar may have changed while the app was away (Today re-reads it, as on the Mac).
+        UpNext.Refresh();
     }
 
     /// <summary>The app is quitting: the first run is not skipped by it.</summary>
