@@ -10,6 +10,48 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- The screens' palette (the canvas's; the Mac's DesignTokens.swift and ScreenStyle.swift
+                 say why each derived tone is what it is). Paper by day, night paper by night; the ink
+                 zone is paper in both themes. Secondary text on night paper is paper at 62 % (muted
+                 would be 2.9:1). -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="InkSurfaceBrush" Color="#FFF2EEE6" />
+                    <SolidColorBrush x:Key="InkTextBrush" Color="#FF16181F" />
+                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="#FF625E57" />
+                    <SolidColorBrush x:Key="InkCardBrush" Color="#FFFBF9F4" />
+                    <SolidColorBrush x:Key="InkBorderBrush" Color="#FFD9D1C3" />
+                    <SolidColorBrush x:Key="InkSeparatorBrush" Color="#FFE4DDD0" />
+                    <SolidColorBrush x:Key="InkChipBrush" Color="#FFE9E3D8" />
+                    <SolidColorBrush x:Key="InkDueChipBrush" Color="#FFEFE3D6" />
+                    <SolidColorBrush x:Key="InkDueTextBrush" Color="#FF6B4424" />
+                    <SolidColorBrush x:Key="InkAlertChipBrush" Color="#FFF3DDD7" />
+                    <SolidColorBrush x:Key="InkAlertTextBrush" Color="#FF8E2A1A" />
+                    <SolidColorBrush x:Key="InkAlertCardBrush" Color="#FFFBF3EF" />
+                    <SolidColorBrush x:Key="InkAlertBrush" Color="#FFB23A26" />
+                    <SolidColorBrush x:Key="InkThemBrush" Color="#FF7E5431" />
+                    <SolidColorBrush x:Key="InkRecordingBrush" Color="#FFB23A26" />
+                    <SolidColorBrush x:Key="InkZoneBrush" Color="#FFF2EEE6" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="InkSurfaceBrush" Color="#FF121419" />
+                    <SolidColorBrush x:Key="InkTextBrush" Color="#FFF2EEE6" />
+                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="#9EF2EEE6" />
+                    <SolidColorBrush x:Key="InkCardBrush" Color="#FF181B21" />
+                    <SolidColorBrush x:Key="InkBorderBrush" Color="#FF2A2D35" />
+                    <SolidColorBrush x:Key="InkSeparatorBrush" Color="#FF22252C" />
+                    <SolidColorBrush x:Key="InkChipBrush" Color="#FF22252C" />
+                    <SolidColorBrush x:Key="InkDueChipBrush" Color="#FF2E241C" />
+                    <SolidColorBrush x:Key="InkDueTextBrush" Color="#FFE2C3A5" />
+                    <SolidColorBrush x:Key="InkAlertChipBrush" Color="#FF3A1D18" />
+                    <SolidColorBrush x:Key="InkAlertTextBrush" Color="#FFF2B4A6" />
+                    <SolidColorBrush x:Key="InkAlertCardBrush" Color="#FF2A1714" />
+                    <SolidColorBrush x:Key="InkAlertBrush" Color="#FFE0644E" />
+                    <SolidColorBrush x:Key="InkThemBrush" Color="#FFC8956C" />
+                    <SolidColorBrush x:Key="InkRecordingBrush" Color="#FFE0644E" />
+                    <SolidColorBrush x:Key="InkZoneBrush" Color="#FFF2EEE6" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
 
             <!-- The accent: sepia #7E5431, as on the Mac. WinUI paints accent fills with Dark1 in
                  the light theme (white on it: 8.2:1) and Light2 in the dark theme (on night paper
@@ -30,6 +72,64 @@
             <FontFamily x:Key="InkInterfaceFontFamily">Segoe UI Variable</FontFamily>
             <FontFamily x:Key="InkReadingFontFamily">Sitka Text</FontFamily>
             <FontFamily x:Key="InkMonoFontFamily">Cascadia Mono</FontFamily>
+
+
+            <!-- The screens' type: Sitka for titles and what the user reads as a document, Segoe UI
+                 Variable for the interface, Cascadia Mono for times and counts. -->
+            <Style x:Key="InkScreenTitleStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkReadingFontFamily}" />
+                <Setter Property="FontSize" Value="30" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
+            </Style>
+            <Style x:Key="InkHeadingStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkReadingFontFamily}" />
+                <Setter Property="FontSize" Value="20" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
+            </Style>
+            <Style x:Key="InkBodyStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkInterfaceFontFamily}" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
+            </Style>
+            <Style x:Key="InkReadingStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkReadingFontFamily}" />
+                <Setter Property="FontSize" Value="17" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
+            </Style>
+            <Style x:Key="InkCaptionStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkInterfaceFontFamily}" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
+            </Style>
+            <Style x:Key="InkTimestampStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkMonoFontFamily}" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
+            </Style>
+            <Style x:Key="InkEyebrowStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkMonoFontFamily}" />
+                <Setter Property="FontSize" Value="11" />
+                <Setter Property="CharacterSpacing" Value="80" />
+                <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
+            </Style>
+            <Style x:Key="InkAlertTextStyle" TargetType="TextBlock" BasedOn="{StaticResource InkCaptionStyle}">
+                <Setter Property="Foreground" Value="{ThemeResource InkAlertBrush}" />
+            </Style>
+            <!-- The canvas's card: raised paper, a hairline border, 14 px corners. -->
+            <Style x:Key="InkCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource InkCardBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource InkBorderBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="14" />
+                <Setter Property="Padding" Value="16,13" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -1,18 +1,27 @@
 // Starts and stops the core, and brings its events to the UI thread.
 //
-//   core event thread --Push--> EventRelay --one hop per batch--> UI thread: the status
+//   core event thread --Push--> EventRelay --one hop per batch--> UI thread: the store, then the screens
 //
 // The shell only sends commands and renders state (architecture rule 1). Nothing here polls.
 using Inkwell.Core;
 using Inkwell.Core.Events;
+using Inkwell.Core.Screens;
 using Microsoft.UI.Dispatching;
 
 namespace Inkwell;
 
-public sealed class CoreController(DispatcherQueue ui, Action<CoreStatus> show)
+public sealed class CoreController(DispatcherQueue ui)
 {
     private InkSession? session;
-    private CoreStatus status = new(CoreStatusKind.Starting);
+
+    /// <summary>Everything the screens show about the core.</summary>
+    public CoreStore Store { get; } = new();
+
+    /// <summary>Sees every batch after the store (the screens' models), when set.</summary>
+    public Action<IReadOnlyList<InkEvent>>? Observer { get; set; }
+
+    /// <summary>Where commands that went nowhere are logged: by name only.</summary>
+    public ScreenLog CommandLog { get; init; } = ScreenLog.System;
 
     /// <summary>UI thread. Starts the core with the library in the data directory; a failure is shown.</summary>
     public void Start()
@@ -21,8 +30,6 @@ public sealed class CoreController(DispatcherQueue ui, Action<CoreStatus> show)
         {
             return;
         }
-        status = new CoreStatus(CoreStatusKind.Starting);
-        show(status);
         var relay = new EventRelay(work => ui.TryEnqueue(() => work()), Received);
         try
         {
@@ -33,27 +40,38 @@ public sealed class CoreController(DispatcherQueue ui, Action<CoreStatus> show)
         catch (Exception e) when (e is InkStatusException or IOException or UnauthorizedAccessException or DllNotFoundException or EntryPointNotFoundException)
         {
             // The message names a path or a core status, never anything the user said.
-            status = new CoreStatus(CoreStatusKind.Failed, e.Message);
-            show(status);
+            Store.StartFailed(e.Message);
+        }
+    }
+
+    /// <summary>
+    /// UI thread. Queues one of the screens' commands; its outcome arrives as events. A command
+    /// with no core to take it, or one the core refuses to queue, never ran: logged by name.
+    /// </summary>
+    public void Send(CoreCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (session is null)
+        {
+            CommandLog.Write($"no core is running: a {command.Name} command was not sent");
+            return;
+        }
+        try
+        {
+            session.Command(command.Json);
+        }
+        catch (InkStatusException e)
+        {
+            CommandLog.Write($"the core refused a {command.Name} command: {e.Message}");
         }
     }
 
     /// <summary>UI thread: a batch of the core's events.</summary>
     private void Received(IReadOnlyList<InkEvent> batch)
     {
-        foreach (var e in batch)
-        {
-            var next = status.Next(e, Log);
-            if (next != status)
-            {
-                status = next;
-                show(status);
-            }
-        }
+        Store.Apply(batch);
+        Observer?.Invoke(batch);
     }
-
-    /// <summary>What no screen shows, by name only (CoreStatus.Next never passes an event's words).</summary>
-    private static void Log(string line) => System.Diagnostics.Trace.WriteLine($"Inkwell: {line}");
 
     /// <summary>
     /// UI thread. Stops the core off the UI thread (it waits for its workers and unloads every
