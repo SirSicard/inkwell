@@ -39,6 +39,7 @@ use ink_ffi::library::write_timeline;
 use ink_ffi::runtime::{Core, DictationParts, Model, Parts};
 use ink_pipeline::capture::SideCapture;
 use ink_pipeline::chain::DictationSettings;
+use ink_pipeline::consent::{Feature, LlmConsent};
 use ink_pipeline::events::VadUnavailable;
 use ink_pipeline::gain_stage::Vad;
 use ink_pipeline::import::{ImportServices, ImportSettings, import_wav};
@@ -616,6 +617,22 @@ fn main() {
     );
     let store: Arc<dyn Store> =
         Arc::new(ink_store::SqliteStore::open(dir.join("library.sqlite")).unwrap());
+    // Summaries and commitments are written only with the meetings consent for the model that
+    // writes them: the scripted one, on this machine. Given as Settings > AI would give it.
+    let writer = LlmConsent::for_model(&LlmInfo {
+        provider: "scripted".into(),
+        model: "seed".into(),
+        endpoint: ink_core::Endpoint::InProcess,
+    });
+    store
+        .set_settings(&[
+            (
+                Feature::Meetings.setting_key(),
+                writer.to_setting().as_str(),
+            ),
+            (ink_ffi::consent::MEETINGS_SETTING, "on"),
+        ])
+        .unwrap();
     let now = now_unix_ms();
     // Out of order on purpose: the list must sort by start, not by when a record was written.
     let names = [("spk0", "Alex"), ("spk1", "Robin"), ("spk2", "Sam")];
