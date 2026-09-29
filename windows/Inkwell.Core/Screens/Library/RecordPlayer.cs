@@ -418,8 +418,10 @@ public sealed class RecordPlayer : ObservableModel
         {
             Fill(side);
         }
-        catch (ChunkReadException e)
+        catch (Exception e)
         {
+            // On the UI thread, from the output's callback: any failure to read or queue the next
+            // slice stops playback and says so (Fail logs its kind), never crashes or goes silent.
             Fail(e);
             return;
         }

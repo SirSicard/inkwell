@@ -35,7 +35,15 @@ public sealed partial class StorageSection : UserControl
     {
         measuring = true;
         Render();
-        await storage.Measure().ConfigureAwait(true);
+        try
+        {
+            await storage.Measure().ConfigureAwait(true);
+        }
+        catch (Exception failure)
+        {
+            // Measure says its own failures; anything else is logged by kind, and the ring stops.
+            ScreenLog.System.Write($"storage could not be measured ({failure.GetType().Name})");
+        }
         measuring = false;
         Render();
     }

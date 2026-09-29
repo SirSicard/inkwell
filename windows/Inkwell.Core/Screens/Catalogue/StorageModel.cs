@@ -59,7 +59,7 @@ public sealed class StorageModel(
             Sizes = await Task.Run(() => MeasureFolders(data, models)).ConfigureAwait(true);
             Failed = false;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Security.SecurityException or ArgumentException)
+        catch (Exception e)
         {
             // The kind only: a message can name the path.
             log.Write($"storage measure failed: {e.GetType().Name}");

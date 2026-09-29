@@ -102,6 +102,12 @@ public sealed class WaveformLoader(ScreenLog? log = null) : ObservableModel
 
     public Waveform Waveform { get; private set; } = Waveform.Empty;
 
+    /// <summary>The line the player shows when the waveform could not be built.</summary>
+    public const string FailedText = "Couldn't draw this recording's waveform.";
+
+    /// <summary>Why the waveform is missing, when its build failed; null otherwise.</summary>
+    public string? Failure { get; private set; }
+
     /// <summary>The record <see cref="Waveform"/> is (or is being built) for.</summary>
     public string? Record { get; private set; }
 
@@ -113,6 +119,7 @@ public sealed class WaveformLoader(ScreenLog? log = null) : ObservableModel
         var id = document.Record.Record;
         Record = id;
         Waveform = Waveform.Empty;
+        Failure = null;
         Changed();
         var ticket = new Ticket();
         _ticket = ticket;
@@ -139,7 +146,22 @@ public sealed class WaveformLoader(ScreenLog? log = null) : ObservableModel
 
     private async Task Deliver(Task<Waveform> build, string id, Ticket ticket)
     {
-        var built = await build.ConfigureAwait(true);
+        Waveform built;
+        try
+        {
+            built = await build.ConfigureAwait(true);
+        }
+        catch (Exception e)
+        {
+            // Said on screen and logged by kind, never left as an empty lane that looks like silence.
+            _log.Write($"waveform: the build failed ({e.GetType().Name})");
+            if (!ticket.Cancelled && Record == id)
+            {
+                Failure = FailedText;
+                Changed();
+            }
+            return;
+        }
         if (ticket.Cancelled || Record != id)
         {
             return;

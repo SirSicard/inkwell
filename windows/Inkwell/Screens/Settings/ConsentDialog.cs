@@ -91,10 +91,10 @@ public sealed class ConsentDialog
         {
             result = await dialog.ShowAsync();
         }
-        catch (Exception e) when (e is COMException or InvalidOperationException)
+        catch (Exception e)
         {
-            // Another dialog is up: nothing was agreed to, so nothing is sent.
-            log.Write("consent step could not be shown; cancelled");
+            // Another dialog is up (or the dialog failed): nothing was agreed to, so nothing is sent.
+            log.Write($"consent step could not be shown ({e.GetType().Name}); cancelled");
             open = null;
             openFor = null;
             consent.Cancel();

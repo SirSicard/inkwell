@@ -116,7 +116,7 @@ public sealed partial class PlayerBar : UserControl
 
     private void ShowNotice()
     {
-        var notice = _player.Notice(_document.PlaybackCaveats, _loader.Waveform.Partial);
+        var notice = _player.Notice(_document.PlaybackCaveats, _loader.Waveform.Partial) ?? _loader.Failure;
         Notice.Text = notice ?? "";
         Notice.Visibility = notice is null ? Visibility.Collapsed : Visibility.Visible;
     }

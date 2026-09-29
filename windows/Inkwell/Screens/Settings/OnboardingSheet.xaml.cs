@@ -97,11 +97,11 @@ public sealed partial class OnboardingSheet : ContentDialog
         {
             await ShowAsync();
         }
-        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or InvalidOperationException)
+        catch (Exception e)
         {
-            // Another dialog is up: the first run shows at the next change of the model or the
-            // next launch; nothing is recorded.
-            log.Write("first-run sheet could not be shown");
+            // Another dialog is up (or the dialog failed): the first run shows at the next change
+            // of the model or the next launch; nothing is recorded.
+            log.Write($"first-run sheet could not be shown ({e.GetType().Name})");
             isOpen = false;
         }
     }
