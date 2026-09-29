@@ -271,6 +271,8 @@ public sealed class LibraryModel : ObservableModel
             ListLoad = LibraryLoad.Loading;
         }
         MoreLoad = LibraryLoad.Idle;
+        // A page asked for under the old list is stale now: its answer must not append.
+        _latest.Remove(Slot.More);
         _send(new CoreCommand.RecordsList(Filter, null, PageSize, RefFor(Slot.List)));
         Changed();
     }
