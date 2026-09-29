@@ -396,6 +396,9 @@ final class ImportNoteModel {
             lines.append("Inkwell 0.2 started dictation with \(old), a key combination. Inkwell now listens for one key held on its own, so it uses \(currentKey). Pick another under Dictate if you like.")
         case .otherKey:
             lines.append("Inkwell 0.2\u{2019}s dictation key (\(old)) isn\u{2019}t one Inkwell can listen for now, so it uses \(currentKey). Pick another under Dictate if you like.")
+        case .replaced:
+            // Only a Windows import replaces a key (Fn never reaches Windows); said as it is there.
+            lines.append("Inkwell 0.2 started dictation with \(old), which this computer never sees, so it was replaced by \(currentKey). Pick another under Dictate if you like.")
         case .mapped:
             break
         }

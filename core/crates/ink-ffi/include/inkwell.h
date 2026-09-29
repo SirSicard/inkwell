@@ -204,7 +204,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
  *       "dictation.polish" (on|off; setting.set takes only off, which also withdraws polish's
  *       consent in the same write, and answers "consent.state" too: consent.allow turns it on),
- *       "dictation.key" (fn|right_option|right_command|right_control|right_shift),
+ *       "dictation.key" (fn|right_option|right_command|right_control|right_shift|right_alt|
+ *       right_win; a key this OS cannot hold is refused when dictation binds it, as
+ *       "dictation.off" with "key_refused"; the default is fn on macOS and right_control on
+ *       Windows),
  *       "dictation.edit_key" (off or one of those; voice edit turns on with its consent through
  *       consent.allow, and off withdraws that consent in the same write, answering
  *       "consent.state" too; an edit key set without a consent edits nothing),

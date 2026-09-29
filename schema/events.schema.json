@@ -3054,9 +3054,10 @@
     },
     "ImportKeyOutcome": {
       "type": "string",
-      "description": "What became of 0.2's dictation hotkey: mapped to a 1.0 key, or not, because it is a combination or another key 1.0 cannot hold on its own.",
+      "description": "What became of 0.2's dictation hotkey: mapped to a 1.0 key (the same key), replaced by another key because this OS never sees it (Fn on Windows becomes right Ctrl; key names both), or not carried over, because it is a combination or another key 1.0 cannot hold on its own.",
       "enum": [
         "mapped",
+        "replaced",
         "combination",
         "other_key"
       ]

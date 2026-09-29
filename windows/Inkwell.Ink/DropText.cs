@@ -23,6 +23,14 @@ public enum DropTone
 /// </param>
 public sealed record DropText(string Title, string Detail, DropTone Tone = DropTone.Plain, bool LiveWords = false)
 {
+    /// <summary>
+    /// The Drop window's name, which is what a screen reader reads and what any process (or UI
+    /// Automation client) can read from the window: "Inkwell: " and the title only. The detail can
+    /// hold the user's live words, so it never goes into it; it would also change with every
+    /// partial.
+    /// </summary>
+    public string AccessibleName => $"Inkwell: {Title}";
+
     /// <summary>How many of the newest live words are shown wet, as on the canvas.</summary>
     public const int WetWords = 2;
 

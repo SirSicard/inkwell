@@ -1112,10 +1112,13 @@ public struct ImportKeyNote: Codable, Sendable, Equatable {
     public let toggle: Bool
 }
 
-/// What became of 0.2's dictation hotkey: mapped to a 1.0 key, or not, because it is a
-/// combination or another key 1.0 cannot hold on its own.
+/// What became of 0.2's dictation hotkey: mapped to a 1.0 key (the same key), replaced by
+/// another key because this OS never sees it (Fn on Windows becomes right Ctrl; key names
+/// both), or not carried over, because it is a combination or another key 1.0 cannot hold on
+/// its own.
 public enum ImportKeyOutcome: String, Codable, Sendable, Equatable, CaseIterable {
     case mapped
+    case replaced
     case combination
     case otherKey = "other_key"
 }

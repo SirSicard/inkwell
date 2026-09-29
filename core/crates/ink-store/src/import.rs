@@ -43,7 +43,9 @@
 //! ([`DICTATION_KEY_SETTING`]) exists and means the same thing. 1.0 listens for one modifier held
 //! on its own, hold to talk. 0.2's modifier-only keys (`fn`, `right_cmd`, `right_opt`,
 //! `right_ctrl`) map to it; a key combination such as 0.2's default `super+shift+space`, or any
-//! other key, cannot, and the default key stays. Either way the outcome is recorded under
+//! other key, cannot, and the default key stays. On Windows, where Fn never reaches the OS, `fn`
+//! is replaced by the Windows default (right Ctrl) and the note says so, naming both keys; 0.2's
+//! `right_cmd` there was the right Windows key. Either way the outcome is recorded under
 //! [`KEY_NOTE_KEY`], so Settings can say once what became of the old key (never silently), and a
 //! dictation key the user already chose in 1.0 is never replaced. 0.2's voice-edit key is not
 //! carried over: 1.0's is off until the user picks one.
@@ -184,15 +186,27 @@ impl Unmappable {
 ///
 /// 0.2 had two kinds of hotkey (`modkey.rs`): a modifier held on its own, written as a token, and
 /// a key combination parsed by its global-shortcut plugin. Only the first kind exists in 1.0.
+///
+/// On Windows (0.2 shipped there too), `fn` becomes the Windows default, right Ctrl, because Fn
+/// never reaches Windows ([`replaced_on_this_os`] says so), and `right_cmd`, which 0.2 bound to
+/// the right Windows key there, becomes `right_win`. The Mac's mapping keeps every key as it was.
 pub fn map_hotkey(hotkey: &str) -> Result<&'static str, Unmappable> {
     match hotkey.trim() {
+        "fn" if cfg!(windows) => Ok("right_control"),
         "fn" => Ok("fn"),
+        "right_cmd" if cfg!(windows) => Ok("right_win"),
         "right_cmd" => Ok("right_command"),
         "right_opt" => Ok("right_option"),
         "right_ctrl" => Ok("right_control"),
         other if other.contains('+') => Err(Unmappable::Combination),
         _ => Err(Unmappable::OtherKey),
     }
+}
+
+/// Whether [`map_hotkey`] gives 0.2's key another key on this OS, not the same key under 1.0's
+/// name: `fn` on Windows. The note then says the key was replaced (outcome `replaced`).
+pub fn replaced_on_this_os(hotkey: &str) -> bool {
+    cfg!(windows) && hotkey.trim() == "fn"
 }
 
 /// What the import does with 0.2's dictation hotkey.
@@ -226,7 +240,12 @@ impl KeyImport {
     /// Whether Settings should say something about it: the key did not carry over, or it did but
     /// no longer starts and stops on separate presses.
     pub fn needs_note(&self) -> bool {
-        self.outcome.is_err() || self.was_toggle
+        self.outcome.is_err() || self.was_toggle || self.replaced()
+    }
+
+    /// The key carried over as another key (Fn on Windows).
+    fn replaced(&self) -> bool {
+        self.outcome.is_ok() && replaced_on_this_os(&self.hotkey)
     }
 
     /// The document under [`KEY_NOTE_KEY`]. `applied` says whether the import set 1.0's key (it
@@ -236,6 +255,7 @@ impl KeyImport {
             "hotkey": self.hotkey,
             "key": self.outcome.ok(),
             "outcome": match self.outcome {
+                Ok(_) if self.replaced() => "replaced",
                 Ok(_) => "mapped",
                 Err(why) => why.name(),
             },
@@ -1469,13 +1489,28 @@ mod tests {
 
     #[test]
     fn modifier_tokens_map_and_everything_else_does_not() {
-        for (old, new) in [
-            ("fn", "fn"),
-            ("right_cmd", "right_command"),
-            ("right_opt", "right_option"),
-            ("right_ctrl", "right_control"),
-        ] {
-            assert_eq!(map_hotkey(old), Ok(new), "{old}");
+        let mapped: &[(&str, &str)] = if cfg!(windows) {
+            &[
+                ("fn", "right_control"),
+                ("right_cmd", "right_win"),
+                ("right_opt", "right_option"),
+                ("right_ctrl", "right_control"),
+            ]
+        } else {
+            &[
+                ("fn", "fn"),
+                ("right_cmd", "right_command"),
+                ("right_opt", "right_option"),
+                ("right_ctrl", "right_control"),
+            ]
+        };
+        for (old, new) in mapped {
+            assert_eq!(map_hotkey(old), Ok(*new), "{old}");
+            assert_eq!(
+                replaced_on_this_os(old),
+                cfg!(windows) && *old == "fn",
+                "{old}"
+            );
         }
         for combination in [DEFAULT_HOTKEY_0_2, "ctrl+space", "super+shift+e", "alt+f"] {
             assert_eq!(map_hotkey(combination), Err(Unmappable::Combination));

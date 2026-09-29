@@ -222,8 +222,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             text = lines;
             DropLayouts();
-            // What a screen reader reads: the window's name.
-            fixed (char* name = $"Inkwell: {lines.Title}, {lines.Detail}")
+            // What a screen reader reads: the window's name, the title only (see AccessibleName).
+            fixed (char* name = lines.AccessibleName)
             {
                 SetWindowTextW(hwnd, name);
             }

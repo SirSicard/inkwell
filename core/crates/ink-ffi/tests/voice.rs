@@ -1390,6 +1390,24 @@ fn an_imported_modifier_hotkey_is_the_key_held_and_imported_snippets_expand() {
     rig.events.assert_valid();
 }
 
+/// Windows: 0.2's Fn becomes right Ctrl, which dictation holds, and Settings says the key was
+/// replaced, naming both (never a dead key that only Settings > Voice reports).
+#[cfg(windows)]
+#[test]
+fn on_windows_an_imported_fn_is_replaced_by_right_ctrl_and_settings_says_so() {
+    let rig = VoiceRig::new("import-fn-win");
+    import_0_2(
+        &rig,
+        &[("settings.json", r#"{"hotkey":"fn","recording_mode":"ptt"}"#)],
+    );
+    assert_eq!(rig.enable()["key"], "right_control");
+    let notes = rig.ask(r#"{"cmd":"import.notes","id":"n"}"#, "n");
+    assert_eq!(notes["key"]["outcome"], "replaced", "{notes}");
+    assert_eq!(notes["key"]["hotkey"], "fn");
+    assert_eq!(notes["key"]["key"], "right_control");
+    rig.events.assert_valid();
+}
+
 #[test]
 fn an_unmappable_hotkey_keeps_the_default_and_settings_says_so_once() {
     let rig = VoiceRig::new("import-unmapped");

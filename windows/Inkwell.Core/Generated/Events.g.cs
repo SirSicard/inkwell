@@ -1523,14 +1523,18 @@ public sealed record ImportKeyNote
 }
 
 /// <summary>
-/// What became of 0.2's dictation hotkey: mapped to a 1.0 key, or not, because it is a
-/// combination or another key 1.0 cannot hold on its own.
+/// What became of 0.2's dictation hotkey: mapped to a 1.0 key (the same key), replaced by
+/// another key because this OS never sees it (Fn on Windows becomes right Ctrl; key names
+/// both), or not carried over, because it is a combination or another key 1.0 cannot hold on
+/// its own.
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<ImportKeyOutcome>))]
 public enum ImportKeyOutcome
 {
     [JsonStringEnumMemberName("mapped")]
     Mapped,
+    [JsonStringEnumMemberName("replaced")]
+    Replaced,
     [JsonStringEnumMemberName("combination")]
     Combination,
     [JsonStringEnumMemberName("other_key")]

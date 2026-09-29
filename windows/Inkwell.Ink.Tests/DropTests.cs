@@ -254,6 +254,26 @@ public sealed class DropTests
         }
     }
 
+    /// <summary>
+    /// The Drop's window name (what screen readers and any process read) is the title only: never
+    /// the detail, which holds the live words. Runs over SSH: no frame is needed.
+    /// </summary>
+    [Fact]
+    public unsafe void TheWindowNameNeverHoldsTheWords()
+    {
+        lock (TestPipeline.Lock)
+        {
+            var ui = new UiThread();
+            using var drop = new DropWindow(Loader, new InkClock(ui.Post));
+            drop.Show(new DropText("Dictating \u00B7 Notepad", "a synthetic secret line", LiveWords: true), InkState.Dictating);
+            var buffer = stackalloc char[256];
+            var length = GetWindowTextW((HWND)drop.Handle, buffer, 256);
+            Assert.Equal("Inkwell: Dictating \u00B7 Notepad", new string(buffer, 0, length));
+            drop.Hide();
+        }
+        Assert.Equal("Inkwell: Too short", new DropText("Too short", "Try again").AccessibleName);
+    }
+
     [Fact]
     public void TheWetWordsAreTheLastTwo()
     {
