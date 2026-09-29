@@ -133,10 +133,17 @@ fn run(shared: &Shared, runs: &Mutex<Runs>, rx: &Receiver<Question>, waiting: &A
     }
 }
 
+/// Why a question has no answer without a language model, in the words of the OS it runs on. The
+/// shells match its start ("no language model"), never the rest.
+#[cfg(target_os = "macos")]
+const NO_LANGUAGE_MODEL: &str = "no language model is available to answer on this Mac";
+#[cfg(not(target_os = "macos"))]
+const NO_LANGUAGE_MODEL: &str = "no language model is available to answer on this PC";
+
 /// **Worker.** Answers `question` about `record` so far, with the registered language model.
 fn answer_about(shared: &Shared, record: &RecordId, question: &str) -> Result<String, String> {
     let Some(llm) = crate::engines::llm(shared) else {
-        return Err("no language model is available to answer on this Mac".into());
+        return Err(NO_LANGUAGE_MODEL.into());
     };
     let store: &dyn Store = shared.store.as_ref();
     let stored = store

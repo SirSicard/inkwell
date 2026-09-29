@@ -74,7 +74,7 @@ public class LiveModelTests
         Assert.Null(live.Asked[0].Answer); // waiting for the core
         Assert.Equal("Thinking…", live.Asked[0].AnswerText);
         // The core has no model to answer with: said in words, never a made-up answer.
-        live.Apply(Ev.Of("""{"type":"command.failed","command":"meeting.ask","id":"ask:0","message":"no language model is available to answer on this Mac"}"""));
+        live.Apply(Ev.Of("""{"type":"command.failed","command":"meeting.ask","id":"ask:0","message":"no language model is available to answer on this PC"}"""));
         Assert.IsType<AskAnswer.Unavailable>(live.Asked[0].Answer);
         Assert.False(live.Asked[0].IsAnswer);
     }
@@ -248,7 +248,7 @@ public class LiveMeetingTests
 
         live.AskText = "What do I owe?";
         live.SubmitAsk();
-        live.Apply(Ev.Of("""{"type":"command.failed","command":"meeting.ask","id":"ask:1","message":"no language model is available to answer on this Mac"}"""));
+        live.Apply(Ev.Of("""{"type":"command.failed","command":"meeting.ask","id":"ask:1","message":"no language model is available to answer on this PC"}"""));
         // Windows: no Apple Intelligence; the model is one the core's engines registered.
         Assert.Equal(new AskAnswer.Unavailable("Answers need a language model, which is off or not ready on this PC."), live.Asked[0].Answer);
         live.AskText = "And now?";
