@@ -86,6 +86,49 @@ public class EditConsentTests
         Assert.Equal(new CoreCommand.ConsentGet(LlmFeature.Edit, "consent.get:edit:2"), sent.Commands[before]);
     }
 
+    /// <summary>
+    /// Windows: Settings > AI's Voice edit switch is the picker's consent: on asks first with the
+    /// first key the picker offers (never the dictation key), Cancel changes nothing, and it reads
+    /// on only once the core has recorded the consent and holds the key; off is the picker's Off.
+    /// </summary>
+    [Fact]
+    public void TheVoiceEditSwitchAsksFirstAndReadsOnOnlyWhenAllowed()
+    {
+        var sent = new Sent();
+        var screens = Screens(sent);
+        var ai = screens.Ai;
+        Assert.False(ai.EditOn);
+        Assert.True(ai.CanToggleEdit);
+        Assert.Equal("Off. Nothing you select is sent anywhere.", ai.EditStatus);
+        var before = sent.Commands.Count;
+        ai.SetEdit(true);
+        Assert.Equal("right_alt", screens.EditConsent.PendingKey); // the default dictation key is right_control
+        Assert.Equal(before, sent.Commands.Count); // asking sends nothing
+        screens.EditConsent.Cancel();
+        Assert.False(ai.EditOn);
+        Assert.Equal(before, sent.Commands.Count);
+
+        ai.SetEdit(true);
+        screens.EditConsent.Allow();
+        Assert.Equal(new CoreCommand.ConsentAllow(LlmFeature.Edit, LlmDestination.OnDevice, null, "right_alt", "consent.allow:edit:2"), sent.Commands[^1]);
+        Assert.False(ai.EditOn); // not before the core says so
+        screens.Apply(
+            State(on: true, allowed: true, allowedTo: "on_device", feature: "edit"),
+            Ev.Of("""{"type":"dictation.ready","key":"right_control","edit_key":"right_alt"}"""));
+        Assert.True(ai.EditOn);
+        Assert.Equal("On: select text, hold Right Alt, say what to change. It stays on this PC.", ai.EditStatus);
+
+        ai.SetEdit(false);
+        Assert.Equal(new CoreCommand.SettingSet(ShellSetting.DictationEditKey, "off"), sent.Commands[^1]);
+        Assert.False(screens.EditConsent.IsAllowedOn);
+
+        // No model: the switch can't be used, and says why.
+        var none = new SettingsHarness(_ => { });
+        none.Apply(State(on: false, allowed: false, feature: "edit"));
+        Assert.False(none.Ai.CanToggleEdit);
+        Assert.Equal("No language model is available on this PC, so voice edit stays off.", none.Ai.EditStatus);
+    }
+
     /// <summary>Polish's state never moves voice edit's, nor the reverse.</summary>
     [Fact]
     public void EachFeatureReadsOnlyItsOwnState()

@@ -87,6 +87,71 @@ public sealed class AiSettings : ObservableModel
     /// <summary>What the Voice section says under the keys about voice edit's consent, if anything.</summary>
     public string? EditConsentProblem => EditConsent.Problem;
 
+    // Voice edit's switch (Settings > AI, Windows): the same consent as the edit-key picker, as a
+    // switch beside polish and summaries. On picks the first key the picker offers (never the
+    // dictation key) and asks first; off is the picker's Off.
+
+    /// <summary>The switch reads on only with an edit key, a consent that covers the model now, and a working model.</summary>
+    public bool EditOn => Dictation.EditKey is not null && EditConsent.IsAllowedOn && Polish.HasWorkingEngine;
+
+    /// <summary>Whether the switch can be used: a working model, and the core has said where it sends.</summary>
+    public bool CanToggleEdit =>
+        Polish.HasWorkingEngine && EditConsent.State is not null && EditConsent.Destination is not null;
+
+    /// <summary>The line under the switch. A failure or an unread state is said first, never read as off.</summary>
+    public string EditStatus
+    {
+        get
+        {
+            if ((EditConsent.Failure is not null || EditConsent.State?.Error is not null) && EditConsent.Problem is string failed)
+            {
+                return failed;
+            }
+            if (!Polish.HasWorkingEngine)
+            {
+                return "No language model is available on this PC, so voice edit stays off.";
+            }
+            if (EditConsent.Problem is string problem)
+            {
+                return problem;
+            }
+            if (!EditOn || Dictation.EditKey is not string key || EditConsent.Destination is not ConsentDestination destination)
+            {
+                return "Off. Nothing you select is sent anywhere.";
+            }
+            var cap = DictationModel.Cap(key);
+            return destination.IsOnDevice
+                ? $"On: select text, hold {cap}, say what to change. It stays on this PC."
+                : $"On: select text, hold {cap}, say what to change. The selection and what you say go to {destination.Label}.";
+        }
+    }
+
+    /// <summary>Whether the status is a problem to show in the alert colour.</summary>
+    public bool EditIsProblem => EditConsent.IsProblem;
+
+    /// <summary>
+    /// The user switched voice edit. On asks first (the consent step, with the first key the edit
+    /// picker offers); off turns it off, and the core withdraws the consent in the same write.
+    /// </summary>
+    public void SetEdit(bool on)
+    {
+        if (!CanToggleEdit)
+        {
+            return;
+        }
+        if (!on)
+        {
+            ChooseEditKey(null);
+            return;
+        }
+        var offered = Dictation.EditKeys;
+        var key = Dictation.EditKey ?? (offered.Count > 0 ? offered[0].Token : null);
+        if (key is not null)
+        {
+            EditConsent.Ask(ConsentHost.Settings, key);
+        }
+    }
+
     /// <summary>Summaries and Ask's switch reads on only with a consent that covers the model now and a working model.</summary>
     public bool MeetingsAIOn => MeetingsConsent.IsAllowedOn && Polish.HasWorkingEngine;
 

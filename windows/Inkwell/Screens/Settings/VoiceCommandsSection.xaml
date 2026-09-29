@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Voice commands. As the Mac's VoiceCommandsSection: the failure (with Start over),
+     the switch and what it means, the wake word, where the list came from, the rows (a command
+     this build does not carry out says so), and the add form. -->
+<UserControl
+    x:Class="Inkwell.Screens.VoiceCommandsSection"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens"
+    Loaded="OnLoaded">
+    <StackPanel Spacing="10">
+        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Voice commands" />
+        <StackPanel Orientation="Horizontal" Spacing="10" Visibility="{x:Bind local:SettingsFormat.Shows(Model.Failure), Mode=OneWay}">
+            <TextBlock VerticalAlignment="Center" Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind Model.Failure, Mode=OneWay}" />
+            <Button
+                Click="OnStartOver"
+                Content="{x:Bind local:VoiceCommandsSection.StartOverTitle}"
+                ToolTipService.ToolTip="{x:Bind local:VoiceCommandsSection.StartOverHelp}"
+                AutomationProperties.HelpText="{x:Bind local:VoiceCommandsSection.StartOverHelp}"
+                Visibility="{x:Bind Model.Unreadable, Mode=OneWay}" />
+        </StackPanel>
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Text="Voice commands" />
+            <ToggleSwitch
+                x:Name="CommandsSwitch"
+                Grid.Column="1"
+                MinWidth="0"
+                AutomationProperties.HelpText="{x:Bind Model.StatusLine, Mode=OneWay}"
+                AutomationProperties.Name="Voice commands"
+                IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
+                IsOn="{x:Bind Model.Enabled, Mode=OneWay}"
+                OffContent=""
+                OnContent=""
+                Toggled="OnEnabledToggled" />
+            <TextBlock Grid.Column="2" VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" Text="{x:Bind Model.StatusLine, Mode=OneWay}" />
+        </Grid>
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="160" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Text="Wake word" />
+            <TextBox
+                x:Name="Wake"
+                Grid.Column="1"
+                AutomationProperties.Name="Wake word"
+                IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
+                KeyDown="OnWakeKeyDown"
+                PlaceholderText="Wake word"
+                TextChanged="OnWakeChanged" />
+            <Button x:Name="SaveWake" Grid.Column="2" AutomationProperties.Name="Save the wake word" Click="OnSaveWake" Content="Save" IsEnabled="False" />
+        </Grid>
+        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:VoiceCommandsSection.FromImportText}" Visibility="{x:Bind Model.FromImport, Mode=OneWay}" />
+        <ContentControl x:Name="RowsHost" HorizontalContentAlignment="Stretch" IsTabStop="False">
+            <ItemsRepeater x:Name="Rows">
+                <ItemsRepeater.ItemTemplate>
+                    <DataTemplate x:DataType="local:VoiceCommandItem">
+                        <Grid
+                            Padding="0,8"
+                            BorderBrush="{ThemeResource InkSeparatorBrush}"
+                            BorderThickness="0,0,0,1"
+                            ColumnSpacing="12"
+                            Tag="{x:Bind Id}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Triggers}" />
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock MaxLines="2" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Does}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Not available in this version: Inkwell hears it and types nothing." Visibility="{x:Bind NotCarriedOut}" />
+                            </StackPanel>
+                            <ToggleSwitch
+                                x:Name="Toggle"
+                                Grid.Column="2"
+                                MinWidth="0"
+                                VerticalAlignment="Top"
+                                AutomationProperties.Name="{x:Bind Name}"
+                                IsOn="{x:Bind Enabled}"
+                                OffContent=""
+                                OnContent=""
+                                Toggled="OnToggled" />
+                            <Button x:Name="Delete" Grid.Column="3" VerticalAlignment="Top" Click="OnDelete" Content="Delete" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsRepeater.ItemTemplate>
+            </ItemsRepeater>
+        </ContentControl>
+        <ContentControl x:Name="AddHost" Margin="0,4,0,0" HorizontalContentAlignment="Stretch" IsTabStop="False">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="NewTriggers" AutomationProperties.Name="Phrases, comma-separated" PlaceholderText="Phrases, comma-separated" TextChanged="OnNewChanged" />
+                <ComboBox x:Name="NewAction" Grid.Column="1" AutomationProperties.Name="Does" SelectedIndex="0" SelectionChanged="OnNewActionChanged">
+                    <x:String>Type text</x:String>
+                    <x:String>Switch style</x:String>
+                </ComboBox>
+                <TextBox x:Name="NewValue" Grid.Column="2" AutomationProperties.Name="Text to type" PlaceholderText="Text to type" TextChanged="OnNewChanged" />
+                <Button x:Name="Add" Grid.Column="3" AutomationProperties.Name="Add a voice command" Click="OnAdd" Content="Add" IsEnabled="False" />
+            </Grid>
+        </ContentControl>
+    </StackPanel>
+</UserControl>
