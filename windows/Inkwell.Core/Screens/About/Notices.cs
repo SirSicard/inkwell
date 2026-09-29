@@ -8,17 +8,18 @@
 //
 // What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, fastcluster,
 // VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback), the Windows App
-// SDK, WebView2, WinUIEx, the .NET runtime and the Windows SDK's .NET projection in their place.
+// SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection and C#/WinRT in their
+// place. Their texts are in NoticeTexts.cs, copied from the packages the Windows build restores.
 //
 // The texts shared with the Mac (llama.cpp down to webgl-noise, the Apache License, Silero's) are
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
 // components' own licence files except where Notices.swift says otherwise, and the composed ones
-// (`Composed`) are listed with their upstream check in mac/composed-notices.txt.
+// (`Composed`) are listed with their upstream check in mac/composed-notices.txt; the Windows-only
+// composed ones (WinUIEx and the Windows SDK projection, whose packages carry no licence text) in
+// composed-notices.txt beside this file.
 //
-// A pending notice (`Pending`) is one whose text was not on hand when this was written (the
-// licence files of the NuGet packages and wasapi-rs): it shows a placeholder naming the file its
-// text comes from, and must be replaced by that file, verbatim, before a Windows release.
-// NoticesTests lists them.
+// No notice ships as a placeholder: `Pending` names where a text must come from while it is one,
+// and NoticesTests holds the list of pending notices empty.
 
 namespace Inkwell.Core.Screens;
 
@@ -88,19 +89,14 @@ public static partial class RustNotices
 }
 
 /// <summary>What the Windows app ships that is not Inkwell's own.</summary>
-public static class Notices
+public static partial class Notices
 {
-    /// <summary>A pending notice's placeholder text, naming the file its text comes from.</summary>
-    private static string Placeholder(string source) =>
-        $"[Pending: this notice's text is {source}, copied verbatim before a Windows release.]";
-
     /// <summary>The code, in the order About lists it.</summary>
     public static IReadOnlyList<ThirdPartyNotice> Components { get; } =
     [
         new("wasapi-rs", "wasapi-rs, by Henrik Enquist",
             "The way a meeting app's sound is captured: process loopback activation, rewritten against windows-rs.",
-            "MIT", Placeholder(WasapiSource))
-        { Pending = WasapiSource },
+            "MIT", WasapiLicence),
         new("llama-cpp", "llama.cpp and ggml, by the ggml authors",
             "Runs the speech model (Qwen3-ASR) on the GPU, through Vulkan, or on the CPU.",
             "MIT", """
@@ -711,24 +707,26 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """),
         new("windows-app-sdk", "Windows App SDK, by Microsoft",
             "The app's windows and controls (WinUI 3), copied beside the app: Microsoft.WindowsAppSDK.WinUI 2.3.9, Base 2.0.4, Foundation 2.3.12 and InteractiveExperiences 2.1.9.",
-            "Microsoft Software License Terms", Placeholder(WindowsAppSdkSource))
-        { Pending = WindowsAppSdkSource },
+            "Microsoft Software License Terms",
+            "--- license.txt ---\n" + WindowsAppSdkLicence + "\n" + WindowsAppSdkNotices),
         new("webview2", "WebView2 SDK, by Microsoft",
             "Brought with WinUI 3: Microsoft.Web.WebView2 1.0.3719.77.",
-            "BSD-3-Clause", Placeholder(WebView2Source))
-        { Pending = WebView2Source },
-        new("winuiex", "WinUIEx",
+            "BSD-3-Clause",
+            "--- LICENSE.txt ---\n" + WebView2Licence + "\n\n--- NOTICE.txt ---\n" + WebView2Notices),
+        new("winuiex", "WinUIEx, by Morten Nielsen",
             "The tray icon: WinUIEx 2.9.3.",
-            "MIT", Placeholder(WinUIExSource))
-        { Pending = WinUIExSource },
+            "MIT", WinUIExText)
+        { Composed = true },
         new("dotnet-runtime", ".NET runtime",
             "Compiled into Inkwell.exe by NativeAOT: .NET 10.0.12.",
-            "MIT, with the notices of the code it includes", Placeholder(DotnetSource))
-        { Pending = DotnetSource },
+            "MIT, with the notices of the code it includes", DotnetText),
         new("windows-sdk-net", "Windows SDK projection for .NET, by Microsoft",
             "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
-            "Windows SDK licence terms", Placeholder(WindowsSdkNetSource))
-        { Pending = WindowsSdkNetSource },
+            "Windows SDK licence terms", WindowsSdkNetText)
+        { Composed = true },
+        new("cswinrt", "C#/WinRT runtime, by Microsoft",
+            "How C# calls the Windows APIs, compiled in with the projection: WinRT.Runtime from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
+            "MIT", CsWinRtLicence),
     ];
 
     /// <summary>The ids of the composed notices, which mac/composed-notices.txt lists.</summary>
@@ -753,13 +751,6 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "Hears where speech starts and stops.", Silero)
         { Composed = true },
     ];
-
-    private const string WasapiSource = "the LICENSE of wasapi-rs 0.24.0 (HEnquist/wasapi-rs)";
-    private const string WindowsAppSdkSource = "license.txt of the NuGet package Microsoft.WindowsAppSDK.WinUI 2.3.9 (sha256 ee72e062ba4afb3420bc3439a1e86f4d775f8e4a0daabdc35a72b6ee379359f2, windows/scripts/nuget-licence-exceptions.json), with its section 3(b)(ii) end-user notice";
-    private const string WebView2Source = "LICENSE.txt of the NuGet package Microsoft.Web.WebView2 1.0.3719.77 (sha256 0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55, windows/scripts/nuget-licence-exceptions.json)";
-    private const string WinUIExSource = "the licence file of the NuGet package WinUIEx 2.9.3";
-    private const string DotnetSource = "the .NET runtime's LICENSE.TXT and THIRD-PARTY-NOTICES.TXT, from its 10.0.12 runtime pack";
-    private const string WindowsSdkNetSource = "the Windows SDK licence terms of Microsoft.Windows.SDK.NET.Ref 10.0.26100.57 (https://aka.ms/WinSDKLicenseURL)";
 
     /// <summary>The Apache License 2.0, shared by the components under it (Notices.swift's apache2).</summary>
     public const string Apache2 = """

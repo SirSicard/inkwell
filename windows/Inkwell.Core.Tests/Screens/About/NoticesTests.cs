@@ -31,6 +31,22 @@ internal static class AboutCheckout
     /// <summary>A repository file's text, line ends normalised.</summary>
     public static string Read(string relative) =>
         File.ReadAllText(Path.Combine(Root(), relative)).Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    /// <summary>
+    /// A file of the Windows solution's folder (windows/, found by Inkwell.slnx above the tests),
+    /// line ends normalised. Every copy of the solution has it, so these never skip.
+    /// </summary>
+    public static string ReadWindows(string relative)
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "Inkwell.slnx")))
+            {
+                return File.ReadAllText(Path.Combine(dir.FullName, relative)).Replace("\r\n", "\n", StringComparison.Ordinal);
+            }
+        }
+        throw new DirectoryNotFoundException("no Inkwell.slnx above the tests");
+    }
 }
 
 public class NoticesTests
@@ -98,6 +114,38 @@ public class NoticesTests
         Assert.Contains("2.9.3", byId["winuiex"].Role, StringComparison.Ordinal);
         Assert.StartsWith("MIT", byId["dotnet-runtime"].Licence, StringComparison.Ordinal);
         Assert.Contains("windows-sdk-net", byId.Keys);
+        Assert.Equal("MIT", byId["cswinrt"].Licence);
+
+        // The texts are the packages' own (NoticeTexts.cs).
+        Assert.StartsWith("Copyright (c) 2020 Henrik Enquist", byId["wasapi-rs"].Text, StringComparison.Ordinal);
+        Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT WINDOWS APP SDK", byId["windows-app-sdk"].Text, StringComparison.Ordinal);
+        Assert.Contains("--- NOTICE.txt (Microsoft.WindowsAppSDK.Base 2.0.4) ---", byId["windows-app-sdk"].Text, StringComparison.Ordinal);
+        Assert.Contains("Copyright (C) Microsoft Corporation. All rights reserved.", byId["webview2"].Text, StringComparison.Ordinal);
+        Assert.Contains("--- NOTICE.txt ---", byId["webview2"].Text, StringComparison.Ordinal);
+        Assert.Contains("Copyright \u00a9 2021-2026 - Morten Nielsen", byId["winuiex"].Text, StringComparison.Ordinal);
+        Assert.Contains("Copyright (c) .NET Foundation and Contributors", byId["dotnet-runtime"].Text, StringComparison.Ordinal);
+        Assert.Contains("--- THIRD-PARTY-NOTICES.TXT ---", byId["dotnet-runtime"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://aka.ms/WinSDKLicenseURL", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
+        Assert.Contains("Copyright (c) Microsoft Corporation.", byId["cswinrt"].Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The Microsoft licences About shows are the files the NuGet licence check approved: their
+    /// SHA-256 (LF line ends) is the one windows/scripts/nuget-licence-exceptions.json pins. (Windows only.)
+    /// </summary>
+    [Fact]
+    public void TheMicrosoftLicencesAreTheFilesTheLicenceCheckApproved()
+    {
+        using var exceptions = System.Text.Json.JsonDocument.Parse(AboutCheckout.ReadWindows("scripts/nuget-licence-exceptions.json"));
+        var pinned = exceptions.RootElement.EnumerateArray()
+            .ToDictionary(e => e.GetProperty("id").GetString()!, e => e.GetProperty("licence").GetString()!);
+        static string Sha(string text) =>
+            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
+        foreach (var id in new[] { "Microsoft.WindowsAppSDK.WinUI", "Microsoft.WindowsAppSDK.Base", "Microsoft.WindowsAppSDK.Foundation", "Microsoft.WindowsAppSDK.InteractiveExperiences" })
+        {
+            Assert.Equal($"file license.txt sha256:{Sha(Notices.WindowsAppSdkLicence)}", pinned[id]);
+        }
+        Assert.Equal($"file LICENSE.txt sha256:{Sha(Notices.WebView2Licence)}", pinned["Microsoft.Web.WebView2"]);
     }
 
     /// <summary>Nothing Mac-only: no component, model credit or text names the Mac's own pieces.</summary>
@@ -115,36 +163,29 @@ public class NoticesTests
     }
 
     /// <summary>
-    /// The notices whose text was not on hand show a placeholder naming the file it comes from;
-    /// each must be replaced by that file, verbatim, before a Windows release. This is the list.
+    /// No notice ships as a placeholder: every text is the component's own (or composed, and
+    /// listed as such). This was the list of pending notices; it must stay empty.
     /// </summary>
     [Fact]
-    public void EveryPendingNoticeNamesTheFileItsTextComesFrom()
+    public void NoNoticeIsPending()
     {
-        var pending = Notices.Components.Where(c => c.Pending is not null).ToList();
-        Assert.Equal(
-            ["wasapi-rs", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net"],
-            pending.Select(c => c.Id));
-        Assert.All(pending, c =>
-        {
-            Assert.StartsWith("[Pending: ", c.Text, StringComparison.Ordinal);
-            Assert.Contains(c.Pending!, c.Text, StringComparison.Ordinal);
-        });
-        Assert.All(Notices.Components.Where(c => c.Pending is null),
-            c => Assert.DoesNotContain("[Pending", c.Text, StringComparison.Ordinal));
+        Assert.Empty(Notices.Components.Where(c => c.Pending is not null).Select(c => c.Id));
+        Assert.All(Notices.Components, c => Assert.DoesNotContain("[Pending", c.Text, StringComparison.Ordinal));
     }
 
     /// <summary>
     /// The texts shared with the Mac are the Mac's, word for word (Notices.swift): every Windows
-    /// notice that is not pending is one of the Mac's. (Windows only: the Mac has one list.)
+    /// notice but the Windows-only ones is one of the Mac's. (Windows only: the Mac has one list.)
     /// </summary>
     [Fact]
     public void TheSharedTextsAreTheMacs()
     {
         var mac = MacNotices.Texts(AboutCheckout.Read("mac/Sources/Inkwell/Screens/Notices.swift"));
         Assert.True(mac.Count > 15, "Notices.swift was read");
-        var shared = Notices.Components.Where(c => c.Pending is null).ToList();
+        string[] windowsOnly = ["wasapi-rs", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt"];
+        var shared = Notices.Components.Where(c => !windowsOnly.Contains(c.Id)).ToList();
         Assert.Equal(16, shared.Count);
+        Assert.All(windowsOnly, id => Assert.False(mac.ContainsKey(id), id));
         foreach (var c in shared)
         {
             Assert.True(mac.ContainsKey(c.Id), $"{c.Id} is not one of the Mac's notices");
@@ -272,20 +313,23 @@ public class ComposedNoticesTests
         && d.Select((c, i) => i is 4 or 7 ? c == '-' : char.IsAsciiDigit(c)).All(ok => ok);
 
     /// <summary>
-    /// Every composed Windows notice has its line and marker. (Windows: the list is the Mac's, so
-    /// only its lines for notices the Windows app shows are held to the Windows flags.)
+    /// Every composed Windows notice has its line and marker. (Windows: the shared notices' lines
+    /// are the Mac's list, of which only the lines for notices the Windows app shows are held to
+    /// the Windows flags; the Windows-only ones are in About/composed-notices.txt.)
     /// </summary>
     [Fact]
     public void EveryComposedNoticeIsListedWithItsUpstreamCheckAndNothingElseIs()
     {
-        var list = AboutCheckout.Read("mac/composed-notices.txt");
+        var mac = AboutCheckout.Read("mac/composed-notices.txt");
+        var windows = AboutCheckout.ReadWindows("Inkwell.Core/Screens/About/composed-notices.txt");
         var declared = Notices.ComposedIds;
         Assert.NotEmpty(declared);
         var shown = Notices.Components.Select(c => c.Id).Concat(Notices.Models.Select(m => m.Id)).ToHashSet();
-        var ours = string.Join("\n", Lines(list).Where(l => shown.Contains(l.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0])));
-        Assert.Equal([], Problems(declared, ours));
+        var ours = string.Join("\n", Lines(mac).Where(l => shown.Contains(l.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0])));
+        Assert.Equal([], Problems(declared, ours + "\n" + windows));
         // Every line is well formed (a short line would drop out of the comparison above).
-        Assert.All(Lines(list), l => Assert.True(l.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 3, l));
+        Assert.All(Lines(mac).Concat(Lines(windows)), l => Assert.True(l.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 3, l));
+        Assert.Equal(["winuiex", "windows-sdk-net"], Markers(windows).Keys);
     }
 
     /// <summary>The check fails when a composed notice has no line, and when a line names no composed notice.</summary>
