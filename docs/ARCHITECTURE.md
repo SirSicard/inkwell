@@ -357,6 +357,9 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
 
 - `cargo test --workspace` in `core/`. CI runs it with fmt, `clippy -D warnings` and `cargo deny` on
   macOS 26 and Windows Server 2025 (`.github/workflows/core.yml`).
+- `windows/`: `dotnet test Inkwell.slnx`, run in `windows/` (its `global.json` pins the SDK), after
+  `cargo build -p ink-ffi --lib` (the tests load the core's DLL). CI (`.github/workflows/win.yml`, Windows Server 2025) also checks that the
+  generated C# is current and runs the NuGet licence check, `windows/scripts/nuget-licences.ps1`.
 - CI has no models, GPU, Neural Engine or audio devices. Tests there use the mock engine (answers
   keyed by the exact input audio) and the replay harness.
 - Tests that need real models are `#[ignore]` and run locally:
@@ -371,7 +374,7 @@ Checked after every change once the step that introduces them has landed:
 | | Invariant | Check |
 |---|---|---|
 | I1 | Core tests green on macOS and Windows | `core.yml` |
-| I2 | Licences clean | `cargo deny`; Swift and NuGet audits once those projects exist |
+| I2 | Licences clean | `cargo deny`; the Swift audit (`mac.yml`); the NuGet check (`win.yml`) |
 | I3 | No private data in the repo | a local pre-push check |
 | I4 | Realtime callbacks allocation-free | a thread-scoped guard around every audio callback |
 | I5 | No transcripts in logs | a privacy lint test |

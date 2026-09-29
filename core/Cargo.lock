@@ -329,6 +329,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "csbindgen"
+version = "1.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "950f59b281d7e20f050b4efd56d7c36c0deb853bf9ea1f20b985a75ae5b03b34"
+dependencies = [
+ "regex",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "derive-new"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -688,6 +698,7 @@ dependencies = [
 name = "ink-ffi"
 version = "0.0.0"
 dependencies = [
+ "csbindgen",
  "hound",
  "ink-audio",
  "ink-core",
