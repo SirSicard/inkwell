@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.12, )",
+        "resolved": "10.0.12",
+        "contentHash": "xi+BDjFpW+Sb+MHFHaH6Y/gV9I8BluFwRXc1QyCdoZbIK26eNiBeFuMTe/FMwc33G1wdHCyDg7CVTmb8OdQrMQ=="
+      },
+      "TerraFX.Interop.Windows": {
+        "type": "Direct",
+        "requested": "[10.0.26100.6, )",
+        "resolved": "10.0.26100.6",
+        "contentHash": "QjL9vliSWmscUv6A7bjvsryHjYnY0norqvCNcLXSdEy1VIIzMF6FiS7BuvLTBuGUeN9FY4zJbU65OsHEv7jG9A=="
+      }
+    },
+    "net10.0/win-x64": {}
+  }
+}

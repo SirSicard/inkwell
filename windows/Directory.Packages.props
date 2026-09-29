@@ -12,6 +12,9 @@
     <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
     <!-- The tray icon (MIT). -->
     <PackageVersion Include="WinUIEx" Version="2.9.3" />
+    <!-- The ink (Inkwell.Ink): Direct3D 11, DXGI, DirectComposition, Direct2D, DirectWrite and
+         Win32 declarations (MIT), NativeAOT-safe. -->
+    <PackageVersion Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />
   </ItemGroup>
   <ItemGroup>
     <!-- Tests (never shipped): xUnit v3 on the VSTest runner, without Microsoft.Testing.Platform. -->
