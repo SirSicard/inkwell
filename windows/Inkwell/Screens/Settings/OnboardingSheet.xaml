@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The first-run sheet (the Mac's OnboardingView), as a ContentDialog over the window: where the
+     user is (dots, never a bar that fills), one of four steps, and Skip / Back / Continue (Start on
+     the last). Its own buttons, in the Mac's order, rather than the dialog's. Polish's consent step
+     shows inside the sheet (WinUI shows one dialog at a time). -->
+<ContentDialog
+    x:Class="Inkwell.Screens.OnboardingSheet"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Closed="OnClosed"
+    Closing="OnClosing">
+    <ContentDialog.Resources>
+        <x:Double x:Key="ContentDialogMaxWidth">720</x:Double>
+        <x:Double x:Key="ContentDialogMaxHeight">760</x:Double>
+    </ContentDialog.Resources>
+    <Grid Width="620" MinHeight="460" RowSpacing="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel x:Name="Dots" Orientation="Horizontal" Spacing="8">
+            <Ellipse x:Name="Dot0" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
+            <Ellipse x:Name="Dot1" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
+            <Ellipse x:Name="Dot2" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
+            <Ellipse x:Name="Dot3" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <StackPanel x:Name="WelcomeStep" Spacing="14">
+                <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Inkwell" />
+                <TextBlock x:Name="WelcomeLine0" Style="{StaticResource InkReadingStyle}" />
+                <TextBlock x:Name="WelcomeLine1" Style="{StaticResource InkReadingStyle}" />
+                <TextBlock x:Name="WelcomeLine2" Foreground="{ThemeResource InkSecondaryTextBrush}" Style="{StaticResource InkReadingStyle}" />
+            </StackPanel>
+
+            <StackPanel x:Name="PermissionsStep" Spacing="12">
+                <TextBlock x:Name="PermissionsTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
+                <TextBlock x:Name="PermissionsNote" Style="{StaticResource InkCaptionStyle}" />
+                <ContentPresenter x:Name="CardsHost" />
+            </StackPanel>
+
+            <StackPanel x:Name="PolishStep" Spacing="12">
+                <TextBlock x:Name="PolishTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
+                <TextBlock x:Name="PolishNote" Style="{StaticResource InkBodyStyle}" />
+                <ToggleSwitch
+                    x:Name="PolishSwitch"
+                    OffContent=""
+                    OnContent=""
+                    Toggled="OnPolishToggled" />
+                <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                <!-- Polish's consent step, inside the sheet. Only its agreeing button sends anything. -->
+                <Border x:Name="ConsentCard" Style="{StaticResource InkCardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock x:Name="ConsentTitle" AutomationProperties.HeadingLevel="Level2" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
+                        <TextBlock x:Name="ConsentMessage" Style="{StaticResource InkBodyStyle}" />
+                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="ConsentCancel" Click="OnConsentCancel" Content="Cancel" />
+                            <Button x:Name="ConsentAllow" Click="OnConsentAllow" Style="{StaticResource AccentButtonStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel x:Name="ReadyStep" Spacing="14">
+                <TextBlock x:Name="ReadyTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
+                <TextBlock x:Name="ReadyLine" Style="{StaticResource InkReadingStyle}" />
+                <TextBlock x:Name="StillOffLine" Foreground="{ThemeResource InkAlertBrush}" Style="{StaticResource InkReadingStyle}" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="2" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="SkipButton" Click="OnSkip" Content="Skip" />
+            <Button x:Name="BackButton" Grid.Column="2" Click="OnBack" Content="Back" />
+            <Button x:Name="NextButton" Grid.Column="3" Click="OnNext" Style="{StaticResource AccentButtonStyle}" />
+        </Grid>
+    </Grid>
+</ContentDialog>
