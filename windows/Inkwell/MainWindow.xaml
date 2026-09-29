@@ -68,6 +68,15 @@
             OpenPaneLength="208"
             PaneDisplayMode="Left"
             SelectionChanged="OnNavigationSelectionChanged">
+            <!-- "Search everything said" (the canvas's toolbar search): the Library's matches. -->
+            <NavigationView.AutoSuggestBox>
+                <AutoSuggestBox
+                    x:Name="Search"
+                    AutomationProperties.Name="Search everything said"
+                    PlaceholderText="Search everything said"
+                    QueryIcon="Find"
+                    QuerySubmitted="OnSearchSubmitted" />
+            </NavigationView.AutoSuggestBox>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />

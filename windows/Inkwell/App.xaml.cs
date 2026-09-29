@@ -45,7 +45,7 @@ public partial class App : Application
             models.LogUnshown(batch);
         };
         var made = new AppScreens(core.Store, models, router);
-        window.Attach(core.Store, router, made.Screen, made.InkZoneFoot());
+        window.Attach(core.Store, router, made.Screen, made.InkZoneFoot(), made.Search);
         made.AttachFirstRun(window.Content as FrameworkElement);
         // Up next's minute redraws only while the window is on screen (rule 9).
         window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: true);

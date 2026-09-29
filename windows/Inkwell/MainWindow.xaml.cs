@@ -21,6 +21,7 @@ public sealed partial class MainWindow : Window
     private CoreStore? store;
     private Func<Route, UIElement>? makeScreen;
     private UIElement? todayFoot;
+    private Action<string>? search;
     private bool meetingLive;
     private bool syncing;
 
@@ -36,8 +37,10 @@ public sealed partial class MainWindow : Window
     /// UI thread, once. Shows the store's routes: <paramref name="screen"/> makes a route's screen
     /// (once), <paramref name="railFoot"/> the controls at the foot of Today's ink zone.
     /// </summary>
-    public void Attach(CoreStore coreStore, Router shellRouter, Func<Route, UIElement> screen, UIElement railFoot)
+    /// <param name="searchSaid">Shows the Library's matches for a query typed in the search box.</param>
+    public void Attach(CoreStore coreStore, Router shellRouter, Func<Route, UIElement> screen, UIElement railFoot, Action<string> searchSaid)
     {
+        search = searchSaid;
         store = coreStore;
         router = shellRouter;
         makeScreen = screen;
@@ -97,6 +100,9 @@ public sealed partial class MainWindow : Window
         }
         syncing = false;
     }
+
+    private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args) =>
+        search?.Invoke(args.QueryText);
 
     private void OnNavigationSelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {

@@ -6,8 +6,6 @@ using Inkwell.Core.Screens;
 using Inkwell.Screens;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Automation;
-using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 
 namespace Inkwell;
@@ -40,6 +38,8 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             reveal: FileExplorer.Reveal,
             apps: InstalledApps.Shared,
             wake: new DispatcherWake(ui),
+            makePlayer: document => WindowsAudioOutput.PlayerFor(document, core.CommandLog),
+            search: new DispatcherSearchScheduler(ui),
             log: core.CommandLog);
     }
 
@@ -47,11 +47,19 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     public UIElement Screen(Route route) => route switch
     {
         Route.Today => new TodayScreen(store, models.Library, models.Owed, models.Permissions, models.UpNext, Presence, router.Open, OpenRecord),
+        Route.Library => new LibraryScreen(models.Library, () => models.Ai.SummaryOffNote),
         Route.Owed => new OwedScreen(models.Owed, (record, ms) => OpenRecord(record, ms, play: true)),
         Route.Live => new LiveScreen(store, models.Live, models.Meetings),
         Route.Settings => new SettingsScreen(SettingsSections()),
-        _ => Placeholder(route),
+        _ => throw new ArgumentOutOfRangeException(nameof(route)),
     };
+
+    /// <summary>"Search everything said": the Library with the matches.</summary>
+    public void Search(string query)
+    {
+        router.Open(Route.Library);
+        models.Library.Query = query;
+    }
 
     /// <summary>The foot of Today's ink zone.</summary>
     public UIElement InkZoneFoot() => new InkZoneFoot(store, models.RecordControls, models.Meetings);
@@ -89,12 +97,5 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("Storage", new StorageSection(models.Storage, models.Meetings)),
             new("About", new AboutSection(models.About)),
         ];
-    }
-
-    private static StackPanel Placeholder(Route route)
-    {
-        var title = new TextBlock { Text = route.Title(), Style = (Style)Application.Current.Resources["InkScreenTitleStyle"] };
-        AutomationProperties.SetHeadingLevel(title, AutomationHeadingLevel.Level1);
-        return new StackPanel { Padding = new Thickness(48, 38, 48, 28), Children = { title } };
     }
 }
