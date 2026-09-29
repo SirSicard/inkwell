@@ -12,19 +12,20 @@ namespace Inkwell.Core.Tests.Screens;
 public class TodayTextTests
 {
     private static readonly CultureInfo EnGb = CultureInfo.GetCultureInfo("en-GB");
+    private static readonly LibraryCalendar Utc = new(TimeZoneInfo.Utc, EnGb);
 
     [Fact]
     public void TheDateLineAndGreetingFollowTheUsersZone()
     {
         var saturday = new DateTimeOffset(2026, 9, 26, 15, 0, 0, TimeSpan.Zero);
-        Assert.Equal("Saturday 26 September", TodayText.LongDay(saturday, TimeZoneInfo.Utc, EnGb));
-        Assert.Equal("Good afternoon", TodayText.Greeting(saturday, TimeZoneInfo.Utc));
-        Assert.Equal("Good morning", TodayText.Greeting(saturday.AddHours(-10), TimeZoneInfo.Utc));
-        Assert.Equal("Good evening", TodayText.Greeting(saturday.AddHours(4), TimeZoneInfo.Utc));
-        Assert.Equal("Good evening", TodayText.Greeting(saturday.AddHours(-11), TimeZoneInfo.Utc)); // 04:00
+        Assert.Equal("Saturday 26 September", TodayText.LongDay(saturday, Utc));
+        Assert.Equal("Good afternoon", LibraryFormat.Greeting(saturday, Utc));
+        Assert.Equal("Good morning", LibraryFormat.Greeting(saturday.AddHours(-10), Utc));
+        Assert.Equal("Good evening", LibraryFormat.Greeting(saturday.AddHours(4), Utc));
+        Assert.Equal("Good evening", LibraryFormat.Greeting(saturday.AddHours(-11), Utc)); // 04:00
         var plusTen = TimeZoneInfo.CreateCustomTimeZone("plus-ten", TimeSpan.FromHours(10), "plus-ten", "plus-ten");
-        Assert.Equal("Sunday 27 September", TodayText.LongDay(saturday, plusTen, EnGb));
-        Assert.Equal("15:00", TodayText.Time(saturday, TimeZoneInfo.Utc, EnGb));
+        Assert.Equal("Sunday 27 September", TodayText.LongDay(saturday, new LibraryCalendar(plusTen, EnGb)));
+        Assert.Equal("15:00", LibraryFormat.Time(saturday, Utc));
     }
 
     [Fact]
@@ -68,6 +69,57 @@ public class TodayTextTests
         Assert.Equal("Play where it was said, 00:42", TodayText.OwedPlayLabel(42_000));
     }
 
+    /// The Owed model's first three, as Today words them: overdue in the alert colour, an undated
+    /// one without a date, a play link where it was said.
+    [Fact]
+    public void OwedSoonRowsAreTheOwedModelsFirstThree()
+    {
+        const long Day = 86_400_000;
+        var now = DateTimeOffset.FromUnixTimeSeconds(1_790_500_000);
+        var nowMs = now.ToUnixTimeMilliseconds();
+        var owed = new OwedModel(_ => { }, TimeZoneInfo.Utc);
+        owed.Apply(Ev.Of($$"""
+            {"type":"commitments.listed","items":[
+            {"id":"a","record":"r1","record_title":"Planning call","record_started_at_unix_ms":{{nowMs - 3_600_000}},"text":"Share the scorecard draft","due_at_unix_ms":{{nowMs - 2 * Day}},"merged":0},
+            {"id":"b","record":"r1","record_title":"Planning call","record_started_at_unix_ms":{{nowMs - 3_600_000}},"text":"Send the pilot deck","due_at_unix_ms":{{nowMs + Day}},"said_at_ms":2332000,"merged":0},
+            {"id":"c","record":"r2","record_title":"Weekly sync","record_started_at_unix_ms":{{nowMs - 5 * Day}},"text":"Review the budget","merged":0},
+            {"id":"d","record":"r3","record_started_at_unix_ms":{{nowMs - 5 * Day}},"text":"Book a room","merged":0}]}
+            """));
+        var rows = TodayText.OwedSoonRows(owed, now);
+        Assert.Equal(owed.Items.Take(3).Select(i => i.Id), rows.Select(r => r.Id));
+        var late = rows.Single(r => r.Id == "a");
+        Assert.Equal("2 days overdue · Planning call", late.Meta);
+        Assert.True(late.Overdue);
+        Assert.Null(late.PlayTitle);
+        var said = rows.Single(r => r.Id == "b");
+        Assert.Equal("Due tomorrow · Planning call", said.Meta);
+        Assert.False(said.Overdue);
+        Assert.Equal("\u25B8 38:52", said.PlayTitle);
+        Assert.Equal("Play where it was said, 38:52", said.PlayLabel);
+        Assert.Equal("Mark done: Send the pilot deck", said.DoneLabel);
+        if (rows.SingleOrDefault(r => r.Id == "c") is { } undated)
+        {
+            Assert.Equal("Weekly sync", undated.Meta);
+        }
+    }
+
+    [Fact]
+    public void TheLastMeetingPlaysFromItsFirstPromise()
+    {
+        var withPromise = new RecordDocument(Ev.Of<LibraryRecord>("""
+            {"type":"library.record","ref":"x","record":{"record":"r1","kind":"meeting","started_at_unix_ms":0,"revision":2,"has_audio":true},
+             "segments":[{"channel":"mic","start_ms":2822,"end_ms":3546,"text":"I'll send the plan."}],
+             "notes":[],"speakers":[],
+             "commitments":[{"commitment":"c1","record":"r1","text":"Send the plan","provenance":[{"channel":"mic","start_ms":2822,"end_ms":3546}],"done":false}]}
+            """));
+        Assert.Equal(2822, TodayText.PlayFromMs(withPromise));
+        var none = new RecordDocument(Ev.Of<LibraryRecord>("""
+            {"type":"library.record","ref":"x","record":{"record":"r1","kind":"meeting","started_at_unix_ms":0,"revision":2,"has_audio":true},
+             "segments":[],"notes":[],"speakers":[],"commitments":[]}
+            """));
+        Assert.Equal(0, TodayText.PlayFromMs(none));
+    }
+
     /// From the Mac's DetectionStateTests: Today follows the core's detection state, not the
     /// setting.
     [Fact]
@@ -97,11 +149,10 @@ public class TodayTextTests
         Assert.Equal(changes, controls.Changes);
         controls.Apply(Ev.Of("""{"type":"dictation.ready","key":"ctrl+shift+space"}"""));
         Assert.Equal("Hold Ctrl+Shift+Space to dictate", controls.DictateText);
-        Assert.Equal("Right Windows key", KeyNames.Display("right_win"));
-        Assert.Equal("Right Alt", KeyNames.Display("right_alt"));
-        Assert.Equal("Right Shift", KeyNames.Display("right_shift"));
-        Assert.Equal("F13", KeyNames.Display("f13"));
-        Assert.Equal("Alt+D", KeyNames.Display("alt+d"));
+        controls.Apply(Ev.Of("""{"type":"dictation.ready","key":"right_win"}"""));
+        Assert.Equal("Hold Right Windows key to dictate", controls.DictateText);
+        controls.Apply(Ev.Of("""{"type":"dictation.ready","key":"f13"}"""));
+        Assert.Equal("Hold F13 to dictate", controls.DictateText);
         Assert.DoesNotContain("Mac", RecordControlsModel.RecordNowHint, StringComparison.Ordinal);
     }
 }

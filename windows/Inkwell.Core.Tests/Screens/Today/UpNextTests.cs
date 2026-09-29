@@ -89,7 +89,7 @@ public class UpNextTests
         Assert.Equal("in 42 min", MeetingApp.StartsIn(model.Event!.Start, Now));
         Assert.Null(model.Note);
         Assert.Null(model.ConnectTitle);
-        Assert.Equal("14:55 · Zoom · in 42 min", model.MetaLine(Now, TimeZoneInfo.Utc, CultureInfo.GetCultureInfo("en-GB")));
+        Assert.Equal("14:55 · Zoom · in 42 min", model.MetaLine(Now, new LibraryCalendar(TimeZoneInfo.Utc, CultureInfo.GetCultureInfo("en-GB"))));
         Assert.Equal("Records when Zoom opens the microphone", model.RecordsWhen);
     }
 

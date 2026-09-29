@@ -4,8 +4,9 @@
 // plain values the Library and Owed screens' models hold (their counts, load states and items);
 // Today reads them and asks for nothing itself.
 //
-// Time, Stamp and Duration are the Mac's LibraryFormat.time/stamp/duration, which the Library
-// screen's port owns; they are repeated here only so Today builds on its own.
+// Times, positions, lengths and the greeting are LibraryFormat's (the Library screen's port). The
+// date line is not: it follows the culture's day-and-month order ("Saturday 26 September" in
+// en-GB, "Saturday September 26" in en-US) where LibraryFormat.LongDay fixes the order.
 using System.Globalization;
 using Inkwell.Core.Events;
 
@@ -17,21 +18,12 @@ public static class TodayText
     public const int OwedShown = 3;
 
     /// <summary>Today's heading: "Saturday 27 September" (the locale's day and month order).</summary>
-    public static string LongDay(DateTimeOffset date, TimeZoneInfo zone, CultureInfo culture)
+    public static string LongDay(DateTimeOffset date, LibraryCalendar calendar)
     {
-        ArgumentNullException.ThrowIfNull(culture);
-        var local = TimeZoneInfo.ConvertTime(date, zone);
-        return $"{local.ToString("dddd", culture)} {local.ToString(culture.DateTimeFormat.MonthDayPattern, culture)}";
+        ArgumentNullException.ThrowIfNull(calendar);
+        var local = calendar.Clock(date);
+        return $"{local.ToString("dddd", calendar.Culture)} {local.ToString(calendar.Culture.DateTimeFormat.MonthDayPattern, calendar.Culture)}";
     }
-
-    /// <summary>A greeting for the hour where the user is.</summary>
-    public static string Greeting(DateTimeOffset date, TimeZoneInfo zone) =>
-        TimeZoneInfo.ConvertTime(date, zone).Hour switch
-        {
-            >= 5 and < 12 => "Good morning",
-            >= 12 and < 18 => "Good afternoon",
-            _ => "Good evening",
-        };
 
     /// <summary>The counts at the foot: today's dictation and this week's meetings. A count that could not be read says so; it is never shown as zero. A count not answered yet is left out.</summary>
     /// <param name="today">library.stats since the start of today, when answered.</param>
@@ -46,7 +38,7 @@ public static class TodayText
         var dictated = today?.Kinds.FirstOrDefault(k => k.Kind == RecordKind.Dictation);
         if (dictated is not null)
         {
-            lines.Add($"Dictated today · {dictated.Words.ToString("N0", culture)} words · {Duration(dictated.DurationMs)}");
+            lines.Add($"Dictated today · {dictated.Words.ToString("N0", culture)} words · {LibraryFormat.Duration(dictated.DurationMs)}");
         }
         else if (todayFailed)
         {
@@ -55,7 +47,7 @@ public static class TodayText
         var met = week?.Kinds.FirstOrDefault(k => k.Kind == RecordKind.Meeting);
         if (met is not null)
         {
-            lines.Add($"This week · {met.Records} {(met.Records == 1 ? "meeting" : "meetings")} · {Duration(met.DurationMs)}");
+            lines.Add($"This week · {met.Records} {(met.Records == 1 ? "meeting" : "meetings")} · {LibraryFormat.Duration(met.DurationMs)}");
         }
         else if (weekFailed)
         {
@@ -72,7 +64,7 @@ public static class TodayText
         : null;
 
     /// <summary>The last meeting's play button: "Play", or "Play from 12:41" from the first promise's moment.</summary>
-    public static string PlayTitle(long fromMs) => fromMs > 0 ? $"Play from {Stamp(fromMs)}" : "Play";
+    public static string PlayTitle(long fromMs) => fromMs > 0 ? $"Play from {LibraryFormat.Stamp(fromMs)}" : "Play";
 
     /// <summary>The first <see cref="OwedShown"/> of the Owed screen's list (soonest due first).</summary>
     public static IReadOnlyList<T> OwedSoon<T>(IReadOnlyList<T> items)
@@ -93,41 +85,42 @@ public static class TodayText
         string.Join(" · ", new[] { due, recordTitle }.OfType<string>());
 
     /// <summary>A promise's play link: "▸ 12:41".</summary>
-    public static string OwedPlayTitle(long saidAtMs) => $"▸ {Stamp(saidAtMs)}";
+    public static string OwedPlayTitle(long saidAtMs) => $"▸ {LibraryFormat.Stamp(saidAtMs)}";
 
     /// <summary>The play link's accessible name.</summary>
-    public static string OwedPlayLabel(long saidAtMs) => $"Play where it was said, {Stamp(saidAtMs)}";
+    public static string OwedPlayLabel(long saidAtMs) => $"Play where it was said, {LibraryFormat.Stamp(saidAtMs)}";
 
-    /// <summary>The clock time: "14:02" (or the locale's form).</summary>
-    public static string Time(DateTimeOffset date, TimeZoneInfo zone, CultureInfo culture)
+    /// <summary>Owed soon's rows: the first <see cref="OwedShown"/> of the Owed model's list (soonest due first), as Today words them.</summary>
+    public static IReadOnlyList<OwedSoonRow> OwedSoonRows(OwedModel owed, DateTimeOffset now)
     {
-        ArgumentNullException.ThrowIfNull(culture);
-        return TimeZoneInfo.ConvertTime(date, zone).ToString(culture.DateTimeFormat.ShortTimePattern, culture);
-    }
-
-    /// <summary>A position in a record: "12:41", or "1:02:05" from an hour on.</summary>
-    public static string Stamp(long ms)
-    {
-        var seconds = Math.Max(ms, 0) / 1000;
-        var (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
-        return h > 0
-            ? string.Create(CultureInfo.InvariantCulture, $"{h}:{m:00}:{s:00}")
-            : string.Create(CultureInfo.InvariantCulture, $"{m:00}:{s:00}");
-    }
-
-    /// <summary>A length: "under 1 min", "42 min", "2 h 10 min".</summary>
-    public static string Duration(long ms)
-    {
-        var minutes = (long)Math.Round(Math.Max(ms, 0) / 60_000.0, MidpointRounding.AwayFromZero);
-        if (minutes < 1)
+        ArgumentNullException.ThrowIfNull(owed);
+        return OwedSoon(owed.Items).Select(item =>
         {
-            return "under 1 min";
-        }
-        if (minutes < 60)
-        {
-            return $"{minutes} min";
-        }
-        var (h, m) = (minutes / 60, minutes % 60);
-        return m == 0 ? $"{h} h" : $"{h} h {m} min";
+            var due = owed.Due(item, now);
+            return new OwedSoonRow(
+                item.Id, item.Text, OwedMeta(due is DueLabel.Undated ? null : due.Text, item.RecordTitle), due.IsOverdue,
+                item.Record, item.SaidAtMs);
+        }).ToList();
     }
+
+    /// <summary>Where the last meeting's Play starts: the first promise's moment, else the start (the Mac's).</summary>
+    public static long PlayFromMs(RecordDocument meeting)
+    {
+        ArgumentNullException.ThrowIfNull(meeting);
+        return meeting.Owed.Select(o => o.AtMs).OfType<long>().FirstOrDefault();
+    }
+}
+
+/// <summary>One promise on Today: a circle marks it done, what is owed, when and where it was said.</summary>
+/// <param name="Meta">"2 days overdue · Weekly sync".</param>
+/// <param name="Overdue">Drawn in the alert colour.</param>
+public sealed record OwedSoonRow(string Id, string Text, string Meta, bool Overdue, string Record, long? SaidAtMs)
+{
+    /// <summary>The circle's accessible name.</summary>
+    public string DoneLabel => $"Mark done: {Text}";
+
+    /// <summary>"▸ 12:41", or null when it was not placed in the record.</summary>
+    public string? PlayTitle => SaidAtMs is long at ? TodayText.OwedPlayTitle(at) : null;
+
+    public string? PlayLabel => SaidAtMs is long at ? TodayText.OwedPlayLabel(at) : null;
 }

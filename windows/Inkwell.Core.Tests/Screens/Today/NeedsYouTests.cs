@@ -6,12 +6,13 @@ using System.Globalization;
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Xunit;
+using static Inkwell.Core.Tests.Screens.LibraryFixtures;
 
 namespace Inkwell.Core.Tests.Screens;
 
 public class NeedsYouTests
 {
-    private static readonly CultureInfo EnGb = CultureInfo.GetCultureInfo("en-GB");
+    private static readonly LibraryCalendar Utc = new(TimeZoneInfo.Utc, CultureInfo.GetCultureInfo("en-GB"));
 
     /// <summary>The cards as a permissions check leaves them: <paramref name="off"/> names the ones refused, the rest allowed.</summary>
     private static Func<PermissionName, CardState> Cards(params PermissionName[] off) =>
@@ -19,29 +20,58 @@ public class NeedsYouTests
 
     private static IReadOnlyList<NeedsYouItem> Items(
         Func<PermissionName, CardState>? permission = null, long farSilent = 0, DateTimeOffset? since = null,
-        CoreStore? store = null, NeedsYou.FarEnd? farEnd = null)
+        CoreStore? store = null, FarEndCheck? farEnd = null)
     {
         store ??= new CoreStore();
         return NeedsYou.Items(
-            permission ?? Cards(), farEnd ?? new NeedsYou.FarEnd.Checked(farSilent, since),
-            store.Meeting, store.Notices, TimeZoneInfo.Utc, EnGb);
+            permission ?? Cards(), farEnd ?? new FarEndCheck.Checked(farSilent, since),
+            store.Meeting, store.Notices, Utc);
     }
 
     /// Review fix: the counts that tell whether the far end recorded nothing could not be read.
-    /// That is said ("couldn't check"), never read as zero meetings. Windows: the library model's
-    /// side (its library.stats questions and their failures) is the Library screen's port; here
-    /// the banner reads the three answers it can pass in.
+    /// That is said ("couldn't check"), never read as zero meetings, which would silence the one
+    /// warning this banner exists for. Tested through Today's own wiring (NeedsYou.Items from the
+    /// permissions, library and store models) from the library model's answers.
     [Fact]
     public void TodaysBannerSaysWhenItCouldNotCheckTheFarEnd()
     {
-        Assert.Empty(Items(farEnd: new NeedsYou.FarEnd.Unknown()));
+        var sent = new Sent();
+        var library = new LibraryModel(sent.Send, calendar: Utc);
+        var permissions = new PermissionsModel(_ => { }, NoCalendar.Instance);
+        var store = new CoreStore();
+        IReadOnlyList<NeedsYouItem> Today() => NeedsYou.Items(permissions, library, store);
+        library.RefreshToday();
+        var stats = sent.Commands.Where(c => Cmd(c) == "library.stats").Select(RequestId).ToList();
+        Assert.Equal(2, stats.Count);
+        Assert.Empty(Today()); // still asking: no guess either way
 
-        var failed = Items(farEnd: new NeedsYou.FarEnd.Failed());
+        foreach (var id in stats)
+        {
+            library.Apply(Ev.Of($$"""{"type":"command.failed","command":"library.stats","id":"{{id}}","message":"the library: disk I/O error"}"""));
+        }
+        var failed = Today();
         Assert.Equal(["far-unknown"], failed.Select(i => i.Id));
         Assert.Equal("Inkwell couldn't check the other side of your calls", failed[0].Title);
         Assert.Equal(new NeedsYouAction.RetryChecks(), failed[0].Action);
+        Assert.True(library.Handles(Ev.Of<CommandFailed>($$"""{"type":"command.failed","command":"library.stats","id":"{{stats[0]}}","message":"x"}""")));
 
-        Assert.Equal(["far-silent"], Items(farEnd: new NeedsYou.FarEnd.Checked(2, DateTimeOffset.FromUnixTimeMilliseconds(1_789_000_000_000))).Select(i => i.Id));
+        // Asked again, and answered: two meetings kept no far end.
+        sent.Commands.Clear();
+        library.RefreshToday();
+        var again = sent.Commands.Where(c => Cmd(c) == "library.stats").Select(RequestId).ToList();
+        library.Apply(Ev.Of($$"""{"type":"library.stats","ref":"{{again[1]}}","since_unix_ms":0,"kinds":[],"far_silent_meetings":2,"far_silent_since_unix_ms":1789000000000}"""));
+        Assert.Equal(["far-silent"], Today().Select(i => i.Id));
+    }
+
+    /// Windows: an Allow item's permission is asked for as its Settings card asks.
+    [Fact]
+    public void AnAllowAsksAsItsSettingsCard()
+    {
+        Assert.Equal(PermissionCard.HearYou, NeedsYou.Card(PermissionName.Microphone));
+        var permissions = new PermissionsModel(_ => { }, NoCalendar.Instance);
+        permissions.Apply(Ev.Of("""{"type":"permissions.checked","microphone":"denied","system_audio":"granted","accessibility":"granted","input_monitoring":"granted"}"""));
+        var library = new LibraryModel(_ => { }, calendar: Utc);
+        Assert.Equal(["perm-mic"], NeedsYou.Items(permissions, library, new CoreStore()).Select(i => i.Id));
     }
 
     [Fact]
@@ -123,7 +153,7 @@ public class NeedsYouTests
         store.Apply([Ev.Of("""{"type":"meeting.side_state","record":"r1","channel":"far","state":"zeros"}""")]);
         store.Apply([Ev.Of("""{"type":"meeting.recovered","record":"r0","trimmed":1,"rebuilt":0,"unrecoverable":0,"recorded_ms":12000}""")]);
         store.Apply([Ev.Of("""{"type":"meeting.detection","listening":false,"message":"the audio server stopped answering"}""")]);
-        var titles = Items(store: store, farEnd: new NeedsYou.FarEnd.Unknown()).Select(i => i.Title).ToList();
+        var titles = Items(store: store, farEnd: new FarEndCheck.Unknown()).Select(i => i.Title).ToList();
         Assert.Equal("Inkwell can't hear the other side of this call", titles[0]);
         Assert.Contains("A meeting was finished after Inkwell quit unexpectedly", titles);
         Assert.Contains("Inkwell stopped listening for calls", titles);
@@ -139,7 +169,7 @@ public class NeedsYouTests
         store.Apply([Ev.Of("""{"type":"meetings.recovered","meetings":0,"message":"couldn't look for meetings a crash interrupted: Not a directory (os error 20)"}""")]);
         Assert.Equal(
             ["Inkwell couldn't check for an unfinished meeting"],
-            Items(store: store, farEnd: new NeedsYou.FarEnd.Unknown()).Select(i => i.Title));
+            Items(store: store, farEnd: new FarEndCheck.Unknown()).Select(i => i.Title));
     }
 
     /// From the Mac's RecoveryNoticeTests.
@@ -151,7 +181,7 @@ public class NeedsYouTests
         store.Apply([Ev.Of("""{"type":"meeting.warning","record":"r1","kind":"not_crash_protected","message":"Is a directory (os error 21)"}""")]);
         Assert.Contains(
             "This meeting isn't protected against a crash",
-            Items(store: store, farEnd: new NeedsYou.FarEnd.Unknown()).Select(i => i.Title));
+            Items(store: store, farEnd: new FarEndCheck.Unknown()).Select(i => i.Title));
     }
 
     /// The NeedsYou lines of the Mac's DictationTests (edit key lost) and VoiceCommandNoticeTests
