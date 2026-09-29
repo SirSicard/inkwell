@@ -18,6 +18,11 @@
 //! as lost, which makes the insertion report the clipboard as not restored. The restore happens
 //! only if nobody wrote the clipboard since the text was rendered, checked with the clipboard's
 //! sequence number while it is open, so a copy the user made meanwhile is kept.
+//!
+//! **The owner thread never stops serving.** While it waits for the clipboard (another app may
+//! hold it open, and that app may be the reader waiting for our `WM_RENDERFORMAT`), it keeps
+//! answering sent messages. A restore that fails is tried again; the text's state is dropped only
+//! once a restore succeeded, and a thread that ends without one tries once more on its way out.
 #![cfg(windows)]
 
 use std::cell::RefCell;
@@ -41,8 +46,9 @@ use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE,
-    MSG, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, RegisterClassW, WINDOW_EX_STYLE, WM_APP,
-    WM_QUIT, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WNDCLASSW, WS_OVERLAPPED,
+    MSG, MsgWaitForMultipleObjects, PM_NOREMOVE, PM_QS_SENDMESSAGE, PeekMessageW,
+    PostThreadMessageW, QS_SENDMESSAGE, RegisterClassW, WINDOW_EX_STYLE, WM_APP, WM_QUIT,
+    WM_RENDERALLFORMATS, WM_RENDERFORMAT, WNDCLASSW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, w};
 
@@ -128,6 +134,53 @@ fn open(owner: Option<HWND>) -> Result<(), PlatformError> {
     Err(PlatformError::Failed(
         "the clipboard stayed busy (another app holds it open)".into(),
     ))
+}
+
+/// How many times the owner thread tries a restore before giving up.
+const RESTORE_ATTEMPTS: u32 = 3;
+
+/// Waits up to `wait` while serving the messages other threads send this one (a reader's
+/// `WM_RENDERFORMAT`). **Owner thread.**
+fn serve_sent(wait: Duration) {
+    let ms = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
+    // SAFETY: no handles; wakes early when a sent message arrives.
+    let _ = unsafe { MsgWaitForMultipleObjects(None, false, ms, QS_SENDMESSAGE) };
+    let mut msg = MSG::default();
+    // SAFETY: a live MSG; peeking dispatches pending sent messages and removes nothing else.
+    let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE) };
+}
+
+/// Opens the clipboard for the owner `window`, serving sent messages between tries, so a reader
+/// that holds the clipboard while it waits for our render is answered rather than waited out.
+/// **Owner thread.**
+fn open_serving(window: HWND) -> Result<(), PlatformError> {
+    for attempt in 0..OPEN_ATTEMPTS {
+        // SAFETY: this thread's window.
+        if unsafe { OpenClipboard(Some(window)) }.is_ok() {
+            return Ok(());
+        }
+        if attempt + 1 < OPEN_ATTEMPTS {
+            serve_sent(OPEN_RETRY);
+        }
+    }
+    Err(PlatformError::Failed(
+        "the clipboard stayed busy (another app holds it open)".into(),
+    ))
+}
+
+/// `attempt` up to `times` times, until one succeeds; the last error otherwise.
+fn retry<T>(
+    times: u32,
+    mut attempt: impl FnMut() -> Result<T, PlatformError>,
+) -> Result<T, PlatformError> {
+    let mut last = Err(PlatformError::Failed("not tried".into()));
+    for _ in 0..times.max(1) {
+        last = attempt();
+        if last.is_ok() {
+            break;
+        }
+    }
+    last
 }
 
 /// Closes the clipboard when dropped.
@@ -497,10 +550,12 @@ fn owner_thread(
         }
         if msg.hwnd.is_invalid() && msg.message == WM_INK_RESTORE {
             if let Ok(RestoreRequest(reply)) = requests.try_recv() {
-                let restored = restore(window, &saved);
-                // The text is done with: a late render (on destroy) must never put it back over
-                // the restored clipboard.
-                STATE.with(|s| s.borrow_mut().take());
+                let restored = retry(RESTORE_ATTEMPTS, || restore(window, &saved));
+                if restored.is_ok() {
+                    // The text is done with: a late render (on destroy) must never put it back
+                    // over the restored clipboard.
+                    STATE.with(|s| s.borrow_mut().take());
+                }
                 let _ = reply.send(restored);
             }
             continue;
@@ -508,16 +563,21 @@ fn owner_thread(
         // SAFETY: a message this thread received.
         unsafe { DispatchMessageW(&msg) };
     }
-    // SAFETY: this thread's window, destroyed once. If it still owns the promise, Windows sends
-    // WM_RENDERALLFORMATS first, and the text stays on the clipboard.
-    let _ = unsafe { DestroyWindow(window) };
+    if STATE.with(|s| s.borrow().is_some()) {
+        // No restore succeeded (or none was asked for): one more try before the promise goes.
+        let _ = retry(RESTORE_ATTEMPTS, || restore(window, &saved));
+    }
+    // With the state gone, WM_RENDERALLFORMATS (sent on destroy while we still own a promise)
+    // renders nothing: the dictated text never outlives this thread on the clipboard.
     STATE.with(|s| s.borrow_mut().take());
+    // SAFETY: this thread's window, destroyed once.
+    let _ = unsafe { DestroyWindow(window) };
 }
 
 /// Writes the promise and the exclusion formats. On a failure after the clipboard was emptied,
 /// puts `saved` back at once.
 fn write(window: HWND, saved: &Saved) -> Result<(), WriteFailed> {
-    open(Some(window)).map_err(|_| WriteFailed {
+    open_serving(window).map_err(|_| WriteFailed {
         clipboard_back: true,
     })?;
     let _open = OpenGuard;
@@ -554,7 +614,7 @@ fn write(window: HWND, saved: &Saved) -> Result<(), WriteFailed> {
 
 /// Puts `saved` back if the clipboard still holds our text.
 fn restore(window: HWND, saved: &Saved) -> Result<Restore, PlatformError> {
-    open(Some(window))?;
+    open_serving(window)?;
     let _open = OpenGuard;
     let ours = STATE.with(|s| s.borrow().as_ref().map_or(0, |state| state.ours));
     // SAFETY: no arguments; read while the clipboard is open, so nobody can write in between.
@@ -570,6 +630,33 @@ fn restore(window: HWND, saved: &Saved) -> Result<Restore, PlatformError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restore_is_retried_until_one_succeeds() {
+        let mut calls = 0;
+        let result = retry(3, || {
+            calls += 1;
+            if calls < 3 {
+                Err(PlatformError::Failed("busy".into()))
+            } else {
+                Ok(Restore::Restored)
+            }
+        });
+        assert_eq!(result.unwrap(), Restore::Restored);
+        assert_eq!(calls, 3);
+        let mut calls = 0;
+        let failed: Result<Restore, _> = retry(3, || {
+            calls += 1;
+            Err(PlatformError::Failed(format!("busy {calls}")))
+        });
+        assert!(matches!(failed, Err(PlatformError::Failed(m)) if m == "busy 3"));
+        let mut calls = 0;
+        let _ = retry(3, || {
+            calls += 1;
+            Ok::<_, PlatformError>(())
+        });
+        assert_eq!(calls, 1, "a success is not repeated");
+    }
 
     #[test]
     fn global_memory_formats_are_copied() {
