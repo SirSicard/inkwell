@@ -31,6 +31,7 @@ pub mod capture;
 pub mod clock;
 mod com;
 pub mod detect;
+pub mod hotkey;
 pub mod permissions;
 mod process;
 mod sessions;
@@ -41,5 +42,7 @@ pub use capture::{WasapiSource, WinCapture};
 pub use clock::WinClock;
 #[cfg(windows)]
 pub use detect::WinMeetingDetector;
+#[cfg(windows)]
+pub use hotkey::WinHotkeySource;
 #[cfg(windows)]
 pub use permissions::WinPermissionProbe;
