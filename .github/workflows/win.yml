@@ -1,0 +1,92 @@
+name: Windows
+
+# The Windows shell (windows/): the generated C# is current, every NuGet package's licence is on
+# the allowlist, the solution builds and passes its tests against the core's DLL (the cdylib of
+# core/crates/ink-ffi, engine features off), and the app publishes with NativeAOT. The core's own
+# tests run in core.yml. CI has no desktop: launching the app is windows/S3.3a-CHECKLIST.md.
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win.yml']
+  pull_request:
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  shell:
+    name: licences, build and tests (windows-2025)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Installs the channel and components pinned in core/rust-toolchain.toml.
+      - run: rustup toolchain install
+        working-directory: core
+      # Pinned to the commit tag v2.9.1 points at, read from GitHub (never typed from memory).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: core
+      # The C# event types (ink-schema) and P/Invoke declarations (csbindgen) match the schema and
+      # the core's C ABI.
+      - name: Generated C# is current
+        working-directory: core
+        run: |
+          cargo run --locked -p ink-ffi --bin ink-schema -- --check
+          cargo test --locked -p ink-ffi --test csharp_binding --test schema
+      # The DLL the shell loads, as the shell links it: engine features off.
+      - name: Build the core's DLL
+        working-directory: core
+        run: cargo build --locked -p ink-ffi --lib
+      # The SDK windows/global.json pins, read from there. Pinned to the commit tag v6.0.0 points
+      # at, read from GitHub (never typed from memory).
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: windows/global.json
+      # Every dotnet step runs in windows/, where global.json is: from the repository root the
+      # host would pick another installed SDK, and the locked restore would fail on its packs.
+      - name: Restore (locked)
+        working-directory: windows
+        run: dotnet restore Inkwell.slnx --locked-mode
+      # Every package restore pulled, direct and transitive, before anything is built from it.
+      - name: NuGet licence check
+        shell: pwsh
+        working-directory: windows
+        run: scripts/nuget-licences.ps1
+      - name: Build
+        working-directory: windows
+        run: dotnet build Inkwell.slnx --no-restore
+      # A run that finds no tests (a discovery or adapter problem) fails instead of passing empty.
+      - name: Tests
+        shell: pwsh
+        working-directory: windows
+        run: |
+          $results = Join-Path $env:RUNNER_TEMP 'tests'
+          dotnet test Inkwell.slnx --no-build --logger 'trx;LogFileName=results.trx' --results-directory $results
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          [xml]$trx = Get-Content (Join-Path $results 'results.trx') -Raw
+          $total = [int]$trx.TestRun.ResultSummary.Counters.total
+          Write-Output "tests run: $total"
+          if ($total -eq 0) { Write-Output '::error::dotnet test ran no tests'; exit 1 }
+      # The app as it ships: NativeAOT, x64, with the Windows App SDK's runtime beside the exe.
+      # A trim or AOT warning fails it (warnings are errors). Without the core's DLL beside it,
+      # the app would only say the core did not start: that fails here.
+      - name: Publish the app (NativeAOT)
+        shell: pwsh
+        working-directory: windows
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'inkwell-app'
+          dotnet publish Inkwell/Inkwell.csproj -c Release -o $app
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($file in 'Inkwell.exe', 'ink_ffi.dll') {
+            if (-not (Test-Path (Join-Path $app $file))) { Write-Output "::error::$file is not in the published app"; exit 1 }
+          }
