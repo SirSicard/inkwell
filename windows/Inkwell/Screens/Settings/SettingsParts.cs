@@ -46,10 +46,11 @@ public static class FileExplorer
         {
             using var _ = Process.Start(start);
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception e)
         {
-            // Explorer could not start: nothing to open, and nothing the user's words are in. The
-            // folder's path stays on screen, selectable.
+            // Explorer could not start: logged by its error code (never the path). The folder's
+            // path stays on screen, selectable.
+            ScreenLog.System.Write($"File Explorer could not open the library's folder (error {e.NativeErrorCode})");
         }
     }
 }

@@ -199,7 +199,7 @@ public sealed partial class TodayScreen : UserControl
                 permissions.Request(NeedsYou.Card(allow.Permission));
                 break;
             case NeedsYouAction.OpenSoundSettings:
-                _ = Windows.System.Launcher.LaunchUriAsync(new Uri("ms-settings:sound"));
+                OpenSoundSettings();
                 break;
             case NeedsYouAction.Dismiss dismiss:
                 store.DismissNotice(dismiss.NoticeId);
@@ -440,4 +440,20 @@ public sealed partial class TodayScreen : UserControl
     private static Brush BrushOf(string key) => (Brush)Application.Current.Resources[key];
 
     private static Style StyleOf(string key) => (Style)Application.Current.Resources[key];
+
+    /// <summary>Opens Windows' Sound settings; one that does not open is logged by name.</summary>
+    private static async void OpenSoundSettings()
+    {
+        try
+        {
+            if (!await Windows.System.Launcher.LaunchUriAsync(new Uri("ms-settings:sound")))
+            {
+                ScreenLog.System.Write("Sound settings did not open");
+            }
+        }
+        catch (Exception e)
+        {
+            ScreenLog.System.Write($"Sound settings could not be opened ({e.GetType().Name})");
+        }
+    }
 }
