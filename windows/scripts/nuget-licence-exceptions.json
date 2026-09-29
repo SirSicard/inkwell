@@ -33,5 +33,10 @@
     "id": "Microsoft.Windows.SDK.BuildTools.MSIX",
     "licence": "file sdk_license.txt sha256:707cc5cc686f19c0a58a8cbafa73ed2c4656cf16ae8726b6d80b469db91cd3e2",
     "reason": "Windows SDK licence terms; MSIX build tools only, unused by the unpackaged app. A dependency of the Windows App SDK; accepted by the maintainer on 2026-09-29."
+  },
+  {
+    "id": "Microsoft.Windows.SDK.NET.Ref",
+    "licence": "url https://aka.ms/WinSDKLicenseURL",
+    "reason": "Windows SDK licence: the C# projection of the Windows APIs, which every app targeting a Windows version pulls (it ships beside the app). Accepted by the maintainer on 2026-09-29."
   }
 ]

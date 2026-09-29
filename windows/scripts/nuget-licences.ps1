@@ -2,10 +2,11 @@
 # The NuGet licence check (CLAUDE.md, Licences): every package the Windows solution restores,
 # direct or transitive, including the packs the SDK downloads for it, carries a licence on the
 # allowlist, or is listed in nuget-licence-exceptions.json with the SHA-256 of its licence text and
-# the reason it is accepted. win.yml runs it after `dotnet restore`; run it the same way locally:
+# the reason it is accepted. win.yml runs it after `dotnet restore`; run it the same way locally,
+# from windows/ (where global.json pins the SDK):
 #
-#   dotnet restore windows/Inkwell.slnx
-#   pwsh windows/scripts/nuget-licences.ps1
+#   dotnet restore Inkwell.slnx
+#   pwsh scripts/nuget-licences.ps1
 #
 # It reads what restore wrote (obj/project.assets.json) and each package's .nuspec from the NuGet
 # packages folder, so it needs no network. It fails on a licence it cannot read, on an exception
@@ -60,12 +61,12 @@ foreach ($file in $assetsFiles) {
 }
 
 function Test-Expression([string]$expression) {
-    # SPDX: any OR branch whose AND terms are all allowed. WITH (an exception clause) and anything
-    # else unusual needs a person to read it.
-    if ($expression -match '\bWITH\b') { return $false }
-    foreach ($branch in (($expression -replace '[()]', '') -split '\s+OR\s+')) {
-        $terms = @($branch -split '\s+AND\s+' | ForEach-Object { $_.Trim() })
-        if (@($terms | Where-Object { $Allow -notcontains $_ }).Count -eq 0) { return $true }
+    # SPDX: any OR branch whose AND terms are all allowed, compared case-sensitively. WITH (an
+    # exception clause) and parentheses (grouping this reading does not follow) need a person.
+    if ($expression -cmatch '\bWITH\b' -or $expression.Contains('(') -or $expression.Contains(')')) { return $false }
+    foreach ($branch in ($expression -csplit '\s+OR\s+')) {
+        $terms = @($branch -csplit '\s+AND\s+' | ForEach-Object { $_.Trim() })
+        if (@($terms | Where-Object { $Allow -cnotcontains $_ }).Count -eq 0) { return $true }
     }
     return $false
 }
@@ -105,7 +106,7 @@ $rows = foreach ($key in ($packages.Keys | Sort-Object)) {
     }
     if ($null -eq $verdict -and $exceptions.ContainsKey($lowerId)) {
         $e = $exceptions[$lowerId]
-        if ($what -eq $e.licence) {
+        if ($what -ceq $e.licence) {
             $verdict = "exception: $($e.reason)"
             $used[$lowerId] = $true
         } else {

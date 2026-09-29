@@ -1,3 +1,4 @@
+using Inkwell.Core;
 using Microsoft.UI.Xaml;
 
 namespace Inkwell;
@@ -22,6 +23,7 @@ public sealed partial class MainWindow : Window
             CoreStatusKind.Starting => "Starting the core",
             CoreStatusKind.Ready => "Ready",
             CoreStatusKind.Failed => $"The core did not start: {status.Detail}",
+            CoreStatusKind.MismatchedBuild => $"This shell and its core are from different builds (a {status.Detail} event did not decode)",
             CoreStatusKind.Stopped => "The core stopped",
             _ => Status.Text,
         };

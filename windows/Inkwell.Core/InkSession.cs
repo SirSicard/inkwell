@@ -145,10 +145,12 @@ public sealed unsafe class InkSession : IDisposable
         {
             evt = InkEvent.Decode(bytes);
         }
-        catch (JsonException)
+        catch (Exception)
         {
-            // Only JSON without a string "type" fails to decode at all: a known event whose content
-            // does not decode arrives as UndecodableEvent with its type and record.
+            // Only JSON without a string "type" fails to decode at all (a known event whose
+            // content does not decode arrives as UndecodableEvent with its type and record).
+            // Anything else thrown here must not cross into the core either: the shell shows an
+            // undecodable event instead.
             evt = new UndecodableEvent { Type = "" };
         }
         try

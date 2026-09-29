@@ -9,14 +9,10 @@ using Microsoft.UI.Dispatching;
 
 namespace Inkwell;
 
-public enum CoreStatusKind { Starting, Ready, Failed, Stopped }
-
-/// <summary>What the window shows about the core. Detail: the version when ready, why when failed.</summary>
-public readonly record struct CoreStatus(CoreStatusKind Kind, string Detail = "");
-
 public sealed class CoreController(DispatcherQueue ui, Action<CoreStatus> show)
 {
     private InkSession? session;
+    private CoreStatus status = new(CoreStatusKind.Starting);
 
     /// <summary>UI thread. Starts the core with the library in the data directory; a failure is shown.</summary>
     public void Start()
@@ -25,7 +21,8 @@ public sealed class CoreController(DispatcherQueue ui, Action<CoreStatus> show)
         {
             return;
         }
-        show(new CoreStatus(CoreStatusKind.Starting));
+        status = new CoreStatus(CoreStatusKind.Starting);
+        show(status);
         var relay = new EventRelay(work => ui.TryEnqueue(() => work()), Received);
         try
         {
@@ -36,7 +33,8 @@ public sealed class CoreController(DispatcherQueue ui, Action<CoreStatus> show)
         catch (Exception e) when (e is InkStatusException or IOException or UnauthorizedAccessException or DllNotFoundException or EntryPointNotFoundException)
         {
             // The message names a path or a core status, never anything the user said.
-            show(new CoreStatus(CoreStatusKind.Failed, e.Message));
+            status = new CoreStatus(CoreStatusKind.Failed, e.Message);
+            show(status);
         }
     }
 
@@ -45,20 +43,17 @@ public sealed class CoreController(DispatcherQueue ui, Action<CoreStatus> show)
     {
         foreach (var e in batch)
         {
-            switch (e)
+            var next = status.Next(e, Log);
+            if (next != status)
             {
-                case CoreReady ready when ready.Abi != InkSession.AbiVersion:
-                    show(new CoreStatus(CoreStatusKind.Failed, $"its ABI is {ready.Abi}, this shell's {InkSession.AbiVersion}"));
-                    break;
-                case CoreReady ready:
-                    show(new CoreStatus(CoreStatusKind.Ready, ready.Version));
-                    break;
-                case CoreStopped:
-                    show(new CoreStatus(CoreStatusKind.Stopped));
-                    break;
+                status = next;
+                show(status);
             }
         }
     }
+
+    /// <summary>What no screen shows, by name only (CoreStatus.Next never passes an event's words).</summary>
+    private static void Log(string line) => System.Diagnostics.Trace.WriteLine($"Inkwell: {line}");
 
     /// <summary>
     /// UI thread. Stops the core off the UI thread (it waits for its workers and unloads every

@@ -52,17 +52,41 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: windows/global.json
+      # Every dotnet step runs in windows/, where global.json is: from the repository root the
+      # host would pick another installed SDK, and the locked restore would fail on its packs.
       - name: Restore (locked)
-        run: dotnet restore windows/Inkwell.slnx --locked-mode
+        working-directory: windows
+        run: dotnet restore Inkwell.slnx --locked-mode
       # Every package restore pulled, direct and transitive, before anything is built from it.
       - name: NuGet licence check
         shell: pwsh
-        run: windows/scripts/nuget-licences.ps1
+        working-directory: windows
+        run: scripts/nuget-licences.ps1
       - name: Build
-        run: dotnet build windows/Inkwell.slnx --no-restore
+        working-directory: windows
+        run: dotnet build Inkwell.slnx --no-restore
+      # A run that finds no tests (a discovery or adapter problem) fails instead of passing empty.
       - name: Tests
-        run: dotnet test windows/Inkwell.slnx --no-build
+        shell: pwsh
+        working-directory: windows
+        run: |
+          $results = Join-Path $env:RUNNER_TEMP 'tests'
+          dotnet test Inkwell.slnx --no-build --logger 'trx;LogFileName=results.trx' --results-directory $results
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          [xml]$trx = Get-Content (Join-Path $results 'results.trx') -Raw
+          $total = [int]$trx.TestRun.ResultSummary.Counters.total
+          Write-Output "tests run: $total"
+          if ($total -eq 0) { Write-Output '::error::dotnet test ran no tests'; exit 1 }
       # The app as it ships: NativeAOT, x64, with the Windows App SDK's runtime beside the exe.
-      # A trim or AOT warning fails it (warnings are errors).
+      # A trim or AOT warning fails it (warnings are errors). Without the core's DLL beside it,
+      # the app would only say the core did not start: that fails here.
       - name: Publish the app (NativeAOT)
-        run: dotnet publish windows/Inkwell/Inkwell.csproj -c Release -o "${{ runner.temp }}/inkwell-app"
+        shell: pwsh
+        working-directory: windows
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'inkwell-app'
+          dotnet publish Inkwell/Inkwell.csproj -c Release -o $app
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($file in 'Inkwell.exe', 'ink_ffi.dll') {
+            if (-not (Test-Path (Join-Path $app $file))) { Write-Output "::error::$file is not in the published app"; exit 1 }
+          }
