@@ -1,9 +1,8 @@
 // The app: one window and a tray icon over the core. Closing the window hides it; the tray's Quit
-// stops the core, then the app.
+// stops the core, then the app. The screens' models (ScreenModels) follow the core's events after
+// the store; each route's screen is made from them (Screens.cs).
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Automation;
-using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using WinUIEx;
 
@@ -16,6 +15,7 @@ public partial class App : Application
     private MainWindow? window;
     private TrayIcon? tray;
     private CoreController? core;
+    private ScreenModels? screens;
     private bool quitting;
     private readonly Router router = new();
 
@@ -37,7 +37,24 @@ public partial class App : Application
             }
         };
         core = new CoreController(window.DispatcherQueue);
-        window.Attach(core.Store, router, Screen, new StackPanel());
+        screens = AppScreens.Models(core, window.DispatcherQueue);
+        var models = screens;
+        core.Observer = batch =>
+        {
+            models.Apply(batch);
+            models.LogUnshown(batch);
+        };
+        var made = new AppScreens(core.Store, models, router);
+        window.Attach(core.Store, router, made.Screen, AppScreens.InkZoneFoot());
+        made.AttachFirstRun(window.Content as FrameworkElement);
+        // Coming back to the app re-checks what may have changed outside it (permissions, the keys).
+        window.Activated += (_, e) =>
+        {
+            if (e.WindowActivationState != WindowActivationState.Deactivated)
+            {
+                models.AppBecameActive();
+            }
+        };
         tray = new TrayIcon(1, Path.Combine(AppContext.BaseDirectory, "Assets", "Inkwell.ico"), "Inkwell");
         tray.Selected += (_, _) => ShowWindow();
         tray.ContextMenu += (_, e) =>
@@ -56,14 +73,6 @@ public partial class App : Application
         core.Start();
     }
 
-    /// <summary>A route's screen.</summary>
-    private static UIElement Screen(Route route)
-    {
-        var title = new TextBlock { Text = route.Title(), Style = (Style)Current.Resources["InkScreenTitleStyle"] };
-        AutomationProperties.SetHeadingLevel(title, AutomationHeadingLevel.Level1);
-        return new StackPanel { Padding = new Thickness(48, 38, 48, 28), Children = { title } };
-    }
-
     private void ShowWindow()
     {
         window?.AppWindow.Show();
@@ -78,6 +87,10 @@ public partial class App : Application
             return;
         }
         quitting = true;
+        // Quitting is not skipping the first run; and what the screens hold unsaved (the notes line
+        // under the caret) reaches the core before it stops.
+        screens?.AppQuitting();
+        screens?.FlushBeforeStop();
         window.AppWindow.Hide();
         core.Stop(() =>
         {
