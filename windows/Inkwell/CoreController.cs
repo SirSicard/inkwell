@@ -54,6 +54,7 @@ public sealed class CoreController(DispatcherQueue ui)
         if (session is null)
         {
             CommandLog.Write($"no core is running: a {command.Name} command was not sent");
+            NotSent(command, "the core is not running");
             return;
         }
         try
@@ -63,7 +64,19 @@ public sealed class CoreController(DispatcherQueue ui)
         catch (InkStatusException e)
         {
             CommandLog.Write($"the core refused a {command.Name} command: {e.Message}");
+            NotSent(command, e.Message);
         }
+    }
+
+    /// <summary>
+    /// A command that never reached the core fails as if the core had failed it: its command.failed
+    /// goes the way the core's events go, after this turn (a model may be sending from inside its
+    /// own Apply), so the screen waiting for it says "couldn't" instead of waiting forever.
+    /// </summary>
+    private void NotSent(CoreCommand command, string why)
+    {
+        var failed = command.NotSent($"couldn't send it: {why}");
+        ui.TryEnqueue(() => Received([failed]));
     }
 
     /// <summary>UI thread: a batch of the core's events.</summary>

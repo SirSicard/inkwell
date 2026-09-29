@@ -16,15 +16,18 @@ namespace Inkwell.Core.Screens;
 /// <param name="Engine">The engine's name; null when nothing fills the job.</param>
 /// <param name="Wer">Its measured word error rate on this job, percent.</param>
 /// <param name="Known">Whether the answer has arrived.</param>
-public sealed record CatalogueLine(Job Job, string? Engine, double? Wer, bool Known)
+/// <param name="Failed">The last question about it failed (engine.route): not known, which is not "nothing installed".</param>
+public sealed record CatalogueLine(Job Job, string? Engine, double? Wer, bool Known, bool Failed = false)
 {
+    public const string FailedText = "Couldn't check which model does this";
+
     /// <summary>The measured accuracy, as the screen shows it.</summary>
     public string? Accuracy => Wer is double wer
         ? string.Format(CultureInfo.InvariantCulture, "{0:0.0} % of words right ({1:0.0} % word error rate)", Math.Max(0, 100 - wer), wer)
         : null;
 
     /// <summary>What the line says in place of an engine: the engine, else nothing or still asking.</summary>
-    public string EngineText => Engine ?? (Known ? "Nothing installed yet" : "Checking…");
+    public string EngineText => Engine ?? (Failed ? FailedText : Known ? "Nothing installed yet" : "Checking…");
 }
 
 public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
@@ -39,6 +42,7 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
 
     private ImmutableDictionary<string, IReadOnlyList<JobScore>> shellEngines = ImmutableDictionary<string, IReadOnlyList<JobScore>>.Empty;
     private ImmutableDictionary<Job, EngineRouted> serving = ImmutableDictionary<Job, EngineRouted>.Empty;
+    private ImmutableHashSet<Job> routeFailed = [];
 
     /// <summary>The catalogue's models for this OS.</summary>
     public IReadOnlyList<CatalogueEntry> Models { get; private set; } = [];
@@ -62,6 +66,10 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
 
     public CatalogueLine Line(Job job)
     {
+        if (routeFailed.Contains(job))
+        {
+            return new CatalogueLine(job, null, null, Known: false, Failed: true);
+        }
         if (!serving.TryGetValue(job, out var routed))
         {
             return new CatalogueLine(job, null, null, Known: false);
@@ -108,12 +116,16 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         return $"{Name(entry.Id)} · {entry.Licence} · {StorageModel.Size(entry.SizeBytes, format)} · {(entry.Installed ? "installed" : "not installed")}";
     }
 
-    /// <summary>Whether this screen shows the failure (models.list); engine.route's are logged.</summary>
+    /// <summary>Whether this screen shows the failure: models.list, and engine.route on its job's line.</summary>
     public static bool Handles(CommandFailed failed)
     {
         ArgumentNullException.ThrowIfNull(failed);
-        return failed.Command == "models.list";
+        return failed.Command is "models.list" or "engine.route";
     }
+
+    /// <summary>The job an engine.route failure is about, from its id; null when it names none.</summary>
+    private static Job? RouteJob(CommandFailed failed) =>
+        Jobs.Cast<Job?>().FirstOrDefault(j => failed.Id == new CoreCommand.EngineRoute(j!.Value).CommandId);
 
     public void Apply(InkEvent e)
     {
@@ -130,6 +142,11 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
                 break;
             case EngineRouted routed:
                 serving = serving.SetItem(routed.Job, routed);
+                routeFailed = routeFailed.Remove(routed.Job);
+                Changed();
+                break;
+            case CommandFailed failed when failed.Command == "engine.route" && RouteJob(failed) is Job job:
+                routeFailed = routeFailed.Add(job);
                 Changed();
                 break;
             case EngineRegistered engine:
@@ -148,6 +165,7 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
             case CoreStopped:
                 shellEngines = shellEngines.Clear();
                 serving = serving.Clear();
+                routeFailed = routeFailed.Clear();
                 Changed();
                 break;
             default:

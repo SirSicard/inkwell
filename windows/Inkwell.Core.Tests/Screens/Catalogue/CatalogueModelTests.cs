@@ -71,4 +71,18 @@ public class CatalogueModelTests
         catalogue.Apply(Ev.Of("""{"type":"core.stopped"}"""));
         Assert.False(catalogue.Line(Job.DictationFinal).Known); // a stopped core's answers are gone
     }
+
+    /// <summary>A route question that failed reads "couldn't", never "nothing installed", until its answer comes.</summary>
+    [Fact]
+    public void AFailedRouteQuestionSaysSoOnItsLine()
+    {
+        var catalogue = new CatalogueModel(new Sent().Send);
+        var failed = new CoreCommand.EngineRoute(Job.MeetingFinal).NotSent("couldn't send it: the core is not running");
+        Assert.True(CatalogueModel.Handles(failed));
+        catalogue.Apply(failed);
+        Assert.Equal(CatalogueLine.FailedText, catalogue.Line(Job.MeetingFinal).EngineText);
+        Assert.Equal("Checking…", catalogue.Line(Job.DictationFinal).EngineText);
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"meeting_final"}"""));
+        Assert.Equal("Nothing installed yet", catalogue.Line(Job.MeetingFinal).EngineText);
+    }
 }

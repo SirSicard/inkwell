@@ -22,6 +22,18 @@ public abstract record CoreCommand
     /// <summary>Its JSON, as ink_command reads it (keys sorted, so the same command reads the same).</summary>
     public string Json => JsonFields.Write(Fields());
 
+    /// <summary>Its "id", when it carries one (answers echo it as ref; a command.failed as its id).</summary>
+    public string? CommandId => Fields().Where(f => f.Key == "id").Select(f => f.Value as string).FirstOrDefault();
+
+    /// <summary>
+    /// The command.failed the core would have sent had it run this command and failed: the shell
+    /// raises it when the command never reached the core (no core, or the core refused to queue
+    /// it), so the screen that waits for an answer says "couldn't" instead of waiting forever.
+    /// <paramref name="message"/> names what went wrong, never the command's fields.
+    /// </summary>
+    public CommandFailed NotSent(string message) =>
+        new() { Type = "command.failed", Command = Name, Id = CommandId, Message = message };
+
     public sealed record PermissionsCheck : CoreCommand
     {
         public override string Name => "permissions.check";
@@ -78,10 +90,12 @@ public abstract record CoreCommand
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name)];
     }
 
+    /// <summary>Its id names the job ("engine.route:dictation_final"), so a failure is matched to its line.</summary>
     public sealed record EngineRoute(Job Job) : CoreCommand
     {
         public override string Name => "engine.route";
-        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("job", Wire.Name(Job))];
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("job", Wire.Name(Job)), ("id", $"{Name}:{Wire.Name(Job)}")];
     }
 
     /// <summary>The id names the setting, so a failure can be matched to it (command.failed has no key).</summary>

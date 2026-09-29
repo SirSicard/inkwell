@@ -73,4 +73,19 @@ public class ScreenModelsTests
         var add = Assert.IsType<CoreCommand.NoteAdd>(Assert.Single(sent.Commands, c => c is CoreCommand.NoteAdd));
         Assert.Equal("A line still being typed", add.Text);
     }
+
+    /// <summary>A command that never reached the core resolves its screen to "couldn't", as the core's own failure does.</summary>
+    [Fact]
+    public void ACommandNeverSentResolvesItsScreenInsteadOfWaiting()
+    {
+        var sent = new Sent();
+        var screens = new ScreenModels(sent.Send, log: new Logged().Log);
+        screens.Library.RefreshList();
+        Assert.Equal(LibraryLoad.Loading, screens.Library.ListLoad);
+        var list = Assert.Single(sent.Commands, c => c is CoreCommand.RecordsList);
+        var failed = list.NotSent("couldn't send it: the core is not running");
+        Assert.True(screens.Handles(failed));
+        screens.Apply([failed]);
+        Assert.Equal(LibraryLoad.Failed, screens.Library.ListLoad);
+    }
 }

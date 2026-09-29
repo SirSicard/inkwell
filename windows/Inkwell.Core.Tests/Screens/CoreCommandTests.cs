@@ -69,4 +69,17 @@ public class CoreCommandTests
         Assert.True(Fields(snippets).GetProperty("replace_unreadable").GetBoolean());
         Assert.Equal(snippets, new CoreCommand.SnippetsSave(new List<SnippetDraft> { new("s", "sig", "Best,") }, true, "s2"));
     }
+
+    [Fact]
+    public void ACommandThatNeverReachedTheCoreFailsWithItsNameAndId()
+    {
+        var ask = new CoreCommand.MeetingAsk("a private question", "ask:3");
+        var failed = ask.NotSent("couldn't send it: the core is not running");
+        Assert.Equal("command.failed", failed.Type);
+        Assert.Equal("meeting.ask", failed.Command);
+        Assert.Equal("ask:3", failed.Id);
+        Assert.DoesNotContain("private", failed.Message);
+        Assert.Null(new CoreCommand.ModesList().NotSent("x").Id);
+        Assert.Equal("engine.route:live_partials", new CoreCommand.EngineRoute(Job.LivePartials).CommandId);
+    }
 }
