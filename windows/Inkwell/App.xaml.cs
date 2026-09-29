@@ -16,6 +16,9 @@ public partial class App : Application
     private TrayIcon? tray;
     private CoreController? core;
     private ScreenModels? screens;
+    private ShellInk? ink;
+    /// <summary>What stops the Drop working now, or null: kept for the tray icon made after it.</summary>
+    private string? inkProblem;
     private bool quitting;
     private readonly Router router = new();
 
@@ -37,6 +40,10 @@ public partial class App : Application
             }
         };
         core = new CoreController(window.DispatcherQueue);
+        // The ink's pipeline compiles off the UI thread from here; the Drop waits, hidden.
+        ink = new ShellInk(window.DispatcherQueue, InkProblem);
+        InkPanel.Clock = ink.Clock;
+        window.ShowInk(ink);
         screens = AppScreens.Models(core, window.DispatcherQueue);
         var models = screens;
         core.Observer = batch =>
@@ -77,11 +84,37 @@ public partial class App : Application
             menu.Items.Add(quit);
             e.Flyout = menu;
         };
+        tray.Tooltip = TrayTooltip(inkProblem);
         tray.IsVisible = true;
         window.Activate();
         // On screen from the start: the window's own change events may not come for the first show.
         made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
         core.Start();
+    }
+
+    /// <summary>
+    /// UI thread. The Drop's problem, where it stays seen: the window's status line, and the tray
+    /// icon's tooltip, which is there while the window is hidden.
+    /// </summary>
+    private void InkProblem(string? problem)
+    {
+        inkProblem = problem;
+        window?.ShowInkFailure(problem);
+        if (tray is not null)
+        {
+            tray.Tooltip = TrayTooltip(problem);
+        }
+    }
+
+    /// <summary>The tray icon's tooltip: "Inkwell", or what stops the Drop (Windows keeps 128 characters).</summary>
+    internal static string TrayTooltip(string? problem)
+    {
+        if (problem is null)
+        {
+            return "Inkwell";
+        }
+        var text = $"Inkwell. The Drop: {problem}";
+        return text.Length <= 127 ? text : string.Concat(text.AsSpan(0, 126), "\u2026");
     }
 
     private static bool Minimized(Window window) =>
@@ -108,6 +141,8 @@ public partial class App : Application
         window.AppWindow.Hide();
         core.Stop(() =>
         {
+            ink?.Dispose();
+            ink = null;
             tray?.Dispose();
             tray = null;
             window.Close();

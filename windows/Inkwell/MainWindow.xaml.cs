@@ -33,6 +33,20 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Inkwell.ico"));
     }
 
+    /// <summary>UI thread. The window's ink follows the shell's ink state.</summary>
+    internal void ShowInk(ShellInk ink)
+    {
+        Ink.State = ink.State;
+        ink.Changed += () => Ink.State = ink.State;
+    }
+
+    /// <summary>UI thread. Why the Drop cannot draw its ink (it shows a plain panel meanwhile), or null once it draws again.</summary>
+    internal void ShowInkFailure(string? failure)
+    {
+        InkStatus.Text = failure is null ? "" : $"The Drop: {failure}";
+        InkStatus.Visibility = failure is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     /// <summary>
     /// UI thread, once. Shows the store's routes: <paramref name="screen"/> makes a route's screen
     /// (once), <paramref name="railFoot"/> the controls at the foot of Today's ink zone.
@@ -132,6 +146,8 @@ public sealed partial class MainWindow : Window
         Screen.Content = screen;
         var wide = route == Route.Today;
         InkRail.Width = wide ? InkZoneWidth : RailWidth;
+        // Today's zone knocks the wordmark out of the ink; the narrow rail does not.
+        Ink.ShowsWordmark = wide;
         RailFoot.Content = wide ? todayFoot : null;
     }
 

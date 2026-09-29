@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The ink on Windows: the shader (Shaders/ink.hlsl, generated from shaders/ink.wgsl by
+       core/crates/ink-shader) on Direct3D 11, the wordmark and the Drop's text through DirectWrite,
+       and the Drop itself, a raw Win32 window on DirectComposition. No WinUI here, so it tests
+       headless (WARP draws where there is no GPU). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Trim and AOT analyzers on: the app publishes with NativeAOT. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Direct3D 11, DXGI, DirectComposition, Direct2D, DirectWrite and Win32 declarations (MIT):
+         unsafe structs and function pointers only, so NativeAOT needs nothing generated at run
+         time. -->
+    <PackageReference Include="TerraFX.Interop.Windows" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Shaders\ink.hlsl" LogicalName="ink.hlsl" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Inkwell.Ink.Tests" />
+  </ItemGroup>
+</Project>

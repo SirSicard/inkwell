@@ -21,6 +21,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Inkwell.Core\Inkwell.Core.csproj" />
+    <!-- The ink and the Drop (S3.4). -->
+    <ProjectReference Include="..\Inkwell.Ink\Inkwell.Ink.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\Inkwell.ico" CopyToOutputDirectory="PreserveNewest" />

@@ -15,6 +15,7 @@
     x:Class="Inkwell.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell"
     Title="Inkwell">
     <Window.SystemBackdrop>
         <MicaBackdrop />
@@ -50,6 +51,14 @@
                     FontFamily="{StaticResource InkInterfaceFontFamily}"
                     Style="{StaticResource CaptionTextBlockStyle}"
                     Text="Starting the core" />
+                <!-- Why the Drop's ink cannot draw (S3.4), when it cannot. -->
+                <TextBlock
+                    x:Name="InkStatus"
+                    MaxWidth="420"
+                    FontFamily="{StaticResource InkInterfaceFontFamily}"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    TextTrimming="CharacterEllipsis"
+                    Visibility="Collapsed" />
                 <TextBlock
                     x:Name="Version"
                     VerticalAlignment="Center"
@@ -84,7 +93,9 @@
                 </Grid.ColumnDefinitions>
                 <Grid x:Name="InkRail" Width="64" Background="{ThemeResource InkZoneBrush}" BorderBrush="{ThemeResource InkBorderBrush}" BorderThickness="0,0,1,0">
                     <!-- The ink (S3.4). Decorative: the state it shows is spoken by the Drop and the screens. -->
-                    <Border x:Name="InkHost" AutomationProperties.AccessibilityView="Raw" />
+                    <Border x:Name="InkHost" AutomationProperties.AccessibilityView="Raw">
+                        <local:InkPanel x:Name="Ink" />
+                    </Border>
                     <!-- Today's foot of the ink zone: whether Inkwell listens, and Record now. -->
                     <ContentPresenter x:Name="RailFoot" Margin="22" VerticalAlignment="Bottom" />
                 </Grid>
