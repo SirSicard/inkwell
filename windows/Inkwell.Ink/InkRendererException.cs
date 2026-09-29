@@ -1,5 +1,6 @@
-// Why the ink cannot draw. Every failure has a name and says what failed; the surface then shows
-// plain paper (or, for the Drop, its text on paper) and the failure is logged by that name.
+// Why the ink cannot draw. Every failure has a name and says what failed; it is logged by that
+// name and the surface stops drawing (a window's ink shows what is behind it; the Drop, which
+// Direct2D paints on the same device, shows nothing).
 using TerraFX.Interop.Windows;
 
 namespace Inkwell.Ink;

@@ -134,7 +134,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     {
         ArgumentNullException.ThrowIfNull(lines);
         ObjectDisposedException.ThrowIf(disposed, this);
-        if (lines != text)
+        var textChanged = lines != text;
+        if (textChanged)
         {
             text = lines;
             DropLayouts();
@@ -143,9 +144,17 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             {
                 SetWindowTextW(hwnd, name);
             }
+        }
+        // One frame for the change: a new state draws (with the new text); only new text on the
+        // same state needs the frame marked out of date.
+        if (state != Surface.State)
+        {
+            Surface.State = state;
+        }
+        else if (textChanged)
+        {
             Surface.Invalidate();
         }
-        Surface.State = state;
         if (!IsShown)
         {
             Place();
@@ -201,7 +210,17 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     {
         dpiScale = scale;
         var (w, h) = PixelSize();
-        swapChain?.Resize(w, h);
+        try
+        {
+            swapChain?.Resize(w, h);
+        }
+        catch (InkRendererException e)
+        {
+            // Reached from Show and from the window procedure, where an exception would end the
+            // process: the Drop stops drawing and says why, as for a failed frame.
+            Surface.Fail(e.Message);
+            return;
+        }
         var (inkW, inkH) = InkSurface.CanvasPixels(DropLayout.InkWidth, DropLayout.Height, scale);
         if (inkTexture is null || inkTexture.Width != inkW || inkTexture.Height != inkH)
         {

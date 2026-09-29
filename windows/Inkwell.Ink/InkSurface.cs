@@ -28,6 +28,8 @@ public sealed class InkSurface : IDisposable
     private InkSchedule schedule;
     private InkPipeline? pipeline;
     private Wordmark? wordmark;
+    /// <summary>The wordmark could not be made for this canvas: drawn without it until the canvas or the setting changes.</summary>
+    private bool wordmarkFailed;
     private bool hostOnScreen;
     private bool followsSystem = true;
     private bool disposed;
@@ -240,7 +242,7 @@ public sealed class InkSurface : IDisposable
         {
             return;
         }
-        if (ShowsWordmark && wordmark is null)
+        if (ShowsWordmark && wordmark is null && !wordmarkFailed)
         {
             try
             {
@@ -250,7 +252,7 @@ public sealed class InkSurface : IDisposable
             {
                 // A failed wordmark leaves the ink without it; the ink still draws.
                 InkLog.Write(e.Message);
-                ShowsWordmark = false;
+                wordmarkFailed = true;
             }
         }
         bool presented;
@@ -261,10 +263,7 @@ public sealed class InkSurface : IDisposable
         catch (InkRendererException e)
         {
             // The device failed (removed, reset, out of memory): stop drawing, say so by name.
-            Failure = e.Message;
-            InkLog.Write(e.Message);
-            clock.Remove(this);
-            UpdateVisibility();
+            Fail(e.Message);
             return;
         }
         if (presented)
@@ -274,10 +273,20 @@ public sealed class InkSurface : IDisposable
         }
     }
 
+    /// <summary>The host's pixels failed (a swapchain that would not resize): stop drawing, say so by name.</summary>
+    internal void Fail(string message)
+    {
+        Failure = message;
+        InkLog.Write(message);
+        clock.Remove(this);
+        UpdateVisibility();
+    }
+
     private void DropWordmark()
     {
         wordmark?.Dispose();
         wordmark = null;
+        wordmarkFailed = false;
     }
 
     /// <summary>Leaves the clock and releases the wordmark. UI thread.</summary>

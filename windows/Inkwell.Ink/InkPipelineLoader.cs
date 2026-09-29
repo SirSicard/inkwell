@@ -48,6 +48,12 @@ public sealed class InkPipelineLoader(Func<InkPipeline> make)
         {
             result = new InkPipelineOutcome(null, e.Message);
         }
+        catch (Exception e)
+        {
+            // Anything else (a missing system DLL, an unreadable resource) must not end the app on
+            // a pool thread: it becomes the named failure every waiter gets.
+            result = new InkPipelineOutcome(null, $"couldn't start the ink: {e.GetType().Name}: {e.Message}");
+        }
         List<Action<InkPipelineOutcome>> ready;
         lock (gate)
         {

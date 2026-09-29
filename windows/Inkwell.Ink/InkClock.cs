@@ -155,7 +155,7 @@ public sealed class InkClock
         if (!fallbackLogged)
         {
             fallbackLogged = true;
-            InkLog.Write($"couldn't wait on the compositor clock (0x{result:X8}); pacing the ink with a 16 ms sleep instead");
+            InkLog.Write($"couldn't wait on the compositor clock (0x{result:X8}, error {System.Runtime.InteropServices.Marshal.GetLastSystemError()}); pacing the ink with a 16 ms sleep instead");
         }
         Thread.Sleep(16);
         return true;
