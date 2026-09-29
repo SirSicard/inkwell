@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Library (the canvas's "Library · a meeting record", the Mac's LibraryScreen): the records,
+     newest first, filtered by kind or searched through everything said; beside them, the open
+     record (RecordScreen). -->
+<UserControl
+    x:Class="Inkwell.Screens.LibraryScreen"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="272" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- The list column: heading, search, kind filters, and the records or the matches. -->
+        <Grid
+            Padding="12,18,12,0"
+            BorderBrush="{ThemeResource InkBorderBrush}"
+            BorderThickness="0,0,1,0"
+            RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid Padding="6,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock
+                    x:Name="ColumnTitle"
+                    AutomationProperties.HeadingLevel="Level1"
+                    FontSize="17"
+                    FontWeight="SemiBold"
+                    Style="{StaticResource InkBodyStyle}" />
+                <TextBlock
+                    x:Name="Count"
+                    Grid.Column="1"
+                    VerticalAlignment="Bottom"
+                    Style="{StaticResource InkTimestampStyle}" />
+            </Grid>
+            <AutoSuggestBox
+                x:Name="SearchBox"
+                Grid.Row="1"
+                QueryIcon="Find"
+                TextChanged="OnSearchChanged" />
+            <StackPanel
+                x:Name="Chips"
+                Grid.Row="2"
+                Padding="6,0"
+                AutomationProperties.Name="Show"
+                Orientation="Horizontal"
+                Spacing="6" />
+
+            <!-- The list could not be read: never an empty library. -->
+            <StackPanel x:Name="ListFailed" Grid.Row="3" Padding="6,0" Spacing="6" Visibility="Collapsed">
+                <TextBlock x:Name="ListFailedText" Style="{StaticResource InkAlertTextStyle}" FontSize="15" />
+                <HyperlinkButton x:Name="ListRetry" Padding="0" Click="OnRetryList" />
+            </StackPanel>
+            <StackPanel x:Name="Empty" Grid.Row="3" Padding="6,0" Spacing="6" Visibility="Collapsed">
+                <TextBlock x:Name="EmptyTitle" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
+                <TextBlock x:Name="EmptyDetail" Style="{StaticResource InkCaptionStyle}" />
+            </StackPanel>
+            <ListView
+                x:Name="RecordList"
+                Grid.Row="3"
+                AutomationProperties.Name="Records"
+                SelectionChanged="OnRecordSelected"
+                SelectionMode="Single">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:RecordListItem">
+                        <StackPanel Padding="0,9" Spacing="3">
+                            <TextBlock
+                                FontWeight="SemiBold"
+                                MaxLines="2"
+                                Style="{StaticResource InkBodyStyle}"
+                                Text="{x:Bind Title}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock Style="{StaticResource InkTimestampStyle}" Text="{x:Bind Line}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                <ListView.Footer>
+                    <HyperlinkButton x:Name="MoreButton" Margin="6,4,0,12" Click="OnMore" Visibility="Collapsed" />
+                </ListView.Footer>
+            </ListView>
+
+            <!-- The search's matches. -->
+            <TextBlock
+                x:Name="SearchStatus"
+                Grid.Row="3"
+                Padding="6,0"
+                Style="{StaticResource InkCaptionStyle}"
+                Visibility="Collapsed" />
+            <ListView
+                x:Name="HitList"
+                Grid.Row="3"
+                AutomationProperties.Name="Matches"
+                IsItemClickEnabled="True"
+                ItemClick="OnHitClick"
+                SelectionMode="None"
+                Visibility="Collapsed">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:HitItem">
+                        <StackPanel Padding="0,6" Spacing="3">
+                            <TextBlock
+                                FontWeight="SemiBold"
+                                MaxLines="1"
+                                Style="{StaticResource InkBodyStyle}"
+                                Text="{x:Bind Title}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                FontSize="15"
+                                MaxLines="2"
+                                Style="{StaticResource InkReadingStyle}"
+                                Foreground="{ThemeResource InkSecondaryTextBrush}"
+                                Text="{x:Bind Snippet}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock Style="{StaticResource InkTimestampStyle}" Text="{x:Bind Meta}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+
+        <!-- The open record, or what opens here. -->
+        <StackPanel
+            x:Name="NothingSelected"
+            Grid.Column="1"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Spacing="8">
+            <TextBlock x:Name="NothingTitle" HorizontalAlignment="Center" AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" />
+            <TextBlock x:Name="NothingDetail" HorizontalAlignment="Center" Style="{StaticResource InkCaptionStyle}" />
+        </StackPanel>
+        <ContentPresenter
+            x:Name="RecordHost"
+            Grid.Column="1"
+            HorizontalContentAlignment="Stretch"
+            VerticalContentAlignment="Stretch" />
+    </Grid>
+</UserControl>

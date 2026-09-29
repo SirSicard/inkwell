@@ -1,0 +1,4 @@
+# Licence texts compiled into the Windows About screen are compared byte for byte (and hashed)
+# against their sources: keep LF on every checkout, including Windows runners with autocrlf.
+windows/Inkwell.Core/Screens/About/*.cs text eol=lf
+windows/Inkwell.Core/Screens/About/*.txt text eol=lf

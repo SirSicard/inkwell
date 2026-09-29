@@ -1,0 +1,9 @@
+# The Windows-only notices in Notices.cs that are composed, because the component's package carries
+# no licence text (the shared ones are in mac/composed-notices.txt). Each is compared with the file
+# below before a Windows release: the Windows counterpart of mac/composed-notices.txt, in its format,
+# which ComposedNoticesTests holds to the Composed flags.
+#
+#   <notice id> verified=<no|YYYY-MM-DD> <the file to compare it with>
+
+winuiex          verified=no  the LICENSE of dotMorten/WinUIEx at the commit its 2.9.3 package names (72f2975d2a237c0d7ad1113fe617d5894e66feb6): the text is the MIT licence under the copyright line of the package's manifest
+windows-sdk-net  verified=no  the Windows SDK licence terms the package's manifest links (https://aka.ms/WinSDKLicenseURL): the text is the manifest's copyright line and that link
