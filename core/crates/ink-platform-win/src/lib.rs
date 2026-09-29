@@ -31,7 +31,10 @@ pub mod capture;
 pub mod clock;
 mod com;
 pub mod detect;
+pub mod focus;
 pub mod hotkey;
+pub mod insert;
+mod integrity;
 pub mod permissions;
 mod process;
 mod sessions;
@@ -43,6 +46,10 @@ pub use clock::WinClock;
 #[cfg(windows)]
 pub use detect::WinMeetingDetector;
 #[cfg(windows)]
+pub use focus::WinFocusReader;
+#[cfg(windows)]
 pub use hotkey::WinHotkeySource;
+#[cfg(windows)]
+pub use insert::WinTextInserter;
 #[cfg(windows)]
 pub use permissions::WinPermissionProbe;
