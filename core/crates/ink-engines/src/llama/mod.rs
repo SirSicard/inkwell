@@ -29,8 +29,8 @@
 //! model in a `static`. `tests/llama_asr.rs` pins this.
 //!
 //! **Where it computes** ([`compute`]): on a GPU when ggml reports one (Metal on the Mac, Vulkan on
-//! Windows with `engine-llama-vulkan`), every layer offloaded; else on the CPU, nothing offloaded and
-//! one thread per physical core, set explicitly (llama.cpp's own default is 4). Chosen once per
+//! Windows with `engine-llama-vulkan`), every layer offloaded; else on the CPU, nothing offloaded
+//! and one thread per physical core, set explicitly (llama.cpp's own default is 4). Chosen once per
 //! process from ggml's devices by [`crate::choose`], so a Vulkan build on a machine without a
 //! Vulkan device runs on the CPU.
 //!

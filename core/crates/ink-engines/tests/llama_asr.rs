@@ -250,6 +250,7 @@ fn qwen3_asr_reproduces_the_measured_wer_on_ami_sdm() {
     let _serial = serial();
     let (corpus, _) = corpus_on("ami-sdm", 3);
     println!("measured at the engine choice: {AMI_SDM_MEASURED:.2}");
+    assert_eq!(corpus.reference, 671, "the reference set changed");
     assert!(
         (corpus.wer() - AMI_SDM_MEASURED).abs() <= 0.3,
         "WER {:.2} is not within 0.3 of the measured {AMI_SDM_MEASURED:.2}",

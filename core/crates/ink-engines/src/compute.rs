@@ -1,13 +1,13 @@
 //! Where a ggml engine computes: on a GPU when the build and the machine have one, else on the CPU
 //! with one thread per physical core.
 //!
-//! The choice is made from the devices ggml reports at run time, not from the build: a Windows build
-//! with Vulkan (`engine-llama-vulkan`) runs on the GPU where the machine has a Vulkan device and on
-//! the CPU where it has none, and a build without a GPU backend always runs on the CPU. The Mac's
-//! Metal device is a GPU like any other.
+//! The choice is made from the devices ggml reports at run time, not from the build: a Windows
+//! build with Vulkan (`engine-llama-vulkan`) runs on the GPU where the machine has a Vulkan device
+//! and on the CPU where it has none, and a build without a GPU backend always runs on the CPU. The
+//! Mac's Metal device is a GPU like any other.
 //!
-//! - **GPU:** every layer offloaded, and llama.cpp's own thread defaults for the little work left on
-//!   the CPU. That is the setup the speeds were measured with, on Metal and on Vulkan.
+//! - **GPU:** every layer offloaded, and llama.cpp's own thread defaults for the little work left
+//!   on the CPU. That is the setup the speeds were measured with, on Metal and on Vulkan.
 //! - **CPU:** nothing offloaded, and the thread count set explicitly to the machine's physical
 //!   cores. llama.cpp's default is 4 threads whatever the machine, which leaves most of a
 //!   desktop's cores idle while the model reads the audio (writing the text is bound by memory
@@ -65,13 +65,13 @@ pub enum Compute {
 }
 
 impl Compute {
-    /// Whether this is a GPU.
+    /// **Any thread.** Whether this is a GPU.
     pub fn is_gpu(&self) -> bool {
         matches!(self, Self::Gpu { .. })
     }
 
-    /// The thread count to set explicitly: `Some` on the CPU, `None` on a GPU (llama.cpp's
-    /// defaults, as measured).
+    /// **Any thread.** The thread count to set explicitly: `Some` on the CPU, `None` on a GPU
+    /// (llama.cpp's defaults, as measured).
     pub fn cpu_threads(&self) -> Option<NonZeroU32> {
         match self {
             Self::Gpu { .. } => None,
@@ -92,9 +92,9 @@ impl fmt::Display for Compute {
     }
 }
 
-/// The rule: the first discrete GPU, else the first integrated GPU, else the CPU with
-/// `cpu_threads` threads. Devices are taken in ggml's order, which is the order llama.cpp would
-/// use them in.
+/// **Any thread.** The rule: the first discrete GPU, else the first integrated GPU, else the CPU
+/// with `cpu_threads` threads. Devices are taken in ggml's order, which is the order llama.cpp
+/// would use them in.
 pub fn choose(devices: &[Device], cpu_threads: NonZeroU32) -> Compute {
     let first = |kind| devices.iter().find(|d| d.kind == kind);
     match first(DeviceKind::Gpu).or_else(|| first(DeviceKind::IntegratedGpu)) {
@@ -108,8 +108,9 @@ pub fn choose(devices: &[Device], cpu_threads: NonZeroU32) -> Compute {
     }
 }
 
-/// The machine's physical cores (at least 1): the thread count for CPU inference. Where the OS
-/// does not report cores, its logical processor count.
+/// **Any thread** (asks the OS; not for a realtime thread). The machine's physical cores (at
+/// least 1): the thread count for CPU inference. Where the OS does not report cores, its logical
+/// processor count (num_cpus's fallback).
 pub fn physical_cores() -> NonZeroU32 {
     let cores = u32::try_from(num_cpus::get_physical()).unwrap_or(u32::MAX);
     NonZeroU32::new(cores).unwrap_or(NonZeroU32::MIN)
@@ -175,6 +176,8 @@ mod tests {
 
     #[test]
     fn an_integrated_gpu_counts_but_a_discrete_one_comes_first() {
+        // ggml's Vulkan backend lists only devices Vulkan calls discrete or integrated GPUs, so a
+        // software rasteriser (a CPU-type Vulkan device) never reaches this list.
         let igpu = device("Vulkan", "Synthetic iGPU", DeviceKind::IntegratedGpu);
         let dgpu = device("Vulkan", "Synthetic dGPU", DeviceKind::Gpu);
         let cpu = device("CPU", "Synthetic CPU", DeviceKind::Cpu);

@@ -109,14 +109,17 @@ impl QwenAsr {
         })?;
         // The audio encoder: on the GPU with llama.cpp's defaults, or on the CPU with the same
         // thread count as the text model.
-        let defaults = MtmdContextParams::default();
-        let params = MtmdContextParams {
+        let defaults = MtmdContextParams {
             print_timings: false,
-            use_gpu: compute.is_gpu(),
-            n_threads: compute.cpu_threads().map_or(defaults.n_threads, |t| {
-                i32::try_from(t.get()).unwrap_or(i32::MAX)
-            }),
-            ..defaults
+            ..MtmdContextParams::default()
+        };
+        let params = match compute.cpu_threads() {
+            None => defaults,
+            Some(threads) => MtmdContextParams {
+                use_gpu: false,
+                n_threads: i32::try_from(threads.get()).unwrap_or(i32::MAX),
+                ..defaults
+            },
         };
         let mtmd = MtmdContext::init_from_file(mmproj_path, &text_model, &params)
             .map_err(|e| failed(format!("mtmd could not load {}: {e}", file_name(mmproj))))?;
@@ -143,7 +146,7 @@ impl QwenAsr {
         })
     }
 
-    /// Where this model computes.
+    /// **Any thread.** Where this model computes.
     pub fn compute(&self) -> &Compute {
         self.compute
     }
