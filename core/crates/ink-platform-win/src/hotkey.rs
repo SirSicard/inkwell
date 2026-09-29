@@ -46,7 +46,7 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, HC_ACTION, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, PeekMessageW,
-    PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_KEYDOWN,
+    PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN,
     WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
@@ -59,6 +59,16 @@ pub use binding::{DEFAULT_BINDING, KEYS};
 /// The marker in `dwExtraInfo` on every key event this crate injects, so its own hook lets them
 /// through. Arbitrary; ASCII for "inkw".
 pub(crate) const SYNTHETIC_EVENT_MARK: usize = 0x696E_6B77;
+
+/// The mask key: an unassigned virtual key (`0xE8`), injected while a swallowed chord's modifiers
+/// are down so their release is not a lone tap (see `machine`). It carries
+/// [`SYNTHETIC_EVENT_MARK`] and passes through the hook, because Windows has to see it; apps
+/// ignore it.
+pub(crate) const MASK_VK: u16 = 0xE8;
+
+/// The hook thread's message asking it to inject the mask key (posted from the hook callback,
+/// which does not inject from inside itself).
+const WM_INK_MASK: u32 = WM_APP + 2;
 
 /// How long `start` waits for the hook to be installed.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
@@ -158,6 +168,11 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
     };
     let verdict = machine.on(input);
     MACHINE.with(|m| m.set(Some(machine)));
+    if verdict.mask {
+        // SAFETY: posts to this thread's own queue; the loop injects the key after the callback.
+        let _ =
+            unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_INK_MASK, WPARAM(0), LPARAM(0)) };
+    }
     if let Some(edge) = verdict.edge {
         CONTEXT.with(|c| {
             if let Some(context) = c.borrow().as_ref() {
@@ -216,7 +231,9 @@ fn run(
                 lost = true;
                 break;
             }
-            _ => {} // nothing of ours to dispatch; the hook runs inside GetMessageW
+            // The hook runs inside GetMessageW; the only message of ours is the mask request.
+            _ if msg.message == WM_INK_MASK => crate::insert::send_mask_key(),
+            _ => {}
         }
     }
     // SAFETY: installed above on this thread, removed once.

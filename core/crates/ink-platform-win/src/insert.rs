@@ -10,6 +10,8 @@
 
 mod clipboard;
 mod keys;
+
+pub(crate) use keys::send_mask_key;
 pub(crate) mod sequence;
 
 use std::cell::RefCell;

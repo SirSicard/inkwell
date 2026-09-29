@@ -9,6 +9,12 @@
 //! gain is that the key does nothing else while it dictates: right Alt would otherwise open an
 //! app's menu on release. A release is swallowed only when its press was, so an app that saw a
 //! press (before the hook existed) also sees the release. Everything else passes through.
+//!
+//! **The stray modifier tap.** A swallowed chord key leaves its modifiers looking pressed and
+//! released on their own: Windows then opens the Start menu (Win), activates a menu bar (Alt) or
+//! switches the keyboard layout (Ctrl+Shift, Alt+Shift). So a chord press with modifiers asks for a
+//! **mask key**: the hook thread injects one unassigned key while they are still down, which
+//! Windows counts as "another key was pressed", as a typed chord would have been.
 #![cfg(windows)]
 
 use super::binding::Binding;
@@ -44,6 +50,8 @@ pub(crate) struct Verdict {
     pub(crate) swallow: bool,
     /// Report this to the core.
     pub(crate) edge: Option<Edge>,
+    /// Inject the mask key now: a chord with modifiers was swallowed.
+    pub(crate) mask: bool,
 }
 
 /// Whether the hotkey is held, and the rules above. `Copy`, so the hook keeps it in a `Cell`.
@@ -85,9 +93,13 @@ impl HoldMachine {
                     Verdict {
                         swallow: true,
                         edge: None,
+                        mask: false,
                     }
                 } else if chord.matches(vk, modifiers) {
-                    self.transition(true)
+                    Verdict {
+                        mask: chord.modifiers != 0,
+                        ..self.transition(true)
+                    }
                 } else {
                     // The key with other modifiers: the app's.
                     Verdict::default()
@@ -113,6 +125,7 @@ impl HoldMachine {
         Verdict {
             swallow: true,
             edge,
+            mask: false,
         }
     }
 }
@@ -137,18 +150,27 @@ mod tests {
     const SWALLOW: Verdict = Verdict {
         swallow: true,
         edge: None,
+        mask: false,
     };
     const PASS: Verdict = Verdict {
         swallow: false,
         edge: None,
+        mask: false,
     };
     const PRESSED: Verdict = Verdict {
         swallow: true,
         edge: Some(Edge::Pressed),
+        mask: false,
+    };
+    /// A chord with modifiers: pressed, and the mask key asked for.
+    const PRESSED_MASKED: Verdict = Verdict {
+        mask: true,
+        ..PRESSED
     };
     const RELEASED: Verdict = Verdict {
         swallow: true,
         edge: Some(Edge::Released),
+        mask: false,
     };
 
     #[test]
@@ -197,7 +219,8 @@ mod tests {
         );
         assert_eq!(
             m.on(down(vk::SPACE, modifier::CTRL | modifier::SHIFT)),
-            PRESSED
+            PRESSED_MASKED,
+            "Ctrl+Shift released alone would switch the layout"
         );
         // Repeats swallow even after a modifier lets go.
         assert_eq!(m.on(down(vk::SPACE, modifier::CTRL)), SWALLOW);
@@ -205,9 +228,26 @@ mod tests {
     }
 
     #[test]
+    fn a_win_or_alt_chord_asks_for_the_mask_key_once() {
+        for (token, mods, key) in [
+            ("win+7", modifier::WIN, 0x37),
+            ("alt+d", modifier::ALT, 0x44),
+        ] {
+            let mut m = machine(token);
+            assert_eq!(m.on(down(key, mods)), PRESSED_MASKED, "{token}");
+            assert_eq!(
+                m.on(down(key, mods)),
+                SWALLOW,
+                "{token}: repeats ask for nothing"
+            );
+            assert_eq!(m.on(up(key)), RELEASED, "{token}");
+        }
+    }
+
+    #[test]
     fn a_function_key_alone_is_a_chord_without_modifiers() {
         let mut m = machine("f13");
-        assert_eq!(m.on(down(0x7C, 0)), PRESSED);
+        assert_eq!(m.on(down(0x7C, 0)), PRESSED, "no modifier, no mask");
         assert_eq!(m.on(up(0x7C)), RELEASED);
         assert_eq!(m.on(down(0x7C, modifier::SHIFT)), PASS);
     }

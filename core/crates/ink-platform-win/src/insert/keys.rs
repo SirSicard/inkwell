@@ -124,6 +124,21 @@ fn send(inputs: &[INPUT]) -> Result<(), PlatformError> {
     }
 }
 
+/// Injects the hotkey's mask key (down and up), marked so the hook passes it on. A failure only
+/// means the stray tap it prevents may happen; it is not reported.
+pub(crate) fn send_mask_key() {
+    let _ = send(&mask_inputs());
+}
+
+/// The mask key down and up.
+fn mask_inputs() -> [INPUT; 2] {
+    let mask = crate::hotkey::MASK_VK;
+    [
+        key(mask, 0, KEYBD_EVENT_FLAGS(0)),
+        key(mask, 0, KEYEVENTF_KEYUP),
+    ]
+}
+
 /// Presses Ctrl+V.
 pub(crate) fn post_paste() -> Result<(), PlatformError> {
     wait_for_release()?;
@@ -156,6 +171,20 @@ mod tests {
                 (0x11, 0, true)
             ]
         );
+        for input in &inputs {
+            // SAFETY: keyboard inputs.
+            assert_eq!(
+                unsafe { input.Anonymous.ki.dwExtraInfo },
+                SYNTHETIC_EVENT_MARK
+            );
+        }
+    }
+
+    #[test]
+    fn the_mask_key_is_an_unassigned_key_marked_as_ours() {
+        let inputs = mask_inputs();
+        let seen: Vec<_> = inputs.iter().map(describe).collect();
+        assert_eq!(seen, [(0xE8, 0, false), (0xE8, 0, true)]);
         for input in &inputs {
             // SAFETY: keyboard inputs.
             assert_eq!(
