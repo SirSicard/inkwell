@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- C# over the core's C ABI (inkwell.h): the generated P/Invoke declarations and event types,
+       the session, and the hop to the UI thread. No WinUI here, so it tests headless. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Trim and AOT analyzers on: the app publishes with NativeAOT. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Inkwell.Core.Tests" />
+  </ItemGroup>
+</Project>
