@@ -20,7 +20,9 @@ use ink_core::{InsertOutcome, PlatformError, TextInserter};
 
 use crate::integrity;
 use clipboard::{Owner, Saved};
-use sequence::{Backend, PasteTiming, PostFailed, Promise, Restore, WriteFailed};
+use sequence::{
+    Backend, Focus, FocusTarget, PasteTiming, PostFailed, Promise, Restore, WriteFailed,
+};
 
 /// [`TextInserter`] for Windows.
 #[derive(Debug)]
@@ -61,8 +63,18 @@ struct WinBackend {
 impl Backend for WinBackend {
     type Saved = Saved;
 
-    fn target_blocked(&self) -> bool {
-        integrity::foreground_blocks_input()
+    fn focus(&self) -> Focus {
+        match integrity::foreground_target() {
+            Some((window, pid))
+                if !integrity::blocks_input(
+                    integrity::own_level(),
+                    integrity::level_of_pid(pid),
+                ) =>
+            {
+                Focus::Ready(FocusTarget { window, pid })
+            }
+            _ => Focus::Blocked,
+        }
     }
 
     fn wait_for_release(&self) -> bool {
@@ -91,8 +103,8 @@ impl Backend for WinBackend {
         owner.restore()
     }
 
-    fn type_text(&self, text: &str) -> Result<(), PlatformError> {
-        keys::type_text(text)
+    fn type_text(&self, text: &str, target: FocusTarget) -> Result<(), PlatformError> {
+        keys::type_text(text, || self.still_focused(target))
     }
 }
 

@@ -3,7 +3,11 @@
 //!
 //! 1. Nothing to insert: touch nothing.
 //! 2. The target runs above our integrity level (an app run as administrator): Windows would drop
-//!    the keystrokes without a word, so [`InsertOutcome::Blocked`], and nothing is touched.
+//!    the keystrokes without a word, so [`InsertOutcome::Blocked`], and nothing is touched. So is
+//!    a target whose level cannot be read, and no foreground window at all (the secure desktop).
+//!    The target, window and process, is recorded here, and checked again right before Ctrl+V and
+//!    before each batch of typed keys: if focus moved, nothing more is sent, because it would land
+//!    in whatever has focus now ("the focused window changed").
 //! 3. A modifier key still held (after a chord hotkey) is waited for, once and briefly; if it stays
 //!    down, nothing is touched and the error says **nothing was inserted**, so the core keeps the
 //!    dictation (it is already in the record) rather than lose it.
@@ -61,6 +65,31 @@ pub(crate) struct Promise {
     pub(crate) reads: Receiver<()>,
 }
 
+/// The window an insertion is for, recorded when it starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FocusTarget {
+    /// The foreground window's handle, as a number.
+    pub(crate) window: usize,
+    /// The process that owns it.
+    pub(crate) pid: u32,
+}
+
+/// What has focus when the insertion starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Focus {
+    /// A window our input reaches.
+    Ready(FocusTarget),
+    /// No foreground window, or one above our integrity level (or of a level we cannot read).
+    Blocked,
+}
+
+/// The error for input that stopped because focus moved.
+pub(crate) fn focus_changed(what: &str) -> PlatformError {
+    not_inserted(&format!(
+        "the focused window changed {what}, and it would have gone to whatever has focus now"
+    ))
+}
+
 /// A Ctrl+V that did not go out cleanly.
 #[derive(Debug)]
 pub(crate) struct PostFailed {
@@ -90,8 +119,12 @@ pub(crate) enum Restore {
 pub(crate) trait Backend {
     /// A saved copy of the clipboard.
     type Saved;
-    /// Whether the focused window drops our synthetic input (UIPI).
-    fn target_blocked(&self) -> bool;
+    /// What has focus now, and whether our synthetic input reaches it (UIPI).
+    fn focus(&self) -> Focus;
+    /// Whether `target` still has focus and still takes our input.
+    fn still_focused(&self, target: FocusTarget) -> bool {
+        self.focus() == Focus::Ready(target)
+    }
     /// Waits briefly for held modifier keys to be released. `false` if one is still down.
     fn wait_for_release(&self) -> bool;
     /// Copies every format on the clipboard.
@@ -103,8 +136,9 @@ pub(crate) trait Backend {
     fn post_paste(&self) -> Result<(), PostFailed>;
     /// Puts the saved clipboard back if the clipboard is still ours, as one step.
     fn restore(&self) -> Result<Restore, PlatformError>;
-    /// Types `text` as Unicode key events.
-    fn type_text(&self, text: &str) -> Result<(), PlatformError>;
+    /// Types `text` as Unicode key events into `target`, checking before each batch that it still
+    /// has focus.
+    fn type_text(&self, text: &str, target: FocusTarget) -> Result<(), PlatformError>;
 }
 
 /// Waits for the target to read the clipboard (see the Mac's twin in ink-platform-mac). Returns
@@ -150,15 +184,15 @@ pub(crate) fn insert<B: Backend>(
     if text.is_empty() {
         return Ok(InsertOutcome::Pasted);
     }
-    if backend.target_blocked() {
+    let Focus::Ready(target) = backend.focus() else {
         return Ok(InsertOutcome::Blocked);
-    }
+    };
     if !backend.wait_for_release() {
         return Err(not_inserted(
             "a modifier key is still held, and sending into it would change the keys",
         ));
     }
-    let clipboard_back = match paste(backend, text, timing) {
+    let clipboard_back = match paste(backend, text, target, timing) {
         Paste::Taken { clipboard_back } => {
             // The text is in. A clipboard that did not come back is part of the outcome, never an
             // error (an error invites a retry, which would insert the text twice).
@@ -169,6 +203,13 @@ pub(crate) fn insert<B: Backend>(
             });
         }
         Paste::NotPosted { clipboard_back } => clipboard_back,
+        Paste::FocusMoved { clipboard_back } => {
+            return Err(PlatformError::Failed(format!(
+                "{}{}",
+                reason(&focus_changed("before the paste")),
+                clipboard_note(clipboard_back)
+            )));
+        }
         Paste::Unread {
             clipboard_back,
             read_early: false,
@@ -194,7 +235,7 @@ pub(crate) fn insert<B: Backend>(
             )));
         }
     };
-    match backend.type_text(text) {
+    match backend.type_text(text, target) {
         Ok(()) if clipboard_back => Ok(InsertOutcome::Typed),
         Ok(()) => Ok(InsertOutcome::InsertedClipboardNotRestored),
         Err(error) if clipboard_back => Err(error),
@@ -210,6 +251,8 @@ enum Paste {
     Taken { clipboard_back: bool },
     /// No Ctrl+V went out: typing is safe.
     NotPosted { clipboard_back: bool },
+    /// Focus moved before Ctrl+V: nothing was sent.
+    FocusMoved { clipboard_back: bool },
     /// Ctrl+V went out and nothing read the clipboard after it in time: it may still land.
     Unread {
         clipboard_back: bool,
@@ -233,7 +276,7 @@ fn clipboard_back(restore: &Result<Restore, PlatformError>) -> bool {
     matches!(restore, Ok(Restore::Restored | Restore::KeptNewerCopy))
 }
 
-fn paste<B: Backend>(backend: &B, text: &str, timing: PasteTiming) -> Paste {
+fn paste<B: Backend>(backend: &B, text: &str, target: FocusTarget, timing: PasteTiming) -> Paste {
     // A clipboard that cannot be saved is never overwritten: the user would lose it.
     let Ok(saved) = backend.save_clipboard() else {
         return Paste::NotPosted {
@@ -251,6 +294,11 @@ fn paste<B: Backend>(backend: &B, text: &str, timing: PasteTiming) -> Paste {
     thread::sleep(timing.settle);
     // Reads so far are not the target's: it has not been asked yet.
     let read_early = promise.reads.try_iter().count() > 0;
+    if !backend.still_focused(target) {
+        return Paste::FocusMoved {
+            clipboard_back: clipboard_back(&backend.restore()),
+        };
+    }
     if let Err(PostFailed { sent_any: false }) = backend.post_paste() {
         return Paste::NotPosted {
             clipboard_back: clipboard_back(&backend.restore()),
@@ -313,8 +361,15 @@ mod tests {
         ManagerReadsFirst,
     }
 
+    const WINDOW: FocusTarget = FocusTarget {
+        window: 0x1234,
+        pid: 42,
+    };
+
     struct Mock {
         blocked: bool,
+        /// Focus moves away once the text is on the clipboard (after `write`).
+        focus_moves: bool,
         target: Target,
         fail_save: bool,
         fail_write: Option<bool>,
@@ -335,6 +390,7 @@ mod tests {
         fn new(target: Target) -> Self {
             Self {
                 blocked: false,
+                focus_moves: false,
                 target,
                 fail_save: false,
                 fail_write: None,
@@ -359,8 +415,19 @@ mod tests {
     impl Backend for Mock {
         type Saved = String;
 
-        fn target_blocked(&self) -> bool {
-            self.blocked
+        fn focus(&self) -> Focus {
+            if self.blocked {
+                return Focus::Blocked;
+            }
+            let written = self.calls.borrow().contains(&"write");
+            if self.focus_moves && written {
+                Focus::Ready(FocusTarget {
+                    window: 0x9999,
+                    pid: 7,
+                })
+            } else {
+                Focus::Ready(WINDOW)
+            }
         }
 
         fn wait_for_release(&self) -> bool {
@@ -424,8 +491,12 @@ mod tests {
             })
         }
 
-        fn type_text(&self, text: &str) -> Result<(), PlatformError> {
+        fn type_text(&self, text: &str, target: FocusTarget) -> Result<(), PlatformError> {
             self.call("type");
+            assert_eq!(
+                target, WINDOW,
+                "typing goes to the window recorded at the start"
+            );
             if self.fail_type {
                 return Err(PlatformError::Failed("SendInput sent 0 of 68".into()));
             }
@@ -447,6 +518,25 @@ mod tests {
         mock.blocked = true;
         assert_eq!(insert(&mock, TEXT, FAST).unwrap(), InsertOutcome::Blocked);
         assert!(mock.calls.borrow().is_empty());
+        assert_eq!(*mock.clipboard.borrow(), ORIGINAL);
+    }
+
+    #[test]
+    fn focus_moving_before_ctrl_v_sends_nothing_and_restores() {
+        let mut mock = Mock::new(Target::Reads);
+        mock.focus_moves = true;
+        match insert(&mock, TEXT, FAST) {
+            Err(PlatformError::Failed(m)) => {
+                assert!(m.starts_with("nothing was inserted"), "{m}");
+                assert!(m.contains("focused window changed"), "{m}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            *mock.calls.borrow(),
+            ["wait", "save", "write", "restore"],
+            "no Ctrl+V, no typing"
+        );
         assert_eq!(*mock.clipboard.borrow(), ORIGINAL);
     }
 

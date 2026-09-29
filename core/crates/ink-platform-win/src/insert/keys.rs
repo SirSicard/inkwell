@@ -173,11 +173,42 @@ pub(crate) fn post_paste() -> Result<(), bool> {
     send_counted(&paste_inputs()).map_err(|(sent, _)| sent > 0)
 }
 
-/// Types `text`.
-pub(crate) fn type_text(text: &str) -> Result<(), PlatformError> {
-    for batch in text_inputs(text).chunks(TYPE_BATCH) {
+/// Types `text`, calling `still_focused` before each batch: once it says no, nothing more is sent.
+pub(crate) fn type_text(
+    text: &str,
+    still_focused: impl FnMut() -> bool,
+) -> Result<(), PlatformError> {
+    type_batches(&text_inputs(text), still_focused, |batch| {
         refuse_if_held()?;
-        send(batch)?;
+        send(batch)
+    })
+}
+
+/// The typing loop over `inputs`, in batches: check focus, send; stop at the first failure. The
+/// error says how much went in. Pure over `still_focused` and `send`.
+fn type_batches(
+    inputs: &[INPUT],
+    mut still_focused: impl FnMut() -> bool,
+    mut send: impl FnMut(&[INPUT]) -> Result<(), PlatformError>,
+) -> Result<(), PlatformError> {
+    let total = inputs.len() / 2;
+    let mut done = 0;
+    for batch in inputs.chunks(TYPE_BATCH) {
+        let result = if still_focused() {
+            send(batch)
+        } else {
+            Err(super::sequence::focus_changed("while typing"))
+        };
+        if let Err(error) = result {
+            return Err(if done == 0 {
+                error
+            } else {
+                PlatformError::Failed(format!(
+                    "the text was only partly typed ({done} of {total} keys): {error}"
+                ))
+            });
+        }
+        done += batch.len() / 2;
     }
     Ok(())
 }
@@ -220,6 +251,38 @@ mod tests {
                 SYNTHETIC_EVENT_MARK
             );
         }
+    }
+
+    #[test]
+    fn typing_stops_at_the_batch_where_focus_moved_and_says_how_far_it_got() {
+        let inputs = text_inputs(&"x".repeat(100)); // 200 inputs: batches of 64, 64, 64, 8
+        let mut checks = 0;
+        let mut sent = 0;
+        let result = type_batches(
+            &inputs,
+            || {
+                checks += 1;
+                checks <= 2
+            },
+            |batch| {
+                sent += batch.len();
+                Ok(())
+            },
+        );
+        assert_eq!(sent, 128, "two batches went in, none after focus moved");
+        match result {
+            Err(PlatformError::Failed(m)) => {
+                assert!(m.contains("64 of 100"), "{m}");
+                assert!(m.contains("focused window changed"), "{m}");
+            }
+            other => panic!("{other:?}"),
+        }
+        // Focus gone before the first batch: nothing was inserted.
+        let result = type_batches(&inputs, || false, |_| panic!("nothing sent"));
+        assert!(
+            matches!(result, Err(PlatformError::Failed(m)) if m.starts_with("nothing was inserted"))
+        );
+        assert!(type_batches(&inputs, || true, |_| Ok(())).is_ok());
     }
 
     #[test]

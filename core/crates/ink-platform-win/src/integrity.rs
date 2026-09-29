@@ -36,12 +36,12 @@ pub(crate) enum TargetLevel {
     Unknown,
 }
 
-/// Whether input from a process at `own` is dropped by `target`. Pure.
+/// Whether input from a process at `own` is dropped by `target`. A level that could not be read
+/// counts as dropping it: sending blind into an elevated window fails silently. Pure.
 pub(crate) fn blocks_input(own: Integrity, target: TargetLevel) -> bool {
     match target {
         TargetLevel::Known(level) => level > own,
-        TargetLevel::Refused => true,
-        TargetLevel::Unknown => false,
+        TargetLevel::Refused | TargetLevel::Unknown => true,
     }
 }
 
@@ -116,11 +116,23 @@ pub(crate) fn window_pid(window: HWND) -> Option<u32> {
     (pid != 0).then_some(pid)
 }
 
-/// The level of the process owning the foreground window.
+/// The foreground window (as a number) and the process that owns it; `None` without one (the
+/// secure desktop).
+pub(crate) fn foreground_target() -> Option<(usize, u32)> {
+    let window = foreground_window()?;
+    Some((window.0 as usize, window_pid(window)?))
+}
+
+/// The level of the process owning the foreground window; `Unknown` without one.
 pub(crate) fn foreground_level() -> TargetLevel {
-    let Some(pid) = foreground_window().and_then(window_pid) else {
-        return TargetLevel::Unknown;
-    };
+    match foreground_target() {
+        Some((_, pid)) => level_of_pid(pid),
+        None => TargetLevel::Unknown,
+    }
+}
+
+/// The level of process `pid`.
+pub(crate) fn level_of_pid(pid: u32) -> TargetLevel {
     // SAFETY: plain arguments; the handle is closed by `Owned`.
     match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
         Ok(process) => {
@@ -131,7 +143,8 @@ pub(crate) fn foreground_level() -> TargetLevel {
     }
 }
 
-/// Whether the foreground window would drop our synthetic input.
+/// Whether the foreground window would drop our synthetic input. No foreground window, or one
+/// whose level cannot be read, counts as dropping it.
 pub(crate) fn foreground_blocks_input() -> bool {
     blocks_input(own_level(), foreground_level())
 }
@@ -173,7 +186,10 @@ mod tests {
             "both elevated"
         );
         assert!(!blocks_input(MEDIUM, TargetLevel::Known(0x1000)), "low");
-        assert!(!blocks_input(MEDIUM, TargetLevel::Unknown));
+        assert!(
+            blocks_input(MEDIUM, TargetLevel::Unknown),
+            "an unreadable level is never taken as reachable"
+        );
     }
 
     /// Runs on CI: reading this process's own token needs nothing.
