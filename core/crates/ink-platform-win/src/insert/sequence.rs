@@ -12,7 +12,11 @@
 //!    sync, press Ctrl+V, wait until the target has read it plus a quiet period, then put the saved
 //!    clipboard back, but only if nobody wrote it since. A clipboard that cannot be saved is never
 //!    overwritten.
-//! 5. If nothing read the clipboard in time, type the text as Unicode key events.
+//! 5. Type the text as Unicode key events **only when no Ctrl+V went out** (the clipboard could
+//!    not be saved or written, or Windows took none of the keystroke). A Ctrl+V that went out and
+//!    was not read in time may still land later, in an app that was only slow: typing as well
+//!    could insert the text twice, or the late paste could insert the restored clipboard. So that
+//!    case inserts nothing more and says "nothing was inserted".
 //!
 //! Every error that leaves the text out says so in words that begin "nothing was inserted"
 //! ([`not_inserted`]).
@@ -52,6 +56,13 @@ pub(crate) struct Promise {
     pub(crate) reads: Receiver<()>,
 }
 
+/// A Ctrl+V that did not go out cleanly.
+#[derive(Debug)]
+pub(crate) struct PostFailed {
+    /// Whether any of its keystrokes went in: then a paste may still be pending.
+    pub(crate) sent_any: bool,
+}
+
 /// A write that did not happen, and whether the clipboard is as it was.
 #[derive(Debug)]
 pub(crate) struct WriteFailed {
@@ -84,7 +95,7 @@ pub(crate) trait Backend {
     /// [`restore`](Self::restore); on failure it has already tried to put it back.
     fn write_delayed(&self, text: &str, saved: Self::Saved) -> Result<Promise, WriteFailed>;
     /// Presses Ctrl+V.
-    fn post_paste(&self) -> Result<(), PlatformError>;
+    fn post_paste(&self) -> Result<(), PostFailed>;
     /// Puts the saved clipboard back if the clipboard is still ours, as one step.
     fn restore(&self) -> Result<Restore, PlatformError>;
     /// Types `text` as Unicode key events.
@@ -152,7 +163,15 @@ pub(crate) fn insert<B: Backend>(
                 InsertOutcome::InsertedClipboardNotRestored
             });
         }
-        Paste::NotTaken { clipboard_back } => clipboard_back,
+        Paste::NotPosted { clipboard_back } => clipboard_back,
+        Paste::Unread { clipboard_back } => {
+            return Err(not_inserted(&format!(
+                "the app did not take the paste within {} s, and typing it as well could insert \
+                 it twice{}",
+                timing.read_timeout.as_secs_f32(),
+                clipboard_note(clipboard_back)
+            )));
+        }
     };
     match backend.type_text(text) {
         Ok(()) if clipboard_back => Ok(InsertOutcome::Typed),
@@ -166,8 +185,21 @@ pub(crate) fn insert<B: Backend>(
 }
 
 enum Paste {
+    /// The target read it.
     Taken { clipboard_back: bool },
-    NotTaken { clipboard_back: bool },
+    /// No Ctrl+V went out: typing is safe.
+    NotPosted { clipboard_back: bool },
+    /// Ctrl+V went out and nothing read the clipboard in time: it may still land.
+    Unread { clipboard_back: bool },
+}
+
+/// The clause an error adds when the user's clipboard did not come back.
+fn clipboard_note(clipboard_back: bool) -> &'static str {
+    if clipboard_back {
+        ""
+    } else {
+        "; the previous clipboard could not be put back either"
+    }
 }
 
 /// Whether a restore left the user's clipboard as it should be: back in full, or replaced by a
@@ -179,24 +211,25 @@ fn clipboard_back(restore: &Result<Restore, PlatformError>) -> bool {
 fn paste<B: Backend>(backend: &B, text: &str, timing: PasteTiming) -> Paste {
     // A clipboard that cannot be saved is never overwritten: the user would lose it.
     let Ok(saved) = backend.save_clipboard() else {
-        return Paste::NotTaken {
+        return Paste::NotPosted {
             clipboard_back: true,
         };
     };
     let promise = match backend.write_delayed(text, saved) {
         Ok(promise) => promise,
         Err(failed) => {
-            return Paste::NotTaken {
+            return Paste::NotPosted {
                 clipboard_back: failed.clipboard_back,
             };
         }
     };
     thread::sleep(timing.settle);
-    if backend.post_paste().is_err() {
-        return Paste::NotTaken {
+    if let Err(PostFailed { sent_any: false }) = backend.post_paste() {
+        return Paste::NotPosted {
             clipboard_back: clipboard_back(&backend.restore()),
         };
     }
+    // Posted, or partly: from here a paste may land, so the text is never typed as well.
     let taken = wait_for_reads(&promise.reads, Instant::now(), timing);
     let back = clipboard_back(&backend.restore());
     if taken {
@@ -204,7 +237,7 @@ fn paste<B: Backend>(backend: &B, text: &str, timing: PasteTiming) -> Paste {
             clipboard_back: back,
         }
     } else {
-        Paste::NotTaken {
+        Paste::Unread {
             clipboard_back: back,
         }
     }
@@ -254,7 +287,8 @@ mod tests {
         target: Target,
         fail_save: bool,
         fail_write: Option<bool>,
-        fail_post: bool,
+        /// `Some(sent_any)`: Ctrl+V fails, with or without some keystrokes in.
+        fail_post: Option<bool>,
         fail_type: bool,
         held: bool,
         lossy_restore: bool,
@@ -273,7 +307,7 @@ mod tests {
                 target,
                 fail_save: false,
                 fail_write: None,
-                fail_post: false,
+                fail_post: None,
                 fail_type: false,
                 held: false,
                 lossy_restore: false,
@@ -323,10 +357,10 @@ mod tests {
             Ok(Promise { reads: rx })
         }
 
-        fn post_paste(&self) -> Result<(), PlatformError> {
+        fn post_paste(&self) -> Result<(), PostFailed> {
             self.call("paste");
-            if self.fail_post {
-                return Err(PlatformError::Failed("SendInput".into()));
+            if let Some(sent_any) = self.fail_post {
+                return Err(PostFailed { sent_any });
             }
             let reader = self.reader.borrow();
             let reader = reader.as_ref().expect("written first");
@@ -431,14 +465,23 @@ mod tests {
     }
 
     #[test]
-    fn an_unread_paste_restores_then_types() {
+    fn an_unread_paste_restores_and_is_never_typed_on_top() {
         let mock = Mock::new(Target::Ignores);
-        assert_eq!(insert(&mock, TEXT, FAST).unwrap(), InsertOutcome::Typed);
+        match insert(&mock, TEXT, FAST) {
+            Err(PlatformError::Failed(m)) => {
+                assert!(m.starts_with("nothing was inserted"), "{m}");
+                assert!(m.contains("twice"), "{m}");
+            }
+            other => panic!("{other:?}"),
+        }
         assert_eq!(
             *mock.calls.borrow(),
-            ["wait", "save", "write", "paste", "restore", "type"]
+            ["wait", "save", "write", "paste", "restore"]
         );
-        assert_eq!(mock.typed.borrow().as_deref(), Some(TEXT));
+        assert!(
+            mock.typed.borrow().is_none(),
+            "a late paste could still land"
+        );
         assert_eq!(*mock.clipboard.borrow(), ORIGINAL);
     }
 
@@ -465,9 +508,9 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_ctrl_v_restores_then_types() {
+    fn a_ctrl_v_that_never_went_out_restores_then_types() {
         let mut mock = Mock::new(Target::Reads);
-        mock.fail_post = true;
+        mock.fail_post = Some(false);
         assert_eq!(insert(&mock, TEXT, FAST).unwrap(), InsertOutcome::Typed);
         assert_eq!(
             *mock.calls.borrow(),
@@ -476,14 +519,29 @@ mod tests {
     }
 
     #[test]
+    fn a_ctrl_v_that_partly_went_out_is_waited_for_never_typed_over() {
+        // Some of its keystrokes went in: the paste may land, and here the target reads it.
+        let mut mock = Mock::new(Target::Ignores);
+        mock.fail_post = Some(true);
+        assert!(insert(&mock, TEXT, FAST).is_err());
+        assert!(mock.typed.borrow().is_none());
+        assert_eq!(
+            *mock.calls.borrow(),
+            ["wait", "save", "write", "paste", "restore"]
+        );
+    }
+
+    #[test]
     fn typing_that_fails_is_an_error_naming_the_clipboard_too() {
         let mut mock = Mock::new(Target::Ignores);
+        mock.fail_post = Some(false);
         mock.fail_type = true;
         assert!(matches!(
             insert(&mock, TEXT, FAST),
             Err(PlatformError::Failed(_))
         ));
         let mut worse = Mock::new(Target::Ignores);
+        worse.fail_post = Some(false);
         worse.fail_type = true;
         worse.lossy_restore = true;
         match insert(&worse, TEXT, FAST) {

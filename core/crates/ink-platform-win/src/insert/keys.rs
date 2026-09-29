@@ -119,15 +119,23 @@ fn refuse_if_held() -> Result<(), PlatformError> {
 
 /// Sends `inputs` in one call; an error unless all went in.
 fn send(inputs: &[INPUT]) -> Result<(), PlatformError> {
+    send_counted(inputs).map_err(|(_, error)| error)
+}
+
+/// As [`send`], with how many went in when not all did.
+fn send_counted(inputs: &[INPUT]) -> Result<(), (u32, PlatformError)> {
     // SAFETY: a live slice of keyboard inputs and the struct's size.
     let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
     if sent as usize == inputs.len() {
         Ok(())
     } else {
-        Err(PlatformError::Failed(format!(
-            "Windows accepted {sent} of {} key events (another app may be blocking input)",
-            inputs.len()
-        )))
+        Err((
+            sent,
+            PlatformError::Failed(format!(
+                "Windows accepted {sent} of {} key events (another app may be blocking input)",
+                inputs.len()
+            )),
+        ))
     }
 }
 
@@ -158,10 +166,11 @@ pub(crate) fn send_heartbeat() -> bool {
     unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) > 0 }
 }
 
-/// Presses Ctrl+V.
-pub(crate) fn post_paste() -> Result<(), PlatformError> {
-    refuse_if_held()?;
-    send(&paste_inputs())
+/// Presses Ctrl+V. On failure, whether any of its keystrokes went in (then a paste may still
+/// happen).
+pub(crate) fn post_paste() -> Result<(), bool> {
+    refuse_if_held().map_err(|_| false)?;
+    send_counted(&paste_inputs()).map_err(|(sent, _)| sent > 0)
 }
 
 /// Types `text`.

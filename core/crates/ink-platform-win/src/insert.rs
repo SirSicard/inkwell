@@ -1,4 +1,4 @@
-//! Text insertion: a delayed-render paste first, then Unicode key events.
+//! Text insertion: a delayed-render paste, or Unicode key events when no paste could go out.
 //!
 //! The order and every decision are in `sequence`, tested against a scripted clipboard. This
 //! module wires it to the real clipboard (`clipboard`: an owner thread per insertion), synthetic
@@ -20,7 +20,7 @@ use ink_core::{InsertOutcome, PlatformError, TextInserter};
 
 use crate::integrity;
 use clipboard::{Owner, Saved};
-use sequence::{Backend, PasteTiming, Promise, Restore, WriteFailed};
+use sequence::{Backend, PasteTiming, PostFailed, Promise, Restore, WriteFailed};
 
 /// [`TextInserter`] for Windows.
 #[derive(Debug)]
@@ -44,8 +44,9 @@ impl Default for WinTextInserter {
 }
 
 impl TextInserter for WinTextInserter {
-    /// Blocks for the length of the paste: about 0.35 s when the target reads it, up to about 2 s
-    /// before typing instead when nothing does. Never prompts: Windows has nothing to prompt for.
+    /// Blocks for the length of the paste: about 0.35 s when the target reads it, about 2 s when
+    /// nothing does (then nothing more is inserted, and the error says so). Never prompts:
+    /// Windows has nothing to prompt for.
     fn insert(&self, text: &str) -> Result<InsertOutcome, PlatformError> {
         sequence::insert(&WinBackend::default(), text, self.timing)
     }
@@ -78,8 +79,8 @@ impl Backend for WinBackend {
         Ok(Promise { reads })
     }
 
-    fn post_paste(&self) -> Result<(), PlatformError> {
-        keys::post_paste()
+    fn post_paste(&self) -> Result<(), PostFailed> {
+        keys::post_paste().map_err(|sent_any| PostFailed { sent_any })
     }
 
     fn restore(&self) -> Result<Restore, PlatformError> {
