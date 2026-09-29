@@ -2,6 +2,7 @@
   <Configurations>
     <Platform Name="x64" />
   </Configurations>
+  <Project Path="Inkwell/Inkwell.csproj" />
   <Project Path="Inkwell.Core/Inkwell.Core.csproj" />
   <Project Path="Inkwell.Core.Tests/Inkwell.Core.Tests.csproj" />
 </Solution>

@@ -51,7 +51,8 @@ foreach ($file in $assetsFiles) {
     foreach ($tfm in $assets['project']['frameworks'].Keys) {
         foreach ($dep in @($assets['project']['frameworks'][$tfm]['downloadDependencies'])) {
             if ($null -eq $dep) { continue }
-            foreach ($v in ($dep['version'] -replace '[\[\]\(\) ]', '' -split ';')) {
+            # An exact range, "[10.0.12, 10.0.12]": each bound names the same version.
+            foreach ($v in @($dep['version'] -replace '[\[\]\(\) ]', '' -split ',' | Where-Object { $_ } | Sort-Object -Unique)) {
                 $packages["$($dep['name'].ToLowerInvariant())/$($v.ToLowerInvariant())"] = @{ Id = $dep['name']; Version = $v; Folders = $folders }
             }
         }

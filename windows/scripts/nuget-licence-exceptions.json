@@ -1,1 +1,37 @@
-[]
+[
+  {
+    "id": "Microsoft.WindowsAppSDK.WinUI",
+    "licence": "file license.txt sha256:ee72e062ba4afb3420bc3439a1e86f4d775f8e4a0daabdc35a72b6ee379359f2",
+    "reason": "Microsoft Software License Terms, Windows App SDK: WinUI 3 has no other source. Accepted by the maintainer on 2026-09-29 for 2.x component packages; its end-user notice (section 3(b)(ii)) is owed before Windows distribution."
+  },
+  {
+    "id": "Microsoft.WindowsAppSDK.Base",
+    "licence": "file license.txt sha256:ee72e062ba4afb3420bc3439a1e86f4d775f8e4a0daabdc35a72b6ee379359f2",
+    "reason": "Microsoft Software License Terms, Windows App SDK: WinUI 3 has no other source. Accepted by the maintainer on 2026-09-29 for 2.x component packages; its end-user notice (section 3(b)(ii)) is owed before Windows distribution."
+  },
+  {
+    "id": "Microsoft.WindowsAppSDK.Foundation",
+    "licence": "file license.txt sha256:ee72e062ba4afb3420bc3439a1e86f4d775f8e4a0daabdc35a72b6ee379359f2",
+    "reason": "Microsoft Software License Terms, Windows App SDK: WinUI 3 has no other source. Accepted by the maintainer on 2026-09-29 for 2.x component packages; its end-user notice (section 3(b)(ii)) is owed before Windows distribution."
+  },
+  {
+    "id": "Microsoft.WindowsAppSDK.InteractiveExperiences",
+    "licence": "file license.txt sha256:ee72e062ba4afb3420bc3439a1e86f4d775f8e4a0daabdc35a72b6ee379359f2",
+    "reason": "Microsoft Software License Terms, Windows App SDK: WinUI 3 has no other source. Accepted by the maintainer on 2026-09-29 for 2.x component packages; its end-user notice (section 3(b)(ii)) is owed before Windows distribution."
+  },
+  {
+    "id": "Microsoft.Web.WebView2",
+    "licence": "file LICENSE.txt sha256:0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55",
+    "reason": "BSD-3-Clause text, untagged. A dependency of WinUI; accepted by the maintainer on 2026-09-29."
+  },
+  {
+    "id": "Microsoft.Windows.SDK.BuildTools",
+    "licence": "url https://aka.ms/WinSDKLicenseURL",
+    "reason": "Windows SDK licence; build tools only, nothing ships. A dependency of the Windows App SDK; accepted by the maintainer on 2026-09-29."
+  },
+  {
+    "id": "Microsoft.Windows.SDK.BuildTools.MSIX",
+    "licence": "file sdk_license.txt sha256:707cc5cc686f19c0a58a8cbafa73ed2c4656cf16ae8726b6d80b469db91cd3e2",
+    "reason": "Windows SDK licence terms; MSIX build tools only, unused by the unpackaged app. A dependency of the Windows App SDK; accepted by the maintainer on 2026-09-29."
+  }
+]

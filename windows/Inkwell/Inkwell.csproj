@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The WinUI 3 shell: an unpackaged, self-contained app (nothing is installed system-wide:
+       the Windows App SDK's runtime is copied next to the exe), published with NativeAOT. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.26100.0</TargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <ApplicationIcon>Assets\Inkwell.ico</ApplicationIcon>
+    <RootNamespace>Inkwell</RootNamespace>
+    <!-- NativeAOT on publish (dotnet publish -c Release). The fallback, if a NativeAOT build
+         breaks: -p:PublishAot=false -p:PublishReadyToRun=true. -->
+    <PublishAot>true</PublishAot>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" />
+    <PackageReference Include="WinUIEx" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Inkwell.Core\Inkwell.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Assets\Inkwell.ico" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The core. Missing, the app still starts and says the core did not start. -->
+    <Content Include="$(InkCoreDir)ink_ffi.dll" Link="ink_ffi.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(InkCoreDir)ink_ffi.dll')" />
+  </ItemGroup>
+</Project>

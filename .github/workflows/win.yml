@@ -1,8 +1,9 @@
 name: Windows
 
 # The Windows shell (windows/): the generated C# is current, every NuGet package's licence is on
-# the allowlist, and the solution builds and passes its tests against the core's DLL (the cdylib
-# of core/crates/ink-ffi, engine features off). The core's own tests run in core.yml.
+# the allowlist, the solution builds and passes its tests against the core's DLL (the cdylib of
+# core/crates/ink-ffi, engine features off), and the app publishes with NativeAOT. The core's own
+# tests run in core.yml. CI has no desktop: launching the app is windows/S3.3a-CHECKLIST.md.
 on:
   push:
     branches: [main]
@@ -61,3 +62,7 @@ jobs:
         run: dotnet build windows/Inkwell.slnx --no-restore
       - name: Tests
         run: dotnet test windows/Inkwell.slnx --no-build
+      # The app as it ships: NativeAOT, x64, with the Windows App SDK's runtime beside the exe.
+      # A trim or AOT warning fails it (warnings are errors).
+      - name: Publish the app (NativeAOT)
+        run: dotnet publish windows/Inkwell/Inkwell.csproj -c Release -o "${{ runner.temp }}/inkwell-app"

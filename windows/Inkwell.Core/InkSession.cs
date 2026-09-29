@@ -91,6 +91,9 @@ public sealed unsafe class InkSession : IDisposable
         public volatile int EventThread;
     }
 
+    /// <summary>INK_ABI_VERSION: core.ready must report this.</summary>
+    public const long AbiVersion = InkAbi.Version;
+
     private readonly EventSink sink;
     private readonly GCHandle handle;
     private readonly Lock stopLock = new();

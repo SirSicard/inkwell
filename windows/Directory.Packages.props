@@ -5,6 +5,15 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The app. The Windows App SDK's component packages, not its metapackage (which adds the AI,
+         ML, Search and Widgets packages): WinUI brings Base, Foundation, InteractiveExperiences,
+         WebView2 and the SDK build tools. Their licences are Microsoft's, accepted by the
+         maintainer and listed in scripts/nuget-licence-exceptions.json. -->
+    <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+    <!-- The tray icon (MIT). -->
+    <PackageVersion Include="WinUIEx" Version="2.9.3" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Tests (never shipped): xUnit v3 on the VSTest runner, without Microsoft.Testing.Platform. -->
     <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.1" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
