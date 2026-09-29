@@ -34,6 +34,8 @@
                             TextTrimming="CharacterEllipsis"
                             TextWrapping="Wrap" />
                         <TextBlock x:Name="RecordLine" Style="{StaticResource InkTimestampStyle}" TextWrapping="Wrap" />
+                        <!-- A copy the clipboard refused (another app holding it). -->
+                        <TextBlock x:Name="CopyFailure" Style="{StaticResource InkAlertTextStyle}" Visibility="Collapsed" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
                         <Button

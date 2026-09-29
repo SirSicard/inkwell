@@ -142,11 +142,24 @@ internal static class Parts
 /// <summary>Puts text on the clipboard.</summary>
 internal static class TextClipboard
 {
-    public static void Copy(string text)
+    /// <summary>The line a refused copy shows.</summary>
+    public const string Failed = "Couldn't copy: another app is holding the clipboard. Try again.";
+
+    /// <summary>Copies <paramref name="text"/>; false when the clipboard refused it (another app holds it), logged by name.</summary>
+    public static bool Copy(string text)
     {
-        var package = new DataPackage();
-        package.SetText(text);
-        Clipboard.SetContent(package);
+        try
+        {
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+            return true;
+        }
+        catch (System.Runtime.InteropServices.COMException e)
+        {
+            ScreenLog.System.Write($"a copy to the clipboard was refused (0x{e.HResult:X8})");
+            return false;
+        }
     }
 }
 

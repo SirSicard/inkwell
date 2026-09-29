@@ -369,7 +369,7 @@ public sealed partial class RecordScreen : UserControl
     {
         if (_library.Document?.Summary is { } summary)
         {
-            TextClipboard.Copy(summary.PlainText);
+            ShowCopy(TextClipboard.Copy(summary.PlainText));
         }
     }
 
@@ -377,9 +377,16 @@ public sealed partial class RecordScreen : UserControl
     {
         if (_library.Document is { } document)
         {
-            TextClipboard.Copy(document.TranscriptText);
+            ShowCopy(TextClipboard.Copy(document.TranscriptText));
         }
     }
 
     private void OnTryAgain(object sender, RoutedEventArgs e) => _library.Reopen();
+
+    /// <summary>A refused copy says so under the title; the next copy that works clears it.</summary>
+    private void ShowCopy(bool copied)
+    {
+        CopyFailure.Text = copied ? "" : TextClipboard.Failed;
+        CopyFailure.Visibility = copied ? Visibility.Collapsed : Visibility.Visible;
+    }
 }
