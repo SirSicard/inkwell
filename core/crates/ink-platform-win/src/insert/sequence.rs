@@ -25,9 +25,10 @@
 //!    not be saved or written, or Windows took none of the keystroke). A Ctrl+V that went out and
 //!    was not read in time may still land later, in an app that was only slow: typing as well
 //!    could insert the text twice, or the late paste could insert the restored clipboard. So that
-//!    case inserts nothing more and says "nothing was inserted".
+//!    case inserts nothing more and says the paste **could not be confirmed** and may land late,
+//!    never "nothing was inserted", so a retry does not duplicate it.
 //!
-//! Every error that leaves the text out says so in words that begin "nothing was inserted"
+//! Every error that surely left the text out says so in words that begin "nothing was inserted"
 //! ([`not_inserted`]).
 #![cfg(windows)]
 
@@ -214,9 +215,12 @@ pub(crate) fn insert<B: Backend>(
             clipboard_back,
             read_early: false,
         } => {
-            return Err(not_inserted(&format!(
-                "the app did not take the paste within {} s, and typing it as well could insert \
-                 it twice{}",
+            // Not "nothing was inserted": a slow app may still paste it, so a retry could
+            // duplicate it. Nothing is typed on top, for the same reason.
+            return Err(PlatformError::Failed(format!(
+                "the paste could not be confirmed: the app did not read it within {} s and it may \
+                 still land late; it was not typed as well, so check the app before inserting \
+                 again{}",
                 timing.read_timeout.as_secs_f32(),
                 clipboard_note(clipboard_back)
             )));
@@ -593,8 +597,11 @@ mod tests {
         let mock = Mock::new(Target::Ignores);
         match insert(&mock, TEXT, FAST) {
             Err(PlatformError::Failed(m)) => {
-                assert!(m.starts_with("nothing was inserted"), "{m}");
-                assert!(m.contains("twice"), "{m}");
+                assert!(m.contains("could not be confirmed"), "{m}");
+                assert!(
+                    !m.starts_with("nothing was inserted"),
+                    "it may land late: {m}"
+                );
             }
             other => panic!("{other:?}"),
         }

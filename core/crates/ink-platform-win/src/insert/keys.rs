@@ -205,6 +205,17 @@ fn batches(inputs: &[INPUT]) -> Vec<&[INPUT]> {
     out
 }
 
+/// A failure before any key went in, worded as nothing inserted (once).
+fn first_batch_failed(error: PlatformError) -> PlatformError {
+    match error {
+        PlatformError::Failed(m) if m.starts_with("nothing was inserted") => {
+            PlatformError::Failed(m)
+        }
+        PlatformError::Failed(m) => super::sequence::not_inserted(&m),
+        other => super::sequence::not_inserted(&other.to_string()),
+    }
+}
+
 /// The typing loop over `inputs`, in batches: check focus, send; stop at the first failure. The
 /// error says how much went in. Pure over `still_focused` and `send`.
 fn type_batches(
@@ -222,7 +233,7 @@ fn type_batches(
         };
         if let Err(error) = result {
             return Err(if done == 0 {
-                error
+                first_batch_failed(error)
             } else {
                 PlatformError::Failed(format!(
                     "the text was only partly typed ({done} of {total} keys): {error}"
@@ -304,6 +315,25 @@ mod tests {
             matches!(result, Err(PlatformError::Failed(m)) if m.starts_with("nothing was inserted"))
         );
         assert!(type_batches(&inputs, || true, |_| Ok(())).is_ok());
+        // Any failure of the first batch is "nothing was inserted", worded once.
+        let result = type_batches(
+            &inputs,
+            || true,
+            |_| {
+                Err(PlatformError::Failed(
+                    "Windows accepted 0 of 64 key events".into(),
+                ))
+            },
+        );
+        match result {
+            Err(PlatformError::Failed(m)) => {
+                assert!(
+                    m.starts_with("nothing was inserted: Windows accepted"),
+                    "{m}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
