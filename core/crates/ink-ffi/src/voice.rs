@@ -77,15 +77,26 @@ pub const DICTATION_SETTINGS: &[&str] = &[
     Feature::Polish.setting_key(),
     Feature::Edit.setting_key(),
 ];
-/// The dictation key until the user picks another.
+/// The dictation key until the user picks another: Fn on the Mac.
+#[cfg(not(windows))]
 pub const DEFAULT_KEY: &str = "fn";
-/// The keys a shell may offer (modifiers held on their own; see ink-platform-mac's bindings).
+/// The dictation key until the user picks another: right Ctrl on Windows, where Fn never reaches
+/// the OS (ink-platform-win's `DEFAULT_BINDING`).
+#[cfg(windows)]
+pub const DEFAULT_KEY: &str = ink_platform_win::hotkey::DEFAULT_BINDING;
+/// The keys a shell may offer (modifiers held on their own; see each platform's bindings). One
+/// list for both platforms: the Mac offers `fn`, `right_option` and `right_command`, Windows
+/// `right_alt` and `right_win`, and a platform that cannot hold a key refuses it when dictation
+/// binds it (`dictation.off` with `key_refused`), so a key stored on the other OS is said, never
+/// quietly swapped.
 pub const KEYS: &[&str] = &[
     "fn",
     "right_option",
     "right_command",
     "right_control",
     "right_shift",
+    "right_alt",
+    "right_win",
 ];
 /// The edit key's values: `off` (the default: a held modifier would otherwise read the selection
 /// in every app) or one of [`KEYS`].
@@ -96,10 +107,12 @@ pub const EDIT_KEYS: &[&str] = &[
     "right_command",
     "right_control",
     "right_shift",
+    "right_alt",
+    "right_win",
 ];
 
-/// The platform's pieces dictation needs. The Mac's are made by [`VoicePlatform::mac`]; tests pass
-/// mocks. Two hotkey sources, one per key: a source holds one binding.
+/// The platform's pieces dictation needs. The Mac's are made by [`VoicePlatform::mac`], Windows'
+/// by [`VoicePlatform::win`]; tests pass mocks. Two hotkey sources, one per key: a source holds one binding.
 #[derive(Clone)]
 pub struct VoicePlatform {
     /// Opens the mic.
@@ -125,6 +138,21 @@ impl VoicePlatform {
             edit_keys: Arc::new(ink_platform_mac::MacHotkeySource::new(clock)),
             inserter: Arc::new(ink_platform_mac::MacTextInserter::new()),
             focus: Arc::new(ink_platform_mac::MacFocusReader::new()),
+        })
+    }
+
+    /// Windows': WASAPI capture, two low-level keyboard hooks, insertion and focus, on the
+    /// performance counter (the timebase the core's clock uses there too). Nothing is opened or
+    /// hooked until dictation starts and binds its keys.
+    #[cfg(windows)]
+    pub fn win() -> Result<Self, String> {
+        let clock = ink_platform_win::WinClock::new().map_err(|e| e.to_string())?;
+        Ok(Self {
+            capture: Arc::new(ink_platform_win::WinCapture::new(clock)),
+            keys: Arc::new(ink_platform_win::WinHotkeySource::new(clock)),
+            edit_keys: Arc::new(ink_platform_win::WinHotkeySource::new(clock)),
+            inserter: Arc::new(ink_platform_win::WinTextInserter::new()),
+            focus: Arc::new(ink_platform_win::WinFocusReader::new()),
         })
     }
 }
@@ -1029,6 +1057,37 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    /// Each OS starts on a key it can hold, and the settings accept it as the key and the edit key:
+    /// Fn on the Mac, right Ctrl on Windows (Fn never reaches Windows).
+    #[test]
+    fn the_default_key_is_this_platforms_own() {
+        assert!(KEYS.contains(&DEFAULT_KEY), "{DEFAULT_KEY}");
+        assert!(EDIT_KEYS.contains(&DEFAULT_KEY), "{DEFAULT_KEY}");
+        let expected = if cfg!(windows) { "right_control" } else { "fn" };
+        assert_eq!(DEFAULT_KEY, expected);
+    }
+
+    /// Every key the Windows hook holds on its own can be chosen (the Windows shell offers them).
+    #[cfg(windows)]
+    #[test]
+    fn every_windows_key_can_be_chosen() {
+        for key in ink_platform_win::hotkey::KEYS {
+            assert!(KEYS.contains(key), "{key}");
+            assert!(EDIT_KEYS.contains(key), "{key}");
+        }
+    }
+
+    /// Windows' dictation platform is made without touching a device or installing a hook (those
+    /// wait for `dictation.enable`), so it is made at every launch, with or without a desktop.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_platform_is_made_without_opening_anything() {
+        let platform = VoicePlatform::win().expect("the Windows platform");
+        // Stopping keys that were never bound is a no-op.
+        platform.keys.stop();
+        platform.edit_keys.stop();
+    }
 
     /// The tap's thread never waits on the mic thread: a burst of presses with nobody receiving
     /// returns at once, the pending wakes stay bounded, and a stop still gets through once the

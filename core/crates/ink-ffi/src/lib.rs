@@ -269,6 +269,11 @@ pub unsafe extern "C" fn ink_init(
                     Ok(platform) => core.set_voice_platform(platform),
                     Err(e) => log::error!("ink_init: dictation has no platform: {e}"),
                 }
+                #[cfg(windows)]
+                match voice::VoicePlatform::win() {
+                    Ok(platform) => core.set_voice_platform(platform),
+                    Err(e) => log::error!("ink_init: dictation has no platform: {e}"),
+                }
                 *CORE.write().unwrap_or_else(PoisonError::into_inner) = Some(core);
                 INK_OK
             }

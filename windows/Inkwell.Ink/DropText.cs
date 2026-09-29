@@ -1,6 +1,8 @@
 // The Drop's two lines, for the five states: the Mac's DropText for a held state
-// (mac/Sources/Inkwell/ShellInk.swift). The live words, the meeting's app and the consent offer's
-// buttons come with dictation and meetings end to end.
+// (mac/Sources/Inkwell/ShellInk.swift). A dictation's lines come from the shell (the app's
+// ShellInk, from Inkwell.Core's DropModel): while a key is held the second line is its live
+// words, one line with the head cut and the newest words wet. The meeting's app and the consent
+// offer's buttons come with meetings end to end.
 namespace Inkwell.Ink;
 
 /// <summary>How the Drop colours its title and border.</summary>
@@ -15,8 +17,100 @@ public enum DropTone
 }
 
 /// <summary>What the Drop says beside the ink.</summary>
-public sealed record DropText(string Title, string Detail, DropTone Tone = DropTone.Plain)
+/// <param name="LiveWords">
+/// The detail is the live words of a take being held: its end matters (the head is cut, not the
+/// tail), and its newest words are still wet (italic, muted).
+/// </param>
+public sealed record DropText(string Title, string Detail, DropTone Tone = DropTone.Plain, bool LiveWords = false)
 {
+    /// <summary>
+    /// The Drop window's name, which is what a screen reader reads and what any process (or UI
+    /// Automation client) can read from the window: "Inkwell: " and the title only. The detail can
+    /// hold the user's live words, so it never goes into it; it would also change with every
+    /// partial.
+    /// </summary>
+    public string AccessibleName => $"Inkwell: {Title}";
+
+    /// <summary>How many of the newest live words are shown wet, as on the canvas.</summary>
+    public const int WetWords = 2;
+
+    /// <summary>Where the wet words of <paramref name="detail"/> start: the last <see cref="WetWords"/> words (0 for fewer).</summary>
+    public static int WetStart(string detail)
+    {
+        ArgumentNullException.ThrowIfNull(detail);
+        var index = detail.Length;
+        var words = 0;
+        var inWord = false;
+        for (var i = detail.Length - 1; i >= 0; i--)
+        {
+            var space = char.IsWhiteSpace(detail[i]);
+            if (!space && !inWord)
+            {
+                words++;
+                inWord = true;
+            }
+            else if (space && inWord)
+            {
+                inWord = false;
+                if (words == WetWords)
+                {
+                    return index;
+                }
+            }
+            if (!space)
+            {
+                index = i;
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Live words cut from the head to fit one line of <paramref name="available"/> width, as
+    /// <paramref name="measure"/> gives a string's width: whole words dropped from the start, an
+    /// ellipsis in their place, so the newest words always show. A last word too long on its own
+    /// is left for the layout to cut.
+    /// </summary>
+    public static string HeadCut(string words, Func<string, double> measure, double available)
+    {
+        ArgumentNullException.ThrowIfNull(words);
+        ArgumentNullException.ThrowIfNull(measure);
+        var text = words.Trim();
+        if (measure(text) <= available)
+        {
+            return text;
+        }
+        // Where each word after the first starts; suffixes from later starts are shorter, so the
+        // first start whose suffix fits is found by bisection.
+        var starts = new List<int>();
+        for (var i = 1; i < text.Length; i++)
+        {
+            if (!char.IsWhiteSpace(text[i]) && char.IsWhiteSpace(text[i - 1]))
+            {
+                starts.Add(i);
+            }
+        }
+        if (starts.Count == 0)
+        {
+            return text;
+        }
+        string Cut(int k) => "\u2026" + text[starts[k]..];
+        int lo = 0, hi = starts.Count - 1;
+        while (lo < hi)
+        {
+            var mid = (lo + hi) / 2;
+            if (measure(Cut(mid)) <= available)
+            {
+                hi = mid;
+            }
+            else
+            {
+                lo = mid + 1;
+            }
+        }
+        return Cut(lo);
+    }
+
     /// <summary>The lines for a state.</summary>
     public static DropText For(InkState state) => state switch
     {

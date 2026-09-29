@@ -1,7 +1,9 @@
 // The app: one window and a tray icon over the core. Closing the window hides it; the tray's Quit
 // stops the core, then the app. The screens' models (ScreenModels) follow the core's events after
-// the store; each route's screen is made from them (Screens.cs).
+// the store; each route's screen is made from them (Screens.cs). The Drop follows dictation through
+// DropModel after the store too.
 using Inkwell.Core.Screens;
+using Inkwell.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using WinUIEx;
@@ -46,10 +48,16 @@ public partial class App : Application
         window.ShowInk(ink);
         screens = AppScreens.Models(core, window.DispatcherQueue);
         var models = screens;
+        // What the Drop says about dictation, after the store has taken each batch.
+        var drop = new DropModel(new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine);
+        var shellInk = ink;
+        drop.Changed += () => shellInk.Show(drop.Line, drop.IsLive);
+        var store = core.Store;
         core.Observer = batch =>
         {
             models.Apply(batch);
             models.LogUnshown(batch);
+            drop.Apply(store, batch);
         };
         var made = new AppScreens(core.Store, models, router);
         window.Attach(core.Store, router, made.Screen, made.InkZoneFoot(), made.Search);

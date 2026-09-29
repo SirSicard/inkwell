@@ -77,6 +77,13 @@ public sealed record InkConfig(
     }
 }
 
+/// <summary>One stream's audio bands (inkwell.h, InkBands): RMS amplitude per band, linear full scale.</summary>
+/// <param name="Low">80-500 Hz.</param>
+/// <param name="Mid">500 Hz-2 kHz.</param>
+/// <param name="High">2-8 kHz.</param>
+/// <param name="Published">Bands published so far.</param>
+public readonly record struct AudioBands(float Low, float Mid, float High, ulong Published);
+
 /// <summary>
 /// The running core. One per process; call <see cref="Shutdown"/> on every quit path (a loaded
 /// model must be dropped before the process exits).
@@ -224,6 +231,26 @@ public sealed unsafe class InkSession : IDisposable
 
     /// <inheritdoc cref="Shutdown"/>
     public void Dispose() => Shutdown();
+
+    /// <summary>
+    /// The latest bands of the live audio (your mic while a take is open), copied out. Any thread,
+    /// any rate: ink_bands_read never locks or allocates, so the ink reads it once per frame.
+    /// Zeros before the core starts and while nothing is live.
+    /// </summary>
+    public static AudioBands Bands()
+    {
+        var bands = default(InkBands);
+        _ = NativeMethods.ink_bands_read(&bands);
+        return new AudioBands(bands.low, bands.mid, bands.high, bands.published);
+    }
+
+    /// <summary>The far end's latest bands during a meeting, as <see cref="Bands"/> gives the mic's.</summary>
+    public static AudioBands FarBands()
+    {
+        var bands = default(InkBands);
+        _ = NativeMethods.ink_far_bands_read(&bands);
+        return new AudioBands(bands.low, bands.mid, bands.high, bands.published);
+    }
 
     /// <summary>A NUL-terminated copy: every string crossing the ABI is.</summary>
     private static byte[] Terminated(ReadOnlySpan<byte> utf8)

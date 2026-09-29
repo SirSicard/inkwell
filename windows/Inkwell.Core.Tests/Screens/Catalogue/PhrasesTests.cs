@@ -342,6 +342,17 @@ public class ImportNoteTests
         Assert.Contains("hold Right Ctrl", text, StringComparison.Ordinal);
     }
 
+    /// <summary>Windows: 0.2's fn was replaced by right Ctrl; the note names both keys.</summary>
+    [Fact]
+    public void AReplacedKeyNamesBoth()
+    {
+        var model = new ImportNoteModel(_ => { });
+        model.Apply(Ev.Of("""{"type":"import.notes","key":{"hotkey":"fn","outcome":"replaced","key":"right_control","applied":true,"toggle":false}}"""));
+        Assert.Equal(
+            "Inkwell 0.2 started dictation with fn, which never reaches Windows, so it was replaced by Right Ctrl. Pick another under Dictate if you like.",
+            ImportNoteModel.Text(Assert.IsType<ImportKeyNote>(model.Note), "Right Ctrl"));
+    }
+
     /// <summary>Windows: keys by their Windows names (the Mac shows its modifier symbols).</summary>
     [Fact]
     public void OldKeysReadAsKeys()

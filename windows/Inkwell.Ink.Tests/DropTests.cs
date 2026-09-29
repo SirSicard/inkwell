@@ -221,6 +221,86 @@ public sealed class DropTests
     /// </summary>
     private static bool Visible(HWND hwnd) => ((uint)GetWindowLongW(hwnd, GWL.GWL_STYLE) & WS.WS_VISIBLE) != 0;
 
+    /// <summary>
+    /// A held take: its live words drawn on one line with the head cut, the ink reading the live
+    /// levels once per frame. Needs a compositor (the desktop); skipped over SSH.
+    /// </summary>
+    [Fact]
+    public void LiveWordsDrawAndTheInkReadsTheLevels()
+    {
+        lock (TestPipeline.Lock)
+        {
+            Assert.Null(Loader.Wait().Failure);
+            var ui = new UiThread();
+            using var drop = new DropWindow(Loader, new InkClock(ui.Post));
+            drop.Surface.AssumeReduceMotion = false;
+            var reads = 0;
+            drop.Surface.Levels = () =>
+            {
+                reads++;
+                return new InkLevels(0.8, 0);
+            };
+            var words = string.Join(' ', Enumerable.Repeat("a synthetic sentence said while the key is held", 6));
+            drop.Show(new DropText("Dictating \u00B7 Notepad", words, LiveWords: true), InkState.Dictating);
+            Assert.SkipWhen(drop.Surface.Failure?.EndsWith(NoCompositor, StringComparison.Ordinal) == true,
+                $"no compositor in this session: {drop.Surface.Failure}");
+            ui.Pump(0.3);
+            drop.Show(new DropText("Dictating \u00B7 Notepad", words + " and more", LiveWords: true), InkState.Dictating);
+            ui.Pump(0.3);
+            Assert.Null(drop.Surface.Failure);
+            Assert.True(drop.Surface.FramesDrawn > 5, $"live frames: {drop.Surface.FramesDrawn}");
+            Assert.True(reads > 5, $"level reads: {reads}");
+            drop.Hide();
+        }
+    }
+
+    /// <summary>
+    /// The Drop's window name (what screen readers and any process read) is the title only: never
+    /// the detail, which holds the live words. Runs over SSH: no frame is needed.
+    /// </summary>
+    [Fact]
+    public unsafe void TheWindowNameNeverHoldsTheWords()
+    {
+        lock (TestPipeline.Lock)
+        {
+            var ui = new UiThread();
+            using var drop = new DropWindow(Loader, new InkClock(ui.Post));
+            drop.Show(new DropText("Dictating \u00B7 Notepad", "a synthetic secret line", LiveWords: true), InkState.Dictating);
+            var buffer = stackalloc char[256];
+            var length = GetWindowTextW((HWND)drop.Handle, buffer, 256);
+            Assert.Equal("Inkwell: Dictating \u00B7 Notepad", new string(buffer, 0, length));
+            drop.Hide();
+        }
+        Assert.Equal("Inkwell: Too short", new DropText("Too short", "Try again").AccessibleName);
+    }
+
+    [Fact]
+    public void TheWetWordsAreTheLastTwo()
+    {
+        Assert.Equal("said so", "we said so"[DropText.WetStart("we said so")..]);
+        Assert.Equal("said so  ", "we said so  "[DropText.WetStart("we said so  ")..]);
+        Assert.Equal(0, DropText.WetStart("hello"));
+        Assert.Equal(0, DropText.WetStart("two words"));
+        Assert.Equal(0, DropText.WetStart(""));
+    }
+
+    [Fact]
+    public void LiveWordsAreCutFromTheHeadSoTheNewestShow()
+    {
+        // One unit per character.
+        static double Width(string s) => s.Length;
+        Assert.Equal("short words", DropText.HeadCut("short words", Width, 20));
+        Assert.Equal("  trimmed".Trim(), DropText.HeadCut("  trimmed ", Width, 20));
+        var cut = DropText.HeadCut("one two three four five six", Width, 12);
+        Assert.Equal("\u2026five six", cut);
+        Assert.True(Width(cut) <= 12);
+        // The longest tail that fits: dropping one word fewer would not.
+        Assert.True(Width("\u2026four five six") > 12);
+        // A last word too long alone is left for the layout's own cut.
+        Assert.Equal("\u2026enormousword", DropText.HeadCut("a enormousword", Width, 5));
+        Assert.Equal("enormousword", DropText.HeadCut("enormousword", Width, 5));
+    }
+
     [Fact]
     public void EachStateSaysWhatTheMacSays()
     {

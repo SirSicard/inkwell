@@ -76,7 +76,7 @@ internal sealed unsafe class DropFallback : IDisposable
         var corner = (int)Math.Round(2 * DropLayout.CornerRadius * scale);
         // The window owns the region once set. Without it the panel is square: still shown.
         _ = SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner), false);
-        fixed (char* name = $"Inkwell: {lines.Title}, {lines.Detail}")
+        fixed (char* name = lines.AccessibleName)
         {
             SetWindowTextW(hwnd, name);
         }

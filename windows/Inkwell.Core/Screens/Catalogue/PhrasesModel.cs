@@ -480,6 +480,10 @@ public sealed class ImportNoteModel(Action<CoreCommand> send) : ObservableModel
             case ImportKeyOutcome.Combination:
                 lines.Add($"Inkwell 0.2 started dictation with {old}, a key combination. Inkwell now listens for one key held on its own, so it uses {currentKey}. Pick another under Dictate if you like.");
                 break;
+            case ImportKeyOutcome.Replaced:
+                // Fn never reaches Windows: the import set another key in its place.
+                lines.Add($"Inkwell 0.2 started dictation with {old}, which never reaches Windows, so it was replaced by {currentKey}. Pick another under Dictate if you like.");
+                break;
             case ImportKeyOutcome.OtherKey:
                 lines.Add($"Inkwell 0.2’s dictation key ({old}) isn’t one Inkwell can listen for now, so it uses {currentKey}. Pick another under Dictate if you like.");
                 break;

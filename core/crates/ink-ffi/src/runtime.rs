@@ -230,17 +230,26 @@ fn platform_clock() -> Result<Arc<dyn Clock>, String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows: the performance counter, the timebase WASAPI stamps the mic's blocks on and the
+/// keyboard hook stamps its keys on, so a take's press, its audio and the chain's waits agree.
+#[cfg(windows)]
 fn platform_clock() -> Result<Arc<dyn Clock>, String> {
-    // Until ink-platform-win's clock (S3.1): only replays run here, and their host times come
-    // from this same clock, so they share its timebase. Real capture must use the platform's.
+    ink_platform_win::WinClock::new()
+        .map(|c| Arc::new(c) as Arc<dyn Clock>)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn platform_clock() -> Result<Arc<dyn Clock>, String> {
+    // No platform crate here: only replays run, and their host times come from this same clock,
+    // so they share its timebase.
     Ok(Arc::new(StdClock(std::time::Instant::now())))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 struct StdClock(std::time::Instant);
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl Clock for StdClock {
     fn now_ns(&self) -> u64 {
         u64::try_from(self.0.elapsed().as_nanos()).unwrap_or(u64::MAX)
@@ -1223,5 +1232,17 @@ mod tests {
         ] {
             assert!(parse_command(bad).is_err(), "{bad}");
         }
+    }
+
+    /// Windows: the core's clock is the performance counter, the timebase of the mic's blocks and
+    /// the hook's keys (a take's press and its audio must agree to within a block).
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_clock_is_the_performance_counter() {
+        let core = platform_clock().expect("the clock");
+        let counter = ink_platform_win::WinClock::new().expect("the counter");
+        let (a, b, c) = (counter.now_ns(), core.now_ns(), counter.now_ns());
+        assert!(a <= b && b <= c, "{a} {b} {c}");
+        assert!(c - a < 1_000_000_000, "one read apart: {} ns", c - a);
     }
 }

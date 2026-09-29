@@ -70,7 +70,7 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
         {
             return;
         }
-        surface = new InkSurface(this, ShellInk.Loader, Clock) { State = state, ShowsWordmark = wordmark };
+        surface = new InkSurface(this, ShellInk.Loader, Clock) { State = state, ShowsWordmark = wordmark, Levels = ShellInk.LiveLevels };
         root = XamlRoot;
         if (root is not null)
         {
