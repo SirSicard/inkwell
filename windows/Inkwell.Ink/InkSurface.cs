@@ -7,10 +7,12 @@
 // The canvas follows the prototype's sizing rule, as on the Mac: the display scale, capped at 1.25
 // for a large canvas (over 180,000 square DIPs) and at 2 otherwise.
 //
-// A frame that fails (a lost device: TDR, driver update, DWM restart; a failed present) is not the
-// end: the surface drops the host's device objects, asks the loader for a new pipeline, and tries
-// again after 0.5, 1 and 2 s, then every 5 s, for as long as the host is on screen (hidden, it
-// waits for the next show: nothing ticks for a hidden ink). While it cannot draw (the pipeline
+// A frame that fails is not the end: the surface drops the host's device objects and tries again
+// after 0.5, 1 and 2 s, then every 5 s, for as long as the host is on screen (hidden, it waits for
+// the next show: nothing ticks for a hidden ink). Only a lost device (TDR, driver update: the
+// device reports itself removed, or the HRESULT says so) costs a new pipeline; any other failure (a
+// composition device lost to a DWM restart, a swapchain that cannot be made) keeps the pipeline,
+// and a retry only makes the host's objects again. A failure is announced once, not per retry. While it cannot draw (the pipeline
 // still compiling, lost, or a shader that does not compile) the host shows its fallback, and every
 // change of failure is announced (FailureChanged) so the shell can show it.
 namespace Inkwell.Ink;
@@ -44,6 +46,8 @@ public sealed class InkSurface : IDisposable
     private readonly IDisposable subscription;
     /// <summary>The pipeline whose frame failed, until a new one arrives.</summary>
     private InkPipeline? lost;
+    /// <summary>The host's objects failed on a device that is still good: the next retry makes them again.</summary>
+    private bool hostBroken;
     /// <summary>Recovery attempts since the last frame that drew.</summary>
     private int attempts;
     private bool retryScheduled;
@@ -224,18 +228,25 @@ public sealed class InkSurface : IDisposable
 
     /// <summary>
     /// The schedule sees a surface that cannot draw (no pipeline, no canvas) as off screen; the
-    /// host shows its fallback while it is on screen and the ink cannot draw.
+    /// host shows its fallback while it is on screen and the ink cannot draw or is failing (it
+    /// stays up through a retry until a frame really draws, so it never blinks).
     /// </summary>
     private void UpdateVisibility()
     {
-        var canDraw = pipeline is not null && canvas.Width > 0;
-        var fallback = hostOnScreen && !canDraw && !disposed;
+        UpdateFallback();
+        Perform(schedule.SetOnScreen(hostOnScreen && CanDraw));
+    }
+
+    private bool CanDraw => pipeline is not null && canvas.Width > 0 && !hostBroken;
+
+    private void UpdateFallback()
+    {
+        var fallback = hostOnScreen && (!CanDraw || Failure is not null) && !disposed;
         if (fallback != fallbackShown)
         {
             fallbackShown = fallback;
             target.SetFallback(fallback);
         }
-        Perform(schedule.SetOnScreen(hostOnScreen && canDraw));
     }
 
     private void Adopt(InkPipelineOutcome outcome)
@@ -269,21 +280,34 @@ public sealed class InkSurface : IDisposable
         else
         {
             lost = null;
+            hostBroken = false;
             // The frame on screen is from the old device (or none): draw anew once on screen.
             Perform(schedule.Invalidate());
         }
         UpdateVisibility();
     }
 
-    /// <summary>A frame failed: drop the device's objects, show the fallback, and try again with backoff.</summary>
-    internal void DeviceFailed(string message)
+    /// <summary>
+    /// A frame failed: drop the host's objects, show the fallback, and try again with backoff. A lost
+    /// device (<paramref name="deviceLost"/>, or the pipeline's device says so) also drops the
+    /// pipeline, and the retry asks for a new one.
+    /// </summary>
+    internal void DeviceFailed(string message, bool deviceLost = false)
     {
         SetFailure(message);
         clock.Remove(this);
         target.ReleaseDeviceResources();
         DropWordmark();
-        lost = pipeline;
-        pipeline = null;
+        if (deviceLost || pipeline?.DeviceRemoved() == true)
+        {
+            lost = pipeline;
+            pipeline = null;
+            hostBroken = false;
+        }
+        else
+        {
+            hostBroken = true;
+        }
         UpdateVisibility();
         ScheduleRetry();
     }
@@ -327,13 +351,24 @@ public sealed class InkSurface : IDisposable
         retryScheduled = false;
         retryTimer?.Dispose();
         retryTimer = null;
-        if (disposed || pipeline is not null)
+        if (disposed)
         {
             return;
         }
         if (!hostOnScreen)
         {
             retryWhenShown = true;
+            return;
+        }
+        if (pipeline is not null)
+        {
+            if (hostBroken)
+            {
+                // The device is good: the host makes its objects again on the next frame.
+                hostBroken = false;
+                Perform(schedule.Invalidate());
+                UpdateVisibility();
+            }
             return;
         }
         if (loader.Outcome is { Pipeline: { } current } && current != lost)
@@ -422,7 +457,7 @@ public sealed class InkSurface : IDisposable
         catch (InkRendererException e)
         {
             // The device failed (removed, reset, DWM restarted, out of memory): recover.
-            DeviceFailed(e.Message);
+            DeviceFailed(e.Message, InkPipeline.IsDeviceLoss(e.HResultCode));
             return;
         }
         catch (Exception e)
@@ -440,6 +475,7 @@ public sealed class InkSurface : IDisposable
             {
                 attempts = 0;
                 SetFailure(null);
+                UpdateFallback();
             }
         }
     }

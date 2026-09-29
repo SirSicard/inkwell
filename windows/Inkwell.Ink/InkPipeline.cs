@@ -130,6 +130,14 @@ public sealed unsafe class InkPipeline : IDisposable
         }
     }
 
+    /// <summary>Whether the device is gone (removed, reset, hung): only a new pipeline draws again. UI thread.</summary>
+    internal bool DeviceRemoved() => !disposed && Device != null && Device->GetDeviceRemovedReason().FAILED;
+
+    /// <summary>The HRESULTs that mean the device itself is lost, not just a host's objects.</summary>
+    internal static bool IsDeviceLoss(int hr) =>
+        hr == DXGI.DXGI_ERROR_DEVICE_REMOVED || hr == DXGI.DXGI_ERROR_DEVICE_RESET || hr == DXGI.DXGI_ERROR_DEVICE_HUNG
+        || hr == DXGI.DXGI_ERROR_DRIVER_INTERNAL_ERROR || hr == D2DERR.D2DERR_RECREATE_TARGET;
+
     /// <summary>Shaders/ink.hlsl, embedded in this assembly.</summary>
     public static string ShaderSource()
     {

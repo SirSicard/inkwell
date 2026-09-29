@@ -18,6 +18,12 @@ internal sealed class FlakyTarget : IInkTarget, IDisposable
     public const int DeviceRemoved = unchecked((int)0x887A0005);
 
     public bool FailNext { get; set; }
+
+    /// <summary>What the failing frame throws: a lost device by default.</summary>
+    public int FailWith { get; set; } = DeviceRemoved;
+
+    /// <summary>DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (winerror.h): no swapchain now, the device fine.</summary>
+    public const int NotCurrentlyAvailable = unchecked((int)0x887A0022);
     public int Releases { get; private set; }
     public List<bool> Fallbacks { get; } = [];
     public bool Fallback => Fallbacks.Count > 0 && Fallbacks[^1];
@@ -27,7 +33,7 @@ internal sealed class FlakyTarget : IInkTarget, IDisposable
         if (FailNext)
         {
             FailNext = false;
-            throw new InkRendererException("present the ink", (HRESULT)DeviceRemoved);
+            throw new InkRendererException("present the ink", (HRESULT)FailWith);
         }
         return inner.Render(pipeline, uniforms, mark);
     }
@@ -94,6 +100,13 @@ public sealed class RecoveryTests
         }
 
         public int PendingRetries => retries.Count;
+
+        /// <summary>Runs the pending retry on this thread (a retry that needs no compile).</summary>
+        public void RunRetry()
+        {
+            Assert.NotEmpty(retries);
+            retries.Dequeue()();
+        }
 
         public void Dispose()
         {
@@ -163,6 +176,36 @@ public sealed class RecoveryTests
         Assert.Equal(2, rig.Surface.FramesDrawn);
         Assert.False(rig.Target.Fallback);
         Assert.Null(rig.Surface.Failure);
+    }
+
+    /// <summary>A failure that is not the device's (a swapchain DWM will not give now) keeps the pipeline: retries make only the host's objects again, and it is announced once.</summary>
+    [Fact]
+    public void AHostFailureIsRetriedWithoutANewPipeline()
+    {
+        using var rig = new Rig(() => new InkPipeline(InkAdapter.Warp));
+        rig.PumpUntil(() => rig.Surface.FramesDrawn == 1);
+        rig.Target.FailWith = FlakyTarget.NotCurrentlyAvailable;
+        rig.Target.FailNext = true;
+        rig.Surface.Invalidate();
+        Assert.True(rig.Target.Fallback);
+        Assert.Equal(1, rig.Target.Releases);
+
+        // It keeps failing for a while: the same failure, said once, and no compile.
+        for (var i = 0; i < 4; i++)
+        {
+            rig.Target.FailNext = true;
+            rig.RunRetry();
+            Assert.True(rig.Target.Fallback);
+        }
+        Assert.Equal([0.5, 1, 2, 5, 5], rig.Delays.Select(d => d.TotalSeconds));
+        Assert.Single(rig.Failures);
+        Assert.Equal(1, rig.Loader.Compiles);
+
+        rig.RunRetry();
+        Assert.Equal(2, rig.Surface.FramesDrawn);
+        Assert.False(rig.Target.Fallback);
+        Assert.Null(rig.Surface.Failure);
+        Assert.Equal(1, rig.Loader.Compiles);
     }
 
     [Fact]
