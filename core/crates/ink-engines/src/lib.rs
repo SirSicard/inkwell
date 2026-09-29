@@ -6,6 +6,7 @@
 //! | [`Downloader`] | Fetches a row's files: resumes part files, checks size and SHA-256 before a file is moved into place, stops on a [`CancelToken`](ink_core::CancelToken), reports progress. |
 //! | [`Router`] | Job → the installed engine for this OS with the lowest measured error rate. Engines the shell registers over the C ABI compete on the same terms. |
 //! | [`Residency`] | Keeps the dictation model warm, loads others on demand, unloads what has been idle for five minutes, never loads two copies. |
+//! | [`Compute`] | Where a ggml engine runs: a GPU when the machine has one (Metal, Vulkan), else the CPU on every physical core ([`choose`]). |
 //!
 //! How the pipeline uses them: [`Router::route`] a job; a [`Route::External`] engine is called
 //! directly, a [`Route::Model`] is loaded with [`Residency::acquire`] and called through the
@@ -22,6 +23,7 @@
 #![warn(missing_docs)]
 
 mod adapters;
+mod compute;
 mod download;
 #[cfg(feature = "http")]
 mod http;
@@ -39,6 +41,7 @@ mod rows;
 mod silero;
 
 pub use adapters::{VadModel, load_diarizer, load_vad};
+pub use compute::{Compute, Device, DeviceKind, choose, physical_cores};
 pub use download::{DownloadError, DownloadProgress, Downloader, Fetch, FetchError, Fetched};
 #[cfg(feature = "http")]
 pub use http::HttpFetch;

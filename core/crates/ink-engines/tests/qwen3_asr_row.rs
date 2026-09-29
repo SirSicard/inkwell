@@ -13,15 +13,15 @@ const ID: &str = "qwen3-asr-1.7b-q8";
 const REVISION: &str = "36a678687ba7d07a74ca70ccb0e36902e005fb80";
 
 #[test]
-fn the_qwen3_asr_row_is_pinned_licensed_and_mac_only() {
+fn the_qwen3_asr_row_is_pinned_licensed_and_on_both_oses() {
     let registry = Registry::builtin().expect("built-in rows validate");
     let row = registry.get(ID).expect("the Qwen3-ASR row is built in");
     assert_eq!(row.revision, REVISION);
     // The base model's licence (the GGUF conversion's repository has no tag).
     assert_eq!(row.licence, "Apache-2.0");
     assert_eq!(row.runtime, Runtime::LlamaCpp);
-    // Windows waits for its own speed measurement.
-    assert_eq!(row.oses, vec![Os::MacOs]);
+    // Metal on the Mac; Vulkan or the CPU on Windows.
+    assert_eq!(row.oses, vec![Os::MacOs, Os::Windows]);
     // AMI IHM for meetings, FLEURS English as published for dictation.
     assert_eq!(row.wer(Job::MeetingFinal), Some(16.08));
     assert_eq!(row.wer(Job::DictationFinal), Some(4.59));

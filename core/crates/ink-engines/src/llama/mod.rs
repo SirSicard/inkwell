@@ -28,6 +28,12 @@
 //! drops its [`Residency`], and with it every model, before the process exits, and nothing keeps a
 //! model in a `static`. `tests/llama_asr.rs` pins this.
 //!
+//! **Where it computes** ([`compute`]): on a GPU when ggml reports one (Metal on the Mac, Vulkan on
+//! Windows with `engine-llama-vulkan`), every layer offloaded; else on the CPU, nothing offloaded and
+//! one thread per physical core, set explicitly (llama.cpp's own default is 4). Chosen once per
+//! process from ggml's devices by [`crate::choose`], so a Vulkan build on a machine without a
+//! Vulkan device runs on the CPU.
+//!
 //! **Threads.** Everything here is a **worker**-thread call, `Send + Sync`, and may block for as
 //! long as the work takes.
 //!
@@ -76,17 +82,25 @@ pub fn log_allowed(metadata: &tracing::Metadata<'_>) -> bool {
     true
 }
 
+use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::OnceLock;
 
 use ink_core::{CancelToken, EngineError};
 use llama_cpp_2::context::LlamaContext;
+use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
-use llama_cpp_2::{LogOptions, TokenToStringError, send_logs_to_tracing};
+use llama_cpp_2::{
+    LlamaBackendDeviceType, LogOptions, TokenToStringError, list_llama_ggml_backend_devices,
+    send_logs_to_tracing,
+};
+
+use crate::compute::{Compute, Device, DeviceKind, choose, physical_cores};
 
 /// The process's llama.cpp backend. llama.cpp is initialised once per process (the binding refuses
 /// a second `init`), so every model shares this one, and it lives until the process exits. A model
@@ -102,6 +116,56 @@ fn backend() -> Result<&'static LlamaBackend, EngineError> {
         })
         .as_ref()
         .map_err(|e| EngineError::Failed(format!("the llama.cpp backend did not start: {e}")))
+}
+
+/// **Worker.** Where this process's llama.cpp models compute: the GPU ggml reports, or the CPU on
+/// every physical core (see the module docs). Starts the backend if it has not started, and is
+/// decided once: ggml registers its devices when the backend starts, and they do not change.
+pub fn compute() -> Result<&'static Compute, EngineError> {
+    static COMPUTE: OnceLock<Compute> = OnceLock::new();
+    // The devices are only listed once the backend (and with it ggml's device registry) is up.
+    backend()?;
+    Ok(COMPUTE.get_or_init(|| {
+        let devices: Vec<Device> = list_llama_ggml_backend_devices()
+            .into_iter()
+            .map(|d| Device {
+                backend: d.backend,
+                description: d.description,
+                kind: match d.device_type {
+                    LlamaBackendDeviceType::Cpu => DeviceKind::Cpu,
+                    LlamaBackendDeviceType::Gpu => DeviceKind::Gpu,
+                    LlamaBackendDeviceType::IntegratedGpu => DeviceKind::IntegratedGpu,
+                    LlamaBackendDeviceType::Accelerator => DeviceKind::Accelerator,
+                    LlamaBackendDeviceType::Unknown => DeviceKind::Unknown,
+                },
+            })
+            .collect();
+        choose(&devices, physical_cores())
+    }))
+}
+
+/// Model parameters for `compute`: llama.cpp's defaults on a GPU (every layer offloaded,
+/// memory-mapped: what was measured), and no layer offloaded on the CPU.
+fn model_params(compute: &Compute) -> LlamaModelParams {
+    let params = LlamaModelParams::default();
+    if compute.is_gpu() {
+        params
+    } else {
+        params.with_n_gpu_layers(0)
+    }
+}
+
+/// A context's parameters for `compute`, holding `n_ctx` tokens: on the CPU, generation and prompt
+/// reading both get one thread per physical core; on a GPU, llama.cpp's defaults.
+fn context_params(compute: &Compute, n_ctx: u32) -> LlamaContextParams {
+    let params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx));
+    match compute.cpu_threads() {
+        None => params,
+        Some(threads) => {
+            let threads = i32::try_from(threads.get()).unwrap_or(i32::MAX);
+            params.with_n_threads(threads).with_n_threads_batch(threads)
+        }
+    }
 }
 
 /// A path's file name, for errors: the directory can hold the user's name, and errors end up in

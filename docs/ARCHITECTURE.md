@@ -115,6 +115,21 @@ llama.cpp's CMake cache and fails on anything else. The diarizer's prefix record
 (The pure-Rust VAD runtime, tract, carries SME kernels too, but chooses them at run time from what
 the CPU reports.)
 
+### Where llama.cpp computes
+
+The llama.cpp adapter picks its device once per process from the devices ggml reports
+(`ink-engines/src/compute.rs`): the first GPU (Metal on the Mac; Vulkan on Windows, built with
+`engine-llama-vulkan`), else the CPU. On a GPU every layer is offloaded and llama.cpp's own thread
+defaults stand, as measured. On the CPU nothing is offloaded and the thread count is set to the
+machine's physical cores; llama.cpp's default of 4 left a 12-core desktop far slower. So one Windows
+build runs on a Vulkan GPU where there is one and on the CPU where there is none.
+
+- The Vulkan build loads `vulkan-1.dll`, which GPU drivers install. A machine without it cannot
+  start that build at all, so the Windows release must handle that case itself rather than rely on
+  the CPU fallback.
+- Building it needs the Vulkan SDK, libclang (llama-cpp-sys-2 generates its bindings) and the
+  Ninja generator: see the feature's note in `ink-engines/Cargo.toml`.
+
 ## The diarizer's native library
 
 The diarizer (Nemotron-3-Diarization) runs on NeMo-Speech.cpp, a C++ library with a C API. The

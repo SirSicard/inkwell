@@ -410,7 +410,8 @@ pub fn builtin_rows() -> Vec<EngineRow> {
 /// (its files' own metadata say `apache-2.0`), so the row records the base model's licence.
 ///
 /// Sizes and hashes are those of the files downloaded from this revision (checked locally by an
-/// ignored test). Mac only until its speed on Windows has been measured.
+/// ignored test). Windows too: on a desktop's Vulkan GPU it matched the Mac's WER and ran faster;
+/// on the CPU alone it is slower than real time for dictation but fits a meeting's final pass.
 fn qwen3_asr_1_7b_q8() -> EngineRow {
     const REVISION: &str = "36a678687ba7d07a74ca70ccb0e36902e005fb80";
     let file = |name: &str, sha256: &str, size: u64| ModelFile {
@@ -447,7 +448,7 @@ fn qwen3_asr_1_7b_q8() -> EngineRow {
         ],
         revision: REVISION.into(),
         licence: "Apache-2.0".into(),
-        oses: vec![Os::MacOs],
+        oses: vec![Os::MacOs, Os::Windows],
         runtime: Runtime::LlamaCpp,
     }
 }
