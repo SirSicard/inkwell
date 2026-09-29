@@ -12,6 +12,9 @@
 //!     cargo test -p ink-engines --features engine-nemo --release -- --ignored --test-threads 1
 //! ```
 //!
+//! The model runs on GPU 0 (Metal on the Mac, Vulkan on Windows); `INK_NEMO_DEVICE=cpu` runs the
+//! same tests on the CPU.
+//!
 //! Scored with `der/` (pyannote.metrics semantics, proved in `tests/der_scorer.rs`). Setting
 //! `INK_DIAR_OUT` also writes each hypothesis there as RTTM.
 
@@ -57,7 +60,16 @@ fn model_path() -> PathBuf {
         .join(&row.files[0].name)
 }
 
-/// The diarizer on the GPU, after checking the model file is the row's.
+/// Where the tests run the model: GPU 0 unless `INK_NEMO_DEVICE` is `cpu`.
+fn device() -> NemoDevice {
+    match std::env::var("INK_NEMO_DEVICE").as_deref() {
+        Err(_) | Ok("gpu") => NemoDevice::Gpu(0),
+        Ok("cpu") => NemoDevice::Cpu,
+        Ok(other) => panic!("INK_NEMO_DEVICE is {other:?}, not gpu or cpu"),
+    }
+}
+
+/// The diarizer on `device()`, after checking the model file is the row's.
 fn diarizer() -> NemoDiarizer {
     let row = nemotron_3_diarization();
     let path = model_path();
@@ -68,7 +80,7 @@ fn diarizer() -> NemoDiarizer {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(sha, row.files[0].sha256, "model hash");
-    NemoDiarizer::new(&path, row.info(), NemoDevice::Gpu(0)).unwrap()
+    NemoDiarizer::new(&path, row.info(), device()).unwrap()
 }
 
 fn read_wav(path: &Path) -> Vec<f32> {
@@ -372,7 +384,7 @@ fn the_loader_loads_the_installed_row_through_residency() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::copy(model_path(), &path).unwrap();
     let residency = Residency::new(
-        Arc::new(NemoLoader::new(dir, NemoDevice::Gpu(0))),
+        Arc::new(NemoLoader::new(dir, device())),
         Arc::new(MockClock::new(0, 0)),
     );
     let lease = residency.acquire(&row).unwrap();

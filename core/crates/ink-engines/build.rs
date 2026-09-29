@@ -15,6 +15,10 @@
 //!   manifest from before the script recorded it is refused too: that prefix was built native, and
 //!   links SentencePiece and Abseil from where Homebrew installed them.
 //!
+//! On Windows there is no rpath: the manifest's DLLs are copied into this build's `OUT_DIR` and that
+//! directory is declared as a native search path, which cargo puts on `PATH` when it runs this
+//! package's tests and its dependents' (cargo adds only search paths inside the target directory).
+//!
 //! `INK_NEMO_CHECK_ONLY=1` is for type-checking (CI's clippy) where the library is not built: it
 //! skips the library, the manifest and the link, so a binary or test built that way does not link.
 //! It still compiles and lints every line of the adapter, and if `NEMO_SPEECH_DIR` is set as well,
@@ -82,8 +86,8 @@ fn main() {
         }
         (Some(dir), false) => {
             check_headers(&dir);
-            let library = check_manifest(&dir);
-            link(&dir, &library);
+            let (library, listed) = check_manifest(&dir);
+            link(&dir, &library, &listed);
         }
     }
 }
@@ -110,8 +114,9 @@ fn check_headers(dir: &Path) {
     }
 }
 
-/// Checks the manifest and every library it lists, and returns the library to link.
-fn check_manifest(dir: &Path) -> PathBuf {
+/// Checks the manifest and every library it lists, and returns the library to link and every
+/// library listed.
+fn check_manifest(dir: &Path) -> (PathBuf, Vec<PathBuf>) {
     let path = dir.join(MANIFEST);
     println!("cargo:rerun-if-changed={}", path.display());
     let text = fs::read_to_string(&path).unwrap_or_else(|e| {
@@ -176,13 +181,38 @@ fn check_manifest(dir: &Path) -> PathBuf {
             library.display()
         ));
     }
-    library
+    (library, listed)
 }
 
-fn link(dir: &Path, library: &Path) {
+fn link(dir: &Path, library: &Path, listed: &[PathBuf]) {
     let lib = dir.join("lib");
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=dylib=nemo_speech_asr_c");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // The import library links; the DLLs are found at run time, beside the binary or on
+        // PATH. Copies of the checked DLLs in OUT_DIR, which cargo puts on PATH for tests.
+        let out = PathBuf::from(env::var_os("OUT_DIR").unwrap_or_else(|| fail("no OUT_DIR")))
+            .join("nemo-bin");
+        fs::create_dir_all(&out)
+            .unwrap_or_else(|e| fail(&format!("creating {}: {e}", out.display())));
+        let dlls: Vec<&PathBuf> = listed
+            .iter()
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")))
+            .collect();
+        if dlls.is_empty() {
+            fail(&format!("{MANIFEST} lists no DLL"));
+        }
+        for dll in dlls {
+            let name = dll
+                .file_name()
+                .unwrap_or_else(|| fail("a DLL path with no name"));
+            fs::copy(dll, out.join(name))
+                .unwrap_or_else(|e| fail(&format!("copying {}: {e}", dll.display())));
+        }
+        println!("cargo:rustc-link-search=native={}", out.display());
+        println!("cargo:lib_dir={}", out.display());
+        return;
+    }
     println!("cargo:lib_dir={}", lib.display());
     // This package's own tests and examples find the library where it was installed. The Mac app
     // bundles the prefix's libraries in Contents/Frameworks and gives itself the rpath there

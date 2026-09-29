@@ -172,6 +172,13 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   Homebrew's SentencePiece and Abseil (built for a Mac's own, newer macOS) fails that last check; `INK_ALLOW_NEWER_MACOS=1`
   lets a local build through with a warning, and a release (`--timestamp`) refuses it. Every
   bundled library must also be one `THIRD_PARTY.md` covers, by name.
+- **On Windows** the same two scripts run in Git Bash inside a Visual Studio developer environment.
+  NeMo-Speech.cpp builds with the upstream `vulkan-diar` preset (MSVC, the dynamic C runtime).
+  SentencePiece and Abseil are built from the same pinned tarballs as static libraries and linked
+  into NeMo's own DLL, so the prefix's `bin/` holds only NeMo's DLLs and its ggml's. The Visual C++
+  runtime is the system's. The manifest hashes those DLLs and the C API's import library in
+  `lib/`. With no rpath on Windows, `build.rs` copies the checked DLLs into its `OUT_DIR` and
+  declares that directory as a native search path, which cargo puts on `PATH` for tests.
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
   apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
