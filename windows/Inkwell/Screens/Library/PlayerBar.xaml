@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The player at the foot of a record (the Mac's PlayerBar): play or pause, the two-lane waveform
+     with the playhead, the time, and the You/Them mix. What it cannot vouch for (the failure, an
+     estimated timing, audio it cannot play) is said under it. -->
+<UserControl
+    x:Class="Inkwell.Screens.PlayerBar"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Border
+        Background="{ThemeResource InkSurfaceBrush}"
+        BorderBrush="{ThemeResource InkBorderBrush}"
+        BorderThickness="0,1,0,0"
+        Padding="32,12,24,8">
+        <Grid RowSpacing="4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button
+                    x:Name="PlayButton"
+                    Width="38"
+                    Height="38"
+                    Padding="0"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Play"
+                    Background="{ThemeResource InkTextBrush}"
+                    BorderThickness="0"
+                    Click="OnPlayClick"
+                    CornerRadius="19">
+                    <FontIcon x:Name="PlayIcon" FontSize="14" Foreground="{ThemeResource InkSurfaceBrush}" Glyph="&#xE768;" />
+                </Button>
+                <Border x:Name="WaveHost" Grid.Column="1" VerticalAlignment="Center" />
+                <TextBlock
+                    x:Name="TimeText"
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource InkTimestampStyle}" />
+                <StackPanel Grid.Column="3" VerticalAlignment="Center" Spacing="0">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock
+                            Width="34"
+                            VerticalAlignment="Center"
+                            AutomationProperties.AccessibilityView="Raw"
+                            Style="{StaticResource InkCaptionStyle}"
+                            Text="You" />
+                        <Slider
+                            x:Name="YouSlider"
+                            Width="78"
+                            AutomationProperties.Name="Your volume"
+                            Maximum="1"
+                            Minimum="0"
+                            StepFrequency="0.01"
+                            ValueChanged="OnYouVolume" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock
+                            Width="34"
+                            VerticalAlignment="Center"
+                            AutomationProperties.AccessibilityView="Raw"
+                            Style="{StaticResource InkCaptionStyle}"
+                            Text="Them" />
+                        <Slider
+                            x:Name="ThemSlider"
+                            Width="78"
+                            AutomationProperties.Name="Their volume"
+                            Maximum="1"
+                            Minimum="0"
+                            StepFrequency="0.01"
+                            ValueChanged="OnThemVolume" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+            <TextBlock
+                x:Name="Notice"
+                Grid.Row="1"
+                Margin="54,0,0,0"
+                Style="{StaticResource InkAlertTextStyle}"
+                Visibility="Collapsed" />
+        </Grid>
+    </Border>
+</UserControl>
