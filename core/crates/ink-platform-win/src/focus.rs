@@ -7,14 +7,18 @@
 //! The selection comes from UI Automation: the focused element's Text pattern. Apps that expose no
 //! Text pattern (many games, some custom editors) answer `None`, as an app without an
 //! accessibility selection does on the Mac. UI Automation needs no permission. The selected text
-//! is returned to the caller only; it is never logged.
+//! is returned to the caller only; it is never logged. A password field's selection is never read
+//! (nor one whose password flag cannot be read), and the calls into the target app have short
+//! timeouts (1 s to connect, 1.5 s per answer), so a hung app does not hold voice editing for UI
+//! Automation's default 20 s transaction timeout.
 #![cfg(windows)]
 
 use ink_core::{AppRef, FocusInfo, FocusReader, PlatformError};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
+    CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationTextPattern, UIA_TextPatternId,
 };
+use windows::core::{BOOL, Interface};
 
 use crate::com::{ComScope, display_stem, failed, file_name};
 use crate::integrity;
@@ -22,6 +26,15 @@ use crate::integrity;
 /// The longest selection read, in characters: voice editing works on a paragraph or a page, not a
 /// whole document.
 const MAX_SELECTION: i32 = 100_000;
+
+/// How long UI Automation waits to reach the focused app, and for each answer from it.
+const CONNECTION_TIMEOUT_MS: u32 = 1_000;
+const TRANSACTION_TIMEOUT_MS: u32 = 1_500;
+
+/// Whether an element's password flag forbids reading its selection: set, or unreadable.
+fn is_password(flag: windows::core::Result<BOOL>) -> bool {
+    flag.map_or(true, BOOL::as_bool)
+}
 
 /// [`FocusReader`] for Windows.
 #[derive(Debug, Default)]
@@ -62,12 +75,23 @@ impl FocusReader for WinFocusReader {
         let _com = ComScope::enter()?;
         // SAFETY: an in-process COM class, in this thread's apartment.
         let automation: IUIAutomation =
-            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+            unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|e| failed("UI Automation is not available", &e))?;
+        if let Ok(timeouts) = automation.cast::<IUIAutomation2>() {
+            // SAFETY: a live automation object; plain millisecond values.
+            unsafe {
+                let _ = timeouts.SetConnectionTimeout(CONNECTION_TIMEOUT_MS);
+                let _ = timeouts.SetTransactionTimeout(TRANSACTION_TIMEOUT_MS);
+            }
+        }
         // SAFETY: a live automation object. No focused element is an ordinary answer.
         let Ok(element) = (unsafe { automation.GetFocusedElement() }) else {
             return Ok(None);
         };
+        // SAFETY: a live element.
+        if is_password(unsafe { element.CurrentIsPassword() }) {
+            return Ok(None);
+        }
         // SAFETY: a live element; an element without the pattern fails, which means no selection.
         let Ok(pattern) =
             (unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) })
@@ -96,6 +120,15 @@ impl FocusReader for WinFocusReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_password_field_or_an_unreadable_flag_is_never_read() {
+        assert!(is_password(Ok(BOOL::from(true))));
+        assert!(is_password(Err(windows::core::Error::from_hresult(
+            windows::Win32::Foundation::E_FAIL
+        ))));
+        assert!(!is_password(Ok(BOOL::from(false))));
+    }
 
     /// Runs anywhere: with no foreground window (a service session, a runner), the answer is
     /// empty, never an error.
