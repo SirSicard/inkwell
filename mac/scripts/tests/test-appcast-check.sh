@@ -104,7 +104,7 @@ run "a key that is not 32 bytes" 1 "not 32 bytes of base64" \
 feed "$work/unsigned-item.xml" ""
 run "an unsigned item" 1 "has no EdDSA signature" \
   verify "$work/unsigned-item.xml" "$work/Inkwell.dmg" 1.2.3 "$url" "$key"
-run "... allowed in the rehearsal" 0 "not signed (the app carries no update key)" \
+run "... allowed in the rehearsal" 0 "not signed (allowed in the rehearsal)" \
   verify "$work/unsigned-item.xml" "$work/Inkwell.dmg" 1.2.3 "$url" "$key" --allow-unsigned-item
 run "an unknown flag" 1 "unknown argument" \
   verify "$work/unsigned-item.xml" "$work/Inkwell.dmg" 1.2.3 "$url" "$key" --lenient
