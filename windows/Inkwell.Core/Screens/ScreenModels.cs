@@ -16,6 +16,9 @@ public sealed class ScreenModels
     /// <param name="reveal">Opens a folder in File Explorer (Storage).</param>
     /// <param name="apps">Names the apps modes are for.</param>
     /// <param name="wake">Up next's one-shot wake (the view's clock).</param>
+    /// <param name="makePlayer">Makes a record's player over the app's audio output (null: no player).</param>
+    /// <param name="search">Waits for typing to pause before a Library search (null: at once).</param>
+    /// <param name="appVersion">The app's version for About (null: a development build).</param>
     public ScreenModels(
         Action<CoreCommand> send,
         string? dataDirectory = null,
@@ -23,6 +26,9 @@ public sealed class ScreenModels
         Action<string>? reveal = null,
         IAppDirectory? apps = null,
         IWakeScheduler? wake = null,
+        Func<RecordDocument, RecordPlayer?>? makePlayer = null,
+        ISearchScheduler? search = null,
+        string? appVersion = null,
         ScreenLog? log = null)
     {
         ArgumentNullException.ThrowIfNull(send);
@@ -48,6 +54,8 @@ public sealed class ScreenModels
         ImportNote = new ImportNoteModel(send);
         RecordControls = new RecordControlsModel();
         UpNext = new UpNextModel(cal, cal, wake ?? NoWake.Instance);
+        Library = new LibraryModel(send, makePlayer, search);
+        About = new AboutModel(appVersion);
     }
 
     public PermissionsModel Permissions { get; }
@@ -72,6 +80,9 @@ public sealed class ScreenModels
     /// <summary>The foot of Today's ink zone.</summary>
     public RecordControlsModel RecordControls { get; }
     public UpNextModel UpNext { get; }
+    /// <summary>What Today, the Library and a record show of the library.</summary>
+    public LibraryModel Library { get; }
+    public AboutModel About { get; }
 
     /// <summary>A batch of the core's events, after the CoreStore has applied it.</summary>
     public void Apply(IReadOnlyList<InkEvent> batch)
@@ -99,6 +110,8 @@ public sealed class ScreenModels
             ImportNote.Apply(e);
             RecordControls.Apply(e);
         }
+        // The Library folds a batch at once, and refreshes once per batch.
+        Library.Apply(batch);
     }
 
     /// <summary>
@@ -138,7 +151,8 @@ public sealed class ScreenModels
         return PermissionsModel.Handles(failed) || Polish.Handles(failed) || CatalogueModel.Handles(failed)
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
             || MeetingModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed)
-            || Ai.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed);
+            || Ai.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
+            || Library.Handles(failed);
     }
 
     /// <summary>

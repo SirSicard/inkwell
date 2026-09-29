@@ -31,6 +31,7 @@ public class ScreenModelsTests
         Assert.Contains(sent.Commands, c => c is CoreCommand.ConsentGet { Feature: LlmFeature.Edit });
         Assert.Contains(sent.Commands, c => c is CoreCommand.ConsentGet { Feature: LlmFeature.Meetings });
         Assert.Contains(new CoreCommand.SettingGet(ShellSetting.DictationEnabled), sent.Commands);
+        Assert.Contains(sent.Commands, c => c is CoreCommand.RecordsList);
     }
 
     [Fact]
