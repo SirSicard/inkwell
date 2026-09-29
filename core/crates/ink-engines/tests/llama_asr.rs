@@ -10,6 +10,13 @@
 //! into a scratch model directory laid out as the downloader would leave it, so the router,
 //! residency and the loader are the ones the app uses. A missing bench directory or model fails the
 //! test: a real-model check never passes without running.
+//!
+//! On Windows, build with `engine-llama-vulkan` for the GPU (see its note in Cargo.toml for the
+//! build environment) and set `INK_EXPECT_COMPUTE` to `gpu` or `cpu`: the WER tests check that the
+//! engine computes there before they measure. To run a Vulkan build on the CPU, hide every Vulkan
+//! device from ggml with `GGML_VK_VISIBLE_DEVICES` set to a blank (a space): that is the machine
+//! without a Vulkan GPU, and the engine must fall back to the CPU by itself. The speeds printed are
+//! for comparison only; time them on a quiet machine.
 
 #![cfg(feature = "engine-llama")]
 
@@ -23,7 +30,10 @@ use std::time::{Duration, Instant};
 use ink_core::mock::MockClock;
 use ink_core::{CancelToken, Channel, EngineError, Job, OfflineEngine, TranscribeOptions};
 use ink_engines::llama::{MAX_WINDOW_SECONDS, QwenAsr, QwenAsrLoader};
-use ink_engines::{EngineRow, IDLE_UNLOAD, ModelDir, Os, Registry, Residency, Route, Router};
+use ink_engines::{
+    Compute, EngineRow, IDLE_UNLOAD, ModelDir, Os, Registry, Residency, Route, Router,
+    physical_cores,
+};
 
 const ID: &str = "qwen3-asr-1.7b-q8";
 const RATE: usize = 16_000;
@@ -130,56 +140,120 @@ fn options() -> TranscribeOptions {
 }
 
 fn ami_clip(name: &str) -> Vec<f32> {
-    let path = bench::bench_dir().join("ami-ihm").join(name);
+    set_clip("ami-ihm", name)
+}
+
+fn set_clip(set: &str, name: &str) -> Vec<f32> {
+    let path = bench::bench_dir().join(set).join(name);
     let (rate, samples) = bench::read_wav(&path).unwrap();
     assert_eq!(rate as usize, RATE, "{}", path.display());
     samples
+}
+
+/// Where the engine must compute on this machine: `INK_EXPECT_COMPUTE` (`gpu` or `cpu`), which
+/// Windows runs must set (a PC may or may not have a Vulkan GPU, and a build may or may not have
+/// Vulkan); on the Mac, Metal's GPU unless it says otherwise.
+fn check_compute(compute: &Compute) {
+    let expected = match std::env::var("INK_EXPECT_COMPUTE") {
+        Ok(v) => v,
+        Err(_) if cfg!(target_os = "macos") => "gpu".into(),
+        Err(_) => panic!("set INK_EXPECT_COMPUTE to gpu or cpu for this machine and build"),
+    };
+    match expected.as_str() {
+        "gpu" => assert!(compute.is_gpu(), "expected a GPU, computing on {compute}"),
+        "cpu" => assert_eq!(
+            *compute,
+            Compute::Cpu {
+                threads: physical_cores()
+            },
+            "expected the CPU on every physical core"
+        ),
+        other => panic!("INK_EXPECT_COMPUTE is {other:?}, not gpu or cpu"),
+    }
+}
+
+/// Routes the meeting final to the installed row as the app does, loads it once through
+/// residency, checks where it computes, and transcribes every clip of `set` whole. Returns the
+/// corpus edits against the references, and prints each clip's and the corpus's speed (times
+/// real time; not a measurement unless the machine was quiet).
+fn corpus_on(set: &str, clips: usize) -> (bench::Edits, EngineRow) {
+    let bench = bench::bench_dir();
+    let installed = Installed::new();
+
+    // The route the meeting final takes in the app: the router picks the installed row for this
+    // OS...
+    let registry = Registry::new(vec![installed.row.clone()]).unwrap();
+    let os = Os::current().expect("the core ships on this OS");
+    let router = Router::new(&registry, installed.dir.clone(), os);
+    let Route::Model(row) = router.route(Job::MeetingFinal).unwrap() else {
+        panic!("the meeting final should route to the installed model");
+    };
+    // ...and residency loads it once for every clip, on the device the machine has.
+    let clock = Arc::new(MockClock::new(1_000, 1_700_000_000_000));
+    let residency = Residency::new(Arc::new(QwenAsrLoader::new(installed.dir.clone())), clock);
+    let engine = residency.acquire(&row).unwrap();
+    println!("{set}: computing on {}", engine.compute());
+    check_compute(engine.compute());
+
+    let rows = bench::read_ami_tsv(&bench.join(format!("{set}.tsv"))).unwrap();
+    assert_eq!(rows.len(), clips, "the measured {set} set");
+    let mut corpus = bench::Edits::default();
+    let (mut audio_s, mut busy_s) = (0.0, 0.0);
+    for clip in &rows {
+        let audio = set_clip(set, &clip.wav);
+        let seconds = audio.len() as f64 / RATE as f64;
+        // The clips were measured whole; they must not be split here either.
+        assert!(seconds <= f64::from(MAX_WINDOW_SECONDS), "{}", clip.wav);
+        let started = Instant::now();
+        let transcript = engine.transcribe(&audio, &options()).unwrap();
+        let elapsed = started.elapsed().as_secs_f64();
+        assert_eq!(transcript.segments.len(), 1, "{}", clip.wav);
+        let edits = bench::score(&clip.reference, &transcript.text());
+        println!(
+            "{:18} {seconds:5.1} s audio  {elapsed:5.2} s  {:5.1}x  {edits}",
+            clip.wav,
+            seconds / elapsed
+        );
+        corpus = corpus + edits;
+        audio_s += seconds;
+        busy_s += elapsed;
+    }
+    println!(
+        "corpus             {corpus}   {:.1}x real time",
+        audio_s / busy_s
+    );
+    (corpus, row.as_ref().clone())
 }
 
 #[test]
 #[ignore = "needs the Qwen3-ASR model and AMI IHM under $INK_BENCH_DIR; run locally"]
 fn qwen3_asr_reproduces_the_measured_wer_on_ami_ihm() {
     let _serial = serial();
-    let bench = bench::bench_dir();
-    let installed = Installed::new();
-
-    // The route the meeting final takes in the app: the router picks the installed row...
-    let registry = Registry::new(vec![installed.row.clone()]).unwrap();
-    let router = Router::new(&registry, installed.dir.clone(), Os::MacOs);
-    let Route::Model(row) = router.route(Job::MeetingFinal).unwrap() else {
-        panic!("the meeting final should route to the installed model");
-    };
-    // ...and residency loads it once for every clip.
-    let clock = Arc::new(MockClock::new(1_000, 1_700_000_000_000));
-    let residency = Residency::new(Arc::new(QwenAsrLoader::new(installed.dir.clone())), clock);
-    let engine = residency.acquire(&row).unwrap();
-
-    let rows = bench::read_ami_tsv(&bench.join("ami-ihm.tsv")).unwrap();
-    assert_eq!(rows.len(), 3, "the measured set is three AMI IHM excerpts");
-    let mut corpus = bench::Edits::default();
-    for clip in &rows {
-        let audio = ami_clip(&clip.wav);
-        let seconds = audio.len() as f64 / RATE as f64;
-        // The clips were measured whole; they must not be split here either.
-        assert!(seconds <= f64::from(MAX_WINDOW_SECONDS), "{}", clip.wav);
-        let started = Instant::now();
-        let transcript = engine.transcribe(&audio, &options()).unwrap();
-        let elapsed = started.elapsed();
-        assert_eq!(transcript.segments.len(), 1, "{}", clip.wav);
-        let edits = bench::score(&clip.reference, &transcript.text());
-        println!(
-            "{:18} {seconds:5.1} s audio  {:5.2} s  {edits}",
-            clip.wav,
-            elapsed.as_secs_f64()
-        );
-        corpus = corpus + edits;
-    }
+    let (corpus, row) = corpus_on("ami-ihm", 3);
     let measured = f64::from(row.wer(Job::MeetingFinal).unwrap());
-    println!("corpus             {corpus}   measured at the engine choice: {measured:.2}");
+    println!("measured at the engine choice: {measured:.2}");
     assert_eq!(corpus.reference, 709, "the reference set changed");
     assert!(
         (corpus.wer() - measured).abs() <= 0.3,
         "WER {:.2} is not within 0.3 of the measured {measured:.2}",
+        corpus.wer()
+    );
+}
+
+/// The far-field (single distant mic) AMI set the engine was also measured on: 42.03 on the Mac
+/// (Metal), and within decoding noise of that on Windows (Vulkan and CPU).
+const AMI_SDM_MEASURED: f64 = 42.03;
+
+#[test]
+#[ignore = "needs the Qwen3-ASR model and AMI SDM under $INK_BENCH_DIR; run locally"]
+fn qwen3_asr_reproduces_the_measured_wer_on_ami_sdm() {
+    let _serial = serial();
+    let (corpus, _) = corpus_on("ami-sdm", 3);
+    println!("measured at the engine choice: {AMI_SDM_MEASURED:.2}");
+    assert_eq!(corpus.reference, 671, "the reference set changed");
+    assert!(
+        (corpus.wer() - AMI_SDM_MEASURED).abs() <= 0.3,
+        "WER {:.2} is not within 0.3 of the measured {AMI_SDM_MEASURED:.2}",
         corpus.wer()
     );
 }

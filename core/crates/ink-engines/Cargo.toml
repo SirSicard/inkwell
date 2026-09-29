@@ -21,6 +21,13 @@ http = ["dep:ureq"]
 # Off by default: it compiles llama.cpp and its ggml with cmake, and CI has no models. llama.cpp is
 # linked statically, so its ggml stays inside the core (docs/ARCHITECTURE.md, "ggml").
 engine-llama = ["dep:llama-cpp-2", "dep:tracing"]
+# llama.cpp's Vulkan backend, for Windows: the engine runs on a Vulkan GPU where the machine has
+# one and on the CPU where it has none (src/compute.rs). Building it needs the Vulkan SDK
+# (VULKAN_SDK), libclang for llama-cpp-sys-2's bindings (LIBCLANG_PATH) and the Ninja generator
+# (CMAKE_GENERATOR=Ninja): with Visual Studio's generator, MSBuild runs the shader generator's
+# install step before its configure step. The binary then loads vulkan-1.dll, which GPU drivers
+# install. Never on the Mac, which runs on Metal.
+engine-llama-vulkan = ["engine-llama", "llama-cpp-2/vulkan"]
 # Silero VAD on tract, a pure-Rust ONNX runtime: ink-audio's speech probability, no native code and
 # no build-time download.
 engine-silero = ["dep:tract-onnx"]
@@ -50,6 +57,10 @@ ink-audio = { path = "../ink-audio" }
 # checked against this version's optimiser. Default features off: they add tract-transformers,
 # which the VAD does not need.
 tract-onnx = { version = "=0.23.8", default-features = false, optional = true }
+
+# The machine's physical core count, the thread count for CPU inference (src/compute.rs). MIT OR
+# Apache-2.0; uses libc, already in the tree, on Unix and a Win32 call on Windows.
+num_cpus = "1.17.0"
 
 [build-dependencies]
 # build.rs checks the NeMo-Speech.cpp headers it links against by SHA-256 (already a dependency).

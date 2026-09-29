@@ -28,6 +28,12 @@
 //! drops its [`Residency`], and with it every model, before the process exits, and nothing keeps a
 //! model in a `static`. `tests/llama_asr.rs` pins this.
 //!
+//! **Where it computes** ([`compute`]): on a GPU when ggml reports one (Metal on the Mac, Vulkan on
+//! Windows with `engine-llama-vulkan`), every layer offloaded; else on the CPU, nothing offloaded
+//! and one thread per physical core, set explicitly (llama.cpp's own default is 4). Chosen once per
+//! process from ggml's devices by [`crate::choose`], so a Vulkan build on a machine without a
+//! Vulkan device runs on the CPU.
+//!
 //! **Threads.** Everything here is a **worker**-thread call, `Send + Sync`, and may block for as
 //! long as the work takes.
 //!
@@ -76,17 +82,25 @@ pub fn log_allowed(metadata: &tracing::Metadata<'_>) -> bool {
     true
 }
 
+use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::OnceLock;
 
 use ink_core::{CancelToken, EngineError};
 use llama_cpp_2::context::LlamaContext;
+use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
-use llama_cpp_2::{LogOptions, TokenToStringError, send_logs_to_tracing};
+use llama_cpp_2::{
+    LlamaBackendDeviceType, LogOptions, TokenToStringError, list_llama_ggml_backend_devices,
+    send_logs_to_tracing,
+};
+
+use crate::compute::{Compute, Device, DeviceKind, choose, physical_cores};
 
 /// The process's llama.cpp backend. llama.cpp is initialised once per process (the binding refuses
 /// a second `init`), so every model shares this one, and it lives until the process exits. A model
@@ -102,6 +116,104 @@ fn backend() -> Result<&'static LlamaBackend, EngineError> {
         })
         .as_ref()
         .map_err(|e| EngineError::Failed(format!("the llama.cpp backend did not start: {e}")))
+}
+
+/// **Worker.** Where this process's llama.cpp models compute: the GPU ggml reports, or the CPU on
+/// every physical core (see the module docs). Starts the backend if it has not started, and is
+/// decided once: ggml registers its devices when the backend starts, and they do not change. The
+/// choice is logged once, with the device list. It is where each model is tried first: a model that
+/// fails to load on the GPU falls back to the CPU on its own ([`with_cpu_fallback`]), and the next
+/// model tries the GPU again.
+pub fn compute() -> Result<&'static Compute, EngineError> {
+    static COMPUTE: OnceLock<Compute> = OnceLock::new();
+    // The devices are only listed once the backend (and with it ggml's device registry) is up.
+    backend()?;
+    Ok(COMPUTE.get_or_init(|| {
+        let devices: Vec<Device> = list_llama_ggml_backend_devices()
+            .into_iter()
+            .map(|d| Device {
+                backend: d.backend,
+                description: d.description,
+                kind: match d.device_type {
+                    LlamaBackendDeviceType::Cpu => DeviceKind::Cpu,
+                    LlamaBackendDeviceType::Gpu => DeviceKind::Gpu,
+                    LlamaBackendDeviceType::IntegratedGpu => DeviceKind::IntegratedGpu,
+                    LlamaBackendDeviceType::Accelerator => DeviceKind::Accelerator,
+                    LlamaBackendDeviceType::Unknown => DeviceKind::Unknown,
+                },
+            })
+            .collect();
+        let chosen = choose(&devices, physical_cores());
+        log_choice(&devices, &chosen, cfg!(feature = "engine-llama-vulkan"));
+        chosen
+    }))
+}
+
+/// Logs where llama.cpp computes and what ggml offered, so a CPU fallback is never silent: a
+/// warning when a build with Vulkan (`vulkan_build`) found no GPU to use.
+fn log_choice(devices: &[Device], chosen: &Compute, vulkan_build: bool) {
+    tracing::info!(?devices, "llama.cpp computes on {chosen}");
+    if vulkan_build && !chosen.is_gpu() {
+        tracing::warn!(
+            ?devices,
+            "this build has Vulkan but ggml offers no Vulkan GPU: llama.cpp runs on the {chosen}"
+        );
+    }
+}
+
+/// Loads a model with `chosen` and returns it with where it computes. If `chosen` is a GPU and the
+/// load fails (for example a GPU with too little memory for the model), logs it and loads again on
+/// the CPU with `cpu_threads`. The fallback is this load's only; nothing is cached, so the next
+/// load tries the GPU again. When both fail, the error names both.
+fn with_cpu_fallback<T>(
+    chosen: &Compute,
+    cpu_threads: NonZeroU32,
+    id: &str,
+    mut load: impl FnMut(&Compute) -> Result<T, EngineError>,
+) -> Result<(T, Compute), EngineError> {
+    match load(chosen) {
+        Ok(loaded) => Ok((loaded, chosen.clone())),
+        Err(on_gpu) if chosen.is_gpu() => {
+            let cpu = Compute::Cpu {
+                threads: cpu_threads,
+            };
+            tracing::warn!(
+                model = id,
+                "couldn't load on {chosen} ({on_gpu}); loading on the {cpu} instead"
+            );
+            match load(&cpu) {
+                Ok(loaded) => Ok((loaded, cpu)),
+                Err(on_cpu) => Err(EngineError::Failed(format!(
+                    "{id}: couldn't load on {chosen} ({on_gpu}) or on the CPU ({on_cpu})"
+                ))),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Model parameters for `compute`: llama.cpp's defaults on a GPU (every layer offloaded,
+/// memory-mapped: what was measured), and no layer offloaded on the CPU.
+fn model_params(compute: &Compute) -> LlamaModelParams {
+    let params = LlamaModelParams::default();
+    if compute.is_gpu() {
+        params
+    } else {
+        params.with_n_gpu_layers(0)
+    }
+}
+
+/// A context's parameters for `compute`, holding `n_ctx` tokens: on the CPU, generation and prompt
+/// reading both get one thread per physical core; on a GPU, llama.cpp's defaults.
+fn context_params(compute: &Compute, n_ctx: u32) -> LlamaContextParams {
+    let params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(n_ctx));
+    match compute.cpu_threads() {
+        None => params,
+        Some(threads) => {
+            let threads = i32::try_from(threads.get()).unwrap_or(i32::MAX);
+            params.with_n_threads(threads).with_n_threads_batch(threads)
+        }
+    }
 }
 
 /// A path's file name, for errors: the directory can hold the user's name, and errors end up in
@@ -207,7 +319,13 @@ mod tests {
     use tracing::span::{Attributes, Id, Record};
     use tracing::{Event, Level, Metadata, Subscriber};
 
-    use super::log_allowed;
+    use std::cell::RefCell;
+    use std::num::NonZeroU32;
+
+    use ink_core::EngineError;
+
+    use super::{log_allowed, log_choice, with_cpu_fallback};
+    use crate::compute::{Compute, Device, DeviceKind};
 
     /// A subscriber that applies `log_allowed`, as the app's must, and records what gets through.
     #[derive(Clone, Default)]
@@ -314,6 +432,118 @@ mod tests {
             vec![
                 (Level::DEBUG, "ink_pipeline".to_owned()),
                 (Level::INFO, "llama_cpp_2x".to_owned()),
+            ]
+        );
+    }
+
+    fn gpu() -> Compute {
+        Compute::Gpu {
+            backend: "Vulkan".into(),
+            description: "Synthetic GPU".into(),
+        }
+    }
+
+    fn cpu(threads: u32) -> Compute {
+        Compute::Cpu {
+            threads: NonZeroU32::new(threads).unwrap(),
+        }
+    }
+
+    const THIS: &str = "ink_engines::llama";
+
+    #[test]
+    fn a_gpu_load_that_fails_falls_back_to_the_cpu_and_says_so() {
+        // A GPU with too little memory for the model: the load on it fails, the one on the CPU
+        // works.
+        let tried = RefCell::new(Vec::new());
+        let mut result = None;
+        let logged = kept(|| {
+            result = Some(with_cpu_fallback(
+                &gpu(),
+                NonZeroU32::new(12).unwrap(),
+                "m",
+                |c| {
+                    tried.borrow_mut().push(c.clone());
+                    if c.is_gpu() {
+                        Err(EngineError::Failed("m: out of GPU memory".into()))
+                    } else {
+                        Ok("loaded")
+                    }
+                },
+            ));
+        });
+        let (loaded, on) = result.unwrap().unwrap();
+        assert_eq!((loaded, &on), ("loaded", &cpu(12)));
+        assert_eq!(*tried.borrow(), [gpu(), cpu(12)]);
+        assert_eq!(logged, [(Level::WARN, THIS.to_owned())]);
+    }
+
+    #[test]
+    fn the_fallback_is_not_cached_the_next_load_tries_the_gpu_again() {
+        let fail_gpu = |c: &Compute| {
+            if c.is_gpu() {
+                Err(EngineError::Failed("m: out of GPU memory".into()))
+            } else {
+                Ok(())
+            }
+        };
+        let threads = NonZeroU32::new(4).unwrap();
+        assert_eq!(
+            with_cpu_fallback(&gpu(), threads, "big", fail_gpu)
+                .unwrap()
+                .1,
+            cpu(4)
+        );
+        // A later model that fits is loaded on the GPU, not on the CPU the last one fell back to.
+        let (_, on) = with_cpu_fallback(&gpu(), threads, "small", |_| Ok(())).unwrap();
+        assert_eq!(on, gpu());
+    }
+
+    #[test]
+    fn a_load_that_fails_everywhere_names_both_failures() {
+        let err = with_cpu_fallback(&gpu(), NonZeroU32::new(2).unwrap(), "m", |c| {
+            Err::<(), _>(EngineError::Failed(format!("m: broken on {c}")))
+        })
+        .unwrap_err();
+        let EngineError::Failed(msg) = err else {
+            panic!("{err:?}")
+        };
+        assert!(msg.contains("on Vulkan") && msg.contains("on CPU"), "{msg}");
+    }
+
+    #[test]
+    fn a_cpu_choice_is_tried_once_and_its_failure_returned_as_is() {
+        let mut calls = 0;
+        let err = with_cpu_fallback(&cpu(8), NonZeroU32::new(8).unwrap(), "m", |_| {
+            calls += 1;
+            Err::<(), _>(EngineError::ModelMissing("m".into()))
+        })
+        .unwrap_err();
+        assert_eq!(err, EngineError::ModelMissing("m".into()));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn the_choice_is_logged_and_a_vulkan_build_on_the_cpu_warns() {
+        let devices = [Device {
+            backend: "CPU".into(),
+            description: "Synthetic CPU".into(),
+            kind: DeviceKind::Cpu,
+        }];
+        let info = |level| vec![(level, THIS.to_owned())];
+        assert_eq!(
+            kept(|| log_choice(&devices, &gpu(), true)),
+            info(Level::INFO)
+        );
+        assert_eq!(
+            kept(|| log_choice(&devices, &cpu(12), false)),
+            info(Level::INFO)
+        );
+        assert_eq!(
+            kept(|| log_choice(&devices, &cpu(12), true)),
+            [
+                (Level::INFO, THIS.to_owned()),
+                (Level::WARN, THIS.to_owned())
             ]
         );
     }
