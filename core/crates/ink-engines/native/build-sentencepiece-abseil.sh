@@ -40,8 +40,10 @@
 # The SentencePiece release asset is the Python source distribution, which carries the complete C++
 # source under sentencepiece/: that directory is what gets built.
 #
-# On Windows (Git Bash, inside a Visual Studio developer environment, so that `cl` is on PATH):
-# - x64, MSVC, the dynamic C runtime (/MD, what Rust's MSVC target links), Release.
+# On Windows (Git Bash, inside a Visual Studio developer environment for x64 or arm64):
+# - The developer environment's architecture, with the compiler NeMo-Speech.cpp is built with
+#   (lib/windows-toolchain.sh): x64 with MSVC (`cl`), arm64 with clang-cl (ggml refuses MSVC on
+#   ARM). The dynamic C runtime (/MD, what Rust's MSVC target links), Release.
 # - Static libraries. SentencePiece's CMake builds only a static library on Windows, and Abseil is
 #   static too, so NeMo-Speech.cpp's DLL links both privately and the prefix ships no DLL of
 #   theirs. SentencePiece is still compiled against this Abseil, and NeMo against the same one.
@@ -65,6 +67,8 @@ fail() { echo "build-sentencepiece-abseil: $*" >&2; exit 1; }
 # safe_extract: lists a tarball, refuses an entry that would land outside its directory, then
 # extracts it without its owners.
 . "$(cd "$(dirname "$0")" && pwd)/lib/safe-extract.sh"
+# windows_toolchain: the Windows architecture and compiler, from the developer environment.
+. "$(cd "$(dirname "$0")" && pwd)/lib/windows-toolchain.sh"
 
 if [ "$#" -ne 2 ]; then
     sed -n '6,15p' "$0" >&2
@@ -122,7 +126,7 @@ native() {
     if [ "${os}" = windows ]; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
 }
 if [ "${os}" = windows ]; then
-    command -v cl >/dev/null 2>&1 || fail "no cl on PATH: run from a Visual Studio developer environment"
+    windows_toolchain || fail "no Windows toolchain (above)"
 fi
 deployment_target="${MACOSX_DEPLOYMENT_TARGET:-26.0}"
 
@@ -144,7 +148,8 @@ spm_src="${src}/sentencepiece-${SENTENCEPIECE_VERSION}/sentencepiece"
 rm -rf "${spm_src}/third_party/absl" "${spm_src}/third_party/abseil-cpp"
 
 # Both projects, the same way: Release; on macOS arm64 for the deployment target, installed by
-# @rpath and shared; on Windows x64 with MSVC and the dynamic C runtime, static.
+# @rpath and shared; on Windows the developer environment's architecture and compiler, with the
+# dynamic C runtime, static.
 common=(
     -G Ninja
     -DCMAKE_BUILD_TYPE=Release
@@ -163,8 +168,8 @@ if [ "${os}" = macos ]; then
 else
     shared=OFF
     common+=(
-        -DCMAKE_C_COMPILER=cl
-        -DCMAKE_CXX_COMPILER=cl
+        "-DCMAKE_C_COMPILER=${win_cc}"
+        "-DCMAKE_CXX_COMPILER=${win_cc}"
         -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
     )
 fi
@@ -268,7 +273,7 @@ mkdir -p "$(dirname "${manifest}")"
         echo "deployment_target ${deployment_target}"
         pattern='lib/*.dylib'
     else
-        echo "platform windows-x64 msvc static /MD"
+        echo "platform windows-${win_arch} ${win_cc_name} static /MD"
         pattern='lib/*.lib'
     fi
     (
@@ -290,6 +295,6 @@ echo "Installed SentencePiece ${SENTENCEPIECE_VERSION} and Abseil ${ABSEIL_VERSI
 if [ "${os}" = macos ]; then
     echo "(arm64, macOS ${deployment_target}). Build NeMo-Speech.cpp against them with:"
 else
-    echo "(x64, MSVC, static). Build NeMo-Speech.cpp against them with:"
+    echo "(${win_arch}, ${win_cc}, static). Build NeMo-Speech.cpp against them with:"
 fi
 echo "  ENGINE_DEPS_DIR=${prefix} core/crates/ink-engines/native/build-nemo-speech.sh <source> <prefix>"
