@@ -84,7 +84,7 @@ Not needed for contributing, kept here so the release process is written down so
 - **Releases** are cut by pushing a `v1.X.Y` tag, as [docs/RELEASING.md](docs/RELEASING.md) describes. The 0.2 app's releases come from the `legacy/0.2` branch.
 - **The Mac updater's signing key** is Sparkle's EdDSA key, whose public half is in `mac/Info.plist`. Losing the private half permanently breaks updates for every installed copy. Keep a backup outside GitHub Actions secrets.
 - **Every release** updates `CHANGELOG.md` (Keep a Changelog format). The version comes from the tag.
-- **Repo settings:** description "Local-first speech to text for desktop. Free and open source." Topics: `speech-to-text`, `stt`, `dictation`, `tauri`, `rust`, `desktop-app`, `privacy`, `local-first`, `voice`, `transcription`. Discussions on, private vulnerability reporting on.
+- **Repo settings:** description "Local-first speech to text for desktop. Free and open source." Topics: `speech-to-text`, `stt`, `dictation`, `rust`, `desktop-app`, `privacy`, `local-first`, `voice`, `transcription`. Discussions on, private vulnerability reporting on.
 - **Do not** add a CLA, stale bots, or fifteen labels before there are fifteen issues.
 
 ## License
