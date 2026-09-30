@@ -108,6 +108,25 @@ final class LoginItemMigrationTests: XCTestCase {
         XCTAssertNil(LoginItemMigration.notice(for: outcome), "nothing to tell")
     }
 
+    func testZeroTwosAgentMatchesThisBundleReachedThroughALink() throws {
+        // 0.2 wrote its executable's resolved path; this copy was opened through a link to it.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ink-bundle-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let real = dir.appendingPathComponent("Real/Inkwell.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let link = dir.appendingPathComponent("Inkwell.app", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let resolved = try XCTUnwrap(realpath(real.path, nil))
+        defer { free(resolved) }
+        let program = String(cString: resolved) + "/Contents/MacOS/app"
+        XCTAssertNotEqual(link.path + "/Contents/MacOS/app", program, "the paths differ as given")
+
+        files.contents[agent] = agent02(program: program)
+        XCTAssertEqual(migration(bundle: link).run(), .carriedOver(turnedOn: .success(.on), notRemoved: nil))
+        XCTAssertEqual(files.removals, [agent])
+    }
+
     func testALoginItemWaitingForApprovalCountsAsOn() {
         files.contents[agent] = agent02()
         loginItem.afterTurnOn = .needsApproval
