@@ -7,3 +7,4 @@
 
 winuiex          verified=no  the LICENSE of dotMorten/WinUIEx at the commit its 2.9.3 package names (72f2975d2a237c0d7ad1113fe617d5894e66feb6): the text is the MIT licence under the copyright line of the package's manifest
 windows-sdk-net  verified=no  the Windows SDK licence terms the package's manifest links (https://aka.ms/WinSDKLicenseURL): the text is the manifest's copyright line and that link
+onnxruntime      verified=no  the LICENSE of microsoft/onnxruntime at v1.27.0, the version sherpa-onnx 1.13.4's Windows archive ships: the text is the LICENSE of onnxruntime 1.19.2's Python package, as the archive carries none

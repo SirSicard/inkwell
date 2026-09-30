@@ -127,6 +127,14 @@ public class NoticesTests
         Assert.Contains("--- THIRD-PARTY-NOTICES.TXT ---", byId["dotnet-runtime"].Text, StringComparison.Ordinal);
         Assert.Contains("https://aka.ms/WinSDKLicenseURL", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (c) Microsoft Corporation.", byId["cswinrt"].Text, StringComparison.Ordinal);
+
+        // Windows' Parakeet runs on sherpa-onnx and the ONNX Runtime its archive carries.
+        Assert.Equal("Apache-2.0", byId["sherpa-onnx"].Licence);
+        Assert.Equal(Notices.Apache2, byId["sherpa-onnx"].Text);
+        Assert.Contains("1.13.4", byId["sherpa-onnx"].Role, StringComparison.Ordinal);
+        Assert.Equal("MIT", byId["onnxruntime"].Licence);
+        Assert.StartsWith("MIT License\n\nCopyright (c) Microsoft Corporation\n", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        Assert.Contains("1.27.0", byId["onnxruntime"].Role, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -182,7 +190,7 @@ public class NoticesTests
     {
         var mac = MacNotices.Texts(AboutCheckout.Read("mac/Sources/Inkwell/Screens/Notices.swift"));
         Assert.True(mac.Count > 15, "Notices.swift was read");
-        string[] windowsOnly = ["wasapi-rs", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt"];
+        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt"];
         var shared = Notices.Components.Where(c => !windowsOnly.Contains(c.Id)).ToList();
         Assert.Equal(16, shared.Count);
         Assert.All(windowsOnly, id => Assert.False(mac.ContainsKey(id), id));
@@ -329,7 +337,7 @@ public class ComposedNoticesTests
         Assert.Equal([], Problems(declared, ours + "\n" + windows));
         // Every line is well formed (a short line would drop out of the comparison above).
         Assert.All(Lines(mac).Concat(Lines(windows)), l => Assert.True(l.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 3, l));
-        Assert.Equal(["winuiex", "windows-sdk-net"], Markers(windows).Keys);
+        Assert.Equal(["winuiex", "windows-sdk-net", "onnxruntime"], Markers(windows).Keys);
     }
 
     /// <summary>The check fails when a composed notice has no line, and when a line names no composed notice.</summary>
