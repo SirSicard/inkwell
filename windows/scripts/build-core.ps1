@@ -38,7 +38,8 @@
 #
 # Needs: the Rust toolchain core/rust-toolchain.toml pins; CMake and Ninja; Visual Studio 2026's C++
 # build tools for this architecture, whose developer environment it enters when cl.exe is not on
-# PATH (its redistributable folder, VCToolsRedistDir, holds the runtime copied above); LLVM (libclang for llama.cpp's bindings, LIBCLANG_PATH, LLVM's bin under Program Files when
+# PATH (its redistributable folder, VCToolsRedistDir, holds the runtime copied above); LLVM
+# (libclang for llama.cpp's bindings, LIBCLANG_PATH, LLVM's bin under Program Files when
 # unset; on ARM64 also clang-cl, since ggml refuses MSVC on ARM); on x64 the Vulkan SDK
 # (VULKAN_SDK); SHERPA_ONNX_DIR, the unpacked sherpa-onnx-v1.13.4-win-<x64|arm64>-shared-MD-Release-
 # no-tts-lib archive, whose files ink-engines' build.rs checks against its pins; and, where the
@@ -211,7 +212,7 @@ if ($nemo) {
 
 # The Visual C++ runtime DLLs the folder's DLLs import (above), from the redistributable folder.
 $dumpbin = (Get-Command dumpbin.exe).Source
-$redistFolders = @('CRT', 'OpenMP') | ForEach-Object { Join-Path $env:VCToolsRedistDir "$vsArch\Microsoft.$VcRedist.$_" }
+$redistFolders = if ($env:VCToolsRedistDir) { @('CRT', 'OpenMP') | ForEach-Object { Join-Path $env:VCToolsRedistDir "$vsArch\Microsoft.$VcRedist.$_" } } else { @() }
 $pending = [System.Collections.Generic.Queue[string]]::new()
 foreach ($file in Get-ChildItem $out -File -Filter *.dll) { $pending.Enqueue($file.FullName) }
 $runtimeCopied = 0
