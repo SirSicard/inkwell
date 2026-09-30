@@ -13,7 +13,8 @@
 // before has ended, with model.update_finished or a command.failed carrying its id. Only the model
 // being installed moves a bar: progress for another model, or for a replacement (one model updated
 // to another), is not this screen's. A failure stays, in the core's words, until the user tries
-// again.
+// again. A model that does dictation is kept warm once it is in (model.warm, as at launch), sent
+// before the next install so it never waits for that download.
 import InkBridge
 import Observation
 
@@ -252,6 +253,10 @@ final class CatalogueModel {
         case .modelUpdateFinished(let update):
             requery()
             if update.id == update.next, update.next == installing {
+                let dictates = models.first { $0.id == update.next }?.jobs.contains { $0.job == .dictationFinal } == true
+                if update.ok, dictates {
+                    send(.modelWarm(.dictationFinal))
+                }
                 ended(update.next, failure: update.ok ? nil : update.message ?? "the download did not finish")
             }
         case .coreStopped:

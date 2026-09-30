@@ -35,7 +35,8 @@ the real core.
       and the downloads keep going through the rest of the first run and after it.
 - [ ] Once Parakeet is in, Settings > Models reads Parakeet TDT v3 for Live words without a
       restart, and dictating shows live words in the Drop; once Qwen3-ASR is in, Dictation reads
-      Qwen3-ASR 1.7B.
+      Qwen3-ASR 1.7B, and the first dictation after it is as quick as the next (it is loaded when
+      its download ends, not by that take).
 - [ ] A download that fails (turn Wi-Fi off while one runs): its row says "Couldn't download it"
       and why, in red, with Retry, and nothing tries again by itself. Wi-Fi back on, Retry: it
       downloads.

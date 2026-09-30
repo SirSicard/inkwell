@@ -705,7 +705,28 @@ final class ModelDownloadTests: XCTestCase {
         XCTAssertEqual(catalogue.firstRunModels.map(\.id), [parakeet, qwen], "still listed, as downloaded")
         sent.commands = []
         catalogue.apply(finished(qwen))
-        XCTAssertEqual(sent.commands, asked, "nothing left to install")
+        XCTAssertEqual(sent.commands, asked + [.modelWarm(.dictationFinal)], "nothing left to install; the dictation model kept warm")
+    }
+
+    /// A model that does dictation, once this screen installed it, is kept warm as the one at launch
+    /// is (the first take after the download is not a cold load), and the warm goes before the next
+    /// install, so it never waits for that download. Parakeet (the shell runs it: it does no job in
+    /// the catalogue) and a failed download are not warmed.
+    func testAnInstalledDictationModelIsKeptWarmBeforeTheNextInstall() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listed())
+        catalogue.download([qwen, parakeet])
+        sent.commands = []
+        catalogue.apply(finished(qwen))
+        XCTAssertEqual(sent.commands, asked + [.modelWarm(.dictationFinal), .modelInstall(parakeet, ref: "model.update:2")])
+        sent.commands = []
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(sent.commands, asked, "Parakeet is not warmed: the shell loads it")
+        catalogue.download([qwen])
+        sent.commands = []
+        catalogue.apply(finished(qwen, ok: false, message: "the connection was reset"))
+        XCTAssertEqual(sent.commands, asked, "a failed download is not warmed")
     }
 
     /// Only the model being installed moves its bar: progress for another model, or for a
@@ -1162,6 +1183,11 @@ final class CoreCommandTests: XCTestCase {
         XCTAssertEqual(install["next"] as? String, "qwen3-asr-1.7b-q8", "its own next: the first download")
         XCTAssertEqual(install["id"] as? String, "model.update:1")
         XCTAssertEqual(CoreCommand.modelInstall("x", ref: "r").name, "model.update")
+        let warm = try fields(.modelWarm(.dictationFinal))
+        XCTAssertEqual(warm["cmd"] as? String, "model.warm")
+        XCTAssertEqual(warm["job"] as? String, "dictation_final")
+        XCTAssertEqual(warm["id"] as? String, "model.warm:dictation_final")
+        XCTAssertEqual(CoreCommand.modelWarm(.dictationFinal).name, "model.warm")
         XCTAssertEqual(CoreCommand.noteAdd(record: "r", atMs: 1, text: "private words", ref: "x").name, "note.add",
                        "the name logged never carries the words")
     }
@@ -1312,6 +1338,9 @@ final class ScreensCoreContractTests: XCTestCase {
         XCTAssertEqual(install?.command, "model.update")
         XCTAssertEqual(install?.id, "model.update:1")
         XCTAssertNotNil(try answer(.engineRoute(.dictationFinal)) { if case .engineRouted(let r) = $0 { r } else { nil } })
+        // Nothing installed here: nothing to keep warm, and it says so.
+        let warm = try answer(.modelWarm(.dictationFinal)) { if case .modelWarmFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(warm?.job, .dictationFinal)
         let permissions = try answer(.permissionsCheck) { if case .permissionsChecked(let p) = $0 { p } else { nil } }
         XCTAssertEqual(permissions?.systemAudio, .notDetermined, "never asked here, so never probed")
         let refused = try answer(.noteAdd(record: "no-such-record", atMs: 1_000, text: "private words", ref: "note-line-7")) {

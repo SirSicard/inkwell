@@ -20,6 +20,9 @@ enum CoreCommand: Equatable, Sendable {
     /// only when the user pressed Download. `ref` comes back as the id of a `command.failed`; the
     /// download's progress and end are model.update_progress and model.update_finished for it.
     case modelInstall(String, ref: String)
+    /// Loads the job's model and keeps it loaded: answered by model.warmed, model.refused or
+    /// model.warm_failed.
+    case modelWarm(Job)
     case engineRoute(Job)
     case settingGet(ShellSetting)
     case settingSet(ShellSetting, String)
@@ -83,6 +86,7 @@ enum CoreCommand: Equatable, Sendable {
         case .noteDelete(let note, let ref): ["cmd": "note.delete", "note": note, "id": ref]
         case .modelsList: ["cmd": "models.list"]
         case .modelInstall(let model, let ref): ["cmd": "model.update", "model": model, "next": model, "id": ref]
+        case .modelWarm(let job): ["cmd": "model.warm", "job": job.rawValue, "id": "model.warm:\(job.rawValue)"]
         case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue]
         // The id names the setting, so a failure can be matched to it (command.failed has no key).
         case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue, "id": "setting:\(key.rawValue)"]
@@ -141,6 +145,7 @@ enum CoreCommand: Equatable, Sendable {
         case .noteDelete: "note.delete"
         case .modelsList: "models.list"
         case .modelInstall: "model.update"
+        case .modelWarm: "model.warm"
         case .engineRoute: "engine.route"
         case .settingGet: "setting.get"
         case .settingSet: "setting.set"
