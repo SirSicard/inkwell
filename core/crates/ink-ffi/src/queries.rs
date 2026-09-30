@@ -21,7 +21,7 @@ use ink_core::{
     Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState, PlatformError,
     RecordId, Store,
 };
-use ink_engines::{ModelDir, Os};
+use ink_engines::{ModelDir, Os, Route};
 use ink_pipeline::style::Style;
 use serde_json::{Map, Value, json};
 
@@ -129,6 +129,9 @@ pub enum Query {
     },
     /// `models.list`: the catalogue's models for this OS.
     ModelsList,
+    /// `engine.route`: what serves a job now. A router read, so it is here, where a model
+    /// download on the command thread never delays it.
+    EngineRoute(ink_core::Job),
     /// `setting.get`.
     SettingGet {
         /// One of [`SHELL_SETTINGS`].
@@ -171,6 +174,7 @@ struct Job {
 fn fields(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "permissions.check" | "models.list" | "modes.list" => &[],
+        "engine.route" => &["job"],
         "permission.request" => &["permission"],
         "commitments.list" => &["limit"],
         "commitment.set_done" => &["commitment", "done"],
@@ -284,6 +288,9 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             note: text("note")?,
         },
         "models.list" => Query::ModelsList,
+        "engine.route" => Query::EngineRoute(
+            events::parse_job(&text("job")?).ok_or_else(|| format!("{name}: unknown job"))?,
+        ),
         "setting.get" => Query::SettingGet {
             key: shell_setting(name, &text("key")?)?,
         },
@@ -595,6 +602,7 @@ impl Ctx<'_> {
                 Err(e) => fail(e.to_string()),
             },
             Query::ModelsList => emit(self.catalogue()),
+            Query::EngineRoute(job) => emit(routed(self.shared, job)),
             Query::SettingGet { key } => match store.setting(&key) {
                 Ok(value) => emit(setting(&key, value)),
                 Err(e) => fail(e.to_string()),
@@ -724,6 +732,24 @@ fn setting(key: &str, value: Option<String>) -> Value {
     event(
         "setting.value",
         &[("key", Some(key.into())), ("value", value.map(Into::into))],
+    )
+}
+
+/// `engine.routed`: what serves `job` now: a model downloaded from the registry, an engine the
+/// shell registered (such as a fallback while that model downloads), or nothing installed.
+fn routed(shared: &Shared, job: ink_core::Job) -> Value {
+    let (id, source) = match shared.router.route(job) {
+        Ok(Route::Model(row)) => (Some(row.id.clone()), Some("registry")),
+        Ok(Route::External { id, .. }) => (Some(id), Some("shell")),
+        Err(_) => (None, None),
+    };
+    event(
+        "engine.routed",
+        &[
+            ("job", Some(events::job(job).into())),
+            ("id", id.map(Into::into)),
+            ("source", source.map(Into::into)),
+        ],
     )
 }
 
@@ -972,7 +998,14 @@ mod tests {
                 value: "off".into()
             }))
         );
+        assert_eq!(
+            p(r#"{"cmd":"engine.route","job":"live_partials","id":"r"}"#),
+            Some(Ok(Query::EngineRoute(ink_core::Job::LivePartials)))
+        );
         for bad in [
+            r#"{"cmd":"engine.route"}"#,
+            r#"{"cmd":"engine.route","job":"typing"}"#,
+            r#"{"cmd":"engine.route","job":"live_partials","engine":"x"}"#,
             // Only the user's consent turns polish on: consent.allow, never setting.set.
             r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#,
             r#"{"cmd":"setting.set","key":"llm.consent.polish","value":"{\"to\":\"on_device\"}"}"#,

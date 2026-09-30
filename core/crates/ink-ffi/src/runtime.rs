@@ -393,7 +393,6 @@ enum Command {
     ModelWarm { job: Job },
     ModelUpdate { id: String, next: String },
     EngineUnregister { id: String },
-    EngineRoute { job: Job },
 }
 
 struct Envelope {
@@ -452,7 +451,6 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
         "model.warm" => &["job"],
         "model.update" => &["model", "next"],
         "engine.unregister" => &["engine"],
-        "engine.route" => &["job"],
         other => return Err(format!("unknown command \"{other}\"")),
     };
     let allowed: Vec<&str> = ["cmd", "id"].iter().chain(fields).copied().collect();
@@ -477,9 +475,6 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
         },
         "engine.unregister" => Command::EngineUnregister {
             id: text("engine")?,
-        },
-        "engine.route" => Command::EngineRoute {
-            job: events::parse_job(&text("job")?).ok_or("engine.route: unknown job")?,
         },
         other => return Err(format!("unknown command \"{other}\"")),
     };
@@ -999,23 +994,6 @@ fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
         }
         Command::ModelWarm { job } => warm(shared, job),
         Command::ModelUpdate { id: current, next } => update(shared, &current, &next, &fail),
-        Command::EngineRoute { job } => {
-            // What serves `job` now: a model downloaded from the registry, an engine the shell
-            // registered (such as a fallback while that model downloads), or nothing installed.
-            let (id, source) = match shared.router.route(job) {
-                Ok(Route::Model(row)) => (Some(row.id.clone()), Some("registry")),
-                Ok(Route::External { id, .. }) => (Some(id), Some("shell")),
-                Err(_) => (None, None),
-            };
-            shared.events.emit(event(
-                "engine.routed",
-                &[
-                    ("job", Some(events::job(job).into())),
-                    ("id", id.map(Into::into)),
-                    ("source", source.map(Into::into)),
-                ],
-            ));
-        }
         Command::EngineUnregister { id: engine } => {
             let known = {
                 let mut ids = lock(&shared.externals);
@@ -1287,9 +1265,6 @@ mod tests {
             r#"{"cmd":"replay_meeting"}"#,
             r#"{"cmd":"replay_meeting","mic":"/m.wav","pacing":"slow"}"#,
             r#"{"cmd":"engine.unregister","engine":3}"#,
-            r#"{"cmd":"engine.route"}"#,
-            r#"{"cmd":"engine.route","job":"typing"}"#,
-            r#"{"cmd":"engine.route","job":"live_partials","engine":"x"}"#,
             r#"{"cmd":"model.update","model":"a","next":"b","id":7}"#,
         ] {
             assert!(parse_command(bad).is_err(), "{bad}");

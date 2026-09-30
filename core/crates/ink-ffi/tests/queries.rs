@@ -491,6 +491,34 @@ fn the_catalogue_lists_this_oses_models_with_their_rates_and_whether_they_are_in
     rig.finish();
 }
 
+/// What serves a job is a screen's question (Settings > Models asks it after each download, and
+/// when an engine comes or goes): it is answered while a model update holds the command thread for
+/// its download, not once the download ends.
+#[test]
+fn what_serves_a_job_is_answered_while_a_model_update_holds_the_commands() {
+    let rig = rig("route");
+    rig.core
+        .command(&json!({"cmd": "model.update", "model": ROW_ID, "next": ROW_ID}).to_string())
+        .unwrap();
+    rig.events.wait_type("model.update_started", WAIT);
+    assert!(rig.gate.until_waiting(WAIT), "the install is under way");
+
+    let routed = rig.ask(
+        json!({"cmd": "engine.route", "job": "dictation_final"}),
+        "engine.routed",
+        1,
+    );
+    assert_eq!(routed["job"], "dictation_final");
+    assert_eq!(routed["id"], ROW_ID);
+    assert_eq!(routed["source"], "registry");
+    assert_eq!(
+        rig.events.count("model.update_finished"),
+        0,
+        "the answer did not wait for the update"
+    );
+    rig.finish();
+}
+
 /// The Mac's Parakeet, which the core only downloads (the shell runs it), is in the built-in
 /// catalogue on macOS with its size and whether it is installed, and filling no job; Windows does
 /// not list it.

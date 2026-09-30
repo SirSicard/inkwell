@@ -138,12 +138,6 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       With "model" and "next" the same registry id, it installs that model (the first
  *       download): nothing else is unloaded or warmed, and a model already installed is left as
  *       it is. Only when the user asks for the download.
- *   {"cmd":"engine.route","job":"dictation_final"}
- *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
- *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
- *       or no id when nothing fills it. The router picks the lowest measured error rate among
- *       installed models and registered engines, at every call: a shell engine registered as a
- *       fallback serves until a better model finishes installing, then that model does.
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
@@ -208,6 +202,14 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       <models_dir>/<id>/<first 12 digits of its revision>/, and the shell loads it from there
  *       and registers its engine. The Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml: its files are
  *       in that directory's parakeet-tdt-0.6b-v3/, the folder FluidAudio loads v3 from.
+ *   {"cmd":"engine.route","job":"dictation_final"}
+ *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
+ *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
+ *       or no id when nothing fills it. The router picks the lowest measured error rate among
+ *       installed models and registered engines, at every call: a shell engine registered as a
+ *       fallback serves until a better model finishes installing, then that model does. A
+ *       download never delays the answer, which can overtake an engine.unregister or model.update
+ *       sent before it: ask again once their event has come.
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
