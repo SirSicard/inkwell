@@ -133,6 +133,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "model.refused", never served from files being replaced. "model.update_started", then
  *       "model.update_finished". While a job is using the model, or another update holds it,
  *       the update is "command.failed" and nothing changes: send it again later.
+ *       With "model" and "next" the same registry id, it installs that model (the first
+ *       download): nothing else is unloaded or warmed, and a model already installed is left as
+ *       it is. Only when the user asks for the download.
  *   {"cmd":"engine.route","job":"dictation_final"}
  *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
  *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
