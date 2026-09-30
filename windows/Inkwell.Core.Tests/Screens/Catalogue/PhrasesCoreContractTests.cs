@@ -15,7 +15,7 @@ public class PhrasesCoreContractTests
     /// One core per process: another test class's session may be running, so a start that finds
     /// one waits for it to end (up to a minute) rather than failing.
     /// </summary>
-    private static InkSession Start(InkConfig config, Action<InkEvent> onEvent)
+    internal static InkSession Start(InkConfig config, Action<InkEvent> onEvent)
     {
         var until = DateTime.UtcNow + TimeSpan.FromMinutes(1);
         while (true)
