@@ -1028,10 +1028,10 @@ mod tests {
         let engine = Scripted::new(script.clone());
         let (mut stream, kept) = open(&engine);
         assert_eq!(TrailingWindow::new(engine.clone(), info()).info(), info());
-        // 1.2 s, two words in: the first shows as a partial.
-        for t in (0..19_200).step_by(1_600) {
-            stream.push(&indexed(t, t + 1_600)).unwrap();
-        }
+        // 1.2 s, two words in, in one push so the first window is all of it: the first word shows
+        // as a partial (the second ends in the newest 0.16 s). Pushed in blocks, the thread could
+        // take its window early, hide the only word it has, and wait for a hop that never comes.
+        stream.push(&indexed(0, 19_200)).unwrap();
         wait_for("a partial", || {
             lock(&kept)
                 .iter()
