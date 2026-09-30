@@ -6,10 +6,14 @@
 //! cargo run -p ink-ffi --bin ink-notices -- --check       # fail if the file differs from a fresh run
 //! cargo run -p ink-ffi --bin ink-notices -- --check-lock  # fail if it was made from another lock
 //! cargo run -p ink-ffi --bin ink-notices -- --windows [--check | --check-lock]
+//! cargo run -p ink-ffi --bin ink-notices -- --velopack [--check | --check-lock]
 //! ```
 //!
 //! `--windows` does the same for the Windows shell: the crates of the Windows target
 //! ([`WINDOWS`]), as C# (`windows/Inkwell.Core/Screens/About/RustNotices.g.cs`, [`csharp`]).
+//! `--velopack` does it for the crates in Velopack's Setup.exe and Update.exe, which the Windows
+//! installer ships, from Velopack's own lock and manifests ([`velopack`], with its own rules for
+//! the network and licences), as C# (`windows/Inkwell.Core/Screens/About/VelopackNotices.g.cs`).
 //!
 //! Offline: it reads cargo's resolution (`cargo tree` and `cargo metadata`, both `--offline
 //! --locked`) and each crate's unpacked package in the local registry. A crate whose package is
@@ -38,6 +42,7 @@ mod graph;
 mod licence;
 mod overrides;
 mod swift;
+mod velopack;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -88,6 +93,8 @@ struct Shell {
     out: &'static str,
     /// The file's language: C# (the Windows shell) or Swift (the Mac's).
     csharp: bool,
+    /// Velopack's binaries' crates ([`velopack`]), not the core's.
+    velopack: bool,
 }
 
 /// The Mac app: Swift, for Apple silicon.
@@ -96,6 +103,7 @@ const MAC: Shell = Shell {
     features: RELEASE_FEATURES,
     out: SWIFT_OUT,
     csharp: false,
+    velopack: false,
 };
 
 /// The Windows app: C#, for x64 and ARM64 (from x64's crates).
@@ -104,11 +112,29 @@ const WINDOWS: Shell = Shell {
     features: WINDOWS_RELEASE_FEATURES,
     out: CSHARP_OUT,
     csharp: true,
+    velopack: false,
+};
+
+/// The crates in Velopack's Setup.exe and Update.exe: C#, for both of Velopack's Windows targets.
+const VELOPACK: Shell = Shell {
+    target: velopack::TARGET_LIST,
+    features: velopack::FEATURES,
+    out: velopack::OUT,
+    csharp: true,
+    velopack: true,
 };
 
 impl Shell {
     fn render(self, fingerprint: &str, notices: &[CrateNotice]) -> String {
-        if self.csharp {
+        if self.velopack {
+            csharp::render_velopack(
+                velopack::VERSION,
+                self.features,
+                self.target,
+                fingerprint,
+                notices,
+            )
+        } else if self.csharp {
             csharp::render(self.features, self.target, fingerprint, notices)
         } else {
             swift::render(self.features, self.target, fingerprint, notices)
@@ -141,7 +167,9 @@ impl Shell {
 
     /// The command that regenerates the file.
     fn regenerate(self) -> &'static str {
-        if self.csharp {
+        if self.velopack {
+            "cargo run -p ink-ffi --bin ink-notices -- --velopack"
+        } else if self.csharp {
             "cargo run -p ink-ffi --bin ink-notices -- --windows"
         } else {
             "cargo run -p ink-ffi --bin ink-notices"
@@ -383,27 +411,38 @@ fn release_tree(
     target: &str,
     features: &str,
 ) -> Result<Vec<(String, String)>, String> {
-    run_cargo(
-        core,
-        &[
-            "tree",
-            "--offline",
-            "--locked",
-            "-p",
-            "ink-ffi",
-            "-e",
-            "normal,no-proc-macro",
-            "--target",
-            target,
-            "--features",
-            features,
-            "--prefix",
-            "none",
-            "--format",
-            "{p}",
-        ],
-    )
-    .and_then(|t| graph::tree(&t))
+    crate_tree(core, "ink-ffi", target, features, true)
+}
+
+/// `package`'s normal dependencies in the workspace at `dir` for `target` with `features`, as
+/// (name, version). `locked`: offline, from the lock as it is (the core's); otherwise cargo may
+/// fetch and narrow the lock to the workspace (Velopack's, whose drift [`velopack`] checks).
+fn crate_tree(
+    dir: &Path,
+    package: &str,
+    target: &str,
+    features: &str,
+    locked: bool,
+) -> Result<Vec<(String, String)>, String> {
+    let mut args = vec!["tree"];
+    if locked {
+        args.extend(["--offline", "--locked"]);
+    }
+    args.extend([
+        "-p",
+        package,
+        "-e",
+        "normal,no-proc-macro",
+        "--target",
+        target,
+        "--features",
+        features,
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
+    ]);
+    run_cargo(dir, &args).and_then(|t| graph::tree(&t))
 }
 
 /// The crates of `other` (another target's tree) that `listed` (the tree a file is made from)
@@ -418,6 +457,9 @@ fn not_covered(listed: &[(String, String)], other: &[(String, String)]) -> Vec<S
 
 /// The shell's file, from cargo's resolution and the packages on this machine.
 fn generate(root: &Path, shell: Shell) -> Result<String, Vec<String>> {
+    if shell.velopack {
+        return velopack::generate(root);
+    }
     let core = root.join("core");
     let tree = release_tree(&core, shell.target, shell.features).map_err(|e| vec![e])?;
     if shell.csharp {
@@ -562,8 +604,13 @@ fn check(root: &Path, shell: Shell, generated: &str) -> Result<(), String> {
 fn check_lock(root: &Path, shell: Shell) -> Result<(), String> {
     let out = shell.out;
     let file = std::fs::read_to_string(root.join(out)).map_err(|e| format!("{out}: {e}"))?;
-    let lock = std::fs::read_to_string(root.join("core/Cargo.lock"))
-        .map_err(|e| format!("core/Cargo.lock: {e}"))?;
+    let lock_path = if shell.velopack {
+        format!("{}/Cargo.lock.upstream", velopack::INPUT)
+    } else {
+        "core/Cargo.lock".to_string()
+    };
+    let lock =
+        std::fs::read_to_string(root.join(&lock_path)).map_err(|e| format!("{lock_path}: {e}"))?;
     let recorded = shell
         .recorded(&file, "lockFingerprint")
         .ok_or(format!("{out} records no lockFingerprint"))?;
@@ -577,6 +624,15 @@ fn check_lock(root: &Path, shell: Shell) -> Result<(), String> {
             shell.target, shell.features
         ));
     }
+    if shell.velopack {
+        let version = shell.recorded(&file, "version").unwrap_or_default();
+        if version != velopack::VERSION {
+            return Err(format!(
+                "{out} was made for Velopack {version}, not {}.\nRegenerate: {regenerate}",
+                velopack::VERSION
+            ));
+        }
+    }
     if recorded != swift::fingerprint(shell.features, shell.target, &lock) {
         let fetch = if shell.csharp {
             ""
@@ -584,7 +640,7 @@ fn check_lock(root: &Path, shell: Shell) -> Result<(), String> {
             " (or mac/scripts/rust-notices.sh, which fetches the packages first)"
         };
         return Err(format!(
-            "{out} was made from another core/Cargo.lock: a dependency changed and its notice may be missing.\n\
+            "{out} was made from another {lock_path}: a dependency changed and its notice may be missing.\n\
              Regenerate: {regenerate}{fetch}"
         ));
     }
@@ -596,6 +652,7 @@ fn main() -> ExitCode {
     let root = repo_root();
     let (shell, args) = match args.split_first() {
         Some((first, rest)) if first == "--windows" => (WINDOWS, rest.to_vec()),
+        Some((first, rest)) if first == "--velopack" => (VELOPACK, rest.to_vec()),
         _ => (MAC, args),
     };
     let out = shell.out;
@@ -613,8 +670,13 @@ fn main() -> ExitCode {
                     eprintln!("  {e}");
                 }
                 if errors.iter().any(|e| e.contains("carries")) {
+                    let table = if shell.velopack {
+                        velopack::INPUT
+                    } else {
+                        NOTICES_DIR
+                    };
                     eprintln!(
-                        "A crate without its licence text needs {NOTICES_DIR}/overrides.txt: add a line only after reading its upstream licence."
+                        "A crate without its licence text needs {table}/overrides.txt: add a line only after reading its upstream licence."
                     );
                 }
                 return ExitCode::FAILURE;
@@ -631,7 +693,9 @@ fn main() -> ExitCode {
             }
             Ok(generated) => check(&root, shell, &generated),
         },
-        _ => Err("usage: ink-notices [--windows] [--check | --check-lock]".to_string()),
+        _ => {
+            Err("usage: ink-notices [--windows | --velopack] [--check | --check-lock]".to_string())
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -725,6 +789,16 @@ mod tests {
         }
     }
 
+    /// The same for Velopack's binaries' (`ink-notices --velopack --check` compares the whole file):
+    /// made from Velopack's lock in core/crates/ink-ffi/notices/velopack/, for the Velopack the
+    /// Windows build pins.
+    #[test]
+    fn the_checked_in_velopack_notices_were_generated_from_its_lock_for_the_pinned_release() {
+        if let Err(e) = check_lock(&repo_root(), VELOPACK) {
+            panic!("{e}");
+        }
+    }
+
     #[test]
     fn the_windows_notices_are_the_windows_targets_crates() {
         let cs = committed(WINDOWS);
@@ -782,7 +856,7 @@ mod tests {
 
     #[test]
     fn the_checked_in_notices_name_no_path_of_a_machine() {
-        for shell in [MAC, WINDOWS] {
+        for shell in [MAC, WINDOWS, VELOPACK] {
             let file = committed(shell);
             // The macOS home prefix is spelt in two pieces so the pre-push privacy grep, which
             // refuses that path in a diff, does not match this test.

@@ -1,0 +1,25 @@
+# Licence texts for crates in Velopack's Setup.exe and Update.exe (ink-notices --velopack) whose
+# published package carries no text of any licence it offers: the format and rules of
+# ../overrides.txt, with the texts in ../texts/. A line is used only for the crate version it names,
+# and only while that package still lacks the text; a line no crate needs is an error.
+#
+#   <crate> <version> <text file in ../texts/> verified=<no|YYYY-MM-DD> <reason: shown in the app beside the text>
+#
+# Each line is `no` until its text is compared with the licence files in the crate's repository at
+# the commit its version was published from (its package's .cargo_vcs_info.json), none of which
+# were on hand; a release tag waits for every date (windows/scripts/release-version.sh):
+# - fs_at 0.2.1: github.com/rbtcollins/fs_at at e8b58a0682496a0c6ddc9eae80942a2f29a5a7e4.
+# - fluent-langneg 0.13.1 and 0.14.2: github.com/projectfluent/fluent-langneg-rs at
+#   7fdc590466ea63ca2367ac10fb1b881fe561f1a8 and a161fed4c028436d5584ccadf77c799a65c16232.
+# - intl_pluralrules 7.0.2: github.com/zbraniecki/pluralrules at
+#   d0715d5b7cca72e228d6e6c4de154bd30dfdd06a (intl_pluralrules/).
+# - webview2-com-sys 0.39.1: github.com/wravery/webview2-rs at
+#   edc2caf886175ccaebe86078c9cfe1ae2a187328. Its text, MIT-webview2-rs.txt, is MIT.txt under a
+#   composed copyright line naming webview2-rs's authors: neither its manifest nor those of its
+#   sibling crates (webview2-com 0.38.2, webview2-com-macros 0.8.1) names an author.
+
+fluent-langneg    0.13.1  MIT.txt              verified=no  the MIT licence's text; the crate offers Apache-2.0 or MIT, and its package holds no licence file
+fluent-langneg    0.14.2  MIT.txt              verified=no  the MIT licence's text; the crate offers Apache-2.0 or MIT, and its package holds no licence file
+fs_at             0.2.1   Apache-2.0.txt       verified=no  the Apache License 2.0, which the crate is under (its manifest says so); its package holds no licence file
+intl_pluralrules  7.0.2   MIT.txt              verified=no  the MIT licence's text; the crate offers Apache-2.0 or MIT, and its package holds no licence file
+webview2-com-sys  0.39.1  MIT-webview2-rs.txt  verified=no  the MIT licence's text; the crate is MIT (its manifest says so), but its package holds no licence file and names no author, so the copyright line names the authors of its repository, github.com/wravery/webview2-rs, until compared with that repository's LICENSE
