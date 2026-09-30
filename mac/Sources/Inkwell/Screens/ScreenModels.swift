@@ -259,6 +259,11 @@ final class ScreenModels {
                 // What became of 0.2's key, and the key it set.
                 importNote.load()
                 send(.settingGet(.dictationKey))
+                // The lists it brought, which Settings may show already: an edit to the old list
+                // would save it over the import's (the user's own list wins in the core).
+                snippets.load()
+                voiceCommands.load()
+                modes.load()
             }
             dictation.apply(event)
             editConsent.apply(event)

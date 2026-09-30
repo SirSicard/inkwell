@@ -118,6 +118,11 @@ public sealed class ScreenModels
                 // What became of 0.2's key, and the key it set.
                 ImportNote.Load();
                 send(new CoreCommand.SettingGet(ShellSetting.DictationKey));
+                // The lists it brought, which Settings may show already: an edit to the old list
+                // would save it over the import's (the user's own list wins in the core).
+                Snippets.Load();
+                VoiceCommands.Load();
+                Modes.Load();
             }
             Dictation.Apply(e);
             EditConsent.Apply(e);

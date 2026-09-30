@@ -45,6 +45,8 @@ With a library that skipped the first run (press **Skip**) and holds no import:
 
 - [ ] Settings > Voice shows the same row under the keys, beside where the key note shows, with
       **Import**. It imports the same way, and the key note appears afterwards.
+- [ ] Without leaving Settings, Snippets, Voice commands and Modes show what came over, and
+      adding a snippet afterwards keeps the imported ones.
 
 ## D. Nothing to import
 

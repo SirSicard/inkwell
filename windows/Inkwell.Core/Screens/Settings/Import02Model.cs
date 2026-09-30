@@ -1,8 +1,8 @@
 // Inkwell 0.2's data on this PC: looked for when the first run shows and each time Settings opens,
 // and imported from the first run's step or Settings > Voice. The core knows where 0.2 kept its
 // data; the shell asks (import.check, import.run) and says what came back in plain words. After an
-// import, ScreenModels reads the key note and the dictation key again, and the Library lists again
-// (import.finished). A port of the Mac's Import02Model.
+// import, ScreenModels reads the key note, the dictation key and Settings' lists again, and the
+// Library lists again (import.finished). A port of the Mac's Import02Model.
 using System.Globalization;
 using Inkwell.Core.Events;
 

@@ -206,6 +206,30 @@ final class Import02FirstRunTests: XCTestCase {
         XCTAssertNotNil(screens.import02.imported)
     }
 
+    /// Settings may have read its lists before the import (Import pressed in Settings > Voice): they
+    /// are read again, so an edit afterwards keeps what came over instead of saving the old list
+    /// over it (the user's own list wins over the import's in the core).
+    func testAnImportReadsTheListsSettingsShowsAgain() {
+        let sent = Sent()
+        let screens = ScreenModels(send: sent.send)
+        screens.snippets.load()
+        screens.apply([event(#"{"type":"snippets.listed","from_import":false,"ref":"snippets:1","snippets":[]}"#)])
+        sent.commands = []
+
+        screens.apply([event(#"{"type":"import.finished","counts":\#(counts),"ref":"import.run"}"#)])
+        XCTAssertTrue(sent.commands.contains(.snippetsList(ref: "snippets:2")), "\(sent.commands)")
+        XCTAssertTrue(sent.commands.contains(.voiceCommandsList(ref: "voice_commands:1")), "\(sent.commands)")
+        XCTAssertTrue(sent.commands.contains(.modesList), "\(sent.commands)")
+
+        screens.apply([event(#"{"type":"snippets.listed","from_import":true,"ref":"snippets:2","snippets":[{"id":"s1","trigger":"my sig","expansion":"Kind regards","category":"","enabled":true}]}"#)])
+        XCTAssertTrue(screens.snippets.fromImport)
+        screens.snippets.add(trigger: "brb", expansion: "be right back", category: "")
+        guard case .snippetsSave(let saved, _, _)? = sent.commands.last else {
+            return XCTFail("no save: \(sent.commands)")
+        }
+        XCTAssertEqual(saved.map(\.trigger), ["my sig", "brb"], "what came over is kept")
+    }
+
     func testTheImportsFailuresAreShownWhereItIsOffered() {
         let screens = ScreenModels(send: { _ in })
         for command in ["import.check", "import.run"] {

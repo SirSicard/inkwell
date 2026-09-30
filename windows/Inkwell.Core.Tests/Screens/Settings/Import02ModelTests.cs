@@ -237,4 +237,30 @@ public class Import02ModelTests
             Assert.True(screens.Handles(Ev.Of<CommandFailed>($$"""{"type":"command.failed","command":"{{command}}","id":"{{command}}","message":"x"}""")), command);
         }
     }
+
+    /// <summary>
+    /// Settings may have read its lists before the import (Import pressed in Settings > Voice): they
+    /// are read again, so an edit afterwards keeps what came over instead of saving the old list
+    /// over it (the user's own list wins over the import's in the core).
+    /// </summary>
+    [Fact]
+    public void AnImportReadsTheListsSettingsShowsAgain()
+    {
+        var sent = new Sent();
+        var screens = new ScreenModels(sent.Send, log: new Logged().Log);
+        screens.Snippets.Load();
+        screens.Apply([Ev.Of("""{"type":"snippets.listed","from_import":false,"ref":"snippets:1","snippets":[]}""")]);
+        sent.Commands.Clear();
+
+        screens.Apply([Finished()]);
+        Assert.Contains(new CoreCommand.SnippetsList("snippets:2"), sent.Commands);
+        Assert.Contains(new CoreCommand.VoiceCommandsList("voice_commands:1"), sent.Commands);
+        Assert.Contains(new CoreCommand.ModesList(), sent.Commands);
+
+        screens.Apply([Ev.Of("""{"type":"snippets.listed","from_import":true,"ref":"snippets:2","snippets":[{"id":"s1","trigger":"my sig","expansion":"Kind regards","category":"","enabled":true}]}""")]);
+        Assert.True(screens.Snippets.FromImport);
+        screens.Snippets.Add("brb", "be right back", "");
+        var saved = Assert.IsType<CoreCommand.SnippetsSave>(sent.Commands[^1]);
+        Assert.Equal(["my sig", "brb"], saved.Snippets.Select(s => s.Trigger)); // what came over is kept
+    }
 }
