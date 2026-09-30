@@ -8,6 +8,7 @@
 //! | `ink-meeting`, `ink-pump` | a meeting ([`meeting`](crate::meeting)) |
 //! | `ink-meetings` | starting and stopping meetings, detection ([`control`](crate::control)) |
 //! | `ink-ask` | questions about the live meeting ([`asking`](crate::asking)) |
+//! | `ink-llm-test` | the own-key provider's test request ([`cloud`](crate::cloud)) |
 //! | `ink-recovery` | a crashed meeting's final pass ([`recovery`](crate::recovery)) |
 //! | `ink-retention` | retention sweeps, when asked: at launch, after a final pass, on a setting change ([`retention`](crate::retention)) |
 //! | `ink-dictation` | the dictation chain ([`dictation`](crate::dictation)) |
