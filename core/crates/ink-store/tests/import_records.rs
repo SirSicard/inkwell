@@ -183,6 +183,7 @@ fn every_field_round_trips() {
             audio_dir: want.record.audio_dir.clone(),
             // Set directly: no pass had to run.
             revision: 3,
+            imported: true,
         }
     );
     assert_eq!(store.segments(id).unwrap(), want.segments);
@@ -282,6 +283,41 @@ fn an_import_leaves_the_records_already_there_untouched() {
         "an existing final line"
     );
     assert_eq!(store.record(&kept).unwrap().unwrap().revision, 2);
+}
+
+/// Retention never deletes what an import brought in: each record the import writes is marked as
+/// imported, and a record made here, before the import or after it, is not.
+#[test]
+fn the_records_an_import_writes_are_marked_and_nothing_else() {
+    let db = TempDb::new("records-marked");
+    let store = db.open();
+    let before = meeting(&store, 10);
+    let mut imported = store
+        .import_records(MARKER, "{}", &[full(20), bare(30)])
+        .unwrap();
+    let after = meeting(&store, 40);
+    for id in &imported {
+        assert!(store.record(id).unwrap().unwrap().imported);
+    }
+    for id in [&before, &after] {
+        assert!(!store.record(id).unwrap().unwrap().imported);
+    }
+    let listed = store
+        .records(&RecordQuery {
+            kind: None,
+            before: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(listed.len(), 4);
+    let mut marked: Vec<RecordId> = listed
+        .into_iter()
+        .filter(|r| r.imported)
+        .map(|r| r.id)
+        .collect();
+    marked.sort();
+    imported.sort();
+    assert_eq!(marked, imported);
 }
 
 #[test]

@@ -1039,6 +1039,8 @@ fn fields_round_trip(store: &dyn Store) {
             source_app: Some("com.example.files".into()),
             audio_dir: Some("audio/x".into()),
             revision: 1,
+            // Made here, from a file: no importer wrote it.
+            imported: false,
         }
     );
 

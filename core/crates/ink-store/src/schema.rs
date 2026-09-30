@@ -22,7 +22,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::codec::Fail;
 
 /// Every migration, in order. The database's `user_version` counts how many have run.
-const MIGRATIONS: &[&str] = &[V1, V2, V3];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// The schema version this build writes: the number of migrations. A database with a higher
 /// `user_version` came from a newer build and is refused rather than guessed at.
@@ -205,6 +205,13 @@ CREATE TABLE commitment_done_evidence (
 ) STRICT, WITHOUT ROWID;
 -- For the cascade from a deleted evidence record.
 CREATE INDEX commitment_done_evidence_by_record ON commitment_done_evidence (record_id);
+";
+
+/// Whether an import wrote a record, which retention never deletes: 1 on each record an importer
+/// writes, set in the import's own transaction, and 0 on each record made here. Records from
+/// before this migration read as 0: nothing in them says whether an import wrote them.
+const V4: &str = "
+ALTER TABLE record ADD COLUMN imported INTEGER NOT NULL DEFAULT 0 CHECK (imported IN (0, 1));
 ";
 
 /// Brings the database up to [`SCHEMA_VERSION`] in one immediate transaction.

@@ -65,3 +65,6 @@ hound = "3.5.1"
 # (tests/csharp_binding.rs checks them; the C# lives in windows/). MIT. A dev-dependency: it never
 # reaches the libraries the shells link, nor their licence notices.
 csbindgen = "1.9.8"
+# A synthetic Inkwell 0.2 `transcripts.db` for the import's tests (tests/import02.rs), written as
+# 0.2 wrote it. ink-store's own rusqlite (MIT), already in the tree.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }

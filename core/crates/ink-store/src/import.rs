@@ -113,7 +113,7 @@ use serde_json::{Map, Value, json};
 use zeroize::Zeroize;
 
 use crate::{
-    SqliteStore, get_setting, insert_record, insert_segments, new_id, put_setting, segment_rows,
+    SqliteStore, get_setting, insert_record_at, insert_segments, new_id, put_setting, segment_rows,
     set_ended,
 };
 
@@ -662,7 +662,9 @@ impl SqliteStore {
     /// Refused with [`ImportError::AlreadyImported`] when the store already holds one; any
     /// failure rolls every row back. Records and segments go through the same inserts and
     /// checks as [`Store::create_record`](ink_core::Store::create_record) and
-    /// [`Store::append_segments`](ink_core::Store::append_segments), with new UUID ids.
+    /// [`Store::append_segments`](ink_core::Store::append_segments), with new UUID ids, and
+    /// each record is marked as imported ([`Record::imported`](ink_core::Record::imported)),
+    /// which retention never deletes.
     ///
     /// **Worker**: one write transaction, which holds the store for the length of the import.
     pub fn import_inkwell02(&self, source: &Inkwell02) -> Result<Counts, ImportError> {
@@ -708,7 +710,7 @@ impl SqliteStore {
                 return Ok(Err(ImportError::AlreadyImported));
             }
             for (id, dictation, rows) in &records {
-                insert_record(
+                insert_record_at(
                     tx,
                     id,
                     &NewRecord {
@@ -718,6 +720,8 @@ impl SqliteStore {
                         source_app: None,
                         audio_dir: None,
                     },
+                    1,
+                    true,
                 )?;
                 insert_segments(tx, &RecordId(id.clone()), 1, rows)?;
                 set_ended(tx, id, dictation.ended_at_unix_ms)?;

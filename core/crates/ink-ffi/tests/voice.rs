@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ink_engines::{EngineRow, ModelDir, Registry, SILERO_VAD_ID};
 use ink_ffi::runtime::{Core, Parts};
 use ink_ffi::voice::{DEFAULT_KEY, MIC_IDLE, VoicePlatform};
+use ink_pipeline::tail::TailConfig;
 use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -27,6 +28,10 @@ const WAIT: Duration = Duration::from_secs(10);
 const SETTLED: Duration = Duration::from_millis(200);
 /// 10 ms at the mock mic's 48 kHz.
 const BLOCK: usize = 480;
+/// Silence fed after a release, in seconds: room for the tail, which the chain waits for in
+/// audio (`TAIL`, 300 ms at most), and short of the deadline where it stops waiting (the tail and
+/// its grace, 550 ms after the release on the mock clock). See [`VoiceRig::release_take`].
+const TAIL_ROOM: f64 = 0.4;
 
 struct VoiceRig {
     core: Option<Core>,
@@ -198,18 +203,57 @@ impl VoiceRig {
             .collect()
     }
 
+    /// The events so far, and what the warnings and discards among them said: why a take ended
+    /// without the outcome a test waited for.
+    fn said(&self) -> String {
+        let said: Vec<String> = self
+            .events
+            .all()
+            .into_iter()
+            .filter(|v| v["type"] == "dictation.warning" || v["type"] == "dictation.discarded")
+            .map(|v| v.to_string())
+            .collect();
+        format!("{:?}; {said:?}", self.events.types())
+    }
+
+    /// Lets go of `key` once the take its press opened has started (`started` takes had started
+    /// before that press), then feeds [`TAIL_ROOM`]. The caller waits for the outcome.
+    ///
+    /// [`feed`](Self::feed) moves the mock clock about 50 times faster than the pump hands the
+    /// chain the mic's audio (every 10 ms of real time, later on a loaded machine), so both waits
+    /// are for the chain. A release sent at once can reach it before any audio of a stream the
+    /// press opened, and then sits at the press: a take of 0 ms. A take starts only once the chain
+    /// has heard the minimum hold, which places the release on the stream's timeline. And a clock
+    /// moved past the tail's deadline while the take's audio is still on its way ends the take
+    /// with what the chain has heard (`tail_cut_short`, then `too_short`). The tail arrives in
+    /// audio, so the room completes it however late the pump is, and the clock stays short of the
+    /// deadline until the caller has the outcome.
+    fn release_take(&self, key: &MockPlatform, started: usize) {
+        let room = Duration::from_secs_f64(TAIL_ROOM);
+        let tail = ink_audio::take::TAIL;
+        assert!(room > tail && room < tail + TailConfig::default().grace);
+        assert!(
+            self.events
+                .wait_count("dictation.started", started + 1, WAIT),
+            "{}",
+            self.said()
+        );
+        assert!(key.release());
+        self.silence(TAIL_ROOM);
+    }
+
     /// Press, speak, release, and room for the tail; waits for the take to end.
     fn dictate(&self, seconds: f64, seed: u64) -> Value {
         let before = self.events.count("dictation.inserted");
+        let started = self.events.count("dictation.started");
         assert!(self.platform.press());
         self.feed(&Self::speech(seconds, seed));
-        assert!(self.platform.release());
-        self.silence(0.6);
+        self.release_take(&self.platform, started);
         assert!(
             self.events
                 .wait_count("dictation.inserted", before + 1, WAIT),
-            "{:?}",
-            self.events.types()
+            "{}",
+            self.said()
         );
         self.events
             .all()
@@ -286,8 +330,7 @@ fn a_second_press_never_wipes_the_take() {
     rig.feed(&VoiceRig::speech(0.8, 2));
     assert!(rig.platform.press(), "the key-down again, mid-hold");
     rig.feed(&VoiceRig::speech(0.8, 3));
-    assert!(rig.platform.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.platform, 0);
     assert!(rig.events.wait_count("dictation.inserted", 1, WAIT));
     assert_eq!(rig.events.count("dictation.started"), 1);
     assert_eq!(rig.platform.inserted(), ["Hello world. "]);
@@ -482,8 +525,7 @@ fn an_edit_without_a_language_model_leaves_the_selection_alone() {
     assert!(rig.edit.press());
     rig.feed(&VoiceRig::speech(1.0, 4));
     rig.sync_edit_clock();
-    assert!(rig.edit.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.edit, 0);
     let failed = rig
         .events
         .wait_for(WAIT, |v| v["type"] == "dictation.edit_failed")
@@ -532,8 +574,7 @@ fn the_ink_follows_the_voice_while_a_take_is_open() {
         during.bands.low + during.bands.mid + during.bands.high > 0.0,
         "{during:?}"
     );
-    assert!(rig.platform.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.platform, 0);
     assert!(rig.events.wait_count("dictation.inserted", 1, WAIT));
     // Room after the take (the mic stays open): the ink rests, and nothing more is published.
     // The take's end still publishes one still frame, on the pump's next pass: wait for the count
@@ -900,8 +941,7 @@ fn a_voice_edit_refuses_a_model_that_is_not_local() {
     assert!(rig.edit.press());
     rig.feed(&VoiceRig::speech(1.0, 12));
     rig.sync_edit_clock();
-    assert!(rig.edit.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.edit, 0);
     let failed = rig
         .events
         .wait_for(WAIT, |v| v["type"] == "dictation.edit_failed")
@@ -1241,23 +1281,19 @@ impl VoiceRig {
                 .collect()
         };
         let before = outcomes(&self.events).len();
+        let started = self.events.count("dictation.started");
         self.platform.set_selection(Some("teh cat"));
         self.sync_edit_clock();
         assert!(self.edit.press());
         self.feed(&VoiceRig::speech(1.0, seed));
         self.sync_edit_clock();
-        assert!(self.edit.release());
-        self.silence(0.6);
+        self.release_take(&self.edit, started);
         let until = Instant::now() + WAIT;
         loop {
             if let Some(v) = outcomes(&self.events).into_iter().nth(before) {
                 return v;
             }
-            assert!(
-                Instant::now() < until,
-                "no edit outcome: {:?}",
-                self.events.types()
-            );
+            assert!(Instant::now() < until, "no edit outcome: {}", self.said());
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -1522,8 +1558,7 @@ fn an_imported_voice_command_is_carried_out() {
     // "hello world" is now the wake word and a trigger.
     assert!(rig.platform.press());
     rig.feed(&VoiceRig::speech(1.2, 1));
-    assert!(rig.platform.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.platform, 0);
     let command = rig.events.wait_type("dictation.command", WAIT);
     assert_eq!(command["action"], "insert_text");
     assert_eq!(command["carried_out"], true);

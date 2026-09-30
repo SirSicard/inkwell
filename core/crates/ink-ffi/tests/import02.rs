@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::*;
+use ink_core::{NewRecord, RecordKind, RecordQuery, Store};
 use ink_engines::{ModelDir, Registry};
 use ink_ffi::import02::Import02;
 use ink_ffi::runtime::{Core, Parts};
@@ -355,6 +356,95 @@ fn a_linked_file_is_named_and_nothing_is_imported() {
     assert_eq!(failed["message"], message, "the same words");
     assert_eq!(rig.marker(), None);
     assert_eq!(rig.keys.asked.load(Ordering::SeqCst), 0);
+    rig.events.assert_valid();
+    rig.core.shutdown();
+}
+
+/// Midday UTC on 15 January 2026, Unix seconds.
+const JAN_15_2026: i64 = 1_768_478_400;
+
+/// `transcripts.db` as Inkwell 0.2 created it (its `history.rs`), with `texts` saved an hour
+/// apart from [`JAN_15_2026`], in local time as 0.2 wrote them.
+fn transcripts_0_2(dir: &Path, texts: &[&str]) {
+    let conn = rusqlite::Connection::open(dir.join("transcripts.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS transcripts (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             text TEXT NOT NULL,
+             raw_text TEXT NOT NULL,
+             style TEXT NOT NULL DEFAULT 'formal',
+             model TEXT NOT NULL DEFAULT 'unknown',
+             audio_duration_ms INTEGER NOT NULL DEFAULT 0,
+             created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_created ON transcripts(created_at DESC);",
+    )
+    .unwrap();
+    for (i, text) in (0_i64..).zip(texts) {
+        conn.execute(
+            "INSERT INTO transcripts (text, raw_text, audio_duration_ms, created_at)
+             VALUES (?1, ?1, 2000, datetime(?2, 'unixepoch', 'localtime'))",
+            rusqlite::params![text, JAN_15_2026 + 3_600 * i],
+        )
+        .unwrap();
+    }
+}
+
+/// Retention never sweeps an import: it is deliberate, and the library may hold the only copy.
+/// Three 0.2 dictations from January are imported, then the library is set to keep 30 days: the
+/// sweep deletes a dictation made here that is as old, and keeps the three (0.2's marker refuses
+/// a second import, so a swept import could never be brought back).
+#[test]
+fn imported_dictations_outlive_a_retention_change() {
+    let source = legacy("retention", &[]);
+    transcripts_0_2(
+        source.path(),
+        &[
+            "An invented first note.",
+            "An invented second note.",
+            "An invented third note.",
+        ],
+    );
+    let rig = Rig::new("retention", Some(Some(source.path().to_owned())));
+    // Made here and as old as the imports: what the sweep must still delete.
+    let started = JAN_15_2026 * 1_000;
+    let made_here = rig
+        .store
+        .create_record(NewRecord {
+            kind: RecordKind::Dictation,
+            title: None,
+            started_at_unix_ms: started,
+            source_app: None,
+            audio_dir: None,
+        })
+        .unwrap();
+    rig.store
+        .finish_record(&made_here, started + 2_000)
+        .unwrap();
+
+    let finished = rig.ask("import.run");
+    assert_eq!(finished["type"], "import.finished", "{finished}");
+    assert_eq!(finished["counts"]["dictations"], 3);
+    rig.core
+        .command(r#"{"cmd":"setting.set","key":"retention.days","value":"30"}"#)
+        .unwrap();
+    let swept = rig.events.wait_type("library.swept", WAIT);
+    assert_eq!(swept["deleted"], 1, "only the dictation made here: {swept}");
+    assert_eq!(swept["failed"], 0);
+    assert_eq!(rig.store.record(&made_here).unwrap(), None);
+    let kept = rig
+        .store
+        .records(&RecordQuery {
+            kind: None,
+            before: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(kept.len(), 3, "the imported dictations: {kept:?}");
+    assert!(kept.iter().all(|r| r.kind == RecordKind::Dictation));
+    for record in &kept {
+        assert_eq!(rig.store.segments(&record.id).unwrap().len(), 1);
+    }
     rig.events.assert_valid();
     rig.core.shutdown();
 }

@@ -972,9 +972,11 @@ fn controller(
             Ok(mic) => mic,
             Err(message) => {
                 log::warn!("dictation: the mic could not be opened: {message}");
-                shared.events.emit(mic_failed(&message));
-                // The press waiting for audio is dropped (reported as cancelled).
+                // The press waiting for audio is dropped (reported as cancelled). Queued before the
+                // failure is said, so a press made in answer to it comes after it and is not the
+                // one cancelled.
                 let _ = inbox.send(Input::StreamEnded);
+                shared.events.emit(mic_failed(&message));
                 continue;
             }
         };

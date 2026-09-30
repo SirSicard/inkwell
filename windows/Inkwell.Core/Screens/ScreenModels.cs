@@ -144,6 +144,14 @@ public sealed class ScreenModels
         }
         // The Library folds a batch at once, and refreshes once per batch.
         Library.Apply(batch);
+        // As the Mac's controller, once the screens have read what they need: the dictation model
+        // is kept warm from the start, so the first dictation after a launch is not a cold load.
+        // Only when this batch leaves the core ready with this shell's ABI (the Mac's store status:
+        // another ABI fails, and a core.stopped after it stops).
+        if (batch.LastOrDefault(e => e is Events.CoreReady or CoreStopped) is Events.CoreReady { Abi: InkSession.AbiVersion })
+        {
+            send(new CoreCommand.ModelWarm(Job.DictationFinal));
+        }
     }
 
     /// <summary>
