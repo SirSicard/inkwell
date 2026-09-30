@@ -7,3 +7,6 @@ windows/Inkwell.Core/Screens/About/*.txt text eol=lf
 *.sh text eol=lf
 mac/composed-notices.txt text eol=lf
 core/crates/ink-ffi/notices/overrides.txt text eol=lf
+# Velopack's files at its release's tag, byte for byte (their SHA-256s are the tag's), and the
+# overrides beside them, which bash parses on the Windows runners too.
+core/crates/ink-ffi/notices/velopack/** text eol=lf

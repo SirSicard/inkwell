@@ -115,7 +115,7 @@ public class NoticesTests
         Assert.StartsWith("MIT", byId["dotnet-runtime"].Licence, StringComparison.Ordinal);
         Assert.Contains("windows-sdk-net", byId.Keys);
         Assert.Equal("MIT; Inkwell's copy under the Windows SDK licence terms", byId["cswinrt"].Licence);
-        Assert.Equal("MIT", byId["velopack"].Licence);
+        Assert.Equal("MIT, with the notices of the Rust crates in its Setup.exe and Update.exe", byId["velopack"].Licence);
         Assert.Contains("1.2.161", byId["velopack"].Role, StringComparison.Ordinal);
 
         // The texts are the packages' own (NoticeTexts.cs).
@@ -144,15 +144,37 @@ public class NoticesTests
         {
             Assert.Contains(part, byId["onnxruntime"].Text, StringComparison.Ordinal);
         }
-        // And the code compiled into sherpa-onnx's library.
+        // Eigen inside it is MPL-2.0 (a scoped exception): the notice says so and where its source
+        // is, the commit ONNX Runtime 1.27.0's cmake/deps.txt pins.
+        Assert.Contains("onnxruntime.dll includes Eigen, which is licensed under the Mozilla Public License 2.0", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        // And the code compiled into sherpa-onnx's library: each its own licence file at the version
+        // sherpa-onnx 1.13.4 builds (composed-notices.txt).
         Assert.StartsWith("MIT License\n\nCopyright (c) 2013-2025 Niels Lohmann\n", byId["nlohmann-json"].Text, StringComparison.Ordinal);
         Assert.Contains("3.12.0", byId["nlohmann-json"].Role, StringComparison.Ordinal);
-        foreach (var id in new[] { "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank" })
-        {
-            Assert.Equal(Notices.Apache2, byId[id].Text);
-        }
-        // Its copy of fastcluster (BSD-2: the notice must ship with the binary).
-        Assert.StartsWith("Copyright:\n  * Until package version 1.1.23: \u00a9 2011 Daniel M\u00fcllner", byId["hclust-cpp"].Text, StringComparison.Ordinal);
+        Assert.Equal(Notices.Apache2, byId["kaldi-native-fbank"].Text);
+        // kaldi-decoder's, then the Eigen 5.0.1 it builds on, MPL-2.0 (the scoped exception): where
+        // its source is (the archive sherpa-onnx 1.13.4's cmake/eigen.cmake pins) and its COPYING.MPL2.
+        Assert.StartsWith(Notices.Apache2 + "\n\n--- Eigen 5.0.1 (MPL-2.0): where its source is ---\n", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.Contains("sherpa-onnx-c-api.dll is built with Eigen 5.0.1, which kaldi-decoder builds on and which is licensed under the Mozilla Public License 2.0", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz (SHA-256 e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec)", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n\n--- Eigen 5.0.1's COPYING.MPL2 ---\n" + Notices.EigenMpl2Licence, byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        // Byte for byte that file (its SHA-256; the literal drops only its final line end).
+        Assert.Equal("66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Notices.EigenMpl2Licence + "\n"))));
+        // kaldifst's LICENSE puts a note on its copyright model above the Apache License.
+        Assert.StartsWith("                                 Legal Notices\n\n   NOTE (this is not from the Apache License):", byId["kaldifst"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n\n" + Notices.Apache2, byId["kaldifst"].Text, StringComparison.Ordinal);
+        // OpenFst's COPYING names the Apache License and Google's copyright; the licence's text follows.
+        Assert.StartsWith("Licensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use these files", byId["openfst"].Text, StringComparison.Ordinal);
+        Assert.Contains("Copyright 2005-2026 Google LLC.", byId["openfst"].Text, StringComparison.Ordinal);
+        Assert.EndsWith(Notices.Apache2, byId["openfst"].Text, StringComparison.Ordinal);
+        // simple-sentencepiece's own darts.h carries Darts-clone 0.32's BSD 2-clause notice (not SentencePiece's copy).
+        Assert.StartsWith(Notices.Apache2 + "\n\n", byId["simple-sentencepiece"].Text, StringComparison.Ordinal);
+        Assert.Contains("The BSD 2-clause license\n\nCopyright (c) 2008-2014, Susumu Yata All rights reserved.", byId["simple-sentencepiece"].Text, StringComparison.Ordinal);
+        // hclust-cpp's LICENSE: fastcluster's licence under its own copyright lines (BSD-2: it must ship with the binary).
+        Assert.StartsWith("Copyright:\n  * fastcluster_dm.cpp & fastcluster_R_dm.cpp:\n     \u00a9 2011 Daniel M\u00fcllner", byId["hclust-cpp"].Text, StringComparison.Ordinal);
+        Assert.Contains("\u00a9 2018 Christoph Dalitz", byId["hclust-cpp"].Text, StringComparison.Ordinal);
         Assert.StartsWith("Copyright \u00a9 2021 Caelan Sayler\nCopyright \u00a9 2024 Velopack Ltd.", byId["velopack"].Text, StringComparison.Ordinal);
     }
 
@@ -219,8 +241,8 @@ public class NoticesTests
             Assert.True(mac[c.Id] == c.Text, $"{c.Id}: the text differs from Notices.swift's");
         }
         Assert.Equal(mac["silero-vad"], Notices.Models.Single(m => m.Id == "silero-vad").Notice);
-        // sherpa-onnx's copy of fastcluster shows fastcluster's own notice, the Mac's.
-        Assert.Equal(mac["fastcluster"], Notices.Components.Single(c => c.Id == "hclust-cpp").Text);
+        // sherpa-onnx's copy of fastcluster (hclust-cpp's) shows hclust-cpp's own licence, not the Mac's copy's.
+        Assert.NotEqual(mac["fastcluster"], Notices.Components.Single(c => c.Id == "hclust-cpp").Text);
     }
 }
 

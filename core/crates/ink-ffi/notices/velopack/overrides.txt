@@ -1,0 +1,39 @@
+# Licence texts for crates in Velopack's Setup.exe and Update.exe (ink-notices --velopack) whose
+# published package carries no text of any licence it offers: the format and rules of
+# ../overrides.txt, with the texts in ../texts/. A line is used only for the crate version it names,
+# and only while that package still lacks the text; a line no crate needs is an error.
+#
+#   <crate> <version> <text file in ../texts/> verified=<no|YYYY-MM-DD> <reason: shown in the app beside the text>
+#
+# Each line's date is the day its text was compared with the licence files in the crate's
+# repository at the commit its version was published from (its package's .cargo_vcs_info.json); a
+# release tag waits for every date (windows/scripts/release-version.sh). The texts, each that file
+# byte for byte:
+# - fluent-langneg 0.13.1 and 0.14.2: github.com/projectfluent/fluent-langneg-rs at
+#   7fdc590466ea63ca2367ac10fb1b881fe561f1a8 and a161fed4c028436d5584ccadf77c799a65c16232, whose
+#   LICENSE-MIT is the same file at both (sha256
+#   016fcc02048817d628b04b140c54db290fd9d29a5e8a55b77871194e810716ac):
+#   fluent-langneg-rs-LICENSE-MIT.txt. It names its holder (Mozilla Foundation), which MIT.txt,
+#   under the manifest's author, did not.
+# - intl_pluralrules 7.0.2: github.com/zbraniecki/pluralrules at
+#   d0715d5b7cca72e228d6e6c4de154bd30dfdd06a, its intl_pluralrules/LICENSE-MIT (sha256
+#   23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3): MIT.txt, the same bytes. It
+#   names no holder, so the manifest's authors stay above it.
+# - webview2-com-sys 0.39.1: github.com/wravery/webview2-rs at
+#   edc2caf886175ccaebe86078c9cfe1ae2a187328, its LICENSE (sha256
+#   0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73; the crate's directory,
+#   crates/bindings, has none): webview2-rs-LICENSE.txt. It names its holder (Bill Avery), in place
+#   of the composed line naming webview2-rs's authors.
+# Not compared, for want of a file to compare with:
+# - fs_at 0.2.1: github.com/rbtcollins/fs_at at e8b58a0682496a0c6ddc9eae80942a2f29a5a7e4 has no
+#   licence file anywhere in its tree, which is .github/ (CODEOWNERS, renovate.json, two
+#   workflows), .gitignore, .vscode/settings.json, CODE_OF_CONDUCT.md, Cargo.lock, Cargo.toml,
+#   README.md and src/ (lib.rs, testsupport.rs, unix.rs, win.rs, win/sugar.rs). Only its Cargo.toml
+#   names a licence (`license = "Apache-2.0"`); its README names none. The line stays `no` until
+#   the maintainer decides what stands as the evidence (as for realfft in ../overrides.txt).
+
+fluent-langneg    0.13.1  fluent-langneg-rs-LICENSE-MIT.txt  verified=2026-09-30  the LICENSE-MIT of the crate's repository (the MIT licence, which the crate offers beside Apache-2.0); its package holds no licence file
+fluent-langneg    0.14.2  fluent-langneg-rs-LICENSE-MIT.txt  verified=2026-09-30  the LICENSE-MIT of the crate's repository (the MIT licence, which the crate offers beside Apache-2.0); its package holds no licence file
+fs_at             0.2.1   Apache-2.0.txt                     verified=no          the Apache License 2.0, which the crate is under (its manifest says so); its package holds no licence file
+intl_pluralrules  7.0.2   MIT.txt                            verified=2026-09-30  the MIT licence's text, as the crate's directory in its repository has it (LICENSE-MIT); the crate offers Apache-2.0 or MIT, and its package holds no licence file
+webview2-com-sys  0.39.1  webview2-rs-LICENSE.txt            verified=2026-09-30  the LICENSE of the crate's repository, github.com/wravery/webview2-rs (the MIT licence); the crate is MIT (its manifest says so), and its package holds no licence file
