@@ -14349,6 +14349,15 @@ Redistribution and use in source and binary forms, with or without modification,
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """;
 
+    /// <summary>
+    /// Where the source of the Eigen inside onnxruntime.dll is (MPL-2.0 asks it of a binary; a scoped
+    /// exception to the allowed licences, THIRD_PARTY.md): the commit ONNX Runtime 1.27.0's
+    /// cmake/deps.txt pins, with the two patches its cmake/external/eigen.cmake applies.
+    /// </summary>
+    internal const string OnnxRuntimeEigenSource = """
+onnxruntime.dll includes Eigen, which is licensed under the Mozilla Public License 2.0 (its text is in ThirdPartyNotices.txt below). Its source code is the Eigen that ONNX Runtime 1.27.0 builds: commit 1d8b82b0740839c0de7f1242a3585e3390ff5f33 (Eigen 3.4.0 with later fixes from its 3.4 branch), at https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip, with the two patches ONNX Runtime applies to it, at https://github.com/microsoft/onnxruntime/tree/v1.27.0/cmake/patches/eigen.
+""";
+
     /// <summary>nlohmann/json 3.12.0's licence, composed before its file was on hand: the MIT licence as
     /// nlohmann/json's LICENSE.MIT words it, under the copyright line 3.12.0's json.hpp gives. The same
     /// words as its LICENSE.MIT at v3.12.0 (compared 2026-09-30, composed-notices.txt).</summary>

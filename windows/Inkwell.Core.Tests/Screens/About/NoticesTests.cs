@@ -144,6 +144,10 @@ public class NoticesTests
         {
             Assert.Contains(part, byId["onnxruntime"].Text, StringComparison.Ordinal);
         }
+        // Eigen inside it is MPL-2.0 (a scoped exception): the notice says so and where its source
+        // is, the commit ONNX Runtime 1.27.0's cmake/deps.txt pins.
+        Assert.Contains("onnxruntime.dll includes Eigen, which is licensed under the Mozilla Public License 2.0", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip", byId["onnxruntime"].Text, StringComparison.Ordinal);
         // And the code compiled into sherpa-onnx's library: each its own licence file at the version
         // sherpa-onnx 1.13.4 builds (composed-notices.txt).
         Assert.StartsWith("MIT License\n\nCopyright (c) 2013-2025 Niels Lohmann\n", byId["nlohmann-json"].Text, StringComparison.Ordinal);

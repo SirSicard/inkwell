@@ -599,7 +599,8 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
         new("onnxruntime", "ONNX Runtime, by Microsoft",
             "Runs Parakeet's model for sherpa-onnx: ONNX Runtime 1.27.0, copied beside the app.",
             "MIT, with the notices of the code it includes",
-            OnnxRuntimeLicence + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
+            OnnxRuntimeLicence + "\n\n--- Eigen (MPL-2.0): where its source is ---\n" + OnnxRuntimeEigenSource
+            + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
         { Composed = true },
         // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL): each
         // its own licence file at the version sherpa-onnx 1.13.4 builds, compared on 2026-09-30
