@@ -737,15 +737,20 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
     /// <summary>
     /// The end-user terms the Windows App SDK's licence asks of an app that ships its runtime
-    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice): the
-    /// user agrees to Microsoft's terms for those components. Settings > About shows it above the
-    /// notices; the installer's splash (windows/scripts/pack.ps1), the release notes and the
-    /// download page carry it before Inkwell first runs.
+    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice), and
+    /// the Windows SDK's licence of an app that ships its .NET projection (Distributable Code,
+    /// Distribution Requirements: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll are on its
+    /// REDIST list; the windows-sdk-net notice): the user agrees to Microsoft's terms for those
+    /// components. The first run asks for that agreement before anything else (TermsStep);
+    /// Settings > About shows it above the notices; the installer's splash
+    /// (windows/scripts/pack.ps1), the release notes and the download page carry it before
+    /// Inkwell first runs.
     /// </summary>
     public const string WindowsAppSdkTerms =
-        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK, " +
-        "which Microsoft licenses separately, under the Microsoft Software License Terms shown below " +
-        "(\"Windows App SDK, by Microsoft\"). By installing or using Inkwell, you agree to those terms for those components.";
+        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK " +
+        "and the Windows SDK's .NET projection, which Microsoft licenses separately, under the Microsoft Software " +
+        "License Terms shown below (\"Windows App SDK, by Microsoft\" and \"Windows SDK projection for .NET, by Microsoft\"). " +
+        "By installing or using Inkwell, you agree to those terms for those components.";
 
     /// <summary>The ids of the composed notices, which mac/composed-notices.txt lists.</summary>
     public static IReadOnlySet<string> ComposedIds =>

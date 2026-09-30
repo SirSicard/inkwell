@@ -44,10 +44,10 @@ SHA-256 against the release before installing it.
 dictations, notes and downloaded models) stays in `%LOCALAPPDATA%\Inkwell`, so a reinstall picks up
 where you left off. To remove it as well, delete that folder after uninstalling.
 
-**Microsoft's terms.** Inkwell includes the runtime of Microsoft's Windows App SDK, which Microsoft
-licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's
-Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those
-components.
+**Microsoft's terms.** Inkwell includes the runtime of Microsoft's Windows App SDK and the Windows
+SDK's .NET projection, which Microsoft licenses separately under the Microsoft Software License
+Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you
+agree to those terms for those components.
 
 **Why the warnings?** Windows warns about any app that is not signed with a code-signing
 certificate it recognises. Signing the Windows build is planned; until then, the SHA-256 in step 2
@@ -58,8 +58,8 @@ is the check.
 Notes for the release-prep step (not homepage text):
 
 - The same terms sentence is in each release's notes (win-release.yml), on the installer's splash
-  (`$SplashTerms` in windows/scripts/pack.ps1) and in Settings > About
-  (`Notices.WindowsAppSdkTerms`); keep the four in step if one changes.
+  (`$SplashTerms` in windows/scripts/pack.ps1) and in Settings > About and the first run's terms
+  step (`Notices.WindowsAppSdkTerms`); keep the four in step if one changes.
 - Smart App Control: Microsoft's own answer is that no single app can be allowed past it, only the
   whole feature turned off, and that it cannot then go back to evaluation mode without resetting
   Windows ([Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)).

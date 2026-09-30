@@ -1,7 +1,8 @@
 // The app: one window and a tray icon over the core. Closing the window hides it; the tray's Quit
 // stops the core, then the app. The screens' models (ScreenModels) follow the core's events after
 // the store; each route's screen is made from them (Screens.cs). The Drop follows dictation through
-// DropModel after the store too.
+// DropModel after the store too. Before any of it, Microsoft's terms (TermsStep, TermsWindow): until
+// they are agreed to, nothing else is made, shown or started.
 using Inkwell.Core.Screens;
 using Inkwell.Screens;
 using Microsoft.UI.Xaml;
@@ -14,6 +15,8 @@ namespace Inkwell;
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA1001", Justification = "Disposed on Quit")]
 public partial class App : Application
 {
+    /// <summary>The terms step's window, while it is up (held, as the main window is).</summary>
+    private TermsWindow? terms;
     private MainWindow? window;
     private TrayIcon? tray;
     private CoreController? core;
@@ -30,6 +33,35 @@ public partial class App : Application
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
+    {
+        var step = new TermsStep(TermsFile(), Launch, Exit);
+        step.Launch();
+        if (step.Showing)
+        {
+            terms = new TermsWindow(step);
+            terms.Closed += (_, _) => terms = null;
+            terms.Activate();
+        }
+    }
+
+    /// <summary>
+    /// Where the agreement to the terms is kept: in the library's folder, or null when that folder
+    /// is not known (INK_DATA_DIR is not an absolute path; the core then says so when it starts).
+    /// </summary>
+    private static TermsRecord? TermsFile()
+    {
+        try
+        {
+            return new TermsRecord(Path.Combine(DataLocation.DataDirectory(), TermsRecord.FileName));
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Everything the app does, once the terms are agreed to: the window, the core, the screens and the tray.</summary>
+    private void Launch()
     {
         window = new MainWindow();
         window.AppWindow.Closing += (_, e) =>
