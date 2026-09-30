@@ -249,10 +249,12 @@ fn load_library(name: &CStr) -> Result<(), EngineError> {
     // never freed: it stays loaded for the life of the process, as a DLL loaded at start does.
     let module = unsafe { LoadLibraryExA(name.as_ptr(), std::ptr::null_mut(), 0) };
     if module.is_null() {
+        // Windows names no DLL: its "module not found" is the same for this one and for any it
+        // loads, so the message gives the likely ones as examples, not as the cause.
         let error = std::io::Error::last_os_error();
         return Err(EngineError::Failed(format!(
-            "couldn't load {} or a DLL it loads ({error}); on Windows the diarizer needs the \
-             Vulkan loader, vulkan-1.dll, which GPU drivers install",
+            "couldn't load {} or a DLL it loads ({error}), for example the Vulkan loader \
+             (vulkan-1.dll, which GPU drivers install) or the Visual C++ runtime",
             name.to_string_lossy()
         )));
     }
@@ -932,14 +934,16 @@ mod tests {
     }
 
     /// Windows: a library that does not load is an error naming it, not the delay-load helper's
-    /// exception at the first call.
+    /// exception at the first call. The DLL it lacks may be any it loads, so none is given as the
+    /// cause.
     #[test]
     #[cfg(windows)]
     fn a_library_that_does_not_load_is_an_error_naming_it() {
         let err = load_library(c"no-such-library-for-inkwell.dll").unwrap_err();
         assert!(
             matches!(&err, EngineError::Failed(m)
-                if m.starts_with("couldn't load no-such-library-for-inkwell.dll or a DLL it loads (")),
+                if m.starts_with("couldn't load no-such-library-for-inkwell.dll or a DLL it loads (")
+                    && m.contains("for example")),
             "{err}"
         );
         assert_eq!(load_library(c"kernel32.dll"), Ok(()));
