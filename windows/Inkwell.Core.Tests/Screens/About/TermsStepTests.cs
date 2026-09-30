@@ -131,6 +131,12 @@ public sealed class TermsStepTests : IDisposable
         Assert.All(TermsStep.Licences, row => Assert.Contains(row, about)); // the same title, line and full text
         Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT WINDOWS APP SDK", TermsStep.Licences[0].Text, StringComparison.Ordinal);
         Assert.Contains("MICROSOFT WINDOWS SOFTWARE DEVELOPMENT KIT (SDK)", TermsStep.Licences[1].Text, StringComparison.Ordinal);
+        // The Windows SDK's Distributable Code that Inkwell ships is two files, both on its REDIST
+        // list: the row the user agrees under names each (C#/WinRT's own row says MIT first).
+        foreach (var file in new[] { "Microsoft.Windows.SDK.NET.dll", "WinRT.Runtime.dll" })
+        {
+            Assert.Contains(file, TermsStep.Licences[1].Detail, StringComparison.Ordinal);
+        }
         // The sentence names both, by their rows' names.
         foreach (var id in new[] { "windows-app-sdk", "windows-sdk-net" })
         {
