@@ -3,7 +3,10 @@
 //!
 //! - **One pass per call**, greedy search, up to [`MAX_SECONDS`] of audio; longer audio is refused
 //!   rather than cut (the callers that use it hand over short windows: live partials re-decode a
-//!   trailing window, a dictation take is short). The whole call is one segment.
+//!   trailing window, a dictation take is short).
+//! - **One segment per word**, placed by the model's token times: a word runs from its first
+//!   token's start to its last token's end. The live-partials scheme (`crate::live`) reads them;
+//!   a dictation reads only the text.
 //! - **The CPU**, with one thread per physical core. ONNX Runtime's other execution providers are
 //!   not in this build of sherpa-onnx.
 //! - **Cancellation** is checked before the decode, which cannot be interrupted once started.
@@ -18,6 +21,14 @@
 //! downloaded at build time: the sherpa-onnx crates, whose build script fetches archives, are not
 //! used. The declarations below follow sherpa-onnx 1.13.4's C API (`c-api.h`, Apache-2.0), and
 //! [`SherpaParakeet::load`] refuses a library that reports another version.
+//!
+//! # onnxruntime.dll
+//!
+//! Windows 11 has its own, older `onnxruntime.dll` in System32, and Windows looks there before
+//! `PATH` (after the executable's own directory). sherpa-onnx given that one crashes the process
+//! when it creates the recognizer. So the app ships the archive's DLLs beside its executable
+//! (`build.rs` puts them beside the tests too), and [`SherpaParakeet::load`] asks the ONNX Runtime
+//! the process has loaded for its version first, and refuses any but [`ONNXRUNTIME_VERSION`].
 //!
 //! # Threads
 //!
@@ -42,6 +53,9 @@ use crate::lock;
 
 /// The sherpa-onnx release the declarations below are written against.
 pub const SHERPA_ONNX_VERSION: &str = "1.13.4";
+
+/// The ONNX Runtime that sherpa-onnx 1.13.4's Windows archive carries (the DLL's own version).
+pub const ONNXRUNTIME_VERSION: &str = "1.27.0";
 
 /// The longest audio transcribed in one call, in seconds.
 pub const MAX_SECONDS: u32 = 90;
@@ -222,6 +236,20 @@ mod ffi {
         _private: [u8; 0],
     }
 
+    /// ONNX Runtime's `OrtApiBase` (`onnxruntime_c_api.h`, MIT): the two entry points every
+    /// version keeps. Only the version string is read.
+    #[repr(C)]
+    pub struct OrtApiBase {
+        pub get_api: unsafe extern "C" fn(version: u32) -> *const std::ffi::c_void,
+        pub get_version_string: unsafe extern "C" fn() -> *const c_char,
+    }
+
+    // Linked by build.rs (`onnxruntime`), after it has checked the library: the same
+    // `onnxruntime.dll` sherpa-onnx's library uses, since Windows loads one module by that name.
+    unsafe extern "C" {
+        pub fn OrtGetApiBase() -> *const OrtApiBase;
+    }
+
     // Linked by build.rs (`sherpa-onnx-c-api`), after it has checked the library.
     unsafe extern "C" {
         pub fn SherpaOnnxGetVersionStr() -> *const c_char;
@@ -287,6 +315,15 @@ impl SherpaParakeet {
                 version.to_string_lossy()
             )));
         }
+        let ort = onnxruntime_version();
+        if ort.as_deref() != Some(ONNXRUNTIME_VERSION) {
+            return Err(failed(format!(
+                "the process loaded ONNX Runtime {}, not the {ONNXRUNTIME_VERSION} sherpa-onnx \
+                 was built with (Windows' own onnxruntime.dll, found before the app's?): the \
+                 archive's DLLs must sit beside the executable",
+                ort.as_deref().unwrap_or("of no known version")
+            )));
+        }
         let mut paths = Vec::with_capacity(FILES.len());
         for name in FILES {
             let path = dir.join(name);
@@ -332,8 +369,8 @@ impl SherpaParakeet {
         EngineError::Failed(format!("{}: {what}", self.info.id))
     }
 
-    /// One decode of `audio`, which is finite and within the length limit.
-    fn decode(&self, audio: &[f32]) -> Result<String, EngineError> {
+    /// One decode of `audio`, which is finite and within the length limit: its words.
+    fn decode(&self, audio: &[f32]) -> Result<Vec<TimedText>, EngineError> {
         let n = i32::try_from(audio.len()).map_err(|_| self.failed("too much audio".into()))?;
         let rate = i32::try_from(CANONICAL_RATE).unwrap_or(i32::MAX);
         let recognizer = lock(&self.recognizer);
@@ -358,13 +395,36 @@ impl SherpaParakeet {
             let bytes = unsafe { CStr::from_ptr(json) }.to_bytes().to_vec();
             // SAFETY: `json` came from SherpaOnnxGetOfflineStreamResultAsJson and is freed once.
             unsafe { ffi::SherpaOnnxDestroyOfflineStreamResultJson(json) };
-            text_of(&bytes).map_err(|e| self.failed(e))
+            let audio_ms = audio.len() as u64 * 1000 / u64::from(CANONICAL_RATE);
+            words_of(&bytes, audio_ms).map_err(|e| self.failed(e))
         };
         // SAFETY: `stream` came from SherpaOnnxCreateOfflineStream and is destroyed once, after its
         // last use.
         unsafe { ffi::SherpaOnnxDestroyOfflineStream(stream) };
         result
     }
+}
+
+/// The version of the ONNX Runtime this process loaded, if it reports one.
+fn onnxruntime_version() -> Option<String> {
+    // SAFETY: OrtGetApiBase takes no arguments and returns null or a pointer to a static struct
+    // whose first two members every ONNX Runtime version keeps.
+    let base = unsafe { ffi::OrtGetApiBase() };
+    if base.is_null() {
+        return None;
+    }
+    // SAFETY: `base` is non-null and points to that static struct; its version function takes no
+    // arguments and returns null or a static NUL-terminated string.
+    let version = unsafe { ((*base).get_version_string)() };
+    if version.is_null() {
+        return None;
+    }
+    // SAFETY: non-null, static and NUL-terminated (above).
+    Some(
+        unsafe { CStr::from_ptr(version) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// The recognizer's configuration: the transducer's `[encoder, decoder, joiner]`, the tokens,
@@ -493,14 +553,67 @@ fn recognizer_config(
     }
 }
 
-/// The `text` field of a result's JSON. The error names the problem, never the text.
-fn text_of(json: &[u8]) -> Result<String, String> {
-    let value: serde_json::Value =
+/// The words of a result's JSON, in ms, kept inside the `audio_ms` decoded: its `tokens` joined
+/// into words (a token that starts with a space starts a word; punctuation joins the word before
+/// it), each from its first token's `timestamps` entry to the latest end (`timestamps` plus
+/// `durations`, taken as 0 where the model gives none) of its tokens. The error names the problem,
+/// never the text.
+fn words_of(json: &[u8], audio_ms: u64) -> Result<Vec<TimedText>, String> {
+    use serde_json::Value;
+    // Parsed as a `Value` and read by hand: a typed parse's errors can quote the text.
+    let value: Value =
         serde_json::from_slice(json).map_err(|e| format!("unreadable result JSON ({e})"))?;
-    match value.get("text") {
-        Some(serde_json::Value::String(text)) => Ok(text.trim().to_owned()),
-        _ => Err("the result JSON has no text".into()),
+    let has_text = match value.get("text") {
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        _ => return Err("the result JSON has no text".into()),
+    };
+    let array = |key: &str| match value.get(key) {
+        None => Ok(&[][..]),
+        Some(Value::Array(items)) => Ok(items.as_slice()),
+        Some(_) => Err(format!("the result's {key} is not a list")),
+    };
+    let (tokens, starts, durations) = (array("tokens")?, array("timestamps")?, array("durations")?);
+    if starts.len() != tokens.len() || !(durations.is_empty() || durations.len() == tokens.len()) {
+        return Err(format!(
+            "the result's {} tokens have {} start times and {} durations",
+            tokens.len(),
+            starts.len(),
+            durations.len()
+        ));
     }
+    if has_text && tokens.is_empty() {
+        return Err("the result has text but no tokens".into());
+    }
+    let seconds = |v: &Value, key: &str| {
+        v.as_f64()
+            .filter(|s| s.is_finite() && *s >= 0.0)
+            .ok_or_else(|| format!("the result's {key} holds something that is not a time"))
+    };
+    let ms = |s: f64| ((s * 1000.0).round() as u64).min(audio_ms);
+    let mut words: Vec<TimedText> = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let token = token
+            .as_str()
+            .ok_or("the result's tokens hold something that is not text")?;
+        let start = seconds(&starts[i], "timestamps")?;
+        let duration = durations
+            .get(i)
+            .map_or(Ok(0.0), |d| seconds(d, "durations"))?;
+        let (start_ms, end_ms) = (ms(start), ms(start + duration));
+        match words.last_mut() {
+            Some(word) if !token.starts_with(' ') => {
+                word.text.push_str(token);
+                word.end_ms = word.end_ms.max(end_ms);
+            }
+            _ => words.push(TimedText {
+                start_ms,
+                end_ms,
+                text: token.trim_start().to_owned(),
+            }),
+        }
+    }
+    words.retain(|w| !w.text.trim().is_empty());
+    Ok(words)
 }
 
 impl OfflineEngine for SherpaParakeet {
@@ -529,33 +642,69 @@ impl OfflineEngine for SherpaParakeet {
                 audio.len() / CANONICAL_RATE as usize
             )));
         }
-        let text = self.decode(audio)?;
-        let end_ms = audio.len() as u64 * 1000 / u64::from(CANONICAL_RATE);
         Ok(Transcript {
-            segments: vec![TimedText {
-                start_ms: 0,
-                end_ms,
-                text,
-            }],
+            segments: self.decode(audio)?,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::text_of;
+    use super::words_of;
+    use ink_core::TimedText;
 
-    #[test]
-    fn the_text_is_read_from_the_result_json() {
-        let json = br#"{"lang": "", "text": " hello there ", "timestamps": [0.1, 0.4]}"#;
-        assert_eq!(text_of(json).unwrap(), "hello there");
+    fn word(text: &str, start_ms: u64, end_ms: u64) -> TimedText {
+        TimedText {
+            start_ms,
+            end_ms,
+            text: text.into(),
+        }
     }
 
     #[test]
-    fn a_result_without_text_is_an_error_that_quotes_nothing() {
-        let err = text_of(br#"{"tokens": ["secret"]}"#).unwrap_err();
-        assert!(!err.contains("secret"), "{err}");
-        let err = text_of(b"not json at all: secret").unwrap_err();
-        assert!(!err.contains("secret"), "{err}");
+    fn tokens_join_into_words_placed_by_their_times() {
+        // The shape sherpa-onnx 1.13.4 gives Parakeet TDT: a token opening a word starts with a
+        // space; punctuation joins the word before it; a duration may be zero.
+        let json = br#"{"lang": "", "text": "Yeah, we're here.",
+            "timestamps": [1.60, 1.68, 1.76, 2.08, 2.16, 2.24, 2.40, 2.56],
+            "durations": [0.08, 0.08, 0.08, 0.08, 0.00, 0.08, 0.16, 0.08],
+            "tokens": [" Ye", "ah", ",", " we", "'", "re", " here", "."], "words": []}"#;
+        let words = words_of(json, 10_000).unwrap();
+        assert_eq!(
+            words,
+            [
+                word("Yeah,", 1600, 1840),
+                word("we're", 2080, 2320),
+                word("here.", 2400, 2640),
+            ]
+        );
+        let text: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(
+            text.join(" "),
+            "Yeah, we're here.",
+            "the text, word for word"
+        );
+    }
+
+    #[test]
+    fn times_stay_inside_the_audio_and_nothing_said_is_no_words() {
+        let json =
+            br#"{"text": "late", "timestamps": [0.96], "durations": [0.16], "tokens": [" late"]}"#;
+        assert_eq!(words_of(json, 1_000).unwrap(), [word("late", 960, 1000)]);
+        let json = br#"{"text": "", "timestamps": [], "durations": [], "tokens": []}"#;
+        assert!(words_of(json, 1_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_malformed_result_is_an_error_that_quotes_nothing() {
+        for json in [
+            &br#"{"text": "secret", "timestamps": [0.1], "durations": [0.1]}"#[..],
+            br#"{"text": "secret", "timestamps": [0.1, 0.2], "durations": [0.1], "tokens": [" secret"]}"#,
+            br#"{"text": "secret", "timestamps": ["x"], "durations": [0.1], "tokens": [" secret"]}"#,
+            b"not json at all: secret",
+        ] {
+            let err = words_of(json, 1_000).unwrap_err();
+            assert!(!err.contains("secret"), "{err}");
+        }
     }
 }

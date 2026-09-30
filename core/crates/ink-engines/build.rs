@@ -245,10 +245,15 @@ fn copy_dlls(dlls: &[&Path], subdir: &str) -> PathBuf {
 /// sherpa-onnx 1.13.4's `win-x64-shared-MD-Release-no-tts-lib` archive: the files `engine-sherpa`
 /// uses, below the unpacked directory, with their SHA-256s (the archive's own is `dec41ab39449…`,
 /// as GitHub publishes it). `src/sherpa.rs` declares that release's C API.
-const SHERPA_FILES: [(&str, &str); 4] = [
+const SHERPA_FILES: [(&str, &str); 5] = [
     (
         "lib/sherpa-onnx-c-api.lib",
         "806798a9fa6da0027f50ee6d8c0fe94f62f4a3f0947c3f1a96fe42acbee97d84",
+    ),
+    // Linked for one call: the adapter asks the ONNX Runtime the process loaded for its version.
+    (
+        "lib/onnxruntime.lib",
+        "b9fc3cd678257d88a111b0773ede4bfceaf0fe95daab4379f2b2b37348a68781",
     ),
     (
         "lib/sherpa-onnx-c-api.dll",
@@ -317,8 +322,42 @@ fn sherpa() {
         dir.join("lib").display()
     );
     println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
+    println!("cargo:rustc-link-lib=dylib=onnxruntime");
     let dlls: Vec<&Path> = dlls.iter().map(PathBuf::as_path).collect();
-    copy_dlls(&dlls, "sherpa-bin");
+    let out = copy_dlls(&dlls, "sherpa-bin");
+    beside_executables(&out, &dlls);
+}
+
+/// Copies `dlls` beside the executables cargo builds: the binaries (`<profile>/`) and the tests
+/// (`<profile>/deps/`), `out` being `<profile>/build/<package>-<hash>/out/<subdir>`. Windows looks
+/// for a DLL's dependencies in the executable's directory, then System32, and on `PATH` last, and
+/// Windows 11 has its own, older onnxruntime.dll in System32: found through `PATH`, sherpa-onnx gets
+/// that one and crashes the process. The app ships them beside its executable the same way. A copy
+/// already there with the same contents is left alone (a test may have it loaded).
+fn beside_executables(out: &Path, dlls: &[&Path]) {
+    let profile = out
+        .ancestors()
+        .nth(4)
+        .unwrap_or_else(|| fail(&format!("{} is not inside a profile", out.display())));
+    for dir in [profile.to_path_buf(), profile.join("deps")] {
+        fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| fail(&format!("creating {}: {e}", dir.display())));
+        for dll in dlls {
+            let name = dll
+                .file_name()
+                .unwrap_or_else(|| fail("a DLL path with no name"));
+            let to = dir.join(name);
+            if to.is_file() && sha256_of(&to, "") == sha256_of(dll, "") {
+                continue;
+            }
+            fs::copy(dll, &to).unwrap_or_else(|e| {
+                fail(&format!(
+                    "copying {} beside the executables: {e}",
+                    dll.display()
+                ))
+            });
+        }
+    }
 }
 
 /// The file's SHA-256 as lowercase hex, or a build failure that says `what`.
