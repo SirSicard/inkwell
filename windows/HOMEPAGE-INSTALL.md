@@ -57,8 +57,9 @@ is the check.
 
 Notes for the release-prep step (not homepage text):
 
-- The same terms sentence is in each release's notes (win-release.yml) and in Settings > About
-  (`Notices.WindowsAppSdkTerms`); keep the three in step if one changes.
+- The same terms sentence is in each release's notes (win-release.yml), on the installer's splash
+  (`$SplashTerms` in windows/scripts/pack.ps1) and in Settings > About
+  (`Notices.WindowsAppSdkTerms`); keep the four in step if one changes.
 - Smart App Control: Microsoft's own answer is that no single app can be allowed past it, only the
   whole feature turned off, and that it cannot then go back to evaluation mode without resetting
   Windows ([Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)).

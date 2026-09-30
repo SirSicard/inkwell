@@ -12,7 +12,8 @@
 # - Inkwell_X.Y.Z_x64-setup.exe, the installer: per user (no administrator), into
 #   %LOCALAPPDATA%\InkwellApp, with a Start menu entry and an entry in Settings > Apps that
 #   uninstalls it. The library (%LOCALAPPDATA%\Inkwell) is not in that folder, so an uninstall
-#   leaves it. It refuses Windows older than 11 24H2 (10.0.26100), the app's floor.
+#   leaves it. It refuses Windows older than 11 24H2 (10.0.26100), the app's floor. While it
+#   installs it shows a splash with the Windows App SDK's end-user terms ($SplashTerms below).
 # - InkwellApp-X.Y.Z-full.nupkg and releases.win.json: the update and the feed the installed app
 #   reads from the release (VelopackUpdater.cs). The feed names the package with its size and
 #   SHA-256, which the app checks before installing it; this script checks the feed says the
@@ -37,9 +38,50 @@ $Runtime = 'win10.0.26100-x64'
 
 $windows = Split-Path -Parent $PSScriptRoot
 
+# The end-user terms the Windows App SDK's licence asks for (its section 3(b)(ii)), on the
+# installer's splash: Velopack's Setup has no text page, only an image shown while it installs, so
+# the terms are on screen before Inkwell first runs, wherever the installer came from. The same
+# terms are in Settings > About (Notices.WindowsAppSdkTerms), the release notes (win-release.yml)
+# and the homepage (windows/HOMEPAGE-INSTALL.md): keep the four in step. The non-breaking spaces
+# keep "Settings > About" on one line.
+$SplashTerms = "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's " +
+    "Windows App SDK, which Microsoft licenses separately under the Microsoft Software License Terms, " +
+    "shown in full in Inkwell's Settings`u{00A0}>`u{00A0}About. By installing or using Inkwell, you " +
+    "agree to those terms for those components."
+
 function Fail([string]$message) {
     Write-Output "::error title=pack::$message"
     throw "pack: $message"
+}
+
+# The splash, drawn here so its text is reviewed as text: a white PNG with the title and the terms.
+function Write-Splash([string]$Path) {
+    Add-Type -AssemblyName System.Drawing
+    # Pixels; the bottom strip is left for Setup's progress bar.
+    $width = 600; $height = 270; $margin = 32; $progress = 36
+    $bitmap = [System.Drawing.Bitmap]::new($width, $height)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $titleFont = [System.Drawing.Font]::new('Segoe UI Semibold', 24, [System.Drawing.GraphicsUnit]::Pixel)
+    $bodyFont = [System.Drawing.Font]::new('Segoe UI', 16, [System.Drawing.GraphicsUnit]::Pixel)
+    $ink = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(0x1f, 0x1f, 0x1f))
+    try {
+        # A missing font falls back silently to another face: fail instead.
+        foreach ($font in $titleFont, $bodyFont) {
+            if (-not $font.Name.StartsWith('Segoe UI')) { Fail "the splash's font is $($font.Name), not Segoe UI" }
+        }
+        $graphics.Clear([System.Drawing.Color]::White)
+        $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+        $graphics.DrawString('Installing Inkwell', $titleFont, $ink, [System.Drawing.PointF]::new($margin, $margin))
+        $top = $margin + $titleFont.GetHeight($graphics) + 14
+        $box = [System.Drawing.SizeF]::new($width - 2 * $margin, $height - $top - $progress)
+        # The terms fit whole, or the pack fails: never cut off on screen.
+        $needed = $graphics.MeasureString($SplashTerms, $bodyFont, [int]$box.Width)
+        if ($needed.Height -gt $box.Height) { Fail "the splash's terms need $([int]$needed.Height) px of $([int]$box.Height)" }
+        $graphics.DrawString($SplashTerms, $bodyFont, $ink, [System.Drawing.RectangleF]::new($margin, $top, $box.Width, $box.Height))
+        $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally {
+        $ink.Dispose(); $bodyFont.Dispose(); $titleFont.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
+    }
 }
 
 if ($Version -notmatch '^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$') { Fail "the version is X.Y.Z, not '$Version'" }
@@ -94,9 +136,14 @@ try {
     dotnet tool restore
     if ($LASTEXITCODE -ne 0) { Fail 'dotnet tool restore failed' }
     $work = Join-Path $OutDir 'vpk'
+    $splashDir = Join-Path $OutDir 'splash'
+    New-Item -ItemType Directory $splashDir | Out-Null
+    $splash = Join-Path $splashDir 'splash.png'
+    Write-Splash $splash
     dotnet vpk pack --skip-updates --yes `
         --packId $PackId --packVersion $Version --packDir $AppDir --mainExe Inkwell.exe `
         --packTitle Inkwell --packAuthors Inkwell --icon (Join-Path $windows 'Inkwell\Assets\Inkwell.ico') `
+        --splashImage $splash `
         --runtime $Runtime --channel win --shortcuts StartMenuRoot --noPortable --delta None `
         --outputDir $work
     if ($LASTEXITCODE -ne 0) { Fail "vpk pack failed ($LASTEXITCODE)" }
@@ -129,7 +176,7 @@ $setup = Join-Path $OutDir "Inkwell_${Version}_x64-setup.exe"
 Move-Item $setupFrom $setup
 Move-Item $package $OutDir
 Move-Item $feedPath $OutDir
-Remove-Item -Recurse -Force $work
+Remove-Item -Recurse -Force $work, $splashDir
 $sums = Join-Path $OutDir "Inkwell_${Version}_windows-sha256.txt"
 $lines = foreach ($file in Get-ChildItem $OutDir -File | Sort-Object Name) {
     '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant(), $file.Name

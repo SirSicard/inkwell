@@ -736,8 +736,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
     /// The end-user terms the Windows App SDK's licence asks of an app that ships its runtime
     /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice): the
     /// user agrees to Microsoft's terms for those components. Settings > About shows it above the
-    /// notices; the release notes and the download page carry it before anything is installed
-    /// (the installer shows no text).
+    /// notices; the installer's splash (windows/scripts/pack.ps1), the release notes and the
+    /// download page carry it before Inkwell first runs.
     /// </summary>
     public const string WindowsAppSdkTerms =
         "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK, " +
