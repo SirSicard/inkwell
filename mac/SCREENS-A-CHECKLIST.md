@@ -82,10 +82,11 @@ need a permission (the calendar, system audio) or ears (playback); those say so.
       taken with the screen locked, when no window is on screen and the ink rightly draws
       nothing: its layer is plain paper until the first visible frame).
 
-Not in this step, by design (so not a failure here):
+Not checked here (so not a failure here):
 - The ink zone's own lines ("Listening for meetings", "Hold fn to dictate") and "Record now":
-  meeting capture from devices is S2.8. The zone and the wordmark are S2.4's.
-- The Owed count beside the sidebar row: S2.6 owns the sidebar's Owed.
+  MEETINGS-CHECKLIST.md, section 1. The zone and the wordmark are S2.4's.
+- An Owed count beside the sidebar row: the sidebar lists Owed without one; the Owed screen
+  carries the counts (SCREENS-B-CHECKLIST.md, section 4).
 
 ## Library
 
@@ -126,8 +127,8 @@ Not in this step, by design (so not a failure here):
       token anywhere on the tab.
 - [ ] A link in a summary shows as plain words: not coloured, not clickable, and nothing opens
       (the summary is written from what the other side said, so its links are not trusted).
-- [ ] Below the summary, "Where it was said": each promise with the line it came from and its
-      chip. (Decisions have no line yet: see the report.)
+- [ ] Below the summary, "Decided, and where": each decision with the line it came from and its
+      chip. Then "Where it was said": each promise with its line and chip.
 - [ ] Owed: each promise with a circle (done / not done), its owner and due, and its chip.
       Marking it done strikes it through and updates Today's Owed soon.
 
