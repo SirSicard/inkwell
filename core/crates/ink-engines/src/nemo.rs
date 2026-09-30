@@ -48,7 +48,7 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::path::Path;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ink_core::{
     CANONICAL_RATE, CancelToken, DiarizeInput, Diarizer, EngineError, EngineInfo, EngineStream,
@@ -313,6 +313,22 @@ impl Creates {
     }
 }
 
+/// `nemo_speech_diar_create`, only with [`CREATING`] held: the guard is an argument, so a create
+/// cannot be written without the lock, or with the lock let go before the call.
+///
+/// # Safety
+///
+/// The strings `cfg` points to must be live for the call.
+unsafe fn create(
+    _creating: &MutexGuard<'_, Creates>,
+    cfg: &ffi::DiarModelConfig,
+    out: &mut *mut ffi::DiarModel,
+) -> ffi::Status {
+    // SAFETY: `cfg`'s strings are live (the caller's contract), and its `size` covers the whole
+    // struct as declared in the pinned header; `out` is a valid place for the handle.
+    unsafe { ffi::nemo_speech_diar_create(cfg, out) }
+}
+
 /// A model handle. Only [`Model`] holds one, behind its mutex.
 struct ModelHandle(NonNull<ffi::DiarModel>);
 
@@ -362,9 +378,8 @@ impl Model {
                  it is not tried again"
             )));
         }
-        // SAFETY: `cfg` and the strings it points to outlive the call, and its `size` covers the
-        // whole struct as declared in the pinned header; `out` is a valid place for the handle.
-        let status = unsafe { ffi::nemo_speech_diar_create(&cfg, &mut out) };
+        // SAFETY: `cfg` and the strings it points to outlive the call.
+        let status = unsafe { create(&creating, &cfg, &mut out) };
         if let NemoDevice::Gpu(ix) = device {
             creating.note(ix, status == ffi::OK);
         }
@@ -997,7 +1012,8 @@ mod tests {
 
     /// Loads run one at a time in the process: while one is under way (holding the lock), another
     /// diarizer's load waits, and goes on when it ends. A corrupt file on the CPU: the library is
-    /// called and refuses it, so no model is needed.
+    /// called and refuses it, so no model is needed. That the create itself runs under the lock is
+    /// the compiler's to check: [`create`] takes the guard.
     #[test]
     fn a_load_waits_while_another_is_under_way() {
         let dir =
