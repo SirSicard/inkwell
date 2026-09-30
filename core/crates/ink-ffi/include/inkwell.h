@@ -135,10 +135,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       byte is on disk), then "model.update_finished". While a job is using the model, or
  *       another update holds it, the update is "command.failed" and nothing changes: send it
  *       again later.
- *       With "model" and "next" the same registry id, it installs that model (the first
- *       download): nothing else is unloaded or warmed, and a model already installed is left as
- *       it is. Only when the user asks for the download. A voice detector installed while
- *       dictation runs is taken by it at once ("dictation.voice_detection" says so).
+ *       With "model" and "next" the same registry id, it installs that model: meant for a model
+ *       that is not installed yet (its first download), sent only when the user asks for it.
+ *       Nothing else is unloaded or warmed. An installed model keeps its files, but if it is
+ *       loaded it is unloaded (and loaded again if it was warm), and while a job uses it the
+ *       update is refused, as above. A voice detector installed while dictation runs is taken by
+ *       it at once ("dictation.voice_detection" says so).
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
