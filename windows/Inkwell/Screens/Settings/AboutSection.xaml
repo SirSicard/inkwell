@@ -25,6 +25,8 @@
     <StackPanel Spacing="12">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="About" />
         <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" IsTextSelectionEnabled="True" Text="{x:Bind About.VersionLine}" />
+        <!-- Inkwell's copyright notice, which the Windows SDK's licence asks an app shipping its code to display. -->
+        <TextBlock IsTextSelectionEnabled="True" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:AboutModel.CopyrightLine}" />
         <!-- Updates (the Mac's updates row): a button when this copy updates itself, and where
              things are. The line is a live region: Narrator reads each change. -->
         <StackPanel Orientation="Horizontal" Spacing="12">

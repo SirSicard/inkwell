@@ -33,6 +33,13 @@ public sealed class AboutModel
     /// <summary>"Inkwell 1.0.0", or "Inkwell development build".</summary>
     public string VersionLine { get; }
 
+    /// <summary>
+    /// Inkwell's copyright notice, LICENSE's line for it, under the version: the Windows SDK's
+    /// licence asks an app that ships its code to display its own. Inkwell.csproj's Copyright puts
+    /// the same line in Inkwell.exe's file properties.
+    /// </summary>
+    public const string CopyrightLine = "Copyright (c) 2026 Mattias Hjemgaard";
+
     /// <summary>The end-user terms for Microsoft's components, the Windows App SDK and the Windows SDK's .NET projection (Notices.WindowsAppSdkTerms), above the notices.</summary>
     public static string Terms => Notices.WindowsAppSdkTerms;
 
