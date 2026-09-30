@@ -506,18 +506,20 @@ fn capture(
 }
 
 /// **Worker.** The router's live-partials engine for a meeting starting now, if one is installed:
-/// a streaming engine the shell registered (on the Mac, FluidAudio's Parakeet). Without one the
+/// a streaming engine the shell registered (on the Mac, FluidAudio's Parakeet), or a registry
+/// model the core runs itself (Windows' Parakeet, [`crate::gate::live_model`]). Without one the
 /// meeting has no live transcript, only its final pass.
-fn live_engine(shared: &Shared) -> Option<Arc<dyn StreamingEngine>> {
+fn live_engine(shared: &Arc<Shared>) -> Option<Arc<dyn StreamingEngine>> {
     match shared.router.route(Job::LivePartials) {
         Ok(Route::External {
             engine: ExternalEngine::Streaming(engine),
             ..
         }) => Some(engine),
+        Ok(Route::Model(row)) => Some(crate::gate::live_model(shared, &row)),
         Ok(other) => {
-            // A registry row for live partials: this build has no streaming adapter for one.
-            log::warn!(
-                "live partials route to {}, which this build cannot stream; no live transcript",
+            // An offline shell engine routed live partials: registration refuses that, so a bug.
+            log::error!(
+                "live partials route to {}, which is not a streaming engine; no live transcript",
                 other.id()
             );
             None
