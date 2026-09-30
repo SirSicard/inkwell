@@ -49,6 +49,8 @@ final class CatalogueModel {
     /// Every model the user asked for since launch: the first run keeps listing them once they
     /// are in, as downloaded.
     private(set) var asked: Set<String> = []
+    /// A download runs or waits its turn (the first run says they keep going only then).
+    var downloading: Bool { installing != nil || !waiting.isEmpty }
     /// The id the install's command carries: a command.failed with it is that install's failure.
     @ObservationIgnored private var installRef: String?
     @ObservationIgnored private var installs = 0

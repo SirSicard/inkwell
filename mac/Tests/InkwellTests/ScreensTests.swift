@@ -780,6 +780,23 @@ final class ModelDownloadTests: XCTestCase {
         XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .failed("another update holds qwen3-asr-1.7b-q8"))
     }
 
+    /// The first run's "the downloads keep going" holds only while one runs or waits: not before
+    /// the press, and not once every one has ended, failed or done.
+    func testDownloadingHoldsOnlyWhileADownloadRunsOrWaits() {
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(listed())
+        XCTAssertFalse(catalogue.downloading, "nothing pressed")
+        catalogue.download([parakeet, qwen])
+        XCTAssertTrue(catalogue.downloading)
+        catalogue.apply(finished(parakeet, ok: false, message: "offline"))
+        XCTAssertTrue(catalogue.downloading, "Qwen3-ASR goes next")
+        catalogue.apply(finished(qwen, ok: false, message: "offline"))
+        XCTAssertFalse(catalogue.downloading, "every download failed: none keeps going")
+        catalogue.download([qwen])
+        catalogue.apply(finished(qwen))
+        XCTAssertFalse(catalogue.downloading, "all done")
+    }
+
     /// The core stopping ends what was queued: nothing is sent after it, and no row stays
     /// "downloading".
     func testTheCoreStoppingClearsTheQueue() throws {

@@ -111,7 +111,7 @@ struct OnboardingView: View {
                                 .accessibilityLabel("Download \(total) from \(CatalogueModel.sources(offered))")
                         }
                     }
-                    if !catalogue.asked.isDisjoint(with: offered.map(\.id)) {
+                    if catalogue.downloading {
                         Text("You can go on: the downloads keep going, and Settings > Models shows them.")
                             .font(Typography.caption)
                             .foregroundStyle(Theme.secondaryText)
