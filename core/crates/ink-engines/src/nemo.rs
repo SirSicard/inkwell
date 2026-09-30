@@ -510,12 +510,14 @@ fn check_samples(audio: &[f32]) -> Result<(), EngineError> {
 ///
 /// Each preset's model is loaded when first used (the final pass's at the first
 /// [`diarize`](Diarizer::diarize), the live one at the first
-/// [`open_stream`](Diarizer::open_stream)) and kept until this value is dropped. A failed load
+/// [`open_stream`](Diarizer::open_stream)), on the first of its devices it loads on
+/// ([`with_fallback`](Self::with_fallback)), and kept until this value is dropped. A failed load
 /// is returned and tried again on the next call.
 pub struct NemoDiarizer {
     info: EngineInfo,
     path: CString,
-    device: NemoDevice,
+    /// Where the model runs: tried in this order at each load.
+    devices: Vec<NemoDevice>,
     offline: Mutex<Option<Arc<Model>>>,
     live: Mutex<Option<Arc<Model>>>,
 }
@@ -524,7 +526,7 @@ impl fmt::Debug for NemoDiarizer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NemoDiarizer")
             .field("id", &self.info.id)
-            .field("device", &self.device)
+            .field("devices", &self.devices)
             .finish_non_exhaustive()
     }
 }
@@ -553,10 +555,20 @@ impl NemoDiarizer {
         Ok(Self {
             info,
             path,
-            device,
+            devices: vec![device],
             offline: Mutex::new(None),
             live: Mutex::new(None),
         })
+    }
+
+    /// The same diarizer, loading on `device` where the model does not load on the devices before
+    /// it: Windows' CPU behind GPU 0, for a PC whose Vulkan has no device the model loads on (no
+    /// Vulkan GPU, or too little memory on it). The fallback is tried where the model loads, at
+    /// its first use; nothing is loaded here.
+    #[must_use]
+    pub fn with_fallback(mut self, device: NemoDevice) -> Self {
+        self.devices.push(device);
+        self
     }
 
     /// The model for the final pass or for live labels, loading it on first use.
@@ -575,7 +587,10 @@ impl NemoDiarizer {
         if let Some(model) = slot.as_ref() {
             return Ok(Arc::clone(model));
         }
-        let model = Arc::new(Model::load(&self.path, preset, self.device)?);
+        let model = Arc::new(crate::adapters::first_that_loads(
+            &self.devices,
+            |device| Model::load(&self.path, preset, device),
+        )?);
         *slot = Some(Arc::clone(&model));
         Ok(model)
     }

@@ -44,21 +44,21 @@ pub fn load_vad(models: &ModelDir, row: &EngineRow) -> Result<Arc<dyn VadModel>,
 }
 
 /// **Worker.** Loads the diarizer row installed under `models`, on the GPU where there is one: on
-/// the Mac its GPU; on Windows GPU 0 (Vulkan), and the CPU when that does not load (no Vulkan GPU,
-/// or too little memory on it). Without its adapter in this build, [`EngineError::ModelMissing`],
-/// naming the row.
+/// the Mac its GPU; on Windows GPU 0 (Vulkan), and the CPU when the model does not load there (no
+/// Vulkan GPU, or too little memory on it). The model loads at the diarizer's first use, so that
+/// is where the CPU is tried (`NemoDiarizer::with_fallback`). Without its adapter in this build,
+/// [`EngineError::ModelMissing`], naming the row.
 pub fn load_diarizer(models: &ModelDir, row: &EngineRow) -> Result<Arc<dyn Diarizer>, EngineError> {
     #[cfg(feature = "engine-nemo")]
     if row.runtime == crate::Runtime::NemoSpeechCpp {
         use crate::Loader;
-        let devices: &[crate::NemoDevice] = if cfg!(target_os = "macos") {
-            &[crate::NemoDevice::Gpu(0)]
+        let diarizer =
+            crate::NemoLoader::new(models.clone(), crate::NemoDevice::Gpu(0)).load(row)?;
+        let diarizer = if cfg!(target_os = "macos") {
+            diarizer
         } else {
-            &[crate::NemoDevice::Gpu(0), crate::NemoDevice::Cpu]
+            diarizer.with_fallback(crate::NemoDevice::Cpu)
         };
-        let diarizer = first_that_loads(devices, |device| {
-            crate::NemoLoader::new(models.clone(), device).load(row)
-        })?;
         return Ok(Arc::new(diarizer));
     }
     let _ = models;
@@ -68,11 +68,11 @@ pub fn load_diarizer(models: &ModelDir, row: &EngineRow) -> Result<Arc<dyn Diari
     )))
 }
 
-/// Loads with each of `devices` in turn and returns the first that loads. A missing model, or a
-/// cancel, ends it at once. When no device loads, the one device's error, or an error naming each
-/// device's.
+/// Loads with each of `devices` in turn and returns the first that loads (the diarizer's model,
+/// `nemo.rs`). A missing model, or a cancel, ends it at once. When no device loads, the one
+/// device's error, or an error naming each device's.
 #[cfg_attr(not(feature = "engine-nemo"), allow(dead_code))]
-fn first_that_loads<D: Copy + std::fmt::Debug, T>(
+pub(crate) fn first_that_loads<D: Copy + std::fmt::Debug, T>(
     devices: &[D],
     mut load: impl FnMut(D) -> Result<T, EngineError>,
 ) -> Result<T, EngineError> {

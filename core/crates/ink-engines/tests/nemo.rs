@@ -413,6 +413,54 @@ fn a_corrupt_model_fails_on_first_use_with_the_librarys_reason() {
     );
 }
 
+/// Windows' fallback (`load_diarizer`): the CPU is tried where the model loads, at the first use,
+/// after the GPU; a model that loads on neither is an error naming each device's reason.
+#[test]
+fn a_model_that_loads_on_no_device_names_each_devices_reason() {
+    let dir = temp_dir("corrupt-fallback");
+    let path = dir.join("model.gguf");
+    fs::write(&path, b"not a gguf file").unwrap();
+    let diarizer = NemoDiarizer::new(&path, info(), NemoDevice::Gpu(0))
+        .unwrap()
+        .with_fallback(NemoDevice::Cpu);
+    let second = [0.0; 16_000];
+    let err = diarizer
+        .diarize(&mut SliceWindows::new(&second), &CancelToken::new())
+        .unwrap_err();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(
+        matches!(&err, EngineError::Failed(m)
+            if m.contains("Gpu(0): NeMo-Speech.cpp loading the model")
+                && m.contains("Cpu: NeMo-Speech.cpp loading the model")),
+        "{err:?}"
+    );
+}
+
+/// A GPU the model does not load on: the diarizer runs on the CPU instead. No machine has a
+/// hundredth GPU, and NeMo-Speech.cpp refuses its index as it refuses GPU 0 on a PC whose Vulkan
+/// has no device it can use ("no matching GPU device found").
+#[test]
+#[ignore = "needs the Nemotron model and the AMI meetings (INK_BENCH_DIR, INK_DIAR_SET)"]
+fn a_model_that_does_not_load_on_the_gpu_runs_on_the_cpu() {
+    let (audio, _) = meeting("EN2002c");
+    let minute = &audio[..60 * 16_000];
+    let absent = NemoDevice::Gpu(99);
+    let err = NemoDiarizer::new(&model_path(), info(), absent)
+        .unwrap()
+        .diarize(&mut SliceWindows::new(minute), &CancelToken::new())
+        .unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Failed(m) if m.contains("no matching GPU device")),
+        "{err:?}"
+    );
+    let turns = NemoDiarizer::new(&model_path(), info(), absent)
+        .unwrap()
+        .with_fallback(NemoDevice::Cpu)
+        .diarize(&mut SliceWindows::new(minute), &CancelToken::new())
+        .unwrap();
+    assert!(!turns.is_empty());
+}
+
 #[test]
 #[ignore = "needs the Nemotron model and the AMI meetings (INK_BENCH_DIR, INK_DIAR_SET)"]
 fn the_loader_loads_the_installed_row_through_residency() {
