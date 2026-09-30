@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The first-run sheet (the Mac's OnboardingView), as a ContentDialog over the window: where the
-     user is (dots, never a bar that fills), one of four steps, and Skip / Back / Continue (Start on
+     user is (dots, never a bar that fills), one of five steps, and Skip / Back / Continue (Start on
      the last). Its own buttons, in the Mac's order, rather than the dialog's. Polish's consent step
      shows inside the sheet (WinUI shows one dialog at a time). -->
 <ContentDialog
@@ -25,6 +25,7 @@
             <Ellipse x:Name="Dot1" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
             <Ellipse x:Name="Dot2" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
             <Ellipse x:Name="Dot3" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
+            <Ellipse x:Name="Dot4" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
         </StackPanel>
 
         <Grid Grid.Row="1">
@@ -39,6 +40,20 @@
                 <TextBlock x:Name="PermissionsTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <TextBlock x:Name="PermissionsNote" Style="{StaticResource InkCaptionStyle}" />
                 <ContentPresenter x:Name="CardsHost" />
+            </StackPanel>
+
+            <!-- The models not on this PC yet. Nothing downloads before the step's Download, which
+                 names them, how much in all and from where; Continue never waits for it. -->
+            <StackPanel x:Name="ModelsStep" Spacing="12">
+                <TextBlock x:Name="ModelsTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
+                <TextBlock x:Name="ModelsNote" Style="{StaticResource InkBodyStyle}" />
+                <ContentPresenter x:Name="ModelRowsHost" />
+                <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="DownloadButton" Click="OnDownload" Style="{StaticResource AccentButtonStyle}" />
+                    <Button x:Name="ModelsTryAgain" Click="OnModelsTryAgain" />
+                </StackPanel>
+                <TextBlock x:Name="ModelsGoOn" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
 
             <StackPanel x:Name="PolishStep" Spacing="12">

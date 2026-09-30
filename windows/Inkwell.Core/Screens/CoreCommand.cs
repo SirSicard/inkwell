@@ -90,6 +90,30 @@ public abstract record CoreCommand
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name)];
     }
 
+    /// <summary>
+    /// Installs <paramref name="Next"/> in place of <paramref name="Model"/>: with both the same
+    /// registry id, the first download of that model (nothing else is unloaded or warmed). Only
+    /// when the user asks for it. Its id names the model ("model.update:&lt;next&gt;"), so a failure
+    /// is matched to its row.
+    /// </summary>
+    public sealed record ModelUpdate(string Model, string Next) : CoreCommand
+    {
+        public override string Name => "model.update";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("model", Model), ("next", Next), ("id", $"{Name}:{Next}")];
+    }
+
+    /// <summary>
+    /// Loads the job's model and keeps it loaded: answered by model.warmed, model.refused or
+    /// model.warm_failed. Its id names the job ("model.warm:dictation_final"), as the Mac's.
+    /// </summary>
+    public sealed record ModelWarm(Job Job) : CoreCommand
+    {
+        public override string Name => "model.warm";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("job", Wire.Name(Job)), ("id", $"{Name}:{Wire.Name(Job)}")];
+    }
+
     /// <summary>Its id names the job ("engine.route:dictation_final"), so a failure is matched to its line.</summary>
     public sealed record EngineRoute(Job Job) : CoreCommand
     {

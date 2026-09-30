@@ -34,6 +34,7 @@ public class ScreenModelsTests
         Assert.Contains(sent.Commands, c => c is CoreCommand.RecordsList);
         // S3.5b: a meeting a crash interrupted is finished once the core is up, and asked for once.
         Assert.Single(sent.Commands, c => c is CoreCommand.MeetingsRecover);
+        Assert.DoesNotContain(sent.Commands, c => c is CoreCommand.ModelUpdate); // nothing downloads on launch
     }
 
     [Fact]
@@ -55,6 +56,7 @@ public class ScreenModelsTests
             ("setting.get", "setting:dictation.polish"), ("setting.set", "setting:dictation.key"),
             ("setting.set", "setting:meetings.llm"), ("setting.get", "setting:meetings.detect"),
             ("consent.allow", "consent.allow:edit:3"), ("snippets.save", "snippets:2"), ("meeting.start", "meeting.start"),
+            ("model.update", "model.update:qwen3-asr-1.7b-q8"),
         })
         {
             Assert.True(screens.Handles(Failed(command, id)), $"{command} {id}");

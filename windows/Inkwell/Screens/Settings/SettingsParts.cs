@@ -226,6 +226,26 @@ public sealed record VoiceCommandItem(VoiceCommandDraft Row)
     public string Name => VoiceCommandsModel.AccessibilityLabel(Row);
 }
 
+/// <summary>A model's row where it can be downloaded (ModelRowsView).</summary>
+/// <param name="OwnDownload">The row has a Download of its own (Settings; the first run has one for all).</param>
+public sealed record ModelRowItem(ModelRow Row, bool OwnDownload)
+{
+    public string Id => Row.Id;
+    public string Text => Row.Text(System.Globalization.CultureInfo.CurrentCulture);
+    /// <summary>Where it would come from, beside its own Download (the first run's line says it for all).</summary>
+    public string? From => OwnDownload ? Row.From : null;
+    public bool ShowsDownload => OwnDownload && Row.CanDownload;
+    public string DownloadName => Row.DownloadName(System.Globalization.CultureInfo.CurrentCulture);
+    public bool Downloading => Row.Progress is not null;
+    public double Progress => Row.Progress ?? 0;
+    public string ProgressName => Row.ProgressName;
+    /// <summary>What the download is doing (a failure is Failure's).</summary>
+    public string? Status => Row.CanRetry ? null : Row.Status(System.Globalization.CultureInfo.CurrentCulture);
+    public string? Failure => Row.CanRetry ? Row.Status(System.Globalization.CultureInfo.CurrentCulture) : null;
+    public bool CanRetry => Row.CanRetry;
+    public string RetryName => Row.RetryName;
+}
+
 /// <summary>One job's line in Settings > Models.</summary>
 /// <param name="HasEngine">Something fills the job (else the line says "Nothing installed yet" or "Checking…", in the secondary colour).</param>
 public sealed record CatalogueLineItem(string Title, string Engine, bool HasEngine, string? Accuracy)
