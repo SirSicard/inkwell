@@ -312,6 +312,7 @@ impl Transport for ToLoopback {
             headers: request.headers.clone(),
             body: request.body.clone(),
             loopback_only: true,
+            deadline: request.deadline,
         };
         self.inner.post(&local)
     }

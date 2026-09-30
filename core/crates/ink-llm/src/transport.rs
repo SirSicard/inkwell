@@ -14,6 +14,9 @@
 //! - **No proxy** (ureq reads no proxy settings from the environment unless asked).
 //! - **An error status's body is never read.** Providers echo the request, which is the user's
 //!   text, back in their error bodies.
+//! - **A request's [deadline](HttpRequest::deadline) bounds the whole exchange** once connected:
+//!   sending, the wait for the answer and reading it. Without one, only the per-read and per-write
+//!   timeouts apply. Connecting keeps its own timeout, and a name lookup is the OS's.
 //!
 //! # Logging
 //!
@@ -30,7 +33,7 @@
 use std::io::{self, Read};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zeroize::Zeroize;
 
@@ -64,6 +67,10 @@ pub struct HttpRequest {
     /// Refuse to connect unless the URL's host is this machine. Set in local-only mode; the
     /// provider has already checked, and the transport checks again with its own parser.
     pub loopback_only: bool,
+    /// When the exchange must be over: the caller's budget (a cancel token's deadline). The
+    /// transport gives up then, a request on the wire included, and reports
+    /// [`TransportError::Timeout`]. `None`: only the client's own timeouts apply.
+    pub deadline: Option<Instant>,
 }
 
 impl std::fmt::Debug for HttpRequest {
@@ -74,6 +81,7 @@ impl std::fmt::Debug for HttpRequest {
             .field("header_names", &names)
             .field("body_bytes", &self.body.len())
             .field("loopback_only", &self.loopback_only)
+            .field("deadline", &self.deadline)
             .finish()
     }
 }
@@ -160,6 +168,11 @@ pub struct TransportConfig {
     pub max_body_bytes: usize,
 }
 
+/// How far past a request's [deadline](HttpRequest::deadline) the client gives up: a socket
+/// timeout can end a timer tick early, and the caller must find its own deadline passed when the
+/// answer comes back, so it can tell its budget running out from a network failure.
+pub const DEADLINE_GRACE: Duration = Duration::from_millis(20);
+
 impl Default for TransportConfig {
     fn default() -> Self {
         Self {
@@ -219,6 +232,11 @@ impl Transport for UreqTransport {
         }
         for (name, value) in &request.headers {
             call = call.set(name, value);
+        }
+        if let Some(deadline) = request.deadline {
+            // ureq's own deadline: it bounds sending and every read of the answer, body included.
+            call =
+                call.timeout(deadline.saturating_duration_since(Instant::now()) + DEADLINE_GRACE);
         }
         match call.send_bytes(&request.body) {
             Ok(response) => {
@@ -348,6 +366,7 @@ mod tests {
             headers: vec![("Authorization", "Bearer sk-synthetic-canary".into())],
             body: b"{\"messages\":\"synthetic canary text\"}".to_vec(),
             loopback_only: false,
+            deadline: None,
         };
         let shown = format!("{request:?}");
         assert!(!shown.contains("canary"), "{shown}");
@@ -369,6 +388,7 @@ mod tests {
             headers: Vec::new(),
             body: Vec::new(),
             loopback_only: true,
+            deadline: None,
         };
         assert_eq!(
             transport.post(&request).unwrap_err(),

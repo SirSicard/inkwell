@@ -145,6 +145,10 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case settingValue(SettingValue)
     /// `consent.state`
     case consentState(ConsentState)
+    /// `llm.providers`
+    case llmProviders(LlmProviders)
+    /// `llm.tested`
+    case llmTested(LlmTested)
     /// `modes.listed`
     case modesListed(ModesListed)
     /// `snippets.listed`
@@ -254,6 +258,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
+            case "llm.providers": self = .llmProviders(try LlmProviders(from: decoder))
+            case "llm.tested": self = .llmTested(try LlmTested(from: decoder))
             case "modes.listed": self = .modesListed(try ModesListed(from: decoder))
             case "snippets.listed": self = .snippetsListed(try SnippetsListed(from: decoder))
             case "voice_commands.listed": self = .voiceCommandsListed(try VoiceCommandsListed(from: decoder))
@@ -340,6 +346,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
+        case .llmProviders(let event): try event.encode(to: encoder)
+        case .llmTested(let event): try event.encode(to: encoder)
         case .modesListed(let event): try event.encode(to: encoder)
         case .snippetsListed(let event): try event.encode(to: encoder)
         case .voiceCommandsListed(let event): try event.encode(to: encoder)
@@ -1304,6 +1312,104 @@ public enum LlmFeature: String, Codable, Sendable, Equatable, CaseIterable {
     case polish
     case edit
     case meetings
+}
+
+/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
+/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
+/// store.
+public struct LlmProviderEntry: Codable, Sendable, Equatable {
+    /// Whether llm.choose may name another address (custom only).
+    public let customUrl: Bool
+    /// The model used when llm.choose names none.
+    public let defaultModel: String
+    /// Its address: fixed for a built-in provider; for custom, the address used when llm.choose
+    /// names none.
+    public let endpoint: String
+    /// Whether a key is stored for it in the OS key store, asked without reading the key. False
+    /// when that could not be asked (llm.providers' error says so).
+    public let hasKey: Bool
+    /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
+    /// server).
+    public let id: String
+    /// Whether a call needs its API key (a custom server usually runs without one).
+    public let needsKey: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case customUrl = "custom_url"
+        case defaultModel = "default_model"
+        case endpoint
+        case hasKey = "has_key"
+        case id
+        case needsKey = "needs_key"
+    }
+}
+
+/// The own-key language model providers and the one chosen, in answer to llm.providers,
+/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
+/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
+/// with the user's consent for its endpoint (consent.state).
+public struct LlmProviders: Codable, Sendable, Equatable {
+    /// For custom, the server's address as chosen; absent otherwise.
+    public let baseUrl: String?
+    /// The chosen provider's id; absent when none is chosen.
+    public let chosen: String?
+    /// Where the chosen provider sends, as consent.state names it; absent with chosen.
+    public let endpoint: String?
+    /// What could not be read (the stored keys, or the choice), as a sentence starting
+    /// "couldn't"; absent when all was read.
+    public let error: String?
+    /// Local-only mode (llm.local_only): while on, a provider that is not on this machine is
+    /// never called.
+    public let localOnly: Bool
+    /// The model the chosen provider is asked for; absent with chosen.
+    public let model: String?
+    /// Every provider, in preference order.
+    public let providers: [LlmProviderEntry]
+    /// Whether the chosen provider can be called: its key is stored (when it needs one), and
+    /// local-only mode lets it through. Each feature still needs its own consent.
+    public let ready: Bool
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Whether the chosen provider is on this machine (on_device) or not (cloud); absent with
+    /// chosen.
+    public let to: LlmDestination?
+    /// Always `llm.providers`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case baseUrl = "base_url"
+        case chosen
+        case endpoint
+        case error
+        case localOnly = "local_only"
+        case model
+        case providers
+        case ready
+        case ref
+        case to
+        case type
+    }
+}
+
+/// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
+/// provider with its stored key, and whether it answered.
+public struct LlmTested: Codable, Sendable, Equatable {
+    /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
+    /// failed, never the key.
+    public let error: String?
+    /// The model asked.
+    public let model: String
+    /// Whether the provider answered.
+    public let ok: Bool
+    /// The provider tested.
+    public let provider: String
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// The HTTP status of a refusal (401 or 403: the key; 404: the model or address; 429: the
+    /// account's limits); absent otherwise.
+    public let status: Int64?
+    /// Always `llm.tested`.
+    public let type: String
 }
 
 /// An answer to meeting.ask about the live meeting: the model's words. Render them as text only

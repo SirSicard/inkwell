@@ -158,6 +158,8 @@ pub enum Query {
     Library(crate::library::LibraryQuery),
     /// Snippets, voice commands and the import's key note ([`phrases`](crate::phrases)).
     Phrases(crate::phrases::PhrasesQuery),
+    /// Own-key language model providers and their keys ([`cloud`](crate::cloud)).
+    Cloud(crate::cloud::CloudQuery),
 }
 
 /// A query with the command's name and id, for its events.
@@ -219,6 +221,9 @@ pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     }
     if let Some(query) = crate::phrases::parse(name, v) {
         return Some(query.map(Query::Phrases));
+    }
+    if let Some(query) = crate::cloud::parse(name, v) {
+        return Some(query.map(Query::Cloud));
     }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
@@ -670,6 +675,12 @@ impl Ctx<'_> {
                     Err(e) => fail_coded(e.message, e.code),
                 }
             }
+            Query::Cloud(query) => match crate::cloud::answer(self.shared, query, id.as_deref()) {
+                Ok(Some(e)) => emit(e),
+                // llm.test: the test thread answers.
+                Ok(None) => {}
+                Err(e) => fail(e),
+            },
         }
     }
 

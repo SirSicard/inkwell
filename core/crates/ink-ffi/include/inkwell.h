@@ -252,6 +252,25 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       one write. Name what "consent.state" showed; if the model changed meanwhile, nothing is
  *       recorded and it fails ("command.failed", with a fresh "consent.state" first), so the
  *       shell asks again. Answers "consent.state" with the "id".
+ *   {"cmd":"llm.providers","id":"<ref>"}
+ *   {"cmd":"llm.key.save","provider":"openai|groq|anthropic|openrouter|custom","key":"...","id":"<ref>"}
+ *   {"cmd":"llm.key.delete","provider":"<provider>","id":"<ref>"}
+ *   {"cmd":"llm.choose","provider":"<provider>|none","model":"<optional>","base_url":"<custom only>",
+ *    "local_only":"off","id":"<ref>"}
+ *       Own-key language models, for a shell with no model of its own (Windows): "llm.providers"
+ *       lists every provider, whether its key is stored (asked without reading it) and the one
+ *       chosen. A key goes only into the OS key store (macOS keychain, Windows Credential
+ *       Manager): never into settings, an event, an error or a log; send it once and forget it.
+ *       llm.choose picks the provider and its model: one that is not on this machine is chosen
+ *       only with "local_only":"off", which turns local-only mode off with it; one on this
+ *       machine, or none, turns it back on. It answers "setting.value" (llm.local_only) and a
+ *       "consent.state" per feature first: choosing sends nothing, and each feature still needs
+ *       its consent for the provider's endpoint. A model the shell registered is used before the
+ *       chosen provider. Each answers "llm.providers" with the "id".
+ *   {"cmd":"llm.test","id":"<ref>"}
+ *       One short fixed request (never the user's words) to the chosen provider with its stored
+ *       key, through local-only mode: "llm.tested" with the "id", saying whether it answered
+ *       (and the HTTP status of a refusal). One at a time; another sent meanwhile fails as busy.
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).

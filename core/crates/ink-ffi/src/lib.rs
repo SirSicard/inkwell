@@ -38,6 +38,7 @@
 
 pub mod asking;
 pub mod capture;
+pub mod cloud;
 pub mod consent;
 pub mod control;
 pub mod detection;
