@@ -1,6 +1,6 @@
 // Settings > About's updates row over a fake updater: what it says and offers at each step, that
-// nothing runs until pressed, and that a failure says "Couldn't ..." with its reason and offers the
-// check again.
+// nothing runs until pressed, and that a failure (check, download or restart) says "Couldn't ..."
+// with its reason and offers the check again.
 using Inkwell.Core.Screens;
 using Xunit;
 
@@ -14,6 +14,7 @@ public class UpdatesModelTests
         public string? Offered { get; set; } = "1.0.1";
         public Exception? CheckFails { get; set; }
         public Exception? DownloadFails { get; set; }
+        public Exception? RestartFails { get; set; }
         public int Checks { get; private set; }
         public int Downloads { get; private set; }
         public int Restarts { get; private set; }
@@ -31,7 +32,14 @@ public class UpdatesModelTests
             return DownloadFails is null ? Task.CompletedTask : Task.FromException(DownloadFails);
         }
 
-        public void RestartToUpdate() => Restarts++;
+        public void RestartToUpdate()
+        {
+            Restarts++;
+            if (RestartFails is not null)
+            {
+                throw RestartFails;
+            }
+        }
     }
 
     [Fact]
@@ -120,6 +128,30 @@ public class UpdatesModelTests
         await updates.Act();
         Assert.Equal(2, updater.Checks);
         Assert.Equal(0, updater.Restarts);
+    }
+
+    [Fact]
+    public async Task AFailedRestartSaysCouldntWithItsReasonAndOffersTheCheckAgain()
+    {
+        var logged = new Logged();
+        var updater = new FakeUpdater { RestartFails = new System.ComponentModel.Win32Exception("An error occurred trying to start process 'Update.exe'") };
+        var updates = new UpdatesModel(updater, logged.Log);
+        var changes = 0;
+        await updates.Act();
+        await updates.Act();
+        updates.PropertyChanged += (_, _) => changes++;
+        await updates.Act();
+        Assert.Equal(1, updater.Restarts);
+        Assert.Equal(UpdateState.Failed, updates.State);
+        Assert.Equal("Couldn't restart to install Inkwell 1.0.1: An error occurred trying to start process 'Update.exe'.", updates.Line);
+        Assert.True(changes > 0);
+        Assert.Equal("Check Now", updates.ActionTitle);
+        Assert.True(updates.CanAct);
+        Assert.Equal(["update restart failed"], logged.Messages);
+
+        updater.RestartFails = null;
+        await updates.Act();
+        Assert.Equal(UpdateState.Available, updates.State);
     }
 
     [Fact]

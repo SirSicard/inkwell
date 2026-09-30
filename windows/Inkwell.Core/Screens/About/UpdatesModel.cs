@@ -32,7 +32,8 @@ public interface IUpdater
 
     /// <summary>
     /// UI thread. Installs the downloaded version once the app has quit, starts it again, and
-    /// quits the app the way its Quit does (the core stops first).
+    /// quits the app the way its Quit does (the core stops first). Throws when the installer
+    /// cannot be started; the app then keeps running.
     /// </summary>
     void RestartToUpdate();
 }
@@ -67,7 +68,7 @@ public enum UpdateState
     Downloading,
     /// <summary>Downloaded and checked: a restart installs it.</summary>
     Ready,
-    /// <summary>The check or the download failed (<see cref="UpdatesModel.Line"/> says why).</summary>
+    /// <summary>The check, the download or the restart failed (<see cref="UpdatesModel.Line"/> says why).</summary>
     Failed,
 }
 
@@ -174,7 +175,17 @@ public sealed class UpdatesModel(IUpdater updater, ScreenLog? log = null) : Obse
 
     private Task Restart()
     {
-        updater.RestartToUpdate();
+        try
+        {
+            updater.RestartToUpdate();
+        }
+        catch (Exception e)
+        {
+            // The installer did not start (missing, or blocked: it is not code-signed yet), so the
+            // app is still running and the row says why.
+            Fail($"Couldn't restart to install Inkwell {Version}: {Reason(e)}", "restart");
+            Changed();
+        }
         return Task.CompletedTask;
     }
 
