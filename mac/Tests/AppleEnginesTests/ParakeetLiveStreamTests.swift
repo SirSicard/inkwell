@@ -104,12 +104,13 @@ final class ParakeetLiveStreamTests: XCTestCase {
             decoder.release()
             live.close()
         }
+        // Armed before the first push: a push that waited for the decode (the one it starts, or
+        // one already running) would return only after this releases it, and then after the
+        // decode, so the check below fails on that order instead of the test hanging.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { decoder.release() }
         // Half a second starts the first decode, which then holds until it is released.
         try push(live, 0..<8_000)
         XCTAssertEqual(decoder.began.wait(30), true, "a decode began")
-        // A push that waited for the decode would return only after this releases it, and then
-        // after the decode: the check below fails on that order instead of the test hanging.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { decoder.release() }
         for i in 25..<225 {
             try live.push(indexed(i * 320..<(i + 1) * 320))
         }
