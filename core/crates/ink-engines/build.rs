@@ -1,7 +1,8 @@
 //! Links NeMo-Speech.cpp's diarization library for `engine-nemo`, and sherpa-onnx's for
-//! `engine-sherpa` (`sherpa()` at the end). Without those features it does nothing, but for one
-//! line of metadata: whether `engine-silero` is on (for ink-ffi's build
-//! script, which loads Silero for dictation when it is).
+//! `engine-sherpa` (`sherpa()` at the end). Without those features it does nothing, but for
+//! metadata for ink-ffi's build script: whether `engine-silero` is on (ink-ffi loads Silero for
+//! dictation when it is), and, on Windows with `engine-llama-vulkan`, the Vulkan loader to
+//! delay-load (it also links this crate's tests that way).
 //!
 //! The library is built outside cargo (`native/build-nemo-speech.sh`) and found through
 //! `NEMO_SPEECH_DIR`, its install prefix. Before linking, this checks:
@@ -65,6 +66,16 @@ fn main() {
     }
     if env::var_os("CARGO_FEATURE_ENGINE_SHERPA").is_some() {
         sherpa();
+    }
+    // A Windows build with Vulkan delay-loads the Vulkan loader, so a PC without one still starts
+    // it (src/llama/no_vulkan.rs). This crate's tests are linked that way here; ink-ffi's build
+    // script links the core's DLL that way when this metadata says so.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var_os("CARGO_FEATURE_ENGINE_LLAMA_VULKAN").is_some()
+    {
+        println!("cargo:vulkan_delayload=vulkan-1.dll");
+        println!("cargo:rustc-link-arg-tests=/DELAYLOAD:vulkan-1.dll");
+        println!("cargo:rustc-link-arg-tests=delayimp.lib");
     }
     if env::var_os("CARGO_FEATURE_ENGINE_NEMO").is_none() {
         return;

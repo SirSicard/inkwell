@@ -9,10 +9,11 @@
 // What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, its copy of
 // fastcluster, VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback),
 // sherpa-onnx, ONNX Runtime and the code compiled into sherpa-onnx's library (Windows' Parakeet),
-// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection and
-// C#/WinRT in their place. Their texts are in NoticeTexts.cs, copied from the packages the Windows
-// build restores (sherpa-onnx's is the shared Apache License). sherpa-onnx's library compiles in
-// its own copy of fastcluster (hclust-cpp's), whose notice is here, composed from the Mac's.
+// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection,
+// C#/WinRT and Velopack (the installer and updates) in their place. Their texts are in
+// NoticeTexts.cs, copied from the packages the Windows build restores (sherpa-onnx's is the shared
+// Apache License). sherpa-onnx's library compiles in its own copy of fastcluster (hclust-cpp's),
+// whose notice is here, composed from the Mac's.
 //
 // The texts shared with the Mac (llama.cpp down to webgl-noise, the Apache License, Silero's) are
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
@@ -772,7 +773,22 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         new("cswinrt", "C#/WinRT runtime, by Microsoft",
             "How C# calls the Windows APIs, compiled in with the projection: WinRT.Runtime from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
             "MIT", CsWinRtLicence),
+        new("velopack", "Velopack, by Velopack Ltd and Caelan Sayler",
+            "Installs Inkwell and brings its updates: the installer, Update.exe beside the app, and the update check in Settings > About. Velopack 1.2.161.",
+            "MIT", VelopackLicence),
     ];
+
+    /// <summary>
+    /// The end-user terms the Windows App SDK's licence asks of an app that ships its runtime
+    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice): the
+    /// user agrees to Microsoft's terms for those components. Settings > About shows it above the
+    /// notices; the installer's splash (windows/scripts/pack.ps1), the release notes and the
+    /// download page carry it before Inkwell first runs.
+    /// </summary>
+    public const string WindowsAppSdkTerms =
+        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK, " +
+        "which Microsoft licenses separately, under the Microsoft Software License Terms shown below " +
+        "(\"Windows App SDK, by Microsoft\"). By installing or using Inkwell, you agree to those terms for those components.";
 
     /// <summary>The ids of the composed notices, which mac/composed-notices.txt lists.</summary>
     public static IReadOnlySet<string> ComposedIds =>

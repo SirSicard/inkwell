@@ -115,6 +115,8 @@ public class NoticesTests
         Assert.StartsWith("MIT", byId["dotnet-runtime"].Licence, StringComparison.Ordinal);
         Assert.Contains("windows-sdk-net", byId.Keys);
         Assert.Equal("MIT", byId["cswinrt"].Licence);
+        Assert.Equal("MIT", byId["velopack"].Licence);
+        Assert.Contains("1.2.161", byId["velopack"].Role, StringComparison.Ordinal);
 
         // The texts are the packages' own (NoticeTexts.cs).
         Assert.StartsWith("Copyright (c) 2020 Henrik Enquist", byId["wasapi-rs"].Text, StringComparison.Ordinal);
@@ -150,6 +152,7 @@ public class NoticesTests
         }
         // Its copy of fastcluster (BSD-2: the notice must ship with the binary).
         Assert.StartsWith("Copyright:\n  * Until package version 1.1.23: \u00a9 2011 Daniel M\u00fcllner", byId["hclust-cpp"].Text, StringComparison.Ordinal);
+        Assert.StartsWith("Copyright \u00a9 2021 Caelan Sayler\nCopyright \u00a9 2024 Velopack Ltd.", byId["velopack"].Text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -205,7 +208,7 @@ public class NoticesTests
     {
         var mac = MacNotices.Texts(AboutCheckout.Read("mac/Sources/Inkwell/Screens/Notices.swift"));
         Assert.True(mac.Count > 15, "Notices.swift was read");
-        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt"];
+        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt", "velopack"];
         var shared = Notices.Components.Where(c => !windowsOnly.Contains(c.Id)).ToList();
         Assert.Equal(16, shared.Count);
         Assert.All(windowsOnly, id => Assert.False(mac.ContainsKey(id), id));

@@ -16,7 +16,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     public WindowPresence Presence { get; } = new();
 
     /// <summary>The screens' models over the controller, with the app's own services.</summary>
-    public static ScreenModels Models(CoreController core, DispatcherQueue ui)
+    public static ScreenModels Models(CoreController core, DispatcherQueue ui, IUpdater? updater = null)
     {
         string? data = null;
         string? modelsDir = null;
@@ -40,7 +40,9 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             wake: new DispatcherWake(ui),
             makePlayer: document => WindowsAudioOutput.PlayerFor(document, core.CommandLog),
             search: new DispatcherSearchScheduler(ui),
-            log: core.CommandLog);
+            appVersion: AppVersion.Release,
+            log: core.CommandLog,
+            updater: updater);
     }
 
     /// <summary>A route's screen.</summary>
@@ -95,7 +97,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("Meetings", new MeetingsSection(models.Meetings)),
             new("Models", new ModelsSection(models.Catalogue)),
             new("Storage", new StorageSection(models.Storage, models.Meetings)),
-            new("About", new AboutSection(models.About)),
+            new("About", new AboutSection(models.About, models.Updates)),
         ];
     }
 }

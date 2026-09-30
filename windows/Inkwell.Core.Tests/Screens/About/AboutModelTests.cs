@@ -17,6 +17,16 @@ public class AboutModelTests
     }
 
     [Fact]
+    public void TheTermsForTheWindowsAppSdkAreAgreedToAndPointAtItsLicence()
+    {
+        // Section 3(b)(ii) of the Windows App SDK's licence: end users agree to terms that protect
+        // its code at least as much; these are its own terms, whose full text is a notice below.
+        Assert.Contains("Microsoft Software License Terms", AboutModel.Terms, StringComparison.Ordinal);
+        Assert.Contains("you agree to those terms", AboutModel.Terms, StringComparison.Ordinal);
+        Assert.Contains($"\"{Notices.Components.Single(c => c.Id == "windows-app-sdk").Name}\"", AboutModel.Terms, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheRowsAreTheNoticesInOrderWithTheMacsTitles()
     {
         var about = new AboutModel(null);

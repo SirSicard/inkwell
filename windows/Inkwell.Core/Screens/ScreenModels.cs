@@ -19,6 +19,7 @@ public sealed class ScreenModels
     /// <param name="makePlayer">Makes a record's player over the app's audio output (null: no player).</param>
     /// <param name="search">Waits for typing to pause before a Library search (null: at once).</param>
     /// <param name="appVersion">The app's version for About (null: a development build).</param>
+    /// <param name="updater">About's updater (null: this copy does not update itself).</param>
     public ScreenModels(
         Action<CoreCommand> send,
         string? dataDirectory = null,
@@ -29,7 +30,8 @@ public sealed class ScreenModels
         Func<RecordDocument, RecordPlayer?>? makePlayer = null,
         ISearchScheduler? search = null,
         string? appVersion = null,
-        ScreenLog? log = null)
+        ScreenLog? log = null,
+        IUpdater? updater = null)
     {
         ArgumentNullException.ThrowIfNull(send);
         this.log = log ?? ScreenLog.System;
@@ -57,6 +59,7 @@ public sealed class ScreenModels
         UpNext = new UpNextModel(cal, cal, wake ?? NoWake.Instance);
         Library = new LibraryModel(send, makePlayer, search);
         About = new AboutModel(appVersion);
+        Updates = new UpdatesModel(updater ?? NoUpdater.Instance, this.log);
     }
 
     public PermissionsModel Permissions { get; }
@@ -86,6 +89,9 @@ public sealed class ScreenModels
     /// <summary>What Today, the Library and a record show of the library.</summary>
     public LibraryModel Library { get; }
     public AboutModel About { get; }
+
+    /// <summary>About's updates row.</summary>
+    public UpdatesModel Updates { get; }
 
     /// <summary>A batch of the core's events, after the CoreStore has applied it.</summary>
     public void Apply(IReadOnlyList<InkEvent> batch)

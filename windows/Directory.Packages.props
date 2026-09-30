@@ -12,6 +12,9 @@
     <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
     <!-- The tray icon (MIT). -->
     <PackageVersion Include="WinUIEx" Version="2.9.3" />
+    <!-- The installer's hooks and in-app updates (MIT). The same version as the vpk tool that packs
+         the installer (.config/dotnet-tools.json): bump both together. -->
+    <PackageVersion Include="Velopack" Version="1.2.161" />
     <!-- The ink (Inkwell.Ink): Direct3D 11, DXGI, DirectComposition, Direct2D, DirectWrite and
          Win32 declarations (MIT), NativeAOT-safe. -->
     <PackageVersion Include="TerraFX.Interop.Windows" Version="10.0.26100.6" />

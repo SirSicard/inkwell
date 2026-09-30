@@ -47,7 +47,7 @@ public partial class App : Application
         ink = new ShellInk(window.DispatcherQueue, InkProblem, action => screens?.Meetings.Perform(action));
         InkPanel.Clock = ink.Clock;
         window.ShowInk(ink);
-        screens = AppScreens.Models(core, window.DispatcherQueue);
+        screens = AppScreens.Models(core, window.DispatcherQueue, new VelopackUpdater(Quit));
         var models = screens;
         // What the Drop says, after the store has taken each batch.
         var drop = new DropModel(

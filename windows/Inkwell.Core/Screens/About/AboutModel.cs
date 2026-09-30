@@ -2,7 +2,8 @@
 // AboutSection (SettingsScreen.swift) lists them: the models, the code, and the Rust crates under
 // one disclosure. Static data: nothing here changes while the app runs, so it sends no command and
 // applies no event. The core's status line, which the Mac's About shows under the version, is the
-// shell's (CoreStatus); the Mac's updates row has no Windows counterpart yet (no updater).
+// shell's (CoreStatus); the updates row is UpdatesModel's. Windows only: the end-user terms the
+// Windows App SDK's licence requires, above the notices.
 
 namespace Inkwell.Core.Screens;
 
@@ -30,6 +31,9 @@ public sealed class AboutModel
 
     /// <summary>"Inkwell 1.0.0", or "Inkwell development build".</summary>
     public string VersionLine { get; }
+
+    /// <summary>The end-user terms for the Windows App SDK (Notices.WindowsAppSdkTerms), above the notices.</summary>
+    public static string Terms => Notices.WindowsAppSdkTerms;
 
     /// <summary>The weights, each credited; a CC-BY model's row opens onto its credit.</summary>
     public IReadOnlyList<NoticeRow> ModelRows { get; } =
