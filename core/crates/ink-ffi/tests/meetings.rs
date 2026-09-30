@@ -53,6 +53,7 @@ impl MeetingCapture for ReplayCapture {
                 source: Box::new(source),
                 ring: DEFAULT_RING_DURATION,
                 start_at: None,
+                follow: None,
             })
         };
         Ok(Opened {

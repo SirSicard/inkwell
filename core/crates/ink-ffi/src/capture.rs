@@ -3,15 +3,17 @@
 //!
 //! The platform decides which mic (with Bluetooth output, the built-in one, unless the user's
 //! headset-mic setting says otherwise) and taps the far end: the meeting's app when one is known,
-//! everything this machine plays otherwise (the app itself is never tapped). Errors name the
-//! device or the app, never audio.
+//! everything this machine plays otherwise (on the Mac, Inkwell itself is never tapped). Errors
+//! name the device or the app, never audio.
 //!
 //! On Windows ([`WinMeetingCapture`]) the far end of an app is S0.4's plan: process loopback,
 //! which hears the app alone, for Zoom and the browsers; device loopback of the output the app
 //! plays to for every other app (per-process loopback is silent on new Teams), which hears
-//! everything that device plays and is said as such (`far_end` "everything").
+//! everything that device plays, Inkwell's own sounds included, and is said as such (`far_end`
+//! "everything"). Device loopback is bound to one output, so it moves with the call ([`Follow`]):
+//! a headset plugged in mid-call, an output unplugged, a new default under Record now.
 
-use ink_core::{AppRef, Transport};
+use ink_core::{AppRef, AudioSource, Transport};
 #[cfg(any(target_os = "macos", windows))]
 use ink_pipeline::meeting::watchdog::FarDelivery;
 use ink_pipeline::meeting::watchdog::Routing;
@@ -36,12 +38,12 @@ pub struct MicInfo {
 pub enum FarScope {
     /// The meeting's app alone.
     App,
-    /// Everything this machine plays, except this app: Record now, which names no app (and
-    /// replays, which have no devices).
+    /// Everything this machine plays (on the Mac, except this app): Record now, which names no
+    /// app, a Windows app recorded from its output device, and replays, which have no devices.
     #[default]
     Everything,
-    /// Everything this machine plays, except this app, because the meeting's app could not be
-    /// tapped alone: other apps' sound is recorded too, and the shell must say so
+    /// Everything this machine plays (on the Mac, except this app), because the meeting's app
+    /// could not be heard alone: other apps' sound is recorded too, and the shell must say so
     /// (`meeting.far_end_fallback`). Why, as the platform said it.
     EverythingInstead(String),
 }
@@ -66,6 +68,22 @@ pub struct Opened {
     pub mic: Option<MicInfo>,
     /// What the far end records.
     pub far: FarScope,
+}
+
+/// A side opened again elsewhere ([`Follow::moved`]): its new source, opened and not started, and
+/// what it records (a device's name, for the log).
+pub type Reopened = (Box<dyn AudioSource>, String);
+
+/// A side whose device can change under a meeting: while it records, the pump asks it every
+/// [`FOLLOW_INTERVAL`](crate::meeting::FOLLOW_INTERVAL), and at once when its source ended by
+/// itself, whether to open the side again elsewhere. **Pump**, every method.
+pub trait Follow: Send {
+    /// A new source for the side, opened and not started, and what it records (a device's name,
+    /// for the log), when the side should move: its device went, or its app plays elsewhere now.
+    /// `None`: it stays. With `again` (its source ended by itself, or could not be replaced), it
+    /// opens the side again wherever it should be, even where it was. Errors name the device or
+    /// the app, never audio.
+    fn moved(&mut self, again: bool) -> Result<Option<Reopened>, String>;
 }
 
 /// Opens a meeting's capture on this machine.
@@ -173,10 +191,12 @@ mod mac {
                 ),
             };
             let far = far.map_err(|e| format!("the other side's sound: {e}"))?;
+            // The tap follows its process whatever output it plays to: nothing moves it.
             let side = |source: Box<dyn AudioSource>| CaptureSide {
                 source,
                 ring: DEFAULT_RING_DURATION,
                 start_at: None,
+                follow: None,
             };
             Ok(Opened {
                 sides: vec![side(Box::new(mic)), side(Box::new(far))],
@@ -229,10 +249,12 @@ mod mac {
 }
 
 #[cfg(windows)]
-pub use win::{WinDevices, WinMeetingCapture};
+pub use win::{FarHears, WinDevices, WinMeetingCapture};
 
 #[cfg(windows)]
 mod win {
+    use std::sync::Arc;
+
     use ink_audio::DEFAULT_RING_DURATION;
     use ink_core::{AppRef, AudioSource, DeviceId, FarEndTarget, PlatformError};
     use ink_platform_win::WinCapture;
@@ -240,8 +262,23 @@ mod win {
 
     use super::*;
 
+    /// What a far end opened by [`WinDevices::open_far`] hears.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum FarHears {
+        /// One process tree alone (process loopback), wherever it plays.
+        App,
+        /// Everything one output device plays (device loopback).
+        Device {
+            /// The endpoint's id.
+            id: String,
+            /// Its name as Windows shows it.
+            name: String,
+        },
+    }
+
     /// What [`WinMeetingCapture`] asks of the platform: [`WinCapture`] in the app, a stand-in
-    /// that opens replay sources in the tests (CI has no devices). **Worker**, every method.
+    /// that opens replay sources in the tests (CI has no devices). **Worker**, every method (and
+    /// the meeting's pump, for a far end that moves).
     pub trait WinDevices: Send + Sync {
         /// The mic a meeting records with the headset-mic setting at `headset_mic`, and why;
         /// `None` when there is no input at all.
@@ -251,12 +288,14 @@ mod win {
         ) -> Result<Option<(Endpoint, MicRouteReason)>, PlatformError>;
         /// Opens the mic `device`, not started.
         fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError>;
-        /// Opens the far end for `target`, not started, and whether it hears one process tree
-        /// alone (process loopback) rather than everything an output device plays.
+        /// Opens the far end for `target`, not started, and what it hears.
         fn open_far(
             &self,
             target: &FarEndTarget,
-        ) -> Result<(Box<dyn AudioSource>, bool), PlatformError>;
+        ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError>;
+        /// Whether a device-loopback far end opened for `target` on the output `endpoint` should
+        /// be opened again (the platform's `far_end_moved`). Opens nothing.
+        fn far_moved(&self, target: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError>;
     }
 
     impl WinDevices for WinCapture {
@@ -275,25 +314,87 @@ mod win {
         fn open_far(
             &self,
             target: &FarEndTarget,
-        ) -> Result<(Box<dyn AudioSource>, bool), PlatformError> {
+        ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
             let far = self.open_far_end_source(target)?;
-            let alone = far.is_process_loopback();
-            Ok((Box::new(far), alone))
+            let hears = match far.endpoint() {
+                Some(id) if !far.is_process_loopback() => FarHears::Device {
+                    id: id.to_owned(),
+                    name: far.device_name().to_owned(),
+                },
+                _ => FarHears::App,
+            };
+            Ok((Box::new(far), hears))
+        }
+
+        fn far_moved(&self, target: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError> {
+            self.far_end_moved(target, endpoint)
         }
     }
 
     /// [`MeetingCapture`] on Windows: the routed mic (WASAPI) and the far end by S0.4's plan
     /// (the module docs), both stamped on the performance counter.
     pub struct WinMeetingCapture {
-        devices: Box<dyn WinDevices>,
+        devices: Arc<dyn WinDevices>,
     }
 
     impl WinMeetingCapture {
         /// Capture from `devices`.
         pub fn new(devices: impl WinDevices + 'static) -> Self {
             Self {
-                devices: Box::new(devices),
+                devices: Arc::new(devices),
             }
+        }
+    }
+
+    /// A device-loopback far end, moved with its call ([`Follow`]): to where the app plays now,
+    /// or to the new default output when it records all output.
+    struct FollowOutput {
+        devices: Arc<dyn WinDevices>,
+        /// What it was opened for: the app, or all output (Record now, or an app that could not
+        /// be heard alone).
+        target: FarEndTarget,
+        /// The output it records now.
+        endpoint: String,
+        /// Why the last question could not be answered, logged once until it can.
+        unasked: Option<String>,
+    }
+
+    impl Follow for FollowOutput {
+        fn moved(&mut self, again: bool) -> Result<Option<Reopened>, String> {
+            if !again {
+                match self.devices.far_moved(&self.target, &self.endpoint) {
+                    Ok(moved) => {
+                        self.unasked = None;
+                        if !moved {
+                            return Ok(None);
+                        }
+                    }
+                    Err(e) => {
+                        // Where the call plays could not be read: it stays where it is, which
+                        // may well be right, and is asked again next time.
+                        let e = e.to_string();
+                        if self.unasked.as_ref() != Some(&e) {
+                            log::warn!(
+                                "meeting: where the other side plays could not be read: {e}"
+                            );
+                            self.unasked = Some(e);
+                        }
+                        return Ok(None);
+                    }
+                }
+            }
+            let theirs = |e: PlatformError| format!("the other side's sound: {e}");
+            let (far, hears) = self.devices.open_far(&self.target).map_err(theirs)?;
+            let what = match hears {
+                FarHears::Device { id, name } => {
+                    self.endpoint = id;
+                    name
+                }
+                // Not for these targets (the plan gives process loopback only to Zoom and the
+                // browsers, which are never followed); it would hear the app wherever it plays.
+                FarHears::App => "the app alone".to_owned(),
+            };
+            Ok(Some((far, what)))
         }
     }
 
@@ -332,39 +433,53 @@ mod win {
             let everything = || {
                 self.devices
                     .open_far(&FarEndTarget::AllOutput)
-                    .map(|(far, _)| far)
+                    .map(|opened| (opened, FarEndTarget::AllOutput))
             };
             let (far, scope) = match app {
-                Some(app) => match self
-                    .devices
-                    .open_far(&FarEndTarget::Apps(vec![app.clone()]))
-                {
-                    Ok((far, true)) => (Ok(far), FarScope::App),
-                    // Device loopback of the output the app plays to (Teams, and every app but
-                    // Zoom and the browsers): by plan, not a fallback, and it hears everything
-                    // that device plays, so it is said as everything.
-                    Ok((far, false)) => (Ok(far), FarScope::Everything),
-                    Err(e) => {
-                        // Zoom or a browser that is no longer running, or an output that cannot
-                        // be opened: the default output instead. Other apps' sound is then in
-                        // the recording, so the shell is told (meeting.far_end_fallback).
-                        log::warn!(
-                            "meeting: the far end of {} could not be opened ({e}); recording everything the default output plays",
-                            app.id
-                        );
-                        (everything(), FarScope::EverythingInstead(e.to_string()))
+                Some(app) => {
+                    let target = FarEndTarget::Apps(vec![app.clone()]);
+                    match self.devices.open_far(&target) {
+                        Ok(opened @ (_, FarHears::App)) => (Ok((opened, target)), FarScope::App),
+                        // Device loopback of the output the app plays to (Teams, and every app
+                        // but Zoom and the browsers): by plan, not a fallback, and it hears
+                        // everything that device plays, so it is said as everything.
+                        Ok(opened) => (Ok((opened, target)), FarScope::Everything),
+                        Err(e) => {
+                            // Zoom or a browser that is no longer running, or an output that
+                            // cannot be opened: the default output instead. Other apps' sound is
+                            // then in the recording, so the shell is told
+                            // (meeting.far_end_fallback).
+                            log::warn!(
+                                "meeting: the far end of {} could not be opened ({e}); recording everything the default output plays",
+                                app.id
+                            );
+                            (everything(), FarScope::EverythingInstead(e.to_string()))
+                        }
                     }
-                },
+                }
                 None => (everything(), FarScope::Everything),
             };
-            let far = far.map_err(|e| format!("the other side's sound: {e}"))?;
-            let side = |source: Box<dyn AudioSource>| CaptureSide {
+            let ((far, hears), target) = far.map_err(|e| format!("the other side's sound: {e}"))?;
+            // Device loopback is bound to its output: it moves with the call. Process loopback
+            // hears its app wherever it plays.
+            let follow = match hears {
+                FarHears::Device { id, .. } => Some(Box::new(FollowOutput {
+                    devices: Arc::clone(&self.devices),
+                    target,
+                    endpoint: id,
+                    unasked: None,
+                }) as Box<dyn Follow>),
+                FarHears::App => None,
+            };
+            let side = |source: Box<dyn AudioSource>, follow| CaptureSide {
                 source,
                 ring: DEFAULT_RING_DURATION,
                 start_at: None,
+                follow,
             };
             Ok(Opened {
-                sides: vec![side(mic), side(far)],
+                // A mic that is switched is not followed: it stops, and the watchdog says so.
+                sides: vec![side(mic, None), side(far, follow)],
                 routing: Routing {
                     mic: transport,
                     // Loopback delivers nothing while nothing plays: idle, not stalled.
@@ -383,6 +498,7 @@ mod win {
     #[cfg(test)]
     mod tests {
         use std::sync::Mutex;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         use ink_core::{AudioSink, Channel, DeviceInfo, SourceStats, StreamFormat};
 
@@ -452,9 +568,25 @@ mod win {
         struct Devices {
             mic: Option<(Endpoint, MicRouteReason)>,
             app_far: AppFar,
-            all_output_fails: bool,
-            /// What was asked: the headset setting, the mic opened, each far-end target.
+            all_output_fails: AtomicBool,
+            /// What `far_moved` answers.
+            moved: AtomicBool,
+            /// Device-loopback far ends opened so far: each is on the output "out-N".
+            outputs: AtomicUsize,
+            /// What was asked: the headset setting, the mic opened, each far-end target, each
+            /// question whether the far end moved.
             asked: Mutex<Vec<String>>,
+        }
+
+        impl Devices {
+            /// A device-loopback far end on the next output.
+            fn on_device(&self) -> FarHears {
+                let n = self.outputs.fetch_add(1, Ordering::Relaxed);
+                FarHears::Device {
+                    id: format!("out-{n}"),
+                    name: format!("Speakers {n}"),
+                }
+            }
         }
 
         fn endpoint(name: &str, transport: Transport) -> Endpoint {
@@ -477,7 +609,9 @@ mod win {
                     MicRouteReason::DefaultInput,
                 )),
                 app_far,
-                all_output_fails: false,
+                all_output_fails: AtomicBool::new(false),
+                moved: AtomicBool::new(false),
+                outputs: AtomicUsize::new(0),
                 asked: Mutex::new(Vec::new()),
             }
         }
@@ -502,28 +636,44 @@ mod win {
             fn open_far(
                 &self,
                 target: &FarEndTarget,
-            ) -> Result<(Box<dyn AudioSource>, bool), PlatformError> {
+            ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
                 let far = || Box::new(Stub(Channel::Far)) as Box<dyn AudioSource>;
                 match target {
                     FarEndTarget::AllOutput => {
                         self.asked.lock().unwrap().push("far all output".into());
-                        if self.all_output_fails {
+                        if self.all_output_fails.load(Ordering::Relaxed) {
                             return Err(PlatformError::Device("no output device".into()));
                         }
-                        Ok((far(), false))
+                        Ok((far(), self.on_device()))
                     }
                     FarEndTarget::Apps(apps) => {
                         let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
                         self.asked.lock().unwrap().push(format!("far {ids:?}"));
                         match self.app_far {
-                            AppFar::Alone => Ok((far(), true)),
-                            AppFar::Device => Ok((far(), false)),
+                            AppFar::Alone => Ok((far(), FarHears::App)),
+                            AppFar::Device => Ok((far(), self.on_device())),
                             AppFar::Fails => {
                                 Err(PlatformError::Device("Zoom.exe is not running".into()))
                             }
                         }
                     }
                 }
+            }
+
+            fn far_moved(
+                &self,
+                target: &FarEndTarget,
+                endpoint: &str,
+            ) -> Result<bool, PlatformError> {
+                let what = match target {
+                    FarEndTarget::AllOutput => "all output".to_owned(),
+                    FarEndTarget::Apps(apps) => apps[0].id.clone(),
+                };
+                self.asked
+                    .lock()
+                    .unwrap()
+                    .push(format!("moved? {what} on {endpoint}"));
+                Ok(self.moved.load(Ordering::Relaxed))
             }
         }
 
@@ -632,13 +782,75 @@ mod win {
                 WinMeetingCapture::new(leak(none)).open(None, false).err(),
                 Some("there is no microphone".into())
             );
-            let mut silent = devices(AppFar::Fails);
-            silent.all_output_fails = true;
+            let silent = devices(AppFar::Fails);
+            silent.all_output_fails.store(true, Ordering::Relaxed);
             let err = WinMeetingCapture::new(leak(silent))
                 .open(Some(&app("Zoom.exe")), false)
                 .err()
                 .unwrap();
             assert!(err.starts_with("the other side's sound: "), "{err}");
+        }
+
+        /// S3.5b: a device-loopback far end follows its call; process loopback (Zoom) and the
+        /// mic have nothing to follow. It asks whether it moved, opens again for the same target
+        /// when it did (or when told to open again), and from then on asks about its new output.
+        #[test]
+        fn a_device_loopback_far_end_follows_its_call() {
+            let d = leak(devices(AppFar::Alone));
+            let zoom = WinMeetingCapture::new(d)
+                .open(Some(&app("Zoom.exe")), false)
+                .unwrap();
+            assert!(zoom.sides.iter().all(|s| s.follow.is_none()));
+
+            let d = leak(devices(AppFar::Device));
+            let mut opened = WinMeetingCapture::new(d)
+                .open(Some(&app("ms-teams.exe")), false)
+                .unwrap();
+            assert!(opened.sides[0].follow.is_none(), "the mic is not followed");
+            let follow = opened.sides[1].follow.as_mut().expect("the far end moves");
+            assert!(follow.moved(false).unwrap().is_none(), "it stays");
+            d.moved.store(true, Ordering::Relaxed);
+            let (source, what) = follow.moved(false).unwrap().expect("it moved");
+            assert_eq!(source.channel(), Channel::Far);
+            assert_eq!(what, "Speakers 1");
+            d.moved.store(false, Ordering::Relaxed);
+            let (_, what) = follow.moved(true).unwrap().expect("opened again");
+            assert_eq!(what, "Speakers 2");
+            assert!(follow.moved(false).unwrap().is_none());
+            assert_eq!(
+                d.asked.lock().unwrap()[2..],
+                [
+                    "far [\"ms-teams.exe\"]",
+                    "moved? ms-teams.exe on out-0",
+                    "moved? ms-teams.exe on out-0",
+                    "far [\"ms-teams.exe\"]",
+                    // Told to open again: nothing asked, opened where it should be.
+                    "far [\"ms-teams.exe\"]",
+                    "moved? ms-teams.exe on out-2",
+                ]
+            );
+        }
+
+        /// An app that could not be heard alone, and Record now, follow the default output; one
+        /// that cannot be opened again says why, as the start does.
+        #[test]
+        fn a_far_end_of_all_output_follows_the_default_output() {
+            for app_opened in [Some(app("Zoom.exe")), None] {
+                let d = leak(devices(AppFar::Fails));
+                let mut opened = WinMeetingCapture::new(d)
+                    .open(app_opened.as_ref(), false)
+                    .unwrap();
+                let follow = opened.sides[1].follow.as_mut().expect("it moves");
+                assert!(follow.moved(false).unwrap().is_none());
+                assert_eq!(
+                    d.asked.lock().unwrap().last().unwrap(),
+                    "moved? all output on out-0"
+                );
+                // Its output was the only one, and it went.
+                d.all_output_fails.store(true, Ordering::Relaxed);
+                let err = follow.moved(true).err().unwrap();
+                assert!(err.starts_with("the other side's sound: "), "{err}");
+            }
         }
 
         /// A Bluetooth mic's routing reaches the watchdog, which then takes its zeros for the

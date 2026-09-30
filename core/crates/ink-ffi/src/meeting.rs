@@ -21,6 +21,13 @@
 //!   ([`capture`](crate::capture)). A side has ended when its source drops the sink it was given,
 //!   which a replay does after its last block; a device's meeting ends when it is told to
 //!   ([`MeetingRun::end`]).
+//! - **A device that changes** under a meeting: a side that can move ([`Follow`], Windows' device
+//!   loopback) is asked every [`FOLLOW_INTERVAL`] whether it should, and opened again where it
+//!   should be; its ring's sink passes from the old source to the new one, so the side goes on in
+//!   the same chunks. A source that ends by itself ([`AudioSource::ended`]) is opened again at once
+//!   when its side can move, and said when it cannot. A side left with no source is lost
+//!   (`Input::Lost`): the watchdog then expects audio from it, so its silence is said within
+//!   seconds, never taken for quiet.
 //! - **What it runs on** besides the speech engines ([`engines`](crate::engines)): the installed
 //!   VAD, the diarizer for the final pass, and the language model the shell registered, each
 //!   looked up when the meeting starts.
@@ -42,10 +49,10 @@ use ink_core::{
 use ink_engines::{ExternalEngine, Route};
 use ink_pipeline::capture::{CanonicalBlock, CaptureIssue, SideCapture, SideSummary};
 use ink_pipeline::meeting::events::{MeetingEvent, MeetingWarning};
-use ink_pipeline::meeting::watchdog::Routing;
+use ink_pipeline::meeting::watchdog::{FarDelivery, Routing};
 use ink_pipeline::meeting::{MeetingChain, MeetingServices, MeetingSettings, MeetingStart};
 
-use crate::capture::{FarScope, MicInfo, transport_name};
+use crate::capture::{FarScope, Follow, MicInfo, transport_name};
 
 use crate::dictation::dropped_event;
 use crate::events::{self, event};
@@ -55,6 +62,9 @@ use crate::runtime::Shared;
 
 /// How often the pump drains the rings while capture runs.
 pub const PUMP_INTERVAL: Duration = Duration::from_millis(10);
+
+/// How often the pump asks a side that can move ([`Follow`]) whether its device changed.
+pub const FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The longest file a fast replay takes: its ring must hold all of it (the ring's limit is 60 s).
 pub const FAST_REPLAY_MAX: Duration = Duration::from_secs(55);
@@ -99,6 +109,9 @@ pub struct CaptureSide {
     /// starts, so the final pass reads the same audio on every run of the same files. A device
     /// stamps its own times and has none.
     pub start_at: Option<StartAt>,
+    /// For a side whose device can change under the meeting (Windows' device loopback): how it
+    /// moves. `None`: it records its device until the meeting ends.
+    pub follow: Option<Box<dyn Follow>>,
 }
 
 impl Replay {
@@ -138,6 +151,7 @@ impl Replay {
                 source: Box::new(source),
                 ring,
                 start_at: Some(start_at),
+                follow: None,
             });
         }
         Ok(sides)
@@ -147,6 +161,12 @@ impl Replay {
 /// Anything but audio, for the meeting worker.
 enum Input {
     Issue(Channel, CaptureIssue),
+    /// A side's source was replaced (it moved to another device, or came back): a new echo path,
+    /// and the side is judged as it was routed at the start again.
+    Moved(Channel),
+    /// A side has no source any more (it ended by itself, or could not start or be opened
+    /// again): from now on the watchdog expects audio from it, so its silence is said.
+    Lost(Channel),
     Ended(SideSummary),
     Stop,
 }
@@ -157,6 +177,47 @@ struct Source {
     source: Box<dyn AudioSource>,
     done: Arc<AtomicBool>,
     start_at: Option<StartAt>,
+    /// For a side that can move: how, and its ring's sink between sources.
+    follow: Option<Following>,
+    /// It has no working source, and the worker was told (`Input::Lost`).
+    lost: bool,
+}
+
+/// A side that can move ([`Follow`]).
+struct Following {
+    follow: Box<dyn Follow>,
+    /// The ring's sink comes back here when the source it was lent to drops it (on `stop`).
+    back: mpsc::Receiver<Delivered>,
+    /// For the next [`Lent`].
+    lend: mpsc::Sender<Delivered>,
+    /// When to ask it next.
+    next: Instant,
+}
+
+/// The ring's sink, lent to a movable side's current source: it goes back to the pump when that
+/// source drops it, to be lent to the next. Only an `Option` check runs on the realtime thread;
+/// a source drops its sink on `stop`, on the thread that stops it.
+struct Lent {
+    sink: Option<Delivered>,
+    back: mpsc::Sender<Delivered>,
+}
+
+impl AudioSink for Lent {
+    fn push(&mut self, block: &AudioBlock<'_>) {
+        if let Some(sink) = &mut self.sink {
+            sink.push(block);
+        }
+    }
+}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        if let Some(sink) = self.sink.take() {
+            // Refused only once the pump has gone: the sink is then dropped with the refusal,
+            // which marks the side done, as any source's end does.
+            let _ = self.back.send(sink);
+        }
+    }
 }
 
 /// The capture sink a replay pushes into: the ring, plus a flag set when the replay drops it,
@@ -232,6 +293,7 @@ impl MeetingRun {
             source,
             ring,
             start_at,
+            follow,
         } in capture
         {
             let channel = source.channel();
@@ -245,10 +307,21 @@ impl MeetingRun {
                     done: done.clone(),
                 },
             ));
+            let follow = follow.map(|follow| {
+                let (lend, back) = mpsc::channel();
+                Following {
+                    follow,
+                    back,
+                    lend,
+                    next: Instant::now() + FOLLOW_INTERVAL,
+                }
+            });
             sources.push(Source {
                 source,
                 done,
                 start_at,
+                follow,
+                lost: false,
             });
         }
 
@@ -450,9 +523,20 @@ fn capture(
         if let Some(start_at) = &source.start_at {
             start_at.set(t0);
         }
-        if let Err(e) = source.source.start(Box::new(sink)) {
+        let sink: Box<dyn AudioSink> = match &source.follow {
+            Some(f) => Box::new(Lent {
+                sink: Some(sink),
+                back: f.lend.clone(),
+            }),
+            None => Box::new(sink),
+        };
+        if let Err(e) = source.source.start(sink) {
             issues(shared, mailbox, record, channel)(CaptureIssue::Convert(e.to_string()));
-            source.done.store(true, Ordering::Release);
+            if source.follow.is_none() {
+                // Nothing will start it again: it has delivered all it will.
+                source.done.store(true, Ordering::Release);
+            }
+            lose(mailbox, &mut source.lost, channel);
         }
         sides.push((channel, side));
     }
@@ -486,8 +570,20 @@ fn capture(
         let aborting = abort.load(Ordering::Acquire);
         if aborting {
             for s in &mut sources {
-                // Joins the replay thread; a failure only means it had already ended badly.
-                let _ = s.source.stop();
+                // Joins a replay's thread or a device's stream. A failure is how it ended: its
+                // device went before the meeting did, or a replay's sink panicked. Said, unless
+                // the side was already said to be lost.
+                if let Err(e) = s.source.stop()
+                    && !s.lost
+                {
+                    let channel = s.source.channel();
+                    issues(shared, mailbox, record, channel)(CaptureIssue::Convert(e.to_string()));
+                }
+            }
+        } else {
+            let now = Instant::now();
+            for s in &mut sources {
+                look_after(shared, mailbox, record, s, now);
             }
         }
         for (channel, side) in &mut sides {
@@ -503,6 +599,120 @@ fn capture(
         // Refused only when the worker failed: then no final pass reads the summary.
         let _ = mailbox.push(Input::Ended(summary));
     }
+}
+
+/// Tells the worker, once, that a side has no working source (`Input::Lost`).
+fn lose(mailbox: &Box2, lost: &mut bool, channel: Channel) {
+    if !std::mem::replace(lost, true) {
+        // Refused only when the worker has failed: nothing judges the side then.
+        let _ = mailbox.push(Input::Lost(channel));
+    }
+}
+
+/// A side's name for the log.
+fn side_name(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Mic => "microphone",
+        Channel::Far => "other side",
+    }
+}
+
+/// **Pump**, between drains. A source that ended by itself is opened again at once when its side
+/// can move, and said (with the platform's reason) when it cannot; a side that can move is asked
+/// every [`FOLLOW_INTERVAL`] whether it should, and a lost one is tried again as often.
+fn look_after(
+    shared: &Shared,
+    mailbox: &Box2,
+    record: &OnceLock<RecordId>,
+    s: &mut Source,
+    now: Instant,
+) {
+    let Source {
+        source,
+        follow,
+        lost,
+        ..
+    } = s;
+    let channel = source.channel();
+    let ended = !*lost && source.ended();
+    // Stopped for its reason: nothing more comes from it, and it is replaced or said lost below.
+    let why = if ended {
+        Some(source.stop().err().map_or_else(
+            || "its device stopped delivering".to_owned(),
+            |e| e.to_string(),
+        ))
+    } else {
+        None
+    };
+    let Some(f) = follow else {
+        if let Some(why) = why {
+            issues(shared, mailbox, record, channel)(CaptureIssue::Convert(why));
+            lose(mailbox, lost, channel);
+        }
+        return;
+    };
+    if !ended && now < f.next {
+        return;
+    }
+    f.next = now + FOLLOW_INTERVAL;
+    let again = ended || *lost;
+    let moved = f.follow.moved(again).and_then(|next| match next {
+        Some((next, what)) => replace(source, f, next, what).map(Some),
+        // Told to open it again, it opened nothing: the side has no source, and must not read
+        // as a quiet one.
+        None if again => Err("nothing could open it again".to_owned()),
+        None => Ok(None),
+    });
+    match moved {
+        Ok(None) => {}
+        Ok(Some(what)) => {
+            if let Some(why) = why {
+                log::warn!("meeting: the {} ended ({why})", side_name(channel));
+            }
+            if std::mem::take(lost) {
+                log::info!("meeting: the {} is back", side_name(channel));
+            }
+            log::info!("meeting: the {} now records {what}", side_name(channel));
+            // Refused only when the worker has failed.
+            let _ = mailbox.push(Input::Moved(channel));
+        }
+        Err(e) => {
+            // Said once; tried again every interval until it opens.
+            if !*lost {
+                let e = match why {
+                    Some(why) => format!("{why}; opening it again: {e}"),
+                    None => e,
+                };
+                issues(shared, mailbox, record, channel)(CaptureIssue::Convert(e));
+                lose(mailbox, lost, channel);
+            }
+        }
+    }
+}
+
+/// Replaces a movable side's `source` with `next`, which records `what`: the old source stops
+/// (its last blocks are in the ring) and gives the ring's sink back, and `next` starts with it.
+/// Returns `what`.
+fn replace(
+    source: &mut Box<dyn AudioSource>,
+    f: &Following,
+    mut next: Box<dyn AudioSource>,
+    what: String,
+) -> Result<String, String> {
+    if let Err(e) = source.stop() {
+        log::warn!("meeting: {e}");
+    }
+    let sink = f.back.try_recv().map_err(|_| {
+        format!("{what} could not start: the last device still holds the recording")
+    })?;
+    // On a failure the sink comes back again, for the next try.
+    next.start(Box::new(Lent {
+        sink: Some(sink),
+        back: f.lend.clone(),
+    }))
+    .map_err(|e| format!("{what} could not start: {e}"))?;
+    *source = next;
+    Ok(what)
 }
 
 /// **Worker.** The router's live-partials engine for a meeting starting now, if one is installed:
@@ -632,6 +842,9 @@ fn worker(
         sink
     };
     let (services, settings) = services(shared);
+    // How the capture was routed at the start; a side that is lost must deliver from then on.
+    let routed = start.routing;
+    let mut routing = routed;
     let body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let vad = crate::engines::vad_source(shared);
         let warn = sink.clone();
@@ -675,6 +888,20 @@ fn worker(
                 }
                 Pop::Item(Item::Other(Input::Issue(channel, issue))) => {
                     chain.capture_issue(channel, issue);
+                }
+                Pop::Item(Item::Other(Input::Moved(channel))) => {
+                    if channel == Channel::Far {
+                        routing.far = routed.far;
+                    }
+                    chain.set_routing(routing);
+                }
+                Pop::Item(Item::Other(Input::Lost(channel))) => {
+                    // The mic must always deliver; a far end that plays only while something
+                    // plays must now deliver too, or its silence would read as quiet.
+                    if channel == Channel::Far && routing.far != FarDelivery::Continuous {
+                        routing.far = FarDelivery::Continuous;
+                        chain.set_routing(routing);
+                    }
                 }
                 Pop::Item(Item::Other(Input::Ended(summary))) => chain.capture_ended(summary),
                 Pop::Item(Item::Other(Input::Stop)) | Pop::Closed => break,

@@ -1276,7 +1276,7 @@ mod tests {
     #[ignore = "talks to the Windows audio service"]
     fn windows_record_now_opens_the_real_devices_without_starting_them() {
         let platform = MeetingPlatform::production().expect("the platform");
-        let opened = platform.capture.open(None, false).expect("opened");
+        let mut opened = platform.capture.open(None, false).expect("opened");
         let channels: Vec<_> = opened.sides.iter().map(|s| s.source.channel()).collect();
         assert_eq!(channels, [ink_core::Channel::Mic, ink_core::Channel::Far]);
         assert_eq!(opened.far, crate::capture::FarScope::Everything);
@@ -1286,5 +1286,15 @@ mod tests {
         for side in &opened.sides {
             assert!(side.source.format().sample_rate >= 8_000);
         }
+        // The default output's loopback follows the default: it has not changed, so it stays;
+        // told to, it opens the default output's loopback again (not started either).
+        let follow = opened.sides[1]
+            .follow
+            .as_mut()
+            .expect("device loopback moves");
+        assert!(follow.moved(false).expect("asked").is_none());
+        let (again, name) = follow.moved(true).expect("opened again").expect("a source");
+        assert_eq!(again.channel(), ink_core::Channel::Far);
+        assert!(!name.is_empty());
     }
 }

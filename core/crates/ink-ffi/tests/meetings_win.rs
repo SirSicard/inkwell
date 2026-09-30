@@ -25,20 +25,26 @@ use ink_core::{
     MeetingDetector, MeetingSignal, PlatformError, RecordId, Transport,
 };
 use ink_engines::{ModelDir, Registry};
-use ink_ffi::capture::{WinDevices, WinMeetingCapture};
+use ink_ffi::capture::{FarHears, WinDevices, WinMeetingCapture};
 use ink_ffi::runtime::{Core, MeetingPlatform, Parts};
 use ink_platform_win::capture::{Endpoint, MicRouteReason};
 
 const WAIT: Duration = Duration::from_secs(30);
 
 /// Where WASAPI would open devices, two WAV files replayed in real time. It records what it was
-/// asked for; Zoom can be made not to run.
+/// asked for; Zoom can be made not to run, and the far end's output made to change.
 struct ReplayDevices {
     mic: PathBuf,
     far: PathBuf,
     clock: Arc<dyn Clock>,
     asked: Mutex<Vec<String>>,
     zoom_gone: AtomicBool,
+    /// What `far_moved` answers: the call now plays on another output.
+    moved: AtomicBool,
+    /// Each `far_moved` question: the output it was asked about.
+    moves_asked: Mutex<Vec<String>>,
+    /// Device-loopback far ends opened so far: each is on the output "out-N".
+    outputs: AtomicUsize,
 }
 
 impl ReplayDevices {
@@ -51,6 +57,15 @@ impl ReplayDevices {
 
     fn ask(&self, what: String) {
         self.asked.lock().unwrap().push(what);
+    }
+
+    /// A device-loopback far end on the next output.
+    fn on_device(&self) -> FarHears {
+        let n = self.outputs.fetch_add(1, Ordering::Relaxed);
+        FarHears::Device {
+            id: format!("out-{n}"),
+            name: format!("Speakers {n}"),
+        }
     }
 }
 
@@ -84,12 +99,12 @@ impl WinDevices for Devices {
     fn open_far(
         &self,
         target: &FarEndTarget,
-    ) -> Result<(Box<dyn AudioSource>, bool), PlatformError> {
+    ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
         let far = || self.0.replay(&self.0.far, Channel::Far);
         match target {
             FarEndTarget::AllOutput => {
                 self.0.ask("far: the default output".into());
-                Ok((far()?, false))
+                Ok((far()?, self.0.on_device()))
             }
             FarEndTarget::Apps(apps) => {
                 let [app] = apps.as_slice() else {
@@ -102,11 +117,16 @@ impl WinDevices for Devices {
                     if self.0.zoom_gone.load(Ordering::Relaxed) {
                         return Err(PlatformError::Device("Zoom.exe is not running".into()));
                     }
-                    return Ok((far()?, true));
+                    return Ok((far()?, FarHears::App));
                 }
-                Ok((far()?, false))
+                Ok((far()?, self.0.on_device()))
             }
         }
+    }
+
+    fn far_moved(&self, _: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError> {
+        self.0.moves_asked.lock().unwrap().push(endpoint.to_owned());
+        Ok(self.0.moved.swap(false, Ordering::Relaxed))
     }
 }
 
@@ -168,6 +188,9 @@ fn rig(label: &str, seconds: f64) -> Rig {
         clock: clock.clone(),
         asked: Mutex::default(),
         zoom_gone: AtomicBool::new(false),
+        moved: AtomicBool::new(false),
+        moves_asked: Mutex::default(),
+        outputs: AtomicUsize::new(0),
     });
     let detector = Arc::new(FakeDetector::default());
     let parts = Parts {
@@ -344,6 +367,56 @@ fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
     std::thread::sleep(Duration::from_millis(500));
     r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
     assert!(r.events.wait_count("meeting.finished", 2, WAIT));
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// A headset plugged in mid-call (S3.5b): Teams now plays on another output, so its far end, a
+/// device loopback, is opened again for Teams and goes on; the echo search starts again, and
+/// nothing is said to the user because nothing was lost. Zoom (process loopback) is never asked.
+#[test]
+fn a_teams_call_whose_output_changes_is_followed() {
+    let r = rig("win-follow", 60.0);
+    r.offered(exe("ms-teams.exe", 300), 1);
+    r.core
+        .command(r#"{"cmd":"meeting.start","app":"ms-teams.exe"}"#)
+        .unwrap();
+    r.events.wait_type("meeting.started", WAIT);
+    r.devices.moved.store(true, Ordering::Relaxed);
+    let switched = r.events.wait_for(WAIT, |v| {
+        v["type"] == "meeting.echo" && v["state"] == "searching" && v["why"] == "device_switch"
+    });
+    assert!(switched.is_some(), "{:?}", r.events.types());
+    let far_opens: Vec<String> = r
+        .asked()
+        .into_iter()
+        .filter(|a| a.starts_with("far: "))
+        .collect();
+    assert_eq!(
+        far_opens,
+        [
+            "far: ms-teams.exe (pid Some(300))",
+            "far: ms-teams.exe (pid Some(300))"
+        ],
+        "opened again for Teams, where it plays now"
+    );
+    assert_eq!(r.devices.moves_asked.lock().unwrap()[0], "out-0");
+    std::thread::sleep(Duration::from_millis(2_500));
+    assert_eq!(
+        r.devices.moves_asked.lock().unwrap().last().unwrap(),
+        "out-1",
+        "asked about its new output from then on"
+    );
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
+    assert!(
+        !r.events
+            .all()
+            .iter()
+            .any(|v| v["type"] == "meeting.warning" && v["kind"] == "capture"),
+        "{:?}",
+        r.events.types()
+    );
     r.events.assert_valid();
     r.core.shutdown();
 }
