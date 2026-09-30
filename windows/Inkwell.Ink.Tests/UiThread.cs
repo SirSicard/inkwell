@@ -26,7 +26,10 @@ internal sealed class UiThread
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            while (work.TryDequeue(out var action))
+            // Only what was queued before this pass: a clock whose frames outlast its interval
+            // (a Present waiting on a compositor fallen behind) queues the next tick during each
+            // one, and draining until empty never came back to the deadline.
+            for (var queued = work.Count; queued > 0 && work.TryDequeue(out var action); queued--)
             {
                 action();
             }
