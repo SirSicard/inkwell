@@ -42,7 +42,7 @@ public sealed class CloudModel : ObservableModel
 {
     private readonly Action<CoreCommand> send;
     private int requests;
-    /// <summary>The newest test's ref: only its answer is shown.</summary>
+    /// <summary>The newest test's ref: only its answer is shown, and none once the provider, model or key changed.</summary>
     private string? testRef;
 
     public CloudModel(Action<CoreCommand> send)
@@ -241,6 +241,7 @@ public sealed class CloudModel : ObservableModel
     /// <summary>The user picked a provider (null: none) in the picker. Nothing is sent.</summary>
     public void Select(string? id)
     {
+        ForgetTest();
         Selected = id;
         DraftModel = id is not null && id == Chosen ? ChosenModel ?? "" : "";
         DraftBaseUrl = id is not null && id == Chosen ? ChosenBaseUrl ?? "" : "";
@@ -270,6 +271,7 @@ public sealed class CloudModel : ObservableModel
             return;
         }
         Failure = null;
+        ForgetTest();
         send(new CoreCommand.LlmKeySave(p.Id, key, NextRef("key.save")));
         Changed();
     }
@@ -282,6 +284,7 @@ public sealed class CloudModel : ObservableModel
             return;
         }
         Failure = null;
+        ForgetTest();
         send(new CoreCommand.LlmKeyDelete(p.Id, NextRef("key.delete")));
         Changed();
     }
@@ -297,8 +300,7 @@ public sealed class CloudModel : ObservableModel
             return;
         }
         Failure = null;
-        TestState = CloudTestState.None;
-        TestMessage = null;
+        ForgetTest();
         if (SelectedProvider is not CloudProvider p)
         {
             send(new CoreCommand.LlmChoose("none", null, null, false, NextRef("choose")));
@@ -324,6 +326,17 @@ public sealed class CloudModel : ObservableModel
         TestMessage = $"Asking {ProviderName(Chosen!)}…";
         Changed();
         send(new CoreCommand.LlmTest(testRef));
+    }
+
+    /// <summary>
+    /// The provider, model or key changed: a test in flight or done was of what came before, so
+    /// its answer is not shown (a late one no longer matches).
+    /// </summary>
+    private void ForgetTest()
+    {
+        testRef = null;
+        TestState = CloudTestState.None;
+        TestMessage = null;
     }
 
     /// <summary>Every ref this model sends starts with this.</summary>

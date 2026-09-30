@@ -250,6 +250,35 @@ public class CloudModelTests
         Assert.Equal("Couldn't test it: a test is already running; wait for its answer.", cloud.TestMessage);
     }
 
+    /// <summary>
+    /// A test's answer is of the provider, model and key it was sent with: once any of them
+    /// changes, a late answer is not shown under the new setup.
+    /// </summary>
+    [Fact]
+    public void AStaleTestAnswerNeverWins()
+    {
+        const string LateOk = """{"type":"llm.tested","provider":"openai","model":"gpt-4o-mini","ok":true,"ref":"llm.test:2"}""";
+        var (cloud, sent) = Loaded(Providers("openai", "gpt-4o-mini", "cloud", localOnly: false, ready: true, keyed: ["openai", "anthropic"]));
+        cloud.Test();
+        Assert.Equal(new CoreCommand.LlmTest("llm.test:2"), sent.Commands[^1]);
+        cloud.Select("anthropic");
+        cloud.Use();
+        Assert.Equal(CloudTestState.None, cloud.TestState);
+        cloud.Apply(Ev.Of(LateOk));
+        Assert.Equal(CloudTestState.None, cloud.TestState);
+        Assert.Null(cloud.TestMessage);
+
+        foreach (var change in new Action<CloudModel>[] { c => c.SaveKey(Key), c => c.DeleteKey(), c => c.Select("openai") })
+        {
+            (cloud, _) = Loaded(Providers("openai", "gpt-4o-mini", "cloud", localOnly: false, ready: true, keyed: ["openai"]));
+            cloud.Test();
+            change(cloud);
+            cloud.Apply(Ev.Of(LateOk));
+            Assert.Equal(CloudTestState.None, cloud.TestState);
+            Assert.Null(cloud.TestMessage);
+        }
+    }
+
     /// <summary>A refused command is said under the section, in words, never read as done.</summary>
     [Fact]
     public void ARefusedCommandIsSaid()
