@@ -889,18 +889,25 @@ mod tests {
 
     #[test]
     fn every_override_line_names_a_text_that_is_a_licence() {
+        // The core's table and Velopack's (whose run needs the network), both over texts/.
         let dir = repo_root().join(NOTICES_DIR);
-        let table =
-            overrides::parse(&std::fs::read_to_string(dir.join("overrides.txt")).unwrap()).unwrap();
-        assert!(!table.is_empty());
-        for ((name, version), o) in &table {
-            let text = std::fs::read_to_string(dir.join("texts").join(&o.text))
-                .unwrap_or_else(|e| panic!("{name} {version}: texts/{}: {e}", o.text));
-            assert!(
-                !licence::classify(&text).is_empty(),
-                "{name} {version}: texts/{} is no licence text",
-                o.text
-            );
+        for table in [
+            dir.join("overrides.txt"),
+            repo_root().join(velopack::INPUT).join("overrides.txt"),
+        ] {
+            let at = table.display();
+            let table = overrides::parse(&std::fs::read_to_string(&table).unwrap())
+                .unwrap_or_else(|e| panic!("{at}: {e}"));
+            assert!(!table.is_empty(), "{at}");
+            for ((name, version), o) in &table {
+                let text = std::fs::read_to_string(dir.join("texts").join(&o.text))
+                    .unwrap_or_else(|e| panic!("{at}: {name} {version}: texts/{}: {e}", o.text));
+                assert!(
+                    !licence::classify(&text).is_empty(),
+                    "{at}: {name} {version}: texts/{} is no licence text",
+                    o.text
+                );
+            }
         }
     }
 
