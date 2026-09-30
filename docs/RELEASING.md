@@ -392,8 +392,10 @@ What the checks guarantee:
   App SDK binaries use only the UCRT, which is part of Windows. `build-core.ps1` (for the core and
   the engines' DLLs) and `pack.ps1` (for the whole app) fail on any binary that needs a Visual C++
   runtime DLL. **Open:** sherpa-onnx's pinned archives and NeMo-Speech.cpp's build link the Visual
-  C++ runtime dynamically (`/MD`: `vcruntime140.dll`, `msvcp140.dll`, NeMo's ggml also
-  `vcomp140.dll`), so both checks stop a release, naming each DLL, until the maintainer decides how
+  C++ runtime dynamically (`/MD`): on x64 `vcruntime140.dll`, `vcruntime140_1.dll`,
+  `msvcp140.dll`, `msvcp140_1.dll` and, for NeMo's ggml, `vcomp140.dll` (27 imports across the
+  engines' 9 DLLs); on ARM64 `vcruntime140.dll`, `msvcp140.dll` and `msvcp140_1.dll` (6, in
+  sherpa-onnx's 3). So both checks stop a release, naming each DLL, until the maintainer decides how
   the release carries that runtime or links it statically.
 - **Everything it loads is in the package or part of Windows.** Every DLL a binary of the app
   loads when it loads must be beside `Inkwell.exe` or part of Windows (`windows/scripts/lib/dll-imports.ps1`,
