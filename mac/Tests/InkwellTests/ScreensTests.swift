@@ -604,11 +604,13 @@ final class CatalogueModelTests: XCTestCase {
 
     func testAFailedListReadsAsFailedNotAsNothingInstalled() {
         let catalogue = CatalogueModel(send: { _ in })
+        XCTAssertFalse(catalogue.listed, "not answered yet: not known, which is not empty")
         catalogue.apply(event(#"{"type":"command.failed","command":"models.list","message":"the registry could not be read"}"#))
         XCTAssertTrue(catalogue.failed)
         XCTAssertEqual(CatalogueModel.failedText, "The model list could not be read.")
         catalogue.apply(event(#"{"type":"models.listed","models":[]}"#))
         XCTAssertFalse(catalogue.failed, "a list that arrives clears it")
+        XCTAssertTrue(catalogue.listed)
     }
 
     func testEachJobShowsWhatServesItAndItsMeasuredAccuracy() {
@@ -778,6 +780,9 @@ final class ModelDownloadTests: XCTestCase {
         }
         XCTAssertEqual(CatalogueModel.source("silero-vad-v6-16k"), "github.com", "its row names raw.githubusercontent.com")
         XCTAssertNil(CatalogueModel.source("a-model-this-build-does-not-know"), "never a host it cannot vouch for")
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(CatalogueModel.sources(catalogue.firstRunModels), "huggingface.co and github.com", "most bytes first")
     }
 }
 
@@ -1110,6 +1115,18 @@ final class OnboardingModelTests: XCTestCase {
         XCTAssertFalse(other.showing)
     }
 
+    /// The speech models come right after the permissions, before polish.
+    func testTheModelsStepFollowsThePermissions() {
+        typealias Step = OnboardingModel.Step
+        XCTAssertEqual(Step.models.rawValue, Step.permissions.rawValue + 1)
+        XCTAssertLessThan(Step.models.rawValue, Step.polish.rawValue)
+        // Continue leaves it whatever the downloads are doing: the step holds nothing back.
+        let onboarding = OnboardingModel(send: { _ in })
+        onboarding.step = .models
+        onboarding.next()
+        XCTAssertGreaterThan(onboarding.step.rawValue, Step.models.rawValue)
+    }
+
     func testTheFirstRunStateShowsUntilItIsCompletedAndRemembersThat() {
         let sent = Sent()
         let onboarding = OnboardingModel(send: sent.send)
@@ -1347,6 +1364,11 @@ final class LiveLayoutTests: XCTestCase {
     func testOwedAndSettingsNeverRaiseTheWindowsMinimumSizeEither() {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
         screens.owed.apply(event(#"{"type":"commitments.listed","items":[{"id":"a","record":"r","record_started_at_unix_ms":0,"text":"A promise long enough to wrap onto more than one line when the window is narrow","merged":1}]}"#))
+        // Models with a download under way, one waiting, and one failed with the core's words.
+        screens.catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]}]}"#))
+        screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
+        screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
+        screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
         for view in [
             AnyView(OwedScreen()), AnyView(SettingsScreen()), AnyView(LiveScreen()),
         ] {

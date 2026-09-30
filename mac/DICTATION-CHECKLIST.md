@@ -30,6 +30,10 @@ key without consent, a model that moves to the cloud, a store that refuses the w
       INK_DATA_DIR="$(mktemp -d)" INK_MODELS_DIR=/tmp/inkwell-dictation-models \
         mac/build/Inkwell.app/Contents/MacOS/Inkwell
 
+- [ ] The live words in the Drop come from Parakeet, which the script does not stage: download it
+      once into that models folder (Settings > Models > Parakeet TDT v3 > Download, 483 MB from
+      huggingface.co; only with your OK). Without it, dictation works with no live words.
+
 - [ ] System Settings > Keyboard > "Press 🌐 key to": note your setting, and set it to
       **Do Nothing** for this checklist (put it back at the end).
 - [ ] Copy a recognisable sentinel line (`clipboard sentinel 42`): it must still be on the

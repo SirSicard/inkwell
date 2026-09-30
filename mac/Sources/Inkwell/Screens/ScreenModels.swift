@@ -13,6 +13,8 @@ final class OnboardingModel {
     enum Step: Int, CaseIterable, Sendable {
         case welcome
         case permissions
+        /// The speech models: downloaded only when the user presses Download there.
+        case models
         case polish
         case ready
     }

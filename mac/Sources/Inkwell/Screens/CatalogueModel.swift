@@ -25,6 +25,8 @@ final class CatalogueModel {
 
     /// The catalogue's models for this OS.
     private(set) var models: [CatalogueEntry] = []
+    /// Whether models.list has been answered: until then the list is not known yet.
+    private(set) var listed = false
     /// The last models.list failed: the list is not known, which is not the same as empty.
     private(set) var failed = false
 
@@ -193,12 +195,14 @@ final class CatalogueModel {
         }
     }
 
-    /// The hosts `models` come from, as a sentence names them: "huggingface.co", or
-    /// "huggingface.co and github.com".
+    /// The hosts `models` come from, as a sentence names them, the one serving the most first:
+    /// "huggingface.co", or "huggingface.co and github.com".
     static func sources(_ models: [CatalogueEntry]) -> String {
         var hosts: [String] = []
-        for host in models.compactMap({ source($0.id) }) where !hosts.contains(host) {
-            hosts.append(host)
+        for model in models.sorted(by: { $0.sizeBytes > $1.sizeBytes }) {
+            if let host = source(model.id), !hosts.contains(host) {
+                hosts.append(host)
+            }
         }
         return hosts.joined(separator: " and ")
     }
@@ -221,8 +225,9 @@ final class CatalogueModel {
 
     func apply(_ event: InkEvent) {
         switch event {
-        case .modelsListed(let listed):
-            models = listed.models
+        case .modelsListed(let answer):
+            models = answer.models
+            listed = true
             failed = false
         case .commandFailed(let failure) where failure.command == "models.list":
             failed = true
