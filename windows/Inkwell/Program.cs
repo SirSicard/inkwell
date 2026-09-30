@@ -6,7 +6,9 @@
 // -updated, -obsolete, -uninstall) and wait for it: VelopackApp answers those here and exits
 // before any window, doing nothing else. Uninstalling removes the install folder only; the
 // library is elsewhere (DataLocation), so it stays until the user deletes it. A normal start
-// passes through.
+// passes through: Velopack's own default would install an update that was downloaded but not yet
+// restarted into, at the next start, and restart; auto-apply is off, so an update installs only
+// when the user presses Restart to Update (UpdatesModel).
 using Velopack;
 
 namespace Inkwell;
@@ -16,7 +18,7 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        VelopackApp.Build().Run();
+        VelopackApp.Build().SetAutoApplyOnStartup(false).Run();
         XamlGeneratedProgram.XamlGeneratedMain();
     }
 }
