@@ -132,9 +132,24 @@ public class NoticesTests
         Assert.Equal("Apache-2.0", byId["sherpa-onnx"].Licence);
         Assert.Equal(Notices.Apache2, byId["sherpa-onnx"].Text);
         Assert.Contains("1.13.4", byId["sherpa-onnx"].Role, StringComparison.Ordinal);
-        Assert.Equal("MIT", byId["onnxruntime"].Licence);
+        Assert.StartsWith("MIT", byId["onnxruntime"].Licence, StringComparison.Ordinal);
         Assert.StartsWith("MIT License\n\nCopyright (c) Microsoft Corporation\n", byId["onnxruntime"].Text, StringComparison.Ordinal);
         Assert.Contains("1.27.0", byId["onnxruntime"].Role, StringComparison.Ordinal);
+        // With the notices of the code it compiles in.
+        Assert.Contains("--- ThirdPartyNotices.txt ---\nTHIRD PARTY SOFTWARE NOTICES AND INFORMATION", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        foreach (var part in new[] { "google/flatbuffers", "nlohmann/json", "Eigen", "Mozilla Public License Version 2.0" })
+        {
+            Assert.Contains(part, byId["onnxruntime"].Text, StringComparison.Ordinal);
+        }
+        // And the code compiled into sherpa-onnx's library.
+        Assert.StartsWith("MIT License\n\nCopyright (c) 2013-2025 Niels Lohmann\n", byId["nlohmann-json"].Text, StringComparison.Ordinal);
+        Assert.Contains("3.12.0", byId["nlohmann-json"].Role, StringComparison.Ordinal);
+        foreach (var id in new[] { "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank" })
+        {
+            Assert.Equal(Notices.Apache2, byId[id].Text);
+        }
+        // Its copy of fastcluster (BSD-2: the notice must ship with the binary).
+        Assert.StartsWith("Copyright:\n  * Until package version 1.1.23: \u00a9 2011 Daniel M\u00fcllner", byId["hclust-cpp"].Text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -190,7 +205,7 @@ public class NoticesTests
     {
         var mac = MacNotices.Texts(AboutCheckout.Read("mac/Sources/Inkwell/Screens/Notices.swift"));
         Assert.True(mac.Count > 15, "Notices.swift was read");
-        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt"];
+        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt"];
         var shared = Notices.Components.Where(c => !windowsOnly.Contains(c.Id)).ToList();
         Assert.Equal(16, shared.Count);
         Assert.All(windowsOnly, id => Assert.False(mac.ContainsKey(id), id));
@@ -200,6 +215,8 @@ public class NoticesTests
             Assert.True(mac[c.Id] == c.Text, $"{c.Id}: the text differs from Notices.swift's");
         }
         Assert.Equal(mac["silero-vad"], Notices.Models.Single(m => m.Id == "silero-vad").Notice);
+        // sherpa-onnx's copy of fastcluster shows fastcluster's own notice, the Mac's.
+        Assert.Equal(mac["fastcluster"], Notices.Components.Single(c => c.Id == "hclust-cpp").Text);
     }
 }
 
@@ -337,7 +354,7 @@ public class ComposedNoticesTests
         Assert.Equal([], Problems(declared, ours + "\n" + windows));
         // Every line is well formed (a short line would drop out of the comparison above).
         Assert.All(Lines(mac).Concat(Lines(windows)), l => Assert.True(l.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 3, l));
-        Assert.Equal(["winuiex", "windows-sdk-net", "onnxruntime"], Markers(windows).Keys);
+        Assert.Equal(["winuiex", "windows-sdk-net", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp"], Markers(windows).Keys);
     }
 
     /// <summary>The check fails when a composed notice has no line, and when a line names no composed notice.</summary>

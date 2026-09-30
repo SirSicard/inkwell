@@ -6,11 +6,13 @@
 // generated from cargo's resolution of the Windows release build (RustNotices, RustNotices.g.cs, by
 // `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these.
 //
-// What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, fastcluster,
-// VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback), sherpa-onnx and
-// ONNX Runtime (Windows' Parakeet), the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the
-// Windows SDK's .NET projection and C#/WinRT in their place. Their texts are in NoticeTexts.cs,
-// copied from the packages the Windows build restores (sherpa-onnx's is the shared Apache License).
+// What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, its copy of
+// fastcluster, VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback),
+// sherpa-onnx, ONNX Runtime and the code compiled into sherpa-onnx's library (Windows' Parakeet),
+// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection and
+// C#/WinRT in their place. Their texts are in NoticeTexts.cs, copied from the packages the Windows
+// build restores (sherpa-onnx's is the shared Apache License). sherpa-onnx's library compiles in
+// its own copy of fastcluster (hclust-cpp's), whose notice is here, composed from the Mac's.
 //
 // The texts shared with the Mac (llama.cpp down to webgl-noise, the Apache License, Silero's) are
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
@@ -594,7 +596,40 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
             "Apache-2.0", Apache2),
         new("onnxruntime", "ONNX Runtime, by Microsoft",
             "Runs Parakeet's model for sherpa-onnx: ONNX Runtime 1.27.0, copied beside the app.",
-            "MIT", OnnxRuntimeLicence)
+            "MIT, with the notices of the code it includes",
+            OnnxRuntimeLicence + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
+        { Composed = true },
+        // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL). Their
+        // own licence files were not on hand: composed-notices.txt lists each until compared.
+        new("nlohmann-json", "nlohmann/json, by Niels Lohmann",
+            "Part of sherpa-onnx's library: JSON for Modern C++ 3.12.0.",
+            "MIT", NlohmannJsonLicence)
+        { Composed = true },
+        new("kaldi-decoder", "kaldi-decoder, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("kaldifst", "kaldifst, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("openfst", "OpenFst, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("simple-sentencepiece", "simple-sentencepiece, inside sherpa-onnx",
+            "Part of sherpa-onnx's library, with Darts-clone's darts.h (its notice is Darts-clone's, above).",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("kaldi-native-fbank", "kaldi-native-fbank, inside sherpa-onnx",
+            "Part of sherpa-onnx's library: the features Parakeet listens to.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        // fastcluster's own notice (the Mac's text, from FluidAudio's copy), which hclust-cpp's C++
+        // port of it is taken to keep; hclust-cpp's own copyright lines may add to it.
+        new("hclust-cpp", "hclust-cpp's fastcluster, inside sherpa-onnx",
+            "Part of sherpa-onnx's library (hierarchical clustering); not called by Inkwell.",
+            "BSD-2-Clause", HclustCppFastclusterLicence)
         { Composed = true },
         new("aec3", "aec3, a Rust port of WebRTC AEC3, by Angelos-Ermis Mangos",
             "Cancels the echo of the far end in your microphone.",

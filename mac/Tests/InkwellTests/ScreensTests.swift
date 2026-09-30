@@ -1010,8 +1010,13 @@ final class NoticesTests: XCTestCase {
         }
         XCTAssertGreaterThan(names.count, 15, "the table was read")
         // The legacy 0.2 app's base is not in the Mac app, and wasapi-rs's pattern is in Windows-only
-        // code, as are sherpa-onnx and ONNX Runtime (Windows' Parakeet).
-        let windowsOnly: Set = ["wasapi-rs", "sherpa-onnx", "ONNX Runtime"]
+        // code, as are sherpa-onnx, ONNX Runtime and the code compiled into sherpa-onnx's library
+        // (Windows' Parakeet).
+        let windowsOnly: Set = [
+            "wasapi-rs", "sherpa-onnx", "ONNX Runtime",
+            "nlohmann/json", "kaldi-decoder", "kaldifst", "OpenFst", "simple-sentencepiece",
+            "kaldi-native-fbank", "hclust-cpp",
+        ]
         let shipped = names.filter { $0 != "Handy" && !windowsOnly.contains($0) }
         let about = Notices.components.map { $0.name + " " + $0.text }.joined(separator: "\n")
         for name in shipped {
