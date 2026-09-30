@@ -537,7 +537,7 @@ private struct ModelsSection: View {
                         .font(.system(.body, weight: .semibold))
                         .frame(width: 150, alignment: .leading)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(line.engine ?? (line.known ? "Nothing installed yet" : "Checking…"))
+                        Text(line.engineText)
                             .foregroundStyle(line.engine == nil ? Theme.secondaryText : Theme.text)
                         if let accuracy = line.accuracy {
                             Text(accuracy)

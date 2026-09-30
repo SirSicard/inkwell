@@ -24,6 +24,10 @@ final class CatalogueModel {
     private(set) var shellEngines: [String: [JobScore]] = [:]
     /// What serves each job, as last answered; a job asked about and unfilled maps to nil.
     private(set) var serving: [Job: EngineRouted] = [:]
+    /// Jobs whose last engine.route failed: not known, which is not "nothing installed".
+    private(set) var routeFailed: Set<Job> = []
+
+    nonisolated static let routeFailedText = "Couldn't check which model does this"
     /// Times the screen asked again (tests and diagnostics).
     @ObservationIgnored private(set) var requeries = 0
 
@@ -51,8 +55,15 @@ final class CatalogueModel {
         let wer: Double?
         /// Whether the answer has arrived.
         let known: Bool
+        /// The last question about it failed (engine.route).
+        var failed = false
 
         var id: Job { job }
+
+        /// What the line says in place of an engine: the engine, else why not, or still asking.
+        var engineText: String {
+            engine ?? (failed ? CatalogueModel.routeFailedText : known ? "Nothing installed yet" : "Checking…")
+        }
 
         /// The measured accuracy, as the screen shows it.
         var accuracy: String? {
@@ -63,6 +74,9 @@ final class CatalogueModel {
     }
 
     func line(_ job: Job) -> Line {
+        if routeFailed.contains(job) {
+            return Line(job: job, engine: nil, wer: nil, known: false, failed: true)
+        }
         guard let routed = serving[job] else {
             return Line(job: job, engine: nil, wer: nil, known: false)
         }
@@ -99,6 +113,13 @@ final class CatalogueModel {
         }
     }
 
+    /// The job an engine.route failure is about, from its id; nil when it names none of the
+    /// screen's jobs (the controller logs that one).
+    static func routeJob(_ failed: CommandFailed) -> Job? {
+        guard failed.command == "engine.route" else { return nil }
+        return jobs.first { CoreCommand.engineRoute($0).commandID == failed.id }
+    }
+
     func apply(_ event: InkEvent) {
         switch event {
         case .modelsListed(let listed):
@@ -108,6 +129,9 @@ final class CatalogueModel {
             failed = true
         case .engineRouted(let routed):
             serving[routed.job] = routed
+            routeFailed.remove(routed.job)
+        case .commandFailed(let failure):
+            if let job = Self.routeJob(failure) { routeFailed.insert(job) }
         case .engineRegistered(let engine):
             shellEngines[engine.id] = engine.jobs
             requery()
@@ -119,6 +143,7 @@ final class CatalogueModel {
         case .coreStopped:
             shellEngines = [:]
             serving = [:]
+            routeFailed = []
         default:
             break
         }
