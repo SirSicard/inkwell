@@ -752,29 +752,26 @@ fn run(shared: &Shared, rx: &Receiver<Msg>, busy: &AtomicBool) {
         }
         let ran =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| test(shared, id.as_deref())));
-        if ran.is_err() {
+        // Free before the answer goes out: a shell may ask again as soon as it has it.
+        busy.store(false, Ordering::Release);
+        let answer = ran.unwrap_or_else(|_| {
             log::error!("llm.test panicked; the next test still runs");
-            shared.events.emit(events::command_failed(
+            events::command_failed(
                 "llm.test",
                 id.as_deref(),
                 "a bug in the core stopped this test",
-            ));
-        }
-        busy.store(false, Ordering::Release);
+            )
+        });
+        shared.events.emit(answer);
     }
 }
 
-/// **Worker.** Sends [`probe`] to the chosen provider, through its local-only check, and says
-/// whether it answered.
-fn test(shared: &Shared, reference: Option<&str>) {
+/// **Worker.** Sends [`probe`] to the chosen provider, through its local-only check: the answer
+/// that says whether it answered, for the caller to emit.
+fn test(shared: &Shared, reference: Option<&str>) -> Value {
     let Some(llm) = shared.llms.cloud() else {
         log::warn!("command llm.test failed: no provider is chosen");
-        shared.events.emit(events::command_failed(
-            "llm.test",
-            reference,
-            "no provider is chosen",
-        ));
-        return;
+        return events::command_failed("llm.test", reference, "no provider is chosen");
     };
     let info = llm.info();
     let outcome = llm.complete(&probe(), &shared.shutdown);
@@ -789,7 +786,7 @@ fn test(shared: &Shared, reference: Option<&str>) {
             (status, Some(tested_error(e)))
         }
     };
-    shared.events.emit(event(
+    event(
         "llm.tested",
         &[
             ("provider", Some(info.provider.into())),
@@ -799,7 +796,7 @@ fn test(shared: &Shared, reference: Option<&str>) {
             ("error", error.map(Into::into)),
             ("ref", reference.map(Into::into)),
         ],
-    ));
+    )
 }
 
 /// Why a test failed, in words for a screen.
