@@ -126,9 +126,11 @@ model reads the audio. So one Windows build runs on a Vulkan GPU where there is 
 where there is none. The CPU is a fallback, not a peer: it fits a meeting's final pass, but a
 dictation takes seconds.
 
-- The Vulkan build loads `vulkan-1.dll`, which GPU drivers install. A machine without it cannot
-  start that build at all, so the Windows release must handle that case itself rather than rely on
-  the CPU fallback.
+- The Vulkan build needs `vulkan-1.dll`, which GPU drivers install, so the core's DLL delay-loads
+  it: the DLL loads on a machine without it, and when ggml registers its Vulkan backend a
+  delay-load hook answers the missing loader so that Vulkan fails to start the ordinary way and
+  llama.cpp runs on the CPU (`ink-engines/src/llama/no_vulkan.rs`; `tests/vulkan_missing.rs`).
+  `windows/scripts/build-core.ps1` builds the release's DLL and checks its imports.
 - Building it needs the Vulkan SDK, libclang (llama-cpp-sys-2 generates its bindings) and the
   Ninja generator: see the feature's note in `ink-engines/Cargo.toml`.
 
