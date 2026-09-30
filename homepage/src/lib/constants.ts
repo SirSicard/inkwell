@@ -23,7 +23,7 @@ export const BUILD_FROM_SOURCE_URL = `${GITHUB_URL}#build-from-source`;
 export const CONTRIBUTING_URL = `${GITHUB_URL}/blob/main/CONTRIBUTING.md`;
 export const SECURITY_URL = `${GITHUB_URL}/blob/main/SECURITY.md`;
 
-/** Must match DONATION_URL in the app's src/constants.ts. */
+/** Must match the README's "Support the project" link. */
 export const DONATION_URL = "https://buymeacoffee.com/mattiasherzig";
 export const DONATION_SUGGESTED = "€10";
 
