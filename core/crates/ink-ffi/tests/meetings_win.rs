@@ -2,8 +2,10 @@
 //! capture ([`WinMeetingCapture`]) over replay sources where WASAPI would open the routed mic and
 //! the far end, and a detector that says what the audio session manager says (an executable that
 //! holds the mic, and its process). Detection offers, the user answers, the far end is planned as
-//! on Windows, the meeting records, stops, and its final pass writes the record, with the far end
-//! one voice (no diarizer on Windows) and no summary (no language model on Windows), said.
+//! on Windows, the meeting records, stops, and its final pass writes the record. This rig
+//! registers only the mock speech engine, so the far end stays one voice and there is no summary,
+//! said: what a core without a diarizer or a language model does, on any OS. Whether Windows'
+//! registry lists a diarizer is its build's (`engine-nemo`), not this test's.
 //!
 //! Real devices, real calls, the Drop on screen and a `kill -9` of the app are the maintainer's
 //! checklist (`windows/S3.5b-CHECKLIST.md`); a killed core finishing its meeting at the next
@@ -296,7 +298,8 @@ fn a_teams_call_is_offered_recorded_and_blotted_into_a_record() {
     assert_eq!(finished["record"], started["record"]);
     assert_eq!(finished["revision"], 2, "the final pass wrote the record");
 
-    // No diarizer on Windows: the far end stays one voice, and nothing says labels were tried.
+    // No diarizer row in this rig: the far end stays one voice, and nothing says labels were
+    // tried.
     assert_eq!(r.events.count("meeting.diarized"), 0);
     let record = RecordId(finished["record"].as_str().unwrap().to_owned());
     let segments = r.core.shared().store.segments(&record).unwrap();
@@ -305,7 +308,7 @@ fn a_teams_call_is_offered_recorded_and_blotted_into_a_record() {
         "{segments:?}"
     );
     assert!(segments.iter().all(|s| s.speaker.is_none()), "{segments:?}");
-    // No language model on Windows: no summary, and the pass says so.
+    // Nor a language model: no summary, and the pass says so.
     assert!(
         r.events
             .all()
