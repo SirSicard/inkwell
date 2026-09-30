@@ -221,6 +221,44 @@ fn check(what: &str, status: ffi::Status) -> Result<(), EngineError> {
     }
 }
 
+/// Windows: that NeMo-Speech.cpp's library loads, checked before its first call.
+///
+/// The core's DLL delay-loads it (ink-ffi's build script passes `/DELAYLOAD`): NeMo's Vulkan backend,
+/// `ggml-vulkan.dll`, loads the Vulkan loader (`vulkan-1.dll`, which GPU drivers install) when it
+/// loads, so a core that loaded NeMo at once would not start at all on a PC without a Vulkan driver.
+/// Delay-loaded, NeMo loads at its first call, where a library that cannot load would make MSVC's
+/// delay-load helper raise a structured exception and end the process. So it is loaded here first,
+/// with the search the helper uses (flags 0), and a failure is an error of this load: the diarizer
+/// is unavailable, and nothing else is. Once loaded it stays loaded, and the helper finds it. (Where
+/// the library is linked the usual way, as in tests, it is found loaded already.)
+#[cfg(windows)]
+fn library_loads() -> Result<(), EngineError> {
+    load_library(c"nemo_speech_asr_c.dll")
+}
+
+/// Loads the DLL `name` with the default search and keeps it loaded, or says why it did not load.
+#[cfg(windows)]
+fn load_library(name: &CStr) -> Result<(), EngineError> {
+    use std::ffi::{c_char, c_void};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LoadLibraryExA(name: *const c_char, file: *mut c_void, flags: u32) -> *mut c_void;
+    }
+    // SAFETY: `name` is a NUL-terminated string; no file handle, default flags. The module is
+    // never freed: it stays loaded for the life of the process, as a DLL loaded at start does.
+    let module = unsafe { LoadLibraryExA(name.as_ptr(), std::ptr::null_mut(), 0) };
+    if module.is_null() {
+        let error = std::io::Error::last_os_error();
+        return Err(EngineError::Failed(format!(
+            "couldn't load {} or a DLL it loads ({error}); on Windows the diarizer needs the \
+             Vulkan loader, vulkan-1.dll, which GPU drivers install",
+            name.to_string_lossy()
+        )));
+    }
+    Ok(())
+}
+
 /// A model handle. Only [`Model`] holds one, behind its mutex.
 struct ModelHandle(NonNull<ffi::DiarModel>);
 
@@ -241,6 +279,9 @@ struct Model {
 
 impl Model {
     fn load(path: &CStr, preset: Option<&CStr>, device: NemoDevice) -> Result<Self, EngineError> {
+        // Every call into the library starts here: it must load first (delay-loaded on Windows).
+        #[cfg(windows)]
+        library_loads()?;
         let cfg = ffi::DiarModelConfig {
             size: size_of::<ffi::DiarModelConfig>(),
             model_path: path.as_ptr(),
@@ -873,5 +914,21 @@ mod tests {
         assert!(check_samples(&[0.0, 0.5]).is_ok());
         assert!(check_samples(&[0.0, f32::NAN]).is_err());
         assert!(check_samples(&[f32::INFINITY]).is_err());
+    }
+
+    /// Windows: a library that does not load is an error naming it, not the delay-load helper's
+    /// exception at the first call.
+    #[test]
+    #[cfg(windows)]
+    fn a_library_that_does_not_load_is_an_error_naming_it() {
+        let err = load_library(c"no-such-library-for-inkwell.dll").unwrap_err();
+        assert!(
+            matches!(&err, EngineError::Failed(m)
+                if m.starts_with("couldn't load no-such-library-for-inkwell.dll or a DLL it loads (")),
+            "{err}"
+        );
+        assert_eq!(load_library(c"kernel32.dll"), Ok(()));
+        // Tests link the library the usual way, and cargo puts its directory on PATH: it loads.
+        assert_eq!(library_loads(), Ok(()));
     }
 }

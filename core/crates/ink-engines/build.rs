@@ -20,6 +20,8 @@
 //! On Windows there is no rpath: the manifest's DLLs are copied into this build's `OUT_DIR` and that
 //! directory is declared as a native search path, which cargo puts on `PATH` when it runs this
 //! package's tests and its dependents' (cargo adds only search paths inside the target directory).
+//! And the core's DLL delay-loads the C API's DLL: this passes its name to ink-ffi's build script
+//! (`nemo_delayload`), since NeMo's Vulkan backend needs the Vulkan loader as soon as it loads.
 //!
 //! `INK_NEMO_CHECK_ONLY=1` is for type-checking (CI's clippy) where the library is not built: it
 //! skips the library, the manifest and the link, so a binary or test built that way does not link.
@@ -56,6 +58,9 @@ const LIBRARY: [&str; 3] = [
     "lib/libnemo_speech_asr_c.so",
     "lib/nemo_speech_asr_c.lib",
 ];
+
+/// The DLL that import library names (Windows).
+const NEMO_DLL: &str = "nemo_speech_asr_c.dll";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -214,6 +219,17 @@ fn link(dir: &Path, library: &Path, listed: &[PathBuf]) {
         if dlls.is_empty() {
             fail(&format!("{MANIFEST} lists no DLL"));
         }
+        // The core's DLL delay-loads the C API's DLL (ink-ffi's build script, from this metadata):
+        // NeMo's Vulkan backend loads the Vulkan loader when it loads, so a core that loaded NeMo at
+        // start would not start on a PC without a Vulkan driver. src/nemo.rs loads it before its
+        // first call.
+        if !dlls.iter().any(|p| {
+            p.file_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case(NEMO_DLL))
+        }) {
+            fail(&format!("{MANIFEST} lists no bin/{NEMO_DLL}"));
+        }
+        println!("cargo:nemo_delayload={NEMO_DLL}");
         let out = copy_dlls(&dlls, "nemo-bin");
         println!("cargo:lib_dir={}", out.display());
         return;
