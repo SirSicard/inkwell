@@ -23,7 +23,10 @@ esac
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-curl -sfL "https://github.com/SirSicard/inkwell/releases/download/$TAG/latest.json" -o "$TMP"
+# A wrong tag, a draft or a release not yet published has no latest.json to
+# fetch: say so, rather than exit silently under set -e.
+curl -sfL "https://github.com/SirSicard/inkwell/releases/download/$TAG/latest.json" -o "$TMP" \
+  || { echo "FAILED: no latest.json at $TAG (is the tag right, and the release published?)" >&2; exit 1; }
 
 # Refuse to push something that is not JSON (a GitHub error page, an empty
 # body): a malformed KV value makes the worker answer 500 to every client.
