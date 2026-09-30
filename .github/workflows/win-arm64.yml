@@ -145,6 +145,12 @@ jobs:
       - name: sherpa-onnx (ARM64 library)
         shell: bash
         run: |
+          # In a developer environment rustc links with the first link.exe on PATH, and in bash that
+          # is Git's own /usr/bin/link (coreutils), not MSVC's: name MSVC's (vcvarsall above set
+          # VCToolsInstallDir).
+          linker="${VCToolsInstallDir}bin\\HostARM64\\ARM64\\link.exe"
+          test -f "$(cygpath -u "$linker")" || { echo "::error::no MSVC linker at $linker"; exit 1; }
+          export CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER="$linker"
           cargo clippy -p ink-engines --all-targets --locked --features engine-sherpa -- -D warnings
           cargo test -p ink-engines --locked --features engine-sherpa
           out=$(cargo test -p ink-engines --locked --features engine-sherpa --test sherpa -- --ignored --exact a_missing_model_file_is_model_missing) || {
