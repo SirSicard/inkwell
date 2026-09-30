@@ -144,15 +144,27 @@ public class NoticesTests
         {
             Assert.Contains(part, byId["onnxruntime"].Text, StringComparison.Ordinal);
         }
-        // And the code compiled into sherpa-onnx's library.
+        // And the code compiled into sherpa-onnx's library: each its own licence file at the version
+        // sherpa-onnx 1.13.4 builds (composed-notices.txt).
         Assert.StartsWith("MIT License\n\nCopyright (c) 2013-2025 Niels Lohmann\n", byId["nlohmann-json"].Text, StringComparison.Ordinal);
         Assert.Contains("3.12.0", byId["nlohmann-json"].Role, StringComparison.Ordinal);
-        foreach (var id in new[] { "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank" })
+        foreach (var id in new[] { "kaldi-decoder", "kaldi-native-fbank" })
         {
             Assert.Equal(Notices.Apache2, byId[id].Text);
         }
-        // Its copy of fastcluster (BSD-2: the notice must ship with the binary).
-        Assert.StartsWith("Copyright:\n  * Until package version 1.1.23: \u00a9 2011 Daniel M\u00fcllner", byId["hclust-cpp"].Text, StringComparison.Ordinal);
+        // kaldifst's LICENSE puts a note on its copyright model above the Apache License.
+        Assert.StartsWith("                                 Legal Notices\n\n   NOTE (this is not from the Apache License):", byId["kaldifst"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n\n" + Notices.Apache2, byId["kaldifst"].Text, StringComparison.Ordinal);
+        // OpenFst's COPYING names the Apache License and Google's copyright; the licence's text follows.
+        Assert.StartsWith("Licensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use these files", byId["openfst"].Text, StringComparison.Ordinal);
+        Assert.Contains("Copyright 2005-2026 Google LLC.", byId["openfst"].Text, StringComparison.Ordinal);
+        Assert.EndsWith(Notices.Apache2, byId["openfst"].Text, StringComparison.Ordinal);
+        // simple-sentencepiece's own darts.h carries Darts-clone 0.32's BSD 2-clause notice (not SentencePiece's copy).
+        Assert.StartsWith(Notices.Apache2 + "\n\n", byId["simple-sentencepiece"].Text, StringComparison.Ordinal);
+        Assert.Contains("The BSD 2-clause license\n\nCopyright (c) 2008-2014, Susumu Yata All rights reserved.", byId["simple-sentencepiece"].Text, StringComparison.Ordinal);
+        // hclust-cpp's LICENSE: fastcluster's licence under its own copyright lines (BSD-2: it must ship with the binary).
+        Assert.StartsWith("Copyright:\n  * fastcluster_dm.cpp & fastcluster_R_dm.cpp:\n     \u00a9 2011 Daniel M\u00fcllner", byId["hclust-cpp"].Text, StringComparison.Ordinal);
+        Assert.Contains("\u00a9 2018 Christoph Dalitz", byId["hclust-cpp"].Text, StringComparison.Ordinal);
         Assert.StartsWith("Copyright \u00a9 2021 Caelan Sayler\nCopyright \u00a9 2024 Velopack Ltd.", byId["velopack"].Text, StringComparison.Ordinal);
     }
 
@@ -219,8 +231,8 @@ public class NoticesTests
             Assert.True(mac[c.Id] == c.Text, $"{c.Id}: the text differs from Notices.swift's");
         }
         Assert.Equal(mac["silero-vad"], Notices.Models.Single(m => m.Id == "silero-vad").Notice);
-        // sherpa-onnx's copy of fastcluster shows fastcluster's own notice, the Mac's.
-        Assert.Equal(mac["fastcluster"], Notices.Components.Single(c => c.Id == "hclust-cpp").Text);
+        // sherpa-onnx's copy of fastcluster (hclust-cpp's) shows hclust-cpp's own licence, not the Mac's copy's.
+        Assert.NotEqual(mac["fastcluster"], Notices.Components.Single(c => c.Id == "hclust-cpp").Text);
     }
 }
 

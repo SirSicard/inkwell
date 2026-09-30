@@ -1,7 +1,8 @@
 // The licence texts of the Windows-only components (Notices.cs), copied from the packages the
-// Windows build restores (and wasapi's from its crates.io package), verbatim but for line ends
-// (LF) and a leading byte-order mark. Generated once from those files; edit only by replacing a
-// text with its file again. The composed ones say so, and composed-notices.txt lists them.
+// Windows build restores (and wasapi's from its crates.io package, and those of the code
+// sherpa-onnx's library compiles in from its repositories), verbatim but for line ends (LF) and a
+// leading byte-order mark. Generated once from those files; edit only by replacing a text with its
+// file again. The composed ones say so, and composed-notices.txt lists them.
 
 namespace Inkwell.Core.Screens;
 
@@ -8194,7 +8195,8 @@ MIT License
 """;
 
     /// <summary>ONNX Runtime's LICENSE, from its 1.19.2 Python package: sherpa-onnx's archive carries
-    /// none. composed-notices.txt holds it to 1.27.0's, the version the archive ships.</summary>
+    /// none. The same file as microsoft/onnxruntime's at v1.27.0, the version the archive ships
+    /// (compared 2026-09-30, composed-notices.txt).</summary>
     internal const string OnnxRuntimeLicence = """
 MIT License
 
@@ -8221,9 +8223,8 @@ SOFTWARE.
 
     /// <summary>ONNX Runtime 1.27.0's ThirdPartyNotices.txt, the notices of the code it compiles in.
     /// sherpa-onnx's archive carries none, so this is a copy of the file at microsoft/onnxruntime's
-    /// v1.27.0 tag taken in review (sha256
-    /// 0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2), listed in
-    /// composed-notices.txt until it is compared with the tag's.</summary>
+    /// v1.27.0 tag (sha256 0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2),
+    /// compared with the tag's 2026-09-30 (composed-notices.txt).</summary>
     internal const string OnnxRuntimeNotices = """
 THIRD PARTY SOFTWARE NOTICES AND INFORMATION
 
@@ -14348,9 +14349,9 @@ Redistribution and use in source and binary forms, with or without modification,
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """;
 
-    /// <summary>nlohmann/json 3.12.0's licence, composed: the MIT licence as nlohmann/json's LICENSE.MIT
-    /// words it (quoted in ONNX Runtime's notices), under the copyright line 3.12.0's json.hpp
-    /// gives (SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann).</summary>
+    /// <summary>nlohmann/json 3.12.0's licence, composed before its file was on hand: the MIT licence as
+    /// nlohmann/json's LICENSE.MIT words it, under the copyright line 3.12.0's json.hpp gives. The same
+    /// words as its LICENSE.MIT at v3.12.0 (compared 2026-09-30, composed-notices.txt).</summary>
     internal const string NlohmannJsonLicence = """
 MIT License
 
@@ -14375,14 +14376,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """;
 
-    /// <summary>The notice sherpa-onnx's copy of fastcluster (hclust-cpp's C++ port, its
-    /// <c>fastclustercpp</c> classes) is shown with: fastcluster's own, the Mac's text word for
-    /// word (NoticesTests holds it equal). Composed, listed in composed-notices.txt until compared
-    /// with hclust-cpp's LICENSE.</summary>
+    /// <summary>hclust-cpp's LICENSE (the tag 2026-02-25 sherpa-onnx 1.13.4 builds; composed-notices.txt),
+    /// the notice sherpa-onnx's copy of fastcluster (hclust-cpp's C++ port, its <c>fastclustercpp</c>
+    /// classes) is shown with: fastcluster's licence under hclust-cpp's own copyright lines.</summary>
     internal const string HclustCppFastclusterLicence = """
 Copyright:
-  * Until package version 1.1.23: © 2011 Daniel Müllner <https://danifold.net>
-  * All changes from version 1.1.24 on: © Google Inc. <https://www.google.com>
+  * fastcluster_dm.cpp & fastcluster_R_dm.cpp:
+     © 2011 Daniel Müllner <http://danifold.net>
+  * fastcluster.(h|cpp) & demo.cpp & plotresult.r:
+     © 2018 Christoph Dalitz <http://www.hsnr.de/ipattern/>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
@@ -14391,6 +14393,67 @@ Redistribution and use in source and binary forms, with or without modification,
   * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+""";
+
+    /// <summary>The note kaldifst's LICENSE (v1.8.0, which sherpa-onnx 1.13.4's kaldi-decoder builds)
+    /// puts above the Apache License; its text is this, a blank line, and <see cref="Apache2"/>.</summary>
+    internal const string KaldifstLegalNotices = """
+                                 Legal Notices
+
+   NOTE (this is not from the Apache License): The copyright model is that
+   authors (or their employers, if noted in individual files) own their
+   individual contributions. The authors' contributions can be discerned
+   from the git history.
+
+ -------------------------------------------------------------------------
+""";
+
+    /// <summary>The COPYING of the OpenFst sherpa-onnx 1.13.4 builds (csukuangfj/openfst, tag
+    /// v1.8.5-2026-04-11): it names the Apache License, whose text follows it in About.</summary>
+    internal const string OpenFstCopying = """
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use these files except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Copyright 2005-2026 Google LLC.
+""";
+
+    /// <summary>The notice in simple-sentencepiece's ssentencepiece/csrc/darts.h (v0.7, which
+    /// sherpa-onnx 1.13.4 builds): Darts-clone 0.32's own BSD 2-clause licence, not SentencePiece's
+    /// copy of Darts-clone.</summary>
+    internal const string SimpleSentencepieceDartsNotice = """
+The BSD 2-clause license
+
+Copyright (c) 2008-2014, Susumu Yata All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this list
+of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """;
 
     /// <summary>

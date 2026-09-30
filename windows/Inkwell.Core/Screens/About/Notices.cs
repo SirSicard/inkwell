@@ -13,14 +13,15 @@
 // C#/WinRT and Velopack (the installer and updates) in their place. Their texts are in
 // NoticeTexts.cs, copied from the packages the Windows build restores (sherpa-onnx's is the shared
 // Apache License). sherpa-onnx's library compiles in its own copy of fastcluster (hclust-cpp's),
-// whose notice is here, composed from the Mac's.
+// whose notice is here, hclust-cpp's own.
 //
 // The texts shared with the Mac (llama.cpp down to webgl-noise, the Apache License, Silero's) are
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
 // components' own licence files except where Notices.swift says otherwise, and the composed ones
 // (`Composed`) are listed with their upstream check in mac/composed-notices.txt; the Windows-only
-// composed ones (WinUIEx and the Windows SDK projection, whose packages carry no licence text) in
-// composed-notices.txt beside this file.
+// composed ones (WinUIEx, the Windows SDK projection, ONNX Runtime and the code compiled into
+// sherpa-onnx's library, whose packages carry no licence text) in composed-notices.txt beside this
+// file.
 //
 // No notice ships as a placeholder: `Pending` names where a text must come from while it is one,
 // and NoticesTests holds the list of pending notices empty.
@@ -600,8 +601,9 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
             "MIT, with the notices of the code it includes",
             OnnxRuntimeLicence + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
         { Composed = true },
-        // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL). Their
-        // own licence files were not on hand: composed-notices.txt lists each until compared.
+        // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL): each
+        // its own licence file at the version sherpa-onnx 1.13.4 builds, compared on 2026-09-30
+        // (composed-notices.txt).
         new("nlohmann-json", "nlohmann/json, by Niels Lohmann",
             "Part of sherpa-onnx's library: JSON for Modern C++ 3.12.0.",
             "MIT", NlohmannJsonLicence)
@@ -612,22 +614,23 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
         { Composed = true },
         new("kaldifst", "kaldifst, inside sherpa-onnx",
             "Part of sherpa-onnx's library.",
-            "Apache-2.0", Apache2)
+            "Apache-2.0", KaldifstLegalNotices + "\n\n" + Apache2)
         { Composed = true },
         new("openfst", "OpenFst, inside sherpa-onnx",
             "Part of sherpa-onnx's library.",
-            "Apache-2.0", Apache2)
+            "Apache-2.0", OpenFstCopying + "\n\n--- The Apache License 2.0, which COPYING names ---\n" + Apache2)
         { Composed = true },
         new("simple-sentencepiece", "simple-sentencepiece, inside sherpa-onnx",
-            "Part of sherpa-onnx's library, with Darts-clone's darts.h (its notice is Darts-clone's, above).",
-            "Apache-2.0", Apache2)
+            "Part of sherpa-onnx's library, with its own copy of Darts-clone 0.32 (darts.h).",
+            "Apache-2.0, with Darts-clone's BSD-2-Clause notice",
+            Apache2 + "\n\n--- ssentencepiece/csrc/darts.h ---\n" + SimpleSentencepieceDartsNotice)
         { Composed = true },
         new("kaldi-native-fbank", "kaldi-native-fbank, inside sherpa-onnx",
             "Part of sherpa-onnx's library: the features Parakeet listens to.",
             "Apache-2.0", Apache2)
         { Composed = true },
-        // fastcluster's own notice (the Mac's text, from FluidAudio's copy), which hclust-cpp's C++
-        // port of it is taken to keep; hclust-cpp's own copyright lines may add to it.
+        // hclust-cpp's own LICENSE: fastcluster's licence under hclust-cpp's copyright lines (not
+        // the Mac's fastcluster text, whose lines are those of FluidAudio's copy).
         new("hclust-cpp", "hclust-cpp's fastcluster, inside sherpa-onnx",
             "Part of sherpa-onnx's library (hierarchical clustering); not called by Inkwell.",
             "BSD-2-Clause", HclustCppFastclusterLicence)
