@@ -326,8 +326,14 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   detection is on (`meetings.detect`).
 - **Capture.** On the Mac: the routed mic's own IOProc (the built-in mic with Bluetooth output,
   unless `meetings.headset_mic`) and a process tap of the meeting's app, else of everything this
-  Mac plays except Inkwell. `meeting.started` names the title (the calendar's event on now, from
-  the shell), the app and the mic.
+  Mac plays except Inkwell. On Windows: the routed mic (WASAPI), and for the far end process
+  loopback of Zoom and the browsers (the app alone) or device loopback of the output any other app
+  plays to (everything that device plays, said as such), else of the default output. Device
+  loopback moves with the call: the pump asks every 2 s whether its output went or the app plays
+  elsewhere, and hands the side's ring to the new source. A side left with no source (it ended by
+  itself, or could not be opened again) must deliver from then on, so the watchdog says its
+  silence. `meeting.started` names the title (the calendar's event on now, from the shell), the
+  app and the mic.
 - **What it runs on.** The VAD (Silero), loaded at the start; the far end's diarizer (Nemotron),
   loaded only for the final pass and let go of after it; and the language model the shell
   registered, for the summary, commitments and Ask, sized to its context (`context_tokens`: the

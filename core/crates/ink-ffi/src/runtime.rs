@@ -164,8 +164,22 @@ impl MeetingPlatform {
         })
     }
 
-    /// Until ink-platform-win (S3.1): neither.
-    #[cfg(not(target_os = "macos"))]
+    /// Windows': the routed mic and the far end by S0.4's plan (WASAPI, on the performance
+    /// counter), and the audio session manager's detector. Nothing is opened or watched until a
+    /// meeting starts or detection is turned on.
+    #[cfg(windows)]
+    fn production() -> Result<Self, String> {
+        let clock = ink_platform_win::WinClock::new().map_err(|e| e.to_string())?;
+        Ok(Self {
+            capture: Arc::new(crate::capture::WinMeetingCapture::new(
+                ink_platform_win::WinCapture::new(clock),
+            )),
+            detector: Some(Arc::new(ink_platform_win::WinMeetingDetector::new())),
+        })
+    }
+
+    /// Any other OS: neither.
+    #[cfg(not(any(target_os = "macos", windows)))]
     fn production() -> Result<Self, String> {
         Ok(Self::default())
     }
@@ -1244,5 +1258,43 @@ mod tests {
         let (a, b, c) = (counter.now_ns(), core.now_ns(), counter.now_ns());
         assert!(a <= b && b <= c, "{a} {b} {c}");
         assert!(c - a < 1_000_000_000, "one read apart: {} ns", c - a);
+    }
+
+    /// Windows (S3.5b): meetings have the platform's detector, made without watching anything.
+    #[cfg(windows)]
+    #[test]
+    fn windows_meetings_have_a_detector() {
+        let platform = MeetingPlatform::production().expect("the platform");
+        assert!(platform.detector.is_some());
+    }
+
+    /// Windows (S3.5b), on a PC with a mic and an output: "Record now" opens the routed mic and
+    /// the default output's loopback through the core's capture, and starts neither. Needs no
+    /// permission and no desktop session.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "talks to the Windows audio service"]
+    fn windows_record_now_opens_the_real_devices_without_starting_them() {
+        let platform = MeetingPlatform::production().expect("the platform");
+        let mut opened = platform.capture.open(None, false).expect("opened");
+        let channels: Vec<_> = opened.sides.iter().map(|s| s.source.channel()).collect();
+        assert_eq!(channels, [ink_core::Channel::Mic, ink_core::Channel::Far]);
+        assert_eq!(opened.far, crate::capture::FarScope::Everything);
+        let mic = opened.mic.expect("the mic is named");
+        assert!(!mic.name.is_empty());
+        assert_ne!(mic.reason, "unknown");
+        for side in &opened.sides {
+            assert!(side.source.format().sample_rate >= 8_000);
+        }
+        // The default output's loopback follows the default: it has not changed, so it stays;
+        // told to, it opens the default output's loopback again (not started either).
+        let follow = opened.sides[1]
+            .follow
+            .as_mut()
+            .expect("device loopback moves");
+        assert!(follow.moved(false).expect("asked").is_none());
+        let (again, name) = follow.moved(true).expect("opened again").expect("a source");
+        assert_eq!(again.channel(), ink_core::Channel::Far);
+        assert!(!name.is_empty());
     }
 }

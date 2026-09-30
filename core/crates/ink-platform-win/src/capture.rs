@@ -15,6 +15,10 @@
 //! only the call. The call-app matrix (Teams, Zoom, Meet in Chrome and Edge) is not measured yet;
 //! it is in `windows/S3.1-CHECKLIST.md`.
 //!
+//! **A device-loopback far end is bound to one output**, so a meeting asks, while it records,
+//! whether it should move ([`far_end_moved`]): its output went, the default changed under "all
+//! output", or the app now plays on another output. Process loopback follows its app anyway.
+//!
 //! **Mic routing** ([`route_mic`]): with Bluetooth output, a mic that is not Bluetooth, unless the
 //! headset is LE Audio or the headset-mic setting is on.
 //!
@@ -140,12 +144,7 @@ pub(crate) fn plan_far_end(
         });
     }
     // Device loopback on the endpoint the app plays to: an active session first, then any.
-    let belongs = |session: &&Session| {
-        processes.exe(session.pid).is_some_and(|exe| {
-            apps.iter()
-                .any(|app: &AppRef| app.id.eq_ignore_ascii_case(exe))
-        })
-    };
+    let belongs = |session: &&Session| belongs_to(session, apps, processes);
     let playing = render_sessions
         .iter()
         .filter(belongs)
@@ -158,6 +157,46 @@ pub(crate) fn plan_far_end(
         }),
         None => default(FarReason::AppNotPlayingYet),
     }
+}
+
+/// Whether `session`'s process is one of `apps` (by executable).
+fn belongs_to(session: &Session, apps: &[AppRef], processes: &ProcessTable) -> bool {
+    processes.exe(session.pid).is_some_and(|exe| {
+        apps.iter()
+            .any(|app: &AppRef| app.id.eq_ignore_ascii_case(exe))
+    })
+}
+
+/// Whether a device-loopback far end recording the output `current` for `target` should be opened
+/// again where [`plan_far_end`] would open it now: `current` is no longer an active output; for
+/// all output, the default is another output; for apps, one of them plays (an active session) and
+/// none plays on `current`. An app with no session to be seen (it may play through a helper) is
+/// taken to play on the default output, as [`plan_far_end`] took it; one whose sessions are all
+/// idle stays where it is (there is nothing to hear). Pure.
+pub(crate) fn far_end_moved(
+    target: &FarEndTarget,
+    current: &str,
+    outputs: &[String],
+    default_output: Option<&str>,
+    render_sessions: &[Session],
+    processes: &ProcessTable,
+) -> bool {
+    if !outputs.iter().any(|output| output == current) {
+        return true;
+    }
+    let apps = match target {
+        FarEndTarget::AllOutput => return default_output.is_some_and(|d| d != current),
+        FarEndTarget::Apps(apps) => apps,
+    };
+    let sessions: Vec<&Session> = render_sessions
+        .iter()
+        .filter(|s| belongs_to(s, apps, processes))
+        .collect();
+    if sessions.is_empty() {
+        return default_output.is_some_and(|d| d != current);
+    }
+    let mut active = sessions.iter().filter(|s| s.active).peekable();
+    active.peek().is_some() && active.all(|s| s.endpoint != current)
 }
 
 /// [`CaptureControl`] for Windows.
@@ -235,6 +274,40 @@ impl WinCapture {
             FarEndTarget::Apps(_) => ProcessTable::snapshot()?,
         };
         plan_far_end(target, default.as_deref(), &render, &processes)
+    }
+
+    /// **Worker** (or a meeting's pump). Whether a device-loopback far end opened for `target` on
+    /// the output `current` should be opened again ([`far_end_moved`]), from the outputs, the
+    /// render sessions and the processes now. Opens nothing.
+    pub fn far_end_moved(
+        &self,
+        target: &FarEndTarget,
+        current: &str,
+    ) -> Result<bool, PlatformError> {
+        let _com = ComScope::enter()?;
+        let devices = devices::enumerator()?;
+        let outputs: Vec<String> = devices::endpoints(&devices, Flow::Render)?
+            .into_iter()
+            .map(|e| e.info.id.0)
+            .collect();
+        let default = devices::default_endpoint(&devices, Flow::Render)?
+            .map(|d| devices::endpoint_id(&d))
+            .transpose()?;
+        let (render, processes) = match target {
+            FarEndTarget::AllOutput => (Vec::new(), ProcessTable::default()),
+            FarEndTarget::Apps(_) => (
+                sessions::read_all(&devices, Flow::Render)?.sessions,
+                ProcessTable::snapshot()?,
+            ),
+        };
+        Ok(far_end_moved(
+            target,
+            current,
+            &outputs,
+            default.as_deref(),
+            &render,
+            &processes,
+        ))
     }
 
     /// **Worker.** [`CaptureControl::open_mic`], as the concrete type (its counters are readable).
@@ -383,6 +456,22 @@ impl WasapiSource {
         }
     }
 
+    /// Whether it hears one process tree alone (process loopback), rather than a whole device.
+    pub fn is_process_loopback(&self) -> bool {
+        matches!(self.kind, StreamKind::ProcessLoopback { .. })
+    }
+
+    /// The endpoint id it records (the mic's, or the output device loopback hears); `None` for
+    /// process loopback.
+    pub fn endpoint(&self) -> Option<&str> {
+        match &self.kind {
+            StreamKind::Mic { endpoint } | StreamKind::DeviceLoopback { endpoint } => {
+                Some(endpoint)
+            }
+            StreamKind::ProcessLoopback { .. } => None,
+        }
+    }
+
     /// The current (or last) session's counters. **Any thread** that holds the source.
     pub fn stats(&self) -> IoStats {
         self.counters.snapshot()
@@ -437,6 +526,12 @@ impl AudioSource for WasapiSource {
         };
         running.stop();
         stream::session_result(self.counters.snapshot(), self.what())
+    }
+
+    /// The capture client failed (the device was removed or changed format) or the capture
+    /// thread caught a panic: nothing more comes until it is opened again.
+    fn ended(&self) -> bool {
+        self.running.is_some() && self.counters.snapshot().ended()
     }
 }
 
@@ -587,6 +682,79 @@ mod tests {
         assert!(plan_far_end(&FarEndTarget::Apps(vec![]), Some("s"), &[], &t).is_err());
     }
 
+    /// S3.5b: a device-loopback far end moves when its output goes, when "all output"'s default
+    /// changes, and when its app plays on another output and not on this one; never while the app
+    /// still plays here, or plays nowhere.
+    #[test]
+    fn a_device_loopback_far_end_moves_where_its_app_plays() {
+        let t = table();
+        let outputs = ["speakers".to_owned(), "headset".to_owned()];
+        let all = FarEndTarget::AllOutput;
+        let moved = |target: &FarEndTarget, current: &str, default: &str, sessions: &[Session]| {
+            far_end_moved(target, current, &outputs, Some(default), sessions, &t)
+        };
+        assert!(!moved(&all, "speakers", "speakers", &[]));
+        assert!(
+            moved(&all, "speakers", "headset", &[]),
+            "the default changed"
+        );
+        assert!(
+            far_end_moved(&all, "usb-dac", &outputs, Some("speakers"), &[], &t),
+            "its output was unplugged"
+        );
+
+        let teams = FarEndTarget::Apps(vec![app("ms-teams.exe", Some(300))]);
+        // A headset plugged in: Teams now plays there, and no longer here.
+        assert!(moved(
+            &teams,
+            "speakers",
+            "headset",
+            &[session(300, true, "headset")]
+        ));
+        assert!(moved(
+            &teams,
+            "speakers",
+            "speakers",
+            &[
+                session(300, false, "speakers"),
+                session(300, true, "headset")
+            ]
+        ));
+        // It still plays here (a ringer elsewhere changes nothing), or plays nowhere: it stays.
+        assert!(!moved(
+            &teams,
+            "speakers",
+            "headset",
+            &[
+                session(300, true, "speakers"),
+                session(300, true, "headset")
+            ]
+        ));
+        assert!(!moved(
+            &teams,
+            "speakers",
+            "headset",
+            &[session(300, false, "headset")]
+        ));
+        // Another app playing elsewhere is not Teams.
+        assert!(!moved(
+            &teams,
+            "speakers",
+            "speakers",
+            &[session(400, true, "headset")]
+        ));
+        // No session of Teams to be seen (it may play through a helper): the default, as planned.
+        assert!(moved(
+            &teams,
+            "speakers",
+            "headset",
+            &[session(400, true, "speakers")]
+        ));
+        assert!(!moved(&teams, "speakers", "speakers", &[]));
+        // No output at all: it must move, and opening it will say there is nowhere to go.
+        assert!(far_end_moved(&teams, "speakers", &[], None, &[], &t));
+    }
+
     // Local only: these talk to the audio service. They open nothing and need no permission.
 
     #[test]
@@ -621,6 +789,20 @@ mod tests {
                 .expect("open loopback");
             assert!(far.format().sample_rate >= 8_000, "{:?}", far.format());
             assert_eq!(far.mode(), "device loopback");
+            let endpoint = far.endpoint().expect("device loopback names its output");
+            assert!(!far.ended(), "nothing started, nothing ended");
+            // Just opened on the default output, which has not changed: it stays.
+            assert!(
+                !capture
+                    .far_end_moved(&FarEndTarget::AllOutput, endpoint)
+                    .expect("read the outputs")
+            );
+            assert!(
+                capture
+                    .far_end_moved(&FarEndTarget::AllOutput, "{0.0.0.00000000}.{gone}")
+                    .expect("read the outputs"),
+                "an output that is not there moves"
+            );
         }
     }
 }

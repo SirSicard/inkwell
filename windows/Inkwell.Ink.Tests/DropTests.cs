@@ -395,6 +395,177 @@ public sealed class DropTests
         Assert.Equal("enormousword", DropText.HeadCut("enormousword", Width, 5));
     }
 
+    /// <summary>The consent offer (S3.5b): two buttons, which widen the panel as on the Mac.</summary>
+    private static readonly DropText Offer = new("Example Call opened the microphone", "Recording keeps both sides on this PC. Tell the others you are recording.")
+    {
+        Buttons = new DropButtons("Record this call", "Not this one"),
+    };
+
+    [Fact]
+    public void TheOffersButtonsLieInARowInItsWiderPanel()
+    {
+        Assert.Equal((DropLayout.WidthWithButtons, DropLayout.HeightWithButtons), DropLayout.Size(Offer));
+        Assert.Equal((DropLayout.Width, DropLayout.Height), DropLayout.Size(DropText.For(InkState.Meeting)));
+        var (l0, t0, r0, b0) = DropLayout.Button(0);
+        var (l1, t1, r1, b1) = DropLayout.Button(1);
+        Assert.True(l0 >= DropLayout.TextLeft && r0 < l1 && r1 <= DropLayout.WidthWithButtons - DropLayout.TextRight, "inside the panel, beside the ink");
+        Assert.True(t0 == t1 && b0 == b1 && b1 < DropLayout.HeightWithButtons, "one row, above the bottom edge");
+        Assert.Equal(0, DropLayout.ButtonAt(Offer.Buttons, (l0 + r0) / 2, (t0 + b0) / 2));
+        Assert.Equal(1, DropLayout.ButtonAt(Offer.Buttons, (l1 + r1) / 2, (t1 + b1) / 2));
+        Assert.Null(DropLayout.ButtonAt(Offer.Buttons, (r0 + l1) / 2, (t0 + b0) / 2)); // the gap
+        Assert.Null(DropLayout.ButtonAt(Offer.Buttons, DropLayout.InkWidth / 2, (t0 + b0) / 2)); // the ink
+        Assert.Null(DropLayout.ButtonAt(null, (l0 + r0) / 2, (t0 + b0) / 2));
+        Assert.Null(DropLayout.ButtonAt(new DropButtons("One"), (l1 + r1) / 2, (t1 + b1) / 2));
+        Assert.Equal(2, Offer.Buttons!.Count);
+        Assert.Equal("Not this one", Offer.Buttons[1]);
+    }
+
+    /// <summary>
+    /// A click on a button (down and up on it) says which, and never activates the Drop; the panel
+    /// takes its wider size for the offer and its own size back after. Runs over SSH: messages, no frame.
+    /// </summary>
+    [Fact]
+    public unsafe void AClickOnAButtonSaysWhichAndNeverActivatesTheDrop()
+    {
+        lock (TestPipeline.Lock)
+        {
+            var ui = new UiThread();
+            using var drop = new DropWindow(Loader, new InkClock(ui.Post));
+            var hwnd = (HWND)drop.Handle;
+            var clicked = new List<int>();
+            drop.ButtonClicked += clicked.Add;
+            var foreground = GetForegroundWindow();
+
+            drop.Show(DropText.For(InkState.Meeting), InkState.Meeting);
+            var small = Rect(hwnd);
+            drop.Show(Offer, InkState.Idle);
+            ui.Pump(0.1);
+            var wide = Rect(hwnd);
+            var scale = (wide.right - wide.left) / DropLayout.WidthWithButtons;
+            Assert.True(wide.right - wide.left > small.right - small.left, "wider");
+            Assert.True(wide.bottom - wide.top > small.bottom - small.top, "taller");
+            Assert.Equal(small.bottom, wide.bottom); // the same bottom margin
+
+            Click(hwnd, 1, 1, scale);
+            Click(hwnd, 0, 0, scale);
+            Assert.Equal([1, 0], clicked);
+            // Down on one, up on the other: no click.
+            Click(hwnd, 0, 1, scale);
+            Assert.Equal([1, 0], clicked);
+            Assert.Equal(foreground, GetForegroundWindow());
+            Assert.NotEqual(hwnd, GetActiveWindow());
+
+            // Answered: the panel goes back to its size, and where the buttons were is nothing.
+            drop.Show(DropText.For(InkState.Meeting), InkState.Meeting);
+            var back = Rect(hwnd);
+            Assert.Equal((small.right - small.left, small.bottom - small.top), (back.right - back.left, back.bottom - back.top));
+            Click(hwnd, 0, 0, scale);
+            Assert.Equal([1, 0], clicked);
+            drop.Hide();
+        }
+    }
+
+    /// <summary>When the ink cannot draw, the plain panel shows the offer with its buttons, and they answer too.</summary>
+    [Fact]
+    public unsafe void ThePlainFallbackShowsTheOfferAndItsButtonsAnswer()
+    {
+        var ui = new UiThread();
+        var loader = new InkPipelineLoader(() => new InkPipeline(InkAdapter.Warp, "not a shader"));
+        Assert.True(loader.Wait().Permanent);
+        using var drop = new DropWindow(loader, new InkClock(ui.Post));
+        var clicked = new List<int>();
+        drop.ButtonClicked += clicked.Add;
+        ui.Pump(0.2);
+        var foreground = GetForegroundWindow();
+
+        drop.Show(Offer, InkState.Idle);
+        ui.Pump(0.2);
+        Assert.True(drop.ShowsFallback, "an offer is never invisible");
+        var fallback = (HWND)drop.FallbackHandle;
+        var rect = Rect(fallback);
+        var scale = (rect.right - rect.left) / DropLayout.WidthWithButtons;
+        Click(fallback, 0, 0, scale);
+        Assert.Equal([0], clicked);
+        Assert.Equal(foreground, GetForegroundWindow());
+        Assert.NotEqual(fallback, GetActiveWindow());
+        drop.Hide();
+    }
+
+    /// <summary>
+    /// Review (S3.5b): the plain fallback draws the offer's detail on up to two lines above the
+    /// buttons, so the consent sentence shows whole (one line cut it after about 40 characters);
+    /// a panel without buttons keeps its one line. Measured with the fallback's own font.
+    /// </summary>
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    public unsafe void ThePlainFallbackShowsTheWholeConsentSentence(double scale)
+    {
+        int S(double dips) => (int)Math.Round(dips * scale);
+        var client = new RECT { right = S(DropLayout.WidthWithButtons), bottom = S(DropLayout.HeightWithButtons) };
+        var (title, detail, format) = DropFallback.Lines(buttons: true, client, scale);
+        Assert.True((format & DT.DT_WORDBREAK) != 0 && (format & DT.DT_SINGLELINE) == 0, "wraps");
+        Assert.True(title.bottom <= detail.top, "the title above the detail");
+        Assert.True(detail.bottom <= S(DropLayout.Button(0).Top), "above the buttons");
+
+        var dc = CreateCompatibleDC(HDC.NULL);
+        var font = DropFallback.Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
+        var before = SelectObject(dc, (HGDIOBJ)font.Value);
+        try
+        {
+            TEXTMETRICW metrics;
+            Assert.True(GetTextMetricsW(dc, &metrics) != 0);
+            var needed = detail;
+            var words = Offer.Detail;
+            fixed (char* w = words)
+            {
+                // The height the whole sentence takes, wrapped at the detail's width.
+                Assert.True(DrawTextW(dc, w, words.Length, &needed, DT.DT_CALCRECT | DT.DT_WORDBREAK | DT.DT_NOPREFIX | DT.DT_LEFT | DT.DT_TOP) > 0);
+            }
+            var height = needed.bottom - needed.top;
+            Assert.True(height > metrics.tmHeight, $"more than one line ({height} px, a line is {metrics.tmHeight} px)");
+            Assert.True(height <= detail.bottom - detail.top, $"{height} px fits the detail's {detail.bottom - detail.top} px");
+        }
+        finally
+        {
+            SelectObject(dc, before);
+            DeleteObject((HGDIOBJ)font.Value);
+            DeleteDC(dc);
+        }
+
+        var plain = new RECT { right = S(DropLayout.Width), bottom = S(DropLayout.Height) };
+        Assert.True((DropFallback.Lines(buttons: false, plain, scale).DetailFormat & DT.DT_SINGLELINE) != 0);
+    }
+
+    private static unsafe RECT Rect(HWND hwnd)
+    {
+        RECT rect;
+        GetWindowRect(hwnd, &rect);
+        return rect;
+    }
+
+    /// <summary>
+    /// A left button pressed on button <paramref name="down"/> and let go on <paramref name="up"/>, in
+    /// client pixels. First the question Windows asks a window before a click activates it
+    /// (WM_MOUSEACTIVATE, sent here as Windows would: the top-level window, the client area, the
+    /// button's message); the window must answer "don't activate", or the click would take focus
+    /// from the call.
+    /// </summary>
+    private static unsafe void Click(HWND hwnd, int down, int up, double scale)
+    {
+        var asked = SendMessageW(hwnd, WM.WM_MOUSEACTIVATE, (WPARAM)(nuint)(nint)hwnd.Value,
+            (LPARAM)(nint)((WM.WM_LBUTTONDOWN << 16) | HTCLIENT));
+        Assert.Equal((nint)MA.MA_NOACTIVATE, (nint)asked);
+        foreach (var (msg, button) in new[] { (WM.WM_LBUTTONDOWN, down), (WM.WM_LBUTTONUP, up) })
+        {
+            var (l, t, r, b) = DropLayout.Button(button);
+            var x = (int)Math.Round((l + r) / 2 * scale);
+            var y = (int)Math.Round((t + b) / 2 * scale);
+            // MK_LBUTTON while the button is down; the point packed as MAKELPARAM does.
+            SendMessageW(hwnd, (uint)msg, (WPARAM)(nuint)(msg == WM.WM_LBUTTONDOWN ? 1 : 0), (LPARAM)(nint)((y << 16) | (x & 0xFFFF)));
+        }
+    }
+
     [Fact]
     public void EachStateSaysWhatTheMacSays()
     {

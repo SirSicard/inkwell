@@ -1,16 +1,19 @@
-// What the Drop says about dictation, and when: the Mac's DropText.dictating, DictationModel.note
-// and DropController's order (mac/Sources/Inkwell/ShellInk.swift, Screens/DictationModel.swift,
-// Drop.swift), with Windows' words where the cause differs (an app running as administrator, not
-// Secure Input; the keyboard hook, not Accessibility).
+// What the Drop says, and when: the Mac's DropText, DictationModel.note and DropController's order
+// (mac/Sources/Inkwell/ShellInk.swift, Screens/DictationModel.swift, Drop.swift), with Windows'
+// words where the cause differs (an app running as administrator, not Secure Input; the keyboard
+// hook, not Accessibility; no system-audio permission, so a silent far end has no button).
 //
+//   a meeting recording          "● REC · Teams" over its latest line, the ink in meeting (a meeting outranks a take)
+//   its far end silent/stopped   an alert, the ink in problem
+//   its final pass               "Blotting · final pass", the ink blotting
 //   a take held or transcribed   its line, the ink dictating (the app in front, its mode, the live words)
 //   a take ended not as it should  a note for 2.5 s, the ink still (too short, no mic, not typed...)
-//   a note during another take   kept, and shown when that take ends
+//   a note while something is live  kept, and shown when it ends
+//   an app took the mic (the core offers)  "Teams opened the microphone", Record this call / Not this one, the ink still
 //   nothing                      the Drop hides
 //
 // The app's ShellInk draws what this says; nothing here draws, and nothing ticks: a note's end is
-// one delayed call. The live words are the user's: shown, never logged. Meetings join this with
-// the meetings' end to end.
+// one delayed call. The live words and a meeting's lines are the user's: shown, never logged.
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
@@ -26,9 +29,119 @@ public enum DropLineTone
     Alert,
 }
 
-/// <summary>The Drop's two lines.</summary>
+/// <summary>The Drop's two lines, and its buttons when it offers something.</summary>
 /// <param name="LiveWords">The detail is a held take's live words: its end matters, the newest words are wet.</param>
-public sealed record DropLine(string Title, string Detail, DropLineTone Tone = DropLineTone.Plain, bool LiveWords = false);
+public sealed record DropLine(
+    string Title, string Detail, DropLineTone Tone = DropLineTone.Plain, bool LiveWords = false, DropActions? Actions = null);
+
+/// <summary>A button on the Drop.</summary>
+public abstract record DropAction
+{
+    private DropAction() { }
+
+    /// <summary>Record the call the core offered (meeting.start with its app).</summary>
+    public sealed record Record(string App) : DropAction;
+
+    /// <summary>"Not this one" (meeting.dismiss).</summary>
+    public sealed record Dismiss(string App) : DropAction;
+
+    /// <summary>The button's words.</summary>
+    public string Title => this switch
+    {
+        Record => "Record this call",
+        Dismiss => "Not this one",
+        _ => throw new InvalidOperationException("a Drop action without words"),
+    };
+}
+
+/// <summary>The Drop's buttons, in order: the first is the answer, drawn in ink.</summary>
+public sealed record DropActions(DropAction First, DropAction? Second = null)
+{
+    /// <summary>The button at <paramref name="index"/> (0 or 1), or null.</summary>
+    public DropAction? At(int index) => index switch
+    {
+        0 => First,
+        1 => Second,
+        _ => null,
+    };
+}
+
+/// <summary>What the Drop's ink shows (the app maps it to the renderer's state).</summary>
+public enum DropInk
+{
+    /// <summary>Still: nothing live (a note or an offer may show).</summary>
+    Idle,
+    Dictating,
+    Meeting,
+    /// <summary>A meeting's final pass.</summary>
+    Blotting,
+    /// <summary>A meeting whose far end is silent or stopped.</summary>
+    Problem,
+}
+
+/// <summary>The Drop's words for a meeting, and for the offer to record one.</summary>
+public static class MeetingDrop
+{
+    /// <summary>
+    /// The ink for what is live. A meeting outranks a take. Only the far end sets the problem ink,
+    /// which shows the far end's drop gone dead; a silent mic shows as your own drop lying still
+    /// (Live and Today say it in words).
+    /// </summary>
+    public static DropInk Ink(LiveMeeting? meeting, DictationPhase dictation)
+    {
+        if (meeting is not null)
+        {
+            if (meeting.Stopping)
+            {
+                return DropInk.Blotting;
+            }
+            return meeting.Sides.GetValueOrDefault(Channel.Far, SideState.Ok) == SideState.Ok ? DropInk.Meeting : DropInk.Problem;
+        }
+        return dictation == DictationPhase.Idle ? DropInk.Idle : DropInk.Dictating;
+    }
+
+    /// <summary>A live meeting's lines for <paramref name="ink"/> (meeting, problem or blotting).</summary>
+    public static DropLine Live(LiveMeeting meeting, DropInk ink)
+    {
+        ArgumentNullException.ThrowIfNull(meeting);
+        switch (ink)
+        {
+            case DropInk.Blotting:
+                return new("Blotting · final pass", meeting.Title ?? meeting.AppName ?? "The final pass");
+            case DropInk.Problem:
+                // Windows has no system-audio permission to ask for: loopback arrives as silence
+                // when the call's sound is muted on this PC, and not at all when its device went.
+                return meeting.Sides.GetValueOrDefault(Channel.Far, SideState.Ok) == SideState.Zeros
+                    ? new("The other side is silent", "It arrives as silence: the call's sound may be muted on this PC.", DropLineTone.Alert)
+                    : new("The other side stopped", "Nothing is arriving from the call. Only your voice may be recorded.", DropLineTone.Alert);
+            default:
+                var source = meeting.AppName ?? meeting.Title;
+                var latest = meeting.Finals.Count > 0 ? meeting.Finals[^1].Text.Trim() : "";
+                // Said until the first line arrives: other apps' sound is in this recording.
+                var waiting = meeting.FarEndFallback
+                    ? $"Inkwell couldn't hear {meeting.AppName ?? "the call"} alone, so it is recording everything this PC plays"
+                    : "Recording this meeting";
+                var title = source is null ? "● REC" : $"● REC · {source}";
+                return new(title, latest.Length > 0 ? latest : waiting, DropLineTone.Recording);
+        }
+    }
+
+    /// <summary>
+    /// The consent Drop: an app opened the microphone and nothing is live. Honest about what
+    /// recording does: both sides are kept on this PC, and the others should be told. A failed
+    /// answer (<paramref name="failure"/>) is said in its place; the offer stays, to be answered
+    /// again.
+    /// </summary>
+    public static DropLine Offer(MeetingOffer offer, string? failure)
+    {
+        ArgumentNullException.ThrowIfNull(offer);
+        return new(
+            $"{offer.AppName} opened the microphone",
+            failure ?? "Recording keeps both sides on this PC. Tell the others you are recording.",
+            failure is null ? DropLineTone.Plain : DropLineTone.Alert,
+            Actions: new DropActions(new DropAction.Record(offer.App), new DropAction.Dismiss(offer.App)));
+    }
+}
 
 /// <summary>The Drop's words for dictation.</summary>
 public static class DictationDrop
@@ -141,25 +254,32 @@ public sealed class DropModel
 
     private readonly IWakeScheduler wake;
     private readonly Func<bool> hasLanguageModel;
+    private readonly Func<string?> offerFailure;
     private DropLine? live;
     private DropLine? noteShowing;
     private DropLine? noteWaiting;
+    private DropLine? offer;
     private NoteEnd? noteEnd;
 
     /// <param name="wake">Ends a note after <see cref="NoteDuration"/> (one delayed call per note).</param>
     /// <param name="hasLanguageModel">Whether a language model could rewrite a selection (Polish's engine).</param>
-    public DropModel(IWakeScheduler wake, Func<bool>? hasLanguageModel = null)
+    /// <param name="offerFailure">A Drop answer that failed, in words (the meetings model's), or null.</param>
+    public DropModel(IWakeScheduler wake, Func<bool>? hasLanguageModel = null, Func<string?>? offerFailure = null)
     {
         ArgumentNullException.ThrowIfNull(wake);
         this.wake = wake;
         this.hasLanguageModel = hasLanguageModel ?? (() => false);
+        this.offerFailure = offerFailure ?? (() => null);
     }
 
-    /// <summary>What the Drop says now; null: it hides.</summary>
-    public DropLine? Line => live ?? noteShowing;
+    /// <summary>What the Drop says now; null: it hides. What is live first, then a note, then an offer.</summary>
+    public DropLine? Line => live ?? noteShowing ?? offer;
 
-    /// <summary>Whether a take is in progress (the ink dictating); a note shows with the ink still.</summary>
+    /// <summary>Whether something is live (a meeting or a take); a note or an offer shows with the ink still.</summary>
     public bool IsLive => live is not null;
+
+    /// <summary>What the Drop's ink shows now.</summary>
+    public DropInk Ink { get; private set; }
 
     /// <summary>What the Drop shows changed.</summary>
     public event Action? Changed;
@@ -169,9 +289,18 @@ public sealed class DropModel
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(batch);
-        var (line, isLive) = (Line, IsLive);
+        var (line, ink) = (Line, Ink);
         var wasLive = live is not null;
-        live = DictationDrop.Live(store.Dictation, store.LiveDictation);
+        Ink = MeetingDrop.Ink(store.Meeting, store.Dictation);
+        live = Ink switch
+        {
+            DropInk.Idle => null,
+            DropInk.Dictating => DictationDrop.Live(store.Dictation, store.LiveDictation),
+            _ => MeetingDrop.Live(store.Meeting!, Ink),
+        };
+        // The core offers only while nothing is being captured; what is live (a take, or the last
+        // meeting's final pass) hides the offer until it ends.
+        offer = live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure()) : null;
         foreach (var e in batch)
         {
             if (DictationDrop.Note(e, hasLanguageModel()) is not { } note)
@@ -198,7 +327,22 @@ public sealed class DropModel
             noteWaiting = null;
             ShowNote(waiting);
         }
-        if (Line != line || IsLive != isLive)
+        if (Line != line || Ink != ink)
+        {
+            Changed?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// The offer's line again, for a change outside a batch (an answer sent again clears its
+    /// failure). What is live and the notes stay as the last batch left them.
+    /// </summary>
+    public void Refresh(CoreStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var line = Line;
+        offer = live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure()) : null;
+        if (Line != line)
         {
             Changed?.Invoke();
         }

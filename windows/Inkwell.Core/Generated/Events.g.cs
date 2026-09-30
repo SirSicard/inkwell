@@ -2808,10 +2808,11 @@ public sealed record MeetingsRecovered : InkEvent
 
 /// <summary>
 /// Why a meeting records this microphone: the system default input; the built-in mic because
-/// the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because
-/// the user's setting says so; the default because this Mac has no built-in mic; the first
-/// input because no default is set; it was named; or a reason this build of the core does not
-/// name (unknown).
+/// the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be
+/// the one kept); the headset's own mic because the user's setting says so; the default because
+/// this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because
+/// no default is set; it was named; the LE Audio headset's own mic, which keeps full quality
+/// (Windows); or a reason this build of the core does not name (unknown).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<MicReason>))]
 public enum MicReason
@@ -2828,6 +2829,8 @@ public enum MicReason
     FirstInput,
     [JsonStringEnumMemberName("requested")]
     Requested,
+    [JsonStringEnumMemberName("le_audio_headset")]
+    LeAudioHeadset,
     [JsonStringEnumMemberName("unknown")]
     Unknown,
 }
