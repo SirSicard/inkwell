@@ -8,10 +8,11 @@
 # First it checks the app is built for -Arch (Inkwell.exe and the core), and what it needs from the
 # PC it lands on (windows/scripts/lib/dll-imports.ps1): every DLL any of its binaries loads when it
 # loads is beside Inkwell.exe or part of Windows, so ONNX Runtime must be the app's own, never the
-# older onnxruntime.dll in Windows' System32; no Visual C++ runtime DLL at all (the core links the
-# CRT statically; the .NET and Windows App SDK binaries use the UCRT, which is part of Windows); and
-# the Vulkan loader only where it may be missing (delay-loaded by the core, or behind the core's
-# delay-loaded diarizer).
+# older onnxruntime.dll in Windows' System32; the Visual C++ runtime only as the copy beside
+# Inkwell.exe, built for -Arch (the engines' DLLs need it; build-core.ps1 put it with them; the core
+# links the CRT statically, and the .NET and Windows App SDK binaries use the UCRT, which is part of
+# Windows); and the Vulkan loader only where it may be missing (delay-loaded by the core, or behind
+# the core's delay-loaded diarizer). It prints the Visual C++ runtime's version.
 #
 # Then Velopack's vpk (the version windows/.config/dotnet-tools.json pins) packs it, each
 # architecture on its own update channel, so that an x64 install never updates to ARM64 packages
@@ -142,12 +143,19 @@ foreach ($binary in $binaries) {
     $imports[$binary.Name.ToLowerInvariant()] = Read-DllImports $dumpbin $binary.FullName
 }
 $beside = @(Get-ChildItem $AppDir -File | ForEach-Object { $_.Name.ToLowerInvariant() })
-$problems = @(Find-ImportProblems -Imports $imports -Beside $beside -Roots 'inkwell.exe', 'ink_ffi.dll' -Core 'ink_ffi.dll')
+$machines = @{}
+foreach ($binary in Get-ChildItem $AppDir -File | Where-Object { $_.Extension -in '.exe', '.dll' }) {
+    $machines[$binary.Name.ToLowerInvariant()] = Get-PeMachine $binary.FullName
+}
+$problems = @(Find-ImportProblems -Imports $imports -Beside $beside -Machines $machines -Machine $Machine -Roots 'inkwell.exe', 'ink_ffi.dll' -Core 'ink_ffi.dll')
 if ($problems.Count -gt 0) {
     $problems | Sort-Object -Unique | ForEach-Object { Write-Output "::error title=pack::$_" }
     Fail "the app needs what a PC may not have ($($problems.Count) problem(s), above)"
 }
-Write-Output "pack: $($binaries.Count) binaries for $Arch; everything they load is beside Inkwell.exe or part of Windows, and no Visual C++ runtime"
+# (Not $runtime: PowerShell's names ignore case, and $Runtime is vpk's.)
+$vcRuntime = Get-VcRuntimeVersion $AppDir
+Write-Output "pack: $($binaries.Count) binaries for $Arch; everything they load is beside Inkwell.exe or part of Windows"
+Write-Output "pack: the Visual C++ runtime $($vcRuntime.Version) beside Inkwell.exe: $($vcRuntime.Files -join ', ')"
 
 # vpk, as pinned. --skip-updates: it would otherwise ask NuGet for a newer vpk.
 Push-Location $windows

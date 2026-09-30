@@ -2,9 +2,9 @@
 # The core as the Windows release ships it (win-release-build.yml runs this; run it the same way on
 # a PC, from anywhere): ink_ffi.dll with the Windows engines, built for the PC's own architecture
 # (x64, or ARM64 on an ARM64 PC: never cross-compiled), in core/target/release/ (CARGO_TARGET_DIR's
-# release/ when that is set); then the DLL and the engines' DLLs together in its inkwell-core/, the
-# folder the app is published with (InkCoreDir: Inkwell.csproj puts every DLL in it beside
-# Inkwell.exe).
+# release/ when that is set); then the DLL, the engines' DLLs and the Visual C++ runtime DLLs these
+# need together in its inkwell-core/, the folder the app is published with (InkCoreDir:
+# Inkwell.csproj puts every DLL in it beside Inkwell.exe).
 #
 # The engines, by architecture ($ReleaseFeatures below):
 # - x64: Qwen3-ASR on llama.cpp with Vulkan (the CPU where the PC has no Vulkan GPU), Silero VAD,
@@ -26,12 +26,19 @@
 #   a Vulkan driver (ink-engines' src/nemo.rs checks it loads before its first call).
 # - Everything the core and the engines' DLLs load when they load is beside them in inkwell-core/
 #   or part of Windows (windows/scripts/lib/dll-imports.ps1): ONNX Runtime must be the one beside
-#   them, never Windows' own older onnxruntime.dll in System32, and no Visual C++ runtime DLL at
-#   all.
+#   them, never Windows' own older onnxruntime.dll in System32, and the Visual C++ runtime the
+#   copy beside them, of this architecture.
 #
-# Needs: the Rust toolchain core/rust-toolchain.toml pins; CMake and Ninja; Visual Studio's C++
+# The Visual C++ runtime: sherpa-onnx's archive and NeMo-Speech.cpp's build link it dynamically
+# (/MD), so the DLLs of it that the engines' DLLs import (and those these import in turn), and no
+# others, are copied beside them from Visual Studio's redistributable folder for this architecture
+# (VCToolsRedistDir, set by the developer environment: $VcRedist's CRT and OpenMP folders, which
+# the Visual Studio licence lets an app redistribute; never the build machine's System32). Their
+# version is printed, and win-release-build.yml records it in the release.
+#
+# Needs: the Rust toolchain core/rust-toolchain.toml pins; CMake and Ninja; Visual Studio 2026's C++
 # build tools for this architecture, whose developer environment it enters when cl.exe is not on
-# PATH; LLVM (libclang for llama.cpp's bindings, LIBCLANG_PATH, LLVM's bin under Program Files when
+# PATH (its redistributable folder, VCToolsRedistDir, holds the runtime copied above); LLVM (libclang for llama.cpp's bindings, LIBCLANG_PATH, LLVM's bin under Program Files when
 # unset; on ARM64 also clang-cl, since ggml refuses MSVC on ARM); on x64 the Vulkan SDK
 # (VULKAN_SDK); SHERPA_ONNX_DIR, the unpacked sherpa-onnx-v1.13.4-win-<x64|arm64>-shared-MD-Release-
 # no-tts-lib archive, whose files ink-engines' build.rs checks against its pins; and, where the
@@ -69,6 +76,11 @@ $VulkanImports = @('vkGetInstanceProcAddr', 'vkGetDeviceProcAddr', 'vkGetPhysica
 # sherpa-onnx's DLLs the app ships: the C API, the ONNX Runtime it loads, and the provider bridge
 # ONNX Runtime loads (build.rs pins all three).
 $SherpaDlls = @('sherpa-onnx-c-api.dll', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll')
+# The Visual C++ runtime the release ships (Microsoft.VC145.CRT and .OpenMP): Visual Studio 2026's,
+# under the licence terms About shows for it and the first run asks the user to agree to
+# (windows/Inkwell.Core/Screens/About/Notices.cs, vc-runtime). Another redistributable would need
+# its own terms there first, so any other stops the build.
+$VcRedist = 'VC145'
 
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $core = Join-Path $root 'core'
@@ -200,8 +212,32 @@ if ($nemo) {
     if ($copied -eq 0) { Fail 'nemo-speech.manifest lists no DLL' }
 }
 
-# What the DLL loads when it loads, and what it loads later.
+# The Visual C++ runtime DLLs the folder's DLLs import (above), from the redistributable folder.
 $dumpbin = (Get-Command dumpbin.exe).Source
+$redistFolders = @('CRT', 'OpenMP') | ForEach-Object { Join-Path $env:VCToolsRedistDir "$vsArch\Microsoft.$VcRedist.$_" }
+$pending = [System.Collections.Generic.Queue[string]]::new()
+foreach ($file in Get-ChildItem $out -File -Filter *.dll) { $pending.Enqueue($file.FullName) }
+$runtimeCopied = 0
+while ($pending.Count -gt 0) {
+    $imports = Read-DllImports $dumpbin $pending.Dequeue()
+    foreach ($name in @($imports.Load) + @($imports.Delay) | Where-Object { Test-VcRuntimeDll $_ }) {
+        $copy = Join-Path $out $name
+        if (Test-Path $copy) { continue }
+        if (-not $env:VCToolsRedistDir) { Fail "the engines need $name, and VCToolsRedistDir is not set: run this in Visual Studio's developer environment" }
+        $from = @($redistFolders | ForEach-Object { Join-Path $_ $name } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        if ($from.Count -eq 0) { Fail "the engines need $name, which Visual Studio's redistributable folder does not hold for $vsArch ($($redistFolders -join ', '))" }
+        Copy-Item -LiteralPath $from[0] $copy
+        $runtimeCopied++
+        $pending.Enqueue($copy)
+    }
+}
+$runtime = $null
+if ($runtimeCopied -gt 0) {
+    $runtime = Get-VcRuntimeVersion $out
+    Write-Output "the Visual C++ runtime $($runtime.Version), from $($env:VCToolsRedistDir) (Microsoft.$VcRedist, $vsArch): $($runtime.Files -join ', ')"
+}
+
+# What the DLL loads when it loads, and what it loads later.
 $coreImports = Read-DllImports $dumpbin $dll
 Write-Output "ink_ffi.dll loads: $($coreImports.Load -join ', ')"
 Write-Output "ink_ffi.dll delay-loads: $($coreImports.Delay -join ', ')"
@@ -255,11 +291,14 @@ if ($vulkan) {
 
 # Everything the core's folder loads: beside it, or part of Windows.
 $folder = @{}
+$machines = @{}
 foreach ($file in Get-ChildItem $out -File -Filter *.dll) {
     $folder[$file.Name.ToLowerInvariant()] = Read-DllImports $dumpbin $file.FullName
+    $machines[$file.Name.ToLowerInvariant()] = Get-PeMachine $file.FullName
 }
 $beside = @(Get-ChildItem $out -File | ForEach-Object { $_.Name.ToLowerInvariant() })
-foreach ($problem in (Find-ImportProblems -Imports $folder -Beside $beside -Roots 'ink_ffi.dll' -Core 'ink_ffi.dll')) {
+$machine = if ($arch -eq 'Arm64') { 0xAA64 } else { 0x8664 }
+foreach ($problem in (Find-ImportProblems -Imports $folder -Beside $beside -Machines $machines -Machine $machine -Roots 'ink_ffi.dll' -Core 'ink_ffi.dll')) {
     $problems.Add($problem)
 }
 
@@ -280,7 +319,7 @@ if ($vulkan) {
     }
 }
 
-Write-Output "build-core: $arch, $Features; static CRT$(if ($vulkan) { ', Vulkan delay-loaded' })$(if ($nemo) { ', the diarizer delay-loaded' })"
+Write-Output "build-core: $arch, $Features; static CRT$(if ($vulkan) { ', Vulkan delay-loaded' })$(if ($nemo) { ', the diarizer delay-loaded' })$(if ($runtime) { "; the engines' Visual C++ runtime $($runtime.Version) beside them" })"
 foreach ($file in Get-ChildItem $out -File | Sort-Object Name) {
     Write-Output ('{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant(), $file.Name)
 }

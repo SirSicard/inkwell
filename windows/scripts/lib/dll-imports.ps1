@@ -12,7 +12,9 @@
 # And never one of these, whatever the machine that builds the release has in its System32:
 # - vulkan-1.dll, the Vulkan loader, which GPU drivers install;
 # - the Visual C++ runtime (vcruntime*, msvcp*, vcomp*, concrt*, mfc*, vccorlib*), which its
-#   redistributable installs, and which the release neither needs nor ships;
+#   redistributable installs: the release ships the DLLs of it that the engines' DLLs need beside
+#   Inkwell.exe (build-core.ps1 copies them from Visual Studio's redistributable folder), and only
+#   that copy counts, built for the app's architecture;
 # - ONNX Runtime (onnxruntime*.dll): Windows 11 has an older onnxruntime.dll of its own in System32,
 #   and sherpa-onnx must get the one the app ships (ink-engines' src/sherpa.rs also refuses any
 #   other version at run time).
@@ -28,6 +30,46 @@ $script:NotPartOfWindows = '^(vulkan-1|onnxruntime[^.]*)\.dll$'
 # Whether $Name (a DLL's file name) is a Visual C++ runtime DLL.
 function Test-VcRuntimeDll([string]$Name) {
     return $Name.ToLowerInvariant() -match $script:VcRuntimeDll
+}
+
+# The machine a PE file is built for (0x8664 x64, 0xAA64 ARM64): the two bytes after its "PE\0\0"
+# signature, which the offset at 0x3C points at. $null for a file that is not a PE file.
+function Get-PeMachine([string]$Path) {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $reader = [System.IO.BinaryReader]::new($stream)
+        if ($stream.Length -lt 0x40 -or $reader.ReadUInt16() -ne 0x5A4D) { return $null }
+        $stream.Position = 0x3C
+        $pe = $reader.ReadInt32()
+        if ($pe -lt 0 -or $pe + 6 -gt $stream.Length) { return $null }
+        $stream.Position = $pe
+        if ($reader.ReadUInt32() -ne 0x4550) { return $null }
+        return [int]$reader.ReadUInt16()
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+# The Visual C++ runtime DLLs in $Dir and their one file version, as Version (a.b.c.d) and Files
+# (lower case, sorted): what a release records it ships. Throws when there is none, or when they
+# are not all of one version (DLLs from two redistributables). $VersionOf is for the tests.
+function Get-VcRuntimeVersion {
+    param(
+        [Parameter(Mandatory)] [string]$Dir,
+        [scriptblock]$VersionOf = {
+            param($path)
+            $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+            '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
+        }
+    )
+    $files = @(Get-ChildItem -LiteralPath $Dir -File | Where-Object { Test-VcRuntimeDll $_.Name } | Sort-Object { $_.Name.ToLowerInvariant() })
+    if ($files.Count -eq 0) { throw "no Visual C++ runtime DLL in $Dir" }
+    $each = @($files | ForEach-Object { [pscustomobject]@{ Name = $_.Name.ToLowerInvariant(); Version = [string](& $VersionOf $_.FullName) } })
+    $versions = @($each | ForEach-Object { $_.Version } | Select-Object -Unique)
+    if ($versions.Count -ne 1 -or -not $versions[0]) {
+        throw "the Visual C++ runtime DLLs in $Dir are not of one version: $(($each | ForEach-Object { "$($_.Name) $($_.Version)" }) -join ', ')"
+    }
+    return [pscustomobject]@{ Version = $versions[0]; Files = [string[]]@($each | ForEach-Object { $_.Name }) }
 }
 
 # Windows' System32 as a 64-bit program sees it. A 32-bit PowerShell (the first pwsh on some PCs'
@@ -95,8 +137,9 @@ function Get-LoadClosure([hashtable]$Imports, [string[]]$Roots) {
 
 # What a PC may lack, as one line per problem. $Imports maps each binary (its file name, lower
 # case) to what it loads (ConvertFrom-DumpbinDependents); $Beside names every file beside
-# Inkwell.exe, lower case. $Roots are the binaries loaded when the app starts (Inkwell.exe and the
-# core, which it loads at once); $Core is the core's DLL.
+# Inkwell.exe, lower case, and $Machines maps them to the machine each is built for
+# (Get-PeMachine); $Machine is the app's. $Roots are the binaries loaded when the app starts
+# (Inkwell.exe and the core, which it loads at once); $Core is the core's DLL.
 #
 # - A DLL loaded when a binary loads must be beside Inkwell.exe or part of Windows
 #   (Test-WindowsDll). One exception, the Vulkan loader: a binary the core reaches only through a
@@ -106,25 +149,42 @@ function Get-LoadClosure([hashtable]$Imports, [string[]]$Roots) {
 #   load, and the rest runs.
 # - A DLL the core delay-loads must be beside Inkwell.exe, but for the Vulkan loader (the core then
 #   runs llama.cpp on the CPU; build-core.ps1 checks which functions it imports).
-# - A Visual C++ runtime DLL is never allowed, however loaded.
+# - A Visual C++ runtime DLL, however loaded, must be beside Inkwell.exe and built for the app's
+#   machine: never System32's, never another architecture's. Never the debug UCRT (ucrtbased.dll),
+#   which Microsoft does not let an app redistribute.
 # (Other binaries' delay-loads are not checked: the Windows App SDK delay-loads parts of Windows
 # that not every edition has, and handles their absence.)
 function Find-ImportProblems {
     param(
         [Parameter(Mandatory)] [hashtable]$Imports,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$Beside,
+        [Parameter(Mandatory)] [hashtable]$Machines,
+        [Parameter(Mandatory)] [int]$Machine,
         [Parameter(Mandatory)] [string[]]$Roots,
         [Parameter(Mandatory)] [string]$Core,
         [scriptblock]$IsWindowsDll = { param($name) Test-WindowsDll -Name $name }
     )
     $problems = [System.Collections.Generic.List[string]]::new()
+    # A Visual C++ runtime DLL $binary loads: the problem with it, or nothing.
+    $vcRuntime = {
+        param($binary, $dll)
+        if ($dll -eq 'ucrtbased.dll') {
+            "$binary needs ucrtbased.dll, the debug UCRT, which no release may ship"
+        } elseif ($Beside -notcontains $dll) {
+            "$binary needs $dll, a Visual C++ runtime DLL, which is not beside Inkwell.exe (a PC may not have it; System32's copy on the build machine does not count)"
+        } elseif ($Machines[$dll] -ne $Machine) {
+            $found = if ($null -eq $Machines[$dll]) { '(unread)' } else { '0x{0:X4}' -f $Machines[$dll] }
+            "$binary needs $dll, which is beside Inkwell.exe but built for machine $found, not 0x{0:X4}" -f $Machine
+        }
+    }
     $atStart = Get-LoadClosure $Imports $Roots
     $delayed = if ($Imports.ContainsKey($Core)) { $Imports[$Core].Delay } else { @() }
     $deferred = @(Get-LoadClosure $Imports $delayed | Where-Object { $atStart -notcontains $_ })
     foreach ($binary in @($Imports.Keys | Sort-Object)) {
         foreach ($dll in $Imports[$binary].Load) {
             if (Test-VcRuntimeDll $dll) {
-                $problems.Add("$binary needs $dll, a Visual C++ runtime DLL: a PC may not have it, and the release ships none")
+                $problem = & $vcRuntime $binary $dll
+                if ($problem) { $problems.Add($problem) }
             } elseif ($Beside -contains $dll -or (& $IsWindowsDll $dll)) {
                 continue
             } elseif ($dll -eq 'vulkan-1.dll' -and $deferred -contains $binary) {
@@ -137,7 +197,8 @@ function Find-ImportProblems {
         }
         foreach ($dll in $Imports[$binary].Delay) {
             if (Test-VcRuntimeDll $dll) {
-                $problems.Add("$binary needs $dll, a Visual C++ runtime DLL: a PC may not have it, and the release ships none")
+                $problem = & $vcRuntime $binary $dll
+                if ($problem) { $problems.Add($problem) }
             } elseif ($binary -eq $Core -and $dll -ne 'vulkan-1.dll' -and $Beside -notcontains $dll) {
                 $problems.Add("$binary delay-loads $dll, which is not beside Inkwell.exe")
             }
