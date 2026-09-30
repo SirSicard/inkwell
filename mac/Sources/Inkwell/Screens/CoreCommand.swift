@@ -16,6 +16,10 @@ enum CoreCommand: Equatable, Sendable {
     case noteUpdate(note: String, text: String, ref: String)
     case noteDelete(note: String, ref: String)
     case modelsList
+    /// A registry model's first download (`model.update` with the model as its own next), sent
+    /// only when the user pressed Download. `ref` comes back as the id of a `command.failed`; the
+    /// download's progress and end are model.update_progress and model.update_finished for it.
+    case modelInstall(String, ref: String)
     case engineRoute(Job)
     case settingGet(ShellSetting)
     case settingSet(ShellSetting, String)
@@ -78,6 +82,7 @@ enum CoreCommand: Equatable, Sendable {
         case .noteUpdate(let note, let text, let ref): ["cmd": "note.update", "note": note, "text": text, "id": ref]
         case .noteDelete(let note, let ref): ["cmd": "note.delete", "note": note, "id": ref]
         case .modelsList: ["cmd": "models.list"]
+        case .modelInstall(let model, let ref): ["cmd": "model.update", "model": model, "next": model, "id": ref]
         case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue]
         // The id names the setting, so a failure can be matched to it (command.failed has no key).
         case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue, "id": "setting:\(key.rawValue)"]
@@ -135,6 +140,7 @@ enum CoreCommand: Equatable, Sendable {
         case .noteUpdate: "note.update"
         case .noteDelete: "note.delete"
         case .modelsList: "models.list"
+        case .modelInstall: "model.update"
         case .engineRoute: "engine.route"
         case .settingGet: "setting.get"
         case .settingSet: "setting.set"

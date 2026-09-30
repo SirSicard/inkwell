@@ -341,6 +341,9 @@ final class ScreenModels {
              "commitment.not_yet", "note.add", "note.update", "note.delete",
              "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
             true
+        case "model.update":
+            // The download's row says it failed, and why (the first run and Settings > Models).
+            true
         case "setting.get":
             failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
