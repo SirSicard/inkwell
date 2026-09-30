@@ -29,7 +29,7 @@ the real core.
       meetings", each with its state. Nothing is asked for until you press Allow.
 - [ ] Models step (it downloads about 3 GB: only with your OK, into the scratch library's own
       models folder): each model not on this Mac with its licence, size and where it comes from
-      (huggingface.co; Silero VAD from github.com), and the total. Nothing is fetched until you
+      (huggingface.co; Silero VAD from raw.githubusercontent.com), and the total. Nothing is fetched until you
       press Download (Activity Monitor > Network: Inkwell receives nothing before it). Then one
       model at a time, smallest first, with its bar, the others "Waiting". Continue works at once,
       and the downloads keep going through the rest of the first run and after it.

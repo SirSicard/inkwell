@@ -799,11 +799,32 @@ final class ModelDownloadTests: XCTestCase {
             XCTAssertNotEqual(CatalogueModel.name(id), id, "named: \(id)")
             XCTAssertNotNil(CatalogueModel.source(id), id)
         }
-        XCTAssertEqual(CatalogueModel.source("silero-vad-v6-16k"), "github.com", "its row names raw.githubusercontent.com")
+        XCTAssertEqual(CatalogueModel.source("silero-vad-v6-16k"), "raw.githubusercontent.com", "the host its row names")
         XCTAssertNil(CatalogueModel.source("a-model-this-build-does-not-know"), "never a host it cannot vouch for")
         let catalogue = CatalogueModel(send: { _ in })
         catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
-        XCTAssertEqual(CatalogueModel.sources(catalogue.firstRunModels), "huggingface.co and github.com", "most bytes first")
+        XCTAssertEqual(CatalogueModel.sources(catalogue.firstRunModels), "huggingface.co and raw.githubusercontent.com", "most bytes first")
+    }
+
+    /// Where the screens say each model comes from is the host its row's URLs name in the core's
+    /// registry (ink-engines), the host the download connects to: a firewall rule written from
+    /// that sentence lets the download through.
+    func testEachModelsSourceIsTheHostItsRowNamesInTheCore() throws {
+        let engines = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("core/crates/ink-engines/src")
+        let registry = try String(contentsOf: engines.appendingPathComponent("registry.rs"), encoding: .utf8)
+        let rows = try String(contentsOf: engines.appendingPathComponent("rows.rs"), encoding: .utf8)
+        for (id, source, row) in [
+            ("qwen3-asr-1.7b-q8", registry, "fn qwen3_asr_1_7b_q8()"),
+            ("parakeet-tdt-0.6b-v3-coreml", rows, "pub fn parakeet_tdt_v3_coreml()"),
+            ("nemotron-3-diarization-q8", rows, "pub fn nemotron_3_diarization()"),
+            ("silero-vad-v6-16k", rows, "pub fn silero_vad()"),
+        ] {
+            let start = try XCTUnwrap(source.range(of: row), "\(row) is not in the core's source")
+            let url = try XCTUnwrap(source[start.upperBound...].firstMatch(of: /"https:\/\/([^\/"]+)\//), "no URL in \(row)")
+            XCTAssertEqual(CatalogueModel.source(id), String(url.output.1), id)
+        }
     }
 }
 

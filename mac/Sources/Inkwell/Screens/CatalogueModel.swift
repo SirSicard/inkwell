@@ -191,13 +191,13 @@ final class CatalogueModel {
     static func source(_ id: String) -> String? {
         switch id {
         case "qwen3-asr-1.7b-q8", "parakeet-tdt-0.6b-v3-coreml", "nemotron-3-diarization-q8": "huggingface.co"
-        case "silero-vad-v6-16k": "github.com"
+        case "silero-vad-v6-16k": "raw.githubusercontent.com"
         default: nil
         }
     }
 
     /// The hosts `models` come from, as a sentence names them, the one serving the most first:
-    /// "huggingface.co", or "huggingface.co and github.com".
+    /// "huggingface.co", or "huggingface.co and raw.githubusercontent.com".
     static func sources(_ models: [CatalogueEntry]) -> String {
         var hosts: [String] = []
         for model in models.sorted(by: { $0.sizeBytes > $1.sizeBytes }) {
