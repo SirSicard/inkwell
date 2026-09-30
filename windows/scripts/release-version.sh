@@ -9,8 +9,9 @@
 #
 # A release tag also waits until every licence notice the Windows app shows that was written
 # without its upstream file on hand has been compared with it (mac/scripts/notices-verified.sh,
-# over the Rust overrides, the shared composed notices and the Windows-only ones); a dry run lists
-# those still open, on stderr, and goes on.
+# over the Rust overrides, those of the crates in Velopack's Setup.exe and Update.exe, the shared
+# composed notices and the Windows-only ones); a dry run lists those still open, on stderr, and
+# goes on.
 #
 # Only plain X.Y.Z, no suffix: Velopack compares versions to decide what is newer, and the Mac's
 # release of the same tag allows no more. No leading zeros: "1.02" and "1.2" would name one
@@ -33,7 +34,7 @@ case "$1" in
     ;;
   *) fail "unknown kind: $1" ;;
 esac
-lists="${INK_NOTICES_FILES:-$root/core/crates/ink-ffi/notices/overrides.txt:$root/mac/composed-notices.txt:$root/windows/Inkwell.Core/Screens/About/composed-notices.txt}"
+lists="${INK_NOTICES_FILES:-$root/core/crates/ink-ffi/notices/overrides.txt:$root/core/crates/ink-ffi/notices/velopack/overrides.txt:$root/mac/composed-notices.txt:$root/windows/Inkwell.Core/Screens/About/composed-notices.txt}"
 # stdout is the workflow's outputs: notices-verified.sh prints only to stderr.
 if [ "$1" = tag ]; then
   INK_NOTICES_FILES="$lists" /bin/bash "$root/mac/scripts/notices-verified.sh" \

@@ -52,7 +52,7 @@ entries() { cat "$@" | grep -cvE '^(#|$)' || true; }
 windows_list="$here/../../Inkwell.Core/Screens/About/composed-notices.txt"
 windows_entries="$(entries "$windows_list")"
 [ "$windows_entries" -gt 0 ] && pass "the Windows-only list has notices" || flunk "the Windows-only list has no notices"
-all="$(entries "$here/../../../core/crates/ink-ffi/notices/overrides.txt" "$here/../../../mac/composed-notices.txt" "$windows_list")"
+all="$(entries "$here/../../../core/crates/ink-ffi/notices/overrides.txt" "$here/../../../core/crates/ink-ffi/notices/velopack/overrides.txt" "$here/../../../mac/composed-notices.txt" "$windows_list")"
 out="$(/bin/bash "$script" dry-run 1.0.0 2>&1)"
 assert_contains "the real lists include the Windows-only notices" "$out" " $all notice(s)"
 

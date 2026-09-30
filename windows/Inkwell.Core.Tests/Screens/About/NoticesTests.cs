@@ -115,7 +115,7 @@ public class NoticesTests
         Assert.StartsWith("MIT", byId["dotnet-runtime"].Licence, StringComparison.Ordinal);
         Assert.Contains("windows-sdk-net", byId.Keys);
         Assert.Equal("MIT; Inkwell's copy under the Windows SDK licence terms", byId["cswinrt"].Licence);
-        Assert.Equal("MIT", byId["velopack"].Licence);
+        Assert.Equal("MIT, with the notices of the Rust crates in its Setup.exe and Update.exe", byId["velopack"].Licence);
         Assert.Contains("1.2.161", byId["velopack"].Role, StringComparison.Ordinal);
 
         // The texts are the packages' own (NoticeTexts.cs).

@@ -4,7 +4,9 @@
 //
 // The third-party Rust crates linked into the core (ink_ffi.dll) are not here: their list is
 // generated from cargo's resolution of the Windows release build (RustNotices, RustNotices.g.cs, by
-// `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these.
+// `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these. The
+// crates compiled into Velopack's Setup.exe and Update.exe are generated the same way from
+// Velopack's own lock (VelopackNotices.g.cs, `-- --velopack`) and shown under Velopack's notice.
 //
 // What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, its copy of
 // fastcluster, VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback),
@@ -783,7 +785,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "MIT; Inkwell's copy under the Windows SDK licence terms", CsWinRtLicence),
         new("velopack", "Velopack, by Velopack Ltd and Caelan Sayler",
             "Installs Inkwell and brings its updates: the installer, Update.exe beside the app, and the update check in Settings > About. Velopack 1.2.161.",
-            "MIT", VelopackLicence),
+            "MIT, with the notices of the Rust crates in its Setup.exe and Update.exe", VelopackText),
     ];
 
     /// <summary>
@@ -802,6 +804,18 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         "and the Windows SDK's .NET projection, which Microsoft licenses separately, under the Microsoft Software " +
         "License Terms shown below (\"Windows App SDK, by Microsoft\" and \"Windows SDK projection for .NET, by Microsoft\"). " +
         "By installing or using Inkwell, you agree to those terms for those components.";
+
+    /// <summary>
+    /// Velopack's licence, then the notices of the Rust crates compiled into its Setup.exe and
+    /// Update.exe (VelopackNotices.g.cs), each under its name, version and licence.
+    /// </summary>
+    private static string VelopackText =>
+        VelopackLicence
+        + $"\n\n--- The Rust crates in Setup.exe and Update.exe ({VelopackNotices.Crates.Count}) ---\n"
+        // webview2-com-sys carries Microsoft's loader as a static library, which both link (its
+        // strings are in vpk 1.2.161's setup and update binaries).
+        + "[Both also link Microsoft's WebView2 loader, WebView2LoaderStatic.lib from webview2-com-sys, under the WebView2 SDK's licence: \"WebView2 SDK, by Microsoft\", above.]"
+        + string.Concat(VelopackNotices.Crates.Select(c => $"\n\n=== {c.Title} ({c.Detail}) ===\n{c.Text}"));
 
     /// <summary>The ids of the composed notices, which mac/composed-notices.txt lists.</summary>
     public static IReadOnlySet<string> ComposedIds =>

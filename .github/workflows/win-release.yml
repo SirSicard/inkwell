@@ -131,13 +131,15 @@ jobs:
         shell: pwsh
         run: windows/scripts/build-core.ps1
 
-      # About lists what this build links: the C# bindings and the Rust notices must be current.
+      # About lists what this build links: the C# bindings and the Rust notices (the core's, and
+      # those of the Velopack release vpk packs the installer from) must be current.
       - name: Generated C# and notices are current
         shell: bash
         working-directory: core
         run: |
           cargo run --locked -p ink-ffi --bin ink-schema -- --check
           cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
+          cargo run --locked -p ink-ffi --bin ink-notices -- --velopack --check
 
       # The SDK windows/global.json pins. Pinned to the commit tag v6.0.0 points at.
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
