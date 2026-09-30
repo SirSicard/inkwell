@@ -298,7 +298,7 @@ mod win {
     }
 
     /// The schema word (`MicReason`) for why Windows chose a mic.
-    pub(super) fn reason(r: MicRouteReason) -> &'static str {
+    fn reason(r: MicRouteReason) -> &'static str {
         match r {
             MicRouteReason::Requested => "requested",
             MicRouteReason::DefaultInput => "default_input",
