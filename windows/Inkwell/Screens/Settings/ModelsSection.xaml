@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > Models: which engine does each job now, and how accurate it measured. Read-only.
-     As the Mac's ModelsSection. -->
+<!-- Settings > Models: which engine does each job now, and how accurate it measured, as the Mac's
+     ModelsSection; and the catalogue's models, each not installed with its own Download. -->
 <UserControl
     x:Class="Inkwell.Screens.ModelsSection"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -8,10 +8,7 @@
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
     <StackPanel Spacing="10">
-        <StackPanel Orientation="Horizontal" Spacing="10">
-            <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Models" />
-            <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Read-only" />
-        </StackPanel>
+        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Models" />
         <TextBlock Style="{StaticResource InkAlertTextStyle}" FontSize="14" Text="{x:Bind local:ModelsSection.FailedText}" Visibility="{x:Bind Model.Failed, Mode=OneWay}" />
         <ItemsRepeater x:Name="Lines">
             <ItemsRepeater.ItemTemplate>
@@ -33,13 +30,7 @@
         </ItemsRepeater>
         <StackPanel x:Name="DownloadablePanel" Margin="0,6,0,0" Spacing="4">
             <TextBlock Style="{StaticResource InkEyebrowStyle}" Text="DOWNLOADABLE" />
-            <ItemsRepeater x:Name="Downloadable">
-                <ItemsRepeater.ItemTemplate>
-                    <DataTemplate x:DataType="x:String">
-                        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind}" />
-                    </DataTemplate>
-                </ItemsRepeater.ItemTemplate>
-            </ItemsRepeater>
+            <ContentPresenter x:Name="DownloadableHost" />
         </StackPanel>
         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:ModelsSection.SourceText}" />
     </StackPanel>

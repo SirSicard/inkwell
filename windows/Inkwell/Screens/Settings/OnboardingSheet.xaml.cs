@@ -3,7 +3,9 @@
 // or the app quitting). Escape closes it as skipped (OnboardingModel.SheetDismissed, which does
 // nothing while the app quits), except while polish's consent step is up in it: then Escape
 // cancels the step and the sheet stays. The polish switch only asks (PolishModel.SetOn with
-// ConsentHost.Onboarding); only the step's agreeing button sends anything.
+// ConsentHost.Onboarding); only the step's agreeing button sends anything. The models step's
+// Download is the only thing in the sheet that downloads (CatalogueModel.DownloadMissing).
+using System.Globalization;
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
@@ -20,6 +22,7 @@ public sealed partial class OnboardingSheet : ContentDialog
     private readonly PermissionsModel permissions;
     private readonly PolishModel polish;
     private readonly DictationModel dictation;
+    private readonly CatalogueModel catalogue;
     private readonly ScreenLog log;
     private bool isOpen;
     /// <summary>The sheet is closing because the model says so (or the host went): Escape's rule does not apply.</summary>
@@ -27,18 +30,25 @@ public sealed partial class OnboardingSheet : ContentDialog
     private bool rendering;
 
     private OnboardingSheet(
-        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, DictationModel dictation, ScreenLog log)
+        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, DictationModel dictation,
+        CatalogueModel catalogue, ScreenLog log)
     {
         this.host = host;
         this.onboarding = onboarding;
         this.permissions = permissions;
         this.polish = polish;
         this.dictation = dictation;
+        this.catalogue = catalogue;
         this.log = log;
         InitializeComponent();
         CardsHost.Content = new PermissionCardsView(permissions);
         PermissionsTitle.Text = OnboardingModel.PermissionsTitle;
         PermissionsNote.Text = OnboardingModel.PermissionsNote;
+        ModelRowsHost.Content = new ModelRowsView(catalogue, firstRun: true);
+        ModelsTitle.Text = OnboardingModel.ModelsTitle;
+        DownloadButton.Content = OnboardingModel.DownloadTitle;
+        ModelsTryAgain.Content = OnboardingModel.ModelsTryAgain;
+        ModelsGoOn.Text = OnboardingModel.ModelsGoOn;
         PolishTitle.Text = OnboardingModel.PolishTitle;
         PolishNote.Text = OnboardingModel.PolishNote;
         AutomationProperties.SetName(PolishSwitch, OnboardingModel.PolishToggle);
@@ -54,18 +64,21 @@ public sealed partial class OnboardingSheet : ContentDialog
     /// </summary>
     public static OnboardingSheet Attach(
         FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, DictationModel dictation,
-        ScreenLog? log = null)
+        CatalogueModel catalogue, ScreenLog? log = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(onboarding);
         ArgumentNullException.ThrowIfNull(permissions);
         ArgumentNullException.ThrowIfNull(polish);
         ArgumentNullException.ThrowIfNull(dictation);
-        var sheet = new OnboardingSheet(host, onboarding, permissions, polish, dictation, log ?? ScreenLog.System);
+        ArgumentNullException.ThrowIfNull(catalogue);
+        var sheet = new OnboardingSheet(host, onboarding, permissions, polish, dictation, catalogue, log ?? ScreenLog.System);
         onboarding.PropertyChanged += (_, _) => sheet.Update();
         polish.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         permissions.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         dictation.PropertyChanged += (_, _) => sheet.RenderIfOpen();
+        // The models step's lines: the list, what is left to ask for, whether a download runs.
+        catalogue.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         host.Loaded += (_, _) => sheet.Update();
         sheet.Update();
         return sheet;
@@ -122,10 +135,11 @@ public sealed partial class OnboardingSheet : ContentDialog
             var step = onboarding.Step;
             WelcomeStep.Visibility = Visible(step == OnboardingStep.Welcome);
             PermissionsStep.Visibility = Visible(step == OnboardingStep.Permissions);
+            ModelsStep.Visibility = Visible(step == OnboardingStep.Models);
             PolishStep.Visibility = Visible(step == OnboardingStep.Polish);
             ReadyStep.Visibility = Visible(step == OnboardingStep.Ready);
 
-            Ellipse[] dots = [Dot0, Dot1, Dot2, Dot3];
+            Ellipse[] dots = [Dot0, Dot1, Dot2, Dot3, Dot4];
             for (var i = 0; i < dots.Length; i++)
             {
                 dots[i].Opacity = i == (int)step ? 1 : 0.22;
@@ -141,6 +155,18 @@ public sealed partial class OnboardingSheet : ContentDialog
             WelcomeLine0.Text = welcome[0];
             WelcomeLine1.Text = welcome[1];
             WelcomeLine2.Text = welcome[2];
+
+            ModelsNote.Text = OnboardingModel.ModelsNote(catalogue);
+            var downloadLine = OnboardingModel.DownloadLine(catalogue, CultureInfo.CurrentCulture);
+            DownloadLine.Text = downloadLine ?? "";
+            DownloadLine.Visibility = Visible(downloadLine is not null);
+            DownloadButton.Visibility = Visible(downloadLine is not null);
+            if (downloadLine is not null)
+            {
+                AutomationProperties.SetName(DownloadButton, OnboardingModel.DownloadName(catalogue, CultureInfo.CurrentCulture));
+            }
+            ModelsTryAgain.Visibility = Visible(catalogue.Failed);
+            ModelsGoOn.Visibility = Visible(catalogue.Downloading);
 
             PolishSwitch.IsOn = polish.IsOn;
             PolishSwitch.IsEnabled = polish.CanToggle;
@@ -180,6 +206,11 @@ public sealed partial class OnboardingSheet : ContentDialog
     }
 
     private void OnSkip(object sender, RoutedEventArgs e) => onboarding.Finish();
+
+    /// <summary>The user's agreement to the models the step names: the only download the sheet starts.</summary>
+    private void OnDownload(object sender, RoutedEventArgs e) => catalogue.DownloadMissing();
+
+    private void OnModelsTryAgain(object sender, RoutedEventArgs e) => catalogue.Requery();
 
     private void OnPolishToggled(object sender, RoutedEventArgs e)
     {
