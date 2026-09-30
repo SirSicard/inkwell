@@ -66,6 +66,8 @@ const fixtures: Record<string, unknown> = {
   get_voice_commands: { commands: [], enabled: false },
   set_hotkey: (a: { hotkey: string }) => { settings.hotkey = a.hotkey; return null },
   set_edit_hotkey: (a: { hotkey: string }) => { settings.edit_hotkey = a.hotkey; return null },
+  successor_audience: "apple_silicon",
+  open_successor_site: null,
   "plugin:app|version": "0.2.8-dev",
   "plugin:event|listen": 1,
   "plugin:event|unlisten": null,
