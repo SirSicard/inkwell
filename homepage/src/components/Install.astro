@@ -1,8 +1,8 @@
 ---
 // Download and first run, from the README's Install, Quick start and Requirements sections (the default
-// hotkeys were checked against the app's settings at the v0.2.9 tag). The file
-// links are the release's real assets (see ../lib/release.ts). The previous site's "Nothing is code
-// signed yet" was stale: macOS builds are signed and notarised; Windows is not signed yet.
+// keys were checked against ink-ffi's voice.rs, the Windows minimum against windows/Inkwell.csproj). The
+// file links are the releases' real assets (see ../lib/release.ts). The Mac build is signed and
+// notarised; the Windows build is not signed yet.
 import { BUILD_FROM_SOURCE_URL, RELEASES_URL, SHARED_VERSION } from '../lib/constants';
 import { DOWNLOADS } from '../lib/release';
 ---
@@ -36,13 +36,14 @@ import { DOWNLOADS } from '../lib/release';
           </li>
           <li>Allow Microphone access when asked.</li>
           <li>
-            Allow Accessibility access in System Settings, under Privacy &amp; Security. Inkwell pastes with a
-            synthetic keystroke, which macOS blocks until you grant this. It is the one people miss: without it,
-            dictation transcribes and nothing appears.
+            Allow Accessibility access in System Settings, under Privacy &amp; Security. Inkwell needs it to hear
+            the dictation key and to type the text; until you grant it, dictation stays off and says why.
           </li>
+          <li>For meetings, allow System Audio Recording when asked: it is how Inkwell hears the other side of a call.</li>
         </ol>
         <p class="platform-note">
-          Secure Input blocks the paste, so dictating into password fields and some terminals does nothing.
+          Secure Input (a password field, some terminals) blocks typing into that app: nothing is typed, and
+          Inkwell says so.
         </p>
       </div>
     </div>
@@ -79,23 +80,21 @@ import { DOWNLOADS } from '../lib/release';
       <h3>First run</h3>
       <ol class="steps">
         <li>
-          Finish the short onboarding: pick a microphone, download a model, test the hotkey. The installer holds
-          no speech models; Parakeet V3 (670&nbsp;MB) is the default.
+          Finish the onboarding. The installer holds no speech models: Inkwell downloads them the first time
+          they are needed, the main one about 2.5&nbsp;GB.
         </li>
         <li>
-          The record hotkey starts as <kbd>Cmd+Shift+Space</kbd> on macOS and <kbd>Ctrl+Space</kbd> elsewhere.
-          Change it in Settings, under General; on macOS, pick one that doesn’t collide with Spotlight or
-          input-source switching.
+          The dictation key starts as <kbd>Fn</kbd> on the Mac and right <kbd>Ctrl</kbd> on Windows. Change it in
+          Settings.
         </li>
-        <li>Hold the hotkey, speak, let go. The text is pasted where your cursor is.</li>
+        <li>Hold the key, speak, let go. The text is typed where your cursor is.</li>
       </ol>
     </div>
     <div>
       <h3>Requirements</h3>
       <dl class="reqs">
         <div><dt>System</dt><dd>A Mac with Apple silicon on macOS 26 or later, or a PC with Windows 11 24H2 or later on x64</dd></div>
-        <div><dt>Memory</dt><dd>2&nbsp;GB free with Parakeet V3, less with the small models</dd></div>
-        <div><dt>Disk</dt><dd>About 50&nbsp;MB for the app, plus 240 to 940&nbsp;MB for the model you choose</dd></div>
+        <div><dt>Disk</dt><dd>About 2.5&nbsp;GB for the main speech model, plus the meetings you keep</dd></div>
         <div><dt>Microphone</dt><dd>Any</dd></div>
       </dl>
     </div>

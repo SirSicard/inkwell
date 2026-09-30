@@ -1,7 +1,7 @@
 /**
  * Every outbound link and product fact the page states lives here once.
- * Facts come from the Inkwell README (and the model chart it embeds). Where an older version of the
- * site said something the README contradicts, the README won.
+ * Facts come from the Inkwell README. Where an older version of the site said something the README
+ * contradicts, the README won.
  */
 
 /**
@@ -36,34 +36,29 @@ export const AUTHOR_URL = "https://github.com/SirSicard"; // the maintainer's Gi
 export const MAINTAINER_HANDLE = "SirSicard";
 export const MAINTAINER_GITHUB_URL = "https://github.com/SirSicard";
 
+export const MODEL_WEIGHTS_URL = `${GITHUB_URL}/blob/main/docs/MODEL-WEIGHTS.md`;
+
 export const HANDY_URL = "https://github.com/cjpais/Handy";
-export const SHERPA_ONNX_URL = "https://github.com/k2-fsa/sherpa-onnx";
+export const LLAMA_CPP_URL = "https://github.com/ggml-org/llama.cpp";
+export const FLUIDAUDIO_URL = "https://github.com/FluidInference/FluidAudio";
+export const NEMO_SPEECH_URL = "https://github.com/NVIDIA/NeMo-Speech.cpp";
 export const SILERO_VAD_URL = "https://github.com/snakers4/silero-vad";
-export const TAURI_URL = "https://tauri.app";
 export const HUGGING_FACE_URL = "https://huggingface.co";
-export const GROQ_CONSOLE_URL = "https://console.groq.com";
 
 /** Windows code signing: the SignPath Foundation programme requires its policy on the homepage. */
 export const SIGNPATH_URL = "https://signpath.io";
 export const SIGNPATH_FOUNDATION_URL = "https://signpath.org";
 
 /**
- * The five models. Word error rate, time and size come from the README's model chart
- * (docs/media/models-light.svg: eight recordings of one voice; seconds to transcribe 57 s of audio).
- * Languages and "pick it when" come from the README's models table, lightly shortened; the maker
- * is the one the previous site named. Sorted by word error rate, as the README's chart is.
+ * The models 1.0 runs, one per job, from docs/MODEL-WEIGHTS.md (with its sizes, where it gives one) and
+ * the README's models table. The maker is the model's publisher.
  */
 export const MODELS = [
-  { name: "Qwen3 ASR", maker: "Alibaba", wer: 5.6, seconds: 9.2, mb: 940, languages: "30, including Nordic", when: "You want the best accuracy, or you move between English and a Nordic language. The only one here that doesn’t make you choose." },
-  { name: "Parakeet V2", maker: "NVIDIA", wer: 8.0, seconds: 3.6, mb: 670, languages: "English", when: "You only dictate in English. Same download as V3, and measurably more accurate." },
-  { name: "SenseVoice", maker: "Alibaba", wer: 9.3, seconds: 1.7, mb: 240, languages: "en, zh, ja, ko, yue", when: "Small disk, slow connection or an older machine. A quarter of the size, the fastest here, and as accurate as Whisper." },
-  { name: "Whisper Turbo", maker: "OpenAI", wer: 9.3, seconds: 19.8, mb: 800, languages: "99", when: "You need a language the others don’t reach. Nothing else recommends it." },
-  { name: "Parakeet V3", maker: "NVIDIA", wer: 10.5, seconds: 3.7, mb: 670, languages: "25 European", when: "The default. You switch between European languages, or want the language detected for you." },
+  { name: "Qwen3-ASR 1.7B", maker: "Alibaba", job: "Writes every dictation, and every meeting’s transcript.", runsOn: "llama.cpp: Metal on the Mac, Vulkan or the CPU on Windows", size: "2.5 GB" },
+  { name: "Parakeet TDT 0.6B v3", maker: "NVIDIA", job: "Shows your words while you are still speaking.", runsOn: "FluidAudio on the Mac’s Neural Engine; sherpa-onnx on Windows", size: null },
+  { name: "Nemotron-3-Diarization", maker: "NVIDIA", job: "Tells the other side’s speakers apart when a meeting ends.", runsOn: "NeMo-Speech.cpp", size: "0.11 GB" },
+  { name: "Silero VAD", maker: "Silero", job: "Finds where speech starts and stops.", runsOn: "tract, in Rust", size: "1.3 MB" },
 ] as const;
-
-/** Chart scales: a shared zero baseline and a round maximum just above the largest figure. */
-export const WER_SCALE_MAX = 12;
-export const SECONDS_SCALE_MAX = 20;
 
 /**
  * The hotkey demo's sentences. They are transcripts visible in the app's own dashboard screenshot.
