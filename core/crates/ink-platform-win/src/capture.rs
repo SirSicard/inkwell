@@ -383,6 +383,11 @@ impl WasapiSource {
         }
     }
 
+    /// Whether it hears one process tree alone (process loopback), rather than a whole device.
+    pub fn is_process_loopback(&self) -> bool {
+        matches!(self.kind, StreamKind::ProcessLoopback { .. })
+    }
+
     /// The current (or last) session's counters. **Any thread** that holds the source.
     pub fn stats(&self) -> IoStats {
         self.counters.snapshot()

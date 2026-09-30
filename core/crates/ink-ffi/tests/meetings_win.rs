@@ -1,0 +1,349 @@
+//! Windows meetings end to end through the core (S3.5b), without a desktop: the core's Windows
+//! capture ([`WinMeetingCapture`]) over replay sources where WASAPI would open the routed mic and
+//! the far end, and a detector that says what the audio session manager says (an executable that
+//! holds the mic, and its process). Detection offers, the user answers, the far end is planned as
+//! on Windows, the meeting records, stops, and its final pass writes the record, with the far end
+//! one voice (no diarizer on Windows) and no summary (no language model on Windows), said.
+//!
+//! Real devices, real calls, the Drop on screen and a `kill -9` of the app are the maintainer's
+//! checklist (`windows/S3.5b-CHECKLIST.md`); a killed core finishing its meeting at the next
+//! launch runs on Windows too, in `crash_recovery.rs`.
+#![cfg(windows)]
+
+mod common;
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use common::*;
+use ink_audio::{FileReplaySource, Pacing};
+use ink_core::mock::MockClock;
+use ink_core::{
+    AppRef, AudioSource, Channel, Clock, DeviceId, DeviceInfo, EventSink, FarEndTarget,
+    MeetingDetector, MeetingSignal, PlatformError, RecordId, Transport,
+};
+use ink_engines::{ModelDir, Registry};
+use ink_ffi::capture::{WinDevices, WinMeetingCapture};
+use ink_ffi::runtime::{Core, MeetingPlatform, Parts};
+use ink_platform_win::capture::{Endpoint, MicRouteReason};
+
+const WAIT: Duration = Duration::from_secs(30);
+
+/// Where WASAPI would open devices, two WAV files replayed in real time. It records what it was
+/// asked for; Zoom can be made not to run.
+struct ReplayDevices {
+    mic: PathBuf,
+    far: PathBuf,
+    clock: Arc<dyn Clock>,
+    asked: Mutex<Vec<String>>,
+    zoom_gone: AtomicBool,
+}
+
+impl ReplayDevices {
+    fn replay(&self, path: &Path, channel: Channel) -> Result<Box<dyn AudioSource>, PlatformError> {
+        let source = FileReplaySource::open(path, channel, self.clock.clone())
+            .map_err(|e| PlatformError::Device(e.to_string()))?
+            .with_pacing(Pacing::RealTime);
+        Ok(Box::new(source))
+    }
+
+    fn ask(&self, what: String) {
+        self.asked.lock().unwrap().push(what);
+    }
+}
+
+/// The capture holds its devices; the test keeps a handle to read what they were asked.
+struct Devices(Arc<ReplayDevices>);
+
+impl WinDevices for Devices {
+    fn route_mic(
+        &self,
+        headset_mic: bool,
+    ) -> Result<Option<(Endpoint, MicRouteReason)>, PlatformError> {
+        self.0.ask(format!("headset {headset_mic}"));
+        let usb = Endpoint {
+            info: DeviceInfo {
+                id: DeviceId("{0.0.1.00000000}.{usb-mic}".into()),
+                name: "Microphone (USB Audio)".into(),
+                transport: Transport::Usb,
+                is_default: true,
+            },
+            container: None,
+            rate: Some(48_000),
+        };
+        Ok(Some((usb, MicRouteReason::DefaultInput)))
+    }
+
+    fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError> {
+        self.0.ask(format!("mic {}", device.0));
+        self.0.replay(&self.0.mic, Channel::Mic)
+    }
+
+    fn open_far(
+        &self,
+        target: &FarEndTarget,
+    ) -> Result<(Box<dyn AudioSource>, bool), PlatformError> {
+        let far = || self.0.replay(&self.0.far, Channel::Far);
+        match target {
+            FarEndTarget::AllOutput => {
+                self.0.ask("far: the default output".into());
+                Ok((far()?, false))
+            }
+            FarEndTarget::Apps(apps) => {
+                let [app] = apps.as_slice() else {
+                    return Err(PlatformError::Failed("one app at a time".into()));
+                };
+                self.0.ask(format!("far: {} (pid {:?})", app.id, app.pid));
+                // S0.4's plan: Zoom and the browsers alone (process loopback), every other app
+                // on its output device (device loopback).
+                if app.id.eq_ignore_ascii_case("Zoom.exe") {
+                    if self.0.zoom_gone.load(Ordering::Relaxed) {
+                        return Err(PlatformError::Device("Zoom.exe is not running".into()));
+                    }
+                    return Ok((far()?, true));
+                }
+                Ok((far()?, false))
+            }
+        }
+    }
+}
+
+/// A detector the test drives, as the audio session manager's would report.
+#[derive(Default)]
+struct FakeDetector {
+    sink: Mutex<Option<EventSink<MeetingSignal>>>,
+}
+
+impl FakeDetector {
+    fn signal(&self, signal: MeetingSignal) {
+        let sink = self.sink.lock().unwrap().clone().expect("listening");
+        sink(signal);
+    }
+}
+
+impl MeetingDetector for FakeDetector {
+    fn start(&self, on_signal: EventSink<MeetingSignal>) -> Result<(), PlatformError> {
+        *self.sink.lock().unwrap() = Some(on_signal);
+        Ok(())
+    }
+
+    fn stop(&self) {
+        *self.sink.lock().unwrap() = None;
+    }
+}
+
+/// An app as Windows' detector names it: the executable, the process holding the mic, its stem.
+fn exe(id: &str, pid: u32) -> AppRef {
+    AppRef {
+        id: id.into(),
+        pid: Some(pid),
+        name: id.trim_end_matches(".exe").into(),
+    }
+}
+
+struct Rig {
+    core: Core,
+    events: Arc<Recorder>,
+    devices: Arc<ReplayDevices>,
+    detector: Arc<FakeDetector>,
+    clock: Arc<MockClock>,
+    _dir: TempDir,
+}
+
+fn rig(label: &str, seconds: f64) -> Rig {
+    let dir = TempDir::new(label);
+    let clock = Arc::new(MockClock::new(10_000_000_000, 1_790_146_800_000));
+    let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));
+    speech_wav(&mic, seconds, 51);
+    speech_wav(&far, seconds, 52);
+    let loader = MockLoader::new(Behaviour::Say("words from the final pass".into()));
+    let models = ModelDir::new(dir.path().join("models"));
+    let row = test_row(ROW_ID);
+    install(&models, &row);
+    let devices = Arc::new(ReplayDevices {
+        mic,
+        far,
+        clock: clock.clone(),
+        asked: Mutex::default(),
+        zoom_gone: AtomicBool::new(false),
+    });
+    let detector = Arc::new(FakeDetector::default());
+    let parts = Parts {
+        store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+        clock: clock.clone(),
+        registry: Registry::new(vec![row]).unwrap(),
+        models,
+        loader: loader.clone(),
+        installer: Arc::new(MockInstaller {
+            generation: loader.generation.clone(),
+            gate: None,
+            installs: AtomicUsize::new(0),
+        }),
+        data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: MeetingPlatform {
+            capture: Arc::new(WinMeetingCapture::new(Devices(devices.clone()))),
+            detector: Some(detector.clone()),
+        },
+    };
+    let (core, events) = start_parts(parts);
+    let listening = events
+        .wait_for(WAIT, |v| v["type"] == "meeting.detection")
+        .expect("detection says whether it listens");
+    assert_eq!(listening["listening"], true);
+    Rig {
+        core,
+        events,
+        devices,
+        detector,
+        clock,
+        _dir: dir,
+    }
+}
+
+impl Rig {
+    /// A signal, given time to be taken before the mock clock moves on.
+    fn signal(&self, signal: MeetingSignal) {
+        self.detector.signal(signal);
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// `app` takes the mic and holds it past the offer's 3 s: the core offers it.
+    fn offered(&self, app: AppRef, offers: usize) -> serde_json::Value {
+        self.signal(MeetingSignal::MicInUse { app });
+        self.clock.advance_ns(3_500_000_000);
+        // Any signal makes the meetings thread judge what is pending at the mock clock's time.
+        self.signal(MeetingSignal::MicReleased {
+            app: exe("nobody.exe", 1),
+        });
+        assert!(self.events.wait_count("meeting.detected", offers, WAIT));
+        self.events
+            .all()
+            .into_iter()
+            .filter(|v| v["type"] == "meeting.detected")
+            .nth(offers - 1)
+            .unwrap()
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.devices.asked.lock().unwrap().clone()
+    }
+}
+
+/// Teams: offered by its executable, recorded when the user says so, its far end the output device
+/// it plays to (said as everything), stopped by hand into a final pass that writes the record.
+#[test]
+fn a_teams_call_is_offered_recorded_and_blotted_into_a_record() {
+    let r = rig("win-teams", 60.0);
+    let offer = r.offered(exe("ms-teams.exe", 300), 1);
+    assert_eq!(offer["app"], "ms-teams.exe");
+    assert_eq!(offer["app_name"], "ms-teams");
+
+    r.core
+        .command(r#"{"cmd":"meeting.start","app":"ms-teams.exe","id":"meeting.start"}"#)
+        .unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    assert_eq!(started["app"], "ms-teams.exe");
+    assert_eq!(started["mic_name"], "Microphone (USB Audio)");
+    assert_eq!(started["mic_transport"], "usb");
+    assert_eq!(started["mic_reason"], "default_input");
+    assert_eq!(
+        started["far_end"], "everything",
+        "device loopback hears everything its device plays"
+    );
+    assert_eq!(r.events.count("meeting.far_end_fallback"), 0, "by plan");
+    assert_eq!(
+        r.asked(),
+        [
+            "headset false",
+            "mic {0.0.1.00000000}.{usb-mic}",
+            // The offer's own process reached the plan.
+            "far: ms-teams.exe (pid Some(300))",
+        ]
+    );
+
+    std::thread::sleep(Duration::from_millis(2_000));
+    r.core
+        .command(r#"{"cmd":"meeting.stop","id":"meeting.stop"}"#)
+        .unwrap();
+    r.events.wait_type("meeting.stopped", WAIT);
+    let finished = r.events.wait_type("meeting.finished", WAIT);
+    assert_eq!(finished["record"], started["record"]);
+    assert_eq!(finished["revision"], 2, "the final pass wrote the record");
+
+    // No diarizer on Windows: the far end stays one voice, and nothing says labels were tried.
+    assert_eq!(r.events.count("meeting.diarized"), 0);
+    let record = RecordId(finished["record"].as_str().unwrap().to_owned());
+    let segments = r.core.shared().store.segments(&record).unwrap();
+    assert!(
+        segments.iter().any(|s| s.channel == Channel::Far),
+        "{segments:?}"
+    );
+    assert!(segments.iter().all(|s| s.speaker.is_none()), "{segments:?}");
+    // No language model on Windows: no summary, and the pass says so.
+    assert!(
+        r.events
+            .all()
+            .iter()
+            .any(|v| v["type"] == "meeting.warning" && v["kind"] == "summary_unavailable"),
+        "{:?}",
+        r.events.types()
+    );
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// Zoom is heard alone (process loopback); a Zoom that is gone by the time the user answers is
+/// recorded from the default output instead, and that is said.
+#[test]
+fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
+    let r = rig("win-zoom", 60.0);
+    r.offered(exe("Zoom.exe", 210), 1);
+    r.core
+        .command(r#"{"cmd":"meeting.start","app":"Zoom.exe"}"#)
+        .unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    assert_eq!(started["far_end"], "app", "the call's own sound alone");
+    std::thread::sleep(Duration::from_millis(500));
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
+
+    // The next call: Zoom's process is gone when the answer comes.
+    r.signal(MeetingSignal::MicReleased {
+        app: exe("Zoom.exe", 210),
+    });
+    r.devices.zoom_gone.store(true, Ordering::Relaxed);
+    r.offered(exe("Zoom.exe", 211), 2);
+    r.core
+        .command(r#"{"cmd":"meeting.start","app":"Zoom.exe"}"#)
+        .unwrap();
+    assert!(r.events.wait_count("meeting.started", 2, WAIT));
+    let fallback = r.events.wait_type("meeting.far_end_fallback", WAIT);
+    assert_eq!(fallback["app"], "Zoom.exe");
+    assert!(
+        fallback["message"]
+            .as_str()
+            .unwrap()
+            .contains("Zoom.exe is not running"),
+        "{fallback}"
+    );
+    let second = r
+        .events
+        .all()
+        .into_iter()
+        .filter(|v| v["type"] == "meeting.started")
+        .nth(1)
+        .unwrap();
+    assert_eq!(second["far_end"], "everything");
+    assert_eq!(
+        r.asked()[r.asked().len() - 2..],
+        ["far: Zoom.exe (pid Some(211))", "far: the default output"]
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    assert!(r.events.wait_count("meeting.finished", 2, WAIT));
+    r.events.assert_valid();
+    r.core.shutdown();
+}
