@@ -321,10 +321,15 @@ What a release carries for Windows:
   `%LOCALAPPDATA%\InkwellApp`, adds a Start menu entry and an entry in Settings > Apps, and starts
   the app. Uninstalling removes that folder only: the library, in `%LOCALAPPDATA%\Inkwell`, stays.
   It refuses Windows older than 11 24H2. The package id `InkwellApp` is the update chain's name:
-  it never changes. While it installs it shows a splash with the Windows App SDK's end-user terms
-  (that licence's section 3(b)(ii)), drawn by `pack.ps1`; the release notes and the homepage carry
-  them too, and Settings > About in full. Velopack's installer has no licence page, so nothing asks
-  for a click to agree before installing.
+  it never changes. While it installs it shows a splash with Microsoft's end-user terms, which the
+  licences of the Windows App SDK (its section 3(b)(ii)) and of the Windows SDK's .NET projection
+  (its Distribution Requirements) ask for, drawn by `pack.ps1`; the release notes and the homepage
+  carry them too, and Settings > About in full. Velopack's installer has no licence page, so the
+  app's first run asks instead: the terms and both licences, with Agree and Quit, before anything
+  else starts (`TermsStep`). The agreement is kept in `terms-agreed.txt` in the library folder with
+  the terms' version, a SHA-256 of the sentence and both licence texts (`TermsStep.CurrentVersion`):
+  editing the sentence or re-copying either licence asks every existing user again at their next
+  start.
 - `InkwellApp-X.Y.Z-full.nupkg` and `releases.win.json`: the update and its feed. The app's
   Settings > About > Check Now reads the feeds of the repository's latest published releases
   (GitHub's API, then the assets over HTTPS), and Velopack installs a package only if its size and
