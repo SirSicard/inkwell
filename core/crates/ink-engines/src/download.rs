@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ink_core::{CancelToken, EventSink};
@@ -302,8 +303,11 @@ impl Downloader {
             fs::remove_file(&final_path).map_err(|e| io("removing a stale file", e))?;
         }
         let part_path = self.dir.part_path(row, file);
-        fs::create_dir_all(self.dir.row_dir(row))
-            .map_err(|e| io("creating the model directory", e))?;
+        // The file's own directory: the row's, or one below it for a name with `/`.
+        let parent = part_path
+            .parent()
+            .map_or_else(|| self.dir.row_dir(row), Path::to_path_buf);
+        fs::create_dir_all(parent).map_err(|e| io("creating the model directory", e))?;
         let mut part = OpenOptions::new()
             .read(true)
             .write(true)

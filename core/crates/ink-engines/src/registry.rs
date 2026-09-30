@@ -11,14 +11,15 @@ use std::fmt;
 
 use ink_core::{EngineInfo, Job};
 
-use crate::model_dir::PART_SUFFIX;
+use crate::model_dir::{MAX_RELATIVE_PATH_LEN, PART_SUFFIX, REVISION_DIR_LEN};
 
 /// Licences model weights may carry (docs/MODEL-WEIGHTS.md). Anything else, including the NVIDIA
 /// Open Model Licence and Hugging Face's `other`, needs a policy change before a row can use it.
 pub const ALLOWED_WEIGHT_LICENCES: &[&str] = &["Apache-2.0", "MIT", "OpenMDW-1.1", "CC-BY-4.0"];
 
-/// Longest id or file name a row may use. With the short revision directory this keeps every
-/// model path within [`MAX_RELATIVE_PATH_LEN`](crate::MAX_RELATIVE_PATH_LEN) below the root.
+/// Longest id, or component of a file name, a row may use. A row's paths are also checked whole
+/// against [`MAX_RELATIVE_PATH_LEN`](crate::MAX_RELATIVE_PATH_LEN) below the root; a file name of
+/// one component at this limit always fits.
 pub const MAX_NAME_LEN: usize = 64;
 
 /// An operating system the core ships on.
@@ -75,8 +76,10 @@ pub struct JobScore {
 /// One file of a model, pinned by hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelFile {
-    /// The local file name inside the row's directory. ASCII letters, digits, `-`, `_` and `.`
-    /// only, so it cannot leave that directory.
+    /// The file's path inside the row's directory: one name, or names separated by `/` for a file
+    /// in a subdirectory (a Core ML model is a directory of files). Each name is ASCII letters,
+    /// digits, `-`, `_` and `.`, starting with a letter or digit, so the path is never absolute,
+    /// never climbs with `..`, and cannot leave that directory.
     pub name: String,
     /// Where to fetch it: `https`, with the row's [`revision`](EngineRow::revision) as a path
     /// segment (for Hugging Face, `/resolve/<revision>/`).
@@ -182,16 +185,38 @@ impl EngineRow {
             return Err(invalid("has no files".into()));
         }
         for (i, file) in self.files.iter().enumerate() {
-            check_name(&file.name)
-                .map_err(|why| invalid(format!("file name {:?} {why}", file.name)))?;
-            if file.name.ends_with(PART_SUFFIX) {
+            for part in file.name.split('/') {
+                check_name(part)
+                    .map_err(|why| invalid(format!("file name {:?}: {part:?} {why}", file.name)))?;
+                if part.ends_with(PART_SUFFIX) {
+                    return Err(invalid(format!(
+                        "file name {:?} ends a name in {PART_SUFFIX}, which downloads in progress use",
+                        file.name
+                    )));
+                }
+            }
+            // `<id>/<revision prefix>/<name>.part`, the longest path the row writes.
+            let longest =
+                self.id.len() + 1 + REVISION_DIR_LEN + 1 + file.name.len() + PART_SUFFIX.len();
+            if longest > MAX_RELATIVE_PATH_LEN {
                 return Err(invalid(format!(
-                    "file name {:?} ends in {PART_SUFFIX}, which downloads in progress use",
+                    "file name {:?} makes a path of {longest} characters below the model root, over {MAX_RELATIVE_PATH_LEN}",
                     file.name
                 )));
             }
             if self.files[..i].iter().any(|f| f.name == file.name) {
                 return Err(invalid(format!("file name {:?} appears twice", file.name)));
+            }
+            // A name cannot be both a file and the directory of another.
+            if let Some(below) = self.files.iter().find(|f| {
+                f.name
+                    .strip_prefix(file.name.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            }) {
+                return Err(invalid(format!(
+                    "file name {:?} is also the directory of {:?}",
+                    file.name, below.name
+                )));
             }
             if file.size == 0 {
                 return Err(invalid(format!("file {} has size 0", file.name)));
