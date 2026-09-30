@@ -233,9 +233,10 @@ fn counts_json(counts: &Counts) -> Value {
     Value::Object(out)
 }
 
-/// Why an import cannot happen, in words a screen shows after "Couldn't import". The importer's
-/// own messages name a file and its problem, never a path or content; the ones a user can act on
-/// are said plainly here.
+/// Why an import cannot happen, in words a screen shows after its own lead-in ("Couldn't import",
+/// or that 0.2's data can't be read now), which already says whose data it is. The importer's own
+/// messages name a file and its problem, never a path or content; the ones a user can act on, and
+/// the one whose advice is for the command line, are said plainly here.
 pub fn words(e: &ImportError) -> String {
     match e {
         // A write in progress, or one a crash left (which 0.2 rolls back when it next opens).
@@ -243,11 +244,16 @@ pub fn words(e: &ImportError) -> String {
                                       Inkwell 0.2 (if it is not open, open it and quit it once), \
                                       then try again"
             .into(),
+        // The importer's advice (import a plain copy of the folder) is not for the app, which
+        // reads 0.2's own folder only.
+        ImportError::NotAFile { file } => {
+            format!("{file} is a link or a folder, not a file, and Inkwell imports only files")
+        }
         ImportError::NoSource => "there is no Inkwell 0.2 data on this computer".into(),
         ImportError::AlreadyImported | ImportError::MarkerPresent => {
             "Inkwell 0.2's data is in this library already".into()
         }
-        other => format!("Inkwell 0.2's data: {other}"),
+        other => other.to_string(),
     }
 }
 
@@ -313,15 +319,21 @@ mod tests {
         });
         assert!(in_use.contains("Quit Inkwell 0.2"), "{in_use}");
         assert!(words(&ImportError::AlreadyImported).contains("already"));
-        // The rest keep the importer's own words: the file and the problem, never a path.
+        // A link (a synced dotfile, say) is named, without the importer's advice to import a copy
+        // of the folder, which the app cannot do: it reads 0.2's own folder only.
+        assert_eq!(
+            words(&ImportError::NotAFile {
+                file: "settings.json"
+            }),
+            "settings.json is a link or a folder, not a file, and Inkwell imports only files"
+        );
+        // The rest keep the importer's own words: the file and the problem, never a path. No
+        // lead-in: the screens' own line already says it is 0.2's data.
         let malformed = words(&ImportError::Malformed {
             file: "modes.json",
             problem: "\"modes\" is not a list".into(),
         });
-        assert_eq!(
-            malformed,
-            "Inkwell 0.2's data: modes.json: \"modes\" is not a list"
-        );
+        assert_eq!(malformed, "modes.json: \"modes\" is not a list");
     }
 
     #[test]

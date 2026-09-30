@@ -317,13 +317,44 @@ fn a_file_0_2_could_not_have_written_is_named_and_nothing_is_imported() {
     let rig = Rig::new("malformed", Some(Some(source.path().to_owned())));
     let checked = rig.ask("import.check");
     assert_eq!(checked["state"], "unreadable", "{checked}");
-    assert!(
-        checked["message"].as_str().unwrap().contains("modes.json"),
-        "{checked}"
-    );
+    let message = checked["message"].as_str().unwrap();
+    assert!(message.starts_with("modes.json"), "{checked}");
     assert_eq!(rig.ask("import.run")["type"], "command.failed");
     assert_eq!(rig.marker(), None);
     assert_eq!(rig.ask("snippets.list")["from_import"], false);
+    rig.events.assert_valid();
+    rig.core.shutdown();
+}
+
+/// A file in 0.2's folder that is a link (a synced dotfile, say): named, without advice the app
+/// cannot follow, and nothing is imported. Unix only: making a link needs no rights there.
+#[cfg(unix)]
+#[test]
+fn a_linked_file_is_named_and_nothing_is_imported() {
+    let elsewhere = legacy(
+        "linked-target",
+        &[("settings.json", SETTINGS_0_2.as_bytes())],
+    );
+    let source = legacy("linked", &[("snippets.json", SNIPPETS_0_2.as_bytes())]);
+    std::os::unix::fs::symlink(
+        elsewhere.path().join("settings.json"),
+        source.path().join("settings.json"),
+    )
+    .unwrap();
+    let rig = Rig::new("linked", Some(Some(source.path().to_owned())));
+
+    let checked = rig.ask("import.check");
+    assert_eq!(checked["state"], "unreadable", "{checked}");
+    let message = checked["message"].as_str().unwrap();
+    assert_eq!(
+        message,
+        "settings.json is a link or a folder, not a file, and Inkwell imports only files"
+    );
+    let failed = rig.ask("import.run");
+    assert_eq!(failed["type"], "command.failed", "{failed}");
+    assert_eq!(failed["message"], message, "the same words");
+    assert_eq!(rig.marker(), None);
+    assert_eq!(rig.keys.asked.load(Ordering::SeqCst), 0);
     rig.events.assert_valid();
     rig.core.shutdown();
 }
