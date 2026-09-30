@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The first run's terms step (TermsStep): the terms sentence, each Microsoft licence in full (an
+     expander opening onto its text, as in Settings > About), and Agree or Quit. It is the app's
+     only window until answered: nothing else is made or started before Agree, and closing it is
+     Quit. -->
+<Window
+    x:Class="Inkwell.TermsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:core="using:Inkwell.Core.Screens"
+    Title="Inkwell">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+    <Grid MaxWidth="760" Padding="32,24" RowSpacing="16">
+        <Grid.Resources>
+            <!-- A licence's text, as About shows it: Cascadia Mono at caption size, selectable. -->
+            <Style x:Key="LicenceTextStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkMonoFontFamily}" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="IsTextSelectionEnabled" Value="True" />
+                <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
+            </Style>
+        </Grid.Resources>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="{x:Bind core:TermsStep.Title}" />
+        <TextBlock Grid.Row="1" IsTextSelectionEnabled="True" Style="{StaticResource InkBodyStyle}" Text="{x:Bind core:TermsStep.Sentence}" />
+        <ScrollViewer Grid.Row="2">
+            <ItemsControl ItemsSource="{x:Bind core:TermsStep.Licences}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Spacing="8" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="core:NoticeRow">
+                        <Expander
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            AutomationProperties.HelpText="{x:Bind Detail}"
+                            AutomationProperties.Name="{x:Bind Title}">
+                            <Expander.Header>
+                                <StackPanel Padding="0,6" Spacing="1">
+                                    <TextBlock FontWeight="Medium" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Title}" />
+                                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Detail}" />
+                                </StackPanel>
+                            </Expander.Header>
+                            <ScrollViewer MaxHeight="320">
+                                <TextBlock Style="{StaticResource LicenceTextStyle}" Text="{x:Bind Text}" />
+                            </ScrollViewer>
+                        </Expander>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+        <StackPanel Grid.Row="3" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+            <Button Click="OnQuit" Content="{x:Bind core:TermsStep.QuitTitle}" />
+            <Button Click="OnAgree" Content="{x:Bind core:TermsStep.AgreeTitle}" Style="{StaticResource AccentButtonStyle}" />
+        </StackPanel>
+    </Grid>
+</Window>

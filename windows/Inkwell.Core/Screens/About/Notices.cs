@@ -767,12 +767,16 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "Compiled into Inkwell.exe by NativeAOT: .NET 10.0.12.",
             "MIT, with the notices of the code it includes", DotnetText),
         new("windows-sdk-net", "Windows SDK projection for .NET, by Microsoft",
-            "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
+            "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
             "Windows SDK licence terms", WindowsSdkNetText)
         { Composed = true },
+        // C#/WinRT's source is MIT, but the WinRT.Runtime.dll compiled in is Microsoft's build from
+        // Microsoft.Windows.SDK.NET.Ref, Distributable Code under the Windows SDK licence (its REDIST
+        // list names it): the row says both, and the terms the user agrees to cover it (the
+        // windows-sdk-net row, which the first run's terms step shows, names the file).
         new("cswinrt", "C#/WinRT runtime, by Microsoft",
             "How C# calls the Windows APIs, compiled in with the projection: WinRT.Runtime from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
-            "MIT", CsWinRtLicence),
+            "MIT; Inkwell's copy under the Windows SDK licence terms", CsWinRtLicence),
         new("velopack", "Velopack, by Velopack Ltd and Caelan Sayler",
             "Installs Inkwell and brings its updates: the installer, Update.exe beside the app, and the update check in Settings > About. Velopack 1.2.161.",
             "MIT", VelopackLicence),
@@ -780,15 +784,20 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
     /// <summary>
     /// The end-user terms the Windows App SDK's licence asks of an app that ships its runtime
-    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice): the
-    /// user agrees to Microsoft's terms for those components. Settings > About shows it above the
-    /// notices; the installer's splash (windows/scripts/pack.ps1), the release notes and the
-    /// download page carry it before Inkwell first runs.
+    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice), and
+    /// the Windows SDK's licence of an app that ships its .NET projection (Distributable Code,
+    /// Distribution Requirements: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll are on its
+    /// REDIST list; the windows-sdk-net notice): the user agrees to Microsoft's terms for those
+    /// components. The first run asks for that agreement before anything else (TermsStep);
+    /// Settings > About shows it above the notices; the installer's splash
+    /// (windows/scripts/pack.ps1), the release notes and the download page carry it before
+    /// Inkwell first runs.
     /// </summary>
     public const string WindowsAppSdkTerms =
-        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK, " +
-        "which Microsoft licenses separately, under the Microsoft Software License Terms shown below " +
-        "(\"Windows App SDK, by Microsoft\"). By installing or using Inkwell, you agree to those terms for those components.";
+        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK " +
+        "and the Windows SDK's .NET projection, which Microsoft licenses separately, under the Microsoft Software " +
+        "License Terms shown below (\"Windows App SDK, by Microsoft\" and \"Windows SDK projection for .NET, by Microsoft\"). " +
+        "By installing or using Inkwell, you agree to those terms for those components.";
 
     /// <summary>The ids of the composed notices, which mac/composed-notices.txt lists.</summary>
     public static IReadOnlySet<string> ComposedIds =>

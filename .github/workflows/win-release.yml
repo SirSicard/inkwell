@@ -234,7 +234,7 @@ jobs:
           $marker
           **Windows: download \`$SETUP\`**: Inkwell for 64-bit Windows 11 (24H2 or later), installed for your user alone, no administrator needed. It is not code-signed yet, so SmartScreen warns before it runs: choose **More info**, then **Run anyway**. Check the download first: its SHA-256 is \`$sum\` (also in \`$SUMS\`). \`$PACKAGE\` and \`releases.win.json\` are what the app's updater reads; there is no need to download them.
 
-          Inkwell includes the runtime of Microsoft's Windows App SDK, which Microsoft licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those components.
+          Inkwell includes the runtime of Microsoft's Windows App SDK and the Windows SDK's .NET projection, which Microsoft licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those components.
           EOF
           attach() {
             local draft

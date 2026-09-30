@@ -2,8 +2,9 @@
 // AboutSection (SettingsScreen.swift) lists them: the models, the code, and the Rust crates under
 // one disclosure. Static data: nothing here changes while the app runs, so it sends no command and
 // applies no event. The core's status line, which the Mac's About shows under the version, is the
-// shell's (CoreStatus); the updates row is UpdatesModel's. Windows only: the end-user terms the
-// Windows App SDK's licence requires, above the notices.
+// shell's (CoreStatus); the updates row is UpdatesModel's. Windows only: the end-user terms that
+// Microsoft's licences for the Windows App SDK and the Windows SDK's .NET projection require, above
+// the notices.
 
 namespace Inkwell.Core.Screens;
 
@@ -32,7 +33,14 @@ public sealed class AboutModel
     /// <summary>"Inkwell 1.0.0", or "Inkwell development build".</summary>
     public string VersionLine { get; }
 
-    /// <summary>The end-user terms for the Windows App SDK (Notices.WindowsAppSdkTerms), above the notices.</summary>
+    /// <summary>
+    /// Inkwell's copyright notice, LICENSE's line for it, under the version: the Windows SDK's
+    /// licence asks an app that ships its code to display its own. Inkwell.csproj's Copyright puts
+    /// the same line in Inkwell.exe's file properties.
+    /// </summary>
+    public const string CopyrightLine = "Copyright (c) 2026 Mattias Hjemgaard";
+
+    /// <summary>The end-user terms for Microsoft's components, the Windows App SDK and the Windows SDK's .NET projection (Notices.WindowsAppSdkTerms), above the notices.</summary>
     public static string Terms => Notices.WindowsAppSdkTerms;
 
     /// <summary>The weights, each credited; a CC-BY model's row opens onto its credit.</summary>

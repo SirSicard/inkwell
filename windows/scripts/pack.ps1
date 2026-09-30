@@ -13,7 +13,7 @@
 #   %LOCALAPPDATA%\InkwellApp, with a Start menu entry and an entry in Settings > Apps that
 #   uninstalls it. The library (%LOCALAPPDATA%\Inkwell) is not in that folder, so an uninstall
 #   leaves it. It refuses Windows older than 11 24H2 (10.0.26100), the app's floor. While it
-#   installs it shows a splash with the Windows App SDK's end-user terms ($SplashTerms below).
+#   installs it shows a splash with Microsoft's end-user terms ($SplashTerms below).
 # - InkwellApp-X.Y.Z-full.nupkg and releases.win.json: the update and the feed the installed app
 #   reads from the release (VelopackUpdater.cs). The feed names the package with its size and
 #   SHA-256, which the app checks before installing it; this script checks the feed says the
@@ -38,14 +38,17 @@ $Runtime = 'win10.0.26100-x64'
 
 $windows = Split-Path -Parent $PSScriptRoot
 
-# The end-user terms the Windows App SDK's licence asks for (its section 3(b)(ii)), on the
-# installer's splash: Velopack's Setup has no text page, only an image shown while it installs, so
-# the terms are on screen before Inkwell first runs, wherever the installer came from. The same
-# terms are in Settings > About (Notices.WindowsAppSdkTerms), the release notes (win-release.yml)
-# and the homepage (windows/HOMEPAGE-INSTALL.md): keep the four in step. The non-breaking spaces
+# The end-user terms the Windows App SDK's licence asks for (its section 3(b)(ii)), and the Windows
+# SDK's for its .NET projection (its Distribution Requirements), on the installer's splash:
+# Velopack's Setup has no text page, only an image shown while it installs, so the terms are on
+# screen before Inkwell first runs, wherever the installer came from; the first run then asks the
+# user to agree. The same terms are in Settings > About and the first run's step
+# (Notices.WindowsAppSdkTerms), the release notes (win-release.yml) and the homepage
+# (windows/HOMEPAGE-INSTALL.md): keep the four in step. The non-breaking spaces
 # keep "Settings > About" on one line.
 $SplashTerms = "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's " +
-    "Windows App SDK, which Microsoft licenses separately under the Microsoft Software License Terms, " +
+    "Windows App SDK and the Windows SDK's .NET projection, which Microsoft licenses separately under " +
+    "the Microsoft Software License Terms, " +
     "shown in full in Inkwell's Settings`u{00A0}>`u{00A0}About. By installing or using Inkwell, you " +
     "agree to those terms for those components."
 

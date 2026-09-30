@@ -16,6 +16,10 @@
     <PublishAot>true</PublishAot>
     <!-- Program.cs is the entry point: Velopack's install and update hooks run before WinUI starts. -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <!-- Inkwell's copyright notice in Inkwell.exe's file properties, as About shows it under the
+         version (AboutModel.CopyrightLine, LICENSE's line): the Windows SDK's licence asks an app
+         that ships its code to display its own. -->
+    <Copyright>Copyright (c) 2026 Mattias Hjemgaard</Copyright>
   </PropertyGroup>
   <!-- A release's version (win-release.yml: -p:InkVersion=X.Y.Z, from the tag): the file version,
        and the metadata About reads (AppVersion.cs). Any other build has none: "development build". -->
