@@ -137,7 +137,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       again later.
  *       With "model" and "next" the same registry id, it installs that model (the first
  *       download): nothing else is unloaded or warmed, and a model already installed is left as
- *       it is. Only when the user asks for the download.
+ *       it is. Only when the user asks for the download. A voice detector installed while
+ *       dictation runs is taken by it at once ("dictation.voice_detection" says so).
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".

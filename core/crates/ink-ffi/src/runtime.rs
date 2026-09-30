@@ -1087,6 +1087,11 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
         update_progress(shared, current, next),
     );
     drop(hold);
+    if result.is_ok() && next == ink_engines::SILERO_VAD_ID {
+        // A running dictation takes the voice detector now, queued before the shell hears that
+        // the install ended, so a take it starts after that is levelled with it.
+        crate::voice::vad_installed(shared);
+    }
     let (ok, no_model_warm, message) = match &result {
         Ok(()) => (true, false, None),
         Err(e) => (false, e.no_model_warm(), Some(Value::from(e.to_string()))),

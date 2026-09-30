@@ -17,7 +17,7 @@ use ink_core::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ink_engines::{ModelDir, Registry};
+use ink_engines::{EngineRow, ModelDir, Registry, SILERO_VAD_ID};
 use ink_ffi::runtime::{Core, Parts};
 use ink_ffi::voice::{DEFAULT_KEY, MIC_IDLE, VoicePlatform};
 use serde_json::Value;
@@ -64,6 +64,21 @@ impl VoiceRig {
     }
 
     fn build_with(label: &str, with_platform: bool, store: Arc<dyn ink_core::Store>) -> Self {
+        Self::build_rows(label, with_platform, store, Vec::new())
+    }
+
+    /// A rig whose registry also lists `rows`, none of them installed.
+    fn with_rows(label: &str, rows: Vec<EngineRow>) -> Self {
+        let sqlite = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+        Self::build_rows(label, true, sqlite, rows)
+    }
+
+    fn build_rows(
+        label: &str,
+        with_platform: bool,
+        store: Arc<dyn ink_core::Store>,
+        rows: Vec<EngineRow>,
+    ) -> Self {
         let dir = TempDir::new(label);
         let platform = Arc::new(MockPlatform::new());
         let edit = Arc::new(MockPlatform::new());
@@ -74,7 +89,7 @@ impl VoiceRig {
         let parts = Parts {
             store,
             clock: platform.clock(),
-            registry: Registry::new(vec![row]).unwrap(),
+            registry: Registry::new([vec![row], rows].concat()).unwrap(),
             models,
             loader: loader.clone(),
             installer: Arc::new(MockInstaller {
@@ -254,6 +269,47 @@ fn a_second_press_never_wipes_the_take() {
     assert!(rig.events.wait_count("dictation.inserted", 1, WAIT));
     assert_eq!(rig.events.count("dictation.started"), 1);
     assert_eq!(rig.platform.inserted(), ["Hello world. "]);
+}
+
+/// The voice detector installed while dictation runs reaches it at once, not at the next launch:
+/// when the install ends, the core resolves dictation's VAD again. Its row here has a stand-in
+/// file, so a build with Silero (the release's `ink-engines/engine-silero`) says it could not load
+/// it, which shows the install was acted on; a build without Silero has nothing to load and says
+/// nothing new. The take after it is the barrier: the chain handles what was queued before it.
+#[test]
+fn a_voice_detector_installed_while_dictation_runs_is_taken_at_once() {
+    let mut vad = ink_engines::silero_vad();
+    vad.files[0].size = 4;
+    let rig = VoiceRig::with_rows("vad-installed", vec![vad.clone()]);
+    rig.enable();
+    let first = rig.events.wait_type("dictation.voice_detection", WAIT);
+    assert_eq!(
+        (&first["available"], &first["reason"]),
+        (&false.into(), &"model_missing".into())
+    );
+
+    // The download: its files arrive as the downloader leaves them, and the install ends.
+    install(&ModelDir::new(rig._dir.path().join("models")), &vad);
+    rig.command(&format!(
+        r#"{{"cmd":"model.update","model":"{SILERO_VAD_ID}","next":"{SILERO_VAD_ID}"}}"#
+    ));
+    let finished = rig.events.wait_type("model.update_finished", WAIT);
+    assert_eq!(finished["ok"], true, "{finished}");
+    rig.dictate(1.2, 4);
+
+    let said: Vec<Value> = rig
+        .events
+        .all()
+        .into_iter()
+        .filter(|e| e["type"] == "dictation.voice_detection")
+        .collect();
+    if Registry::builtin().unwrap().get(SILERO_VAD_ID).is_some() {
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[1]["reason"], "load_failed", "{said:?}");
+    } else {
+        assert_eq!(said.len(), 1, "nothing to load in this build: {said:?}");
+    }
+    rig.events.assert_valid();
 }
 
 #[test]
