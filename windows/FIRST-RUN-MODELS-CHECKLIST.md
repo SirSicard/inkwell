@@ -1,0 +1,62 @@
+# First-run models: checklist (Windows)
+
+`Inkwell.Core.Tests` prove what the first run's models step and Settings > Models send and say for
+each event: nothing downloads before a Download button, one `model.update` at a time with model and
+next the same id, progress, failures with Retry, and the list asked again after each download. What
+only a desktop session can show is the real download: the step, the bars, a failure in words, and
+the models then doing their jobs. Nothing here was run from an SSH session, and no model was
+downloaded to write it.
+
+The downloads are real (Qwen3-ASR 1.7B alone is about 2.3 GB, from huggingface.co). Use a library
+of its own so nothing touches the one you use: the models go into `<library>\models`.
+
+## Setup
+
+```
+cd core
+cargo build -p ink-ffi --lib
+cd ..\windows
+dotnet publish Inkwell\Inkwell.csproj -c Release -o %TEMP%\inkwell-app
+set INK_DATA_DIR=%TEMP%\inkwell-first-run
+%TEMP%\inkwell-app\Inkwell.exe
+```
+
+## A. The step, before Download
+
+- [ ] The first run has five dots. After the permissions, a step "Models" lists each model that is
+      not installed: its name, licence and size, and "not installed".
+- [ ] Under the rows, one line gives the total and where the files come from ("from
+      huggingface.co", and GitHub when Silero VAD is listed), then "Nothing downloads until you
+      press Download."
+- [ ] Nothing downloads before the button: `%TEMP%\inkwell-first-run\models` stays empty while
+      you go Back, Continue and Skip.
+- [ ] Narrator reads the step's heading, the rows, and the Download button's name: the models,
+      how much in all, and from where.
+
+## B. Download
+
+- [ ] **Download**: the first model reads "Starting the download…", then a bar with "… of …";
+      the others read "Waiting for the download before it". The button and its line go, and "You
+      can go on: …" shows.
+- [ ] **Continue** goes on while it downloads; finish the first run. Settings > Models shows the
+      same bars.
+- [ ] When a model finishes, its row reads "installed" and the next one starts. Settings > Models'
+      lines (Dictation, Meeting transcript, Live words) change to the new model without leaving the
+      screen. Dictation then works.
+
+## C. A failure, and Retry
+
+- [ ] Turn the network off during a download: the row reads "Couldn't download …: …" in words,
+      with **Retry**; a model waiting behind it starts, and fails the same way while offline.
+- [ ] Network on, **Retry**: the bar starts from where it stopped, not from zero, and finishes.
+
+## D. Settings > Models
+
+- [ ] Each model not installed has its own **Download**, and "From huggingface.co" (Silero VAD:
+      "From GitHub") under its line; an installed one has neither. The heading no longer says
+      "Read-only".
+- [ ] Two Downloads in a row: the second waits for the first.
+- [ ] Quit during a download (notification area > Quit), start again: the model is not installed,
+      and **Download** resumes it.
+
+Date, Windows build and commit:
