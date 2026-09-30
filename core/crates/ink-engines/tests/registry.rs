@@ -6,7 +6,7 @@ use common::{REV, row, sha256_hex};
 use ink_core::Job;
 use ink_engines::{
     ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_RELATIVE_PATH_LEN, ModelDir, ModelFile, Os,
-    REVISION_MARKER, Registry, RegistryError, builtin_rows,
+    REVISION_MARKER, Registry, RegistryError, Runtime, builtin_rows,
 };
 
 fn valid() -> EngineRow {
@@ -298,6 +298,18 @@ fn rows_need_jobs_files_an_os_a_size_and_finite_error_rates() {
         wer: 1.0,
     });
     assert!(matches!(refused(r), RegistryError::Invalid { .. }));
+}
+
+#[test]
+fn a_row_the_shell_runs_fills_no_job_and_every_other_row_fills_one() {
+    // Core ML runs in the Mac shell: the core only downloads such a row, so a job on it would
+    // route to a model the core cannot load.
+    let mut r = valid();
+    r.runtime = Runtime::CoreMl;
+    assert!(matches!(refused(r.clone()), RegistryError::Invalid { .. }));
+    r.scores.clear();
+    let reg = Registry::new(vec![r]).expect("a download-only row");
+    assert!(reg.rows()[0].info().jobs.is_empty());
 }
 
 #[test]

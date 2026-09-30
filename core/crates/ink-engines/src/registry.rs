@@ -58,6 +58,10 @@ pub enum Runtime {
     NemoSpeechCpp,
     /// tract, a pure-Rust ONNX runtime, for Silero VAD (`engine-silero`).
     Tract,
+    /// Apple's Core ML, run by the Mac shell (FluidAudio), never by the core (architecture rule
+    /// 2). The core only downloads such a row: it fills no job, so the router never picks it and
+    /// residency never loads it; the shell loads the files and registers its own engine.
+    CoreMl,
 }
 
 /// One job a row can fill, with its measured error rate on that job's benchmark.
@@ -163,8 +167,15 @@ impl EngineRow {
                 licence: self.licence.clone(),
             });
         }
-        if self.scores.is_empty() {
-            return Err(invalid("fills no job".into()));
+        match (self.runtime, self.scores.is_empty()) {
+            (Runtime::CoreMl, false) => {
+                return Err(invalid(
+                    "is only downloaded (the shell runs Core ML), so it may fill no job".into(),
+                ));
+            }
+            (Runtime::CoreMl, true) => {}
+            (_, true) => return Err(invalid("fills no job".into())),
+            (_, false) => {}
         }
         for (i, score) in self.scores.iter().enumerate() {
             // NaN would make the router's ordering meaningless; a negative rate is a typo.
