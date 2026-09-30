@@ -29,11 +29,11 @@
 #   licence file anywhere in its tree, which is .github/ (CODEOWNERS, renovate.json, two
 #   workflows), .gitignore, .vscode/settings.json, CODE_OF_CONDUCT.md, Cargo.lock, Cargo.toml,
 #   README.md and src/ (lib.rs, testsupport.rs, unix.rs, win.rs, win/sugar.rs). Only its Cargo.toml
-#   names a licence (`license = "Apache-2.0"`); its README names none. The line stays `no` until
-#   the maintainer decides what stands as the evidence (as for realfft in ../overrides.txt).
+#   names a licence (`license = "Apache-2.0"`); its README names none. The maintainer accepted the
+#   manifest as the evidence on 2026-09-30, as for realfft in ../overrides.txt.
 
 fluent-langneg    0.13.1  fluent-langneg-rs-LICENSE-MIT.txt  verified=2026-09-30  the LICENSE-MIT of the crate's repository (the MIT licence, which the crate offers beside Apache-2.0); its package holds no licence file
 fluent-langneg    0.14.2  fluent-langneg-rs-LICENSE-MIT.txt  verified=2026-09-30  the LICENSE-MIT of the crate's repository (the MIT licence, which the crate offers beside Apache-2.0); its package holds no licence file
-fs_at             0.2.1   Apache-2.0.txt                     verified=no          the Apache License 2.0, which the crate is under (its manifest says so); its package holds no licence file
+fs_at             0.2.1   Apache-2.0.txt                     verified=2026-09-30  the Apache License 2.0's text; the crate is Apache-2.0 (its manifest says so; its package and repository hold no licence file)
 intl_pluralrules  7.0.2   MIT.txt                            verified=2026-09-30  the MIT licence's text, as the crate's directory in its repository has it (LICENSE-MIT); the crate offers Apache-2.0 or MIT, and its package holds no licence file
 webview2-com-sys  0.39.1  webview2-rs-LICENSE.txt            verified=2026-09-30  the LICENSE of the crate's repository, github.com/wravery/webview2-rs (the MIT licence); the crate is MIT (its manifest says so), and its package holds no licence file
