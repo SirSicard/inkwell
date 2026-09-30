@@ -195,18 +195,27 @@ fn run_cargo(core: &Path, args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("cargo {}: {e}", args[0]))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let hint = if stderr.contains("offline") || stderr.contains("download") {
-            "\n(a crate's package is not in the local registry: run mac/scripts/rust-notices.sh, which fetches them)"
-        } else {
-            ""
-        };
         return Err(format!(
-            "cargo {} failed:\n{}{hint}",
+            "cargo {} failed:\n{}{}",
             args[0],
-            stderr.trim_end()
+            stderr.trim_end(),
+            fetch_hint(args, &stderr)
         ));
     }
     String::from_utf8(out.stdout).map_err(|e| format!("cargo {}: {e}", args[0]))
+}
+
+/// What to do when cargo (run with `args`) could not find or fetch a crate's package: the core's
+/// runs are offline (`--offline`), and rust-notices.sh fetches their crates first; Velopack's are
+/// not, and fetch Velopack's crates themselves.
+fn fetch_hint(args: &[&str], stderr: &str) -> &'static str {
+    if !(stderr.contains("offline") || stderr.contains("download")) {
+        ""
+    } else if args.contains(&"--offline") {
+        "\n(a crate's package is not in the local registry: run mac/scripts/rust-notices.sh, which fetches them)"
+    } else {
+        "\n(cargo could not fetch a crate: the Velopack run fetches Velopack's crates from crates.io, so it needs the network, with CARGO_NET_OFFLINE unset)"
+    }
 }
 
 /// A crate's licence files, sorted by name (case-insensitively), each cleaned ([`swift::clean`]).
@@ -884,6 +893,27 @@ mod tests {
                 "{}: no workspace crate",
                 shell.out
             );
+        }
+    }
+
+    #[test]
+    fn a_crate_cargo_could_not_fetch_gets_the_hint_of_its_run() {
+        // The core's runs are offline; Velopack's fetch (crate_tree unlocked, its metadata).
+        let core = ["tree", "--offline", "--locked", "-p", "ink-ffi"];
+        let velopack = ["metadata", "--format-version", "1"];
+        let missing = "error: failed to download `foo v1.0.0`";
+        let forbidden = "error: attempting to make an HTTP request, but --offline was specified";
+        for stderr in [missing, forbidden] {
+            assert!(
+                fetch_hint(&core, stderr).contains("rust-notices.sh"),
+                "{stderr}"
+            );
+            let hint = fetch_hint(&velopack, stderr);
+            assert!(hint.contains("needs the network"), "{stderr}");
+            assert!(!hint.contains("rust-notices.sh"), "{stderr}");
+        }
+        for args in [&core[..], &velopack[..]] {
+            assert_eq!(fetch_hint(args, "error: package `foo` not found"), "");
         }
     }
 
