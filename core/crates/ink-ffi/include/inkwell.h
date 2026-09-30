@@ -11,8 +11,8 @@
  *   (ink_register_engine); their answers come back through ink_engine_complete, and a live
  *   stream's words through ink_stream_event. The ink's audio bands are copied out on demand
  *   (ink_bands_read).
- *   The event types are defined once, in schema/events.schema.json; the Swift types are generated
- *   from it (cargo run -p ink-ffi --bin ink-schema).
+ *   The event types are defined once, in schema/events.schema.json; the Swift and C# types are
+ *   generated from it (cargo run -p ink-ffi --bin ink-schema).
  *
  * STRINGS
  *   Every string crossing this ABI is NUL-terminated UTF-8, and at most INK_MAX_JSON bytes. A string passed in is read during the
@@ -204,7 +204,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
  *       "dictation.polish" (on|off; setting.set takes only off, which also withdraws polish's
  *       consent in the same write, and answers "consent.state" too: consent.allow turns it on),
- *       "dictation.key" (fn|right_option|right_command|right_control|right_shift),
+ *       "dictation.key" (fn|right_option|right_command|right_control|right_shift|right_alt|
+ *       right_win; a key this OS cannot hold is refused when dictation binds it, as
+ *       "dictation.off" with "key_refused"; the default is fn on macOS and right_control on
+ *       Windows),
  *       "dictation.edit_key" (off or one of those; voice edit turns on with its consent through
  *       consent.allow, and off withdraws that consent in the same write, answering
  *       "consent.state" too; an edit key set without a consent edits nothing),

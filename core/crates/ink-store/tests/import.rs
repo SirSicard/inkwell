@@ -648,6 +648,67 @@ fn a_modifier_hotkey_becomes_the_dictation_key() {
     assert!(!rows.contains_key("dictation.edit_key"));
 }
 
+/// Windows: 0.2's Fn never reached Windows, so the import sets the Windows default (right Ctrl) and
+/// the note says the key was replaced, naming both.
+#[cfg(windows)]
+#[test]
+fn on_windows_fn_is_replaced_by_right_ctrl_and_the_note_names_both() {
+    let legacy = with_hotkey("key-fn-win", Some("fn"), "ptt");
+    let source = legacy.read().unwrap();
+    let key = source.key().unwrap();
+    assert_eq!(key.outcome, Ok("right_control"));
+    assert!(key.needs_note(), "a replaced key is said");
+    let db = TempDb::new("import-key-fn-win");
+    let store = db.open();
+    store.import_inkwell02(&source).unwrap();
+    assert_eq!(
+        store.setting(DICTATION_KEY_SETTING).unwrap().as_deref(),
+        Some("right_control")
+    );
+    assert_eq!(
+        document(&store, KEY_NOTE_KEY).unwrap(),
+        json!({"hotkey": "fn", "key": "right_control", "outcome": "replaced",
+               "applied": true, "toggle": false})
+    );
+}
+
+/// Windows: 0.2's right_cmd was the right Windows key there, so it carries over as right_win, the
+/// same key under 1.0's name (nothing to say).
+#[cfg(windows)]
+#[test]
+fn on_windows_right_cmd_becomes_the_right_windows_key() {
+    let legacy = with_hotkey("key-cmd-win", Some("right_cmd"), "ptt");
+    let source = legacy.read().unwrap();
+    let key = source.key().unwrap();
+    assert_eq!(key.outcome, Ok("right_win"));
+    assert!(!key.needs_note());
+    let db = TempDb::new("import-key-cmd-win");
+    let store = db.open();
+    store.import_inkwell02(&source).unwrap();
+    assert_eq!(
+        store.setting(DICTATION_KEY_SETTING).unwrap().as_deref(),
+        Some("right_win")
+    );
+    assert_eq!(document(&store, KEY_NOTE_KEY).unwrap()["outcome"], "mapped");
+}
+
+/// The Mac keeps Fn and right Command as they were.
+#[cfg(not(windows))]
+#[test]
+fn on_the_mac_fn_and_right_cmd_carry_over_unchanged() {
+    for (old, new) in [("fn", "fn"), ("right_cmd", "right_command")] {
+        let legacy = with_hotkey(&format!("key-{old}-mac"), Some(old), "ptt");
+        let source = legacy.read().unwrap();
+        let key = source.key().unwrap();
+        assert_eq!(key.outcome, Ok(new));
+        assert!(!key.needs_note(), "{old}");
+        let db = TempDb::new(&format!("import-key-{old}-mac"));
+        let store = db.open();
+        store.import_inkwell02(&source).unwrap();
+        assert_eq!(document(&store, KEY_NOTE_KEY).unwrap()["outcome"], "mapped");
+    }
+}
+
 #[test]
 fn a_combination_hotkey_keeps_the_default_and_says_so() {
     // 0.2's own default, as in `settings()`.
@@ -698,10 +759,11 @@ fn an_unknown_key_keeps_the_default_and_says_so() {
 
 #[test]
 fn a_toggle_hotkey_maps_and_says_it_is_now_held() {
-    let legacy = with_hotkey("key-toggle", Some("fn"), "toggle");
+    // right_ctrl: the same key on both OSes (fn is replaced on Windows).
+    let legacy = with_hotkey("key-toggle", Some("right_ctrl"), "toggle");
     let source = legacy.read().unwrap();
     let key = source.key().unwrap();
-    assert_eq!(key.outcome, Ok("fn"));
+    assert_eq!(key.outcome, Ok("right_control"));
     assert!(key.was_toggle);
     assert!(key.needs_note(), "hold to talk replaces press to start");
     let db = TempDb::new("import-key-toggle");
@@ -709,7 +771,7 @@ fn a_toggle_hotkey_maps_and_says_it_is_now_held() {
     store.import_inkwell02(&source).unwrap();
     assert_eq!(
         store.setting(DICTATION_KEY_SETTING).unwrap().as_deref(),
-        Some("fn")
+        Some("right_control")
     );
     assert_eq!(document(&store, KEY_NOTE_KEY).unwrap()["toggle"], true);
 }

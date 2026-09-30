@@ -1,0 +1,313 @@
+//! C# records from the [`Schema`], for the Windows shell (`windows/`).
+//!
+//! - A string enum becomes a C# `enum`, read and written by its JSON string only (never a number).
+//! - An object becomes a `sealed record` of `init` properties: a required field is `required`, an
+//!   optional one nullable, omitted when absent.
+//! - The events derive from `InkEvent`, whose `Decode` reads the `"type"` and decodes that event,
+//!   keeping an event type it does not know as `UnknownEvent` and a known event whose content does
+//!   not decode as `UndecodableEvent`, rather than failing (as the Swift `InkEvent` does).
+//!
+//! Decoding goes through a source-generated `JsonSerializerContext` (no reflection), so the types
+//! work in a NativeAOT build. JSON names are `snake_case`; C# names are `PascalCase`, with
+//! `[JsonPropertyName]` mapping them.
+
+use std::fmt::Write;
+
+use super::{Def, DefKind, Field, Schema, Ty};
+
+/// The namespace of the generated types.
+pub const NAMESPACE: &str = "Inkwell.Core.Events";
+
+fn pascal(snake: &str) -> String {
+    let mut out = String::new();
+    let mut upper = true;
+    for c in snake.chars() {
+        if c == '_' || c == '.' {
+            upper = true;
+        } else if upper {
+            out.extend(c.to_uppercase());
+            upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    // An identifier cannot start with a digit (an enum value such as "30").
+    if out.starts_with(|c: char| c.is_ascii_digit()) {
+        out.insert(0, 'V');
+    }
+    out
+}
+
+/// A member's name inside type `owner`: C# forbids a member named like its enclosing type.
+fn member(json: &str, owner: &str) -> String {
+    let name = pascal(json);
+    if name == owner {
+        format!("{name}Value")
+    } else {
+        name
+    }
+}
+
+fn cs_type(ty: &Ty) -> String {
+    match ty {
+        Ty::String => "string".into(),
+        Ty::Integer => "long".into(),
+        Ty::Number => "double".into(),
+        Ty::Boolean => "bool".into(),
+        Ty::Array(item) => format!(
+            "global::System.Collections.Generic.IReadOnlyList<{}>",
+            cs_type(item)
+        ),
+        Ty::Ref(name) => name.clone(),
+    }
+}
+
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn doc(out: &mut String, indent: &str, text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "{indent}/// <summary>");
+    for line in wrap(&escape(text), 96usize.saturating_sub(indent.len() + 4)) {
+        let _ = writeln!(out, "{indent}/// {line}");
+    }
+    let _ = writeln!(out, "{indent}/// </summary>");
+}
+
+/// Greedy word wrap, so long descriptions stay readable in the generated file.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    for word in text.split_whitespace() {
+        let line = lines.last_mut().expect("starts with one line");
+        if !line.is_empty() && line.len() + 1 + word.len() > width {
+            lines.push(word.to_owned());
+        } else {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+    }
+    lines
+}
+
+fn property(out: &mut String, owner: &str, f: &Field) {
+    match &f.constant {
+        Some(c) if f.doc.is_empty() => doc(out, "    ", &format!("Always \"{c}\".")),
+        _ => doc(out, "    ", &f.doc),
+    }
+    let _ = writeln!(out, "    [JsonPropertyName(\"{}\")]", f.name);
+    let (required, optional) = if f.required {
+        ("required ", "")
+    } else {
+        ("", "?")
+    };
+    let _ = writeln!(
+        out,
+        "    public {required}{}{optional} {} {{ get; init; }}",
+        cs_type(&f.ty),
+        member(&f.name, owner)
+    );
+}
+
+fn object(out: &mut String, def: &Def, fields: &[Field], event: bool) {
+    if event {
+        let _ = writeln!(out, "public sealed record {} : InkEvent\n{{", def.name);
+    } else {
+        let _ = writeln!(out, "public sealed record {}\n{{", def.name);
+    }
+    let mut first = true;
+    for f in fields {
+        // An event's "type" lives on InkEvent.
+        if event && f.name == "type" {
+            continue;
+        }
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        property(out, &def.name, f);
+    }
+    out.push_str("}\n");
+}
+
+fn enumeration(out: &mut String, def: &Def, values: &[String]) {
+    let _ = writeln!(
+        out,
+        "[JsonConverter(typeof(StrictEnumConverter<{0}>))]\npublic enum {0}\n{{",
+        def.name
+    );
+    for v in values {
+        let _ = writeln!(
+            out,
+            "    [JsonStringEnumMemberName(\"{v}\")]\n    {},",
+            member(v, &def.name)
+        );
+    }
+    out.push_str("}\n");
+}
+
+/// The C# source for `schema`.
+pub fn csharp(schema: &Schema) -> String {
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "// <auto-generated>\n\
+         // Generated from schema/events.schema.json by `cargo run -p ink-ffi --bin ink-schema`.\n\
+         // Do not edit: change the schema and regenerate. A core test fails while this is stale.\n\
+         // </auto-generated>\n\
+         #nullable enable\n\n\
+         using System.Text.Json;\n\
+         using System.Text.Json.Serialization;\n\n\
+         namespace {NAMESPACE};\n\n"
+    );
+    doc(&mut out, "", &schema.doc);
+    out.push_str(
+        "public abstract record InkEvent\n{\n    \
+         /// <summary>\n    \
+         /// The event's kind: its JSON \"type\".\n    \
+         /// </summary>\n    \
+         [JsonPropertyName(\"type\")]\n    \
+         public required string Type { get; init; }\n\n    \
+         /// <summary>\n    \
+         /// Decodes one event: the JSON an <c>InkEventCallback</c> receives. Throws\n    \
+         /// <see cref=\"JsonException\"/> only when it is not a JSON object with a string \"type\".\n    \
+         /// </summary>\n    \
+         public static InkEvent Decode(global::System.ReadOnlyMemory<byte> utf8)\n    {\n        \
+         using var document = JsonDocument.Parse(utf8);\n        \
+         var root = document.RootElement;\n        \
+         if (root.ValueKind != JsonValueKind.Object\n            \
+         || !root.TryGetProperty(\"type\", out var typeElement)\n            \
+         || typeElement.ValueKind != JsonValueKind.String)\n        {\n            \
+         throw new JsonException(\"an event needs a string \\\"type\\\"\");\n        }\n        \
+         var type = typeElement.GetString()!;\n        \
+         try\n        {\n            \
+         return type switch\n            {\n",
+    );
+    for e in &schema.events {
+        if let Some(ty) = schema.event_type(e) {
+            let _ = writeln!(
+                out,
+                "                \"{ty}\" => root.Deserialize(InkEventsJson.Default.{e})!,"
+            );
+        }
+    }
+    out.push_str(
+        "                _ => new UnknownEvent { Type = type },\n            \
+         };\n        }\n        \
+         catch (JsonException)\n        {\n            \
+         string? record = root.TryGetProperty(\"record\", out var r) && r.ValueKind == JsonValueKind.String\n                \
+         ? r.GetString()\n                : null;\n            \
+         return new UndecodableEvent { Type = type, Record = record };\n        }\n    }\n}\n\n\
+         /// <summary>\n\
+         /// An event this build does not know. The core and the shell ship together, so this means a\n\
+         /// mismatched build.\n\
+         /// </summary>\n\
+         public sealed record UnknownEvent : InkEvent;\n\n\
+         /// <summary>\n\
+         /// A known event whose content did not decode (a value this build does not know). Its type and\n\
+         /// record are kept so the shell can still tell what it was about.\n\
+         /// </summary>\n\
+         public sealed record UndecodableEvent : InkEvent\n{\n    \
+         /// <summary>\n    \
+         /// The event's \"record\", when it had a string one.\n    \
+         /// </summary>\n    \
+         public string? Record { get; init; }\n}\n\n\
+         /// <summary>\n\
+         /// Reads and writes an enum by its JSON string only: a number, or a string this build does not\n\
+         /// know, fails to decode.\n\
+         /// </summary>\n\
+         public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>\n    \
+         where T : struct, global::System.Enum\n{\n    \
+         /// <summary>\n    \
+         /// Strings only.\n    \
+         /// </summary>\n    \
+         public StrictEnumConverter()\n        : base(namingPolicy: null, allowIntegerValues: false)\n    {\n    }\n}\n\n\
+         /// <summary>\n\
+         /// The source-generated serializer for the events (no reflection: NativeAOT-safe). Nullable\n\
+         /// annotations and required members are enforced, as the Swift decoder enforces them.\n\
+         /// </summary>\n\
+         [JsonSourceGenerationOptions(RespectNullableAnnotations = true, RespectRequiredConstructorParameters = true)]\n",
+    );
+    for e in &schema.events {
+        let _ = writeln!(out, "[JsonSerializable(typeof({e}))]");
+    }
+    out.push_str("public sealed partial class InkEventsJson : JsonSerializerContext\n{\n}\n");
+    for d in &schema.defs {
+        out.push('\n');
+        doc(&mut out, "", &d.doc);
+        match &d.kind {
+            DefKind::Enum(values) => enumeration(&mut out, d, values),
+            DefKind::Object(fields) => {
+                let event = schema.events.contains(&d.name);
+                object(&mut out, d, fields, event);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_become_csharp_names() {
+        assert_eq!(pascal("speech_too_short"), "SpeechTooShort");
+        assert_eq!(pascal("core.ready"), "CoreReady");
+        assert_eq!(pascal("30"), "V30");
+        assert_eq!(member("phase", "Phase"), "PhaseValue");
+        assert_eq!(member("at_ms", "Tick"), "AtMs");
+        assert_eq!(escape("a < b & c"), "a &lt; b &amp; c");
+    }
+
+    #[test]
+    fn a_small_schema_generates_the_expected_csharp() {
+        let schema = Schema::parse(
+            r##"{
+              "description": "Events.",
+              "oneOf": [{"$ref": "#/$defs/Tick"}],
+              "$defs": {
+                "Phase": {"type": "string", "description": "When.", "enum": ["live", "final", "7"]},
+                "Span": {"type": "object", "description": "A span.", "additionalProperties": false,
+                  "properties": {"span": {"type": "integer"}}, "required": ["span"]},
+                "Tick": {"type": "object", "description": "A tick.", "additionalProperties": false,
+                  "properties": {"type": {"const": "tick.now"},
+                    "at_ms": {"type": "integer", "minimum": 0, "description": "When, ms."},
+                    "phase": {"$ref": "#/$defs/Phase", "description": "Which."},
+                    "words": {"type": "array", "items": {"type": "string"}}},
+                  "required": ["type", "at_ms", "words"]}
+              }
+            }"##,
+        )
+        .unwrap();
+        let out = csharp(&schema);
+        for expected in [
+            "namespace Inkwell.Core.Events;",
+            "public sealed record Tick : InkEvent\n{",
+            "\"tick.now\" => root.Deserialize(InkEventsJson.Default.Tick)!,",
+            "_ => new UnknownEvent { Type = type },",
+            "return new UndecodableEvent { Type = type, Record = record };",
+            "    [JsonPropertyName(\"at_ms\")]\n    public required long AtMs { get; init; }\n",
+            "    public Phase? Phase { get; init; }\n",
+            "public required global::System.Collections.Generic.IReadOnlyList<string> Words",
+            "[JsonConverter(typeof(StrictEnumConverter<Phase>))]\npublic enum Phase\n{",
+            "    [JsonStringEnumMemberName(\"final\")]\n    Final,\n",
+            "    [JsonStringEnumMemberName(\"7\")]\n    V7,\n",
+            "public sealed record Span\n{",
+            "public required long SpanValue { get; init; }",
+            "[JsonSerializable(typeof(Tick))]\npublic sealed partial class InkEventsJson",
+            "/// When, ms.\n",
+        ] {
+            assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
+        }
+        // The event's "type" is InkEvent's, not redeclared on the event.
+        let tick = &out[out.find("public sealed record Tick").unwrap()..];
+        assert!(!tick.contains("\"type\""), "{tick}");
+    }
+}

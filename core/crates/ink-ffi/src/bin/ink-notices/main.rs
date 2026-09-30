@@ -5,7 +5,11 @@
 //! cargo run -p ink-ffi --bin ink-notices                  # regenerate
 //! cargo run -p ink-ffi --bin ink-notices -- --check       # fail if the file differs from a fresh run
 //! cargo run -p ink-ffi --bin ink-notices -- --check-lock  # fail if it was made from another lock
+//! cargo run -p ink-ffi --bin ink-notices -- --windows [--check | --check-lock]
 //! ```
+//!
+//! `--windows` does the same for the Windows shell: the crates of the Windows target
+//! ([`WINDOWS`]), as C# (`windows/Inkwell.Core/Screens/About/RustNotices.g.cs`, [`csharp`]).
 //!
 //! Offline: it reads cargo's resolution (`cargo tree` and `cargo metadata`, both `--offline
 //! --locked`) and each crate's unpacked package in the local registry. A crate whose package is
@@ -29,6 +33,7 @@
 //! ([`overrides`]); an override no crate needs is an error too. Every error is listed before
 //! anything is written.
 
+mod csharp;
 mod graph;
 mod licence;
 mod overrides;
@@ -50,6 +55,14 @@ const RELEASE_FEATURES: &str = "engine-llama,ink-engines/engine-silero,ink-engin
 const TARGET: &str = "aarch64-apple-darwin";
 /// The generated file, from the repository root.
 const SWIFT_OUT: &str = "mac/Sources/Inkwell/Generated/RustNotices.swift";
+/// The Windows release's target: x64 only for now (windows/Directory.Build.props).
+const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+/// The features the Windows release builds the core with. It has no build script yet to hold
+/// them to, as the Mac's has (a test does); its engines are the Mac's (S3.2: llama.cpp, whose
+/// Vulkan backend, `ink-engines/engine-llama-vulkan`, adds no crate, Silero and NeMo-Speech.cpp).
+const WINDOWS_RELEASE_FEATURES: &str = RELEASE_FEATURES;
+/// The generated C# file, from the repository root.
+const CSHARP_OUT: &str = "windows/Inkwell.Core/Screens/About/RustNotices.g.cs";
 /// The overrides table and its texts, from the repository root.
 const NOTICES_DIR: &str = "core/crates/ink-ffi/notices";
 
@@ -62,6 +75,75 @@ const LICENCE_FILE_PREFIXES: [&str; 6] = [
     "notice",
     "unlicense",
 ];
+
+/// A shell the notices are generated for: the release's target and features, and its file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Shell {
+    target: &'static str,
+    features: &'static str,
+    out: &'static str,
+    /// The file's language: C# (the Windows shell) or Swift (the Mac's).
+    csharp: bool,
+}
+
+/// The Mac app: Swift, for Apple silicon.
+const MAC: Shell = Shell {
+    target: TARGET,
+    features: RELEASE_FEATURES,
+    out: SWIFT_OUT,
+    csharp: false,
+};
+
+/// The Windows app: C#, for x64.
+const WINDOWS: Shell = Shell {
+    target: WINDOWS_TARGET,
+    features: WINDOWS_RELEASE_FEATURES,
+    out: CSHARP_OUT,
+    csharp: true,
+};
+
+impl Shell {
+    fn render(self, fingerprint: &str, notices: &[CrateNotice]) -> String {
+        if self.csharp {
+            csharp::render(self.features, self.target, fingerprint, notices)
+        } else {
+            swift::render(self.features, self.target, fingerprint, notices)
+        }
+    }
+
+    /// A value the file records, by its Swift name (`lockFingerprint`; C# capitalises it).
+    fn recorded(self, file: &str, name: &str) -> Option<String> {
+        if self.csharp {
+            let mut chars = name.chars();
+            let upper: String = chars
+                .next()
+                .map(|c| c.to_ascii_uppercase())
+                .into_iter()
+                .chain(chars)
+                .collect();
+            csharp::recorded(file, &upper)
+        } else {
+            swift::recorded(file, name)
+        }
+    }
+
+    fn listed(self, file: &str) -> Vec<String> {
+        if self.csharp {
+            csharp::listed(file)
+        } else {
+            listed(file)
+        }
+    }
+
+    /// The command that regenerates the file.
+    fn regenerate(self) -> &'static str {
+        if self.csharp {
+            "cargo run -p ink-ffi --bin ink-notices -- --windows"
+        } else {
+            "cargo run -p ink-ffi --bin ink-notices"
+        }
+    }
+}
 
 fn repo_root() -> PathBuf {
     // core/crates/ink-ffi -> the repository root.
@@ -254,8 +336,45 @@ fn machine_paths(
     paths
 }
 
-/// The Swift file, from cargo's resolution and the packages on this machine.
-fn generate(root: &Path) -> Result<String, Vec<String>> {
+/// The crates a lock records, as (name, version).
+fn locked(lock: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut name = None;
+    for line in lock.lines() {
+        if let Some(n) = line
+            .strip_prefix("name = \"")
+            .and_then(|l| l.strip_suffix('"'))
+        {
+            name = Some(n.to_string());
+        } else if let Some(v) = line
+            .strip_prefix("version = \"")
+            .and_then(|l| l.strip_suffix('"'))
+            && let Some(n) = name.take()
+        {
+            out.push((n, v.to_string()));
+        }
+    }
+    out
+}
+
+/// The overrides the Windows run checks: all but those for a crate the lock has that the Windows
+/// release does not link (another target's, which the Mac run checks, and refuses where no
+/// release needs it). One for a crate the lock no longer has stays, and is an error.
+fn windows_overrides(overrides: Overrides, crates: &[Package], lock: &str) -> Overrides {
+    let locked = locked(lock);
+    overrides
+        .into_iter()
+        .filter(|(key, _)| {
+            crates
+                .iter()
+                .any(|c| (&c.name, &c.version) == (&key.0, &key.1))
+                || !locked.contains(key)
+        })
+        .collect()
+}
+
+/// The shell's file, from cargo's resolution and the packages on this machine.
+fn generate(root: &Path, shell: Shell) -> Result<String, Vec<String>> {
     let core = root.join("core");
     let tree = run_cargo(
         &core,
@@ -268,9 +387,9 @@ fn generate(root: &Path) -> Result<String, Vec<String>> {
             "-e",
             "normal,no-proc-macro",
             "--target",
-            TARGET,
+            shell.target,
             "--features",
-            RELEASE_FEATURES,
+            shell.features,
             "--prefix",
             "none",
             "--format",
@@ -288,9 +407,9 @@ fn generate(root: &Path) -> Result<String, Vec<String>> {
             "--format-version",
             "1",
             "--filter-platform",
-            TARGET,
+            shell.target,
             "--features",
-            RELEASE_FEATURES,
+            shell.features,
         ],
     )
     .and_then(|m| graph::packages(&m))
@@ -301,13 +420,16 @@ fn generate(root: &Path) -> Result<String, Vec<String>> {
         .map_err(|e| vec![format!("{NOTICES_DIR}/overrides.txt: {e}")])?;
     let overrides =
         overrides::parse(&table).map_err(|e| vec![format!("{NOTICES_DIR}/overrides.txt: {e}")])?;
-    let notices = notices(&crates, &overrides, &notices_dir.join("texts"))?;
     let lock = std::fs::read_to_string(core.join("Cargo.lock"))
         .map_err(|e| vec![format!("core/Cargo.lock: {e}")])?;
-    let rendered = swift::render(
-        RELEASE_FEATURES,
-        TARGET,
-        &swift::fingerprint(RELEASE_FEATURES, TARGET, &lock),
+    let overrides = if shell.csharp {
+        windows_overrides(overrides, &crates, &lock)
+    } else {
+        overrides
+    };
+    let notices = notices(&crates, &overrides, &notices_dir.join("texts"))?;
+    let rendered = shell.render(
+        &swift::fingerprint(shell.features, shell.target, &lock),
         &notices,
     );
     // Nothing of this machine: no path of the checkout, the registry or the home directory.
@@ -356,14 +478,14 @@ fn listed(swift: &str) -> Vec<String> {
 }
 
 /// Compares the file with a fresh run.
-fn check(root: &Path, generated: &str) -> Result<(), String> {
-    let current = std::fs::read_to_string(root.join(SWIFT_OUT))
+fn check(root: &Path, shell: Shell, generated: &str) -> Result<(), String> {
+    let current = std::fs::read_to_string(root.join(shell.out))
         .unwrap_or_default()
         .replace("\r\n", "\n");
     if current == generated {
         return Ok(());
     }
-    let (was, now) = (listed(&current), listed(generated));
+    let (was, now) = (shell.listed(&current), shell.listed(generated));
     let added: Vec<&String> = now.iter().filter(|c| !was.contains(c)).collect();
     let removed: Vec<&String> = was.iter().filter(|c| !now.contains(c)).collect();
     let mut why = String::new();
@@ -391,30 +513,40 @@ fn check(root: &Path, generated: &str) -> Result<(), String> {
         why.push_str("\n  the same crates; a text, a licence or the lock's fingerprint differs");
     }
     Err(format!(
-        "{SWIFT_OUT} is stale:{why}\nRegenerate: cargo run -p ink-ffi --bin ink-notices"
+        "{} is stale:{why}\nRegenerate: {}",
+        shell.out,
+        shell.regenerate()
     ))
 }
 
 /// Compares the fingerprint the file records with the lock as it is now. Needs no package.
-fn check_lock(root: &Path) -> Result<(), String> {
-    let swift =
-        std::fs::read_to_string(root.join(SWIFT_OUT)).map_err(|e| format!("{SWIFT_OUT}: {e}"))?;
+fn check_lock(root: &Path, shell: Shell) -> Result<(), String> {
+    let out = shell.out;
+    let file = std::fs::read_to_string(root.join(out)).map_err(|e| format!("{out}: {e}"))?;
     let lock = std::fs::read_to_string(root.join("core/Cargo.lock"))
         .map_err(|e| format!("core/Cargo.lock: {e}"))?;
-    let recorded = swift::recorded(&swift, "lockFingerprint")
-        .ok_or(format!("{SWIFT_OUT} records no lockFingerprint"))?;
-    let features = swift::recorded(&swift, "features").unwrap_or_default();
-    let target = swift::recorded(&swift, "target").unwrap_or_default();
-    if (features.as_str(), target.as_str()) != (RELEASE_FEATURES, TARGET) {
+    let recorded = shell
+        .recorded(&file, "lockFingerprint")
+        .ok_or(format!("{out} records no lockFingerprint"))?;
+    let features = shell.recorded(&file, "features").unwrap_or_default();
+    let target = shell.recorded(&file, "target").unwrap_or_default();
+    let regenerate = shell.regenerate();
+    if (features.as_str(), target.as_str()) != (shell.features, shell.target) {
         return Err(format!(
-            "{SWIFT_OUT} was made for {target} with {features}; the release builds {TARGET} with {RELEASE_FEATURES}.\n\
-             Regenerate: cargo run -p ink-ffi --bin ink-notices"
+            "{out} was made for {target} with {features}; the release builds {} with {}.\n\
+             Regenerate: {regenerate}",
+            shell.target, shell.features
         ));
     }
-    if recorded != swift::fingerprint(RELEASE_FEATURES, TARGET, &lock) {
+    if recorded != swift::fingerprint(shell.features, shell.target, &lock) {
+        let fetch = if shell.csharp {
+            ""
+        } else {
+            " (or mac/scripts/rust-notices.sh, which fetches the packages first)"
+        };
         return Err(format!(
-            "{SWIFT_OUT} was made from another core/Cargo.lock: a dependency changed and its notice may be missing.\n\
-             Regenerate: cargo run -p ink-ffi --bin ink-notices (or mac/scripts/rust-notices.sh, which fetches the packages first)"
+            "{out} was made from another core/Cargo.lock: a dependency changed and its notice may be missing.\n\
+             Regenerate: {regenerate}{fetch}"
         ));
     }
     Ok(())
@@ -423,14 +555,19 @@ fn check_lock(root: &Path) -> Result<(), String> {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = repo_root();
+    let (shell, args) = match args.split_first() {
+        Some((first, rest)) if first == "--windows" => (WINDOWS, rest.to_vec()),
+        _ => (MAC, args),
+    };
+    let out = shell.out;
     let result = match args
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["--check-lock"] => check_lock(&root),
-        [] | ["--check"] => match generate(&root) {
+        ["--check-lock"] => check_lock(&root, shell),
+        [] | ["--check"] => match generate(&root, shell) {
             Err(errors) => {
                 eprintln!("ink-notices: {} problem(s), nothing written:", errors.len());
                 for e in &errors {
@@ -444,18 +581,18 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             Ok(generated) if args.is_empty() => {
-                let path = root.join(SWIFT_OUT);
+                let path = root.join(out);
                 let written = path
                     .parent()
                     .map_or(Ok(()), std::fs::create_dir_all)
                     .and_then(|()| std::fs::write(&path, &generated));
                 written
-                    .map(|()| println!("wrote {SWIFT_OUT} ({} crates)", listed(&generated).len()))
-                    .map_err(|e| format!("{SWIFT_OUT}: {e}"))
+                    .map(|()| println!("wrote {out} ({} crates)", shell.listed(&generated).len()))
+                    .map_err(|e| format!("{out}: {e}"))
             }
-            Ok(generated) => check(&root, &generated),
+            Ok(generated) => check(&root, shell, &generated),
         },
-        _ => Err("usage: ink-notices [--check | --check-lock]".to_string()),
+        _ => Err("usage: ink-notices [--windows] [--check | --check-lock]".to_string()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -509,8 +646,8 @@ mod tests {
         }
     }
 
-    fn committed() -> String {
-        std::fs::read_to_string(repo_root().join(SWIFT_OUT))
+    fn committed(shell: Shell) -> String {
+        std::fs::read_to_string(repo_root().join(shell.out))
             .expect("the generated notices are checked in")
             .replace("\r\n", "\n")
     }
@@ -520,9 +657,61 @@ mod tests {
     /// the whole file.
     #[test]
     fn the_checked_in_notices_were_generated_from_the_current_lock() {
-        if let Err(e) = check_lock(&repo_root()) {
+        if let Err(e) = check_lock(&repo_root(), MAC) {
             panic!("{e}");
         }
+    }
+
+    /// The same for the Windows shell's (`ink-notices --windows --check` compares the whole file).
+    #[test]
+    fn the_checked_in_windows_notices_were_generated_from_the_current_lock() {
+        if let Err(e) = check_lock(&repo_root(), WINDOWS) {
+            panic!("{e}");
+        }
+    }
+
+    #[test]
+    fn the_windows_notices_are_the_windows_targets_crates() {
+        let cs = committed(WINDOWS);
+        let crates = WINDOWS.listed(&cs);
+        let names: Vec<&str> = crates.iter().filter_map(|c| c.split(' ').next()).collect();
+        for mac_only in ["objc2", "security-framework", "core-foundation", "block2"] {
+            assert!(!names.contains(&mac_only), "{mac_only} is the Mac's");
+        }
+        assert!(names.contains(&"windows-sys"), "{names:?}");
+        assert_eq!(
+            WINDOWS.recorded(&cs, "target").as_deref(),
+            Some("x86_64-pc-windows-msvc")
+        );
+    }
+
+    #[test]
+    fn the_windows_run_leaves_another_targets_overrides_to_the_mac_run() {
+        let lock = "[[package]]\nname = \"objc2\"\nversion = \"0.6.4\"\n\n[[package]]\nname = \"zeta\"\nversion = \"1.0.0\"\n";
+        assert_eq!(
+            locked(lock),
+            [
+                ("objc2".to_string(), "0.6.4".to_string()),
+                ("zeta".to_string(), "1.0.0".to_string())
+            ]
+        );
+        let registry = scratch();
+        let crates = [package(&registry, "zeta", "MIT", &[])];
+        let o = || overrides::Override {
+            text: "MIT.txt".into(),
+            verified: None,
+            reason: "why".into(),
+        };
+        let mut table = Overrides::new();
+        table.insert(("objc2".into(), "0.6.4".into()), o());
+        table.insert(("zeta".into(), "1.0.0".into()), o());
+        table.insert(("gone".into(), "2.0.0".into()), o());
+        let kept: Vec<String> = windows_overrides(table, &crates, lock)
+            .into_keys()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(kept, ["gone", "zeta"], "a crate no lock has stays, to fail");
+        let _ = std::fs::remove_dir_all(registry);
     }
 
     #[test]
@@ -538,27 +727,35 @@ mod tests {
 
     #[test]
     fn the_checked_in_notices_name_no_path_of_a_machine() {
-        let swift = committed();
-        // The macOS home prefix is spelt in two pieces so the pre-push privacy grep, which
-        // refuses that path in a diff, does not match this test.
-        for local in [
-            concat!("/Us", "ers/"),
-            "/home/",
-            "\\Users\\",
-            ".cargo/registry",
-            "registry/src/",
-            "/private/tmp/",
-        ] {
-            assert!(!swift.contains(local), "the notices hold `{local}`");
+        for shell in [MAC, WINDOWS] {
+            let file = committed(shell);
+            // The macOS home prefix is spelt in two pieces so the pre-push privacy grep, which
+            // refuses that path in a diff, does not match this test.
+            for local in [
+                concat!("/Us", "ers/"),
+                "/home/",
+                "\\Users\\",
+                ".cargo/registry",
+                "registry/src/",
+                "/private/tmp/",
+            ] {
+                assert!(
+                    !file.contains(local),
+                    "{}: the notices hold `{local}`",
+                    shell.out
+                );
+            }
+            assert!(
+                shell.listed(&file).len() > 100,
+                "{}: the release links over a hundred crates",
+                shell.out
+            );
+            assert!(
+                shell.listed(&file).iter().all(|c| !c.starts_with("ink-")),
+                "{}: no workspace crate",
+                shell.out
+            );
         }
-        assert!(
-            listed(&swift).len() > 100,
-            "the release links over a hundred crates"
-        );
-        assert!(
-            listed(&swift).iter().all(|c| !c.starts_with("ink-")),
-            "no workspace crate"
-        );
     }
 
     #[test]

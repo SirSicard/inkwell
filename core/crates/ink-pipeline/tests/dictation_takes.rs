@@ -430,6 +430,46 @@ fn the_start_names_the_app_in_front_and_its_mode() {
         }));
 }
 
+/// Windows names the app in front by its executable, spelled as Windows spells it (ink-platform-
+/// win's focus reader), and a mode holds that name in lower case (Settings > Modes): the mode is
+/// picked by the foreground process, whatever the case.
+#[test]
+fn on_windows_the_mode_is_picked_by_the_foreground_process() {
+    let rig = Rig::builder()
+        .settings(|s| {
+            s.modes = ModeStore {
+                default_id: "default".into(),
+                modes: vec![
+                    Mode {
+                        id: "docs".into(),
+                        name: "Documents".into(),
+                        apps: vec!["winword.exe".into()],
+                        ..Mode::builtin_default()
+                    },
+                    Mode::builtin_default(),
+                ],
+            }
+        })
+        .build();
+    rig.answer_anything("hi");
+    rig.platform.set_focus(FocusInfo {
+        app: Some(AppRef {
+            id: "WINWORD.EXE".into(),
+            pid: Some(4242),
+            name: "WINWORD".into(),
+        }),
+        secure_input: false,
+    });
+    rig.dictate(&speech_48k(1.0, -25.0, 23));
+    assert!(has(&rig.events(), |e| *e
+        == DictationEvent::Started {
+            take: 0,
+            edit: false,
+            mode: Some("Documents".into()),
+            app: Some("WINWORD".into()),
+        }));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Live words while the key is held
 // ---------------------------------------------------------------------------------------------

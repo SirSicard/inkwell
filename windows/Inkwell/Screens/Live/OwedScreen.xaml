@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Owed: the promises still open, grouped, overdue ones in the alert colour, a promise said twice
+     shown once, as the Mac's OwedScreen. "Looks done" suggestions sit above the list. Marking one
+     done takes it off the list; where it was said opens the record there. -->
+<UserControl
+    x:Class="Inkwell.Screens.OwedScreen"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:core="using:Inkwell.Core.Screens"
+    xmlns:local="using:Inkwell.Screens">
+    <UserControl.Resources>
+        <!-- A chip's shape (the Mac's Paper.Chip). -->
+        <Style x:Key="OwedChipStyle" TargetType="Border">
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="8,2" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!-- One promise: the round Mark done button, the text, its due chip, merged, where it was said. -->
+        <DataTemplate x:Key="OwedRowTemplate" x:DataType="core:OwedRow">
+            <Grid
+                Padding="0,11"
+                BorderBrush="{ThemeResource InkSeparatorBrush}"
+                BorderThickness="0,0,0,1"
+                ColumnSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button
+                    Width="20"
+                    Height="20"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Margin="0,1,0,0"
+                    Padding="0"
+                    VerticalAlignment="Top"
+                    AutomationProperties.Name="{x:Bind local:OwedViews.MarkDoneName(Text)}"
+                    Background="Transparent"
+                    BorderBrush="{ThemeResource InkTextBrush}"
+                    BorderThickness="1.5"
+                    Click="OnRowDone"
+                    CornerRadius="10"
+                    Tag="{x:Bind Id}"
+                    Visibility="{x:Bind local:OwedViews.Collapsed(Due.IsOverdue)}" />
+                <Button
+                    Width="20"
+                    Height="20"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Margin="0,1,0,0"
+                    Padding="0"
+                    VerticalAlignment="Top"
+                    AutomationProperties.Name="{x:Bind local:OwedViews.MarkDoneName(Text)}"
+                    Background="Transparent"
+                    BorderBrush="{ThemeResource InkAlertBrush}"
+                    BorderThickness="1.5"
+                    Click="OnRowDone"
+                    CornerRadius="10"
+                    Tag="{x:Bind Id}"
+                    Visibility="{x:Bind local:OwedViews.Visible(Due.IsOverdue)}" />
+                <StackPanel Grid.Column="1" Spacing="6">
+                    <TextBlock FontSize="15" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Text}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Border
+                            Background="{ThemeResource InkAlertChipBrush}"
+                            Style="{StaticResource OwedChipStyle}"
+                            Visibility="{x:Bind local:OwedViews.AlertChip(Due)}">
+                            <TextBlock
+                                FontSize="12"
+                                FontWeight="Medium"
+                                Foreground="{ThemeResource InkAlertTextBrush}"
+                                Text="{x:Bind Due.Text}" />
+                        </Border>
+                        <Border
+                            Background="{ThemeResource InkDueChipBrush}"
+                            Style="{StaticResource OwedChipStyle}"
+                            Visibility="{x:Bind local:OwedViews.DueChip(Due)}">
+                            <TextBlock
+                                FontSize="12"
+                                FontWeight="Medium"
+                                Foreground="{ThemeResource InkDueTextBrush}"
+                                Text="{x:Bind Due.Text}" />
+                        </Border>
+                        <Border
+                            Background="{ThemeResource InkChipBrush}"
+                            Style="{StaticResource OwedChipStyle}"
+                            Visibility="{x:Bind local:OwedViews.NeutralChip(Due)}">
+                            <TextBlock FontSize="12" Foreground="{ThemeResource InkTextBrush}" Text="{x:Bind Due.Text}" />
+                        </Border>
+                        <Border
+                            Background="{ThemeResource InkChipBrush}"
+                            Style="{StaticResource OwedChipStyle}"
+                            Visibility="{x:Bind local:OwedViews.Shown(MergedText)}">
+                            <TextBlock FontSize="12" Foreground="{ThemeResource InkTextBrush}" Text="{x:Bind MergedText}" />
+                        </Border>
+                        <!-- Where it was said: opens the record there. -->
+                        <HyperlinkButton
+                            Padding="0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.HelpText="Opens the record where it was said"
+                            Click="OnSaidAt"
+                            Tag="{x:Bind Id}"
+                            Visibility="{x:Bind local:OwedViews.Shown(SaidLine)}">
+                            <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" FontSize="11.5" Text="{x:Bind SaidLine}" />
+                        </HyperlinkButton>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- A heading (a person, or a meeting and its day) and its promises. -->
+        <DataTemplate x:Key="OwedGroupTemplate" x:DataType="core:OwedGroup">
+            <StackPanel>
+                <StackPanel
+                    Padding="0,0,0,8"
+                    BorderBrush="{ThemeResource InkBorderBrush}"
+                    BorderThickness="0,0,0,1"
+                    Orientation="Horizontal"
+                    Spacing="10">
+                    <TextBlock
+                        VerticalAlignment="Bottom"
+                        AutomationProperties.HeadingLevel="Level2"
+                        FontSize="15"
+                        FontWeight="SemiBold"
+                        Style="{StaticResource InkBodyStyle}"
+                        Text="{x:Bind Title}" />
+                    <TextBlock
+                        VerticalAlignment="Bottom"
+                        Style="{StaticResource InkTimestampStyle}"
+                        Text="{x:Bind Subtitle}"
+                        Visibility="{x:Bind local:OwedViews.Shown(Subtitle)}" />
+                </StackPanel>
+                <ItemsRepeater ItemTemplate="{StaticResource OwedRowTemplate}" ItemsSource="{x:Bind Rows}" />
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- A later meeting suggests a promise was kept. -->
+        <DataTemplate x:Key="LooksDoneTemplate" x:DataType="core:LooksDone">
+            <Border Style="{StaticResource InkCardStyle}" Padding="16,14">
+                <Grid ColumnSpacing="14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon
+                        VerticalAlignment="Center"
+                        AutomationProperties.AccessibilityView="Raw"
+                        FontSize="22"
+                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                        Glyph="&#xE930;" />
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                        <!-- What was said, verbatim: plain text, never parsed. -->
+                        <TextBlock Style="{StaticResource InkBodyStyle}" Text="{x:Bind Headline}" />
+                        <TextBlock Style="{StaticResource InkTimestampStyle}" Text="{x:Bind Source}" />
+                    </StackPanel>
+                    <Button
+                        Grid.Column="2"
+                        VerticalAlignment="Center"
+                        Click="OnSuggestionDone"
+                        Content="Mark done"
+                        Style="{StaticResource AccentButtonStyle}"
+                        Tag="{x:Bind Id}" />
+                    <Button
+                        Grid.Column="3"
+                        VerticalAlignment="Center"
+                        Click="OnNotYet"
+                        Content="Not yet"
+                        Tag="{x:Bind Id}" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <ScrollViewer Background="{ThemeResource InkSurfaceBrush}" VerticalScrollBarVisibility="Auto">
+        <StackPanel
+            MaxWidth="956"
+            Padding="48,34,48,28"
+            HorizontalAlignment="Left"
+            Spacing="18">
+            <StackPanel Spacing="6">
+                <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Owed" />
+                <TextBlock x:Name="SummaryLine" Style="{StaticResource InkTimestampStyle}" />
+            </StackPanel>
+            <TextBlock x:Name="FailureLine" Style="{StaticResource InkAlertTextStyle}" />
+            <TextBlock x:Name="LoadFailureLine" Style="{StaticResource InkAlertTextStyle}" />
+            <ItemsRepeater x:Name="SuggestionRows" ItemTemplate="{StaticResource LooksDoneTemplate}">
+                <ItemsRepeater.Layout>
+                    <StackLayout Spacing="12" />
+                </ItemsRepeater.Layout>
+            </ItemsRepeater>
+            <ProgressRing
+                x:Name="LoadingRing"
+                Width="16"
+                Height="16"
+                HorizontalAlignment="Left"
+                AutomationProperties.Name="Loading what you owe" />
+            <TextBlock
+                x:Name="EmptyLine"
+                Foreground="{ThemeResource InkSecondaryTextBrush}"
+                Style="{StaticResource InkBodyStyle}"
+                Text="Nothing owed. Promises you make in meetings show up here." />
+            <ItemsRepeater x:Name="GroupRows" ItemTemplate="{StaticResource OwedGroupTemplate}">
+                <ItemsRepeater.Layout>
+                    <StackLayout Spacing="18" />
+                </ItemsRepeater.Layout>
+            </ItemsRepeater>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

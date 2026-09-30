@@ -53,7 +53,15 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # The platform clock (mach_absolute_time), the timebase of capture.
 ink-platform-mac = { path = "../ink-platform-mac" }
 
+[target.'cfg(windows)'.dependencies]
+# The performance-counter clock, and dictation's keys, mic, insertion and focus (S3.5a).
+ink-platform-win = { path = "../ink-platform-win" }
+
 [dev-dependencies]
 ink-core = { workspace = true, features = ["mock"] }
 # Synthetic test audio (already in the tree).
 hound = "3.5.1"
+# The Windows shell's P/Invoke declarations, generated from this crate's `extern "C"` functions
+# (tests/csharp_binding.rs checks them; the C# lives in windows/). MIT. A dev-dependency: it never
+# reaches the libraries the shells link, nor their licence notices.
+csbindgen = "1.9.8"

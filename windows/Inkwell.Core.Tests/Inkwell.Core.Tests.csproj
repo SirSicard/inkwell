@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- xUnit v3 test projects are executables. -->
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-off" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Inkwell.Core\Inkwell.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The core, for the smoke test. Missing, the smoke test fails saying how to build it. -->
+    <None Include="$(InkCoreDir)ink_ffi.dll" Link="ink_ffi.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(InkCoreDir)ink_ffi.dll')" />
+  </ItemGroup>
+</Project>

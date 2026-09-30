@@ -422,7 +422,7 @@ fn commands_listed(c: &VoiceCommandStore, imported: bool, reference: Option<Valu
 }
 
 /// `import.notes`: the key note while there is something to say (0.2's hotkey did not carry over,
-/// or 1.0 no longer toggles) and the user has not dismissed it.
+/// was replaced by another key, or 1.0 no longer toggles) and the user has not dismissed it.
 fn import_notes(store: &dyn Store, reference: Option<Value>) -> Result<Value, String> {
     const UNREADABLE: &str = "the import's key note cannot be read";
     let dismissed = store
@@ -434,7 +434,7 @@ fn import_notes(store: &dyn Store, reference: Option<Value>) -> Result<Value, St
         let v: Value = serde_json::from_str(&doc).map_err(|_| UNREADABLE)?;
         let hotkey = v["hotkey"].as_str().ok_or(UNREADABLE)?;
         let outcome = v["outcome"].as_str().ok_or(UNREADABLE)?;
-        if !["mapped", "combination", "other_key"].contains(&outcome) {
+        if !["mapped", "replaced", "combination", "other_key"].contains(&outcome) {
             return Err(UNREADABLE.into());
         }
         let toggle = v["toggle"].as_bool().ok_or(UNREADABLE)?;

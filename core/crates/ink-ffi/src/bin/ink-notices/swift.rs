@@ -107,8 +107,8 @@ pub fn compose(files: &[Included]) -> String {
     parts.join("\n\n")
 }
 
-/// A Swift string literal (`"..."`) of a one-line value.
-fn string(s: &str) -> String {
+/// A Swift string literal (`"..."`) of a one-line value (a C# one too: the escapes are the same).
+pub fn string(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
         match c {

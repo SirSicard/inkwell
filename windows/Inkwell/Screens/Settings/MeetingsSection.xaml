@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Meetings: listening for calls, the headset's microphone, and what a meeting records.
+     As the Mac's MeetingsSection, in Windows words. Record now is on Today's rail; how long records
+     are kept is in Storage, as on the Mac. Windows asks no permission for the other side's sound,
+     so the Mac's line about that permission has no place here. -->
+<UserControl
+    x:Class="Inkwell.Screens.MeetingsSection"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens">
+    <UserControl.Resources>
+        <Style x:Key="FactLabel" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="FactText" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
+            <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
+        </Style>
+    </UserControl.Resources>
+    <StackPanel Spacing="10">
+        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Meetings" />
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Top" Margin="0,6,0,0" Style="{StaticResource InkBodyStyle}" Text="Offer to record calls" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <ToggleSwitch
+                    x:Name="Detect"
+                    MinWidth="0"
+                    AutomationProperties.HelpText="{x:Bind local:MeetingsSection.DetectDetail}"
+                    AutomationProperties.Name="Offer to record calls"
+                    IsOn="{x:Bind Model.Detect, Mode=OneWay}"
+                    OffContent=""
+                    OnContent=""
+                    Toggled="OnDetectToggled" />
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:MeetingsSection.DetectDetail}" />
+            </StackPanel>
+        </Grid>
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Top" Margin="0,6,0,0" Style="{StaticResource InkBodyStyle}" Text="Use the headset's microphone" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <ToggleSwitch
+                    x:Name="HeadsetMic"
+                    MinWidth="0"
+                    AutomationProperties.HelpText="{x:Bind local:MeetingsSection.HeadsetDetail}"
+                    AutomationProperties.Name="Use the headset's microphone"
+                    IsOn="{x:Bind Model.HeadsetMic, Mode=OneWay}"
+                    OffContent=""
+                    OnContent=""
+                    Toggled="OnHeadsetToggled" />
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:MeetingsSection.HeadsetDetail}" />
+            </StackPanel>
+        </Grid>
+        <TextBlock Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind local:MeetingsSection.SettingsFailedText}" Visibility="{x:Bind Model.SettingsFailed, Mode=OneWay}" />
+        <Grid ColumnSpacing="12" RowSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Style="{StaticResource FactLabel}" Text="Consent" />
+            <TextBlock Grid.Column="1" Style="{StaticResource FactText}" Text="Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does." />
+            <TextBlock Grid.Row="1" Style="{StaticResource FactLabel}" Text="You" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource FactText}" Text="Your microphone, as &#x201C;Hear you&#x201D; allows." />
+            <TextBlock Grid.Row="2" Style="{StaticResource FactLabel}" Text="Them" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource FactText}" Text="For a call you record when Inkwell offers, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this PC plays, and Inkwell says so." />
+            <TextBlock Grid.Row="3" Style="{StaticResource FactLabel}" Text="Headphones" />
+            <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource FactText}" Text="With Bluetooth headphones, Inkwell records the PC's own microphone: a headset microphone carries only call-quality sound." />
+            <TextBlock Grid.Row="4" Style="{StaticResource FactLabel}" Text="Where" />
+            <TextBlock Grid.Row="4" Grid.Column="1" Style="{StaticResource FactText}" Text="Recordings and transcripts stay on this PC. Nothing is sent anywhere unless you add your own key for a model online." />
+        </Grid>
+    </StackPanel>
+</UserControl>

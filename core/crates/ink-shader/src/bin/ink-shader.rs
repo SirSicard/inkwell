@@ -1,17 +1,17 @@
-//! Writes the Mac app's MSL from `shaders/ink.wgsl`.
+//! Writes the shells' shaders from `shaders/ink.wgsl`: the Mac app's MSL and the Windows shell's
+//! HLSL.
 //!
 //! ```text
 //! cargo run -p ink-shader --bin ink-shader             # regenerate
-//! cargo run -p ink-shader --bin ink-shader -- --check  # fail if it is stale
+//! cargo run -p ink-shader --bin ink-shader -- --check  # fail if either is stale
 //! ```
 //!
-//! The path is [`ink_shader::MSL_OUT`], from the repository root. The Windows shell's HLSL joins in
-//! S3.4.
+//! The paths are [`ink_shader::MSL_OUT`] and [`ink_shader::HLSL_OUT`], from the repository root.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ink_shader::{INK_WGSL, MSL_OUT, msl_file};
+use ink_shader::{HLSL_OUT, INK_WGSL, MSL_OUT, ShaderError, hlsl_file, msl_file};
 
 fn repo_root() -> PathBuf {
     // core/crates/ink-shader -> the repository root.
@@ -37,32 +37,45 @@ fn main() -> ExitCode {
             "note: shaders/ink.wgsl changed since this binary was built; cargo rebuilds it next time"
         );
     }
-    let generated = match msl_file(&wgsl) {
+    // Both, even when the first fails: each failure is printed.
+    let msl_ok = write_or_check(MSL_OUT, msl_file(&wgsl), check);
+    let hlsl_ok = write_or_check(HLSL_OUT, hlsl_file(&wgsl), check);
+    let ok = msl_ok && hlsl_ok;
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Writes (or with `check`, compares) one generated file; false on any failure, which it prints.
+fn write_or_check(out: &str, generated: Result<String, ShaderError>, check: bool) -> bool {
+    let generated = match generated {
         Ok(s) => s,
         Err(e) => {
             eprintln!("shaders/ink.wgsl: {e}");
-            return ExitCode::FAILURE;
+            return false;
         }
     };
-    let path = repo_root().join(MSL_OUT);
+    let path = repo_root().join(out);
     if check {
         let current = std::fs::read_to_string(&path).unwrap_or_default();
         if current.replace("\r\n", "\n") != generated {
-            eprintln!("{MSL_OUT} is stale: run `cargo run -p ink-shader --bin ink-shader`");
-            return ExitCode::FAILURE;
+            eprintln!("{out} is stale: run `cargo run -p ink-shader --bin ink-shader`");
+            return false;
         }
-        return ExitCode::SUCCESS;
+        return true;
     }
     if let Some(dir) = path.parent()
         && let Err(e) = std::fs::create_dir_all(dir)
     {
         eprintln!("{}: {e}", dir.display());
-        return ExitCode::FAILURE;
+        return false;
     }
     if let Err(e) = std::fs::write(&path, generated) {
-        eprintln!("{MSL_OUT}: {e}");
-        return ExitCode::FAILURE;
+        eprintln!("{out}: {e}");
+        return false;
     }
-    println!("wrote {MSL_OUT}");
-    ExitCode::SUCCESS
+    println!("wrote {out}");
+    true
 }

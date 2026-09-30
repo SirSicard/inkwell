@@ -1,0 +1,28 @@
+<Project>
+  <!-- Every project in the Windows solution. -->
+  <!-- The SDK is pinned in global.json (rollForward disable), as the Rust toolchain is in
+       core/rust-toolchain.toml: packages.lock.json records packs versioned with the SDK, so another
+       SDK fails the locked restore. Bump both in their own change. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- Restores are pinned: packages.lock.json is checked in and CI restores in locked mode. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- x64 only for now. ARM64 needs the core built for aarch64-pc-windows-msvc, the win-arm64
+         runtime identifier, and a NativeAOT publish that .NET 10's x64-to-ARM64 packaging
+         regression does not break: an ARM64 build machine, or the SDK fix. Not tried yet. -->
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <!-- The core's DLL (ink_ffi.dll, the cdylib of core/crates/ink-ffi): built in
+       core/ (cargo build, package ink-ffi, its lib target), copied next to what runs it. Override InkCoreDir to
+       use another build (a release one, say). -->
+  <PropertyGroup>
+    <InkCoreDir Condition="'$(InkCoreDir)' == ''">$(MSBuildThisFileDirectory)..\core\target\debug\</InkCoreDir>
+  </PropertyGroup>
+</Project>
