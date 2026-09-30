@@ -27,7 +27,11 @@ cpal = "0.17"
 tauri-plugin-global-shortcut = "2.3.1"
 hound = "3.5.1"
 rubato = "0.16"
-sherpa-onnx = { version = "1.13", default-features = false, features = ["static"] }
+sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["static"] }
+# Named directly as well, so that a bump of sherpa-onnx to a release needing
+# another sherpa-onnx-sys fails to resolve (both declare links = "sherpa-onnx")
+# instead of quietly dropping the vendored copy below.
+sherpa-onnx-sys = { path = "vendor/sherpa-onnx-sys", default-features = false, features = ["static"] }
 arboard = "3"
 enigo = "0.6"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -70,3 +74,12 @@ keyring = { version = "3", features = ["windows-native"] }
 
 [target."cfg(target_os = \"linux\")".dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
+
+# sherpa-onnx-sys as published links sherpa-onnx's text-to-speech libraries,
+# espeak-ng (GPL-3.0) among them, into every static build, and downloads its
+# prebuilt archives without checking them. Inkwell never used text-to-speech.
+# The vendored copy links the no-TTS archives and checks each one against a
+# pinned sha256 before unpacking it; vendor/sherpa-onnx-sys/NOTICE lists the
+# changes.
+[patch.crates-io]
+sherpa-onnx-sys = { path = "vendor/sherpa-onnx-sys" }

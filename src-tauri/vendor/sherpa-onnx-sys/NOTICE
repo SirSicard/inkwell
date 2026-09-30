@@ -1,0 +1,34 @@
+sherpa-onnx-sys 1.13.4, vendored
+
+Source: the sherpa-onnx-sys 1.13.4 crate from crates.io
+(sherpa-onnx-sys-1.13.4.crate, sha256
+ffc951af03dc0653c0622158ca8a585a6f2bc43b7b06048cf0e5b5020005c227).
+Upstream: https://github.com/k2-fsa/sherpa-onnx (the crate's metadata names
+commit 142807252687d81b40d6315f23470a1512a00de3, path
+sherpa-onnx/rust/sherpa-onnx-sys). Licence: Apache-2.0, see LICENSE.
+
+Changed for Inkwell 0.2 on 2026-09-30, in build.rs and Cargo.toml only:
+
+- Static builds link sherpa-onnx's no-TTS prebuilt libraries (the
+  *-static-no-tts-lib archives of the v1.13.4 release) and no longer link
+  piper_phonemize, espeak-ng or ucd. Why: those three are sherpa-onnx's
+  text-to-speech front end, which Inkwell never used, and espeak-ng is
+  GPL-3.0. As published, this crate linked them into every static build.
+- Every archive is checked against a sha256 pinned in build.rs before it is
+  unpacked. A mismatch, or an archive with no pinned digest, fails the
+  build. Why: as published, the crate downloads the archives from GitHub at
+  build time and unpacks them without any check.
+- As a result, static Linux aarch64 is not supported (v1.13.4 publishes no
+  no-TTS archive for it) and shared builds fail (no shared archive is
+  pinned). Inkwell 0.2 builds neither.
+- An unpacked tree left by an earlier build is used again only if it
+  carries the marker a checked unpack writes last (.sha256-verified, holding
+  the pin); otherwise it is unpacked again from a checked archive. Why: an
+  interrupted unpack or a directory from elsewhere would otherwise be linked
+  unchecked.
+- SHERPA_ONNX_LIB_DIR is refused. Why: it links a directory nothing checks.
+- Cargo.toml adds sha2 as a build dependency, for that check.
+
+Every other file is as published, except upstream's Cargo.lock, which was
+removed: a path dependency never uses it. Cargo.toml.orig is upstream's and
+plays no part in this build.
