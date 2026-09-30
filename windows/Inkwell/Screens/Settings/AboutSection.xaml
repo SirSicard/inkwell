@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > About (the Mac's AboutSection): the version, the model credits, every component's
-     notice, and the Rust crates under one disclosure. Each notice is an expander opening onto its
+<!-- Settings > About (the Mac's AboutSection): the version, updates, the terms for Microsoft's
+     components, the model credits, every component's notice, and the Rust crates under one
+     disclosure. Each notice is an expander opening onto its
      full text, selectable; the Rust list scrolls in its own bounded, virtualized view, so an open
      list does not stretch the Settings page by a hundred rows. -->
 <UserControl
@@ -24,6 +25,21 @@
     <StackPanel Spacing="12">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="About" />
         <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" IsTextSelectionEnabled="True" Text="{x:Bind About.VersionLine}" />
+        <!-- Updates (the Mac's updates row): a button when this copy updates itself, and where
+             things are. The line is a live region: Narrator reads each change. -->
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button x:Name="UpdatesButton" Click="OnUpdatesAct" />
+            <TextBlock
+                x:Name="UpdatesLine"
+                VerticalAlignment="Center"
+                AutomationProperties.LiveSetting="Polite"
+                Style="{StaticResource InkCaptionStyle}"
+                TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- The end-user terms the Windows App SDK's licence requires (Notices.WindowsAppSdkTerms). -->
+        <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Terms" Style="{StaticResource InkEyebrowStyle}" Text="TERMS" />
+        <TextBlock IsTextSelectionEnabled="True" Style="{StaticResource InkBodyStyle}" Text="{x:Bind core:AboutModel.Terms}" TextWrapping="Wrap" />
 
         <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Models" Style="{StaticResource InkEyebrowStyle}" Text="MODELS" />
         <StackPanel x:Name="ModelRows" Spacing="8" />

@@ -14,10 +14,22 @@
     <!-- NativeAOT on publish (dotnet publish -c Release). The fallback, if a NativeAOT build
          breaks: -p:PublishAot=false -p:PublishReadyToRun=true. -->
     <PublishAot>true</PublishAot>
+    <!-- Program.cs is the entry point: Velopack's install and update hooks run before WinUI starts. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
+  <!-- A release's version (win-release.yml: -p:InkVersion=X.Y.Z, from the tag): the file version,
+       and the metadata About reads (AppVersion.cs). Any other build has none: "development build". -->
+  <PropertyGroup Condition="'$(InkVersion)' != ''">
+    <Version>$(InkVersion)</Version>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(InkVersion)' != ''">
+    <AssemblyMetadata Include="InkVersion" Value="$(InkVersion)" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" />
     <PackageReference Include="WinUIEx" />
+    <!-- The installer's hooks and in-app updates (MIT). -->
+    <PackageReference Include="Velopack" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Inkwell.Core\Inkwell.Core.csproj" />

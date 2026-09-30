@@ -46,7 +46,7 @@ public partial class App : Application
         ink = new ShellInk(window.DispatcherQueue, InkProblem);
         InkPanel.Clock = ink.Clock;
         window.ShowInk(ink);
-        screens = AppScreens.Models(core, window.DispatcherQueue);
+        screens = AppScreens.Models(core, window.DispatcherQueue, new VelopackUpdater(Quit));
         var models = screens;
         // What the Drop says about dictation, after the store has taken each batch.
         var drop = new DropModel(new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine);
