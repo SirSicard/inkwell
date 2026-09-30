@@ -271,8 +271,9 @@ Before the tag:
       `mac/composed-notices.txt` (replacing the text in `Notices.swift`), and of the Windows-only
       `windows/Inkwell.Core/Screens/About/composed-notices.txt` (replacing the text in
       `Notices.cs`). `mac/scripts/notices-verified.sh` and
-      `windows/scripts/release-version.sh tag v1.0.0` (the same check with the Windows list) must
-      pass: each platform's tag refuses to build until its check does.
+      `windows/scripts/release-version.sh tag v1.0.0 x64` (the same check with the Windows list;
+      `arm64` runs the same check) must pass: each platform's tag refuses to build until its check
+      does.
 - [ ] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
       `src-tauri/`, `public/`, `index.html`, `package.json`, `package-lock.json`,
       `vite.config.ts`, `eslint.config.js` and the three `tsconfig*.json`. With them, what points
