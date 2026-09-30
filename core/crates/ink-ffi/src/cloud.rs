@@ -41,6 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use ink_core::{Endpoint, Llm, LlmError, LlmRequest};
 use ink_llm::{
@@ -70,6 +71,11 @@ pub const MAX_MODEL_CHARS: usize = 256;
 
 /// The longest custom server address `llm.choose` takes, in characters.
 pub const MAX_URL_CHARS: usize = 2_048;
+
+/// How long `llm.test` waits for the provider's answer: a server that takes the request and never
+/// answers ends the test then, not at the client's read timeout (minutes), which would keep the
+/// test busy that long. Long enough for a local server to load its model.
+pub const TEST_BUDGET: Duration = Duration::from_secs(60);
 
 /// An API key on its way to the key store. Its `Debug` never shows it, and its memory is wiped when
 /// it is dropped. Copies made before it (the command's JSON) are out of reach.
@@ -719,8 +725,8 @@ impl Tester {
         Ok(Self { tx, busy, thread })
     }
 
-    /// Ends the thread once the test in flight is done (its request sees the shutdown's cancel
-    /// before and after it goes out; one already on the wire runs to its timeout).
+    /// Ends the thread once the test in flight is done: the shutdown's cancel ends it at once,
+    /// its request on the wire included (left to end on its own).
     pub fn stop(self) {
         let _ = self.tx.send(Msg::Quit);
         if self.thread.join().is_err() {
@@ -766,15 +772,19 @@ fn run(shared: &Shared, rx: &Receiver<Msg>, busy: &AtomicBool) {
     }
 }
 
-/// **Worker.** Sends [`probe`] to the chosen provider, through its local-only check: the answer
-/// that says whether it answered, for the caller to emit.
+/// **Worker.** Sends [`probe`] to the chosen provider, through its local-only check, within
+/// [`TEST_BUDGET`]: the answer that says whether it answered, for the caller to emit.
 fn test(shared: &Shared, reference: Option<&str>) -> Value {
     let Some(llm) = shared.llms.cloud() else {
         log::warn!("command llm.test failed: no provider is chosen");
         return events::command_failed("llm.test", reference, "no provider is chosen");
     };
     let info = llm.info();
-    let outcome = llm.complete(&probe(), &shared.shutdown);
+    // The shutdown's cancel, with the test's own budget.
+    let cancel = shared
+        .shutdown
+        .clone_with_deadline(Instant::now() + TEST_BUDGET);
+    let outcome = llm.complete(&probe(), &cancel);
     let (status, error) = match &outcome {
         Ok(_) => (None, None),
         Err(e) => {
@@ -783,7 +793,8 @@ fn test(shared: &Shared, reference: Option<&str>) -> Value {
                 LlmError::Http { status } => Some(*status),
                 _ => None,
             };
-            (status, Some(tested_error(e, llm.key_withheld())))
+            let closing = shared.shutdown.is_cancelled();
+            (status, Some(tested_error(e, llm.key_withheld(), closing)))
         }
     };
     event(
@@ -800,8 +811,9 @@ fn test(shared: &Shared, reference: Option<&str>) -> Value {
 }
 
 /// Why a test failed, in words for a screen. `withheld`: the provider's key is kept back from its
-/// address ([`ByokLlm::key_withheld`]), so a refusal is not the key's fault.
-fn tested_error(e: &LlmError, withheld: bool) -> String {
+/// address ([`ByokLlm::key_withheld`]), so a refusal is not the key's fault. `closing`: the core is
+/// shutting down, so a test cut short was cut by that, not by its budget.
+fn tested_error(e: &LlmError, withheld: bool, closing: bool) -> String {
     match e {
         LlmError::NoKey => "couldn't test it: no key is stored for it".into(),
         LlmError::KeychainDenied => "couldn't read its key: the key store refused".into(),
@@ -824,7 +836,11 @@ fn tested_error(e: &LlmError, withheld: bool) -> String {
         }
         LlmError::Http { status } => format!("couldn't get an answer: the provider said {status}"),
         LlmError::Network(why) => format!("couldn't reach the provider: {why}"),
-        LlmError::Cancelled => "couldn't finish the test: Inkwell is closing".into(),
+        LlmError::Cancelled if closing => "couldn't finish the test: Inkwell is closing".into(),
+        LlmError::Cancelled => format!(
+            "couldn't get an answer: the provider did not answer within {} seconds",
+            TEST_BUDGET.as_secs()
+        ),
         other => format!("couldn't get an answer: {other}"),
     }
 }
@@ -901,18 +917,30 @@ mod tests {
     #[test]
     fn a_failed_test_is_said_in_words_without_the_key() {
         assert_eq!(
-            tested_error(&LlmError::Http { status: 401 }, false),
+            tested_error(&LlmError::Http { status: 401 }, false, false),
             "couldn't get an answer: the provider refused the key"
         );
         assert_eq!(
-            tested_error(&LlmError::Http { status: 403 }, true),
+            tested_error(&LlmError::Http { status: 403 }, true, false),
             "couldn't get an answer: the server asks for a key, and keys are sent only over \
              https or to this computer"
         );
         assert_eq!(
-            tested_error(&LlmError::Http { status: 500 }, true),
+            tested_error(&LlmError::Http { status: 500 }, true, false),
             "couldn't get an answer: the provider said 500"
         );
-        assert!(tested_error(&LlmError::NoKey, false).starts_with("couldn't"));
+        assert!(tested_error(&LlmError::NoKey, false, false).starts_with("couldn't"));
+    }
+
+    #[test]
+    fn a_test_cut_short_says_whether_its_budget_ran_out_or_inkwell_is_closing() {
+        assert_eq!(
+            tested_error(&LlmError::Cancelled, false, true),
+            "couldn't finish the test: Inkwell is closing"
+        );
+        assert_eq!(
+            tested_error(&LlmError::Cancelled, false, false),
+            "couldn't get an answer: the provider did not answer within 60 seconds"
+        );
     }
 }

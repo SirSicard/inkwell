@@ -196,19 +196,21 @@ fn a_closed_port_is_a_network_error() {
 }
 
 /// A server on 127.0.0.1 that takes one connection and never answers. It holds the connection
-/// until the returned sender is dropped.
-fn silent_server() -> (u16, mpsc::Sender<()>) {
+/// until the returned sender is dropped, and says on the receiver when it has taken it.
+fn silent_server() -> (u16, mpsc::Sender<()>, mpsc::Receiver<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().unwrap().port();
     let (hold, released) = mpsc::channel::<()>();
+    let (taken, connected) = mpsc::channel::<()>();
     thread::spawn(move || {
         let Ok((stream, _)) = listener.accept() else {
             return;
         };
+        let _ = taken.send(());
         let _ = released.recv();
         drop(stream);
     });
-    (port, hold)
+    (port, hold, connected)
 }
 
 /// A budget stops a request on the wire: a server that takes the request and never answers costs
@@ -216,7 +218,7 @@ fn silent_server() -> (u16, mpsc::Sender<()>) {
 /// budget ran out), not as a network failure.
 #[test]
 fn a_deadline_stops_a_request_the_server_never_answers() {
-    let (port, _hold) = silent_server();
+    let (port, _hold, _) = silent_server();
     let llm = ByokLlm::new(
         ByokConfig {
             base_url: Some(format!("http://127.0.0.1:{port}/v1")),
@@ -236,5 +238,47 @@ fn a_deadline_stops_a_request_the_server_never_answers() {
         started.elapsed() < Duration::from_secs(5),
         "{:?}",
         started.elapsed()
+    );
+}
+
+/// A cancel with no deadline (the core's shutdown, a meeting stopped) stops a call whose request
+/// is on the wire at once, not when the client's 300 s read timeout ends the request: the call
+/// reads as cancelled, and the request is left to end on its own.
+#[test]
+fn a_cancel_stops_a_request_the_server_never_answers() {
+    let (port, _hold, connected) = silent_server();
+    let llm = Arc::new(
+        ByokLlm::new(
+            ByokConfig {
+                base_url: Some(format!("http://127.0.0.1:{port}/v1")),
+                ..ByokConfig::new(Provider::Custom)
+            },
+            Arc::new(MemKeys::default()),
+            Arc::new(UreqTransport::new(TransportConfig::default())),
+            LocalOnly::new(true),
+        )
+        .unwrap(),
+    );
+    let cancel = CancelToken::new();
+    let (answered, answer) = mpsc::channel();
+    {
+        let (llm, cancel) = (llm.clone(), cancel.clone());
+        thread::spawn(move || {
+            let _ = answered.send(llm.complete(&request(), &cancel));
+        });
+    }
+    connected
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the request reached the server");
+    let cancelled = Instant::now();
+    cancel.cancel();
+    let outcome = answer
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the call returned once cancelled");
+    assert!(matches!(outcome, Err(LlmError::Cancelled)), "{outcome:?}");
+    assert!(
+        cancelled.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        cancelled.elapsed()
     );
 }

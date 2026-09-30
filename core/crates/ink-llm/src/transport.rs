@@ -3,7 +3,7 @@
 //! built once.
 //!
 //! [`UreqTransport`] is the one implementation: [`ureq`] 2 over the OS TLS stack (native-tls),
-//! blocking, on the calling worker thread. Its settings are decisions:
+//! blocking, on the thread that calls it (a provider's request thread). Its settings are decisions:
 //! - **No redirects.** A redirect is returned as its status. Following one could take a request
 //!   that passed the local-only guard to another machine.
 //! - **`localhost` resolves to `127.0.0.1` and `::1` only**, never through DNS or a hosts file,

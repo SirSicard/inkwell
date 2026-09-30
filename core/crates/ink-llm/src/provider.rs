@@ -16,10 +16,15 @@
 //! error `code` (`model_decommissioned`, `invalid_api_key`); the contract's error has no field
 //! for it, and the body is never read, because providers echo the request in it.
 //!
-//! Cancelling a token without a deadline cannot interrupt a request already on the wire: the client
-//! is blocking, and the transport's read timeout bounds the wait.
+//! The client is blocking, so the request goes out from a thread of its own while the call waits
+//! for it, looking at the cancel token as it waits: a call cancelled while its request is on the
+//! wire (the core's shutdown, a meeting stopped) returns [`LlmError::Cancelled`] at once, and the
+//! request is left to end on its own, within the transport's timeouts, its answer unread.
 
 use std::sync::Arc;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
 use ink_core::{CancelToken, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
 use serde_json::{Value, json};
@@ -27,7 +32,11 @@ use serde_json::{Value, json};
 use crate::guard::{EndpointError, EndpointUrl, LocalOnly};
 use crate::json::{bad, bad_field};
 use crate::keys::{ApiKey, KeyStore, KeyStoreError};
-use crate::transport::{HttpRequest, Transport, TransportError};
+use crate::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+
+/// How often a call waiting on its request looks at its cancel token. A token is a flag with no
+/// wake-up, so the call looks this often, and only while its request is in flight.
+const CANCEL_POLL: Duration = Duration::from_millis(20);
 
 /// A bring-your-own-key provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -272,6 +281,40 @@ impl ByokLlm {
         }
     }
 
+    /// **Worker.** Sends `http` from a thread of its own and waits for the answer, looking at
+    /// `cancel` every [`CANCEL_POLL`]. Cancelled first, it returns [`LlmError::Cancelled`] and
+    /// leaves the request to end on its own, within the transport's timeouts: the client blocks
+    /// until the server answers, and nothing may wait on it past a cancel.
+    fn post(
+        &self,
+        http: HttpRequest,
+        cancel: &CancelToken,
+    ) -> Result<Result<HttpResponse, TransportError>, LlmError> {
+        let (answered, answer) = mpsc::sync_channel(1);
+        let transport = Arc::clone(&self.transport);
+        thread::Builder::new()
+            .name("ink-llm-request".into())
+            .spawn(move || {
+                // Refused once the call has stopped waiting: the answer goes unread.
+                let _ = answered.send(transport.post(&http));
+            })
+            .map_err(|_| LlmError::Network("the request could not be started".into()))?;
+        loop {
+            match answer.recv_timeout(CANCEL_POLL) {
+                Ok(response) => return Ok(response),
+                Err(RecvTimeoutError::Timeout) if cancel.is_cancelled() => {
+                    return Err(LlmError::Cancelled);
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(LlmError::Network(
+                        "the request ended without an answer".into(),
+                    ));
+                }
+            }
+        }
+    }
+
     /// The answer's text, per provider.
     fn parse_answer(&self, body: &[u8]) -> Result<String, LlmError> {
         const TASK: &str = "provider answer";
@@ -326,7 +369,7 @@ impl Llm for ByokLlm {
         }
         let http = self.http_request(request, key.as_ref(), cancel);
         drop(key);
-        let response = self.transport.post(&http);
+        let response = self.post(http, cancel)?;
         if cancel.is_cancelled() {
             return Err(LlmError::Cancelled);
         }

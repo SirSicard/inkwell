@@ -6,9 +6,9 @@
 mod cloud_support;
 mod common;
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use cloud_support::*;
 use common::*;
@@ -551,7 +551,9 @@ fn the_test_sends_one_fixed_request_and_says_how_it_went() {
 
     rig.save_key("openai", "k1");
     rig.choose_openai("c1");
+    let asked = Instant::now();
     let ok = rig.ask(json!({"cmd": "llm.test"}), "t2");
+    let answered = Instant::now();
     assert_eq!(ok["type"], "llm.tested");
     assert_eq!(ok["ok"], true);
     assert_eq!(ok["provider"], "openai");
@@ -564,6 +566,14 @@ fn the_test_sends_one_fixed_request_and_says_how_it_went() {
         Some(format!("Bearer {KEY}").as_str())
     );
     assert!(seen.body.contains("Is this connection working?"));
+    // The test has a budget of its own, which reaches the request on the wire: a server that
+    // takes it and never answers ends the test then, not at the client's read timeout.
+    let deadline = seen.deadline.expect("the test's budget");
+    let budget = ink_ffi::cloud::TEST_BUDGET;
+    assert!(
+        deadline >= asked + budget && deadline <= answered + budget,
+        "{deadline:?}"
+    );
 
     rig.net.set(Ok((401, String::new())));
     let refused = rig.ask(json!({"cmd": "llm.test"}), "t3");
@@ -654,10 +664,11 @@ fn the_test_sends_one_fixed_request_and_says_how_it_went() {
     rig.events.assert_valid();
 }
 
-/// A test in flight when the core stops is joined before shutdown returns, and nothing arrives
-/// after `core.stopped`.
+/// A test in flight when the core stops does not hold up shutdown: its request, on the wire, is
+/// left to end on its own, the test answers that Inkwell is closing, and nothing arrives after
+/// `core.stopped`.
 #[test]
-fn a_test_in_flight_is_finished_before_shutdown_returns() {
+fn a_test_in_flight_does_not_hold_up_shutdown() {
     let rig = Rig::new("cloud-shutdown", &[]);
     rig.save_key("openai", "k1");
     rig.choose_openai("c1");
@@ -667,16 +678,27 @@ fn a_test_in_flight_is_finished_before_shutdown_returns() {
         .command(&json!({"cmd": "llm.test", "id": "t1"}).to_string())
         .unwrap();
     assert!(gate.until_waiting(WAIT));
-    let opener = {
-        let gate = gate.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(200));
-            gate.open();
-        })
-    };
-    rig.core.shutdown();
-    opener.join().unwrap();
-    let types = rig.events.types();
+    let Rig { core, events, .. } = rig;
+    let (stopped, shut) = mpsc::channel();
+    std::thread::spawn(move || {
+        core.shutdown();
+        let _ = stopped.send(());
+    });
+    let returned = shut.recv_timeout(WAIT);
+    // The provider answers only now: the request left behind ends.
+    gate.open();
+    assert!(
+        returned.is_ok(),
+        "shutdown waited for the provider's answer"
+    );
+    let answer = events.wait_for(WAIT, |v| v["ref"] == "t1").unwrap();
+    assert_eq!(answer["type"], "llm.tested");
+    assert_eq!(answer["ok"], false);
+    assert_eq!(
+        answer["error"],
+        "couldn't finish the test: Inkwell is closing"
+    );
+    let types = events.types();
     assert_eq!(types.last().map(String::as_str), Some("core.stopped"));
-    rig.events.assert_valid();
+    events.assert_valid();
 }

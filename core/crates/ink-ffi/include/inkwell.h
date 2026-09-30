@@ -285,6 +285,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       One short fixed request (never the user's words) to the chosen provider with its stored
  *       key, through local-only mode: "llm.tested" with the "id", saying whether it answered
  *       (and the HTTP status of a refusal). One at a time; another sent meanwhile fails as busy.
+ *       A provider that has not answered within 60 s fails it, and ink_shutdown never waits for
+ *       its answer.
  *   {"cmd":"modes.list"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
