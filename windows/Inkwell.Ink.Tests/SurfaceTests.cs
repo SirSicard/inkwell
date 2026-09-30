@@ -200,6 +200,66 @@ public sealed class SurfaceTests(ITestOutputHelper output)
         Assert.Equal(0, clock.ThreadCount);
     }
 
+    /// <summary>
+    /// A host whose every frame outlasts the clock's interval several times over, as a Present
+    /// does that waits on a compositor fallen behind: the clock always queues the next tick early
+    /// in the frame.
+    /// </summary>
+    private sealed class SlowTarget : IInkTarget
+    {
+        public bool Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark)
+        {
+            Thread.Sleep(100);
+            return true;
+        }
+
+        public void ReleaseDeviceResources()
+        {
+        }
+
+        public void SetFallback(bool shown)
+        {
+        }
+
+        public string? CheckDevice() => null;
+    }
+
+    /// <summary>
+    /// With every frame longer than the clock's interval, the next tick is always queued before the
+    /// last one ends. The tests' UI thread still hands back when its time is up: draining until
+    /// nothing was queued, it never did, and the test using it never ended.
+    /// </summary>
+    [Fact]
+    public void ThePumpEndsOnTimeWhileEveryFrameOutlastsTheClock()
+    {
+        lock (TestPipeline.Lock)
+        {
+            Assert.Null(Loader.Wait().Failure);
+            var ui = new UiThread();
+            var clock = new InkClock(ui.Post, () =>
+            {
+                Thread.Sleep(1);
+                return true;
+            });
+            using var surface = new InkSurface(new SlowTarget(), Loader, clock) { AssumeReduceMotion = false };
+            surface.SetCanvas(96, 84, 96);
+            surface.SetOnScreen(true);
+            surface.State = InkState.Meeting;
+            Assert.True(surface.IsAnimating);
+
+            // The pump runs on a thread of its own so that a pump that never returns fails this
+            // test instead of hanging the run; this thread only waits meanwhile.
+            var pump = new Thread(() => ui.Pump(0.3)) { IsBackground = true };
+            pump.Start();
+            Assert.True(pump.Join(TimeSpan.FromSeconds(30)), "the pump returned after its 0.3 s");
+            Assert.True(surface.FramesDrawn > 1, $"the clock drew while it pumped: {surface.FramesDrawn} frames");
+
+            surface.State = InkState.Idle;
+            ui.Pump(0.1);
+            Assert.Equal(0, clock.ThreadCount);
+        }
+    }
+
     [Fact]
     public void TheCanvasFollowsThePrototypesSizingRule()
     {

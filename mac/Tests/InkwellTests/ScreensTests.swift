@@ -628,6 +628,34 @@ final class CatalogueModelTests: XCTestCase {
         XCTAssertTrue(catalogue.line(.meetingFinal).known)
         XCTAssertNil(catalogue.line(.meetingFinal).engine, "nothing fills it")
     }
+
+    /// A route question that failed reads "couldn't", never "nothing installed", until its answer
+    /// comes; it is matched to its line by the id the command carries.
+    func testAFailedRouteQuestionSaysSoOnItsLine() {
+        let catalogue = CatalogueModel(send: { _ in })
+        guard case .commandFailed(let failed) = CoreCommand.engineRoute(.meetingFinal).notSent("couldn't send it: the core is not running")
+        else { return XCTFail("not a command.failed") }
+        XCTAssertEqual(CatalogueModel.routeJob(failed), .meetingFinal)
+        catalogue.apply(.commandFailed(failed))
+        XCTAssertEqual(catalogue.line(.meetingFinal).engineText, CatalogueModel.routeFailedText)
+        XCTAssertEqual(catalogue.line(.dictationFinal).engineText, "Checking…")
+        catalogue.apply(event(#"{"type":"engine.routed","job":"meeting_final"}"#))
+        XCTAssertEqual(catalogue.line(.meetingFinal).engineText, "Nothing installed yet", "the answer clears it")
+
+        // The core's own failure carries the same id.
+        catalogue.apply(event(#"{"type":"command.failed","command":"engine.route","id":"engine.route:live_partials","message":"the command thread has stopped"}"#))
+        XCTAssertTrue(catalogue.line(.livePartials).failed)
+        catalogue.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertFalse(catalogue.line(.livePartials).failed, "a stopped core's answers are gone")
+
+        // Settings shows the ones naming a job; one naming none is left to the controller's log.
+        guard case .commandFailed(let noJob) = event(#"{"type":"command.failed","command":"engine.route","message":"x"}"#)
+        else { return XCTFail("not a command.failed") }
+        XCTAssertNil(CatalogueModel.routeJob(noJob))
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        XCTAssertTrue(screens.handles(failed))
+        XCTAssertFalse(screens.handles(noJob))
+    }
 }
 
 // MARK: - Modes
@@ -991,6 +1019,25 @@ final class CoreCommandTests: XCTestCase {
         XCTAssertEqual(CoreCommand.noteAdd(record: "r", atMs: 1, text: "private words", ref: "x").name, "note.add",
                        "the name logged never carries the words")
     }
+
+    /// A command that never reached the core fails as the core would have failed it: its name and
+    /// id, and a message that never carries its fields.
+    func testACommandThatNeverReachedTheCoreFailsWithItsNameAndId() {
+        let ask = CoreCommand.meetingAsk(question: "a private question", ref: "ask:3")
+        guard case .commandFailed(let failed) = ask.notSent("couldn't send it: the core is not running") else {
+            return XCTFail("not a command.failed")
+        }
+        XCTAssertEqual(failed.type, "command.failed")
+        XCTAssertEqual(failed.command, "meeting.ask")
+        XCTAssertEqual(failed.id, "ask:3")
+        XCTAssertEqual(failed.message, "couldn't send it: the core is not running")
+        XCTAssertFalse(failed.message.contains("private"))
+        guard case .commandFailed(let noID) = CoreCommand.modesList.notSent("x") else {
+            return XCTFail("not a command.failed")
+        }
+        XCTAssertNil(noID.id)
+        XCTAssertEqual(CoreCommand.engineRoute(.livePartials).commandID, "engine.route:live_partials")
+    }
 }
 
 // MARK: - About
@@ -1287,6 +1334,54 @@ final class CoreControllerCommandTests: XCTestCase {
         XCTAssertEqual(failures().count, 1)
         core.received([event(#"{"type":"command.failed","command":"setting.get","id":"setting:somebody.else","message":"x"}"#)])
         XCTAssertEqual(failures().count, 2, "a setting no screen reads is logged")
+    }
+
+    /// With no core to take them, the commands screens wait on fail one hop later, as if the core
+    /// had failed them: the list loading, Ask thinking and a consent read each say they couldn't
+    /// instead of waiting forever. Each is logged once as not sent, and no failure goes unshown.
+    func testACommandWithNoCoreFailsSoItsScreenStopsWaiting() async throws {
+        let logged = Logged()
+        let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
+        core.library.refreshList()
+        core.screens.live.askText = "What did we decide?"
+        core.screens.live.submitAsk(context: [])
+        core.screens.polish.load()
+        XCTAssertEqual(core.library.listLoad, .loading, "after this turn, not inside the send")
+        XCTAssertNil(core.screens.live.asked.first?.answer)
+
+        try await until {
+            core.library.listLoad == .failed && core.screens.live.asked.first?.answer != nil
+                && core.screens.polish.failure != nil
+        }
+        XCTAssertEqual(core.screens.live.asked.first?.answer, .unavailable("Couldn't answer that. Try asking again."))
+        XCTAssertEqual(core.screens.polish.failure, .read)
+        XCTAssertEqual(logged.messages.count, 3, "\(logged.messages)")
+        XCTAssertTrue(logged.messages.allSatisfy { $0.hasPrefix("no core is running") }, "\(logged.messages)")
+        XCTAssertFalse(logged.messages.joined().contains("decide"), "never the question")
+    }
+
+    /// A command the core refuses to queue fails the same way, with its id, so its screen hears.
+    func testACommandTheCoreRefusesFailsWithItsId() async throws {
+        let data = FileManager.default.temporaryDirectory.appendingPathComponent("inkwell-refused-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: data) }
+        let core = CoreController(registersAppleEngines: false, commandLog: Logged().log)
+        var failures: [CommandFailed] = []
+        core.observer = { batch in
+            for case .commandFailed(let failed) in batch { failures.append(failed) }
+        }
+        core.start(environment: ["INK_DATA_DIR": data.path])
+        try await until { if case .ready = core.store.status { true } else { false } }
+
+        // A page of no records: the core cannot read it, so it never queues it.
+        core.send(.recordsList(kind: nil, before: nil, limit: 0, ref: "list-99"))
+        try await until { failures.contains { $0.id == "list-99" } }
+        let refused = failures.first { $0.id == "list-99" }
+        XCTAssertEqual(refused?.command, "records.list")
+        XCTAssertEqual(refused?.message, "couldn't send it: the core could not read the argument")
+
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            core.stop { done.resume() }
+        }
     }
 
     private func until(_ timeout: Duration = .seconds(20), _ done: () -> Bool) async throws {

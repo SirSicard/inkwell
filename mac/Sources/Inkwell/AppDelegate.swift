@@ -85,6 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showRequests.attach { [weak self] in
             self?.showMainWindow()
         }
+        // Inkwell 0.2's Open at Login, carried over once; last, as a failure is shown in an alert.
+        LoginItemMigration.runAtLaunch()
     }
 
     /// Clicked in the Dock or opened again from the Finder while running.

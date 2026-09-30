@@ -4,6 +4,7 @@
 @testable import AppleEngines
 import Foundation
 import InkBridge
+import Synchronization
 import XCTest
 
 /// A decoder that fails every decode.
@@ -11,6 +12,27 @@ private struct FailingDecoder: WindowDecoder {
     func decode(_ samples: [Float]) async throws(ParakeetError) -> DecodedWindow {
         throw .decodeFailed(code: 7)
     }
+}
+
+/// A decoder whose decodes hold until the test releases them, and that says when one began.
+private final class GatedDecoder: WindowDecoder {
+    let began = Signal<Bool>()
+    private let released = Atomic(false)
+    private let finished = Counter()
+
+    func decode(_ samples: [Float]) async throws(ParakeetError) -> DecodedWindow {
+        began.set(true)
+        while !released.load(ordering: .acquiring) {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        finished.add()
+        return DecodedWindow(words: [])
+    }
+
+    func release() { released.store(true, ordering: .releasing) }
+
+    /// Decodes that have returned.
+    var decodesFinished: Int { finished.value }
 }
 
 /// Pushes `range` of indexed audio in 20 ms blocks from a thread of its own, as the core's worker.
@@ -72,19 +94,27 @@ final class ParakeetLiveStreamTests: XCTestCase {
         live.close()
     }
 
+    /// Every push returns while a decode is held: an order, not a time, so a slow runner (Thread
+    /// Sanitizer on CI) cannot fail it.
     func testPushesNeverWaitForADecode() throws {
         let sink = RecordingSink()
-        let decoder = ScriptedDecoder(script: unbroken(10), delay: .milliseconds(400))
+        let decoder = GatedDecoder()
         let live = stream(decoder, sink)
-        var slowest = Duration.zero
-        for i in 0..<200 {
-            let started = ContinuousClock.now
-            try live.push(indexed(i * 320..<(i + 1) * 320))
-            slowest = max(slowest, ContinuousClock.now - started)
+        defer {
+            decoder.release()
+            live.close()
         }
-        XCTAssertGreaterThan(decoder.calls.value, 0, "a decode was running")
-        XCTAssertLessThan(slowest, .milliseconds(50))
-        live.close()
+        // Armed before the first push: a push that waited for the decode (the one it starts, or
+        // one already running) would return only after this releases it, and then after the
+        // decode, so the check below fails on that order instead of the test hanging.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { decoder.release() }
+        // Half a second starts the first decode, which then holds until it is released.
+        try push(live, 0..<8_000)
+        XCTAssertEqual(decoder.began.wait(30), true, "a decode began")
+        for i in 25..<225 {
+            try live.push(indexed(i * 320..<(i + 1) * 320))
+        }
+        XCTAssertEqual(decoder.decodesFinished, 0, "every push returned while the decode was held")
     }
 
     func testAFailedDecodeEndsTheStream() throws {

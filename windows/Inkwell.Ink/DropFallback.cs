@@ -23,6 +23,8 @@ internal sealed unsafe class DropFallback : IDisposable
     private HWND hwnd;
     private DropText text = new("", "");
     private double scale = 1;
+    /// <summary>The Drop's screen reader name, over it (the Drop's window announces it).</summary>
+    private readonly ScreenReaderName speech;
 
     /// <summary>Whether it is on screen.</summary>
     public bool IsShown { get; private set; }
@@ -65,6 +67,7 @@ internal sealed unsafe class DropFallback : IDisposable
             throw new InkRendererException($"couldn't make the Drop's fallback window (error {error})");
         }
         SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, GCHandle.ToIntPtr(self));
+        speech = new ScreenReaderName(hwnd, "the Drop's fallback");
     }
 
     /// <summary>Shows <paramref name="lines"/> over <paramref name="bounds"/> (the Drop's rectangle, in pixels) at <paramref name="dpiScale"/>.</summary>
@@ -76,10 +79,11 @@ internal sealed unsafe class DropFallback : IDisposable
         var corner = (int)Math.Round(2 * DropLayout.CornerRadius * scale);
         // The window owns the region once set. Without it the panel is square: still shown.
         _ = SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner), false);
-        fixed (char* name = lines.AccessibleName)
+        fixed (char* name = lines.WindowTitle)
         {
             SetWindowTextW(hwnd, name);
         }
+        speech.Set(lines.AccessibleName, announce: false);
         SetWindowPos(hwnd, HWND.HWND_TOPMOST, bounds.left, bounds.top, w, h,
             SWP.SWP_NOACTIVATE | SWP.SWP_SHOWWINDOW);
         InvalidateRect(hwnd, null, true);
@@ -92,6 +96,7 @@ internal sealed unsafe class DropFallback : IDisposable
         {
             ShowWindow(hwnd, SW.SW_HIDE);
             IsShown = false;
+            speech.Clear();
         }
     }
 
@@ -206,6 +211,7 @@ internal sealed unsafe class DropFallback : IDisposable
 
     public void Dispose()
     {
+        speech.Dispose();
         if (hwnd != HWND.NULL)
         {
             SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, 0);
