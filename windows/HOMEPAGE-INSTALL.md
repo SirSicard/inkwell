@@ -4,7 +4,7 @@ For the release-prep step, which owns the homepage: the text of its Windows inst
 the Windows build is not code-signed. `X.Y.Z` is the release's version (the homepage's
 `APP_VERSION`); the file names are the ones `.github/workflows/win-release.yml` publishes. The
 Windows-specific UI labels below were written from Microsoft's documentation and need checking on
-a PC once (windows/S3.6-CHECKLIST.md, section 5) before this goes live.
+a PC once (windows/S3.6-CHECKLIST.md, section 1) before this goes live.
 
 ---
 
