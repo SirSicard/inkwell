@@ -264,8 +264,30 @@ const SHERPA_FILES: [(&str, &str); 4] = [
     ),
 ];
 
+/// The same files from its `win-arm64-shared-MD-Release-no-tts-lib` archive, for Windows on ARM64
+/// (the archive's own SHA-256 is `8c9d6f9ecbe8…`, as GitHub publishes it).
+const SHERPA_FILES_ARM64: [(&str, &str); 4] = [
+    (
+        "lib/sherpa-onnx-c-api.lib",
+        "405a2251e84e92ded78314cfcb8b7e8b80d7773dbf5dde7e5fe443348874e0b4",
+    ),
+    (
+        "lib/sherpa-onnx-c-api.dll",
+        "19bbbea78c08ea7571f06ad520a21d1bb418891b378a8255063a8c97d76a8cd7",
+    ),
+    (
+        "lib/onnxruntime.dll",
+        "ae705d4ac744ce74913785f397e622f4aea2fd352b9d92f3f5ba4e006903b540",
+    ),
+    (
+        "lib/onnxruntime_providers_shared.dll",
+        "931aeefbb125fce4e9eda0d6439a7c5bbbd042037d3f8604ce46da65e78fc974",
+    ),
+];
+
 /// `engine-sherpa`: checks the unpacked sherpa-onnx libraries named by `SHERPA_ONNX_DIR` against
-/// [`SHERPA_FILES`], links the C API's import library, and puts the DLLs where tests find them.
+/// [`SHERPA_FILES`] (x64) or [`SHERPA_FILES_ARM64`] (by the target's architecture), links the C
+/// API's import library, and puts the DLLs where tests find them.
 /// Windows only: the Mac runs Parakeet in FluidAudio. `INK_SHERPA_CHECK_ONLY=1` type-checks the
 /// adapter without the libraries (binaries and tests then do not link), on any OS.
 fn sherpa() {
@@ -288,23 +310,30 @@ fn sherpa() {
              type-check it with INK_SHERPA_CHECK_ONLY=1",
         );
     }
+    let (platform, files) = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("x86_64") => ("win-x64", SHERPA_FILES),
+        Ok("aarch64") => ("win-arm64", SHERPA_FILES_ARM64),
+        other => fail(&format!(
+            "engine-sherpa has sherpa-onnx's libraries for x86_64 and aarch64, not {other:?}"
+        )),
+    };
     let dir = env::var_os("SHERPA_ONNX_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            fail(
+            fail(&format!(
                 "engine-sherpa needs SHERPA_ONNX_DIR: the unpacked \
-                 sherpa-onnx-v1.13.4-win-x64-shared-MD-Release-no-tts-lib archive. To \
-                 type-check without it, set INK_SHERPA_CHECK_ONLY=1.",
-            )
+                 sherpa-onnx-v1.13.4-{platform}-shared-MD-Release-no-tts-lib archive. To \
+                 type-check without it, set INK_SHERPA_CHECK_ONLY=1."
+            ))
         });
     let mut dlls = Vec::new();
-    for (file, pinned) in SHERPA_FILES {
+    for (file, pinned) in files {
         let path = dir.join(file);
         println!("cargo:rerun-if-changed={}", path.display());
         let found = sha256_of(&path, &format!("SHERPA_ONNX_DIR has no {file}"));
         if found != pinned {
             fail(&format!(
-                "{} is not sherpa-onnx 1.13.4's no-tts build (sha256 {found})",
+                "{} is not sherpa-onnx 1.13.4's {platform} no-tts build (sha256 {found})",
                 path.display()
             ));
         }
