@@ -342,6 +342,23 @@ public abstract record CoreCommand
         public override string Name => "import.notes";
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
     }
+
+    /// <summary>
+    /// Whether Inkwell 0.2's data is on this PC and not yet imported (the core knows where it is):
+    /// import.checked, or a command.failed, with the command's name as its id.
+    /// </summary>
+    public sealed record ImportCheck : CoreCommand
+    {
+        public override string Name => "import.check";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
+    }
+
+    /// <summary>Imports it: import.finished, or a command.failed whose message is words to show.</summary>
+    public sealed record ImportRun : CoreCommand
+    {
+        public override string Name => "import.run";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
+    }
 }
 
 /// <summary>Where a page of records continues: the last record of the previous page.</summary>

@@ -119,6 +119,12 @@ internal static class DataLocation
 
     public static string? ModelsDirectory() => Override("INK_MODELS_DIR");
 
+    /// <summary>
+    /// Whether INK_DATA_DIR moves the library. A moved library never looks at the user's Inkwell
+    /// 0.2 data either (Import02Model.Looks).
+    /// </summary>
+    public static bool IsMoved() => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("INK_DATA_DIR"));
+
     private static string? Override(string name)
     {
         var value = Environment.GetEnvironmentVariable(name);

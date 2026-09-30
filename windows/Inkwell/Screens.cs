@@ -31,7 +31,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
         }
         // The installed apps are indexed off the UI thread, before Settings > Modes asks.
         InstalledApps.Shared.Warm();
-        return new ScreenModels(
+        var screens = new ScreenModels(
             core.Send,
             dataDirectory: data,
             modelsDirectory: modelsDir,
@@ -41,6 +41,9 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             makePlayer: document => WindowsAudioOutput.PlayerFor(document, core.CommandLog),
             search: new DispatcherSearchScheduler(ui),
             log: core.CommandLog);
+        // A moved library (development, tests, scripts) never looks at this PC's Inkwell 0.2 data.
+        screens.Import02.Looks = !DataLocation.IsMoved();
+        return screens;
     }
 
     /// <summary>A route's screen.</summary>
@@ -69,7 +72,8 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     {
         if (host is not null)
         {
-            OnboardingSheet.Attach(host, models.Onboarding, models.Permissions, models.Polish, models.Dictation);
+            OnboardingSheet.Attach(
+                host, models.Onboarding, models.Permissions, models.Polish, models.Dictation, models.Import02, models.ImportNote);
         }
     }
 
@@ -84,10 +88,14 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     private List<SettingsSectionEntry> SettingsSections()
     {
         var importNote = new ImportKeyNoteView(models.ImportNote, () => DictationModel.Key(models.Dictation.CurrentKey)?.Name ?? DictationModel.Cap(models.Dictation.CurrentKey));
+        // Inkwell 0.2's history beside the key note, looked for each time Settings shows it.
+        var import02 = new Import02Card(models.Import02, inSettings: true);
+        import02.Loaded += (_, _) => models.Import02.Check();
+        var imports = new StackPanel { Spacing = 12, Children = { importNote, import02 } };
         return
         [
             new("Permissions", new PermissionsSection(models.Permissions)),
-            new("Voice", new VoiceSection(models.Ai, importNote)),
+            new("Voice", new VoiceSection(models.Ai, imports)),
             new("AI", new AiSection(models.Ai)),
             new("Modes", new ModesSection(models.Modes)),
             new("Snippets", new SnippetsSection(models.Snippets)),

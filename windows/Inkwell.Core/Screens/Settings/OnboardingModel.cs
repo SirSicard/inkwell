@@ -1,8 +1,9 @@
 // The first-run state: a sheet over the window until the user finishes or skips it, remembered in
 // the core's store (onboarding.done). What Inkwell does, the four permission cards (nothing asked
-// for until the user presses a card's button), polish (off, and turned on only through its consent
-// step: the sheet's switch calls PolishModel.SetOn(on, ConsentHost.Onboarding), which only asks),
-// and how to dictate. A port of the Mac's OnboardingModel and OnboardingView's words.
+// for until the user presses a card's button), Inkwell 0.2's history (only while there is some to
+// import: Import02Model.Offered), polish (off, and turned on only through its consent step: the
+// sheet's switch calls PolishModel.SetOn(on, ConsentHost.Onboarding), which only asks), and how to
+// dictate. A port of the Mac's OnboardingModel and OnboardingView's words.
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
@@ -11,6 +12,8 @@ public enum OnboardingStep
 {
     Welcome,
     Permissions,
+    /// <summary>Only while Inkwell 0.2's data is offered.</summary>
+    ImportData,
     Polish,
     Ready,
 }
@@ -21,13 +24,20 @@ public sealed class OnboardingModel : ObservableModel
 
     private readonly Action<CoreCommand> send;
     private readonly ScreenLog log;
+    private readonly Import02Model? import;
 
-    public OnboardingModel(Action<CoreCommand> send, ScreenLog? log = null)
+    /// <param name="import">Inkwell 0.2's import, whose step shows while it is offered (null: never).</param>
+    public OnboardingModel(Action<CoreCommand> send, ScreenLog? log = null, Import02Model? import = null)
     {
         ArgumentNullException.ThrowIfNull(send);
         this.send = send;
         this.log = log ?? ScreenLog.System;
+        this.import = import;
     }
+
+    /// <summary>The steps shown, in order.</summary>
+    public IReadOnlyList<OnboardingStep> ShownSteps =>
+        Steps.Where(s => s != OnboardingStep.ImportData || import?.Offered == true).ToList();
 
     /// <summary>The id of this model's setting commands.</summary>
     public static string SettingId => ShellSetting.OnboardingDone.CommandId();
@@ -47,22 +57,24 @@ public sealed class OnboardingModel : ObservableModel
 
     public void Next()
     {
-        if (Step == OnboardingStep.Ready)
+        var following = ShownSteps.Where(s => s > Step).ToList();
+        if (following.Count == 0)
         {
             Finish();
             return;
         }
-        Step++;
+        Step = following[0];
         Changed();
     }
 
     public void Back()
     {
-        if (Step == OnboardingStep.Welcome)
+        var previous = ShownSteps.Where(s => s < Step).ToList();
+        if (previous.Count == 0)
         {
             return;
         }
-        Step--;
+        Step = previous[^1];
         Changed();
     }
 
@@ -126,13 +138,26 @@ public sealed class OnboardingModel : ObservableModel
     // The sheet's words and buttons.
 
     /// <summary>Where the user is, for the step dots' accessible name.</summary>
-    public string StepLabel => $"Step {(int)Step + 1} of {Steps.Length}";
+    public string StepLabel
+    {
+        get
+        {
+            var shown = ShownSteps.ToList();
+            return $"Step {Math.Max(0, shown.IndexOf(Step)) + 1} of {shown.Count}";
+        }
+    }
 
     public bool ShowsSkip => Step != OnboardingStep.Ready;
 
     public bool ShowsBack => Step != OnboardingStep.Welcome;
 
-    public string NextTitle => Step == OnboardingStep.Ready ? "Start" : "Continue";
+    /// <summary>Start on the last step; on the import step, Not now until something came over.</summary>
+    public string NextTitle => Step switch
+    {
+        OnboardingStep.Ready => "Start",
+        OnboardingStep.ImportData when import?.Imported is null => Import02Model.NotNow,
+        _ => "Continue",
+    };
 
     public const string SkipHint = "Closes this; Settings has everything here";
 

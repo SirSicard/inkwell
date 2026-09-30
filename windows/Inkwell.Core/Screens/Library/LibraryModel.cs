@@ -460,8 +460,9 @@ public sealed class LibraryModel : ObservableModel
                     // The open record may hold it: read it again.
                     recordChanged = true;
                     break;
-                case MeetingFinished or DictationInserted or CoreReady:
-                    // A record was written or finished: what the screens list has changed.
+                case MeetingFinished or DictationInserted or CoreReady or ImportFinished:
+                    // A record was written or finished, or 0.2's came over: what the screens list
+                    // has changed.
                     libraryChanged = true;
                     break;
             }
