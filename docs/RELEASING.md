@@ -316,7 +316,7 @@ there is a dedicated step that uploads the bundles as artifacts instead. So this
 builds all four platforms, notarises the macOS dmgs, and publishes nothing:
 
 ```bash
-gh workflow run build.yml --ref main
+gh workflow run build.yml --ref legacy/0.2
 gh run watch "$(gh run list --workflow build.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
