@@ -70,3 +70,12 @@ keyring = { version = "3", features = ["windows-native"] }
 
 [target."cfg(target_os = \"linux\")".dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
+
+# sherpa-onnx-sys as published links sherpa-onnx's text-to-speech libraries,
+# espeak-ng (GPL-3.0) among them, into every static build, and downloads its
+# prebuilt archives without checking them. Inkwell never used text-to-speech.
+# The vendored copy links the no-TTS archives and checks each one against a
+# pinned sha256 before unpacking it; vendor/sherpa-onnx-sys/NOTICE lists the
+# changes.
+[patch.crates-io]
+sherpa-onnx-sys = { path = "vendor/sherpa-onnx-sys" }
