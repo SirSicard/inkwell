@@ -24,7 +24,7 @@ mod der;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
 use ink_core::mock::MockClock;
@@ -316,6 +316,40 @@ fn the_windowed_feed_leaves_the_final_pass_unchanged() {
     }
 }
 
+// --- Two at once. -------------------------------------------------------------------------------
+
+/// Two diarizers, each loading its own model, started together, as a crash recovery's final pass
+/// and a live meeting's can be: both finish, with the same turns. On the PC, before loads waited
+/// for each other (`src/nemo.rs`), two at once ended the process (0xC0000409) or gave one of them
+/// the CPU's turns while ggml-vulkan created its device for the first. That happens only at a
+/// process's first load on the GPU: run this test alone (`--exact`), since after another test's
+/// load it proves nothing.
+#[test]
+#[ignore = "needs the Nemotron model and the AMI meetings (INK_BENCH_DIR, INK_DIAR_SET)"]
+fn two_diarizers_load_and_run_at_once() {
+    let (audio, _) = meeting("EN2002c");
+    let minute = &audio[..60 * 16_000];
+    let diarizers = [diarizer(), diarizer()];
+    let start = Barrier::new(diarizers.len());
+    let turns: Vec<Vec<SpeakerTurn>> = std::thread::scope(|s| {
+        let runs: Vec<_> = diarizers
+            .iter()
+            .map(|diarizer| {
+                let start = &start;
+                s.spawn(move || {
+                    start.wait();
+                    diarizer.diarize(&mut SliceWindows::new(minute), &CancelToken::new())
+                })
+            })
+            .collect();
+        runs.into_iter()
+            .map(|run| run.join().unwrap().unwrap())
+            .collect()
+    });
+    assert!(!turns[0].is_empty());
+    assert_eq!(turns[0], turns[1], "the same audio gave other turns");
+}
+
 // --- Live labels. -------------------------------------------------------------------------------
 
 /// Everything a live stream reported, with how much audio had been pushed when each turn came.
@@ -415,9 +449,7 @@ fn a_corrupt_model_fails_on_first_use_with_the_librarys_reason() {
 }
 
 /// The app's diarizer (`load_diarizer`): on Windows the CPU is tried after GPU 0, where the model
-/// loads, at the first use; on the Mac GPU 0 is the only device. (The one test here that loads on
-/// the GPU without the real model, so none runs beside it: on the PC, two models loading on Vulkan
-/// at once can end the process.)
+/// loads, at the first use; on the Mac GPU 0 is the only device.
 #[test]
 fn the_apps_diarizer_tries_the_cpu_after_the_gpu_on_windows() {
     let root = temp_dir("app-fallback");

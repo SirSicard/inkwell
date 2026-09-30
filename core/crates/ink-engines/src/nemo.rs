@@ -37,6 +37,8 @@
 //! - The model handle is used only under a mutex (open a stream, destroy), so it is never used
 //!   from two threads at once. The header gives it no thread affinity, so it may be used and
 //!   destroyed from any thread. Streams opened from it run concurrently, as lines 85-86 allow.
+//! - Models are created one at a time in the process ([`CREATING`]): the header does not say two
+//!   creates may run at once, and on Vulkan they may not.
 
 #![warn(clippy::undocumented_unsafe_blocks)]
 
@@ -261,6 +263,16 @@ fn load_library(name: &CStr) -> Result<(), EngineError> {
     Ok(())
 }
 
+/// Held across each call that creates a model, so that creates run one at a time in the process,
+/// whichever diarizer, preset or device asks. The header promises nothing about two at once, and
+/// on Vulkan they are not safe: the first model a process creates makes ggml-vulkan create its
+/// device, which the pinned ggml lists as created before it is, without a lock
+/// (`ggml_vk_get_device`), so a second create in that window uses the unfinished device. On the
+/// PC that ended the process (the Vulkan loader's "vkCreateFence: Invalid device", 0xC0000409) or
+/// gave one of the two the CPU's turns (`tests/nemo.rs`). Once the device existed, creates,
+/// streams and destroys ran two at once without fault, so only the create waits here.
+static CREATING: Mutex<()> = Mutex::new(());
+
 /// A model handle. Only [`Model`] holds one, behind its mutex.
 struct ModelHandle(NonNull<ffi::DiarModel>);
 
@@ -301,9 +313,11 @@ impl Model {
             update_period_frames: 0,
         };
         let mut out = std::ptr::null_mut();
+        let creating = lock(&CREATING);
         // SAFETY: `cfg` and the strings it points to outlive the call, and its `size` covers the
         // whole struct as declared in the pinned header; `out` is a valid place for the handle.
         let status = unsafe { ffi::nemo_speech_diar_create(&cfg, &mut out) };
+        drop(creating);
         // On a failure `out` is not read: the header defines no handle then, so there is nothing
         // this side may free. (At the pinned commit, `c_api.cpp:489` clears `*out` first and the
         // handle is only released to it on success, lines 515-517, so nothing is left behind.)
@@ -786,6 +800,10 @@ impl Loader<NemoDiarizer> for NemoLoader {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use ink_core::SliceWindows;
+
     use super::*;
 
     fn segment(start_time: f64, end_time: f64, speaker: i32) -> ffi::DiarSegment {
@@ -924,6 +942,46 @@ mod tests {
     #[test]
     fn the_c_preset_is_the_documented_one() {
         assert_eq!(OFFLINE_PRESET_C.to_str(), Ok(OFFLINE_PRESET));
+    }
+
+    /// Loads run one at a time in the process: while one is under way (holding the lock), another
+    /// diarizer's load waits, and goes on when it ends. A corrupt file on the CPU: the library is
+    /// called and refuses it, so no model is needed.
+    #[test]
+    fn a_load_waits_while_another_is_under_way() {
+        let dir =
+            std::env::temp_dir().join(format!("ink-engines-nemo-one-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.gguf");
+        std::fs::write(&path, b"not a gguf file").unwrap();
+        let info = crate::nemotron_3_diarization().info();
+        let diarizer = NemoDiarizer::new(&path, info, NemoDevice::Cpu).unwrap();
+        let second = [0.0; 16_000];
+        let load = || diarizer.diarize(&mut SliceWindows::new(&second), &CancelToken::new());
+        // Once alone first, so that the library's first-call set-up is not what the wait sees.
+        assert!(load().is_err());
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            // Inside the scope, so that a failed assertion lets go of it before the join.
+            let under_way = lock(&CREATING);
+            s.spawn(|| {
+                let _ = done.send(load());
+            });
+            assert!(
+                result.recv_timeout(Duration::from_millis(500)).is_err(),
+                "the load did not wait for the one under way"
+            );
+            drop(under_way);
+            let loaded = result
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the load went on");
+            assert!(
+                matches!(&loaded, Err(EngineError::Failed(m)) if m.contains("loading the model")),
+                "{loaded:?}"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
