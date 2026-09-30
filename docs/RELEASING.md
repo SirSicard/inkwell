@@ -258,8 +258,8 @@ until this day and is not touched before it (invariant I6 in [ARCHITECTURE.md](A
 
 1.0 is one release on the Mac and on Windows together: the tag waits until the Windows app is
 ready too. Windows ships unsigned at first, with the homepage explaining how to install it past
-SmartScreen; its release chain is not in this file yet. Linux and Intel Macs are dropped: 0.2 is
-their last version.
+SmartScreen; its release chain is [below](#inkwell-1x-on-windows). Linux and Intel Macs are
+dropped: 0.2 is their last version.
 
 Before the tag:
 
@@ -286,21 +286,25 @@ Before the tag:
 - [ ] The Windows app ready for the same release, through its own chain.
 - [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
 
-After CI goes green:
+After CI goes green, on the draft, before anything is published:
 
-- [ ] Steps 3 to 5 above: the draft checked with `--update-key`, published as latest, the feed
-      read back.
-- [ ] **The maintainer:** the downloaded dmg installed on a fresh macOS user account (onboarding,
-      one dictation, one meeting), and on the everyday account over the installed 0.2: it
-      replaces it in place, and the microphone and Accessibility grants carry over (same bundle
-      id and team; compare `codesign -d -r-` of both apps).
-- [ ] **The maintainer:** the Windows installer on a fresh Windows account (one dictation, one
-      meeting), and on an account with 0.2 installed.
-- [ ] 0.2.11 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
+- [ ] Step 3 above: the draft's dmg checked with `--update-key`.
+- [ ] **The maintainer:** that dmg installed on a fresh macOS user account (onboarding, one
+      dictation, one meeting), and on the everyday account over the installed 0.2: it replaces
+      it in place, and the microphone and Accessibility grants carry over (same bundle id and
+      team; compare `codesign -d -r-` of both apps).
+- [ ] **The maintainer:** the draft's Windows installer (`gh release download v1.0.0 --repo
+      SirSicard/inkwell --pattern '*_x64-setup.exe'`) on a fresh Windows account (one dictation,
+      one meeting), and on an account with 0.2 installed (`windows/S3.6-CHECKLIST.md`, section 6).
+
+Then:
+
+- [ ] Steps 4 and 5 above: published as latest, the feed read back.
+- [ ] 0.2.10 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
       install 1.0): the 0.2 chain below, published with `--latest=false` so that 1.0 stays the
       release the feed follows, then `inkwell-updater/publish-latest.sh`. On Linux and Intel
       Macs the notice says 0.2 is their last version.
-- [ ] `inkwell-updater/` retired once 1.0 has shipped on Windows too and 0.2.11 has gone out
+- [ ] `inkwell-updater/` retired once 1.0 has shipped on Windows too and 0.2.10 has gone out
       through it (0.2 installs read the notice from it until then).
 - No Homebrew cask in 1.0: `packaging/homebrew/inkwell.rb` stays on 0.2.9. 1.x gets its cask at
   1.0.1 (macOS 26 or later; 1.0's data folder, `~/Library/Application Support/Inkwell`, in
