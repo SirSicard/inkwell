@@ -38,7 +38,8 @@
 //!   from two threads at once. The header gives it no thread affinity, so it may be used and
 //!   destroyed from any thread. Streams opened from it run concurrently, as lines 85-86 allow.
 //! - Models are created one at a time in the process ([`CREATING`]): the header does not say two
-//!   creates may run at once, and on Vulkan they may not.
+//!   creates may run at once, and on Vulkan they may not. On Vulkan a GPU whose first create
+//!   failed is not created on again.
 
 #![warn(clippy::undocumented_unsafe_blocks)]
 
@@ -271,7 +272,46 @@ fn load_library(name: &CStr) -> Result<(), EngineError> {
 /// PC that ended the process (the Vulkan loader's "vkCreateFence: Invalid device", 0xC0000409) or
 /// gave one of the two the CPU's turns (`tests/nemo.rs`). Once the device existed, creates,
 /// streams and destroys ran two at once without fault, so only the create waits here.
-static CREATING: Mutex<()> = Mutex::new(());
+///
+/// It also holds what creates found out ([`Creates`]): on Vulkan, a GPU whose first create failed
+/// is not created on again. ggml-vulkan keeps the device it listed even when making it fails (the
+/// same `ggml_vk_get_device` has no `catch`) and hands it to the next create on that GPU, which
+/// ends the process the same way: on the PC, with the first `vkCreateDevice` made to fail under a
+/// debugger, the CPU ran that pass and the next pass's create on GPU 0 ended the process. So after
+/// a failed first create a GPU's creates fail at once, and the diarizer's next device (the CPU, in
+/// the app) runs the model. The unfinished device still ends the process when it exits
+/// (ggml-vulkan's destructor: "vkDestroyFence: Invalid device"); only a change to ggml-vulkan can
+/// prevent that. A GPU a model was created on has its device whole, so it is tried again after a
+/// later failure (too little memory for the model, say).
+static CREATING: Mutex<Creates> = Mutex::new(Creates {
+    built: Vec::new(),
+    failed: Vec::new(),
+});
+
+/// What creates found out about the GPUs, kept under [`CREATING`].
+struct Creates {
+    /// GPUs a model was created on in this process.
+    built: Vec<u16>,
+    /// GPUs whose first create in this process failed, where the GPU is Vulkan's: not created on
+    /// again.
+    failed: Vec<u16>,
+}
+
+impl Creates {
+    /// Notes whether a create on GPU `ix` `created` a model. Only a GPU no model was created on
+    /// yet is kept from more creates by a failure, and only on Vulkan: the Mac's Metal makes its
+    /// devices when its backend registers, under a lock, and keeps none half made.
+    fn note(&mut self, ix: u16, created: bool) {
+        if self.built.contains(&ix) {
+            return;
+        }
+        if created {
+            self.built.push(ix);
+        } else if !cfg!(target_os = "macos") {
+            self.failed.push(ix);
+        }
+    }
+}
 
 /// A model handle. Only [`Model`] holds one, behind its mutex.
 struct ModelHandle(NonNull<ffi::DiarModel>);
@@ -313,10 +353,21 @@ impl Model {
             update_period_frames: 0,
         };
         let mut out = std::ptr::null_mut();
-        let creating = lock(&CREATING);
+        let mut creating = lock(&CREATING);
+        if let NemoDevice::Gpu(ix) = device
+            && creating.failed.contains(&ix)
+        {
+            return Err(EngineError::Failed(format!(
+                "couldn't load the model on GPU {ix}: its first load in this process failed, and \
+                 it is not tried again"
+            )));
+        }
         // SAFETY: `cfg` and the strings it points to outlive the call, and its `size` covers the
         // whole struct as declared in the pinned header; `out` is a valid place for the handle.
         let status = unsafe { ffi::nemo_speech_diar_create(&cfg, &mut out) };
+        if let NemoDevice::Gpu(ix) = device {
+            creating.note(ix, status == ffi::OK);
+        }
         drop(creating);
         // On a failure `out` is not read: the header defines no handle then, so there is nothing
         // this side may free. (At the pinned commit, `c_api.cpp:489` clears `*out` first and the
@@ -982,6 +1033,65 @@ mod tests {
             );
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Vulkan a failed first create keeps a GPU from more; after a model was created on it, no
+    /// failure does. On the Mac nothing is kept from more.
+    #[test]
+    fn only_a_failed_first_create_keeps_a_gpu_from_more() {
+        let mut creates = Creates {
+            built: Vec::new(),
+            failed: Vec::new(),
+        };
+        creates.note(0, true);
+        creates.note(0, false);
+        creates.note(1, false);
+        assert_eq!(creates.built, [0]);
+        let kept: &[u16] = if cfg!(target_os = "macos") { &[] } else { &[1] };
+        assert_eq!(creates.failed, kept);
+    }
+
+    /// On Vulkan, the next load on a GPU whose first load failed fails at once, without the
+    /// library, and the CPU behind it is tried; on the Mac the library is asked again. GPU 99: no
+    /// machine has one, so the library refuses it ("no matching GPU device") before it reads the
+    /// file. The file is not a model, so the CPU refuses it too, and the error names both.
+    #[test]
+    fn a_gpu_whose_first_load_failed_is_not_tried_again_on_vulkan() {
+        let dir = std::env::temp_dir().join(format!(
+            "ink-engines-nemo-failed-gpu-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.gguf");
+        std::fs::write(&path, b"not a gguf file").unwrap();
+        let info = crate::nemotron_3_diarization().info();
+        let second = [0.0; 16_000];
+        let error = |diarizer: NemoDiarizer| match diarizer
+            .diarize(&mut SliceWindows::new(&second), &CancelToken::new())
+        {
+            Err(EngineError::Failed(m)) => m,
+            other => panic!("{other:?}"),
+        };
+        let first = error(NemoDiarizer::new(&path, info.clone(), NemoDevice::Gpu(99)).unwrap());
+        let again = error(
+            NemoDiarizer::new(&path, info, NemoDevice::Gpu(99))
+                .unwrap()
+                .with_fallback(NemoDevice::Cpu),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(first.contains("no matching GPU device"), "{first}");
+        assert_eq!(
+            again.contains("couldn't load the model on GPU 99: its first load"),
+            !cfg!(target_os = "macos"),
+            "{again}"
+        );
+        assert_eq!(
+            again.contains("no matching GPU device"),
+            cfg!(target_os = "macos"),
+            "{again}"
+        );
+        assert!(again.contains("Cpu: "), "{again}");
     }
 
     #[test]

@@ -45,8 +45,9 @@ pub fn load_vad(models: &ModelDir, row: &EngineRow) -> Result<Arc<dyn VadModel>,
 
 /// **Worker.** Loads the diarizer row installed under `models`, on the GPU where there is one: on
 /// the Mac its GPU; on Windows GPU 0 (Vulkan), and the CPU when the model does not load there (no
-/// Vulkan GPU, or too little memory on it). The model loads at the diarizer's first use, so that
-/// is where the CPU is tried (`NemoDiarizer::with_fallback`). Without its adapter in this build,
+/// Vulkan GPU, or too little memory on it), and without trying GPU 0 once its first load in the
+/// process failed (`nemo.rs`, `CREATING`). The model loads at the diarizer's first use, so that is
+/// where the CPU is tried (`NemoDiarizer::with_fallback`). Without its adapter in this build,
 /// [`EngineError::ModelMissing`], naming the row.
 pub fn load_diarizer(models: &ModelDir, row: &EngineRow) -> Result<Arc<dyn Diarizer>, EngineError> {
     #[cfg(feature = "engine-nemo")]
