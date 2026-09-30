@@ -32,7 +32,8 @@ use ink_core::{
     CancelToken, Diarizer, EngineError, EngineInfo, EventSink, Job, SliceWindows, SpeakerTurn,
 };
 use ink_engines::{
-    ModelDir, NemoDevice, NemoDiarizer, NemoLoader, Residency, nemotron_3_diarization,
+    ModelDir, NemoDevice, NemoDiarizer, NemoLoader, Residency, load_diarizer,
+    nemotron_3_diarization,
 };
 use sha2::{Digest, Sha256};
 
@@ -413,26 +414,32 @@ fn a_corrupt_model_fails_on_first_use_with_the_librarys_reason() {
     );
 }
 
-/// Windows' fallback (`load_diarizer`): the CPU is tried where the model loads, at the first use,
-/// after the GPU; a model that loads on neither is an error naming each device's reason.
+/// The app's diarizer (`load_diarizer`): on Windows the CPU is tried after GPU 0, where the model
+/// loads, at the first use; on the Mac GPU 0 is the only device. (The one test here that loads on
+/// the GPU without the real model, so none runs beside it: on the PC, two models loading on Vulkan
+/// at once can end the process.)
 #[test]
-fn a_model_that_loads_on_no_device_names_each_devices_reason() {
-    let dir = temp_dir("corrupt-fallback");
-    let path = dir.join("model.gguf");
+fn the_apps_diarizer_tries_the_cpu_after_the_gpu_on_windows() {
+    let root = temp_dir("app-fallback");
+    let dir = ModelDir::new(&root);
+    let row = nemotron_3_diarization();
+    let path = dir.file_path(&row, &row.files[0]);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, b"not a gguf file").unwrap();
-    let diarizer = NemoDiarizer::new(&path, info(), NemoDevice::Gpu(0))
-        .unwrap()
-        .with_fallback(NemoDevice::Cpu);
+    let diarizer = load_diarizer(&dir, &row).unwrap();
     let second = [0.0; 16_000];
     let err = diarizer
         .diarize(&mut SliceWindows::new(&second), &CancelToken::new())
         .unwrap_err();
-    let _ = fs::remove_dir_all(&dir);
-    assert!(
-        matches!(&err, EngineError::Failed(m)
-            if m.contains("Gpu(0): NeMo-Speech.cpp loading the model")
-                && m.contains("Cpu: NeMo-Speech.cpp loading the model")),
-        "{err:?}"
+    let _ = fs::remove_dir_all(&root);
+    let EngineError::Failed(m) = &err else {
+        panic!("{err:?}")
+    };
+    assert!(m.contains("loading the model"), "{m}");
+    assert_eq!(
+        m.contains("Gpu(0): ") && m.contains("Cpu: "),
+        cfg!(windows),
+        "{m}"
     );
 }
 
