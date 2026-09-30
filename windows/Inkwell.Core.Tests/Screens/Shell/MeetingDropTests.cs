@@ -36,9 +36,9 @@ public sealed class MeetingDropTests
         public DropModel Drop { get; }
         public int Changes { get; private set; }
 
-        public Rig()
+        public Rig(Logged? logged = null)
         {
-            Meetings = new MeetingModel(Sent.Send, log: new Logged().Log);
+            Meetings = new MeetingModel(Sent.Send, log: (logged ?? new Logged()).Log);
             Drop = new DropModel(new NoWakes(), offerFailure: () => Meetings.FailureOn(MeetingPlace.Drop));
             Drop.Changed += () => Changes++;
         }
@@ -117,6 +117,60 @@ public sealed class MeetingDropTests
         rig.Meetings.Dismiss("ms-teams.exe");
         rig.Apply("""{"type":"command.failed","command":"meeting.dismiss","id":"meeting.dismiss","message":"that app is not being offered"}""");
         Assert.Equal("Couldn't dismiss the offer: that app is not being offered", rig.Drop.Line!.Detail);
+    }
+
+    private const string ZoomOffered = """{"type":"meeting.detected","app":"Zoom.exe","app_name":"Zoom"}""";
+    private const string Consent = "Recording keeps both sides on this PC. Tell the others you are recording.";
+
+    /// <summary>
+    /// Review (S3.5b): a double click on "Record this call" sends two starts; the second fails
+    /// after the first has started the meeting. Its offer has gone, so nothing shows it, and the
+    /// next call's offer keeps its own consent line.
+    /// </summary>
+    [Fact]
+    public void ASecondClicksFailureIsNotShownOnALaterOffer()
+    {
+        var logged = new Logged();
+        var rig = new Rig(logged);
+        rig.Apply(Offered);
+        rig.Meetings.Perform(rig.Drop.Line!.Actions!.At(0)!);
+        rig.Meetings.Perform(rig.Drop.Line!.Actions!.At(0)!);
+        rig.Apply(
+            Started,
+            """{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"a meeting is already running"}""");
+        Assert.Equal("● REC · Microsoft Teams", rig.Drop.Line!.Title);
+        Assert.Null(rig.Meetings.FailureOn(MeetingPlace.Drop));
+        Assert.Contains(logged.Messages, m => m.Contains("its offer had gone", StringComparison.Ordinal));
+
+        rig.Apply("""{"type":"meeting.stopped","record":"r1"}""", """{"type":"meeting.finished","record":"r1","revision":2}""");
+        rig.Apply(ZoomOffered);
+        Assert.Equal(
+            new DropLine("Zoom opened the microphone", Consent,
+                Actions: new DropActions(new DropAction.Record("Zoom.exe"), new DropAction.Dismiss("Zoom.exe"))),
+            rig.Drop.Line);
+    }
+
+    /// <summary>Review (S3.5b): a failed answer goes with its offer, when the app lets go of the mic or another offer comes.</summary>
+    [Fact]
+    public void AFailedAnswerGoesWithItsOffer()
+    {
+        var rig = new Rig();
+        rig.Apply(Offered);
+        rig.Meetings.Record("ms-teams.exe");
+        rig.Apply("""{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"the microphone: no input device"}""");
+        Assert.Equal(DropLineTone.Alert, rig.Drop.Line!.Tone);
+        rig.Apply("""{"type":"meeting.detection_ended","app":"ms-teams.exe","dismissed":false}""");
+        Assert.Null(rig.Drop.Line);
+        rig.Apply(ZoomOffered);
+        Assert.Equal(Consent, rig.Drop.Line!.Detail);
+        Assert.Equal(DropLineTone.Plain, rig.Drop.Line!.Tone);
+
+        // A second offer replacing the first, while its answer's failure shows.
+        rig.Meetings.Dismiss("Zoom.exe");
+        rig.Apply("""{"type":"command.failed","command":"meeting.dismiss","id":"meeting.dismiss","message":"that app is not being offered"}""");
+        Assert.Equal(DropLineTone.Alert, rig.Drop.Line!.Tone);
+        rig.Apply(Offered);
+        Assert.Equal(new DropLine("Microsoft Teams opened the microphone", Consent, Actions: TeamsButtons), rig.Drop.Line);
     }
 
     [Fact]

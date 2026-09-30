@@ -95,6 +95,12 @@ public sealed class MeetingModel(
     private readonly ScreenLog log = log ?? ScreenLog.System;
     /// <summary>Where the start in flight was asked for (a start's command id is the same from every place).</summary>
     private MeetingOrigin starting = MeetingOrigin.RecordNow;
+    /// <summary>
+    /// The app the core offers now, as the store keeps it (meeting.detected, until its
+    /// detection_ended, detection stopping, or a meeting starting): a Drop answer's failure belongs
+    /// to this offer, and goes with it.
+    /// </summary>
+    private string? offered;
 
     public MeetingFailure? Failure { get; private set; }
 
@@ -221,6 +227,16 @@ public sealed class MeetingModel(
         };
     }
 
+    /// <summary>A Drop answer's failure goes with its offer; Record now's and Stop's stay where they were asked.</summary>
+    private void EndOffersFailure()
+    {
+        if (Failure?.Origin is MeetingOrigin.Offer or MeetingOrigin.Dismiss)
+        {
+            Failure = null;
+            Changed();
+        }
+    }
+
     public void Apply(InkEvent e)
     {
         switch (e)
@@ -238,8 +254,22 @@ public sealed class MeetingModel(
                 Changed();
                 break;
             case MeetingStarted:
+                offered = null;
                 Failure = null;
                 Changed();
+                break;
+            case MeetingDetected detected:
+                // A new offer is a new question: an earlier answer's failure is not its.
+                offered = detected.App;
+                EndOffersFailure();
+                break;
+            case MeetingDetectionEnded ended when ended.App == offered:
+                offered = null;
+                EndOffersFailure();
+                break;
+            case MeetingDetection { Listening: false }:
+                offered = null;
+                EndOffersFailure();
                 break;
             case CommandFailed failed when failed.Command is "meeting.start" or "meeting.stop" or "meeting.dismiss":
                 var origin = failed.Command switch
@@ -248,6 +278,14 @@ public sealed class MeetingModel(
                     "meeting.dismiss" => MeetingOrigin.Dismiss,
                     _ => starting,
                 };
+                if ((origin is MeetingOrigin.Offer or MeetingOrigin.Dismiss) && offered is null)
+                {
+                    // The offer it answered has gone (a second click after the first started the
+                    // meeting, or the app let go of the mic): nothing shows it now, and a later
+                    // offer must not. The core logged why.
+                    log.Write($"command.failed for a {failed.Command} command; its offer had gone, so nothing shows it");
+                    break;
+                }
                 Failure = new MeetingFailure(origin, failed.Message);
                 Changed();
                 // The core logged why; this says the shell showed it (the controller does not log a

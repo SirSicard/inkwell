@@ -134,6 +134,8 @@ public class DropAnswerTests
     {
         var sent = new Sent();
         var meetings = new MeetingModel(sent.Send, new FixedTitle(null), log: new Logged().Log);
+        // The offer the answers answer: a failure belongs to it.
+        meetings.Apply(Ev.Of("""{"type":"meeting.detected","app":"ms-teams.exe","app_name":"ms-teams"}"""));
         meetings.Record("ms-teams.exe");
         var failed = Ev.Of<CommandFailed>("""{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"the microphone: no input device"}""");
         meetings.Apply(failed);
