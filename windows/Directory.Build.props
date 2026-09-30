@@ -11,12 +11,19 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <!-- Restores are pinned: packages.lock.json is checked in and CI restores in locked mode. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <!-- x64 only for now. ARM64 needs the core built for aarch64-pc-windows-msvc, the win-arm64
-         runtime identifier, and a NativeAOT publish that .NET 10's x64-to-ARM64 packaging
-         regression does not break: an ARM64 build machine, or the SDK fix. Not tried yet. -->
-    <Platforms>x64</Platforms>
-    <PlatformTarget>x64</PlatformTarget>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- x64, and ARM64 when a project is built with -p:Platform=ARM64 (its project references
+         inherit it). The solution cannot switch it: it refuses -r and passes its projects no
+         platform, so ARM64 builds go project by project (win-arm64.yml). The platform target
+         follows the runtime identifier. ARM64 is built, tested and published on an ARM64 machine,
+         not cross-compiled from x64. Restore covers both runtime identifiers, so each
+         packages.lock.json holds both. The core's DLL (InkCoreDir) must be built for the same
+         architecture. -->
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <PlatformTarget Condition="'$(RuntimeIdentifier)' == 'win-arm64'">ARM64</PlatformTarget>
+    <PlatformTarget Condition="'$(RuntimeIdentifier)' != 'win-arm64'">x64</PlatformTarget>
   </PropertyGroup>
 
   <!-- The core's DLL (ink_ffi.dll, the cdylib of core/crates/ink-ffi): built in
