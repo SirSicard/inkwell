@@ -47,6 +47,7 @@ Inkwell 1.0 is a rebuild: native on each system (SwiftUI and AppKit on the Mac, 
 
 - Speech recognition, voice detection and speaker labels run on your machine. Audio is never uploaded.
 - Dictations keep their text, never their audio. Meetings keep their audio on disk next to the transcript, because the final pass and the record's playback read it from there.
+- On the Mac, if you allow it, Inkwell reads your calendar to show your next meeting and to name each meeting and who was in it. The calendar never leaves the Mac.
 - Everything lives in one folder: `~/Library/Application Support/Inkwell` on the Mac, `%LOCALAPPDATA%\Inkwell` on Windows. Nothing syncs.
 - For dictation, the microphone opens when you press the key and is let go of a minute after your last take. For a meeting, it is open while you record.
 - Polish, voice edit, summaries and Ask use Apple's on-device model on the Mac: your words stay on the Mac. Each asks for your OK first, and asks again if where the words would go ever changes.
@@ -62,7 +63,7 @@ Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases)
 ### Mac (Apple silicon, macOS 26 or later)
 
 1. Download the `.dmg`, drag Inkwell to Applications, and open it. It is signed with a Developer ID and notarized by Apple, so there is no warning to click past.
-2. Onboarding asks for what each job needs: **Microphone** for both, **Accessibility** for the dictation key and for typing the text, and **System Audio Recording** for the other side of a call.
+2. Onboarding asks for what each job needs: **Microphone** for both, **Accessibility** for the dictation key and for typing the text, and **System Audio Recording** for the other side of a call. **Calendars** is optional: it lets Inkwell show your next meeting and name each meeting and who was in it.
 
 Intel Macs are not supported by 1.0: Inkwell 0.2 stays the last version for them, on the Releases page.
 

@@ -27,6 +27,7 @@ Stated plainly, because an app that listens deserves specificity:
 **Stays on your machine, always:**
 - Audio. Speech recognition, voice detection and speaker labels run locally. A dictation's audio is transcribed and never kept. A meeting's audio, your microphone and the call as two streams, is written to disk as it is recorded, because the final pass, crash recovery and the record's playback read it from there. It stays in the data folder with its record until the retention setting removes it (by default, records are kept).
 - Transcripts, notes, summaries, commitments and settings. A SQLite database in the same folder: `~/Library/Application Support/Inkwell` on the Mac, `%LOCALAPPDATA%\Inkwell` on Windows. Nothing syncs.
+- Your calendar, on the Mac, if you allow it: read to show your next meeting and to name each meeting and who was in it.
 - Logs. Transcripts, notes and prompts never reach a log or an error message.
 
 **Language models, only with your OK:**
