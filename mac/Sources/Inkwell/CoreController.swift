@@ -64,6 +64,8 @@ final class CoreController {
                 forward.handle($0)
             })
             session = started
+            // Parakeet loads from where the core installs it: the core's models directory.
+            ParakeetModel.useModelsDirectory(models ?? data.appendingPathComponent("models", isDirectory: true))
             let engines = AppleEngines(session: started)
             apple = engines
             appleEvents.attach(engines)
@@ -223,7 +225,8 @@ final class CoreController {
 }
 
 /// Hands the core's events to the Apple engines, from the core's event thread (it returns at once:
-/// a take starting only prewarms polish). The engines are attached once the session has started.
+/// a take starting only prewarms polish, and Parakeet's finished download starts its load). The
+/// engines are attached once the session has started.
 final class AppleEventForwarder: Sendable {
     private let engines = Mutex<AppleEngines?>(nil)
 

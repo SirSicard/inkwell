@@ -1,12 +1,14 @@
 // Parakeet with the real models on the three AMI IHM clips the engine choice was measured on
-// (709 reference words). Skipped unless INK_BENCH_DIR is set: CI has no models. Run locally, one
-// timing run at a time on an otherwise quiet Mac:
+// (709 reference words). Skipped unless INK_BENCH_DIR and INK_MODELS_DIR are set: CI has no
+// models. Run locally, one timing run at a time on an otherwise quiet Mac:
 //
-//   INK_BENCH_DIR=<bench data> swift test --package-path mac --filter AmiHarnessTests
+//   INK_BENCH_DIR=<bench data> INK_MODELS_DIR=<models directory> \
+//     swift test --package-path mac --filter AmiHarnessTests
 //
 // Reads $INK_BENCH_DIR/ami-ihm.tsv and ami-ihm/*.wav (column 2 names the WAV, column 4 holds the
-// reference, as the core's Rust bench reader takes them); the models come from
-// FluidAudio's cache and are never downloaded. What it measured goes to
+// reference, as the core's Rust bench reader takes them); the models come from $INK_MODELS_DIR, a
+// core's models directory with the parakeet-tdt-0.6b-v3-coreml row installed (the app's, once it
+// has downloaded Parakeet), and are never downloaded. What it measured goes to
 // $INK_BENCH_DIR/out/apple-engines/, never into the repository.
 //
 // 1. The model through the engine's decoder, clip by clip, as the choice was measured: the
@@ -36,6 +38,10 @@ private func bench() throws -> URL {
     guard let dir = ProcessInfo.processInfo.environment["INK_BENCH_DIR"], !dir.isEmpty else {
         throw XCTSkip("set INK_BENCH_DIR to run the real-model harness")
     }
+    guard let models = ProcessInfo.processInfo.environment["INK_MODELS_DIR"], !models.isEmpty else {
+        throw XCTSkip("set INK_MODELS_DIR to a models directory with parakeet-tdt-0.6b-v3-coreml installed")
+    }
+    ParakeetModel.useModelsDirectory(URL(fileURLWithPath: models, isDirectory: true))
     return URL(fileURLWithPath: dir)
 }
 
