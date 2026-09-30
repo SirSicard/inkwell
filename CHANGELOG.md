@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Inkwell 1.0 is out, and this version says so once.** 1.0 is a new app, so the updater in this version cannot install it. On an Apple silicon Mac or on Windows, a notice at the top of the window says where to download it (on a Mac it needs macOS 26 or later). Intel Macs and Linux get no 1.0, so there the notice says this is the last version: it keeps working as it is and gets no further updates. Dismiss it, or use its link, and it does not come back.
+- **Inkwell 1.0 is out, and this version says so once.** 1.0 is a new app, so the updater in this version cannot install it. On an Apple silicon Mac or on Windows, a notice at the top of the window says where to download it (on a Mac it needs macOS 26 or later). Intel Macs and Linux get no 1.0, so there the notice says this is the last version: it keeps working as it is and gets no further updates. It stays until you dismiss it, and then it does not come back.
 
 ## [0.2.9] - 2026-08-27
 

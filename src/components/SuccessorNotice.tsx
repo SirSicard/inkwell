@@ -5,9 +5,10 @@ import { toast } from "../state/toasts"
 /** Mirrors successor::Audience in src-tauri/src/successor.rs. */
 type Audience = "apple_silicon" | "windows" | "intel_mac" | "linux"
 
-/// Shown until it is dismissed or its link is used, then never again. Kept in
-/// the webview's storage rather than settings.json: it is not a setting, and
-/// Inkwell 1.0 imports settings.json.
+/// Shown until it is dismissed, then never again. Using the link does not
+/// dismiss it: whether the page that opened was the right one is not something
+/// this app can see. Kept in the webview's storage rather than settings.json:
+/// it is not a setting, and Inkwell 1.0 imports settings.json.
 const DISMISSED_KEY = "inkwell.successor-notice.dismissed"
 
 const COPY: Record<Audience, { title: string; body: string; link: string }> = {
@@ -66,9 +67,7 @@ export function SuccessorNotice() {
   }
 
   const openSite = () => {
-    invoke("open_successor_site")
-      .then(dismiss)
-      .catch((e) => toast(String(e), "warning"))
+    invoke("open_successor_site").catch((e) => toast(String(e), "warning"))
   }
 
   return (

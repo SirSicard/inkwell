@@ -14,6 +14,9 @@ use serde::Serialize;
 /// The page that offers Inkwell 1.0. Fixed here, and the command that opens it
 /// takes no argument, so the webview can open this page and nothing else.
 /// Must match SITE_URL in homepage/lib/constants.ts (a test below checks).
+///
+/// The notice is only true once the live page offers 1.0, which nothing here
+/// can check: docs/RELEASING.md holds the release until it does.
 pub const SITE_URL: &str = "https://getinkwell.vercel.app";
 
 /// Who is reading the notice, which decides what it says.
