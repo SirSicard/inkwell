@@ -29,6 +29,8 @@ jobs:
         # Pinned: the shells target macOS 26 and Windows 11 24H2.
         os: [macos-26, windows-2025]
     runs-on: ${{ matrix.os }}
+    # Runs take 8 to 19 minutes (macOS) and 7 to 14 (Windows); a hang fails here, not after 6 hours.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Installs the channel and components pinned in core/rust-toolchain.toml.
@@ -101,6 +103,8 @@ jobs:
   swift-tsan:
     name: Swift tests under Thread Sanitizer (macos-26)
     runs-on: macos-26
+    # Runs take 4 to 7 minutes; a hang fails here, not after 6 hours.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: .
