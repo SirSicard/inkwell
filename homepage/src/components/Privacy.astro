@@ -2,8 +2,10 @@
 // What stays and every network call, from the README's Privacy section ("Every network call, listed")
 // and SECURITY.md. Checked against the 1.0 source: the model rows' download URLs (ink-engines'
 // registry), the Mac's update feed and SUEnableSystemProfiling (mac/Info.plist), a dictation keeping
-// no audio (ink-pipeline), the retention choices (retention.days) and the language-model consents
-// (ink_pipeline::consent). This section doubles as the privacy policy the code signing policy links.
+// no audio (ink-pipeline), the retention choices (retention.days), the language-model consents
+// (ink_pipeline::consent) and Windows's providers and key store (ink_llm). Windows's update row follows
+// the updater its distribution step builds: nothing is checked until the user asks. This section
+// doubles as the privacy policy the code signing policy links.
 import { GITHUB_URL, HUGGING_FACE_URL, RELEASES_URL } from '../lib/constants';
 ---
 
@@ -51,8 +53,10 @@ import { GITHUB_URL, HUGGING_FACE_URL, RELEASES_URL } from '../lib/constants';
       <div>
         <dt>Language models</dt>
         <dd>
-          Polish, voice edit, summaries and Ask run on Apple’s on-device model on the Mac. Each is off until
-          you allow it, and asks again if where your words would go ever changes.
+          On the Mac, polish, voice edit, summaries and Ask run on Apple’s on-device model, so your words stay
+          on the Mac. On Windows they need a provider you set up with your own API key, and send it the words
+          they work on (the table below); the key stays in Windows Credential Manager. Each is off until you
+          allow it, and asks again if where your words would go ever changes.
         </dd>
       </div>
     </dl>
@@ -95,15 +99,21 @@ import { GITHUB_URL, HUGGING_FACE_URL, RELEASES_URL } from '../lib/constants';
           <tr role="row">
             <th scope="row" role="rowheader">Updates, Windows</th>
             <td role="cell"><span class="m-only">Goes to</span>This project’s <a href={RELEASES_URL}>GitHub releases</a></td>
-            <td role="cell"><span class="m-only">When</span>When the app looks for a new version</td>
-            <td role="cell"><span class="m-only">What it carries</span>A request for the release feed</td>
+            <td role="cell"><span class="m-only">When</span>Only when you ask the app to check</td>
+            <td role="cell"><span class="m-only">What it carries</span>A request for the release feed, then for the update if you take it. Nothing about your PC</td>
+          </tr>
+          <tr role="row">
+            <th scope="row" role="rowheader">Language model, Windows</th>
+            <td role="cell"><span class="m-only">Goes to</span>The provider you set up: OpenAI, Anthropic, Groq, OpenRouter, or a server you name</td>
+            <td role="cell"><span class="m-only">When</span>Only if you set one up, when a feature you allowed for it runs</td>
+            <td role="cell"><span class="m-only">What it carries</span>The words that feature works on (a dictation, the text you selected, a meeting’s transcript, your question) and your API key</td>
           </tr>
         </tbody>
       </table>
     </div>
     <p class="after-ledger">
-      With the models on disk, updates are the only calls left: dictation and meetings work with the network
-      unplugged. Everything that decides what is sent is in the <a href={GITHUB_URL}>source</a>.
+      With the models on disk, dictation and meetings work with the network unplugged; what is left is
+      updates and, on Windows, a provider you set up. Everything that decides what is sent is in the <a href={GITHUB_URL}>source</a>.
     </p>
   </div>
 </section>

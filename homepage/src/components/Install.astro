@@ -53,16 +53,22 @@ import { DOWNLOADS } from '../lib/release';
       <div class="platform-head">
         <h3>Windows</h3>
         <p class="detected-note" hidden>This computer</p>
-        <p>Windows 11 24H2 or later, on x64.</p>
+        <p>Windows 11 24H2 or later, on x64{DOWNLOADS.windowsArm64 && ' or ARM64'}.</p>
         <ul class="files">
           <li><a href={DOWNLOADS.windows.url} translate="no">{DOWNLOADS.windows.name}</a> <span>{DOWNLOADS.windows.size}</span></li>
+          {DOWNLOADS.windowsArm64 && (
+            <li><a href={DOWNLOADS.windowsArm64.url} translate="no">{DOWNLOADS.windowsArm64.name}</a> <span>{DOWNLOADS.windowsArm64.size}</span></li>
+          )}
         </ul>
       </div>
       <div class="platform-body">
         {/* PLACEHOLDER: the guide to installing without a signature. The Windows distribution step (S3.6)
             drafts its final wording; the README's Install section and the hero link here. */}
         <ol class="steps">
-          <li>Download the installer. If your browser says the file isn’t commonly downloaded, choose to keep it.</li>
+          <li>
+            Download the installer for your PC{DOWNLOADS.windowsArm64 && ', x64 or ARM64'}. If your browser says the
+            file isn’t commonly downloaded, choose to keep it.
+          </li>
           <li>
             Run it. The installer is not code signed yet, so SmartScreen says “Windows protected your PC”: click
             “More info”, then “Run anyway”.
@@ -94,7 +100,7 @@ import { DOWNLOADS } from '../lib/release';
     <div>
       <h3>Requirements</h3>
       <dl class="reqs">
-        <div><dt>System</dt><dd>A Mac with Apple silicon on macOS 26 or later, or a PC with Windows 11 24H2 or later on x64</dd></div>
+        <div><dt>System</dt><dd>A Mac with Apple silicon on macOS 26 or later, or a PC with Windows 11 24H2 or later on x64{DOWNLOADS.windowsArm64 && ' or ARM64'}</dd></div>
         <div><dt>Disk</dt><dd>About 2.5&nbsp;GB for the main speech model, plus the meetings you keep</dd></div>
         <div><dt>Microphone</dt><dd>Any</dd></div>
       </dl>

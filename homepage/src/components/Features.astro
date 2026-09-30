@@ -2,7 +2,8 @@
 // What else it does, as the instrument's spec sheet: grouped definition lists, no cards. Facts come from
 // the README's "What it does" and "Privacy" sections, checked against the 1.0 source: the default keys
 // (ink-ffi's voice.rs), detection's offer and "Record now" (the Mac's MeetingModel), the retention
-// choices (retention.days) and the consents (ink_pipeline::consent).
+// choices (retention.days), the consents (ink_pipeline::consent) and Windows's providers (ink_llm's
+// Provider).
 ---
 
 <section class="features wrap" id="features" aria-labelledby="features-title">
@@ -10,7 +11,8 @@
     <h2 id="features-title">What else it does.</h2>
     <p class="section-intro">
       Two jobs, dictation and meeting notes, both on your machine. The features that need a language model run
-      on Apple’s on-device model on the Mac, and each asks for your OK first.
+      on Apple’s on-device model on the Mac, and on Windows on a provider you set up with your own API key. Each
+      asks for your OK first.
     </p>
   </div>
 
@@ -37,11 +39,12 @@
         <dd>Trigger phrases that expand to full text.</dd>
       </div>
       <div class="spec-wide">
-        <dt>Polish and voice edit, on the Mac</dt>
+        <dt>Polish and voice edit</dt>
         <dd>
           Optional and off by default. Polish tidies a dictation before it is typed. Voice edit, on a key of its
-          own, rewrites the text you selected to a spoken instruction. Both run on Apple’s on-device model, so
-          your words stay on the Mac.
+          own, rewrites the text you selected to a spoken instruction. On the Mac both run on Apple’s on-device
+          model, so your words stay on the Mac. On Windows they run on the provider you set up (OpenAI,
+          Anthropic, Groq, OpenRouter, or an OpenAI-compatible server you name), which receives the words.
         </dd>
       </div>
     </dl>
@@ -69,10 +72,10 @@
         </dd>
       </div>
       <div>
-        <dt>Summary, Owed and Ask, on the Mac</dt>
+        <dt>Summary, Owed and Ask</dt>
         <dd>
           With your OK, a summary with the decisions and actions it cites, the promises made in the call kept
-          under Owed, and answers to your questions about the meeting.
+          under Owed, and answers to your questions about the meeting, from the same language model as polish.
         </dd>
       </div>
     </dl>
@@ -99,7 +102,7 @@
     <h3>What it does not do</h3>
     <ul class="not-built">
       <li>Run on Linux or on an Intel Mac. Inkwell 0.2 stays the last version for them.</li>
-      <li>Send your words to a cloud model. The language-model features run on the Mac’s own.</li>
+      <li>Send your words to a model you did not choose: on Windows, only to the provider you set up, and only for a feature you allowed.</li>
       <li>Transcribe an audio or video file, or export to TXT, SRT, JSON or CSV, as 0.2 did.</li>
     </ul>
   </div>
