@@ -397,6 +397,52 @@ public sealed class DropTests
         drop.Hide();
     }
 
+    /// <summary>
+    /// Review (S3.5b): the plain fallback draws the offer's detail on up to two lines above the
+    /// buttons, so the consent sentence shows whole (one line cut it after about 40 characters);
+    /// a panel without buttons keeps its one line. Measured with the fallback's own font.
+    /// </summary>
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    public unsafe void ThePlainFallbackShowsTheWholeConsentSentence(double scale)
+    {
+        int S(double dips) => (int)Math.Round(dips * scale);
+        var client = new RECT { right = S(DropLayout.WidthWithButtons), bottom = S(DropLayout.HeightWithButtons) };
+        var (title, detail, format) = DropFallback.Lines(buttons: true, client, scale);
+        Assert.True((format & DT.DT_WORDBREAK) != 0 && (format & DT.DT_SINGLELINE) == 0, "wraps");
+        Assert.True(title.bottom <= detail.top, "the title above the detail");
+        Assert.True(detail.bottom <= S(DropLayout.Button(0).Top), "above the buttons");
+
+        var dc = CreateCompatibleDC(HDC.NULL);
+        var font = DropFallback.Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
+        var before = SelectObject(dc, (HGDIOBJ)font.Value);
+        try
+        {
+            TEXTMETRICW metrics;
+            Assert.True(GetTextMetricsW(dc, &metrics) != 0);
+            var needed = detail;
+            var words = Offer.Detail;
+            fixed (char* w = words)
+            {
+                // The height the whole sentence takes, wrapped at the detail's width.
+                Assert.True(DrawTextW(dc, w, words.Length, &needed, DT.DT_CALCRECT | DT.DT_WORDBREAK | DT.DT_NOPREFIX | DT.DT_LEFT | DT.DT_TOP) > 0);
+            }
+            var height = needed.bottom - needed.top;
+            Assert.True(height > metrics.tmHeight, $"more than one line ({height} px, a line is {metrics.tmHeight} px)");
+            Assert.True(height <= detail.bottom - detail.top, $"{height} px fits the detail's {detail.bottom - detail.top} px");
+        }
+        finally
+        {
+            SelectObject(dc, before);
+            DeleteObject((HGDIOBJ)font.Value);
+            DeleteDC(dc);
+        }
+
+        var plain = new RECT { right = S(DropLayout.Width), bottom = S(DropLayout.Height) };
+        Assert.True((DropFallback.Lines(buttons: false, plain, scale).DetailFormat & DT.DT_SINGLELINE) != 0);
+    }
+
     private static unsafe RECT Rect(HWND hwnd)
     {
         RECT rect;

@@ -147,12 +147,7 @@ internal sealed unsafe class DropFallback : IDisposable
         _ = SetBkMode(dc, TRANSPARENT);
         var titleFont = Font(S(DropLayout.TitleSize), FW.FW_MEDIUM);
         var detailFont = Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
-        var left = S(DropLayout.TextLeft);
-        var right = client.right - S(DropLayout.TextRight);
-        // Centred on the panel, or on the part above the buttons when there are some.
-        var mid = text.Buttons is null ? (client.bottom - client.top) / 2 : S(DropLayout.Button(0).Top - 4) / 2;
-        var titleRect = new RECT { left = left, top = mid - S(20), right = right, bottom = mid - S(1) };
-        var detailRect = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(22) };
+        var (titleRect, detailRect, detailFormat) = Lines(text.Buttons is not null, client, scale);
         var oldFont = SelectObject(dc, (HGDIOBJ)titleFont.Value);
         SetTextColor(dc, Colour(text.Tone == DropTone.Plain ? Palette.Muted : Palette.Seal));
         fixed (char* t = text.Title)
@@ -163,7 +158,7 @@ internal sealed unsafe class DropFallback : IDisposable
         SetTextColor(dc, Colour(Palette.Ink));
         fixed (char* d = text.Detail)
         {
-            _ = DrawTextW(dc, d, text.Detail.Length, &detailRect, DT.DT_LEFT | DT.DT_TOP | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
+            _ = DrawTextW(dc, d, text.Detail.Length, &detailRect, detailFormat);
         }
         if (text.Buttons is { } buttons)
         {
@@ -199,7 +194,27 @@ internal sealed unsafe class DropFallback : IDisposable
         EndPaint(hwnd, &ps);
     }
 
-    private static HFONT Font(int pixels, int weight)
+    /// <summary>
+    /// Where the two lines go in a panel whose client area is <paramref name="client"/>, and how the
+    /// detail is drawn. Centred on the panel, one line each. With buttons (the consent offer), over
+    /// them, the detail on up to two lines, as the ink's Drop draws it: the offer's consent
+    /// sentence is the one line the Drop must not cut.
+    /// </summary>
+    internal static (RECT Title, RECT Detail, uint DetailFormat) Lines(bool buttons, RECT client, double scale)
+    {
+        int S(double dips) => (int)Math.Round(dips * scale);
+        var left = S(DropLayout.TextLeft);
+        var right = client.right - S(DropLayout.TextRight);
+        var mid = buttons ? S(25) : (client.bottom - client.top) / 2;
+        var title = new RECT { left = left, top = mid - S(20), right = right, bottom = mid - S(1) };
+        var detail = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(buttons ? 41 : 22) };
+        var format = (uint)(DT.DT_LEFT | DT.DT_TOP | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX
+            | (buttons ? DT.DT_WORDBREAK | DT.DT_EDITCONTROL : DT.DT_SINGLELINE));
+        return (title, detail, format);
+    }
+
+    /// <summary>The fallback's face at <paramref name="pixels"/> high.</summary>
+    internal static HFONT Font(int pixels, int weight)
     {
         fixed (char* face = "Segoe UI")
         {
