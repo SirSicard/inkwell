@@ -7,3 +7,11 @@
 
 winuiex          verified=no  the LICENSE of dotMorten/WinUIEx at the commit its 2.9.3 package names (72f2975d2a237c0d7ad1113fe617d5894e66feb6): the text is the MIT licence under the copyright line of the package's manifest
 windows-sdk-net  verified=no  the Windows SDK licence terms the package's manifest links (https://aka.ms/WinSDKLicenseURL): the text is the manifest's copyright line and that link
+onnxruntime      verified=no  the LICENSE and ThirdPartyNotices.txt of microsoft/onnxruntime at v1.27.0, the version sherpa-onnx 1.13.4's Windows archive ships (the archive carries neither): the licence text is the LICENSE of onnxruntime 1.19.2's Python package; the notices are a copy of v1.27.0's taken in review (sha256 0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2)
+nlohmann-json    verified=no  the LICENSE.MIT of nlohmann/json at v3.12.0, the version compiled into sherpa-onnx 1.13.4's library (json_abi_v3_12_0): the text is the MIT licence under the copyright line of 3.12.0's json.hpp
+kaldi-decoder    verified=no  the LICENSE (and any NOTICE) of kaldi-decoder at the commit sherpa-onnx 1.13.4 builds: the text is the Apache License, which it is taken to be under
+kaldifst         verified=no  the LICENSE (and any NOTICE) of kaldifst at the version sherpa-onnx 1.13.4 builds: the text is the Apache License, which it is taken to be under
+openfst          verified=no  the COPYING (and any NOTICE) of the OpenFst sherpa-onnx 1.13.4 builds: the text is the Apache License, which it is taken to be under
+simple-sentencepiece verified=no  the LICENSE of simple-sentencepiece at the version sherpa-onnx 1.13.4 builds, and the notice in its csrc/darts.h: the text is the Apache License, which it is taken to be under, and darts.h is taken to be SentencePiece's Darts-clone
+kaldi-native-fbank verified=no  the LICENSE (and any NOTICE) of kaldi-native-fbank at the version sherpa-onnx 1.13.4 builds: the text is the Apache License, which it is taken to be under
+hclust-cpp       verified=no  the LICENSE of hclust-cpp (fastclustercpp) at the version sherpa-onnx 1.13.4 builds: the text is fastcluster's own notice, the Mac's (from FluidAudio's copy), which hclust-cpp's C++ port is taken to keep; its own copyright lines may add to it

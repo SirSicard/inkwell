@@ -591,7 +591,7 @@ enum Rebind {
 }
 
 /// The live-partials engine as the router picks it at each take (on the Mac, FluidAudio's
-/// Parakeet, registered by the shell).
+/// Parakeet, registered by the shell; on Windows, Parakeet on sherpa-onnx, a registry model).
 struct RoutedLive {
     shared: Arc<Shared>,
 }
@@ -600,7 +600,8 @@ impl StreamingEngine for RoutedLive {
     fn info(&self) -> EngineInfo {
         match self.shared.router.route(Job::LivePartials) {
             Ok(Route::External { engine, .. }) => engine.info(),
-            _ => EngineInfo {
+            Ok(Route::Model(row)) => row.info(),
+            Err(_) => EngineInfo {
                 id: "none".into(),
                 jobs: vec![Job::LivePartials],
                 licence: String::new(),
@@ -618,8 +619,11 @@ impl StreamingEngine for RoutedLive {
                 engine: ExternalEngine::Streaming(engine),
                 ..
             } => engine.open_stream(channel, events),
+            Route::Model(row) => {
+                crate::gate::live_model(&self.shared, &row).open_stream(channel, events)
+            }
             other => Err(EngineError::Failed(format!(
-                "live partials route to {}, which this build cannot stream",
+                "live partials route to {}, which is not a streaming engine",
                 other.id()
             ))),
         }

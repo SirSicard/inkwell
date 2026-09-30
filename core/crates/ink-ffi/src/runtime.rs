@@ -278,26 +278,19 @@ impl Clock for StdClock {
 
 /// The loader for this build's adapters.
 fn adapters(models: &ModelDir) -> Arc<dyn Loader<Model>> {
-    #[cfg(feature = "engine-llama")]
-    {
-        Arc::new(Adapters {
-            qwen: ink_engines::llama::QwenAsrLoader::new(models.clone()),
-        })
-    }
-    #[cfg(not(feature = "engine-llama"))]
-    {
-        let _ = models;
-        Arc::new(Adapters)
-    }
+    Arc::new(Adapters {
+        #[cfg(feature = "engine-llama")]
+        qwen: ink_engines::llama::QwenAsrLoader::new(models.clone()),
+        models: models.clone(),
+    })
 }
 
-#[cfg(feature = "engine-llama")]
 struct Adapters {
+    #[cfg(feature = "engine-llama")]
     qwen: ink_engines::llama::QwenAsrLoader,
+    /// For the rows ink-engines loads itself (Windows' Parakeet, `load_speech`).
+    models: ModelDir,
 }
-
-#[cfg(not(feature = "engine-llama"))]
-struct Adapters;
 
 impl Loader<Model> for Adapters {
     fn load(&self, row: &EngineRow) -> Result<Model, EngineError> {
@@ -305,10 +298,23 @@ impl Loader<Model> for Adapters {
         if row.runtime == ink_engines::Runtime::LlamaCpp {
             return self.qwen.load(row).map(|m| Box::new(m) as Model);
         }
-        Err(EngineError::ModelMissing(format!(
-            "{}: this build has no adapter for its runtime",
-            row.id
-        )))
+        // Says by its error when this build has no adapter for the row's runtime.
+        ink_engines::load_speech(&self.models, row)
+    }
+}
+
+/// Whether this machine has a GPU the speech engines use, for the router's dictation choice
+/// ([`Router::with_gpu_probe`]). On Windows, the GPU llama.cpp found (Vulkan): without one, Qwen3-ASR
+/// takes seconds for a dictation, and the router gives it to Parakeet where that is installed.
+/// The Mac always has its GPU (Metal).
+#[cfg(all(windows, feature = "engine-llama"))]
+fn has_gpu() -> bool {
+    match ink_engines::llama::compute() {
+        Ok(compute) => compute.is_gpu(),
+        Err(e) => {
+            log::warn!("dictation routing: llama.cpp did not start ({e}); taken as no GPU");
+            false
+        }
     }
 }
 
@@ -554,10 +560,13 @@ impl Core {
         let meetings = parts.meetings;
         // Read before anything can call a model.
         let local_only = LocalOnly::new(crate::llms::local_only_setting(parts.store.as_ref()));
+        let router = Router::new(&parts.registry, parts.models.clone(), os);
+        #[cfg(all(windows, feature = "engine-llama"))]
+        let router = router.with_gpu_probe(has_gpu);
         let shared = Arc::new(Shared {
             events: hub.events(),
-            models: parts.models.clone(),
-            router: Router::new(&parts.registry, parts.models, os),
+            models: parts.models,
+            router,
             residency: Residency::new(parts.loader, parts.clock.clone()),
             store: parts.store,
             clock: parts.clock,

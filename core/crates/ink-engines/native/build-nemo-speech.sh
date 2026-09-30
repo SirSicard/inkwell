@@ -7,7 +7,8 @@
 #           pinned commit below, with its ggml submodule initialised
 #           (`git submodule update --init ggml`). Nothing is downloaded here.
 # <prefix>  where to install: <prefix>/lib holds libnemo_speech_asr_c, NeMo's own ggml libraries
-#           and every library they load from outside the OS, <prefix>/include/nemo_speech the C
+#           and every library they load from outside the OS (on Windows <prefix>/bin holds the
+#           DLLs and <prefix>/lib the C API's import library), <prefix>/include/nemo_speech the C
 #           headers, and <prefix>/share/inkwell/nemo-speech.manifest the commit, the build's
 #           GGML_NATIVE and each library's SHA-256. Point NEMO_SPEECH_DIR at it when building
 #           ink-engines with `--features engine-nemo`.
@@ -49,6 +50,12 @@
 # local build whatever is installed (`brew install sentencepiece abseil`). The configuration is the
 # upstream `metal-diar` preset (Metal, standalone diarization, unpatched-ggml code paths) with the
 # CLI off.
+#
+# On Windows (Git Bash inside a Visual Studio developer environment, with the Vulkan SDK for the
+# shader compiler): the upstream `vulkan-diar` preset, built with MSVC. ENGINE_DEPS_DIR is required:
+# SentencePiece and Abseil are the pinned static libraries, linked into NeMo's own DLL, so the
+# prefix carries NeMo's DLLs and its ggml's and nothing else. The manifest hashes every DLL in
+# <prefix>/bin and the C API's import library.
 set -euo pipefail
 
 NEMO_COMMIT=97a15afa5caa9bce5baaa86c1184103877af4101
@@ -86,11 +93,45 @@ fi
 
 platform=()
 macos=0
-if [ "$(uname -s)" = Darwin ]; then
-    macos=1
-    deployment_target="${MACOSX_DEPLOYMENT_TARGET:-26.0}"
-    platform+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment_target}")
-fi
+windows=0
+preset=metal-diar
+case "$(uname -s)" in
+    Darwin)
+        macos=1
+        deployment_target="${MACOSX_DEPLOYMENT_TARGET:-26.0}"
+        platform+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment_target}")
+        ;;
+    MINGW* | MSYS*)
+        windows=1
+        preset=vulkan-diar
+        command -v cl >/dev/null 2>&1 || {
+            echo "error: no cl on PATH: run from a Visual Studio developer environment" >&2
+            exit 1
+        }
+        [ -n "${ENGINE_DEPS_DIR:-}" ] || {
+            echo "error: set ENGINE_DEPS_DIR (build-sentencepiece-abseil.sh) on Windows" >&2
+            exit 1
+        }
+        [ -n "${VULKAN_SDK:-}" ] || {
+            echo "error: VULKAN_SDK is not set: the Vulkan backend needs the Vulkan SDK" >&2
+            exit 1
+        }
+        platform+=(
+            -DCMAKE_C_COMPILER=cl
+            -DCMAKE_CXX_COMPILER=cl
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
+            # The Visual C++ runtime is the system's (the Rust side needs it too), not a copy in
+            # the prefix under Microsoft's redistribution terms.
+            -DCMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP=ON
+            # ggml-vulkan's find_package(SPIRV-Headers): the SDK's copy, named outright.
+            "-DSPIRV-Headers_DIR=$(cygpath -m "${VULKAN_SDK}")/Lib/cmake/SPIRV-Headers"
+        )
+        ;;
+esac
+# CMake on Windows takes Windows paths (C:/...), not Git Bash's (/c/...).
+native() {
+    if [ "${windows}" = 1 ]; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
+}
 
 # SentencePiece and Abseil: the pinned builds, named outright so that no other install is found
 # first, by the names NeMo-Speech.cpp's src/asr/CMakeLists.txt reads at the pinned commit (on
@@ -103,10 +144,21 @@ fi
 deps=()
 deps_lib=""
 if [ -n "${ENGINE_DEPS_DIR:-}" ]; then
-    deps_dir="$(cd "${ENGINE_DEPS_DIR}" && pwd -P)"
+    deps_dir="$(native "$(cd "${ENGINE_DEPS_DIR}" && pwd -P)")"
     deps_lib="${deps_dir}/lib"
+    if [ "${windows}" = 1 ]; then
+        spm_lib=sentencepiece.lib
+        # A static library carries no link dependencies, and NeMo's CMake adds only some of
+        # Abseil's: the rest of what SentencePiece links (its src/CMakeLists.txt, SPM_LIBS) goes in
+        # after it, as the Abseil package's targets.
+        spm_absl=";absl::status;absl::status_builder;absl::strings;absl::flags;absl::flags_parse"
+        spm_absl+=";absl::log;absl::log_initialize;absl::check;absl::random_random;absl::time"
+    else
+        spm_lib=libsentencepiece.dylib
+        spm_absl=""
+    fi
     for f in share/inkwell/engine-deps.manifest lib/cmake/absl/abslConfig.cmake \
-        lib/libsentencepiece.dylib include/sentencepiece_processor.h; do
+        "lib/${spm_lib}" include/sentencepiece_processor.h; do
         [ -e "${deps_dir}/${f}" ] || {
             echo "error: ENGINE_DEPS_DIR has no ${f}: install it with build-sentencepiece-abseil.sh" >&2
             exit 1
@@ -115,7 +167,7 @@ if [ -n "${ENGINE_DEPS_DIR:-}" ]; then
     deps+=(
         "-DCMAKE_PREFIX_PATH=${deps_dir}"
         "-Dabsl_DIR=${deps_dir}/lib/cmake/absl"
-        "-DSENTENCEPIECE_LIB=${deps_lib}/libsentencepiece.dylib"
+        "-DSENTENCEPIECE_LIB=${deps_lib}/${spm_lib}${spm_absl}"
         "-DSENTENCEPIECE_INCLUDE_DIR=${deps_dir}/include"
         -DCMAKE_DISABLE_FIND_PACKAGE_unofficial-sentencepiece=ON
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON
@@ -127,7 +179,10 @@ elif [ "${macos}" = 1 ]; then
     echo "         (Homebrew). Fine for this Mac's tests; a release bundles the pinned builds." >&2
 fi
 
-cmake --fresh -S "${src}" -B "${build}" --preset metal-diar \
+mkdir -p "${prefix}"
+prefix="$(native "$(cd "${prefix}" && pwd -P)")"
+build="$(native "${build}")"
+cmake --fresh -S "$(native "${src}")" -B "${build}" --preset "${preset}" \
     -DNEMO_SPEECH_BUILD_CLI=OFF \
     -DNEMO_SPEECH_BUILD_MIC_CAPTURE=OFF \
     -DGGML_NATIVE=OFF \
@@ -207,16 +262,30 @@ mkdir -p "$(dirname "${manifest}")"
             echo "# bundled ${o}"
         done
     fi
-    (
-        cd "${prefix}"
-        for f in lib/*; do
-            if [ -f "${f}" ] && [ ! -L "${f}" ]; then
-                case "${f}" in
-                    *.dylib | *.so | *.so.*) echo "sha256 $(sha256 "${f}") ${f}" ;;
-                esac
-            fi
-        done
-    )
+    if [ "${windows}" = 1 ]; then
+        echo "# Windows: the DLLs this build installed in bin/ and the C API's import library;"
+        echo "# SentencePiece and Abseil are linked statically from ENGINE_DEPS_DIR."
+        # What this build installed, not whatever the prefix already held.
+        while IFS= read -r f; do
+            f="${f%$'\r'}" # CMake writes the file with CRLF line ends on Windows.
+            case "${f}" in
+                "${prefix}"/bin/*.dll | "${prefix}"/lib/nemo_speech_asr_c.lib)
+                    echo "sha256 $(sha256 "${f}") ${f#"${prefix}"/}"
+                    ;;
+            esac
+        done <"${build}/install_manifest.txt"
+    else
+        (
+            cd "${prefix}"
+            for f in lib/*; do
+                if [ -f "${f}" ] && [ ! -L "${f}" ]; then
+                    case "${f}" in
+                        *.dylib | *.so | *.so.*) echo "sha256 $(sha256 "${f}") ${f}" ;;
+                    esac
+                fi
+            done
+        )
+    fi
 } >"${manifest}"
 
 echo

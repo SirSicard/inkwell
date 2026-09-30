@@ -1,5 +1,6 @@
-//! Links NeMo-Speech.cpp's diarization library for `engine-nemo`. Without that feature it does
-//! nothing, but for one line of metadata: whether `engine-silero` is on (for ink-ffi's build
+//! Links NeMo-Speech.cpp's diarization library for `engine-nemo`, and sherpa-onnx's for
+//! `engine-sherpa` (`sherpa()` at the end). Without those features it does nothing, but for one
+//! line of metadata: whether `engine-silero` is on (for ink-ffi's build
 //! script, which loads Silero for dictation when it is).
 //!
 //! The library is built outside cargo (`native/build-nemo-speech.sh`) and found through
@@ -14,6 +15,10 @@
 //!   to the CPU of the Mac that built it (whose newer instructions would stop an older Mac). A
 //!   manifest from before the script recorded it is refused too: that prefix was built native, and
 //!   links SentencePiece and Abseil from where Homebrew installed them.
+//!
+//! On Windows there is no rpath: the manifest's DLLs are copied into this build's `OUT_DIR` and that
+//! directory is declared as a native search path, which cargo puts on `PATH` when it runs this
+//! package's tests and its dependents' (cargo adds only search paths inside the target directory).
 //!
 //! `INK_NEMO_CHECK_ONLY=1` is for type-checking (CI's clippy) where the library is not built: it
 //! skips the library, the manifest and the link, so a binary or test built that way does not link.
@@ -58,6 +63,9 @@ fn main() {
     if env::var_os("CARGO_FEATURE_ENGINE_SILERO").is_some() {
         println!("cargo:silero=1");
     }
+    if env::var_os("CARGO_FEATURE_ENGINE_SHERPA").is_some() {
+        sherpa();
+    }
     if env::var_os("CARGO_FEATURE_ENGINE_NEMO").is_none() {
         return;
     }
@@ -82,8 +90,8 @@ fn main() {
         }
         (Some(dir), false) => {
             check_headers(&dir);
-            let library = check_manifest(&dir);
-            link(&dir, &library);
+            let (library, listed) = check_manifest(&dir);
+            link(&dir, &library, &listed);
         }
     }
 }
@@ -110,8 +118,9 @@ fn check_headers(dir: &Path) {
     }
 }
 
-/// Checks the manifest and every library it lists, and returns the library to link.
-fn check_manifest(dir: &Path) -> PathBuf {
+/// Checks the manifest and every library it lists, and returns the library to link and every
+/// library listed.
+fn check_manifest(dir: &Path) -> (PathBuf, Vec<PathBuf>) {
     let path = dir.join(MANIFEST);
     println!("cargo:rerun-if-changed={}", path.display());
     let text = fs::read_to_string(&path).unwrap_or_else(|e| {
@@ -176,13 +185,28 @@ fn check_manifest(dir: &Path) -> PathBuf {
             library.display()
         ));
     }
-    library
+    (library, listed)
 }
 
-fn link(dir: &Path, library: &Path) {
+fn link(dir: &Path, library: &Path, listed: &[PathBuf]) {
     let lib = dir.join("lib");
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=dylib=nemo_speech_asr_c");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // The import library links; the DLLs are found at run time, beside the binary or on
+        // PATH. Copies of the checked DLLs in OUT_DIR, which cargo puts on PATH for tests.
+        let dlls: Vec<&Path> = listed
+            .iter()
+            .map(PathBuf::as_path)
+            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")))
+            .collect();
+        if dlls.is_empty() {
+            fail(&format!("{MANIFEST} lists no DLL"));
+        }
+        let out = copy_dlls(&dlls, "nemo-bin");
+        println!("cargo:lib_dir={}", out.display());
+        return;
+    }
     println!("cargo:lib_dir={}", lib.display());
     // This package's own tests and examples find the library where it was installed. The Mac app
     // bundles the prefix's libraries in Contents/Frameworks and gives itself the rpath there
@@ -197,6 +221,142 @@ fn link(dir: &Path, library: &Path) {
              package's tests may not find it",
             library.display()
         ),
+    }
+}
+
+/// Copies checked DLLs into `OUT_DIR/<subdir>` and declares it a native search path, which cargo
+/// puts on `PATH` when it runs this package's tests and its dependents' (it adds only search paths
+/// inside the target directory). Returns the directory.
+fn copy_dlls(dlls: &[&Path], subdir: &str) -> PathBuf {
+    let out =
+        PathBuf::from(env::var_os("OUT_DIR").unwrap_or_else(|| fail("no OUT_DIR"))).join(subdir);
+    fs::create_dir_all(&out).unwrap_or_else(|e| fail(&format!("creating {}: {e}", out.display())));
+    for dll in dlls {
+        let name = dll
+            .file_name()
+            .unwrap_or_else(|| fail("a DLL path with no name"));
+        fs::copy(dll, out.join(name))
+            .unwrap_or_else(|e| fail(&format!("copying {}: {e}", dll.display())));
+    }
+    println!("cargo:rustc-link-search=native={}", out.display());
+    out
+}
+
+/// sherpa-onnx 1.13.4's `win-x64-shared-MD-Release-no-tts-lib` archive: the files `engine-sherpa`
+/// uses, below the unpacked directory, with their SHA-256s (the archive's own is `dec41ab39449…`,
+/// as GitHub publishes it). `src/sherpa.rs` declares that release's C API.
+const SHERPA_FILES: [(&str, &str); 5] = [
+    (
+        "lib/sherpa-onnx-c-api.lib",
+        "806798a9fa6da0027f50ee6d8c0fe94f62f4a3f0947c3f1a96fe42acbee97d84",
+    ),
+    // Linked for one call: the adapter asks the ONNX Runtime the process loaded for its version.
+    (
+        "lib/onnxruntime.lib",
+        "b9fc3cd678257d88a111b0773ede4bfceaf0fe95daab4379f2b2b37348a68781",
+    ),
+    (
+        "lib/sherpa-onnx-c-api.dll",
+        "5319701a29c7b1b82aad8ad8ade890a2590440659cb874d8da400dff32f587c2",
+    ),
+    (
+        "lib/onnxruntime.dll",
+        "f4dcddcbe283c19a5046340460c23f64869132a299904d3b62ec5c353f5b56ed",
+    ),
+    (
+        "lib/onnxruntime_providers_shared.dll",
+        "92cee8b204ef376f3f5f52be94d3dc620e099aa3aeb8c5e2d17b455d6b912ef4",
+    ),
+];
+
+/// `engine-sherpa`: checks the unpacked sherpa-onnx libraries named by `SHERPA_ONNX_DIR` against
+/// [`SHERPA_FILES`], links the C API's import library, and puts the DLLs where tests find them.
+/// Windows only: the Mac runs Parakeet in FluidAudio. `INK_SHERPA_CHECK_ONLY=1` type-checks the
+/// adapter without the libraries (binaries and tests then do not link), on any OS.
+fn sherpa() {
+    println!("cargo:rerun-if-env-changed=SHERPA_ONNX_DIR");
+    println!("cargo:rerun-if-env-changed=INK_SHERPA_CHECK_ONLY");
+    match env::var("INK_SHERPA_CHECK_ONLY") {
+        Err(env::VarError::NotPresent) => {}
+        Ok(value) if value == "1" => {
+            println!(
+                "cargo:warning=engine-sherpa in check-only mode (INK_SHERPA_CHECK_ONLY=1): \
+                 sherpa-onnx is not linked, so binaries and tests will not link"
+            );
+            return;
+        }
+        _ => fail("INK_SHERPA_CHECK_ONLY must be 1 or unset"),
+    }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        fail(
+            "engine-sherpa links sherpa-onnx's prebuilt Windows libraries; on other OSes, \
+             type-check it with INK_SHERPA_CHECK_ONLY=1",
+        );
+    }
+    let dir = env::var_os("SHERPA_ONNX_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            fail(
+                "engine-sherpa needs SHERPA_ONNX_DIR: the unpacked \
+                 sherpa-onnx-v1.13.4-win-x64-shared-MD-Release-no-tts-lib archive. To \
+                 type-check without it, set INK_SHERPA_CHECK_ONLY=1.",
+            )
+        });
+    let mut dlls = Vec::new();
+    for (file, pinned) in SHERPA_FILES {
+        let path = dir.join(file);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let found = sha256_of(&path, &format!("SHERPA_ONNX_DIR has no {file}"));
+        if found != pinned {
+            fail(&format!(
+                "{} is not sherpa-onnx 1.13.4's no-tts build (sha256 {found})",
+                path.display()
+            ));
+        }
+        if file.ends_with(".dll") {
+            dlls.push(path);
+        }
+    }
+    println!(
+        "cargo:rustc-link-search=native={}",
+        dir.join("lib").display()
+    );
+    println!("cargo:rustc-link-lib=dylib=sherpa-onnx-c-api");
+    println!("cargo:rustc-link-lib=dylib=onnxruntime");
+    let dlls: Vec<&Path> = dlls.iter().map(PathBuf::as_path).collect();
+    let out = copy_dlls(&dlls, "sherpa-bin");
+    beside_executables(&out, &dlls);
+}
+
+/// Copies `dlls` beside the executables cargo builds: the binaries (`<profile>/`) and the tests
+/// (`<profile>/deps/`), `out` being `<profile>/build/<package>-<hash>/out/<subdir>`. Windows looks
+/// for a DLL's dependencies in the executable's directory, then System32, and on `PATH` last, and
+/// Windows 11 has its own, older onnxruntime.dll in System32: found through `PATH`, sherpa-onnx gets
+/// that one and crashes the process. The app ships them beside its executable the same way. A copy
+/// already there with the same contents is left alone (a test may have it loaded).
+fn beside_executables(out: &Path, dlls: &[&Path]) {
+    let profile = out
+        .ancestors()
+        .nth(4)
+        .unwrap_or_else(|| fail(&format!("{} is not inside a profile", out.display())));
+    for dir in [profile.to_path_buf(), profile.join("deps")] {
+        fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| fail(&format!("creating {}: {e}", dir.display())));
+        for dll in dlls {
+            let name = dll
+                .file_name()
+                .unwrap_or_else(|| fail("a DLL path with no name"));
+            let to = dir.join(name);
+            if to.is_file() && sha256_of(&to, "") == sha256_of(dll, "") {
+                continue;
+            }
+            fs::copy(dll, &to).unwrap_or_else(|e| {
+                fail(&format!(
+                    "copying {} beside the executables: {e}",
+                    dll.display()
+                ))
+            });
+        }
     }
 }
 

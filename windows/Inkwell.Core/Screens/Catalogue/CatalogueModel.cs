@@ -103,9 +103,9 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     public static string Name(string id) => id switch
     {
         "qwen3-asr-1.7b-q8" => "Qwen3-ASR 1.7B",
-        "fluidaudio-parakeet-tdt-0.6b-v3" or "fluidaudio-parakeet-tdt-0.6b-v3-offline" => "Parakeet TDT v3",
+        "fluidaudio-parakeet-tdt-0.6b-v3" or "fluidaudio-parakeet-tdt-0.6b-v3-offline" or "parakeet-tdt-0.6b-v3-int8" => "Parakeet TDT v3",
         "nemotron-3-diarization-q8" => "Nemotron-3-Diarization",
-        "silero-vad-v6" => "Silero VAD",
+        "silero-vad-v6-16k" => "Silero VAD",
         _ => id,
     };
 

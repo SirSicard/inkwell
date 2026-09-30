@@ -48,7 +48,8 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
 10. **Engines per job**, chosen by measurement (word error rate on public human-labelled sets:
     AMI meetings and FLEURS English). The models are listed in [MODEL-WEIGHTS.md](MODEL-WEIGHTS.md).
     - Dictation final and meeting final: Qwen3-ASR 1.7B via llama.cpp (Metal on the Mac, Vulkan or
-      CPU on Windows). One resident model serves both.
+      CPU on Windows). One resident model serves both. On a Windows PC without a GPU, dictation
+      goes to Parakeet instead (below).
     - Live partials: Parakeet TDT v3, via FluidAudio on the Mac and sherpa-onnx on Windows.
     - Far-end diarization: Nemotron-3-Diarization via NeMo-Speech.cpp.
 11. **A gain stage before every engine.** A per-utterance robust-peak gain for dictation and file
@@ -172,6 +173,15 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   Homebrew's SentencePiece and Abseil (built for a Mac's own, newer macOS) fails that last check; `INK_ALLOW_NEWER_MACOS=1`
   lets a local build through with a warning, and a release (`--timestamp`) refuses it. Every
   bundled library must also be one `THIRD_PARTY.md` covers, by name.
+- **On Windows** the same two scripts run in Git Bash inside a Visual Studio developer environment.
+  NeMo-Speech.cpp builds with the upstream `vulkan-diar` preset (MSVC, the dynamic C runtime).
+  SentencePiece and Abseil are built from the same pinned tarballs as static libraries and linked
+  into NeMo's own DLL, so the prefix's `bin/` holds only NeMo's DLLs and its ggml's. The Visual C++
+  runtime is the system's. The manifest hashes those DLLs and the C API's import library in
+  `lib/`. With no rpath on Windows, `build.rs` copies the checked DLLs into its `OUT_DIR` and
+  declares that directory as a native search path, which cargo puts on `PATH` for tests. The
+  diarizer runs on GPU 0 (Vulkan) and, where that does not load, on the CPU (about ten times
+  slower: 23× real time on a 12-core desktop, not a measurement, as other builds shared it).
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
   apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
@@ -184,6 +194,35 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   as shared libraries installed by `@rpath`; `build-nemo-speech.sh` builds against them when
   `ENGINE_DEPS_DIR` names their prefix, as the release does. The build manifest published with each
   release records their versions and hashes.
+
+## Parakeet on Windows (sherpa-onnx)
+
+On the Mac, Parakeet runs in FluidAudio on the Neural Engine. On Windows the core runs it itself:
+the int8 ONNX conversion of the same weights, on sherpa-onnx's C API, on the CPU (`engine-sherpa`,
+`ink-engines/src/sherpa.rs`), as a registry model.
+
+- **Not built here.** `SHERPA_ONNX_DIR` names sherpa-onnx 1.13.4's prebuilt "shared, MD, Release,
+  no-tts" archive, unpacked; `build.rs` checks each file it uses against its SHA-256 before linking.
+  The no-tts build carries no espeak-ng (GPL-3.0). The sherpa-onnx crates are not used: their build
+  script downloads archives. In CI the adapter is type-checked without the libraries
+  (`INK_SHERPA_CHECK_ONLY=1`); the real-model tests run locally.
+- **Its DLLs sit beside the executable.** Windows 11 has its own, older `onnxruntime.dll` in
+  System32, which Windows finds before anything on `PATH`, and sherpa-onnx given that one crashes
+  the process. So the app ships `sherpa-onnx-c-api.dll`, `onnxruntime.dll` and
+  `onnxruntime_providers_shared.dll` beside its executable, `build.rs` copies them beside the test
+  and binary executables too, and the adapter refuses to load (with an error that says why) when
+  the ONNX Runtime the process loaded is not the archive's.
+- **Live partials**: [`TrailingWindow`](../core/crates/ink-engines/src/live.rs) re-decodes the
+  utterance not yet settled every half second, the Mac's scheme ported (hide the newest 0.16 s;
+  settle on a 0.8 s pause or at 12 s). Each window goes through the router and residency like any
+  job, so live partials and dictation share one loaded copy. A still window (nothing pending, a
+  stationary speech band: silence, room tone, hum) is not decoded, so a quiet side costs no CPU.
+- **Dictation on a PC without a GPU.** There Qwen3-ASR takes 1.6-1.9 s for 5 s of speech, and
+  Parakeet about 0.3 s (not a measurement: other builds shared the machine), at 7.2 % WER on FLEURS
+  (level-normalised) against Qwen3-ASR's 4.3 %. So on such a machine the router gives dictation to
+  Parakeet first, whatever the error rates (`Router::with_gpu_probe`,
+  `Runtime::slow_on_cpu_for_dictation`); with a GPU, Qwen3-ASR dictates. A take longer than 90 s
+  is cut into windows, as Qwen3-ASR's are.
 
 ## Threads
 

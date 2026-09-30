@@ -538,3 +538,64 @@ fn an_abi_1_table_still_registers_an_offline_engine_and_nothing_newer() {
         Ok(Registration::Streaming(_))
     ));
 }
+
+/// Windows' live partials: a registry model the core runs itself (Parakeet on sherpa-onnx there),
+/// through the trailing-window scheme, loaded once through residency for both sides.
+#[test]
+fn a_registry_model_gives_a_meeting_its_live_partials() {
+    use common::{Behaviour, MockInstaller, MockLoader, test_row};
+    use ink_core::Job;
+    use ink_engines::{JobScore, Runtime};
+
+    let dir = TempDir::new("live-model");
+    let row = ink_engines::EngineRow {
+        scores: vec![JobScore {
+            job: Job::LivePartials,
+            wer: 27.9,
+        }],
+        runtime: Runtime::SherpaOnnx,
+        ..test_row("test-live")
+    };
+    // One segment per decode, over the whole window: settled when the stream finishes.
+    let loader = MockLoader::new(Behaviour::Say("live words".into()));
+    let installer = Arc::new(MockInstaller {
+        generation: loader.generation.clone(),
+        gate: None,
+        installs: AtomicUsize::new(0),
+    });
+    let (core, recorder) = common::start(&dir, &[row], loader.clone(), installer);
+    let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));
+    speech_wav(&mic, 2.5, 21);
+    speech_wav(&far, 2.0, 22);
+    core.command(
+        &serde_json::json!({"cmd": "replay_meeting", "mic": mic, "far": far, "pacing": "fast"})
+            .to_string(),
+    )
+    .unwrap();
+    recorder
+        .wait_for(Duration::from_secs(60), |v| {
+            v["type"] == "meeting.finished" || v["type"] == "meeting.failed"
+        })
+        .expect("the meeting ended");
+    let all = recorder.all();
+    for side in ["mic", "far"] {
+        let finals: Vec<_> = all
+            .iter()
+            .filter(|v| v["type"] == "meeting.final" && v["channel"] == side)
+            .collect();
+        assert_eq!(finals.len(), 1, "{side}: {finals:?}");
+        assert_eq!(finals[0]["text"], "live words");
+    }
+    assert!(
+        !all.iter()
+            .any(|v| v["type"] == "meeting.warning" && v["kind"] == "live_engine_failed"),
+        "{all:?}"
+    );
+    assert_eq!(
+        loader.journal.loads.lock().unwrap().len(),
+        1,
+        "one copy of the model, for both sides"
+    );
+    recorder.assert_valid();
+    core.shutdown();
+}

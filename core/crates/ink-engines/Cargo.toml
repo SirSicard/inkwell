@@ -34,6 +34,11 @@ engine-silero = ["dep:tract-onnx"]
 # Nemotron-3-Diarization through NeMo-Speech.cpp's C API. Links a library built outside cargo:
 # set NEMO_SPEECH_DIR to its install prefix (native/build-nemo-speech.sh; checked in build.rs).
 engine-nemo = []
+# Parakeet TDT v3 int8 on sherpa-onnx's C API, on the CPU (Windows). Links sherpa-onnx 1.13.4's
+# prebuilt "shared, MD, Release, no-tts" libraries, unpacked outside cargo: set SHERPA_ONNX_DIR to
+# that directory (build.rs checks each file's pinned SHA-256). The no-tts build carries no
+# espeak-ng (GPL-3.0). The sherpa-onnx crates are not used: their build script downloads archives.
+engine-sherpa = ["dep:serde_json"]
 
 [dependencies]
 ink-core.workspace = true
@@ -58,6 +63,8 @@ ink-audio = { path = "../ink-audio" }
 # which the VAD does not need.
 tract-onnx = { version = "=0.23.8", default-features = false, optional = true }
 
+# engine-sherpa: reads the recognizer's JSON result. Already in the tree (MIT OR Apache-2.0).
+serde_json = { version = "1", optional = true }
 # The machine's physical core count, the thread count for CPU inference (src/compute.rs). MIT OR
 # Apache-2.0; uses libc, already in the tree, on Unix and a Win32 call on Windows.
 num_cpus = "1.17.0"

@@ -59,6 +59,18 @@ pub enum Runtime {
     Tract,
 }
 
+impl Runtime {
+    /// Whether its speech models take seconds for a dictation on a machine without a GPU, so the
+    /// router gives dictation there to an installed engine that does not ([`Router`]). llama.cpp's
+    /// do: on a 12-core desktop's CPU, Qwen3-ASR 1.7B took about 1.6-1.9 s for 5 s of speech, and
+    /// Parakeet on sherpa-onnx about 0.3 s (not a measurement: other builds shared the machine).
+    ///
+    /// [`Router`]: crate::Router
+    pub fn slow_on_cpu_for_dictation(self) -> bool {
+        matches!(self, Self::LlamaCpp)
+    }
+}
+
 /// One job a row can fill, with its measured error rate on that job's benchmark.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct JobScore {
@@ -387,10 +399,10 @@ impl Registry {
 ///
 /// Each model's revision, hashes and sizes are confirmed when its adapter lands, and its row is
 /// only added then. Error rates are measured per job on the same sets for every row, so the router
-/// compares like with like: the meeting final on AMI IHM (three public meeting excerpts, 709
-/// reference words), the dictation final on FLEURS English dev as published (394 utterances).
-/// The diarizer and the VAD are listed only in builds that include their adapter, so such a build
-/// never offers a download it cannot run.
+/// compares like with like: the meeting final and live partials on AMI IHM (three public meeting
+/// excerpts, 709 reference words), the dictation final on FLEURS English dev as published (394
+/// utterances). The diarizer, the VAD and Windows' Parakeet are listed only in builds that include
+/// their adapter, so such a build never offers a download it cannot run.
 pub fn builtin_rows() -> Vec<EngineRow> {
     [
         qwen3_asr_1_7b_q8(),
@@ -398,6 +410,8 @@ pub fn builtin_rows() -> Vec<EngineRow> {
         crate::rows::nemotron_3_diarization(),
         #[cfg(feature = "engine-silero")]
         crate::rows::silero_vad(),
+        #[cfg(feature = "engine-sherpa")]
+        crate::rows::parakeet_tdt_v3_int8(),
     ]
     .into_iter()
     .collect()

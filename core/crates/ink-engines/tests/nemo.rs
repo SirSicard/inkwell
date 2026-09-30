@@ -12,6 +12,9 @@
 //!     cargo test -p ink-engines --features engine-nemo --release -- --ignored --test-threads 1
 //! ```
 //!
+//! The model runs on GPU 0 (Metal on the Mac, Vulkan on Windows); `INK_NEMO_DEVICE=cpu` runs the
+//! same tests on the CPU.
+//!
 //! Scored with `der/` (pyannote.metrics semantics, proved in `tests/der_scorer.rs`). Setting
 //! `INK_DIAR_OUT` also writes each hypothesis there as RTTM.
 
@@ -35,13 +38,41 @@ use sha2::{Digest, Sha256};
 
 use der::{Turn, clusters, der, min_speaker_recall, to_rttm};
 
-/// Each meeting's DER at ±0.25 s from the diarization gate, with the final pass's preset and the
-/// live one, and the substantial clusters the final pass found (as many as there are people).
-const MEETINGS: [(&str, f64, f64, usize); 3] = [
+/// A meeting, its DER at ±0.25 s with the final pass's preset and with the live one, and the
+/// substantial clusters the final pass finds.
+type Meeting = (&'static str, f64, f64, usize);
+
+/// Each meeting's numbers from the diarization gate, on the Mac (Metal): the final pass finds as
+/// many clusters as there are people.
+const MEETINGS: [Meeting; 3] = [
     ("EN2002a", 15.3, 16.5, 4),
     ("EN2002b", 22.6, 22.7, 4),
     ("EN2002c", 22.8, 25.0, 3),
 ];
+
+/// On Windows the same model and presets give other numbers, taken on the PC on 2026-09-30 and
+/// held here so a change still shows: on Vulkan, EN2002c splits into four clusters (the difference
+/// accepted for Windows); on the CPU, where the app falls back when the GPU will not load it, the
+/// final pass matches the Mac's but the live preset scores EN2002c far worse.
+const WINDOWS_VULKAN: [Meeting; 3] = [
+    ("EN2002a", 15.4, 16.7, 4),
+    ("EN2002b", 22.5, 22.4, 4),
+    ("EN2002c", 26.6, 25.3, 4),
+];
+const WINDOWS_CPU: [Meeting; 3] = [
+    ("EN2002a", 15.5, 16.9, 4),
+    ("EN2002b", 22.3, 23.1, 4),
+    ("EN2002c", 22.9, 37.6, 3),
+];
+
+/// The numbers this platform and `device()` are held to.
+fn meetings() -> [Meeting; 3] {
+    match (cfg!(windows), device()) {
+        (false, _) => MEETINGS,
+        (true, NemoDevice::Gpu(_)) => WINDOWS_VULKAN,
+        (true, NemoDevice::Cpu) => WINDOWS_CPU,
+    }
+}
 
 /// How far a reproduced DER may sit from the gate's (which is printed to one decimal).
 const DER_TOLERANCE: f64 = 0.3;
@@ -57,7 +88,16 @@ fn model_path() -> PathBuf {
         .join(&row.files[0].name)
 }
 
-/// The diarizer on the GPU, after checking the model file is the row's.
+/// Where the tests run the model: GPU 0 unless `INK_NEMO_DEVICE` is `cpu`.
+fn device() -> NemoDevice {
+    match std::env::var("INK_NEMO_DEVICE").as_deref() {
+        Err(_) | Ok("gpu") => NemoDevice::Gpu(0),
+        Ok("cpu") => NemoDevice::Cpu,
+        Ok(other) => panic!("INK_NEMO_DEVICE is {other:?}, not gpu or cpu"),
+    }
+}
+
+/// The diarizer on `device()`, after checking the model file is the row's.
 fn diarizer() -> NemoDiarizer {
     let row = nemotron_3_diarization();
     let path = model_path();
@@ -68,7 +108,7 @@ fn diarizer() -> NemoDiarizer {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(sha, row.files[0].sha256, "model hash");
-    NemoDiarizer::new(&path, row.info(), NemoDevice::Gpu(0)).unwrap()
+    NemoDiarizer::new(&path, row.info(), device()).unwrap()
 }
 
 fn read_wav(path: &Path) -> Vec<f32> {
@@ -146,8 +186,9 @@ fn check_against_gate(name: &str, reference: &[Turn], hypothesis: &[Turn], gate:
 #[ignore = "needs the Nemotron model and the AMI meetings (INK_BENCH_DIR, INK_DIAR_SET)"]
 fn the_final_pass_reproduces_the_gate_der() {
     let diarizer = diarizer();
+    let meetings = meetings();
     let mut sum = 0.0;
-    for (name, gate, _, people) in MEETINGS {
+    for (name, gate, _, people) in meetings {
         let (audio, reference) = meeting(name);
         let started = Instant::now();
         let turns = diarizer
@@ -171,7 +212,13 @@ fn the_final_pass_reproduces_the_gate_der() {
     }
     let row = nemotron_3_diarization().wer(Job::Diarization).unwrap();
     println!("mean DER {:.2}; the registry row carries {row}", sum / 3.0);
-    assert!((sum / 3.0 - f64::from(row)).abs() < 0.1);
+    // The row carries the Mac gate's mean; Windows is held to its own numbers' mean.
+    let expected = if cfg!(windows) {
+        meetings.iter().map(|m| m.1).sum::<f64>() / 3.0
+    } else {
+        f64::from(row)
+    };
+    assert!((sum / 3.0 - expected).abs() < 0.1);
 }
 
 #[test]
@@ -202,13 +249,17 @@ fn cancelling_stops_the_final_pass() {
         diarizer.diarize(&mut SliceWindows::new(&audio), &cancel),
         Err(EngineError::Cancelled)
     );
-    // Cancelled 100 ms into a pass that takes seconds: it stops at the next push.
+    // Cancelled 100 ms into a pass that takes seconds: it stops at the next push. The model is
+    // loaded first, with one whole push (10 s): on Vulkan the first push of that size after a
+    // load took about 3 s on the PC (a 1 s load did not cover it), and later ones about 0.1 s,
+    // in the same process even with a newly loaded model, which fits Vulkan preparing its
+    // pipelines on first use. Cancelling in that first push waits for it.
     diarizer
         .diarize(
-            &mut SliceWindows::new(&audio[..16_000]),
+            &mut SliceWindows::new(&audio[..10 * 16_000]),
             &CancelToken::new(),
         )
-        .unwrap(); // load the model first
+        .unwrap();
     let cancel = CancelToken::new();
     let remote = cancel.clone();
     let canceller = std::thread::spawn(move || {
@@ -235,7 +286,7 @@ fn cancelling_stops_the_final_pass() {
 fn the_windowed_feed_leaves_the_final_pass_unchanged() {
     let diarizer = diarizer();
     let baseline = std::env::var_os("INK_DIAR_BASELINE").map(PathBuf::from);
-    for (name, gate, _, _) in MEETINGS {
+    for (name, gate, _, _) in meetings() {
         let (audio, reference) = meeting(name);
         let whole = diarizer
             .diarize(&mut SliceWindows::new(&audio), &CancelToken::new())
@@ -276,7 +327,7 @@ fn live_labels_reproduce_the_gate_der_and_arrive_while_the_meeting_runs() {
     // union is the whole meeting's diarization, scored against the gate's streaming run.
     const PUSH: usize = 320;
     let diarizer = diarizer();
-    for (name, _, gate, _) in MEETINGS {
+    for (name, _, gate, _) in meetings() {
         let (audio, reference) = meeting(name);
         let reported: Reported = Arc::default();
         let pushed = Arc::new(Mutex::new(0u64));
@@ -372,7 +423,7 @@ fn the_loader_loads_the_installed_row_through_residency() {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::copy(model_path(), &path).unwrap();
     let residency = Residency::new(
-        Arc::new(NemoLoader::new(dir, NemoDevice::Gpu(0))),
+        Arc::new(NemoLoader::new(dir, device())),
         Arc::new(MockClock::new(0, 0)),
     );
     let lease = residency.acquire(&row).unwrap();

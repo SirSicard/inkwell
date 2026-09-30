@@ -6,10 +6,13 @@
 // generated from cargo's resolution of the Windows release build (RustNotices, RustNotices.g.cs, by
 // `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these.
 //
-// What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, fastcluster,
-// VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback), the Windows App
-// SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection and C#/WinRT in their
-// place. Their texts are in NoticeTexts.cs, copied from the packages the Windows build restores.
+// What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, its copy of
+// fastcluster, VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback),
+// sherpa-onnx, ONNX Runtime and the code compiled into sherpa-onnx's library (Windows' Parakeet),
+// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection and
+// C#/WinRT in their place. Their texts are in NoticeTexts.cs, copied from the packages the Windows
+// build restores (sherpa-onnx's is the shared Apache License). sherpa-onnx's library compiles in
+// its own copy of fastcluster (hclust-cpp's), whose notice is here, composed from the Mac's.
 //
 // The texts shared with the Mac (llama.cpp down to webgl-noise, the Apache License, Silero's) are
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
@@ -586,6 +589,48 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
         new("abseil", "Abseil, by Google",
             "Loaded by NeMo-Speech.cpp and SentencePiece.",
             "Apache-2.0", Apache2),
+        // sherpa-onnx's LICENSE (its 1.13.4 crates.io package, the version of the libraries) is the
+        // Apache License exactly, but for a blank first line.
+        new("sherpa-onnx", "sherpa-onnx, by the k2-fsa project",
+            "Runs Parakeet on the CPU, for the live words and for dictation on a PC without a GPU: sherpa-onnx 1.13.4, copied beside the app.",
+            "Apache-2.0", Apache2),
+        new("onnxruntime", "ONNX Runtime, by Microsoft",
+            "Runs Parakeet's model for sherpa-onnx: ONNX Runtime 1.27.0, copied beside the app.",
+            "MIT, with the notices of the code it includes",
+            OnnxRuntimeLicence + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
+        { Composed = true },
+        // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL). Their
+        // own licence files were not on hand: composed-notices.txt lists each until compared.
+        new("nlohmann-json", "nlohmann/json, by Niels Lohmann",
+            "Part of sherpa-onnx's library: JSON for Modern C++ 3.12.0.",
+            "MIT", NlohmannJsonLicence)
+        { Composed = true },
+        new("kaldi-decoder", "kaldi-decoder, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("kaldifst", "kaldifst, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("openfst", "OpenFst, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("simple-sentencepiece", "simple-sentencepiece, inside sherpa-onnx",
+            "Part of sherpa-onnx's library, with Darts-clone's darts.h (its notice is Darts-clone's, above).",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        new("kaldi-native-fbank", "kaldi-native-fbank, inside sherpa-onnx",
+            "Part of sherpa-onnx's library: the features Parakeet listens to.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        // fastcluster's own notice (the Mac's text, from FluidAudio's copy), which hclust-cpp's C++
+        // port of it is taken to keep; hclust-cpp's own copyright lines may add to it.
+        new("hclust-cpp", "hclust-cpp's fastcluster, inside sherpa-onnx",
+            "Part of sherpa-onnx's library (hierarchical clustering); not called by Inkwell.",
+            "BSD-2-Clause", HclustCppFastclusterLicence)
+        { Composed = true },
         new("aec3", "aec3, a Rust port of WebRTC AEC3, by Angelos-Ermis Mangos",
             "Cancels the echo of the far end in your microphone.",
             "MIT or BSD-3-Clause, with WebRTC's BSD-3-Clause notice and patent grant", """
@@ -744,7 +789,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         // credit says so where the Mac's names its Core ML conversion.
         new("parakeet", "Parakeet TDT 0.6B v3", "NVIDIA", "CC-BY-4.0",
             "The live words while you speak and while a meeting runs.",
-            "Parakeet TDT 0.6B v3 by NVIDIA, licensed under the Creative Commons Attribution 4.0 International licence (https://creativecommons.org/licenses/by/4.0/). Converted to ONNX (int8) for sherpa-onnx."),
+            "Parakeet TDT 0.6B v3 by NVIDIA, licensed under the Creative Commons Attribution 4.0 International licence (https://creativecommons.org/licenses/by/4.0/). Converted to ONNX (int8) for sherpa-onnx by csukuangfj on Hugging Face."),
         new("nemotron-diarization", "Nemotron-3-Diarization", "NVIDIA", "OpenMDW-1.1",
             "Who spoke on the far end.", null),
         new("silero-vad", "Silero VAD v6", "the Silero team", "MIT",
