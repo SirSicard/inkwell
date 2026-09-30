@@ -251,8 +251,8 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
 
 ### Release day: 1.0.0 (once)
 
-What the first 1.x release needs beyond the chain above, in order. The 0.2 app stays on `main`
-until this day and is not touched before it (invariant I6 in [ARCHITECTURE.md](ARCHITECTURE.md)).
+What the first 1.x release needs beyond the chain above, in order. The 0.2 app has left `main`;
+`legacy/0.2` keeps it.
 
 Before the tag:
 
@@ -263,16 +263,9 @@ Before the tag:
       `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`) and of
       `mac/composed-notices.txt` (replacing the text in `Notices.swift`).
       `mac/scripts/notices-verified.sh` must pass: the tag refuses to build until it does.
-- [ ] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
-      `src-tauri/`, `public/`, `index.html`, `package.json`, `package-lock.json`,
-      `vite.config.ts`, `eslint.config.js` and the three `tsconfig*.json`. With them, what points
-      at them: `.github/dependabot.yml`'s npm entry for `/` and cargo entry for `/src-tauri`;
-      `.gitignore`'s `src-tauri` lines; `build.yml` (a `v0.*` tag builds from `legacy/0.2`'s own
-      copy); `CLAUDE.md` and `CONTRIBUTING.md`; invariant I6 in `ARCHITECTURE.md`, which ends here;
-      the rows of `THIRD_PARTY.md` that point into `src/` or `src-tauri/`, and the matching
-      exception in `NoticesTests`; the scripts only 0.2 uses (`scripts/download-models.*`,
-      `scripts/gen-model-chart.py`); and `TODO.md`, the 0.2 work list. `docs/legacy/` stays.
-- [ ] The README rewritten for 1.0.
+- [x] The 0.2 app removed from `main`, with what pointed at it (`build.yml` among them: a `v0.*`
+      tag builds from `legacy/0.2`'s own copy). `docs/legacy/` stays.
+- [x] The README rewritten for 1.0.
 - [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
 
 After CI goes green:
@@ -356,8 +349,10 @@ git tag -a vX.Y.Z -m "Inkwell X.Y.Z" && git push origin vX.Y.Z
 xattr -w com.apple.quarantine "0081;$(printf %x $(date +%s));Safari;" Inkwell_X.Y.Z_aarch64.dmg
 spctl --assess -vv --type open --context context:primary-signature Inkwell_X.Y.Z_aarch64.dmg
 
-# 5. Publish
-gh release edit vX.Y.Z --draft=false --latest
+# 5. Publish, never as latest: "latest" is 1.x's, and installed 1.x apps
+#    read their update feed from it (see "Publish in order, and only 1.x as
+#    latest" above).
+gh release edit vX.Y.Z --draft=false --latest=false
 
 # 6. Push the updater manifest into Cloudflare KV, naming the release (not
 #    releases/latest, which is 1.x's and has no latest.json). Refuses a
@@ -365,9 +360,11 @@ gh release edit vX.Y.Z --draft=false --latest
 #    so it cannot report success without having written.
 inkwell-updater/publish-latest.sh vX.Y.Z
 
-# 7. Point the cask at the release. Refuses on a draft, on a no-op rewrite,
-#    and on a URL that does not return 200.
-bin/update-cask.sh
+# 7. While the cask still installs 0.2, point it at the release, by version:
+#    with no argument the script takes the latest release, which is 1.x's.
+#    Refuses on a draft, on a no-op rewrite, and on a URL that does not
+#    return 200.
+bin/update-cask.sh X.Y.Z
 
 # 8. Leave the homepage alone: its download buttons offer 1.x, and a 0.2
 #    release is reached from the releases page.
