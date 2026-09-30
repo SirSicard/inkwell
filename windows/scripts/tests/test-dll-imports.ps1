@@ -13,15 +13,19 @@ function Check([string]$Label, [bool]$Ok, [string]$Detail = '') {
 }
 
 # A System32 holding a few of Windows' own DLLs, and what a build machine's also holds: Windows'
-# older ONNX Runtime, a GPU driver's Vulkan loader, the Visual C++ runtime.
+# older ONNX Runtime, a GPU driver's Vulkan loader, the Visual C++ runtime, and other
+# redistributables (an older Visual C++ runtime, LLVM's OpenMP, C++ AMP). Which files Windows signs
+# as its own is faked too: the real check reads each file's signature.
 $system32 = Join-Path ([System.IO.Path]::GetTempPath()) "ink-dll-imports-$PID"
 New-Item -ItemType Directory -Force $system32 | Out-Null
 try {
-    foreach ($name in 'kernel32.dll', 'dxgi.dll', 'dbghelp.dll', 'msvcp_win.dll', 'mfcore.dll', 'ucrtbase.dll',
-        'onnxruntime.dll', 'vulkan-1.dll', 'vcruntime140.dll', 'msvcp140.dll', 'vcomp140.dll') {
+    $windowsOwn = @('kernel32.dll', 'dxgi.dll', 'dbghelp.dll', 'msvcp_win.dll', 'mfcore.dll', 'ucrtbase.dll', 'onnxruntime.dll')
+    foreach ($name in @($windowsOwn) + @('vulkan-1.dll', 'vcruntime140.dll', 'msvcp140.dll', 'vcomp140.dll',
+            'msvcr120.dll', 'libomp140.aarch64.dll', 'vcamp140.dll')) {
         New-Item -ItemType File (Join-Path $system32 $name) | Out-Null
     }
-    $partOfWindows = { param($name) Test-WindowsDll -Name $name -System32 $system32 }
+    $signedAsWindows = { param($path) $windowsOwn -contains (Split-Path -Leaf $path) }
+    $partOfWindows = { param($name) Test-WindowsDll -Name $name -System32 $system32 -IsOSBinary $signedAsWindows }
 
     Write-Output 'part of Windows'
     foreach ($name in 'kernel32.dll', 'KERNEL32.dll', 'dxgi.dll', 'msvcp_win.dll', 'mfcore.dll', 'ucrtbase.dll',
@@ -31,6 +35,9 @@ try {
     foreach ($name in 'onnxruntime.dll', 'ONNXRUNTIME.DLL', 'onnxruntime_providers_shared.dll', 'vulkan-1.dll',
         'vcruntime140.dll', 'msvcp140.dll', 'vcomp140.dll', 'sherpa-onnx-c-api.dll', 'ggml.dll') {
         Check "$name is not, whatever System32 holds" (-not (& $partOfWindows $name))
+    }
+    foreach ($name in 'msvcr120.dll', 'libomp140.aarch64.dll', 'vcamp140.dll') {
+        Check "$name is not: in System32, but not Windows' own" (-not (& $partOfWindows $name))
     }
 
     Write-Output 'the Visual C++ runtime'
@@ -107,6 +114,12 @@ try {
     $p = Package
     $found = @(Problems $p @($p.Keys | Where-Object { $_ -ne 'ggml-cpu.dll' }))
     Check 'a DLL an engine needs, missing' ($found.Count -eq 1 -and $found[0] -match '^ggml.dll needs ggml-cpu.dll when it loads, and it is neither beside') ($found -join '; ')
+
+    # ggml built with LLVM's OpenMP, whose runtime the build machine's System32 happens to hold.
+    $p = Package
+    $p['ggml-cpu.dll'] = Deps @('ggml-base.dll', 'kernel32.dll', 'libomp140.aarch64.dll') @()
+    $found = @(Problems $p)
+    Check "a redistributable in the build machine's System32" ($found.Count -eq 1 -and $found[0] -match '^ggml-cpu.dll needs libomp140.aarch64.dll when it loads, and it is neither beside') ($found -join '; ')
 
     $p = Package
     $p['ggml-cpu.dll'] = Deps @('ggml-base.dll', 'vcomp140.dll') @()

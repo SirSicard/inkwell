@@ -396,10 +396,11 @@ What the checks guarantee:
   the release carries that runtime or links it statically.
 - **Everything it loads is in the package or part of Windows.** Every DLL a binary of the app
   loads when it loads must be beside `Inkwell.exe` or part of Windows (`windows/scripts/lib/dll-imports.ps1`,
-  which both scripts use). A copy in the build machine's System32 does not count for the DLLs a PC
-  gets elsewhere: the Vulkan loader (GPU drivers), the Visual C++ runtime, and ONNX Runtime, since
-  Windows 11 has an older `onnxruntime.dll` of its own there and sherpa-onnx must get the one the app
-  ships (the adapter also refuses any other version when it loads).
+  which both scripts use). A file in the build machine's System32 counts only if Windows signs it
+  as its own, so nothing a PC gets elsewhere passes for Windows because the build machine has it:
+  the Vulkan loader (GPU drivers), any Visual C++ runtime, LLVM's OpenMP. ONNX Runtime never
+  counts: Windows 11 has an older `onnxruntime.dll` of its own there, and sherpa-onnx must get the
+  one the app ships (the adapter also refuses any other version when it loads).
 - **It starts without Vulkan.** On x64 `vulkan-1.dll` is delay-loaded, and only for the functions
   `build-core.ps1` lists; the core then runs llama.cpp on the CPU (`tests/vulkan_missing.rs` runs
   in the same job). The diarizer's DLL is delay-loaded too, and its Vulkan backend is the one

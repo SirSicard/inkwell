@@ -5,7 +5,11 @@
 #
 # The rule: every DLL a binary loads when it loads is beside Inkwell.exe (where Windows looks for an
 # app's DLLs first) or part of Windows. "Part of Windows" is an API set, or a file of System32 that
-# is not one of these, whatever the machine that builds the release has in its System32:
+# Windows signs as its own (Get-AuthenticodeSignature's IsOSBinary): other software installs into
+# System32 too, and a clean PC has none of it (older Visual C++ runtimes such as msvcr120.dll,
+# LLVM's OpenMP libomp140.*.dll, C++ AMP's vcamp140.dll). The product name in a file's version
+# resource is no test: some of Windows' own name another product (propsys.dll "Windows Search").
+# And never one of these, whatever the machine that builds the release has in its System32:
 # - vulkan-1.dll, the Vulkan loader, which GPU drivers install;
 # - the Visual C++ runtime (vcruntime*, msvcp*, vcomp*, concrt*, mfc*, vccorlib*), which its
 #   redistributable installs, and which the release neither needs nor ships;
@@ -35,16 +39,19 @@ function Get-System32 {
     return Join-Path $env:SystemRoot 'System32'
 }
 
-# Whether $Name is part of Windows (above). $System32 is for the tests.
+# Whether $Name is part of Windows (above). $System32 and $IsOSBinary (whether Windows signs the
+# file at a path as its own) are for the tests.
 function Test-WindowsDll {
     param(
         [Parameter(Mandatory)] [string]$Name,
-        [string]$System32 = (Get-System32)
+        [string]$System32 = (Get-System32),
+        [scriptblock]$IsOSBinary = { param($path) (Get-AuthenticodeSignature -LiteralPath $path).IsOSBinary }
     )
     $name = $Name.ToLowerInvariant()
     if ($name -match '^(api|ext)-ms-win-') { return $true }
     if ((Test-VcRuntimeDll $name) -or $name -match $script:NotPartOfWindows) { return $false }
-    return Test-Path -LiteralPath (Join-Path $System32 $name) -PathType Leaf
+    $path = Join-Path $System32 $name
+    return (Test-Path -LiteralPath $path -PathType Leaf) -and [bool](& $IsOSBinary $path)
 }
 
 # The DLLs in dumpbin /dependents' output: those loaded when the binary loads (Load), and those
