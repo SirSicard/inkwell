@@ -8,7 +8,8 @@ name: Windows release build
 #
 # Built natively on windows-2025. The engines are windows/scripts/build-core.ps1's: llama.cpp
 # with Vulkan, Silero, Parakeet on sherpa-onnx and the NeMo-Speech.cpp diarizer, whose native
-# library is built here.
+# library is built here, and beside them the Visual C++ runtime they need, from the runner's Visual
+# Studio: its version is an output (vcruntime), which the release notes give.
 #
 # Every input is pinned: actions by commit; the Vulkan SDK by the SHA-256 LunarG publishes for its
 # installer; sherpa-onnx's archive by its SHA-256 below, and every file the build uses from it by
@@ -37,6 +38,8 @@ on:
         value: ${{ jobs.build.outputs.package }}
       sums:
         value: ${{ jobs.build.outputs.sums }}
+      vcruntime:
+        value: ${{ jobs.build.outputs.vcruntime }}
 
 permissions: {}
 
@@ -55,6 +58,7 @@ jobs:
       setup: ${{ steps.version.outputs.setup }}
       package: ${{ steps.version.outputs.package }}
       sums: ${{ steps.version.outputs.sums }}
+      vcruntime: ${{ steps.vcruntime.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -258,6 +262,17 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           windows/scripts/pack.ps1 -Version $env:VERSION -AppDir $env:INK_APP_DIR -OutDir (Join-Path $env:RUNNER_TEMP 'inkwell-release')
+
+      # Which Visual C++ runtime the package ships (one version, or the step fails), for the
+      # release notes: read from the DLLs beside Inkwell.exe, as pack.ps1 read them.
+      - name: The Visual C++ runtime it ships
+        id: vcruntime
+        shell: pwsh
+        run: |
+          . windows/scripts/lib/dll-imports.ps1
+          $runtime = Get-VcRuntimeVersion $env:INK_APP_DIR
+          Write-Output "Visual C++ runtime $($runtime.Version): $($runtime.Files -join ', ')"
+          "version=$($runtime.Version)" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
 
       - name: Keep the release's files
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

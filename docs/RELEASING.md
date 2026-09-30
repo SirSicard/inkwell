@@ -333,8 +333,16 @@ without a GPU), and Nemotron diarization of the far end on NeMo-Speech.cpp (Vulk
   Mac. Its `nemo_speech_asr_c.dll`, `nemo_speech_asr.dll` and its ggml's DLLs ship beside
   `Inkwell.exe`. The core delay-loads it: its Vulkan backend needs the Vulkan loader as soon as it
   loads, so a PC without a Vulkan driver runs everything but the diarizer.
-- `build-core.ps1` puts the core's DLL and the engines' DLLs in `core/target/release/inkwell-core/`,
-  and the publish takes every DLL there (`InkCoreDir`).
+- **The Visual C++ runtime**: both engines' DLLs link it dynamically (`/MD`), so `build-core.ps1`
+  copies the DLLs of it they import, and no others, from the build machine's Visual Studio 2026
+  redistributable folder (`VCToolsRedistDir`: `Microsoft.VC145.CRT` and `Microsoft.VC145.OpenMP`;
+  on the runner and on a PC today `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`,
+  `msvcp140_1.dll` and `vcomp140.dll`). They ship beside `Inkwell.exe` (app-local, so the per-user
+  install needs no administrator and no Visual C++ Redistributable). Another redistributable than
+  VC145 stops the build: About shows the licence terms of this one. The build prints the version,
+  and the release notes give it (`win-release-build.yml`'s `vcruntime` output).
+- `build-core.ps1` puts the core's DLL, the engines' DLLs and that runtime in
+  `core/target/release/inkwell-core/`, and the publish takes every DLL there (`InkCoreDir`).
 
 **Unsigned, for now.** The Windows build is not code-signed. SmartScreen warns before the installer
 runs, and Smart App Control blocks it outright; the homepage says how to check the download and get
@@ -349,17 +357,17 @@ What a release carries for Windows:
 
 - `Inkwell_X.Y.Z_x64-setup.exe`, the installer. Per user, no administrator: it installs into
   `%LOCALAPPDATA%\InkwellApp`, adds a Start menu entry and an entry in Settings > Apps, and starts
-  the app. Uninstalling removes that folder only: the library,
-  in `%LOCALAPPDATA%\Inkwell`, stays. It refuses Windows older than 11 24H2. The package id
-  `InkwellApp` is the update chain's name: it never changes. While it installs it shows a splash
-  with Microsoft's end-user terms, which the licences of the Windows App SDK (its section
-  3(b)(ii)) and of the Windows SDK's .NET projection (its Distribution Requirements) ask for, drawn
-  by `pack.ps1`; the release notes and the homepage carry them too, and Settings > About in full.
-  Velopack's installer has no licence page, so the app's first run asks instead: the terms and
-  both licences, with Agree and Quit, before anything else starts (`TermsStep`). The agreement is
+  the app. Uninstalling removes that folder only: the library, in `%LOCALAPPDATA%\Inkwell`, stays.
+  It refuses Windows older than 11 24H2. The package id `InkwellApp` is the update chain's name: it
+  never changes. While it installs it shows a splash with Microsoft's end-user terms, which the
+  licences of the Windows App SDK (its section 3(b)(ii)), of the Windows SDK's .NET projection and
+  of Visual Studio for the Visual C++ runtime (their Distribution Requirements) ask for, drawn by
+  `pack.ps1`; the release notes and the homepage carry them too, and Settings > About in full.
+  Velopack's installer has no licence page, so the app's first run asks instead: the terms and the
+  three licences, with Agree and Quit, before anything else starts (`TermsStep`). The agreement is
   kept in `terms-agreed.txt` in the library folder with the terms' version, a SHA-256 of the
-  sentence and both licence texts (`TermsStep.CurrentVersion`): editing the sentence or re-copying
-  either licence asks every existing user again at their next start.
+  sentence and the three licence texts (`TermsStep.CurrentVersion`): editing the sentence or
+  re-copying any of the licences asks every existing user again at their next start.
 - `InkwellApp-X.Y.Z-full.nupkg` and `releases.win.json`: the update and its feed (Velopack's
   channel `win`, which is part of the update chain too: it never changes). The app's Settings >
   About > Check Now reads the feeds of the repository's latest published releases (GitHub's API,
@@ -370,23 +378,21 @@ What a release carries for Windows:
 
 What the checks guarantee:
 
-- **No Visual C++ runtime needed.** The core's DLL links the CRT statically (`crt-static`, and
-  llama.cpp's CMake build with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`); the .NET and Windows
-  App SDK binaries use only the UCRT, which is part of Windows. `build-core.ps1` (for the core and
-  the engines' DLLs) and `pack.ps1` (for the whole app) fail on any binary that needs a Visual C++
-  runtime DLL. **Open:** sherpa-onnx's pinned archive and NeMo-Speech.cpp's build link the Visual
-  C++ runtime dynamically (`/MD`): `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`,
-  `msvcp140_1.dll` and, for NeMo's ggml, `vcomp140.dll` (27 imports across the engines' 9 DLLs).
-  So both checks stop a release, naming each DLL, until the maintainer decides how the release
-  carries that runtime or links it statically.
+- **The Visual C++ runtime is the app's own.** The core's DLL links the CRT statically
+  (`crt-static`, and llama.cpp's CMake build with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`); the
+  .NET and Windows App SDK binaries use only the UCRT, which is part of Windows; the engines' DLLs
+  need the Visual C++ runtime DLLs above, and `build-core.ps1` (for the core and the engines' DLLs)
+  and `pack.ps1` (for the whole app) accept one only when it is beside `Inkwell.exe` and built for
+  x64, never the build machine's copy in System32 (nor the debug UCRT). `pack.ps1` prints the
+  runtime's version and refuses DLLs of two versions.
 - **Everything it loads is in the package or part of Windows.** Every DLL a binary of the app
   loads when it loads must be beside `Inkwell.exe` or part of Windows (`windows/scripts/lib/dll-imports.ps1`,
   which both scripts use). A file in the build machine's System32 counts only if Windows signs it
   as its own, so nothing a PC gets elsewhere passes for Windows because the build machine has it:
-  the Vulkan loader (GPU drivers), any Visual C++ runtime, LLVM's OpenMP. ONNX Runtime never
+  the Vulkan loader (GPU drivers), a Visual C++ runtime, LLVM's OpenMP. ONNX Runtime never
   counts: Windows 11 has an older `onnxruntime.dll` of its own there, and sherpa-onnx must get the
   one the app ships (the adapter also refuses any other version when it loads).
-- **It starts without Vulkan.** On x64 `vulkan-1.dll` is delay-loaded, and only for the functions
+- **It starts without Vulkan.** `vulkan-1.dll` is delay-loaded, and only for the functions
   `build-core.ps1` lists; the core then runs llama.cpp on the CPU (`tests/vulkan_missing.rs` runs
   in the same job). The diarizer's DLL is delay-loaded too, and its Vulkan backend is the one
   binary allowed to need the loader when it loads; the core checks the diarizer loads before its

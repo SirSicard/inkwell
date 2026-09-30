@@ -71,11 +71,12 @@ public sealed class TermsStepTests : IDisposable
         changed.Agree();
         Assert.Equal("sha256:new", File.ReadAllText(RecordPath).Trim());
 
-        // The version is the terms' own: a change to the sentence or either licence changes it.
-        var current = TermsStep.VersionOf(Notices.WindowsAppSdkTerms, Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText);
+        // The version is the terms' own: a change to the sentence or any of the licences changes it.
+        var current = TermsStep.VersionOf(Notices.WindowsAppSdkTerms, Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText, Notices.VcRuntimeText);
         Assert.Equal(current, TermsStep.CurrentVersion);
-        Assert.NotEqual(current, TermsStep.VersionOf(Notices.WindowsAppSdkTerms + " ", Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText));
-        Assert.NotEqual(current, TermsStep.VersionOf(Notices.WindowsAppSdkTerms, Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText + " "));
+        Assert.NotEqual(current, TermsStep.VersionOf(Notices.WindowsAppSdkTerms + " ", Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText, Notices.VcRuntimeText));
+        Assert.NotEqual(current, TermsStep.VersionOf(Notices.WindowsAppSdkTerms, Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText + " ", Notices.VcRuntimeText));
+        Assert.NotEqual(current, TermsStep.VersionOf(Notices.WindowsAppSdkTerms, Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText, Notices.VcRuntimeText + " "));
     }
 
     [Fact]
@@ -123,22 +124,29 @@ public sealed class TermsStepTests : IDisposable
     }
 
     [Fact]
-    public void TheStepShowsTheTermsSentenceAndBothMicrosoftLicencesAsAboutDoes()
+    public void TheStepShowsTheTermsSentenceAndEachMicrosoftLicenceAsAboutDoes()
     {
         Assert.Equal(AboutModel.Terms, TermsStep.Sentence);
         var about = new AboutModel(null).ComponentRows;
-        Assert.Equal(2, TermsStep.Licences.Count);
+        Assert.Equal(3, TermsStep.Licences.Count);
         Assert.All(TermsStep.Licences, row => Assert.Contains(row, about)); // the same title, line and full text
         Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT WINDOWS APP SDK", TermsStep.Licences[0].Text, StringComparison.Ordinal);
         Assert.Contains("MICROSOFT WINDOWS SOFTWARE DEVELOPMENT KIT (SDK)", TermsStep.Licences[1].Text, StringComparison.Ordinal);
+        Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT VISUAL C++ V14 REDISTRIBUTABLE and RUNTIME", TermsStep.Licences[2].Text, StringComparison.Ordinal);
+        // The Visual C++ runtime that Inkwell ships, from Visual Studio's redistributable folder
+        // (Distributable Code): the row the user agrees under names each DLL the release copies.
+        foreach (var file in new[] { "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "vcomp140.dll" })
+        {
+            Assert.Contains(file, TermsStep.Licences[2].Detail, StringComparison.Ordinal);
+        }
         // The Windows SDK's Distributable Code that Inkwell ships is two files, both on its REDIST
         // list: the row the user agrees under names each (C#/WinRT's own row says MIT first).
         foreach (var file in new[] { "Microsoft.Windows.SDK.NET.dll", "WinRT.Runtime.dll" })
         {
             Assert.Contains(file, TermsStep.Licences[1].Detail, StringComparison.Ordinal);
         }
-        // The sentence names both, by their rows' names.
-        foreach (var id in new[] { "windows-app-sdk", "windows-sdk-net" })
+        // The sentence names each, by their rows' names.
+        foreach (var id in new[] { "windows-app-sdk", "windows-sdk-net", "vc-runtime" })
         {
             Assert.Contains($"\"{Notices.Components.Single(c => c.Id == id).Name}\"", TermsStep.Sentence, StringComparison.Ordinal);
         }

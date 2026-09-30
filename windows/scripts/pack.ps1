@@ -48,8 +48,9 @@ $Machine = 0x8664
 $windows = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/dll-imports.ps1')
 
-# The end-user terms the Windows App SDK's licence asks for (its section 3(b)(ii)), and the Windows
-# SDK's for its .NET projection (its Distribution Requirements), on the installer's splash:
+# The end-user terms the Windows App SDK's licence asks for (its section 3(b)(ii)), the Windows
+# SDK's for its .NET projection and Visual Studio's for the Visual C++ runtime (their Distribution
+# Requirements), on the installer's splash:
 # Velopack's Setup has no text page, only an image shown while it installs, so the terms are on
 # screen before Inkwell first runs, wherever the installer came from; the first run then asks the
 # user to agree. The same terms are in Settings > About and the first run's step
@@ -57,8 +58,8 @@ $windows = Split-Path -Parent $PSScriptRoot
 # (windows/HOMEPAGE-INSTALL.md): keep the four in step. The non-breaking spaces
 # keep "Settings > About" on one line.
 $SplashTerms = "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's " +
-    "Windows App SDK and the Windows SDK's .NET projection, which Microsoft licenses separately under " +
-    "the Microsoft Software License Terms, " +
+    "Windows App SDK, the Windows SDK's .NET projection and the Visual C++ runtime, which Microsoft " +
+    "licenses separately under the Microsoft Software License Terms, " +
     "shown in full in Inkwell's Settings`u{00A0}>`u{00A0}About. By installing or using Inkwell, you " +
     "agree to those terms for those components."
 
