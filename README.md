@@ -41,7 +41,8 @@ Inkwell 1.0 is a rebuild: native on each system (SwiftUI and AppKit on the Mac, 
 ### The library
 
 - **Every dictation and meeting**, newest first and searchable. A meeting's record shows its transcript, notes and summary, and plays its audio from disk.
-- **Keep records** for as long as you choose: forever (the default), or 7, 30, 90 or 365 days.
+- **Keep records** for as long as you choose: forever (the default), or 7, 30, 90 or 365 days. Anything you imported is kept whatever you choose.
+- **Coming from Inkwell 0.2?** The first run, and Settings > Voice after it, offer to bring 0.2's dictation history, dictionary, snippets and modes into the library, and its dictation key when 1.0 can listen for it. 0.2's own copy is only read, never changed.
 
 ## Privacy
 
@@ -52,7 +53,7 @@ Inkwell 1.0 is a rebuild: native on each system (SwiftUI and AppKit on the Mac, 
 - For dictation, the microphone opens when you press the key and is let go of a minute after your last take. For a meeting, it is open while you record.
 - Polish, voice edit, summaries and Ask use Apple's on-device model on the Mac: your words stay on the Mac. On Windows they use a provider you set up with your own API key (OpenAI, Anthropic, Groq, OpenRouter, or an OpenAI-compatible server you name, such as one on your own PC), and the words each one works on go to that provider. The key is kept in Windows Credential Manager. Each feature asks for your OK first, and asks again if where the words would go ever changes.
 - There is no telemetry, no analytics, no crash reporting and no account.
-- **Every network call, listed.** Model downloads fetch pinned files from Hugging Face and GitHub the first time a model is needed. On the Mac, Sparkle checks this repository's releases for updates once you have said yes to its question; a check sends nothing about your Mac. On Windows, the app checks this repository's releases for a new version only when you ask it to. On Windows, a language-model provider you set up receives the words of the features you allowed, and a fixed question when you test it. Nothing else connects.
+- **Every network call, listed.** Model downloads fetch pinned files from Hugging Face and GitHub when you press Download, in the first run or in Settings > Models; nothing downloads before that. On the Mac, Sparkle checks this repository's releases for updates once you have said yes to its question; a check sends nothing about your Mac. On Windows, the app checks this repository's releases for a new version only when you ask it to. On Windows, a language-model provider you set up receives the words of the features you allowed, and a fixed question when you test it. Nothing else connects.
 
 The details, and what counts as a security issue, are in [SECURITY.md](SECURITY.md).
 
@@ -70,12 +71,19 @@ Intel Macs are not supported by 1.0: Inkwell 0.2 stays the last version for them
 > [!NOTE]
 > Fn is also macOS's emoji and dictation key. If pressing it opens something else, set "Press 🌐 key to" to "Do Nothing" in System Settings > Keyboard, or pick another key in Inkwell's Settings.
 
-### Windows (x64 or ARM64, Windows 11 24H2 or later)
+### Windows (x64, Windows 11 24H2 or later)
 
-Download the installer for your PC, x64 or ARM64, and run it.
+1. Download `Inkwell_X.Y.Z_x64-setup.exe`. Your browser may say the file isn't commonly downloaded: choose to keep it.
+2. Check the download (recommended): in PowerShell, `Get-FileHash -Algorithm SHA256` on the file must print the SHA-256 in the release notes, which is also in `Inkwell_X.Y.Z_windows-sha256.txt` on the same release. If it does not match, delete the file.
+3. Run it. It installs for your user account alone, with no administrator and nothing system-wide, and brings the Visual C++ runtime its speech engines need beside the app, so there is no redistributable to install.
+4. On its first run, Inkwell asks you to agree to Microsoft's terms for the Windows App SDK, the Windows SDK's .NET projection and the Visual C++ runtime it includes (in full in Settings > About). **Quit** leaves without starting anything.
 
 > [!WARNING]
-> The Windows installer is not code signed yet. SmartScreen will say "Windows protected your PC": click **More info**, then **Run anyway**. Your browser may also flag the download as uncommon. [The homepage walks through it](https://getinkwell.vercel.app/#windows-install).
+> The Windows installer is not code signed yet. SmartScreen will say "Windows protected your PC": click **More info**, then **Run anyway**. If **Smart App Control** blocks it, there is no way past it for one app: it runs only signed apps, and turning it off cannot be undone without resetting Windows, so wait for the signed build instead. [The homepage walks through it](https://getinkwell.vercel.app/#windows-install).
+
+Updates come when you ask for them: Settings > About > **Check Now**. Inkwell 0.2 stays installed beside 1.0, not replaced by it, so import its history before you uninstall it with its application data.
+
+Windows on ARM64 is not supported by 1.0. An ARM64 build is planned for 1.0.1.
 
 ### Linux
 
@@ -83,19 +91,19 @@ Not supported by 1.0. Inkwell 0.2 stays the last version for Linux, on the Relea
 
 ## Quick start
 
-1. Open Inkwell and finish onboarding. It downloads the speech models the first time they are needed (the main one is about 2.5 GB); they are never inside the installer.
+1. Open Inkwell and finish onboarding. Its Models step lists each model with its licence, size and source: about 3.1 GB in all on the Mac and 3.3 GB on Windows, the main speech model 2.5 GB of it. Nothing downloads until you press **Download**; you can go on while it runs, or download later in Settings > Models. The models are never inside the installer.
 2. Hold the dictation key (Fn on the Mac, right Ctrl on Windows), speak, and let go. The text is typed where your cursor is.
 3. Join a call. When the Drop offers to record it, say yes, or start one yourself with **Record now** on Today.
 
 ## Models
 
-Chosen by measuring word error rates on public, human-labelled recordings (AMI meetings and FLEURS English). They download on first use from a pinned revision and are checked against a hash. The full list and the licences are in [docs/MODEL-WEIGHTS.md](docs/MODEL-WEIGHTS.md).
+Chosen by measuring word error rates on public, human-labelled recordings (AMI meetings and FLEURS English). They download when you press Download, from a pinned revision, and are checked against a hash. The full list and the licences are in [docs/MODEL-WEIGHTS.md](docs/MODEL-WEIGHTS.md).
 
 | Job | Model | Runs on |
 |---|---|---|
 | Dictation and meeting transcripts | Qwen3-ASR 1.7B | llama.cpp: Metal on the Mac, Vulkan (or the CPU) on Windows |
-| Live words | Parakeet TDT 0.6B v3 | FluidAudio on the Mac's Neural Engine; sherpa-onnx on Windows |
-| The other side's speakers | Nemotron-3-Diarization | NeMo-Speech.cpp |
+| Live words, and on Windows the dictations of a PC without a GPU | Parakeet TDT 0.6B v3 | FluidAudio on the Mac's Neural Engine; sherpa-onnx on the CPU on Windows |
+| The other side's speakers | Nemotron-3-Diarization | NeMo-Speech.cpp: Metal on the Mac, Vulkan (or the CPU) on Windows |
 | Voice detection | Silero VAD | tract |
 
 ## Support the project
@@ -114,8 +122,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the prerequisites, the checks and the
 
 ## Requirements
 
-- A Mac with Apple silicon on macOS 26 or later, or an x64 or ARM64 PC on Windows 11 24H2 or later
-- Disk for the models (the main speech model is about 2.5 GB), plus the meetings you keep
+- A Mac with Apple silicon on macOS 26 or later, or an x64 PC on Windows 11 24H2 or later
+- Disk for the models (about 3.1 GB on the Mac, 3.3 GB on Windows), plus the meetings you keep
 - A microphone
 
 ## Contributing

@@ -6,7 +6,7 @@ The latest 1.x release only, on the Mac and on Windows. This is a solo-maintaine
 
 | Version | Supported |
 | ------- | --------- |
-| latest 1.x release (Mac: Apple silicon, macOS 26 or later; Windows: x64 or ARM64, Windows 11 24H2 or later) | Yes |
+| latest 1.x release (Mac: Apple silicon, macOS 26 or later; Windows: x64, Windows 11 24H2 or later) | Yes |
 | older 1.x releases | No |
 | 0.2.x, including the last builds for Intel Macs and Linux | No |
 
@@ -25,9 +25,10 @@ What to expect: acknowledgement within a few days, an honest assessment of wheth
 Stated plainly, because an app that listens deserves specificity:
 
 **Stays on your machine:**
-- Audio. Speech recognition, voice detection and speaker labels run locally. A dictation's audio is transcribed and never kept. A meeting's audio, your microphone and the call as two streams, is written to disk as it is recorded, because the final pass, crash recovery and the record's playback read it from there. It stays in the data folder with its record until the retention setting removes it (by default, records are kept).
+- Audio. Speech recognition, voice detection and speaker labels run locally. A dictation's audio is transcribed and never kept. A meeting's audio, your microphone and the call as two streams, is written to disk as it is recorded, because the final pass, crash recovery and the record's playback read it from there. It stays in the data folder with its record until the retention setting removes it (by default, records are kept; anything imported is never removed by it).
 - Transcripts, notes, summaries, commitments and settings. A SQLite database in the same folder: `~/Library/Application Support/Inkwell` on the Mac, `%LOCALAPPDATA%\Inkwell` on Windows. Nothing syncs. On Windows, a language-model feature you allowed sends the text it works on to your provider (below).
 - Your calendar, on the Mac, if you allow it: read to show your next meeting and to name each meeting and who was in it.
+- Inkwell 0.2's data, if you import it: read where 0.2 left it, read-only, and copied into the library. 0.2's copy is never changed.
 - Logs. Transcripts, notes and prompts never reach a log or an error message.
 
 **Language models, only with your OK:**
@@ -37,7 +38,7 @@ Stated plainly, because an app that listens deserves specificity:
 - Local-only mode, on by default, refuses any language-model endpoint that is not on this machine, in code.
 
 **Leaves your machine:**
-- **Model downloads.** The speech and voice-detection models are fetched from Hugging Face and GitHub the first time they are needed, each from a pinned revision and checked against its hash before it is used.
+- **Model downloads.** The speech and voice-detection models are fetched from Hugging Face and GitHub when you press Download (in the first run or Settings > Models), each from a pinned revision and checked against its hash before it is used. Nothing is fetched before you press it.
 - **Update checks, on the Mac.** Sparkle reads the update feed of this repository's latest release, and only once you have said yes to its question. A check sends no system profile. An update is installed only if its archive's EdDSA signature matches the key the installed app carries (checked before the archive is unpacked), the feed's own signature does too, and the new app is signed by the same Developer ID team.
 - **Your words, on Windows, only to a provider you set up.** When a feature you allowed runs, the text it works on (the dictation to polish, the selected text and your instruction, a meeting's transcript, your question) goes to that provider's API with your key; testing the provider sends a fixed question instead. What the provider keeps is its own policy.
 - **Updates, on Windows, only when you check.** The app asks GitHub for this repository's releases and, if you take the update, downloads it; the download must match the size and SHA-256 its release feed states. Windows builds are not code signed yet, so an update is only as trustworthy as the release it comes from.
