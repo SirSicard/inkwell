@@ -9,6 +9,7 @@ namespace Inkwell.Core.Screens;
 public sealed class ScreenModels
 {
     private readonly ScreenLog log;
+    private readonly Action<CoreCommand> send;
 
     /// <param name="send">Where the screens' commands go.</param>
     /// <param name="dataDirectory">The library's folder (Storage), or null when it could not be found.</param>
@@ -34,6 +35,7 @@ public sealed class ScreenModels
         IUpdater? updater = null)
     {
         ArgumentNullException.ThrowIfNull(send);
+        this.send = send;
         this.log = log ?? ScreenLog.System;
         // No calendar in this unpackaged build (Calendar.cs): every screen says so. Packaging (S3.6)
         // can pass Windows' calendar here.
@@ -45,7 +47,8 @@ public sealed class ScreenModels
         Owed = new OwedModel(send);
         Live = new LiveModel(send, log: this.log);
         Meetings = new MeetingModel(send, cal, log: this.log);
-        Onboarding = new OnboardingModel(send, this.log);
+        Import02 = new Import02Model(send, this.log);
+        Onboarding = new OnboardingModel(send, this.log, Import02);
         Storage = new StorageModel(dataDirectory, modelsDirectory, reveal, this.log);
         Dictation = new DictationModel(send);
         EditConsent = AiSettings.NewEditConsent(send);
@@ -83,6 +86,8 @@ public sealed class ScreenModels
     public SnippetsModel Snippets { get; }
     public VoiceCommandsModel VoiceCommands { get; }
     public ImportNoteModel ImportNote { get; }
+    /// <summary>Inkwell 0.2's data: the first run's step and a row in Settings > Voice.</summary>
+    public Import02Model Import02 { get; }
     /// <summary>The foot of Today's ink zone.</summary>
     public RecordControlsModel RecordControls { get; }
     public UpNextModel UpNext { get; }
@@ -111,6 +116,23 @@ public sealed class ScreenModels
             Live.Apply(e);
             Meetings.Apply(e);
             Onboarding.Apply(e);
+            Import02.Apply(e);
+            if (Onboarding.Showing)
+            {
+                // The first run offers its import step only when there is something to import.
+                Import02.CheckOnce();
+            }
+            if (e is ImportFinished)
+            {
+                // What became of 0.2's key, and the key it set.
+                ImportNote.Load();
+                send(new CoreCommand.SettingGet(ShellSetting.DictationKey));
+                // The lists it brought, which Settings may show already: an edit to the old list
+                // would save it over the import's (the user's own list wins in the core).
+                Snippets.Load();
+                VoiceCommands.Load();
+                Modes.Load();
+            }
             Dictation.Apply(e);
             EditConsent.Apply(e);
             MeetingsConsent.Apply(e);
@@ -169,7 +191,7 @@ public sealed class ScreenModels
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
             || MeetingModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed)
             || Ai.Handles(failed) || CloudModel.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
-            || Library.Handles(failed);
+            || Library.Handles(failed) || Import02Model.Handles(failed);
     }
 
     /// <summary>

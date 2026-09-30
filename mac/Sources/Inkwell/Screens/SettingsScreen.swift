@@ -85,6 +85,7 @@ struct SettingsScreen: View {
             screens.snippets.load()
             screens.voiceCommands.load()
             screens.importNote.load()
+            screens.import02.check()
             screens.catalogue.requery()
             screens.storage.measure()
         }
@@ -294,6 +295,12 @@ private struct VoiceSection: View {
             .font(Typography.caption)
             .fixedSize(horizontal: false, vertical: true)
             ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
+            // Inkwell 0.2's history, while there is some to import (or the look for it failed).
+            if screens.import02.offered || screens.import02.checkFailed {
+                Import02Card(model: screens.import02)
+                    .padding(12)
+                    .paperCard()
+            }
             Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)

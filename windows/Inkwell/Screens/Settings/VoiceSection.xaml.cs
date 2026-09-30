@@ -18,7 +18,7 @@ public sealed partial class VoiceSection : UserControl
     private readonly List<string?> editTokens = [];
     private bool rendering;
 
-    /// <param name="importNote">The Inkwell 0.2 key note's view, shown under the keys, if any.</param>
+    /// <param name="importNote">The Inkwell 0.2 key note's view and the import's row, shown under the keys, if any.</param>
     public VoiceSection(AiSettings ai, UIElement? importNote = null)
     {
         ArgumentNullException.ThrowIfNull(ai);

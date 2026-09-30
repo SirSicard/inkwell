@@ -512,6 +512,15 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertEqual(command(sent().last!)["cmd"] as? String, "record.open")
     }
 
+    /// Inkwell 0.2's dictations came over: the list and the stats are read again.
+    func testAnImportRefreshesWhatIsShown() {
+        let (library, sent) = model()
+        let before = sent().count
+        library.apply([event(#"{"type":"import.finished","counts":{"dictations":2,"dictionary_entries":0,"snippets":0,"modes":0,"settings":0,"voice_commands":0,"app_style_rules":0,"linked_keys":0},"ref":"import.run"}"#)])
+        let asked = sent()[before...].map { command($0)["cmd"] as? String }
+        XCTAssertTrue(asked.contains("records.list") && asked.contains("library.stats"), "\(asked)")
+    }
+
     /// A list or a record that could not be read says so; it never reads as an empty library, and
     /// a stale question's failure changes nothing.
     func testAFailedLoadReadsAsCouldNotLoadNeverAsEmpty() {

@@ -1221,7 +1221,7 @@ final class OnboardingModelTests: XCTestCase {
         onboarding.load()
         onboarding.apply(event(#"{"type":"setting.value","key":"onboarding.done"}"#))
         XCTAssertTrue(onboarding.showing, "never completed")
-        for _ in OnboardingModel.Step.allCases { onboarding.next() }
+        for _ in onboarding.steps { onboarding.next() }
         XCTAssertFalse(onboarding.showing)
         XCTAssertEqual(sent.commands, [.settingGet(.onboardingDone), .settingSet(.onboardingDone, "true")])
         let again = OnboardingModel(send: { _ in })
@@ -1543,6 +1543,7 @@ final class CoreControllerCommandTests: XCTestCase {
         let logged = Logged()
         let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
         core.start(environment: ["INK_DATA_DIR": data.path])
+        XCTAssertFalse(core.screens.import02.looks, "a moved library never looks at this Mac's Inkwell 0.2 data")
         try await until { if case .ready = core.store.status { true } else { false } }
         let fixtures = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

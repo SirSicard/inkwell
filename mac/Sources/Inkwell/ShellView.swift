@@ -111,7 +111,9 @@ struct RecordControls: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(listening)
-                Text("Hold fn to dictate").foregroundStyle(Theme.secondaryText)
+                // The key dictation uses now (a 0.2 import or Settings can change it from fn).
+                Text("Hold \(DictationModel.key(screens.dictation.key)?.name ?? screens.dictation.key) to dictate")
+                    .foregroundStyle(Theme.secondaryText)
             }
             .font(Typography.timestamp)
             .foregroundStyle(PaperPalette.quiet)

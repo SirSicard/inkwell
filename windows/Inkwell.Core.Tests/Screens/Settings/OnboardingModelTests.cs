@@ -71,7 +71,7 @@ public class OnboardingModelTests
         onboarding.Load();
         onboarding.Apply(Ev.Of("""{"type":"setting.value","key":"onboarding.done"}"""));
         Assert.True(onboarding.Showing); // never completed
-        foreach (var _ in Enum.GetValues<OnboardingStep>())
+        foreach (var _ in onboarding.ShownSteps)
         {
             onboarding.Next();
         }

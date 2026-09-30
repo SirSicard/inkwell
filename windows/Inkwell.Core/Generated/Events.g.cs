@@ -118,6 +118,8 @@ public abstract record InkEvent
                 "snippets.listed" => root.Deserialize(InkEventsJson.Default.SnippetsListed)!,
                 "voice_commands.listed" => root.Deserialize(InkEventsJson.Default.VoiceCommandsListed)!,
                 "import.notes" => root.Deserialize(InkEventsJson.Default.ImportNotes)!,
+                "import.checked" => root.Deserialize(InkEventsJson.Default.ImportChecked)!,
+                "import.finished" => root.Deserialize(InkEventsJson.Default.ImportFinished)!,
                 "library.records" => root.Deserialize(InkEventsJson.Default.LibraryRecords)!,
                 "library.search" => root.Deserialize(InkEventsJson.Default.LibrarySearch)!,
                 "library.record" => root.Deserialize(InkEventsJson.Default.LibraryRecord)!,
@@ -250,6 +252,8 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(SnippetsListed))]
 [JsonSerializable(typeof(VoiceCommandsListed))]
 [JsonSerializable(typeof(ImportNotes))]
+[JsonSerializable(typeof(ImportChecked))]
+[JsonSerializable(typeof(ImportFinished))]
 [JsonSerializable(typeof(LibraryRecords))]
 [JsonSerializable(typeof(LibrarySearch))]
 [JsonSerializable(typeof(LibraryRecord))]
@@ -1493,6 +1497,114 @@ public enum FarEnd
 }
 
 /// <summary>
+/// What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer
+/// (the core knows where), and whether this library holds it already. The data is read, never
+/// written, and the keychain is not asked, so linked_keys is 0 here.
+/// </summary>
+public sealed record ImportChecked : InkEvent
+{
+    /// <summary>
+    /// What an import would bring (the dry run), when found.
+    /// </summary>
+    [JsonPropertyName("counts")]
+    public ImportCounts? Counts { get; init; }
+
+    /// <summary>
+    /// Why the data cannot be read now, when unreadable: words to show (for one, that Inkwell
+    /// 0.2 is still open and should be quit first).
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    /// <summary>
+    /// The command's id.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// Whether there is something to import.
+    /// </summary>
+    [JsonPropertyName("state")]
+    public required ImportState State { get; init; }
+}
+
+/// <summary>
+/// How many of each kind Inkwell 0.2's data holds, or an import wrote.
+/// </summary>
+public sealed record ImportCounts
+{
+    /// <summary>
+    /// Per-app style rules.
+    /// </summary>
+    [JsonPropertyName("app_style_rules")]
+    public required long AppStyleRules { get; init; }
+
+    /// <summary>
+    /// Dictations, each a record in the library.
+    /// </summary>
+    [JsonPropertyName("dictations")]
+    public required long Dictations { get; init; }
+
+    /// <summary>
+    /// Dictionary entries (a word and what replaces it).
+    /// </summary>
+    [JsonPropertyName("dictionary_entries")]
+    public required long DictionaryEntries { get; init; }
+
+    /// <summary>
+    /// Providers whose API key in the keychain is linked, by reference (never copied).
+    /// </summary>
+    [JsonPropertyName("linked_keys")]
+    public required long LinkedKeys { get; init; }
+
+    /// <summary>
+    /// Modes.
+    /// </summary>
+    [JsonPropertyName("modes")]
+    public required long Modes { get; init; }
+
+    /// <summary>
+    /// 0.2's own settings.
+    /// </summary>
+    [JsonPropertyName("settings")]
+    public required long Settings { get; init; }
+
+    /// <summary>
+    /// Snippets.
+    /// </summary>
+    [JsonPropertyName("snippets")]
+    public required long Snippets { get; init; }
+
+    /// <summary>
+    /// Voice commands.
+    /// </summary>
+    [JsonPropertyName("voice_commands")]
+    public required long VoiceCommands { get; init; }
+}
+
+/// <summary>
+/// import.run brought Inkwell 0.2's data into the library, in one transaction: the library's
+/// records changed (list them again), import.notes may have something to say about the
+/// dictation key, and a running dictation already uses what came over. A failure is
+/// command.failed, its message in words to show.
+/// </summary>
+public sealed record ImportFinished : InkEvent
+{
+    /// <summary>
+    /// What it wrote.
+    /// </summary>
+    [JsonPropertyName("counts")]
+    public required ImportCounts Counts { get; init; }
+
+    /// <summary>
+    /// The command's id.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
 /// 0.2's dictation hotkey, and what the import made of it.
 /// </summary>
 public sealed record ImportKeyNote
@@ -1565,6 +1677,24 @@ public sealed record ImportNotes : InkEvent
     /// </summary>
     [JsonPropertyName("ref")]
     public string? Ref { get; init; }
+}
+
+/// <summary>
+/// Inkwell 0.2's data: found (and not imported yet), absent from this computer, imported into
+/// this library already (0.2's data is not opened then), or found but unreadable now
+/// (import.run may still work once the reason is gone).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<ImportState>))]
+public enum ImportState
+{
+    [JsonStringEnumMemberName("found")]
+    Found,
+    [JsonStringEnumMemberName("absent")]
+    Absent,
+    [JsonStringEnumMemberName("imported")]
+    Imported,
+    [JsonStringEnumMemberName("unreadable")]
+    Unreadable,
 }
 
 /// <summary>

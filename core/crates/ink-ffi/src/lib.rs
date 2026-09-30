@@ -17,6 +17,7 @@
 //! | [`dictation`] | the dictation worker |
 //! | [`voice`] | dictation, live: the keys, the mic, the worker and the engine's warm-up |
 //! | [`library`] | the library as the screens read it (records, search, a record, counts), answered on `queries`' thread |
+//! | [`import02`] | Inkwell 0.2's data found, counted and imported, answered on `queries`' thread |
 //! | [`logging`] | the only logger and `tracing` subscriber, with both privacy filters |
 //! | [`control`] | meetings started, stopped and detected, on their own thread ([`detection`] decides) |
 //! | [`capture`] | a meeting's mic and far end from this machine's devices |
@@ -49,6 +50,7 @@ pub mod events;
 pub mod external;
 pub mod gate;
 pub mod hub;
+pub mod import02;
 pub mod library;
 pub mod llms;
 pub mod logging;
@@ -226,7 +228,7 @@ pub unsafe extern "C" fn ink_init(
             eprintln!("ink_init: {e}");
             return INK_ERR_FAILED;
         }
-        let parts = match Parts::production(&config) {
+        let (parts, import02) = match Parts::production(&config) {
             Ok(p) => p,
             Err(e) => {
                 log::error!("ink_init: {e}");
@@ -275,6 +277,7 @@ pub unsafe extern "C" fn ink_init(
                     Ok(platform) => core.set_voice_platform(platform),
                     Err(e) => log::error!("ink_init: dictation has no platform: {e}"),
                 }
+                core.set_import02(import02);
                 *CORE.write().unwrap_or_else(PoisonError::into_inner) = Some(core);
                 INK_OK
             }

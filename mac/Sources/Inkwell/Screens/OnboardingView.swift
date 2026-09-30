@@ -1,8 +1,8 @@
 // The first-run state: a sheet over the window until the user finishes or skips it. What Inkwell
 // does, the four permissions (each asked for only when the user presses Allow), the speech models
 // (downloaded only when the user presses Download, and still downloading while the user goes on),
-// polish (off, and turned on only through its consent step), and how to dictate. Remembered in
-// the core's store (onboarding.done).
+// Inkwell 0.2's history (only when there is some to import), polish (off, and turned on only
+// through its consent step), and how to dictate. Remembered in the core's store (onboarding.done).
 import SwiftUI
 
 struct OnboardingView: View {
@@ -17,6 +17,7 @@ struct OnboardingView: View {
                 case .welcome: welcome
                 case .permissions: permissions
                 case .models: models
+                case .importData: importData
                 case .polish: polish
                 case .ready: ready
                 }
@@ -31,7 +32,7 @@ struct OnboardingView: View {
                 if onboarding.step != .welcome {
                     Button("Back") { onboarding.back() }
                 }
-                Button(onboarding.step == .ready ? "Start" : "Continue") { onboarding.next() }
+                Button(continueTitle(onboarding.step)) { onboarding.next() }
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -42,23 +43,35 @@ struct OnboardingView: View {
         .onDisappear { screens.permissions.screenDisappeared() }
     }
 
-    /// Where the user is: dots, never a bar that fills.
+    /// The import step moves on without importing: Not now, until something came over.
+    private func continueTitle(_ step: OnboardingModel.Step) -> String {
+        switch step {
+        case .ready: "Start"
+        case .importData where screens.import02.imported == nil: "Not now"
+        default: "Continue"
+        }
+    }
+
+    /// Where the user is: dots, never a bar that fills. Only the steps shown.
     private func stepDots(_ step: OnboardingModel.Step) -> some View {
-        HStack(spacing: 8) {
-            ForEach(OnboardingModel.Step.allCases, id: \.self) { s in
+        let steps = screens.onboarding.steps
+        return HStack(spacing: 8) {
+            ForEach(steps, id: \.self) { s in
                 Circle()
                     .fill(s == step ? Theme.text : PaperPalette.border)
                     .frame(width: 7, height: 7)
             }
         }
         .accessibilityElement()
-        .accessibilityLabel("Step \(step.rawValue + 1) of \(OnboardingModel.Step.allCases.count)")
+        .accessibilityLabel("Step \((steps.firstIndex(of: step) ?? 0) + 1) of \(steps.count)")
     }
 
+    /// Names the key dictation uses now (after Back, the import step may have changed it).
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let dictation = screens.dictation
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Inkwell").font(Typography.screenTitle).accessibilityAddTraits(.isHeader)
-            Text("Hold fn and speak: your words are typed where your cursor is.")
+            Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key) and speak: your words are typed where your cursor is.")
             Text("In a meeting, Inkwell writes down both sides as they talk, then blots the transcript and lists what you promised.")
             Text("It all happens on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
                 .foregroundStyle(Theme.secondaryText)
@@ -123,6 +136,20 @@ struct OnboardingView: View {
         }
     }
 
+    /// Shown only while Inkwell 0.2's data is offered: what it left, in words, with Import; after
+    /// an import, what became of its dictation key.
+    private var importData: some View {
+        let dictation = screens.dictation
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Your Inkwell 0.2 history").font(Typography.heading).accessibilityAddTraits(.isHeader)
+            Import02Card(model: screens.import02)
+            if screens.import02.imported != nil {
+                ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
+            }
+        }
+        .foregroundStyle(Theme.text)
+    }
+
     private var polish: some View {
         let polish = screens.polish
         return VStack(alignment: .leading, spacing: 12) {
@@ -141,10 +168,12 @@ struct OnboardingView: View {
         .polishConsent(polish, host: .onboarding)
     }
 
+    /// Names the key dictation uses now: the import step can change it from fn.
     private var ready: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let dictation = screens.dictation
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Ready").font(Typography.heading).accessibilityAddTraits(.isHeader)
-            Text("Hold fn, say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
+            Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key), say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
             if !screens.permissions.offCards.isEmpty {
                 Text("Still off: \(screens.permissions.offCards.map(\.title).joined(separator: ", ")). Settings can turn them on.")
                     .foregroundStyle(Theme.alert)

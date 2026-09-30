@@ -159,6 +159,10 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case voiceCommandsListed(VoiceCommandsListed)
     /// `import.notes`
     case importNotes(ImportNotes)
+    /// `import.checked`
+    case importChecked(ImportChecked)
+    /// `import.finished`
+    case importFinished(ImportFinished)
     /// `library.records`
     case libraryRecords(LibraryRecords)
     /// `library.search`
@@ -267,6 +271,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "snippets.listed": self = .snippetsListed(try SnippetsListed(from: decoder))
             case "voice_commands.listed": self = .voiceCommandsListed(try VoiceCommandsListed(from: decoder))
             case "import.notes": self = .importNotes(try ImportNotes(from: decoder))
+            case "import.checked": self = .importChecked(try ImportChecked(from: decoder))
+            case "import.finished": self = .importFinished(try ImportFinished(from: decoder))
             case "library.records": self = .libraryRecords(try LibraryRecords(from: decoder))
             case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
             case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
@@ -356,6 +362,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .snippetsListed(let event): try event.encode(to: encoder)
         case .voiceCommandsListed(let event): try event.encode(to: encoder)
         case .importNotes(let event): try event.encode(to: encoder)
+        case .importChecked(let event): try event.encode(to: encoder)
+        case .importFinished(let event): try event.encode(to: encoder)
         case .libraryRecords(let event): try event.encode(to: encoder)
         case .librarySearch(let event): try event.encode(to: encoder)
         case .libraryRecord(let event): try event.encode(to: encoder)
@@ -1110,6 +1118,67 @@ public enum FarEnd: String, Codable, Sendable, Equatable, CaseIterable {
     case everything
 }
 
+/// What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer
+/// (the core knows where), and whether this library holds it already. The data is read, never
+/// written, and the keychain is not asked, so linked_keys is 0 here.
+public struct ImportChecked: Codable, Sendable, Equatable {
+    /// What an import would bring (the dry run), when found.
+    public let counts: ImportCounts?
+    /// Why the data cannot be read now, when unreadable: words to show (for one, that Inkwell
+    /// 0.2 is still open and should be quit first).
+    public let message: String?
+    /// The command's id.
+    public let ref: String?
+    /// Whether there is something to import.
+    public let state: ImportState
+    /// Always `import.checked`.
+    public let type: String
+}
+
+/// How many of each kind Inkwell 0.2's data holds, or an import wrote.
+public struct ImportCounts: Codable, Sendable, Equatable {
+    /// Per-app style rules.
+    public let appStyleRules: Int64
+    /// Dictations, each a record in the library.
+    public let dictations: Int64
+    /// Dictionary entries (a word and what replaces it).
+    public let dictionaryEntries: Int64
+    /// Providers whose API key in the keychain is linked, by reference (never copied).
+    public let linkedKeys: Int64
+    /// Modes.
+    public let modes: Int64
+    /// 0.2's own settings.
+    public let settings: Int64
+    /// Snippets.
+    public let snippets: Int64
+    /// Voice commands.
+    public let voiceCommands: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case appStyleRules = "app_style_rules"
+        case dictations
+        case dictionaryEntries = "dictionary_entries"
+        case linkedKeys = "linked_keys"
+        case modes
+        case settings
+        case snippets
+        case voiceCommands = "voice_commands"
+    }
+}
+
+/// import.run brought Inkwell 0.2's data into the library, in one transaction: the library's
+/// records changed (list them again), import.notes may have something to say about the
+/// dictation key, and a running dictation already uses what came over. A failure is
+/// command.failed, its message in words to show.
+public struct ImportFinished: Codable, Sendable, Equatable {
+    /// What it wrote.
+    public let counts: ImportCounts
+    /// The command's id.
+    public let ref: String?
+    /// Always `import.finished`.
+    public let type: String
+}
+
 /// 0.2's dictation hotkey, and what the import made of it.
 public struct ImportKeyNote: Codable, Sendable, Equatable {
     /// The import set it as the dictation key (a key already chosen in 1.0 is kept).
@@ -1145,6 +1214,16 @@ public struct ImportNotes: Codable, Sendable, Equatable {
     public let ref: String?
     /// Always `import.notes`.
     public let type: String
+}
+
+/// Inkwell 0.2's data: found (and not imported yet), absent from this computer, imported into
+/// this library already (0.2's data is not opened then), or found but unreadable now
+/// (import.run may still work once the reason is gone).
+public enum ImportState: String, Codable, Sendable, Equatable, CaseIterable {
+    case found
+    case absent
+    case imported
+    case unreadable
 }
 
 /// How a dictation went in. blocked: Secure Input or an elevated target refused synthetic

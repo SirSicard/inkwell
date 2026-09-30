@@ -15,6 +15,8 @@
 //! | [`TextInserter`](ink_core::TextInserter) | `WinTextInserter` | `insert` |
 //! | [`FocusReader`](ink_core::FocusReader) | `WinFocusReader` | `focus` |
 //!
+//! Beside them, `folders` finds the roaming app data folder, where Inkwell 0.2 kept its data.
+//!
 //! Permissions: Windows gates only the microphone for a desktop app, through three privacy
 //! switches that this crate reads and never changes. Nothing here prompts.
 //!
@@ -32,6 +34,7 @@ pub mod clock;
 mod com;
 pub mod detect;
 pub mod focus;
+pub mod folders;
 pub mod hotkey;
 pub mod insert;
 mod integrity;
@@ -47,6 +50,8 @@ pub use clock::WinClock;
 pub use detect::WinMeetingDetector;
 #[cfg(windows)]
 pub use focus::WinFocusReader;
+#[cfg(windows)]
+pub use folders::roaming_app_data;
 #[cfg(windows)]
 pub use hotkey::WinHotkeySource;
 #[cfg(windows)]

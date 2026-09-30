@@ -293,8 +293,9 @@ final class LibraryModel {
             case .commitmentUpdated, .noteAdded, .noteUpdated, .noteDeleted:
                 // The open record may hold it: read it again.
                 recordChanged = true
-            case .meetingFinished, .dictationInserted, .coreReady:
-                // A record was written or finished: what the screens list has changed.
+            case .meetingFinished, .dictationInserted, .coreReady, .importFinished:
+                // A record was written or finished, or 0.2's came over: what the screens list has
+                // changed.
                 libraryChanged = true
             default:
                 break

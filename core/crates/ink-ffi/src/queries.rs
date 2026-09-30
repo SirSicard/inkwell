@@ -1,5 +1,6 @@
 //! The screens' commands: permissions, what is owed, a live meeting's notes, settings, modes, the
-//! model catalogue, and the library's records ([`library`](crate::library)). They run on their own thread, `ink-queries`, in the order they were sent.
+//! model catalogue, the library's records ([`library`](crate::library)), and Inkwell 0.2's data
+//! ([`import02`](crate::import02)). They run on their own thread, `ink-queries`, in the order they were sent.
 //!
 //! Apart from the command thread on purpose: a model update holds that thread for as long as its
 //! download takes, and a note typed during it, or a permission card the user is looking at, must
@@ -163,6 +164,8 @@ pub enum Query {
     Phrases(crate::phrases::PhrasesQuery),
     /// Own-key language model providers and their keys ([`cloud`](crate::cloud)).
     Cloud(crate::cloud::CloudQuery),
+    /// Inkwell 0.2's data: looked for, or imported ([`import02`](crate::import02)).
+    Import02(crate::import02::Import02Query),
 }
 
 /// A query with the command's name and id, for its events.
@@ -228,6 +231,9 @@ pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     }
     if let Some(query) = crate::cloud::parse(name, v) {
         return Some(query.map(Query::Cloud));
+    }
+    if let Some(query) = crate::import02::parse(name, v) {
+        return Some(query.map(Query::Import02));
     }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
@@ -689,6 +695,21 @@ impl Ctx<'_> {
                 Ok(None) => {}
                 Err(e) => fail(e),
             },
+            // A store call and a read of 0.2's files: about a second for a long history, and
+            // apart from the command thread, which a model download can hold for minutes.
+            Query::Import02(query) => {
+                let import = self.shared.import02.get();
+                match crate::import02::answer(import, query, id.as_deref()) {
+                    Ok(e) => {
+                        emit(e);
+                        // A running dictation takes the imported key and lists at once.
+                        if query.imports() {
+                            crate::voice::settings_changed(self.shared);
+                        }
+                    }
+                    Err(e) => fail(e),
+                }
+            }
         }
     }
 

@@ -1535,6 +1535,50 @@ fn an_imported_voice_command_is_carried_out() {
     rig.events.assert_valid();
 }
 
+/// The screens' import (`import.run`) while dictation is live: the running dictation holds the
+/// imported key and expands the imported snippets at once, without being enabled again.
+#[test]
+fn an_import_from_the_screens_reaches_a_running_dictation_at_once() {
+    let rig = VoiceRig::new("import-run-live");
+    let source = TempDir::new("legacy-0.2-live");
+    for (name, text) in [
+        (
+            "settings.json",
+            r#"{"hotkey":"right_opt","recording_mode":"ptt"}"#,
+        ),
+        ("snippets.json", SNIPPETS_0_2),
+    ] {
+        std::fs::write(source.path().join(name), text).unwrap();
+    }
+    rig.core().set_import02(ink_ffi::import02::Import02 {
+        library: rig.sqlite.clone().unwrap(),
+        source: Some(source.path().to_owned()),
+        keys: None,
+    });
+    assert_eq!(rig.enable()["key"], DEFAULT_KEY);
+    let finished = rig.ask(r#"{"cmd":"import.run","id":"i"}"#, "i");
+    assert_eq!(finished["type"], "import.finished", "{finished}");
+    // After the answer, the running dictation is handed its settings again.
+    assert!(rig.events.wait_count("dictation.ready", 2, WAIT));
+    let types = rig.events.types();
+    let answered = types.iter().position(|t| t == "import.finished").unwrap();
+    let rebound = types.iter().rposition(|t| t == "dictation.ready").unwrap();
+    assert!(answered < rebound, "answered first: {types:?}");
+    let ready = rig
+        .events
+        .all()
+        .into_iter()
+        .rfind(|v| v["type"] == "dictation.ready")
+        .unwrap();
+    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_option")
+    );
+    assert_eq!(rig.dictate(1.2, 1)["text"], "Greetings world.");
+    rig.events.assert_valid();
+}
+
 #[test]
 fn a_snippet_saved_in_settings_reaches_a_running_dictation_at_once() {
     let rig = VoiceRig::new("snippet-saved");
