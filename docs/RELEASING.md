@@ -302,13 +302,14 @@ Then:
 - [ ] Steps 4 and 5 above: published as latest, the feed read back.
 - [ ] 0.2.10 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
       install 1.0): the 0.2 chain below, published with `--latest=false` so that 1.0 stays the
-      release the feed follows, then `inkwell-updater/publish-latest.sh`. On Linux and Intel
-      Macs the notice says 0.2 is their last version.
+      release the feed follows, then `inkwell-updater/publish-latest.sh` and `bin/update-cask.sh`
+      (the cask moves to 0.2.10, so Homebrew users get the notice too). Skip the 0.2 chain's step
+      8: the homepage shows 1.0. On Linux and Intel Macs the notice says 0.2 is their last version.
 - [ ] `inkwell-updater/` retired once 1.0 has shipped on Windows too and 0.2.10 has gone out
       through it (0.2 installs read the notice from it until then).
-- No Homebrew cask in 1.0: `packaging/homebrew/inkwell.rb` stays on 0.2.9. 1.x gets its cask at
-  1.0.1 (macOS 26 or later; 1.0's data folder, `~/Library/Application Support/Inkwell`, in
-  `zap`; then `bin/update-cask.sh`).
+- No Homebrew cask for 1.0: `packaging/homebrew/inkwell.rb` stays on 0.2 (0.2.10 once the notice
+  release is out). 1.x gets its cask at 1.0.1 (macOS 26 or later; 1.0's data folder,
+  `~/Library/Application Support/Inkwell`, in `zap`; then `bin/update-cask.sh`).
 - [ ] The homepage's `APP_VERSION` and release snapshot, only once 1.0.0 is published (step 8 of
       the 0.2 chain), in a commit authored as SirSicard: Vercel builds no other author's commits.
 
