@@ -54,7 +54,8 @@ set INK_DATA_DIR=%TEMP%\inkwell-byok
 ## 3. Use (local-only mode)
 
 - [ ] Before pressing it, the note under the picker says "Using OpenAI turns local-only mode off,
-      so the features below can send to OpenAI. Each one still asks before it sends anything."
+      so the features below can send to OpenAI. Each one sends only once you allow it for OpenAI;
+      one you already allowed for OpenAI sends again straight away."
 - [ ] **Use OpenAI**: the line reads "In use: gpt-4o-mini at OpenAI. Local-only mode is off."
       The three switches below can now be used, and all three are still off.
 
@@ -93,8 +94,9 @@ Dictation needs the engines (build as in `S3.5a-CHECKLIST.md`, same Settings ste
       it."; Test says "Couldn't test it: no key is stored for it".
 - [ ] Pick **None** and **Stop using a language model**: the line reads "No language model is in
       use. Local-only mode is on." and the switches cannot be used.
-- [ ] Choose the provider again (key saved, Use), quit from the tray and start again: Settings > AI
-      shows the same provider, model and "Local-only mode is off."
+- [ ] Choose the provider again (key saved, Use): a switch you last allowed for it is on and
+      allowed again with no new step, as the note said. Quit from the tray and start again:
+      Settings > AI shows the same provider, model and "Local-only mode is off."
 - [ ] Narrator: the picker, the key box ("API key"), the model box, Use, Test and each line are
       read out; the key is never read out.
 

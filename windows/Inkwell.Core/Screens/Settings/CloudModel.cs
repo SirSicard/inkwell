@@ -10,10 +10,13 @@
 //
 // Choosing a provider that is not on this PC turns local-only mode off, and the step says so
 // before the user presses Use; the command carries the user's say-so ("local_only":"off"), and the
-// core refuses such a choice without it. Choosing sends nothing: each feature below still asks its
-// own consent for this provider (ConsentModel), and the core refuses to send without it.
+// core refuses such a choice without it. Choosing sends nothing: each feature below sends only with
+// its own consent for this provider (ConsentModel), and the core refuses to send without it. A
+// consent is kept per address, so one given before sends again as soon as that provider is chosen
+// again; the note under Use says so.
 //
-// Test sends one short fixed request (never the user's words) to the chosen provider with its key.
+// Test sends one short fixed request (never the user's words) to the chosen provider with its key,
+// with no feature's consent: the section's caption says so before it is pressed.
 // A failure of any command is said under the section ("Couldn't ..."), never read as success.
 using Inkwell.Core.Events;
 
@@ -162,8 +165,8 @@ public sealed class CloudModel : ObservableModel
             }
             var name = ProviderName(p.Id);
             return SelectedIsCloud
-                ? $"Using {name} turns local-only mode off, so the features below can send to {name}. Each one still asks before it sends anything."
-                : $"This server is on this PC, so local-only mode stays on. Each feature below still asks before it uses it.";
+                ? $"Using {name} turns local-only mode off, so the features below can send to {name}. Each one sends only once you allow it for {name}; one you already allowed for {name} sends again straight away."
+                : $"This server is on this PC, so local-only mode stays on. Each feature below uses it only once you allow it; one you already allowed uses it straight away.";
         }
     }
 

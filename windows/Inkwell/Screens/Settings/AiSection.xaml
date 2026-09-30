@@ -81,7 +81,7 @@
         </Grid>
         <TextBlock
             Style="{StaticResource InkCaptionStyle}"
-            Text="This PC has no language model of its own, so polish, voice edit, summaries and Ask use one you bring: pick a provider, paste your API key (kept in Windows Credential Manager, never in Inkwell's files), choose a model and press Use. Nothing is sent until you turn a feature on below and allow it." />
+            Text="This PC has no language model of its own, so polish, voice edit, summaries and Ask use one you bring: pick a provider, paste your API key (kept in Windows Credential Manager, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it." />
 
         <Grid Margin="0,6,0,0" ColumnSpacing="12">
             <Grid.ColumnDefinitions>

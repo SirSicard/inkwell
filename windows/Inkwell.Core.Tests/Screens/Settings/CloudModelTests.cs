@@ -94,7 +94,7 @@ public class CloudModelTests
         Assert.Equal("No key is stored yet.", cloud.KeyStatus);
         Assert.True(cloud.SelectedIsCloud);
         Assert.Equal(
-            "Using OpenAI turns local-only mode off, so the features below can send to OpenAI. Each one still asks before it sends anything.",
+            "Using OpenAI turns local-only mode off, so the features below can send to OpenAI. Each one sends only once you allow it for OpenAI; one you already allowed for OpenAI sends again straight away.",
             cloud.UseNote);
 
         cloud.SaveKey("   ");
