@@ -6,8 +6,8 @@ not when it hides and comes back, and not when it is clicked. Run it after any c
 (mac/Sources/Inkwell/Drop.swift) and note the date, the macOS version and the commit.
 
 **The whole list is owed again.** The run of 2026-09-27 was on the Drop before it gained
-dictation's live words and the meeting offer's buttons (commits 19bfeb8 and 2b47234), so it does not count
-for the release: run every step, not only the ones that run skipped.
+dictation's live words and the meeting offer's buttons (commits 19bfeb8 and 2b47234), so it does
+not count for the release: run every step, not only the ones that run skipped.
 
 ## Setup
 
