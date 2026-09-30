@@ -119,11 +119,12 @@ pub fn llm(shared: &Shared) -> Option<Arc<dyn Llm>> {
     })
 }
 
-/// The context the registered language model holds, in tokens.
+/// The context the registered language model holds, in tokens (an own-key provider's is taken
+/// as the default).
 pub fn context_tokens(shared: &Shared) -> u32 {
     shared
         .llms
-        .pick()
+        .pick_shell()
         .and_then(|llm| llm.context_tokens())
         .unwrap_or(DEFAULT_CONTEXT_TOKENS)
 }

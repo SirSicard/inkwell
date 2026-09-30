@@ -5,11 +5,15 @@
 //! Foundation Models while Apple Intelligence is available and lets go of it when it is not, so a
 //! take polished after such a change uses what is registered then. With several registered, the
 //! lowest id wins, so the choice never depends on timing.
+//!
+//! The user's own-key provider ([`cloud`](crate::cloud), chosen in Windows' Settings > AI) is kept
+//! here too, and used only while the shell has registered no model: a shell's model comes first.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
+use ink_llm::ByokLlm;
 use ink_llm::guard::{GuardedLlm, LocalOnly};
 
 use crate::external::ExternalLlm;
@@ -31,11 +35,12 @@ pub fn local_only_setting(store: &dyn ink_core::Store) -> bool {
     }
 }
 
-/// The registered language models, by id. `Send + Sync`; the lock is held only to insert,
-/// remove or copy out an `Arc`, never across a call.
+/// The registered language models, by id, and the chosen own-key provider. `Send + Sync`; the
+/// locks are held only to insert, remove or copy out an `Arc`, never across a call.
 #[derive(Default)]
 pub struct ShellLlms {
     engines: RwLock<BTreeMap<String, Arc<ExternalLlm>>>,
+    cloud: RwLock<Option<Arc<ByokLlm>>>,
 }
 
 impl ShellLlms {
@@ -63,14 +68,41 @@ impl ShellLlms {
         removed.is_some()
     }
 
-    /// The model polish goes to now, if one is registered.
-    pub fn pick(&self) -> Option<Arc<ExternalLlm>> {
+    /// The model polish goes to now: a model the shell registered, else the chosen own-key
+    /// provider, if either.
+    pub fn pick(&self) -> Option<Arc<dyn Llm>> {
+        match self.pick_shell() {
+            Some(shell) => Some(shell),
+            None => self.cloud().map(|cloud| cloud as Arc<dyn Llm>),
+        }
+    }
+
+    /// The model the shell registered that [`pick`](Self::pick) gives, if one is registered.
+    pub fn pick_shell(&self) -> Option<Arc<ExternalLlm>> {
         self.engines
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .next()
             .cloned()
+    }
+
+    /// The chosen own-key provider, if one is chosen.
+    pub fn cloud(&self) -> Option<Arc<ByokLlm>> {
+        self.cloud
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Chooses the own-key provider (`None`: none). A call already holding the previous one
+    /// finishes with it.
+    pub fn set_cloud(&self, llm: Option<Arc<ByokLlm>>) {
+        let previous = std::mem::replace(
+            &mut *self.cloud.write().unwrap_or_else(PoisonError::into_inner),
+            llm,
+        );
+        drop(previous);
     }
 }
 

@@ -209,6 +209,12 @@
       "$ref": "#/$defs/ConsentState"
     },
     {
+      "$ref": "#/$defs/LlmProviders"
+    },
+    {
+      "$ref": "#/$defs/LlmTested"
+    },
+    {
       "$ref": "#/$defs/ModesListed"
     },
     {
@@ -2820,6 +2826,145 @@
         "feature",
         "on",
         "allowed"
+      ],
+      "additionalProperties": false
+    },
+    "LlmProviderEntry": {
+      "type": "object",
+      "description": "An own-key (BYOK) language model provider the user can choose: its id, what it uses unless told otherwise, and whether its API key is stored. The key itself never leaves the OS key store.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible server)."
+        },
+        "default_model": {
+          "type": "string",
+          "description": "The model used when llm.choose names none."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Its address: fixed for a built-in provider; for custom, the address used when llm.choose names none."
+        },
+        "custom_url": {
+          "type": "boolean",
+          "description": "Whether llm.choose may name another address (custom only)."
+        },
+        "needs_key": {
+          "type": "boolean",
+          "description": "Whether a call needs its API key (a custom server usually runs without one)."
+        },
+        "has_key": {
+          "type": "boolean",
+          "description": "Whether a key is stored for it in the OS key store, asked without reading the key. False when that could not be asked (llm.providers' error says so)."
+        }
+      },
+      "required": [
+        "id",
+        "default_model",
+        "endpoint",
+        "custom_url",
+        "needs_key",
+        "has_key"
+      ],
+      "additionalProperties": false
+    },
+    "LlmProviders": {
+      "type": "object",
+      "description": "The own-key language model providers and the one chosen, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and Ask) sends to the chosen provider only when no model is registered by the shell, and only with the user's consent for its endpoint (consent.state).",
+      "properties": {
+        "type": {
+          "const": "llm.providers"
+        },
+        "providers": {
+          "type": "array",
+          "description": "Every provider, in preference order.",
+          "items": {
+            "$ref": "#/$defs/LlmProviderEntry",
+            "description": "A provider."
+          }
+        },
+        "chosen": {
+          "type": "string",
+          "description": "The chosen provider's id; absent when none is chosen."
+        },
+        "model": {
+          "type": "string",
+          "description": "The model the chosen provider is asked for; absent with chosen."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "For custom, the server's address as chosen; absent otherwise."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Where the chosen provider sends, as consent.state names it; absent with chosen."
+        },
+        "to": {
+          "$ref": "#/$defs/LlmDestination",
+          "description": "Whether the chosen provider is on this machine (on_device) or not (cloud); absent with chosen."
+        },
+        "local_only": {
+          "type": "boolean",
+          "description": "Local-only mode (llm.local_only): while on, a provider that is not on this machine is never called."
+        },
+        "ready": {
+          "type": "boolean",
+          "description": "Whether the chosen provider can be called: its key is stored (when it needs one), and local-only mode lets it through. Each feature still needs its own consent."
+        },
+        "error": {
+          "type": "string",
+          "description": "What could not be read (the stored keys, or the choice), as a sentence starting \"couldn't\"; absent when all was read."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "providers",
+        "local_only",
+        "ready"
+      ],
+      "additionalProperties": false
+    },
+    "LlmTested": {
+      "type": "object",
+      "description": "The answer to llm.test: one short fixed request (never the user's words) sent to the chosen provider with its stored key, and whether it answered.",
+      "properties": {
+        "type": {
+          "const": "llm.tested"
+        },
+        "provider": {
+          "type": "string",
+          "description": "The provider tested."
+        },
+        "model": {
+          "type": "string",
+          "description": "The model asked."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "Whether the provider answered."
+        },
+        "status": {
+          "type": "integer",
+          "description": "The HTTP status of a refusal (401 or 403: the key; 404: the model or address; 429: the account's limits); absent otherwise."
+        },
+        "error": {
+          "type": "string",
+          "description": "Why it did not answer, as a sentence starting \"couldn't\"; absent when ok. Names what failed, never the key."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "provider",
+        "model",
+        "ok"
       ],
       "additionalProperties": false
     },

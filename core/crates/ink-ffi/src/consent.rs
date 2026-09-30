@@ -24,7 +24,6 @@
 //!   `not_allowed`); a meeting's final pass says `summary_not_allowed`, and Ask fails asking for
 //!   the user's OK (`crate::asking`).
 
-use ink_core::Llm as _;
 use ink_pipeline::consent::{Feature, LlmConsent, NO_CONSENT};
 use serde_json::Value;
 

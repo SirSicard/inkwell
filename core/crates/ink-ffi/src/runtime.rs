@@ -343,6 +343,9 @@ pub struct Shared {
     pub(crate) finishing: Mutex<crate::retention::Holds>,
     /// Dictation, live ([`voice`](crate::voice)): the platform it may use and what runs.
     pub(crate) voice: Mutex<crate::voice::VoiceSlot>,
+    /// Own-key providers' key store and HTTP client, and the test thread's mailbox
+    /// ([`cloud`](crate::cloud)).
+    pub(crate) cloud: crate::cloud::Cloud,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -528,6 +531,7 @@ pub struct Core {
     control: Control,
     asking: Asking,
     retention: Sweeper,
+    tester: crate::cloud::Tester,
 }
 
 impl Core {
@@ -561,7 +565,10 @@ impl Core {
             sweeps: std::sync::OnceLock::new(),
             finishing: Mutex::default(),
             voice: Mutex::default(),
+            cloud: crate::cloud::Cloud::default(),
         });
+        // The chosen own-key provider, if any, before anything can call a model.
+        crate::cloud::load(&shared);
         let runs = Arc::new(Mutex::new(Runs::default()));
         let (commands, rx) = mpsc::channel::<Envelope>();
         let command_thread = {
@@ -583,6 +590,7 @@ impl Core {
         )?;
         let _ = shared.control.set(Mutex::new(control.sender()));
         let asking = Asking::start(shared.clone(), runs.clone())?;
+        let tester = crate::cloud::Tester::start(shared.clone())?;
         shared.events.emit(events::ready());
         // Detection follows the user's setting (on unless turned off); what it finds is offered
         // only once the shell is listening, after `core.ready`.
@@ -616,7 +624,19 @@ impl Core {
             control,
             asking,
             retention,
+            tester,
         })
+    }
+
+    /// Replaces where own-key providers keep their keys and how they reach the network, and builds
+    /// the chosen provider again over them. The app keeps the OS key store and the process's HTTP
+    /// client; tests pass fakes. Not reachable from the C ABI.
+    pub fn set_cloud_services(
+        &self,
+        keys: Arc<dyn ink_llm::KeyStore>,
+        transport: Arc<dyn ink_llm::Transport>,
+    ) {
+        crate::cloud::set_services(&self.shared, keys, transport);
     }
 
     /// Lends the far end's bands writer, as [`lend_bands`](Self::lend_bands) does the mic's.
@@ -796,6 +816,7 @@ impl Core {
             control,
             asking,
             retention,
+            tester,
         } = self;
         shared.shutdown.cancel();
         drop(commands);
@@ -807,6 +828,8 @@ impl Core {
         // Its model call sees the cancel; detection stops, and a recovery in progress stops at
         // its next region (its marker stays for the next launch).
         asking.stop();
+        // After the queries thread, which hands it tests.
+        tester.stop();
         control.stop();
         retention.stop();
         // Dictation's keys, mic, worker and warm-up: every thread that can hold an engine.

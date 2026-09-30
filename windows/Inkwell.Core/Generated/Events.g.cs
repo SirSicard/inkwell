@@ -111,6 +111,8 @@ public abstract record InkEvent
                 "models.listed" => root.Deserialize(InkEventsJson.Default.ModelsListed)!,
                 "setting.value" => root.Deserialize(InkEventsJson.Default.SettingValue)!,
                 "consent.state" => root.Deserialize(InkEventsJson.Default.ConsentState)!,
+                "llm.providers" => root.Deserialize(InkEventsJson.Default.LlmProviders)!,
+                "llm.tested" => root.Deserialize(InkEventsJson.Default.LlmTested)!,
                 "modes.listed" => root.Deserialize(InkEventsJson.Default.ModesListed)!,
                 "snippets.listed" => root.Deserialize(InkEventsJson.Default.SnippetsListed)!,
                 "voice_commands.listed" => root.Deserialize(InkEventsJson.Default.VoiceCommandsListed)!,
@@ -240,6 +242,8 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(ModelsListed))]
 [JsonSerializable(typeof(SettingValue))]
 [JsonSerializable(typeof(ConsentState))]
+[JsonSerializable(typeof(LlmProviders))]
+[JsonSerializable(typeof(LlmTested))]
 [JsonSerializable(typeof(ModesListed))]
 [JsonSerializable(typeof(SnippetsListed))]
 [JsonSerializable(typeof(VoiceCommandsListed))]
@@ -1865,6 +1869,171 @@ public enum LlmFeature
     Edit,
     [JsonStringEnumMemberName("meetings")]
     Meetings,
+}
+
+/// <summary>
+/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
+/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
+/// store.
+/// </summary>
+public sealed record LlmProviderEntry
+{
+    /// <summary>
+    /// Whether llm.choose may name another address (custom only).
+    /// </summary>
+    [JsonPropertyName("custom_url")]
+    public required bool CustomUrl { get; init; }
+
+    /// <summary>
+    /// The model used when llm.choose names none.
+    /// </summary>
+    [JsonPropertyName("default_model")]
+    public required string DefaultModel { get; init; }
+
+    /// <summary>
+    /// Its address: fixed for a built-in provider; for custom, the address used when llm.choose
+    /// names none.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public required string Endpoint { get; init; }
+
+    /// <summary>
+    /// Whether a key is stored for it in the OS key store, asked without reading the key. False
+    /// when that could not be asked (llm.providers' error says so).
+    /// </summary>
+    [JsonPropertyName("has_key")]
+    public required bool HasKey { get; init; }
+
+    /// <summary>
+    /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
+    /// server).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Whether a call needs its API key (a custom server usually runs without one).
+    /// </summary>
+    [JsonPropertyName("needs_key")]
+    public required bool NeedsKey { get; init; }
+}
+
+/// <summary>
+/// The own-key language model providers and the one chosen, in answer to llm.providers,
+/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
+/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
+/// with the user's consent for its endpoint (consent.state).
+/// </summary>
+public sealed record LlmProviders : InkEvent
+{
+    /// <summary>
+    /// For custom, the server's address as chosen; absent otherwise.
+    /// </summary>
+    [JsonPropertyName("base_url")]
+    public string? BaseUrl { get; init; }
+
+    /// <summary>
+    /// The chosen provider's id; absent when none is chosen.
+    /// </summary>
+    [JsonPropertyName("chosen")]
+    public string? Chosen { get; init; }
+
+    /// <summary>
+    /// Where the chosen provider sends, as consent.state names it; absent with chosen.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public string? Endpoint { get; init; }
+
+    /// <summary>
+    /// What could not be read (the stored keys, or the choice), as a sentence starting
+    /// "couldn't"; absent when all was read.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// Local-only mode (llm.local_only): while on, a provider that is not on this machine is
+    /// never called.
+    /// </summary>
+    [JsonPropertyName("local_only")]
+    public required bool LocalOnly { get; init; }
+
+    /// <summary>
+    /// The model the chosen provider is asked for; absent with chosen.
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
+
+    /// <summary>
+    /// Every provider, in preference order.
+    /// </summary>
+    [JsonPropertyName("providers")]
+    public required global::System.Collections.Generic.IReadOnlyList<LlmProviderEntry> Providers { get; init; }
+
+    /// <summary>
+    /// Whether the chosen provider can be called: its key is stored (when it needs one), and
+    /// local-only mode lets it through. Each feature still needs its own consent.
+    /// </summary>
+    [JsonPropertyName("ready")]
+    public required bool Ready { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// Whether the chosen provider is on this machine (on_device) or not (cloud); absent with
+    /// chosen.
+    /// </summary>
+    [JsonPropertyName("to")]
+    public LlmDestination? To { get; init; }
+}
+
+/// <summary>
+/// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
+/// provider with its stored key, and whether it answered.
+/// </summary>
+public sealed record LlmTested : InkEvent
+{
+    /// <summary>
+    /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
+    /// failed, never the key.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// The model asked.
+    /// </summary>
+    [JsonPropertyName("model")]
+    public required string Model { get; init; }
+
+    /// <summary>
+    /// Whether the provider answered.
+    /// </summary>
+    [JsonPropertyName("ok")]
+    public required bool Ok { get; init; }
+
+    /// <summary>
+    /// The provider tested.
+    /// </summary>
+    [JsonPropertyName("provider")]
+    public required string Provider { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The HTTP status of a refusal (401 or 403: the key; 404: the model or address; 429: the
+    /// account's limits); absent otherwise.
+    /// </summary>
+    [JsonPropertyName("status")]
+    public long? Status { get; init; }
 }
 
 /// <summary>
