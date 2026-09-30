@@ -583,6 +583,30 @@ fn the_test_sends_one_fixed_request_and_says_how_it_went() {
             .starts_with("couldn't reach the provider")
     );
 
+    // A custom server over plain http on another machine never gets the key, so its refusal is
+    // not blamed on the key.
+    rig.net.set(Ok((401, String::new())));
+    rig.ask(
+        json!({"cmd": "llm.key.save", "provider": "custom", "key": KEY}),
+        "k2",
+    );
+    rig.ask(
+        json!({"cmd": "llm.choose", "provider": "custom", "base_url": "http://192.0.2.10:8000/v1", "local_only": "off"}),
+        "c2",
+    );
+    let withheld = rig.ask(json!({"cmd": "llm.test"}), "t4b");
+    assert_eq!(withheld["status"], 401);
+    assert_eq!(
+        withheld["error"],
+        "couldn't get an answer: the server asks for a key, and keys are sent only over https or \
+         to this computer"
+    );
+    let seen = rig.net.seen.lock().unwrap().last().unwrap().clone();
+    assert_eq!(seen.url, "http://192.0.2.10:8000/v1/chat/completions");
+    assert_eq!(seen.header("Authorization"), None);
+    rig.ask(json!({"cmd": "llm.key.delete", "provider": "custom"}), "d0");
+    rig.choose_openai("c3");
+
     // No key: said, and nothing sent.
     rig.ask(json!({"cmd": "llm.key.delete", "provider": "openai"}), "d1");
     let calls = rig.net.calls();

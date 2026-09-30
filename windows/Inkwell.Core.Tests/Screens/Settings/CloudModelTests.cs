@@ -149,6 +149,34 @@ public class CloudModelTests
         Assert.True(Assert.IsType<CoreCommand.LlmChoose>(sent.Commands[^1]).LocalOnlyOff);
     }
 
+    /// <summary>
+    /// A custom server over plain http off this PC never gets the key (the core keeps it back), and
+    /// the key line says so, stored or not, instead of reading as if the key were used.
+    /// </summary>
+    [Fact]
+    public void AKeyKeptBackFromAPlainHttpServerIsSaid()
+    {
+        var (cloud, _) = Loaded(Providers(keyed: ["custom"]));
+        cloud.Select("custom");
+        Assert.False(cloud.KeyWithheld); // Ollama's default, on this PC
+        Assert.Equal("A key is stored in Windows Credential Manager.", cloud.KeyStatus);
+        cloud.DraftBaseUrl = "http://192.0.2.10:8000/v1";
+        Assert.True(cloud.KeyWithheld);
+        Assert.Equal(
+            "A key is stored in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
+            cloud.KeyStatus);
+        cloud.DraftBaseUrl = "https://llm.example.com/v1";
+        Assert.False(cloud.KeyWithheld);
+        Assert.Equal("A key is stored in Windows Credential Manager.", cloud.KeyStatus);
+
+        (cloud, _) = Loaded();
+        cloud.Select("custom");
+        cloud.DraftBaseUrl = "HTTP://llm.example.com/v1";
+        Assert.Equal("No key is sent to this server: keys go only over https or to a server on this PC.", cloud.KeyStatus);
+        cloud.Select("openai");
+        Assert.False(cloud.KeyWithheld); // a built-in provider's address is https
+    }
+
     [Theory]
     [InlineData("http://localhost:11434/v1", true)]
     [InlineData("http://LOCALHOST/v1", true)]

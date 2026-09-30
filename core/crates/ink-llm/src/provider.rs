@@ -199,6 +199,12 @@ impl ByokLlm {
         self.base.is_https() || self.base.is_loopback()
     }
 
+    /// Whether a stored key is kept back from this endpoint (a custom server over plain `http` on
+    /// another machine): its requests go without one, so a refusal there is not the key's fault.
+    pub fn key_withheld(&self) -> bool {
+        !self.key_may_travel()
+    }
+
     fn key(&self) -> Result<Option<ApiKey>, LlmError> {
         if !self.key_may_travel() {
             // Only a custom server can get here (built-in endpoints are fixed https); it is

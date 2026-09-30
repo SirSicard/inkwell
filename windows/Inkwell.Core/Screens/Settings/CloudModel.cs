@@ -167,14 +167,29 @@ public sealed class CloudModel : ObservableModel
         }
     }
 
+    /// <summary>
+    /// Whether the core keeps the key back from the server in the picker: a custom server over
+    /// plain http that is not on this PC gets no key, stored or not (the core's rule).
+    /// </summary>
+    public bool KeyWithheld => SelectedProvider is { CustomUrl: true } p && KeyWithheldFrom(BaseUrlFor(p));
+
     /// <summary>The line about the key of the provider in the picker.</summary>
     public string KeyStatus => SelectedProvider switch
     {
         null => "",
+        { HasKey: true } when KeyWithheld => "A key is stored in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
+        _ when KeyWithheld => "No key is sent to this server: keys go only over https or to a server on this PC.",
         { NeedsKey: false, HasKey: false } => "No key is needed unless your server asks for one.",
         { HasKey: true } => "A key is stored in Windows Credential Manager.",
         _ => "No key is stored yet.",
     };
+
+    /// <summary>Whether the core keeps a key back from <paramref name="url"/>: plain http to a server that is not on this PC.</summary>
+    public static bool KeyWithheldFrom(string url)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+        return url.Trim().StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !IsOnThisPc(url);
+    }
 
     /// <summary>The line about what is in use now.</summary>
     public string Status

@@ -783,7 +783,7 @@ fn test(shared: &Shared, reference: Option<&str>) -> Value {
                 LlmError::Http { status } => Some(*status),
                 _ => None,
             };
-            (status, Some(tested_error(e)))
+            (status, Some(tested_error(e, llm.key_withheld())))
         }
     };
     event(
@@ -799,13 +799,19 @@ fn test(shared: &Shared, reference: Option<&str>) -> Value {
     )
 }
 
-/// Why a test failed, in words for a screen.
-fn tested_error(e: &LlmError) -> String {
+/// Why a test failed, in words for a screen. `withheld`: the provider's key is kept back from its
+/// address ([`ByokLlm::key_withheld`]), so a refusal is not the key's fault.
+fn tested_error(e: &LlmError, withheld: bool) -> String {
     match e {
         LlmError::NoKey => "couldn't test it: no key is stored for it".into(),
         LlmError::KeychainDenied => "couldn't read its key: the key store refused".into(),
         LlmError::LocalOnly { .. } => {
             "couldn't test it: local-only mode is on, so nothing was sent".into()
+        }
+        LlmError::Http { status: 401 | 403 } if withheld => {
+            "couldn't get an answer: the server asks for a key, and keys are sent only over \
+             https or to this computer"
+                .into()
         }
         LlmError::Http { status: 401 | 403 } => {
             "couldn't get an answer: the provider refused the key".into()
@@ -895,13 +901,18 @@ mod tests {
     #[test]
     fn a_failed_test_is_said_in_words_without_the_key() {
         assert_eq!(
-            tested_error(&LlmError::Http { status: 401 }),
+            tested_error(&LlmError::Http { status: 401 }, false),
             "couldn't get an answer: the provider refused the key"
         );
         assert_eq!(
-            tested_error(&LlmError::Http { status: 500 }),
+            tested_error(&LlmError::Http { status: 403 }, true),
+            "couldn't get an answer: the server asks for a key, and keys are sent only over \
+             https or to this computer"
+        );
+        assert_eq!(
+            tested_error(&LlmError::Http { status: 500 }, true),
             "couldn't get an answer: the provider said 500"
         );
-        assert!(tested_error(&LlmError::NoKey).starts_with("couldn't"));
+        assert!(tested_error(&LlmError::NoKey, false).starts_with("couldn't"));
     }
 }
