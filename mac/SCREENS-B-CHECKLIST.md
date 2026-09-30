@@ -54,7 +54,8 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
 - [ ] Once: turn Open at Login off, quit, put the copy back
       (`cp ~/Desktop/agent-0.2.plist ~/Library/LaunchAgents/Inkwell.plist`), open Inkwell. Open at
       Login stays off and the file stays.
-- [ ] A failed removal is said: `defaults delete com.inkwell.app LoginItemCarriedOverFrom02`, then
+- [ ] A failed removal is said: quit Inkwell, run
+      `defaults delete com.inkwell.app LoginItemCarriedOverFrom02`, then
       `chflags uchg ~/Library/LaunchAgents/Inkwell.plist`, open Inkwell. An alert "Inkwell could
       not remove Inkwell 0.2's login item." names `~/Library/LaunchAgents/Inkwell.plist`; Open at
       Login is on. Then `chflags nouchg` the file and delete it.
