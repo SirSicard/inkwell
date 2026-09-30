@@ -88,6 +88,12 @@ name or a meeting title into this file or a bug: the repository is public.
 - [ ] Settings > Storage > Keep records: choose 30 days on a library that has meetings or
       dictations older than that (or wait): they leave the Library at once, imports stay, and
       Settings > Storage's sizes go down after a relaunch. Set it back to Forever.
+      Nothing in the repository makes records older than 30 days in a scratch library
+      (`seed_library`'s are at most about four days old), so the deletion side can't be checked by
+      hand without deleting real records; `cargo test -p ink-ffi --test meetings` covers it
+      (`retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words`,
+      `a_sweep_keeps_what_an_import_brought_in`), and `--test import02` covers imports
+      (`imported_dictations_outlive_a_retention_change`).
 
 ## 5. Consent and honesty (read, don't just click)
 
