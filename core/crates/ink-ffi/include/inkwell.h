@@ -274,7 +274,20 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"import.notes","id":"<ref>"}
  *       "import.notes": what became of Inkwell 0.2's dictation hotkey ("key"), while there is
  *       something to say and until setting.set import.key_note dismissed.
- *       These five answer with the command's "id" as "ref"; a failure is "command.failed".
+ *   {"cmd":"import.check","id":"<ref>"}
+ *       "import.checked": Inkwell 0.2's data at 0.2's own data directory on this computer (the
+ *       core knows where; a shell never names it). "state" is found, with the dry run's
+ *       "counts"; absent; imported (this library holds an import already, and 0.2's data is not
+ *       opened); or unreadable, with "message" in words to show (0.2 in the middle of a save,
+ *       say). 0.2's data is only read, and the keychain is not asked ("linked_keys" is 0).
+ *   {"cmd":"import.run","id":"<ref>"}
+ *       Imports it in one transaction: dictations, dictionary, snippets, modes, 0.2's settings,
+ *       voice commands and app styles; API keys already in the keychain are linked, asked for by
+ *       existence only. "import.finished" with the "counts" written; a failure (no data, already
+ *       imported, 0.2 in the middle of a save, a file 0.2 could not have written) is
+ *       "command.failed", its message in words to show. A running dictation uses what came
+ *       over at once; list the library again, and ask import.notes.
+ *       These seven answer with the command's "id" as "ref"; a failure is "command.failed".
  *   {"cmd":"records.list","kind":"meeting","limit":50,"before":{"started_at_unix_ms":0,"id":"..."}}
  *       "library.records": records newest first (by start time, then id). All fields optional:
  *       "kind" is meeting, dictation or file_import; "limit" 1-500 (default 50); "before" is the

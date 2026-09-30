@@ -46,6 +46,7 @@ use crate::events::{self, event};
 use crate::external::Registration;
 use crate::gate::{ModelGate, Routed, refused_event};
 use crate::hub::{EventOut, Events, Hub};
+use crate::import02::Import02;
 use crate::llms::{PolishModel, ShellLlms};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureEnded, CaptureSide, MeetingInfo, MeetingRun, Replay};
@@ -173,17 +174,20 @@ impl MeetingPlatform {
 
 impl Parts {
     /// The real parts: the SQLite library, the platform clock, the built-in registry, the
-    /// downloader over HTTPS, and the adapters this build was compiled with.
-    pub fn production(config: &Config) -> Result<Self, String> {
+    /// downloader over HTTPS, and the adapters this build was compiled with. And the Inkwell 0.2
+    /// import over the same library, for [`Core::set_import02`].
+    pub fn production(config: &Config) -> Result<(Self, Import02), String> {
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("the data directory could not be created: {e}"))?;
         let store = ink_store::SqliteStore::open(config.data_dir.join("library.sqlite"))
             .map_err(|e| format!("the library: {e}"))?;
         let permissions = platform_permissions(&store)?;
+        let store = Arc::new(store);
+        let import02 = Import02::production(store.clone());
         let models = ModelDir::new(&config.models_dir);
         let fetch = ink_engines::HttpFetch::new().map_err(|e| format!("HTTP: {e}"))?;
-        Ok(Self {
-            store: Arc::new(store),
+        let parts = Self {
+            store,
             clock: platform_clock()?,
             registry: Registry::builtin().map_err(|e| format!("the registry: {e}"))?,
             loader: adapters(&models),
@@ -195,7 +199,8 @@ impl Parts {
             data_dir: config.data_dir.clone(),
             permissions,
             meetings: MeetingPlatform::production()?,
-        })
+        };
+        Ok((parts, import02))
     }
 }
 
@@ -343,6 +348,8 @@ pub struct Shared {
     pub(crate) finishing: Mutex<crate::retention::Holds>,
     /// Dictation, live ([`voice`](crate::voice)): the platform it may use and what runs.
     pub(crate) voice: Mutex<crate::voice::VoiceSlot>,
+    /// Inkwell 0.2's import, once the shell's platform gave it ([`Core::set_import02`]).
+    pub(crate) import02: std::sync::OnceLock<Import02>,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -561,6 +568,7 @@ impl Core {
             sweeps: std::sync::OnceLock::new(),
             finishing: Mutex::default(),
             voice: Mutex::default(),
+            import02: std::sync::OnceLock::new(),
         });
         let runs = Arc::new(Mutex::new(Runs::default()));
         let (commands, rx) = mpsc::channel::<Envelope>();
@@ -739,6 +747,16 @@ impl Core {
     /// until this is set. The C ABI sets the Mac's at `ink_init`; tests set mocks.
     pub fn set_voice_platform(&self, platform: crate::voice::VoicePlatform) {
         lock(&self.shared.voice).set_platform(platform);
+    }
+
+    /// Gives `import.check` and `import.run` the library as itself, 0.2's data directory and the
+    /// keychain; until then they fail. `import.library` must be the store the core runs on. The
+    /// C ABI sets [`Parts::production`]'s at `ink_init`; tests point it at fixtures. The first
+    /// one given stays.
+    pub fn set_import02(&self, import: Import02) {
+        if self.shared.import02.set(import).is_err() {
+            log::warn!("the 0.2 import was given twice; the first stays");
+        }
     }
 
     /// Starts the dictation worker with the shell's platform pieces, replacing one already

@@ -221,6 +221,12 @@
       "$ref": "#/$defs/ImportNotes"
     },
     {
+      "$ref": "#/$defs/ImportChecked"
+    },
+    {
+      "$ref": "#/$defs/ImportFinished"
+    },
+    {
       "$ref": "#/$defs/LibraryRecords"
     },
     {
@@ -3061,6 +3067,125 @@
         "combination",
         "other_key"
       ]
+    },
+    "ImportChecked": {
+      "type": "object",
+      "description": "What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer (the core knows where), and whether this library holds it already. The data is read, never written, and the keychain is not asked, so linked_keys is 0 here.",
+      "properties": {
+        "type": {
+          "const": "import.checked"
+        },
+        "state": {
+          "$ref": "#/$defs/ImportState",
+          "description": "Whether there is something to import."
+        },
+        "counts": {
+          "$ref": "#/$defs/ImportCounts",
+          "description": "What an import would bring (the dry run), when found."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why the data cannot be read now, when unreadable: words to show (for one, that Inkwell 0.2 is still open and should be quit first)."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's id."
+        }
+      },
+      "required": [
+        "type",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "ImportState": {
+      "type": "string",
+      "description": "Inkwell 0.2's data: found (and not imported yet), absent from this computer, imported into this library already (0.2's data is not opened then), or found but unreadable now (import.run may still work once the reason is gone).",
+      "enum": [
+        "found",
+        "absent",
+        "imported",
+        "unreadable"
+      ]
+    },
+    "ImportCounts": {
+      "type": "object",
+      "description": "How many of each kind Inkwell 0.2's data holds, or an import wrote.",
+      "properties": {
+        "dictations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dictations, each a record in the library."
+        },
+        "dictionary_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dictionary entries (a word and what replaces it)."
+        },
+        "snippets": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Snippets."
+        },
+        "modes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Modes."
+        },
+        "settings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0.2's own settings."
+        },
+        "voice_commands": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Voice commands."
+        },
+        "app_style_rules": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-app style rules."
+        },
+        "linked_keys": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Providers whose API key in the keychain is linked, by reference (never copied)."
+        }
+      },
+      "required": [
+        "dictations",
+        "dictionary_entries",
+        "snippets",
+        "modes",
+        "settings",
+        "voice_commands",
+        "app_style_rules",
+        "linked_keys"
+      ],
+      "additionalProperties": false
+    },
+    "ImportFinished": {
+      "type": "object",
+      "description": "import.run brought Inkwell 0.2's data into the library, in one transaction: the library's records changed (list them again), import.notes may have something to say about the dictation key, and a running dictation already uses what came over. A failure is command.failed, its message in words to show.",
+      "properties": {
+        "type": {
+          "const": "import.finished"
+        },
+        "counts": {
+          "$ref": "#/$defs/ImportCounts",
+          "description": "What it wrote."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's id."
+        }
+      },
+      "required": [
+        "type",
+        "counts"
+      ],
+      "additionalProperties": false
     },
     "CatalogueEntry": {
       "type": "object",
