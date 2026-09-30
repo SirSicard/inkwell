@@ -1295,8 +1295,8 @@ final class NoticesTests: XCTestCase {
         }
         XCTAssertGreaterThan(names.count, 15, "the table was read")
         // The legacy 0.2 app's base is not in the Mac app, and wasapi-rs's pattern is in Windows-only
-        // code, as are sherpa-onnx, ONNX Runtime (with its Eigen) and the code compiled into
-        // sherpa-onnx's library (Windows' Parakeet), and Velopack (the Windows installer).
+        // code, as are sherpa-onnx, ONNX Runtime, the code compiled into sherpa-onnx's library
+        // (Windows' Parakeet) and the Eigen in both, and Velopack (the Windows installer).
         let windowsOnly: Set = [
             "wasapi-rs", "sherpa-onnx", "ONNX Runtime", "Eigen",
             "nlohmann/json", "kaldi-decoder", "kaldifst", "OpenFst", "simple-sentencepiece",

@@ -152,10 +152,16 @@ public class NoticesTests
         // sherpa-onnx 1.13.4 builds (composed-notices.txt).
         Assert.StartsWith("MIT License\n\nCopyright (c) 2013-2025 Niels Lohmann\n", byId["nlohmann-json"].Text, StringComparison.Ordinal);
         Assert.Contains("3.12.0", byId["nlohmann-json"].Role, StringComparison.Ordinal);
-        foreach (var id in new[] { "kaldi-decoder", "kaldi-native-fbank" })
-        {
-            Assert.Equal(Notices.Apache2, byId[id].Text);
-        }
+        Assert.Equal(Notices.Apache2, byId["kaldi-native-fbank"].Text);
+        // kaldi-decoder's, then the Eigen 5.0.1 it builds on, MPL-2.0 (the scoped exception): where
+        // its source is (the archive sherpa-onnx 1.13.4's cmake/eigen.cmake pins) and its COPYING.MPL2.
+        Assert.StartsWith(Notices.Apache2 + "\n\n--- Eigen 5.0.1 (MPL-2.0): where its source is ---\n", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.Contains("sherpa-onnx-c-api.dll is built with Eigen 5.0.1, which kaldi-decoder builds on and which is licensed under the Mozilla Public License 2.0", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz (SHA-256 e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec)", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n\n--- Eigen 5.0.1's COPYING.MPL2 ---\n" + Notices.EigenMpl2Licence, byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        // Byte for byte that file (its SHA-256; the literal drops only its final line end).
+        Assert.Equal("66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Notices.EigenMpl2Licence + "\n"))));
         // kaldifst's LICENSE puts a note on its copyright model above the Apache License.
         Assert.StartsWith("                                 Legal Notices\n\n   NOTE (this is not from the Apache License):", byId["kaldifst"].Text, StringComparison.Ordinal);
         Assert.EndsWith("\n\n" + Notices.Apache2, byId["kaldifst"].Text, StringComparison.Ordinal);

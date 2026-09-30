@@ -611,9 +611,13 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
             "Part of sherpa-onnx's library: JSON for Modern C++ 3.12.0.",
             "MIT", NlohmannJsonLicence)
         { Composed = true },
+        // kaldi-decoder links Eigen 5.0.1 (MPL-2.0, the scoped exception): the notice says where its
+        // source is and carries its licence, as the ONNX Runtime notice does for its Eigen.
         new("kaldi-decoder", "kaldi-decoder, inside sherpa-onnx",
-            "Part of sherpa-onnx's library.",
-            "Apache-2.0", Apache2)
+            "Part of sherpa-onnx's library, with the Eigen 5.0.1 it builds on.",
+            "Apache-2.0, with Eigen 5.0.1's MPL-2.0",
+            Apache2 + "\n\n--- Eigen 5.0.1 (MPL-2.0): where its source is ---\n" + SherpaOnnxEigenSource
+            + "\n\n--- Eigen 5.0.1's COPYING.MPL2 ---\n" + EigenMpl2Licence)
         { Composed = true },
         new("kaldifst", "kaldifst, inside sherpa-onnx",
             "Part of sherpa-onnx's library.",
