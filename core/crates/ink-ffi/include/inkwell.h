@@ -203,7 +203,11 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       back.
  *   {"cmd":"models.list"}
  *       "models.listed": the catalogue's models for this OS, their measured error rates and
- *       whether each is installed. Send engine.route for what serves a job now.
+ *       whether each is installed. Send engine.route for what serves a job now. A model the
+ *       shell runs fills no job there: the core only downloads it (model.update) into
+ *       <models_dir>/<id>/<first 12 digits of its revision>/, and the shell loads it from there
+ *       and registers its engine. The Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml: its files are
+ *       in that directory's parakeet-tdt-0.6b-v3/, the folder FluidAudio loads v3 from.
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),

@@ -3123,7 +3123,7 @@
         },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills, each with its measured error rate.",
+          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."

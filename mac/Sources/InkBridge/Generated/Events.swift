@@ -424,7 +424,8 @@ public struct CatalogueEntry: Codable, Sendable, Equatable {
     public let id: String
     /// Whether its files are installed and complete.
     public let installed: Bool
-    /// The jobs it fills, each with its measured error rate.
+    /// The jobs it fills, each with its measured error rate. None for a model the core only
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
     public let jobs: [JobScore]
     /// Its weights' licence.
     public let licence: String

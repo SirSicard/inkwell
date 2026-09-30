@@ -369,7 +369,8 @@ public sealed record CatalogueEntry
     public required bool Installed { get; init; }
 
     /// <summary>
-    /// The jobs it fills, each with its measured error rate.
+    /// The jobs it fills, each with its measured error rate. None for a model the core only
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
     /// </summary>
     [JsonPropertyName("jobs")]
     public required global::System.Collections.Generic.IReadOnlyList<JobScore> Jobs { get; init; }

@@ -426,10 +426,11 @@ impl Registry {
 /// compares like with like: the meeting final on AMI IHM (three public meeting excerpts, 709
 /// reference words), the dictation final on FLEURS English dev as published (394 utterances).
 /// The diarizer and the VAD are listed only in builds that include their adapter, so such a build
-/// never offers a download it cannot run.
+/// never offers a download it cannot run. The Mac's Parakeet is in every build: the shell runs it.
 pub fn builtin_rows() -> Vec<EngineRow> {
     [
         qwen3_asr_1_7b_q8(),
+        crate::rows::parakeet_tdt_v3_coreml(),
         #[cfg(feature = "engine-nemo")]
         crate::rows::nemotron_3_diarization(),
         #[cfg(feature = "engine-silero")]

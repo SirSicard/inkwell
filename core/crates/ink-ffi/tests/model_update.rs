@@ -14,7 +14,7 @@ use ink_core::mock::MockPlatform;
 use ink_core::{CancelToken, EventSink, HotkeyEvent};
 use ink_engines::{
     DownloadError, DownloadProgress, Downloader, EngineRow, Fetch, FetchError, Fetched, ModelDir,
-    Registry,
+    ModelFile, Registry, Runtime,
 };
 use ink_ffi::dictation::Block;
 use ink_ffi::dictation::DictationInbox;
@@ -392,6 +392,88 @@ fn an_updates_progress_reaches_the_shell_about_four_times_a_second_and_once_at_t
     assert_eq!(done[0], 0);
     assert_eq!(done.iter().filter(|&&d| d == 1_000_000).count(), 1);
     assert_eq!(done.last(), Some(&1_000_000));
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// A model the shell runs (Core ML, the Mac's Parakeet) is installed the same way, files in
+/// subdirectories and all, and the core never loads, warms or routes to it.
+#[test]
+fn an_update_to_itself_installs_a_model_the_shell_runs_without_loading_it() {
+    let dir = TempDir::new("shell-model");
+    let models = ModelDir::new(dir.path().join("models"));
+    let warm = test_row(ROW_ID);
+    install(&models, &warm);
+    let mut shell_model = test_row("test-core-ml");
+    shell_model.runtime = Runtime::CoreMl;
+    shell_model.scores.clear();
+    shell_model.files = ["v3/Encoder.mlmodelc/weights/weight.bin", "v3/vocab.json"]
+        .iter()
+        .map(|name| ModelFile {
+            name: (*name).into(),
+            url: format!(
+                "https://example.com/test-core-ml/resolve/{}/{name}",
+                "a".repeat(40)
+            ),
+            sha256: ABC_SHA256.into(),
+            size: 3,
+        })
+        .collect();
+    let fetch = Served(
+        shell_model
+            .files
+            .iter()
+            .map(|f| (f.url.clone(), b"abc".to_vec()))
+            .collect(),
+    );
+    let loader = MockLoader::new(Behaviour::Say("words".into()));
+    let (core, events) = start_parts(Parts {
+        store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+        clock: clock(),
+        registry: Registry::new(vec![warm.clone(), shell_model.clone()]).unwrap(),
+        models: models.clone(),
+        loader: loader.clone(),
+        installer: Arc::new(Downloader::new(Arc::new(fetch), models.clone())),
+        data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: Default::default(),
+    });
+    core.command(r#"{"cmd":"model.warm","job":"dictation_final"}"#)
+        .unwrap();
+    events.wait_type("model.warmed", Duration::from_secs(5));
+
+    core.command(r#"{"cmd":"model.update","model":"test-core-ml","next":"test-core-ml"}"#)
+        .unwrap();
+    let finished = events.wait_type("model.update_finished", Duration::from_secs(5));
+    assert_eq!(finished["ok"], true, "{finished}");
+    assert!(models.is_installed(&shell_model));
+    for f in &shell_model.files {
+        let path = models.file_path(&shell_model, f);
+        assert!(path.starts_with(models.row_dir(&shell_model)), "{path:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+    }
+    let progress = events.all();
+    let last = progress
+        .iter()
+        .rfind(|e| e["type"] == "model.update_progress")
+        .unwrap();
+    assert_eq!(
+        (&last["done_bytes"], &last["total_bytes"]),
+        (&6.into(), &6.into())
+    );
+
+    // Never loaded or warmed, and no job routes to it.
+    assert_eq!(*loader.journal.loads.lock().unwrap(), [1]);
+    assert_eq!(core.shared().residency.resident(), [ROW_ID]);
+    assert_eq!(core.shared().residency.warm().as_deref(), Some(ROW_ID));
+    for job in ["dictation_final", "meeting_final", "live_partials"] {
+        core.command(&format!(r#"{{"cmd":"engine.route","job":"{job}"}}"#))
+            .unwrap();
+    }
+    assert!(events.wait_count("engine.routed", 3, Duration::from_secs(5)));
+    for routed in events.all().iter().filter(|e| e["type"] == "engine.routed") {
+        assert_ne!(routed["id"], "test-core-ml", "{routed}");
+    }
     core.shutdown();
     events.assert_valid();
 }
