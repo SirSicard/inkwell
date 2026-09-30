@@ -676,7 +676,7 @@ private struct StorageSection: View {
                     .labelsHidden()
                     .fixedSize()
                     .disabled(meetings.retention == nil)
-                    Text("Older meetings and dictations are deleted with their recordings: their words are overwritten in the library's files, not only hidden. Nothing is deleted while it is forever.")
+                    Text("Older meetings and dictations are deleted with their recordings: their words are overwritten in the library's files, not only hidden. Anything you imported is kept. Nothing is deleted while it is forever.")
                         .font(Typography.caption)
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)

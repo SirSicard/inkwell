@@ -21,7 +21,7 @@ public sealed class StorageModel(
     string? dataDirectory, string? modelsDirectory, Action<string>? reveal = null, ScreenLog? log = null) : ObservableModel
 {
     public const string FailedText = "Couldn't measure the library's folder.";
-    public const string RetentionDetail = "Older meetings and dictations are deleted with their recordings: their words are overwritten in the library's files, not only hidden. Nothing is deleted while it is forever.";
+    public const string RetentionDetail = "Older meetings and dictations are deleted with their recordings: their words are overwritten in the library's files, not only hidden. Anything you imported is kept. Nothing is deleted while it is forever.";
 
     private readonly ScreenLog log = log ?? ScreenLog.System;
     private bool measuring;
