@@ -22,7 +22,7 @@ src/pages/404.astro       the designed 404
 src/layouts/Base.astro    <head>, fonts, the pre-paint `.js` flag
 src/components/           one file per section: Hero, Features, Models, Privacy,
                           Install, Cost, CodeSigning, Colophon, SiteHeader
-src/lib/constants.ts      APP_VERSION, every outbound URL, the model figures
+src/lib/constants.ts      MAC_VERSION and WINDOWS_VERSION, every outbound URL, the models
 src/lib/release.ts        download links, checked against src/data/release.json at build time
 src/lib/ink-field.ts      the <ink-field> element: the app's ink shader (webgl-noise notice inside)
 src/lib/hotkey-demo.ts    the hero's hold-a-key demo
@@ -34,11 +34,11 @@ scripts/                  make-icons.mjs and make-og.mjs (favicons, social card)
 
 ## After a release
 
-The site only advertises a version that has a release ([RELEASING.md](../docs/RELEASING.md), step 8). Once the release exists:
+The site only advertises a version that has a release ([RELEASING.md](../docs/RELEASING.md)). Each platform names its own version, so the Mac and Windows can move to a release one at a time. Once the release exists:
 
-1. Set `APP_VERSION` in `src/lib/constants.ts`.
-2. Run `node scripts/snapshot-release.mjs` (needs `gh`). It copies the release's real asset names and sizes into `src/data/release.json`.
-3. Push. The build fails rather than ship a download link to a file the release doesn't have.
+1. Set `MAC_VERSION`, `WINDOWS_VERSION` or both in `src/lib/constants.ts`.
+2. Run `node scripts/snapshot-release.mjs` (needs `gh`). It copies the real asset names and sizes of each release those versions name into `src/data/release.json`.
+3. Push. The build fails rather than ship a download link to a file its release doesn't have.
 
 ## What the page keeps to
 

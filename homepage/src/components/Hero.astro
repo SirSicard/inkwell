@@ -3,7 +3,7 @@
 // live ink, the key and a text field on the right. The one orchestrated moment lives here.
 import { Picture } from 'astro:assets';
 import dashboard from '../assets/inkwell-dashboard.png';
-import { APP_VERSION, DEMO_SENTENCES, GITHUB_URL, RELEASES_LATEST_URL } from '../lib/constants';
+import { DEMO_SENTENCES, GITHUB_URL, MAC_VERSION, RELEASES_LATEST_URL, SHARED_VERSION, WINDOWS_VERSION } from '../lib/constants';
 import { DOWNLOADS, PRIMARY } from '../lib/release';
 ---
 
@@ -28,7 +28,7 @@ import { DOWNLOADS, PRIMARY } from '../lib/release';
       <a class="text-link" href={GITHUB_URL}>Source on GitHub</a>
     </div>
     <p class="get-meta">
-      <span id="download-note">Version {APP_VERSION} for macOS, Windows and Linux.</span>
+      <span id="download-note">{SHARED_VERSION ? `Version ${SHARED_VERSION} for macOS and Windows.` : `Version ${MAC_VERSION} for macOS, ${WINDOWS_VERSION} for Windows.`}</span>
       Free and MIT licensed; no account, no telemetry.
     </p>
   </div>
@@ -84,16 +84,12 @@ import { DOWNLOADS, PRIMARY } from '../lib/release';
   <div class="hero-specs">
     <ul class="builds" aria-label="Builds by platform">
       <li data-platform="macOS">
-        <a href={DOWNLOADS.macOS.url}>macOS<span class="sr-only"> disk image for Apple Silicon, {DOWNLOADS.macOS.size}</span></a>
-        <span>Apple Silicon, {DOWNLOADS.macOS.size}, or <a href={DOWNLOADS.macOSIntel.url}>Intel<span class="sr-only"> Mac disk image, {DOWNLOADS.macOSIntel.size}</span></a>, {DOWNLOADS.macOSIntel.size}. Both signed with a Developer ID and notarised by Apple, so they open normally.</span>
+        <a href={DOWNLOADS.macOS.url}>macOS<span class="sr-only"> disk image for Apple silicon, {DOWNLOADS.macOS.size}</span></a>
+        <span>Apple silicon, macOS 26 or later, {DOWNLOADS.macOS.size}. Signed with a Developer ID and notarised by Apple, so it opens normally.</span>
       </li>
       <li data-platform="Windows">
         <a href={DOWNLOADS.windows.url}>Windows<span class="sr-only"> installer, {DOWNLOADS.windows.size}</span></a>
-        <span>Installer, {DOWNLOADS.windows.size}. Not code signed yet, so SmartScreen warns: click “More info”, then “Run anyway”.</span>
-      </li>
-      <li data-platform="Linux">
-        <a href={DOWNLOADS.appImage.url}>Linux<span class="sr-only"> AppImage, {DOWNLOADS.appImage.size}</span></a>
-        <span>AppImage, {DOWNLOADS.appImage.size}, or the <a href={DOWNLOADS.deb.url}>.deb</a>. Best effort, not regularly tested.</span>
+        <span>Windows 11 24H2 or later on x64, {DOWNLOADS.windows.size}. Not code signed yet: <a href="#windows-install">how to install it</a>.</span>
       </li>
     </ul>
 

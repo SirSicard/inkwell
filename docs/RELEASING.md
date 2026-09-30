@@ -289,8 +289,9 @@ After CI goes green:
 - [ ] `inkwell-updater/` decided: kept while 0.2 installs still check it, or retired after 0.2.11.
 - [ ] The cask: `packaging/homebrew/inkwell.rb` for 1.0 (macOS 26 or later; 1.0's data folder,
       `~/Library/Application Support/Inkwell`, in `zap`), then `bin/update-cask.sh 1.0.0`.
-- [ ] The homepage's `APP_VERSION` and release snapshot, only once 1.0.0 is published (step 8 of
-      the 0.2 chain), in a commit authored as SirSicard: Vercel builds no other author's commits.
+- [ ] The homepage's `MAC_VERSION` and `WINDOWS_VERSION` and its release snapshot, only once
+      1.0.0 is published (`homepage/README.md`, "After a release"), in a commit authored as
+      SirSicard: Vercel builds no other author's commits.
 
 ## Inkwell 0.2, the Tauri app
 
@@ -331,11 +332,7 @@ same failure after tagging costs a deleted tag and a burnt version.
 #    and the CHANGELOG heading (## [Unreleased] -> ## [X.Y.Z] - date)
 #    (cd src-tauri && cargo check)   regenerates Cargo.lock
 #
-#    NOT homepage/src/lib/constants.ts. That is the fifth place and it waits
-#    for step 7, because the homepage deploys on push and its own rule is
-#    that the site may only advertise a version a release exists for.
-#    Bumping it here puts the new number on a page whose Download button
-#    still hands out the old build for as long as CI takes.
+#    NOT the homepage: it advertises 1.x (step 8).
 #
 #    macOS note: BSD sed has no `0,/re/` address form. It fails silently,
 #    leaving the version untouched, which is easy to miss and then tag.
@@ -372,12 +369,8 @@ inkwell-updater/publish-latest.sh vX.Y.Z
 #    and on a URL that does not return 200.
 bin/update-cask.sh
 
-# 8. Now set APP_VERSION in homepage/src/lib/constants.ts to the same
-#    version, run (cd homepage && node scripts/snapshot-release.mjs) to copy
-#    the release's asset list into src/data/release.json, and push. The
-#    release exists, so the site can describe it honestly, and the build
-#    refuses a version the snapshot doesn't match. Pushing this is what
-#    deploys the homepage.
+# 8. Leave the homepage alone: its download buttons offer 1.x, and a 0.2
+#    release is reached from the releases page.
 ```
 
 ### What no longer needs doing

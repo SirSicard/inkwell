@@ -5,11 +5,15 @@
  */
 
 /**
- * The downloadable release. Advertise only a version that already exists on the releases page:
- * bump it after a release is published, never before, then run `node scripts/snapshot-release.mjs`
- * so the download links follow (see ./release.ts).
+ * The downloadable release, per platform. Advertise only a version that already exists on the
+ * releases page: bump it after that release is published, never before, then run
+ * `node scripts/snapshot-release.mjs` so the download links follow (see ./release.ts). Each platform
+ * names its own version, so one can move to a new release without the other's file having to be in it.
  */
-export const APP_VERSION = "0.2.9";
+export const MAC_VERSION = "0.2.9";
+export const WINDOWS_VERSION = "0.2.9";
+/** The one version both platforms offer, or null while they differ. */
+export const SHARED_VERSION: string | null = MAC_VERSION === WINDOWS_VERSION ? MAC_VERSION : null;
 
 /** Canonical origin: the Vercel project alias until an owned domain exists. */
 export const SITE_URL = "https://getinkwell.vercel.app";
