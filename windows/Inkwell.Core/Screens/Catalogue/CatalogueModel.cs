@@ -283,11 +283,11 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     }
 
     /// <summary>
-    /// Where a model's files come from, as its Download says before the user agrees: every
-    /// registry row is on huggingface.co except Silero VAD's, which is on GitHub (ink-engines'
-    /// rows.rs).
+    /// Where a model's files come from, as its Download says before the user agrees: the host of
+    /// the URLs its row names in the core's registry (ink-engines), as the Mac says it. Every row
+    /// is on huggingface.co except Silero VAD's, on raw.githubusercontent.com.
     /// </summary>
-    public static string Source(string id) => id == "silero-vad-v6-16k" ? "GitHub" : "huggingface.co";
+    public static string Source(string id) => id == "silero-vad-v6-16k" ? "raw.githubusercontent.com" : "huggingface.co";
 
     /// <summary>
     /// Whether this screen shows the failure: models.list, engine.route on its job's line, and

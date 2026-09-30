@@ -32,8 +32,8 @@ set INK_DATA_DIR=%TEMP%\inkwell-first-run
 - [ ] The first run has five dots. After the permissions, a step "Models" lists each model that is
       not installed: its name, licence and size, and "not installed".
 - [ ] Under the rows, one line gives the total and where the files come from ("from
-      huggingface.co and GitHub": Silero VAD's file is on GitHub), then "Nothing downloads until
-      you press Download."
+      huggingface.co and raw.githubusercontent.com": Silero VAD's file is on
+      raw.githubusercontent.com), then "Nothing downloads until you press Download."
 - [ ] Nothing downloads before the button: `%TEMP%\inkwell-first-run\models` stays empty while
       you go Back, Continue and Skip.
 - [ ] Narrator reads the step's heading, the rows, and the Download button's name: the models,
@@ -62,8 +62,8 @@ set INK_DATA_DIR=%TEMP%\inkwell-first-run
 ## D. Settings > Models
 
 - [ ] Each model not installed has its own **Download**, and "From huggingface.co" (Silero VAD:
-      "From GitHub") under its line; an installed one has neither. The heading no longer says
-      "Read-only".
+      "From raw.githubusercontent.com") under its line; an installed one has neither. The heading
+      no longer says "Read-only".
 - [ ] Two Downloads in a row: the second waits for the first.
 - [ ] Quit during a download (notification area > Quit), start again: the model is not installed,
       and **Download** resumes it.

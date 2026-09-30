@@ -176,10 +176,10 @@ public class OnboardingModelTests
         Assert.Equal("Qwen3-ASR 1.7B · Apache-2.0 · 2.32 GB · not installed", rows[0].Text(CultureInfo.InvariantCulture));
         Assert.Equal("Inkwell turns speech into text with models that run on this PC. These are not on it yet:", OnboardingModel.ModelsNote(catalogue));
         Assert.Equal(
-            "2.32 GB in all, from huggingface.co and GitHub. Nothing downloads until you press Download.",
+            "2.32 GB in all, from huggingface.co and raw.githubusercontent.com. Nothing downloads until you press Download.",
             OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
         Assert.Equal(
-            "Download Qwen3-ASR 1.7B and Silero VAD: 2.32 GB in all, from huggingface.co and GitHub",
+            "Download Qwen3-ASR 1.7B and Silero VAD: 2.32 GB in all, from huggingface.co and raw.githubusercontent.com",
             OnboardingModel.DownloadName(catalogue, CultureInfo.InvariantCulture));
         foreach (var _ in Enum.GetValues<OnboardingStep>())
         {

@@ -2,6 +2,7 @@
 // downloads until the user asks, one model.update at a time with model == next, progress and
 // failures on the model's row, and the list asked again after each.
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Xunit;
@@ -16,7 +17,7 @@ public class CatalogueDownloadTests
 
     private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
 
-    /// <summary>Two models not installed (one from Hugging Face, one from GitHub) and one installed.</summary>
+    /// <summary>Two models not installed (one from huggingface.co, one from raw.githubusercontent.com) and one installed.</summary>
     internal static InkEvent Listed(bool qwenInstalled = false, bool sileroInstalled = false) => Ev.Of($$"""
         {"type":"models.listed","models":[
           {"id":"{{Qwen}}","licence":"Apache-2.0","size_bytes":2500000000,"installed":{{Bool(qwenInstalled)}},"jobs":[{"job":"dictation_final","wer":4.59}]},
@@ -248,16 +249,41 @@ public class CatalogueDownloadTests
     {
         Assert.Equal("huggingface.co", CatalogueModel.Source(Qwen));
         Assert.Equal("huggingface.co", CatalogueModel.Source(Nemotron));
-        Assert.Equal("GitHub", CatalogueModel.Source(Silero)); // ink-engines' rows.rs: raw.githubusercontent.com
+        Assert.Equal("raw.githubusercontent.com", CatalogueModel.Source(Silero)); // the host its row names
         var catalogue = new CatalogueModel(_ => { });
         catalogue.Apply(Listed());
         var qwen = Row(catalogue, Qwen);
         Assert.Equal("From huggingface.co", qwen.From);
         Assert.Equal("Download Qwen3-ASR 1.7B, 2.32 GB, from huggingface.co", qwen.DownloadName(Invariant));
-        Assert.Equal("From GitHub", Row(catalogue, Silero).From);
+        Assert.Equal("From raw.githubusercontent.com", Row(catalogue, Silero).From);
         Assert.Null(Row(catalogue, Nemotron).From); // installed: nothing to download
         catalogue.Download(Qwen);
         Assert.Null(Row(catalogue, Qwen).From); // asked for: its progress shows instead
         Assert.Equal("Downloading Qwen3-ASR 1.7B", Row(catalogue, Qwen).ProgressName);
+    }
+
+    /// <summary>
+    /// Where the screens say each model comes from is the host its row's URLs name in the core's
+    /// registry (ink-engines), the host the download connects to: a firewall rule written from
+    /// that sentence lets the download through.
+    /// </summary>
+    [Fact]
+    public void EachModelsSourceIsTheHostItsRowNamesInTheCore()
+    {
+        var registry = AboutCheckout.Read("core/crates/ink-engines/src/registry.rs");
+        var rows = AboutCheckout.Read("core/crates/ink-engines/src/rows.rs");
+        foreach (var (id, source, row) in new[]
+        {
+            (Qwen, registry, "fn qwen3_asr_1_7b_q8()"),
+            (Nemotron, rows, "pub fn nemotron_3_diarization()"),
+            (Silero, rows, "pub fn silero_vad()"),
+        })
+        {
+            var start = source.IndexOf(row, StringComparison.Ordinal);
+            Assert.True(start >= 0, $"{row} is not in the core's source");
+            var url = Regex.Match(source[start..], "\"https://([^/\"]+)/");
+            Assert.True(url.Success, $"no URL in {row}");
+            Assert.Equal(url.Groups[1].Value, CatalogueModel.Source(id));
+        }
     }
 }
