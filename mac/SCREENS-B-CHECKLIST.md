@@ -11,9 +11,10 @@ screen command against the real core.
 
 ## Setup
 
-- [ ] Build: `mac/scripts/build-mac.sh`. The ad-hoc build is fine for everything except section 2,
-      which needs the signed build (`INK_SIGN_IDENTITY` set): an ad-hoc signature is a new app to
-      TCC every time.
+- [ ] Build the signed debug build:
+      `INK_SIGN_IDENTITY=<your Developer ID> mac/scripts/build-mac.sh --debug`. Debug, because the
+      replayed meeting below (`INK_REPLAY_MEETING`, for section 3) is compiled out of release
+      builds. Signed, for section 2: an ad-hoc signature is a new app to TCC every time.
 - [ ] Start it on a scratch library, with a meeting replayed from the fixtures once the engines are
       up (30 seconds of audio):
 
@@ -95,10 +96,12 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
       with their times).
 - [ ] Edit an earlier line and move off it: the change is kept. Delete a line: it is gone from the
       record.
-- [ ] Ask: Command-I puts the cursor in "Ask about this call". A question asked gets the honest
-      "not available in this version" answer, never a made-up one. Far-end questions, when the
-      replay has any, stack above it (newest first, at most four), and Command-1 to Command-4 ask
-      them.
+- [ ] Ask: Command-I puts the cursor in "Ask about this call". Ask needs the "Summaries and Ask"
+      consent (Settings > AI), off on a scratch library: without it a question sends nothing, and
+      the answer says Ask needs your OK in Settings > AI. With it on, the answer is in plain words,
+      or, without Apple Intelligence, "Answers need Apple Intelligence, which is off or not ready
+      on this Mac."; never a made-up one. Far-end questions, when the replay has any, stack above
+      it (newest first, at most four), and Command-1 to Command-4 ask them.
 - [ ] When the replay ends, Live leaves the sidebar and the window shows Today.
 - [ ] Resize the window as small as it goes and back: nothing overlaps, and the window never grows
       by itself as lines arrive.

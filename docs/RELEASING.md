@@ -254,11 +254,16 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
 What the first 1.x release needs beyond the chain above, in order. The 0.2 app stays on `main`
 until this day and is not touched before it (invariant I6 in [ARCHITECTURE.md](ARCHITECTURE.md)).
 
+1.0 is one release on the Mac and on Windows together: the tag waits until the Windows app is
+ready too. Windows ships unsigned at first, with the homepage explaining how to install it past
+SmartScreen; its release chain is not in this file yet. Linux and Intel Macs are dropped: 0.2 is
+their last version.
+
 Before the tag:
 
-- [ ] **The maintainer:** the update key, the `release` environment and its secret, the public
+- [x] **The maintainer:** the update key, the `release` environment and its secret, the public
       key in `mac/Info.plist`, and the tag ruleset (the steps under "Once: the update key").
-- [ ] Every notice written without its upstream file compared with that project's own licence
+- [x] Every notice written without its upstream file compared with that project's own licence
       file, replaced where it differs, and its `verified=` set to the date: the lines of
       `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`) and of
       `mac/composed-notices.txt` (replacing the text in `Notices.swift`).
@@ -273,6 +278,7 @@ Before the tag:
       exception in `NoticesTests`; the scripts only 0.2 uses (`scripts/download-models.*`,
       `scripts/gen-model-chart.py`); and `TODO.md`, the 0.2 work list. `docs/legacy/` stays.
 - [ ] The README rewritten for 1.0.
+- [ ] The Windows app ready for the same release, through its own chain.
 - [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
 
 After CI goes green:
@@ -283,12 +289,17 @@ After CI goes green:
       one dictation, one meeting), and on the everyday account over the installed 0.2: it
       replaces it in place, and the microphone and Accessibility grants carry over (same bundle
       id and team; compare `codesign -d -r-` of both apps).
+- [ ] **The maintainer:** the Windows installer on a fresh Windows account (one dictation, one
+      meeting), and on an account with 0.2 installed.
 - [ ] 0.2.11 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
       install 1.0): the 0.2 chain below, published with `--latest=false` so that 1.0 stays the
-      release the feed follows, then `inkwell-updater/publish-latest.sh`.
-- [ ] `inkwell-updater/` decided: kept while 0.2 installs still check it, or retired after 0.2.11.
-- [ ] The cask: `packaging/homebrew/inkwell.rb` for 1.0 (macOS 26 or later; 1.0's data folder,
-      `~/Library/Application Support/Inkwell`, in `zap`), then `bin/update-cask.sh 1.0.0`.
+      release the feed follows, then `inkwell-updater/publish-latest.sh`. On Linux and Intel
+      Macs the notice says 0.2 is their last version.
+- [ ] `inkwell-updater/` retired once 1.0 has shipped on Windows too and 0.2.11 has gone out
+      through it (0.2 installs read the notice from it until then).
+- No Homebrew cask in 1.0: `packaging/homebrew/inkwell.rb` stays on 0.2.9. 1.x gets its cask at
+  1.0.1 (macOS 26 or later; 1.0's data folder, `~/Library/Application Support/Inkwell`, in
+  `zap`; then `bin/update-cask.sh`).
 - [ ] The homepage's `APP_VERSION` and release snapshot, only once 1.0.0 is published (step 8 of
       the 0.2 chain), in a commit authored as SirSicard: Vercel builds no other author's commits.
 
