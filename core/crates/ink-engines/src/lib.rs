@@ -52,7 +52,7 @@ pub mod sherpa;
 #[cfg(feature = "engine-silero")]
 mod silero;
 
-pub use adapters::{VadModel, load_diarizer, load_vad};
+pub use adapters::{VadModel, load_diarizer, load_speech, load_vad};
 pub use compute::{Compute, Device, DeviceKind, choose, physical_cores};
 pub use download::{DownloadError, DownloadProgress, Downloader, Fetch, FetchError, Fetched};
 #[cfg(feature = "http")]
@@ -69,7 +69,10 @@ pub use registry::{
 };
 pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 pub use router::{ExternalEngine, Route, RouteError, Router};
-pub use rows::{NEMOTRON_DIARIZATION_ID, SILERO_VAD_ID, nemotron_3_diarization, silero_vad};
+pub use rows::{
+    NEMOTRON_DIARIZATION_ID, PARAKEET_INT8_ID, SILERO_VAD_ID, nemotron_3_diarization,
+    parakeet_tdt_v3_int8, silero_vad,
+};
 #[cfg(feature = "engine-silero")]
 pub use silero::{CONTEXT as SILERO_CONTEXT, SileroLoader, SileroModel, SileroVad};
 
