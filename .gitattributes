@@ -2,3 +2,8 @@
 # against their sources: keep LF on every checkout, including Windows runners with autocrlf.
 windows/Inkwell.Core/Screens/About/*.cs text eol=lf
 windows/Inkwell.Core/Screens/About/*.txt text eol=lf
+# Shell scripts, and the notice lists they parse, run under bash on the Windows runners too
+# (win-release.yml): with CRLF, bash stops at the first line ("bash\r", "pipefail\r").
+*.sh text eol=lf
+mac/composed-notices.txt text eol=lf
+core/crates/ink-ffi/notices/overrides.txt text eol=lf
