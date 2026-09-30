@@ -12,7 +12,7 @@ silicon Macs. 0.2's own changes continue in its changelog on the `legacy/0.2` br
 ### Added
 
 - **Meeting notes.** When an app has held the microphone for a few seconds, Inkwell offers to record the call; nothing records until you say so. Your microphone and the call's audio are two streams, so "you" is never a guess. A live transcript while the call runs, notes you can add, and at the end a final pass that replaces the live words and labels the other side's speakers when there are two or more.
-- **Summaries, commitments and Ask, on the Mac.** With your OK, Apple's on-device model writes a meeting's summary with the lines it cites, keeps the promises made in it under Owed, and answers questions about the meeting. Your words stay on the Mac.
+- **Summaries, commitments and Ask.** With your OK, a language model writes a meeting's summary with the lines it cites, keeps the promises made in it under Owed, and answers questions about the meeting. On the Mac it is Apple's on-device model, so your words stay on the Mac; on Windows, the provider you set up.
 - **A library of every dictation and meeting**, searchable, with each meeting's audio played back from disk and a retention setting (forever by default, or 7, 30, 90 or 365 days).
 - **The Drop.** A small window that shows your words as you say them and never takes the focus.
 - **Crash recovery.** Meeting audio is written to disk as it arrives; after a crash the meeting is repaired and finished from what was saved.
@@ -22,14 +22,14 @@ silicon Macs. 0.2's own changes continue in its changelog on the `legacy/0.2` br
 
 - **New speech engines, chosen by measurement.** Qwen3-ASR 1.7B writes dictations and meeting transcripts (Metal on the Mac, Vulkan or the CPU on Windows), Parakeet TDT v3 shows the live words, Nemotron-3-Diarization labels the other side's speakers, and Silero VAD detects voice. Models download the first time they are needed, from a pinned revision, and are checked against their hash.
 - **Dictation is hold to talk,** on a modifier held on its own: Fn (Globe) on the Mac and right Ctrl on Windows until you pick another.
-- **Polish and voice edit ask first.** Each language-model feature (polish, voice edit, summaries and Ask) is off until you allow it for a named destination, and asks again if that destination changes. On the Mac they run on Apple's on-device model.
-- **Updates on the Mac come through Sparkle**, from this repository's releases, each signed with the project's key and checked before it is unpacked.
-- **The Mac app needs macOS 26 or later on Apple silicon; the Windows app needs Windows 11 24H2 or later on x64.** Windows builds are not code signed yet.
+- **Polish and voice edit ask first.** Each language-model feature (polish, voice edit, summaries and Ask) is off until you allow it for a named destination, and asks again if that destination changes. On the Mac they run on Apple's on-device model. On Windows they run on a provider you set up (OpenAI, Anthropic, Groq, OpenRouter, or an OpenAI-compatible server you name), with your own API key, kept in Windows Credential Manager.
+- **Updates on the Mac come through Sparkle**, from this repository's releases, each signed with the project's key and checked before it is unpacked. On Windows the app checks this repository's releases when you ask it to.
+- **The Mac app needs macOS 26 or later on Apple silicon; the Windows app needs Windows 11 24H2 or later, on x64 or ARM64,** with a build of its own for each. Windows builds are not code signed yet.
 
 ### Removed
 
 - **Linux and Intel Macs.** Inkwell 0.2 stays the last version for them, on the releases page.
-- **The 0.2 app's features that 1.0 does not carry:** transcribing an audio or video file, the model picker, export to TXT, SRT, JSON or CSV, and your own API key for a cloud provider (polish and voice edit run on Apple's on-device model instead).
+- **The 0.2 app's features that 1.0 does not carry:** transcribing an audio or video file, the model picker, export to TXT, SRT, JSON or CSV, and, on the Mac, your own API key for a cloud provider (polish and voice edit run on Apple's on-device model there instead).
 
 ## [0.2.9] - 2026-08-27
 

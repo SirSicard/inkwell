@@ -28,14 +28,14 @@ Inkwell 1.0 is a rebuild: native on each system (SwiftUI and AppKit on the Mac, 
 - **The Drop.** A small window that shows the words as you say them, then gets out of the way. It never takes the focus from the app you are typing in.
 - **Modes.** How the text is written can follow the app you are typing into.
 - **Snippets.** Trigger phrases that expand to full text.
-- **Polish and voice edit (Mac, optional, off by default).** Polish tidies a dictation before it is typed. Voice edit, on a key of its own, rewrites the text you selected to a spoken instruction. Both run on Apple's on-device model and ask for your OK before their first use.
+- **Polish and voice edit (optional, off by default).** Polish tidies a dictation before it is typed. Voice edit, on a key of its own, rewrites the text you selected to a spoken instruction. On the Mac both run on Apple's on-device model; on Windows, on a provider you set up with your own API key. Each asks for your OK before its first use.
 
 ### Meetings
 
 - **Offered, never started for you.** When an app has held the microphone for a few seconds, Inkwell offers to record. Nothing records until you say so, and "Record now" starts one by hand.
 - **Two streams.** Your microphone is you; the call's audio is them. Echo cancellation runs on your side only when there is echo to remove.
 - **Live, then final.** A live transcript while the call runs, with notes you can add; when it ends, a final pass replaces the live transcript and labels the other side's speakers when there are two or more.
-- **Summary, commitments and Ask (Mac, optional).** With your OK, Apple's on-device model writes a summary with the decisions and actions it cites, keeps the promises made in the call in **Owed**, and answers questions about the meeting.
+- **Summary, commitments and Ask (optional).** With your OK, a language model (Apple's on-device one on the Mac, the provider you set up on Windows) writes a summary with the decisions and actions it cites, keeps the promises made in the call in **Owed**, and answers questions about the meeting.
 - **Crash recovery.** Audio is written to disk as it arrives, so a crash loses seconds, not the meeting.
 
 ### The library
@@ -50,9 +50,9 @@ Inkwell 1.0 is a rebuild: native on each system (SwiftUI and AppKit on the Mac, 
 - On the Mac, if you allow it, Inkwell reads your calendar to show your next meeting and to name each meeting and who was in it. The calendar never leaves the Mac.
 - Everything lives in one folder: `~/Library/Application Support/Inkwell` on the Mac, `%LOCALAPPDATA%\Inkwell` on Windows. Nothing syncs.
 - For dictation, the microphone opens when you press the key and is let go of a minute after your last take. For a meeting, it is open while you record.
-- Polish, voice edit, summaries and Ask use Apple's on-device model on the Mac: your words stay on the Mac. Each asks for your OK first, and asks again if where the words would go ever changes.
+- Polish, voice edit, summaries and Ask use Apple's on-device model on the Mac: your words stay on the Mac. On Windows they use a provider you set up with your own API key (OpenAI, Anthropic, Groq, OpenRouter, or an OpenAI-compatible server you name, such as one on your own PC), and the words each one works on go to that provider. The key is kept in Windows Credential Manager. Each feature asks for your OK first, and asks again if where the words would go ever changes.
 - There is no telemetry, no analytics, no crash reporting and no account.
-- **Every network call, listed.** Model downloads fetch pinned files from Hugging Face and GitHub the first time a model is needed. On the Mac, Sparkle checks this repository's releases for updates once you have said yes to its question; a check sends nothing about your Mac. On Windows, updates come from this repository's releases. Nothing else connects.
+- **Every network call, listed.** Model downloads fetch pinned files from Hugging Face and GitHub the first time a model is needed. On the Mac, Sparkle checks this repository's releases for updates once you have said yes to its question; a check sends nothing about your Mac. On Windows, the app checks this repository's releases for a new version only when you ask it to. On Windows, a language-model provider you set up receives the words of the features you allowed. Nothing else connects.
 
 The details, and what counts as a security issue, are in [SECURITY.md](SECURITY.md).
 
@@ -70,9 +70,9 @@ Intel Macs are not supported by 1.0: Inkwell 0.2 stays the last version for them
 > [!NOTE]
 > Fn is also macOS's emoji and dictation key. If pressing it opens something else, set "Press 🌐 key to" to "Do Nothing" in System Settings > Keyboard, or pick another key in Inkwell's Settings.
 
-### Windows (x64, Windows 11 24H2 or later)
+### Windows (x64 or ARM64, Windows 11 24H2 or later)
 
-Download the installer and run it.
+Download the installer for your PC, x64 or ARM64, and run it.
 
 > [!WARNING]
 > The Windows installer is not code signed yet. SmartScreen will say "Windows protected your PC": click **More info**, then **Run anyway**. Your browser may also flag the download as uncommon. [The homepage walks through it](https://getinkwell.vercel.app/#windows-install).
@@ -114,7 +114,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the prerequisites, the checks and the
 
 ## Requirements
 
-- A Mac with Apple silicon on macOS 26 or later, or an x64 PC on Windows 11 24H2 or later
+- A Mac with Apple silicon on macOS 26 or later, or an x64 or ARM64 PC on Windows 11 24H2 or later
 - Disk for the models (the main speech model is about 2.5 GB), plus the meetings you keep
 - A microphone
 
@@ -135,7 +135,7 @@ Free code signing provided by [SignPath.io](https://signpath.io), certificate by
 
 Only artifacts built by this repository's GitHub Actions workflows from this repository's own source are signed. Each release signing request is approved by hand.
 
-**Privacy policy:** see [Privacy](#privacy). This program does not send your audio anywhere. It contacts networked systems only to check for updates and to download the speech and voice-detection models it runs on.
+**Privacy policy:** see [Privacy](#privacy). This program does not send your audio anywhere. It contacts networked systems only to check for updates, to download the speech and voice-detection models it runs on, and, on Windows, to reach a language-model provider you set up yourself.
 
 Status: Windows builds are not signed yet.
 
