@@ -181,7 +181,7 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   `lib/`. With no rpath on Windows, `build.rs` copies the checked DLLs into its `OUT_DIR` and
   declares that directory as a native search path, which cargo puts on `PATH` for tests. The
   diarizer runs on GPU 0 (Vulkan) and, where that does not load, on the CPU (about ten times
-  slower: 23× real time on a 12-core desktop).
+  slower: 23× real time on a 12-core desktop, not a measurement, as other builds shared it).
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
   apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
@@ -218,10 +218,11 @@ the int8 ONNX conversion of the same weights, on sherpa-onnx's C API, on the CPU
   job, so live partials and dictation share one loaded copy. A still window (nothing pending, a
   stationary speech band: silence, room tone, hum) is not decoded, so a quiet side costs no CPU.
 - **Dictation on a PC without a GPU.** There Qwen3-ASR takes 1.6-1.9 s for 5 s of speech, and
-  Parakeet about 0.3 s, at 7.2 % WER on FLEURS (level-normalised) against Qwen3-ASR's 4.3 %. So on
-  such a machine the router gives dictation to Parakeet first, whatever the error rates
-  (`Router::with_gpu_probe`, `Runtime::slow_on_cpu_for_dictation`); with a GPU, Qwen3-ASR dictates.
-  A take longer than 90 s is cut into windows, as Qwen3-ASR's are.
+  Parakeet about 0.3 s (not a measurement: other builds shared the machine), at 7.2 % WER on FLEURS
+  (level-normalised) against Qwen3-ASR's 4.3 %. So on such a machine the router gives dictation to
+  Parakeet first, whatever the error rates (`Router::with_gpu_probe`,
+  `Runtime::slow_on_cpu_for_dictation`); with a GPU, Qwen3-ASR dictates. A take longer than 90 s
+  is cut into windows, as Qwen3-ASR's are.
 
 ## Threads
 

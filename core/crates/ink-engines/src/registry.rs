@@ -63,7 +63,7 @@ impl Runtime {
     /// Whether its speech models take seconds for a dictation on a machine without a GPU, so the
     /// router gives dictation there to an installed engine that does not ([`Router`]). llama.cpp's
     /// do: on a 12-core desktop's CPU, Qwen3-ASR 1.7B took about 1.6-1.9 s for 5 s of speech, and
-    /// Parakeet on sherpa-onnx about 0.3 s.
+    /// Parakeet on sherpa-onnx about 0.3 s (not a measurement: other builds shared the machine).
     ///
     /// [`Router`]: crate::Router
     pub fn slow_on_cpu_for_dictation(self) -> bool {

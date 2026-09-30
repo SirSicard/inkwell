@@ -9,7 +9,8 @@
 //! `INK_PARAKEET_DIR` holds `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx` and
 //! `tokens.txt` from `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` at
 //! `2bda32ec70b097a55adaa07d9a7173915b43cc78`, each checked here against the registry row's size
-//! and hash. The speeds printed are for comparison only; time them on a quiet machine.
+//! and hash. The speeds printed are for comparison only, never a measurement: time them on a quiet
+//! machine.
 
 #![cfg(feature = "engine-sherpa")]
 

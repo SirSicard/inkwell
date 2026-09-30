@@ -60,8 +60,9 @@ pub const PARAKEET_INT8_ID: &str = "parakeet-tdt-0.6b-v3-int8";
 /// - **Measured**, the whole of each clip in one pass (`tests/sherpa.rs`): 27.93 on AMI IHM (the
 ///   Mac's Core ML build of the same weights: 23.4) and 16.36 on FLEURS English dev as published,
 ///   where 21 of the quietest utterances come back empty. With the level normalised first, as the
-///   app's gain stage does, FLEURS is 7.17 (Qwen3-ASR 1.7B: 4.3), at a median 0.3 s for 5 s of
-///   speech on a 12-core desktop's CPU.
+///   app's gain stage does, FLEURS is 7.17 (Qwen3-ASR 1.7B: 4.3). A 5 s utterance took a median
+///   0.30-0.36 s on a 12-core desktop's CPU, in two runs while other builds shared the machine:
+///   not a measurement, and a PC with no usable GPU is usually far weaker.
 /// - **Licence:** CC-BY-4.0 (NVIDIA's weights; the conversion adds none). Credited in About.
 /// - **Windows only:** the Mac runs Parakeet in FluidAudio, on the Neural Engine.
 pub fn parakeet_tdt_v3_int8() -> EngineRow {
