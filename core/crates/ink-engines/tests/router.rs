@@ -577,3 +577,24 @@ fn without_a_gpu_a_shell_engine_still_competes_on_its_error_rate() {
         "shell-dictation"
     );
 }
+
+#[test]
+fn an_installed_row_the_shell_runs_is_never_routed() {
+    // A Core ML row fills no job: installed, it is still no candidate for any, and a shell engine
+    // serves as before.
+    let s = Scratch::new("core-ml");
+    let mut core_ml = row("synthetic-core-ml", &[]);
+    core_ml.runtime = Runtime::CoreMl;
+    let (r, dir) = router(&s, vec![core_ml.clone()], Os::MacOs);
+    install(&dir, &core_ml);
+    assert!(dir.is_installed(&core_ml));
+    for job in [
+        Job::DictationFinal,
+        Job::MeetingFinal,
+        Job::LivePartials,
+        Job::Diarization,
+        Job::VoiceActivity,
+    ] {
+        assert_eq!(r.route(job).unwrap_err(), RouteError::NoEngine { job });
+    }
+}

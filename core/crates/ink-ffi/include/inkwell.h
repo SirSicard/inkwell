@@ -131,14 +131,16 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       Replaces a model's files. The model is held exclusively from before it is unloaded until
  *       the new one is installed and warm: meanwhile every job that needs it is refused with
  *       "model.refused", never served from files being replaced. "model.update_started", then
- *       "model.update_finished". While a job is using the model, or another update holds it,
- *       the update is "command.failed" and nothing changes: send it again later.
- *   {"cmd":"engine.route","job":"dictation_final"}
- *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
- *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
- *       or no id when nothing fills it. The router picks the lowest measured error rate among
- *       installed models and registered engines, at every call: a shell engine registered as a
- *       fallback serves until a better model finishes installing, then that model does.
+ *       "model.update_progress" as the download goes (about four a second, and once when every
+ *       byte is on disk), then "model.update_finished". While a job is using the model, or
+ *       another update holds it, the update is "command.failed" and nothing changes: send it
+ *       again later.
+ *       With "model" and "next" the same registry id, it installs that model: meant for a model
+ *       that is not installed yet (its first download), sent only when the user asks for it.
+ *       Nothing else is unloaded or warmed. An installed model keeps its files, but if it is
+ *       loaded it is unloaded (and loaded again if it was warm), and while a job uses it the
+ *       update is refused, as above. A voice detector installed while dictation runs is taken by
+ *       it at once ("dictation.voice_detection" says so).
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
@@ -198,7 +200,19 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       back.
  *   {"cmd":"models.list"}
  *       "models.listed": the catalogue's models for this OS, their measured error rates and
- *       whether each is installed. Send engine.route for what serves a job now.
+ *       whether each is installed. Send engine.route for what serves a job now. A model the
+ *       shell runs fills no job there: the core only downloads it (model.update) into
+ *       <models_dir>/<id>/<first 12 digits of its revision>/, and the shell loads it from there
+ *       and registers its engine. The Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml: its files are
+ *       in that directory's parakeet-tdt-0.6b-v3/, the folder FluidAudio loads v3 from.
+ *   {"cmd":"engine.route","job":"dictation_final"}
+ *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
+ *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
+ *       or no id when nothing fills it. The router picks the lowest measured error rate among
+ *       installed models and registered engines, at every call: a shell engine registered as a
+ *       fallback serves until a better model finishes installing, then that model does. A
+ *       download never delays the answer, which can overtake an engine.unregister or model.update
+ *       sent before it: ask again once their event has come.
  *   {"cmd":"setting.get","key":"<key>"}
  *   {"cmd":"setting.set","key":"<key>","value":"<value>"}
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),

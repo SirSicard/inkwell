@@ -172,7 +172,8 @@ impl VoiceSlot {
 }
 
 fn lock(m: &Mutex<VoiceSlot>) -> MutexGuard<'_, VoiceSlot> {
-    // Taken only by the queries thread and shutdown; every step leaves the slot consistent.
+    // Taken by the queries thread and shutdown, and briefly by the command thread after an
+    // install ([`vad_installed`]); every step leaves the slot consistent.
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -345,6 +346,26 @@ pub fn settings_changed(shared: &Shared) {
                 None,
             ));
         }
+    }
+}
+
+/// **Command thread**, when a model install ends. The voice detector just installed reaches a
+/// running dictation now, not at its next start: its VAD is resolved again ([`crate::vad`]) and
+/// queued to the chain, which tells the shell when that changes (`dictation.voice_detection`).
+/// The slot's lock is let go of before the model is read.
+pub fn vad_installed(shared: &Shared) {
+    let Some(inbox) = lock(&shared.voice)
+        .running
+        .as_ref()
+        .map(|voice| voice.inbox.clone())
+    else {
+        return;
+    };
+    let vad = crate::vad::installed(shared, &shared.models);
+    if inbox.send(Input::SetVad(vad)).is_err() {
+        log::info!(
+            "voice detection was installed after dictation stopped; its next start loads it"
+        );
     }
 }
 

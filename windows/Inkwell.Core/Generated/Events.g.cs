@@ -53,6 +53,7 @@ public abstract record InkEvent
                 "model.warm_failed" => root.Deserialize(InkEventsJson.Default.ModelWarmFailed)!,
                 "model.refused" => root.Deserialize(InkEventsJson.Default.ModelRefused)!,
                 "model.update_started" => root.Deserialize(InkEventsJson.Default.ModelUpdateStarted)!,
+                "model.update_progress" => root.Deserialize(InkEventsJson.Default.ModelUpdateProgress)!,
                 "model.update_finished" => root.Deserialize(InkEventsJson.Default.ModelUpdateFinished)!,
                 "audio.dropped" => root.Deserialize(InkEventsJson.Default.AudioDropped)!,
                 "dictation.voice_detection" => root.Deserialize(InkEventsJson.Default.DictationVoiceDetection)!,
@@ -184,6 +185,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(ModelWarmFailed))]
 [JsonSerializable(typeof(ModelRefused))]
 [JsonSerializable(typeof(ModelUpdateStarted))]
+[JsonSerializable(typeof(ModelUpdateProgress))]
 [JsonSerializable(typeof(ModelUpdateFinished))]
 [JsonSerializable(typeof(AudioDropped))]
 [JsonSerializable(typeof(DictationVoiceDetection))]
@@ -371,7 +373,8 @@ public sealed record CatalogueEntry
     public required bool Installed { get; init; }
 
     /// <summary>
-    /// The jobs it fills, each with its measured error rate.
+    /// The jobs it fills, each with its measured error rate. None for a model the core only
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
     /// </summary>
     [JsonPropertyName("jobs")]
     public required global::System.Collections.Generic.IReadOnlyList<JobScore> Jobs { get; init; }
@@ -3141,6 +3144,40 @@ public sealed record ModelUpdateFinished : InkEvent
     /// </summary>
     [JsonPropertyName("ok")]
     public required bool Ok { get; init; }
+}
+
+/// <summary>
+/// How far a model update's download has got, between model.update_started and
+/// model.update_finished: about four a second at most, and one when every byte is on disk
+/// (done_bytes equal to total_bytes; model.update_finished then says whether the files checked
+/// out). A model already installed sends only that one.
+/// </summary>
+public sealed record ModelUpdateProgress : InkEvent
+{
+    /// <summary>
+    /// Bytes on disk so far across its files. It can go down: a file whose server ignores a
+    /// resume starts over.
+    /// </summary>
+    [JsonPropertyName("done_bytes")]
+    public required long DoneBytes { get; init; }
+
+    /// <summary>
+    /// The model being replaced (the same as next for a first download).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// The model being downloaded.
+    /// </summary>
+    [JsonPropertyName("next")]
+    public required string Next { get; init; }
+
+    /// <summary>
+    /// Its download size (models.listed's size_bytes).
+    /// </summary>
+    [JsonPropertyName("total_bytes")]
+    public required long TotalBytes { get; init; }
 }
 
 /// <summary>

@@ -6,8 +6,9 @@ to `mac/Sources/Inkwell/Screens/` and note the date, the macOS version and the c
 
 Automated checks cover the logic behind each line (`swift test --package-path mac`): the
 permission cards' reaction to a probe change, the Polish and the summaries-and-Ask toggles, modes
-without bundle ids, owed grouping, the notes' saving, the ledger and the question stack, and every
-screen command against the real core.
+without bundle ids, owed grouping, the notes' saving, the ledger and the question stack, the model
+downloads (only from a press, one at a time, failures and Retry), and every screen command against
+the real core.
 
 ## Setup
 
@@ -24,9 +25,22 @@ screen command against the real core.
 
 ## 1. First run
 
-- [ ] A fresh library opens the first-run sheet over the window: four steps shown as dots.
+- [ ] A fresh library opens the first-run sheet over the window: five steps shown as dots.
 - [ ] Permissions step: four cards, "Hear you", "Hear the others", "Type for you", "Know your
       meetings", each with its state. Nothing is asked for until you press Allow.
+- [ ] Models step (it downloads about 3 GB: only with your OK, into the scratch library's own
+      models folder): each model not on this Mac with its licence, size and where it comes from
+      (huggingface.co; Silero VAD from raw.githubusercontent.com), and the total. Nothing is fetched until you
+      press Download (Activity Monitor > Network: Inkwell receives nothing before it). Then one
+      model at a time, smallest first, with its bar, the others "Waiting". Continue works at once,
+      and the downloads keep going through the rest of the first run and after it.
+- [ ] Once Parakeet is in, Settings > Models reads Parakeet TDT v3 for Live words without a
+      restart, and dictating shows live words in the Drop; once Qwen3-ASR is in, Dictation reads
+      Qwen3-ASR 1.7B, and the first dictation after it is as quick as the next (it is loaded when
+      its download ends, not by that take).
+- [ ] A download that fails (turn Wi-Fi off while one runs): its row says "Couldn't download it"
+      and why, in red, with Retry, and nothing tries again by itself. Wi-Fi back on, Retry: it
+      downloads.
 - [ ] Polish step: the switch is off and cannot be turned on if Apple Intelligence is off or not
       on this Mac, and the line under it says why. With Apple Intelligence on, switching it on
       asks first ("Turn on polish?", naming Apple's on-device model); Cancel leaves it off.
@@ -145,7 +159,8 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
       a restart; turning it on again asks again.
 - [ ] Models: Dictation, Meeting transcript and Live words, each with the engine that serves it now
       and its measured accuracy. After a model finishes installing, the line changes to it without
-      a restart.
+      a restart. Each model not on this Mac has Download (downloads: only with your OK); a second
+      Download while one runs reads "Waiting" and starts when the first ends.
 - [ ] Meetings and Storage read true for this Mac; "Show in Finder" opens the library's folder.
 - [ ] About: the version, update settings, the model credits (Parakeet under CC-BY 4.0 with its
       attribution), and every component's notice, each opening to its full licence text.

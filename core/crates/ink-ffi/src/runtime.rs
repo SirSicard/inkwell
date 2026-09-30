@@ -30,10 +30,12 @@ use std::thread::{self, JoinHandle};
 
 use ink_audio::BandsWriter;
 use ink_core::{
-    CancelToken, Clock, EngineError, FocusReader, Job, Llm, MeetingDetector, OfflineEngine,
-    PermissionProbe, Store, TextInserter,
+    CancelToken, Clock, EngineError, EventSink, FocusReader, Job, Llm, MeetingDetector,
+    OfflineEngine, PermissionProbe, Store, TextInserter,
 };
-use ink_engines::{EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded};
+use ink_engines::{
+    DownloadProgress, EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded,
+};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
 use ink_pipeline::gain_stage::Vad;
 use ink_pipeline::update::{ModelInstaller, update_model};
@@ -415,7 +417,6 @@ enum Command {
     ModelWarm { job: Job },
     ModelUpdate { id: String, next: String },
     EngineUnregister { id: String },
-    EngineRoute { job: Job },
 }
 
 struct Envelope {
@@ -474,7 +475,6 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
         "model.warm" => &["job"],
         "model.update" => &["model", "next"],
         "engine.unregister" => &["engine"],
-        "engine.route" => &["job"],
         other => return Err(format!("unknown command \"{other}\"")),
     };
     let allowed: Vec<&str> = ["cmd", "id"].iter().chain(fields).copied().collect();
@@ -499,9 +499,6 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
         },
         "engine.unregister" => Command::EngineUnregister {
             id: text("engine")?,
-        },
-        "engine.route" => Command::EngineRoute {
-            job: events::parse_job(&text("job")?).ok_or("engine.route: unknown job")?,
         },
         other => return Err(format!("unknown command \"{other}\"")),
     };
@@ -1044,23 +1041,6 @@ fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
         }
         Command::ModelWarm { job } => warm(shared, job),
         Command::ModelUpdate { id: current, next } => update(shared, &current, &next, &fail),
-        Command::EngineRoute { job } => {
-            // What serves `job` now: a model downloaded from the registry, an engine the shell
-            // registered (such as a fallback while that model downloads), or nothing installed.
-            let (id, source) = match shared.router.route(job) {
-                Ok(Route::Model(row)) => (Some(row.id.clone()), Some("registry")),
-                Ok(Route::External { id, .. }) => (Some(id), Some("shell")),
-                Err(_) => (None, None),
-            };
-            shared.events.emit(event(
-                "engine.routed",
-                &[
-                    ("job", Some(events::job(job).into())),
-                    ("id", id.map(Into::into)),
-                    ("source", source.map(Into::into)),
-                ],
-            ));
-        }
         Command::EngineUnregister { id: engine } => {
             let known = {
                 let mut ids = lock(&shared.externals);
@@ -1151,8 +1131,14 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
         current_row,
         next_row,
         &shared.shutdown,
+        update_progress(shared, current, next),
     );
     drop(hold);
+    if result.is_ok() && next == ink_engines::SILERO_VAD_ID {
+        // A running dictation takes the voice detector now, queued before the shell hears that
+        // the install ended, so a take it starts after that is levelled with it.
+        crate::voice::vad_installed(shared);
+    }
     let (ok, no_model_warm, message) = match &result {
         Ok(()) => (true, false, None),
         Err(e) => (false, e.no_model_warm(), Some(Value::from(e.to_string()))),
@@ -1170,13 +1156,67 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
     ));
 }
 
+/// The fewest nanoseconds between two `model.update_progress` events: about four a second, which
+/// moves a bar smoothly without an event per MiB downloaded.
+const PROGRESS_INTERVAL_NS: u64 = 250_000_000;
+
+/// Which of an install's progress reports reach the shell: the first, then none sooner than
+/// [`PROGRESS_INTERVAL_NS`] after the last one sent, and the first that reaches the end whenever
+/// it comes (the downloader can report the end twice; the second is dropped).
+#[derive(Default)]
+struct ProgressThrottle {
+    last_ns: Option<u64>,
+    ended: bool,
+}
+
+impl ProgressThrottle {
+    fn pass(&mut self, now_ns: u64, done: u64, total: u64) -> bool {
+        if self.ended {
+            return false;
+        }
+        if done >= total {
+            self.ended = true;
+            return true;
+        }
+        if self
+            .last_ns
+            .is_some_and(|last| now_ns.saturating_sub(last) < PROGRESS_INTERVAL_NS)
+        {
+            return false;
+        }
+        self.last_ns = Some(now_ns);
+        true
+    }
+}
+
+/// **Worker.** The install's progress as `model.update_progress` events, throttled. Runs on the
+/// command thread, between the download's chunks; the lock is its alone.
+fn update_progress(shared: &Shared, current: &str, next: &str) -> EventSink<DownloadProgress> {
+    let (events, clock) = (shared.events.clone(), shared.clock.clone());
+    let (current, next) = (current.to_owned(), next.to_owned());
+    let throttle = Mutex::new(ProgressThrottle::default());
+    Arc::new(move |p: DownloadProgress| {
+        if lock(&throttle).pass(clock.now_ns(), p.done, p.total) {
+            events.emit(event(
+                "model.update_progress",
+                &[
+                    ("id", Some(current.as_str().into())),
+                    ("next", Some(next.as_str().into())),
+                    ("done_bytes", Some(p.done.into())),
+                    ("total_bytes", Some(p.total.into())),
+                ],
+            ));
+        }
+    })
+}
+
 /// A core for unit tests: an in-memory library, `clock`, no models, and events kept in memory.
 #[cfg(test)]
 pub(crate) mod testing {
     use std::sync::{Arc, Mutex};
 
-    use ink_core::{CancelToken, Clock, EngineError};
-    use ink_engines::{DownloadError, EngineRow, Loader, ModelDir, Registry};
+    use ink_core::{CancelToken, Clock, EngineError, EventSink};
+    use ink_engines::{DownloadError, DownloadProgress, EngineRow, Loader, ModelDir, Registry};
     use ink_pipeline::update::ModelInstaller;
     use serde_json::Value;
 
@@ -1191,7 +1231,12 @@ pub(crate) mod testing {
     }
 
     impl ModelInstaller for NoModels {
-        fn install(&self, _: &EngineRow, _: &CancelToken) -> Result<(), DownloadError> {
+        fn install(
+            &self,
+            _: &EngineRow,
+            _: &CancelToken,
+            _: EventSink<DownloadProgress>,
+        ) -> Result<(), DownloadError> {
             Ok(())
         }
     }
@@ -1272,13 +1317,29 @@ mod tests {
             r#"{"cmd":"replay_meeting"}"#,
             r#"{"cmd":"replay_meeting","mic":"/m.wav","pacing":"slow"}"#,
             r#"{"cmd":"engine.unregister","engine":3}"#,
-            r#"{"cmd":"engine.route"}"#,
-            r#"{"cmd":"engine.route","job":"typing"}"#,
-            r#"{"cmd":"engine.route","job":"live_partials","engine":"x"}"#,
             r#"{"cmd":"model.update","model":"a","next":"b","id":7}"#,
         ] {
             assert!(parse_command(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn progress_reaches_the_shell_at_most_four_times_a_second_and_once_at_the_end() {
+        const MS: u64 = 1_000_000;
+        let mut t = ProgressThrottle::default();
+        // The first report goes; the next ones only a quarter second after the last one sent.
+        assert!(t.pass(1_000 * MS, 0, 100));
+        assert!(!t.pass(1_100 * MS, 10, 100));
+        assert!(!t.pass(1_249 * MS, 20, 100));
+        assert!(t.pass(1_250 * MS, 30, 100));
+        assert!(!t.pass(1_300 * MS, 40, 100));
+        // The end goes whenever it comes, once.
+        assert!(t.pass(1_301 * MS, 100, 100));
+        assert!(!t.pass(2_000 * MS, 100, 100));
+        // A row already installed reports only its end: that one goes.
+        let mut t = ProgressThrottle::default();
+        assert!(t.pass(5, 100, 100));
+        assert!(!t.pass(u64::MAX, 100, 100));
     }
 
     /// Windows: the core's clock is the performance counter, the timebase of the mic's blocks and

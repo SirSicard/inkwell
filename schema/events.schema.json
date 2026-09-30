@@ -35,6 +35,9 @@
       "$ref": "#/$defs/ModelUpdateStarted"
     },
     {
+      "$ref": "#/$defs/ModelUpdateProgress"
+    },
+    {
       "$ref": "#/$defs/ModelUpdateFinished"
     },
     {
@@ -790,6 +793,41 @@
         "type",
         "id",
         "next"
+      ],
+      "additionalProperties": false
+    },
+    "ModelUpdateProgress": {
+      "type": "object",
+      "description": "How far a model update's download has got, between model.update_started and model.update_finished: about four a second at most, and one when every byte is on disk (done_bytes equal to total_bytes; model.update_finished then says whether the files checked out). A model already installed sends only that one.",
+      "properties": {
+        "type": {
+          "const": "model.update_progress"
+        },
+        "id": {
+          "type": "string",
+          "description": "The model being replaced (the same as next for a first download)."
+        },
+        "next": {
+          "type": "string",
+          "description": "The model being downloaded."
+        },
+        "done_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes on disk so far across its files. It can go down: a file whose server ignores a resume starts over."
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its download size (models.listed's size_bytes)."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "next",
+        "done_bytes",
+        "total_bytes"
       ],
       "additionalProperties": false
     },
@@ -3231,7 +3269,7 @@
         },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills, each with its measured error rate.",
+          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."

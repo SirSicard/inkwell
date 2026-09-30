@@ -5,8 +5,9 @@
 //   shares one `ParakeetModel` (`shared`). Callers that ask while it loads wait for that load.
 // - Never downloaded here: `ModelHub.offlineMode` is set before FluidAudio's loader is touched,
 //   so a missing or damaged file is reported (`modelMissing`, `downloadRefused`), and FluidAudio
-//   neither fetches nor deletes its cache. Getting the models onto the Mac is a download the user
-//   agrees to, made elsewhere.
+//   neither fetches nor deletes its files. The core downloads them, when the user asks, as its
+//   registry row parakeet-tdt-0.6b-v3-coreml, and they are loaded from where it puts them
+//   (`ParakeetFiles`), never from FluidAudio's own cache.
 // - Every time is counted in samples. FluidAudio's `ASRResult.duration` is 0 for audio longer than
 //   one 15 s model window (its chunked path passes no samples to the result), so it is never read.
 // - Every decode is bounded (`decodeLimit`). One that never returned used to keep the Neural
@@ -69,8 +70,20 @@ public actor ParakeetModel: WindowDecoder {
     /// Loads a backend. Runs at most once per successful load.
     public typealias Loader = @Sendable () async throws(ParakeetError) -> any ParakeetBackend
 
-    /// The one every engine of the app shares.
-    public static let shared = ParakeetModel(loader: FluidAudioParakeet.load)
+    /// The one every engine of the app shares. It loads from the models directory the core was
+    /// started with (`useModelsDirectory`); until the app has said which, a load finds no models.
+    public static let shared = ParakeetModel(loader: { () async throws(ParakeetError) -> any ParakeetBackend in
+        try await FluidAudioParakeet.load(from: ParakeetModel.sharedModels.withLock { $0 })
+    })
+
+    /// Where `shared` loads from.
+    private static let sharedModels = Mutex<URL?>(nil)
+
+    /// The core's models directory, for `shared` to load from: its `models_dir`, or the core's
+    /// default, `<data_dir>/models`. Set before `shared` loads.
+    public static func useModelsDirectory(_ models: URL) {
+        sharedModels.withLock { $0 = models }
+    }
 
     private let loader: Loader
     private var backend: (any ParakeetBackend)?
@@ -239,18 +252,60 @@ actor Turn {
     }
 }
 
+/// Where the core installs Parakeet, and the folder FluidAudio is given to load it from.
+///
+/// The core's registry row parakeet-tdt-0.6b-v3-coreml (ink-engines `rows.rs`) fills no job: the
+/// core only downloads it (`model.update`), into `<models>/<row id>/<first 12 digits of the
+/// revision>/`. It writes the full revision into that directory's `.revision` once every file has
+/// checked out, and removes it before a download changes anything there. The files sit in the
+/// folder FluidAudio reads v3 from, inside that directory. The row's values are restated here; a
+/// test compares them with the core's source.
+public enum ParakeetFiles {
+    /// The row's registry id.
+    public static let rowID = "parakeet-tdt-0.6b-v3-coreml"
+    /// The revision the row pins.
+    static let revision = "7dd20fe6b1797d35f5e3307e8b1732d9a178edfe"
+    /// How many of its leading digits name its directory (the core's `REVISION_DIR_LEN`).
+    static let revisionDirLength = 12
+    /// The marker's file name (the core's `REVISION_MARKER`).
+    static let marker = ".revision"
+
+    /// The row's directory under the core's models directory.
+    static func rowDirectory(in models: URL) -> URL {
+        models.appendingPathComponent(rowID, isDirectory: true)
+            .appendingPathComponent(String(revision.prefix(revisionDirLength)), isDirectory: true)
+    }
+
+    /// What FluidAudio is given: its v3 folder, inside the row's directory (it reads the models
+    /// from `<given>/../<its v3 folder>`).
+    static func directory(in models: URL) -> URL {
+        rowDirectory(in: models).appendingPathComponent(Repo.parakeetV3.folderName, isDirectory: true)
+    }
+
+    /// Whether the core finished installing this revision: its marker holds exactly the revision.
+    /// An interrupted download leaves bundles that FluidAudio would take for the models.
+    static func installed(in models: URL) -> Bool {
+        let marker = rowDirectory(in: models).appendingPathComponent(marker, isDirectory: false)
+        return (try? Data(contentsOf: marker)) == Data(revision.utf8)
+    }
+}
+
 /// Parakeet TDT v3 through FluidAudio 0.15.5.
 struct FluidAudioParakeet: ParakeetBackend {
     let manager: AsrManager
 
-    /// Loads v3 from FluidAudio's cache, refusing to download (see the file header).
-    static func load() async throws(ParakeetError) -> any ParakeetBackend {
+    /// Loads v3 from where the core installs it under `modelsDirectory` (the core's), refusing to
+    /// download (see the file header). No directory means no models.
+    static func load(from modelsDirectory: URL?) async throws(ParakeetError) -> any ParakeetBackend {
         #if !arch(arm64)
             throw ParakeetError.unsupported
         #else
             // Before any loader is touched (FluidAudio reads it per request).
             ModelHub.offlineMode = true
-            let dir = AsrModels.defaultCacheDirectory(for: .v3)
+            guard let modelsDirectory, ParakeetFiles.installed(in: modelsDirectory) else {
+                throw ParakeetError.modelMissing
+            }
+            let dir = ParakeetFiles.directory(in: modelsDirectory)
             guard AsrModels.modelsExist(at: dir, version: .v3) else {
                 throw ParakeetError.modelMissing
             }

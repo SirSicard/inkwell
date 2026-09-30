@@ -13,6 +13,8 @@ final class OnboardingModel {
     enum Step: Int, CaseIterable, Sendable {
         case welcome
         case permissions
+        /// The speech models: downloaded only when the user presses Download there.
+        case models
         case polish
         case ready
     }
@@ -340,6 +342,9 @@ final class ScreenModels {
         case "permissions.check", "models.list", "modes.list", "commitment.set_done",
              "commitment.not_yet", "note.add", "note.update", "note.delete",
              "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
+            true
+        case "model.update":
+            // The download's row says it failed, and why (the first run and Settings > Models).
             true
         case "setting.get":
             failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID

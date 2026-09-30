@@ -19,7 +19,8 @@ name or a meeting title into this file or a bug: the repository is public.
 
 - [ ] Build the signed app with the engines (an ad-hoc signature is a new app to TCC every time):
       `INK_SIGN_IDENTITY=... NEMO_SPEECH_DIR=... mac/scripts/build-mac.sh --engines`.
-- [ ] Models installed (Settings > Models lists Qwen3-ASR, Silero and Nemotron as installed), and
+- [ ] Models installed (Settings > Models lists Qwen3-ASR, Parakeet, Silero and Nemotron as "On
+      this Mac"; Parakeet gives the live words), and
       Apple Intelligence on (Settings > AI: Polish can be turned on). Without Apple Intelligence
       meetings get no summary, and say so.
 - [ ] Settings > AI, before turning anything on: "Summaries and Ask" is off, and says meetings are

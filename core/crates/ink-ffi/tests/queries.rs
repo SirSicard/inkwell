@@ -490,3 +490,102 @@ fn the_catalogue_lists_this_oses_models_with_their_rates_and_whether_they_are_in
     assert!(jobs.contains(&json!({"job": "dictation_final", "wer": 5.0})));
     rig.finish();
 }
+
+/// What serves a job is a screen's question (Settings > Models asks it after each download, and
+/// when an engine comes or goes): it is answered while a model update holds the command thread for
+/// its download, not once the download ends.
+#[test]
+fn what_serves_a_job_is_answered_while_a_model_update_holds_the_commands() {
+    let rig = rig("route");
+    rig.core
+        .command(&json!({"cmd": "model.update", "model": ROW_ID, "next": ROW_ID}).to_string())
+        .unwrap();
+    rig.events.wait_type("model.update_started", WAIT);
+    assert!(rig.gate.until_waiting(WAIT), "the install is under way");
+
+    let routed = rig.ask(
+        json!({"cmd": "engine.route", "job": "dictation_final"}),
+        "engine.routed",
+        1,
+    );
+    assert_eq!(routed["job"], "dictation_final");
+    assert_eq!(routed["id"], ROW_ID);
+    assert_eq!(routed["source"], "registry");
+    assert_eq!(
+        rig.events.count("model.update_finished"),
+        0,
+        "the answer did not wait for the update"
+    );
+    rig.finish();
+}
+
+/// The Mac's Parakeet, which the core only downloads (the shell runs it), is in the built-in
+/// catalogue on macOS with its size and whether it is installed, and filling no job; Windows does
+/// not list it.
+#[test]
+fn the_catalogue_lists_the_macs_parakeet_on_macos_only() {
+    let dir = TempDir::new("catalogue-parakeet");
+    let models = ModelDir::new(dir.path().join("models"));
+    let loader = MockLoader::new(Behaviour::Say("x".into()));
+    let (core, events) = start_parts(Parts {
+        store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+        clock: clock(),
+        registry: Registry::builtin().unwrap(),
+        models: models.clone(),
+        loader: loader.clone(),
+        installer: Arc::new(MockInstaller {
+            generation: loader.generation.clone(),
+            gate: None,
+            installs: AtomicUsize::new(0),
+        }),
+        data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: Default::default(),
+    });
+    let parakeet = |n: usize| {
+        core.command(r#"{"cmd":"models.list"}"#).unwrap();
+        assert!(events.wait_count("models.listed", n, WAIT));
+        let listed = events
+            .all()
+            .into_iter()
+            .filter(|e| e["type"] == "models.listed")
+            .nth(n - 1)
+            .unwrap();
+        listed["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == ink_engines::PARAKEET_COREML_ID)
+            .cloned()
+    };
+    if cfg!(not(target_os = "macos")) {
+        assert_eq!(parakeet(1), None);
+        core.shutdown();
+        events.assert_valid();
+        return;
+    }
+    let row = ink_engines::parakeet_tdt_v3_coreml();
+    assert_eq!(
+        parakeet(1),
+        Some(json!({
+            "id": "parakeet-tdt-0.6b-v3-coreml",
+            "licence": "CC-BY-4.0",
+            "size_bytes": 483_105_645,
+            "installed": false,
+            "jobs": [],
+        }))
+    );
+    // Laid out as the downloader leaves it (sparse files of the right sizes, and the marker).
+    for f in &row.files {
+        let path = models.file_path(&row, f);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(f.size)
+            .unwrap();
+    }
+    std::fs::write(models.marker_path(&row), &row.revision).unwrap();
+    assert_eq!(parakeet(2).unwrap()["installed"], true);
+    core.shutdown();
+    events.assert_valid();
+}

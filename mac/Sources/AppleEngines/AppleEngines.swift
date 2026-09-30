@@ -42,6 +42,15 @@ public final class AppleEngines: Sendable {
     private let polishModel: FoundationModelsPolish
     /// Whether `polishModel` is registered now: what `syncPolish` compares against.
     private let polish = Mutex<FoundationModelsPolish?>(nil)
+    /// Parakeet's registration in this session (`registerParakeet`).
+    private let parakeetRegistration = Mutex(ParakeetRegistration())
+
+    /// Whether `register` has run (Parakeet is then this session's to register, also once its
+    /// download finishes), and what registering its engines came to: done at most once.
+    private struct ParakeetRegistration {
+        var asked = false
+        var outcome: (live: AppleEngineState, finals: AppleEngineState)?
+    }
 
     public init(
         session: InkSession, parakeet: ParakeetModel = .shared,
@@ -54,10 +63,21 @@ public final class AppleEngines: Sendable {
 
     /// Forward the core's events here (the shell's event handler, on the core's event thread; it
     /// returns at once). A take starting prewarms polish, so the polish at its release does not
-    /// pay the model's cold start.
+    /// pay the model's cold start. Parakeet's download finishing loads it and registers its
+    /// engines then, not at the next launch (once `register` has run, and only if they are not
+    /// registered yet).
     public func handle(_ event: InkEvent) {
-        if case .dictationStarted = event {
+        switch event {
+        case .dictationStarted:
             prewarmPolish()
+        case .modelUpdateFinished(let finished) where finished.ok && finished.next == ParakeetFiles.rowID:
+            guard parakeetRegistration.withLock({ $0.asked && $0.outcome == nil }) else { return }
+            Task {
+                let (live, finals) = await registerParakeet()
+                Log.engine.notice("parakeet after its download: live \(String(describing: live), privacy: .public), finals \(String(describing: finals), privacy: .public)")
+            }
+        default:
+            break
         }
     }
 
@@ -69,29 +89,42 @@ public final class AppleEngines: Sendable {
     /// Loads Parakeet (once per process; seconds on the first launch) and registers it for live
     /// partials and as the finals' fallback, and registers polish if Apple Intelligence is
     /// available. Call once the session has started; call `syncPolish` again whenever Apple
-    /// Intelligence may have changed.
+    /// Intelligence may have changed. Parakeet not downloaded yet is registered when its download
+    /// finishes (`handle`).
     public func register() async -> AppleEnginesReport {
-        let live, finals: AppleEngineState
+        parakeetRegistration.withLock { $0.asked = true }
+        let (live, finals) = await registerParakeet()
+        return AppleEnginesReport(livePartials: live, finals: finals, polish: syncPolish())
+    }
+
+    /// Loads Parakeet and registers its engines, unless they are registered already: whoever
+    /// loaded it (the launch, or its download finishing) registers them once.
+    private func registerParakeet() async -> (live: AppleEngineState, finals: AppleEngineState) {
         do throws(ParakeetError) {
             try await parakeet.load()
-            live = Self.state { try session.register(ParakeetLiveEngine(decoder: parakeet)) }
-            finals = Self.state { try session.register(ParakeetOfflineEngine.fallback(model: parakeet)) }
         } catch .modelMissing {
             // Expected until the user agrees to the download: nothing is fetched here.
             Log.engine.notice("parakeet: its models are not on this Mac; no live partials or finals fallback")
-            (live, finals) = (.modelMissing, .modelMissing)
+            return (.modelMissing, .modelMissing)
         } catch .downloadRefused {
             Log.engine.notice("parakeet: a model file was missing and offline mode refused to fetch it; no live partials or finals fallback")
-            (live, finals) = (.modelMissing, .modelMissing)
+            return (.modelMissing, .modelMissing)
         } catch .unsupported {
             Log.engine.notice("parakeet: this Mac has no Apple Silicon; no live partials or finals fallback")
-            (live, finals) = (.unavailable(code: 1), .unavailable(code: 1))
+            return (.unavailable(code: 1), .unavailable(code: 1))
         } catch {
             let code = error.engineError.code
             Log.engine.error("parakeet: loading failed (code \(code)); no live partials or finals fallback")
-            (live, finals) = (.failed(code: code), .failed(code: code))
+            return (.failed(code: code), .failed(code: code))
         }
-        return AppleEnginesReport(livePartials: live, finals: finals, polish: syncPolish())
+        let (session, parakeet) = (self.session, self.parakeet)
+        return parakeetRegistration.withLock { registration in
+            if let outcome = registration.outcome { return outcome }
+            let live = Self.state { try session.register(ParakeetLiveEngine(decoder: parakeet)) }
+            let finals = Self.state { try session.register(ParakeetOfflineEngine.fallback(model: parakeet)) }
+            registration.outcome = (live, finals)
+            return (live, finals)
+        }
     }
 
     /// Registers polish when Apple Intelligence is available and it is not registered, and lets go

@@ -113,6 +113,52 @@ final class RegistrationTests: XCTestCase {
         XCTAssertTrue(core.registered.allSatisfy { $0.kind == .llm }, "\(core.registered)")
     }
 
+    /// Parakeet not downloaded at launch is registered when its download finishes, not at the next
+    /// launch: once, and only in a session whose shell registers the Apple engines.
+    func testParakeetIsRegisteredOnceWhenItsDownloadFinishes() async throws {
+        let core = try TestCore.start()
+        defer { core.stop() }
+        let downloaded = Counter()
+        let model = ParakeetModel(loader: { () throws(ParakeetError) -> any ParakeetBackend in
+            if downloaded.value == 0 { throw .modelMissing }
+            return Silent()
+        })
+        func finished(_ id: String, ok: Bool) throws -> InkEvent {
+            try InkEvent.decode(Data(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":\#(ok),"no_model_warm":false}"#.utf8))
+        }
+        let parakeetInstalled = try finished(ParakeetFiles.rowID, ok: true)
+
+        // A shell that registers no Apple engines (it never called `register`): nothing.
+        AppleEngines(session: core.session, parakeet: ParakeetModel(loader: { Silent() })).handle(parakeetInstalled)
+
+        let engines = AppleEngines(session: core.session, parakeet: model)
+        let report = await engines.register()
+        XCTAssertEqual(report.livePartials, .modelMissing, "not downloaded yet")
+        downloaded.add()
+        // Another model's download, or Parakeet's failing: nothing.
+        engines.handle(try finished("qwen3-asr-1.7b-q8", ok: true))
+        engines.handle(try finished(ParakeetFiles.rowID, ok: false))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(core.registered.allSatisfy { $0.kind == .llm }, "\(core.registered)")
+
+        engines.handle(parakeetInstalled)
+        let until = ContinuousClock.now + .seconds(5)
+        while core.registered.filter({ $0.kind != .llm }).count < 2, ContinuousClock.now < until {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(
+            Set(core.registered.filter { $0.kind != .llm }.map(\.kind)), [.streaming, .offline],
+            "live partials and the finals' fallback")
+        // Its download reported twice, or registration asked for again: registered once, and a
+        // later ask reads registered (the core would refuse the same ids a second time).
+        engines.handle(parakeetInstalled)
+        try await Task.sleep(for: .milliseconds(300))
+        let again = await engines.register()
+        XCTAssertEqual(again.livePartials, .registered)
+        XCTAssertEqual(again.finals, .registered)
+        XCTAssertEqual(core.registered.filter { $0.kind != .llm }.count, 2)
+    }
+
     func testPolishIsRegisteredOnlyWhileAppleIntelligenceIsAvailable() throws {
         let core = try TestCore.start()
         defer { core.stop() }
