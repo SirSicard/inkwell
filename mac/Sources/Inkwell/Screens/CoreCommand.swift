@@ -78,7 +78,8 @@ enum CoreCommand: Equatable, Sendable {
         case .noteUpdate(let note, let text, let ref): ["cmd": "note.update", "note": note, "text": text, "id": ref]
         case .noteDelete(let note, let ref): ["cmd": "note.delete", "note": note, "id": ref]
         case .modelsList: ["cmd": "models.list"]
-        case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue]
+        // The id names the job ("engine.route:dictation_final"), so a failure is matched to its line.
+        case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue, "id": "engine.route:\(job.rawValue)"]
         // The id names the setting, so a failure can be matched to it (command.failed has no key).
         case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue, "id": "setting:\(key.rawValue)"]
         case .settingSet(let key, let value):
@@ -159,6 +160,25 @@ enum CoreCommand: Equatable, Sendable {
         case .voiceCommandsSave: "voice_commands.save"
         case .importNotes: "import.notes"
         }
+    }
+
+    /// Its "id", when it carries one (answers echo it as `ref`; a `command.failed` as its id).
+    var commandID: String? {
+        let fields = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+        return fields?["id"] as? String
+    }
+
+    /// The `command.failed` the core would have sent had it run this command and failed: the
+    /// shell raises it when the command never reached the core (no core, or the core refused to
+    /// queue it), so the screen waiting for an answer says it couldn't instead of waiting forever.
+    /// `message` names what went wrong, never the command's fields.
+    func notSent(_ message: String) -> InkEvent {
+        var fields = ["type": "command.failed", "command": name, "message": message]
+        fields["id"] = commandID
+        // Decoded as the core's own events are, so it reaches the screens the same way. Strings
+        // only, with the fields command.failed requires: neither step can fail.
+        let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return (try? InkEvent.decode(data)) ?? .undecodable(type: "command.failed", record: nil)
     }
 }
 

@@ -88,16 +88,31 @@ final class CoreController {
         }
     }
 
-    /// Queues one of the screens' commands (see `CoreCommand`).
+    /// Queues one of the screens' commands (see `CoreCommand`). One with no core to take it, or
+    /// one the core refuses to queue, never ran: logged by name, and failed (`notSent`).
     func send(_ command: CoreCommand) {
         guard let session else {
             commandLog.write("no core is running: a \(command.name) command was not sent")
+            notSent(command, why: "the core is not running")
             return
         }
         do {
             try session.command(command.json)
         } catch {
             log.error("the core refused a \(command.name, privacy: .public) command: \(String(describing: error), privacy: .public)")
+            // The error names a core status, never the command's fields.
+            notSent(command, why: String(describing: error))
+        }
+    }
+
+    /// A command that never reached the core fails as if the core had failed it: its
+    /// command.failed goes the way the core's events go, one main-queue hop later (a model may be
+    /// sending from inside its own apply), so the screen waiting for it says it couldn't instead
+    /// of waiting forever.
+    private func notSent(_ command: CoreCommand, why: String) {
+        let failed = command.notSent("couldn't send it: \(why)")
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.received([failed]) }
         }
     }
 

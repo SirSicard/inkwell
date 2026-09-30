@@ -166,6 +166,8 @@ final class LibraryModel {
     func refreshList() {
         if listLoad != .loaded { listLoad = .loading }
         moreLoad = .idle
+        // A page asked for under the old list is stale now: its answer must not append.
+        latest[.more] = nil
         send(.recordsList(kind: filter, before: nil, limit: Self.pageSize, ref: ref(for: .list)))
     }
 

@@ -350,6 +350,9 @@ final class ScreenModels {
                 || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
+        case "engine.route":
+            // Settings > Models says so on the job's line.
+            CatalogueModel.routeJob(failed) != nil
         case "consent.get", "consent.allow":
             // Shown under the Polish or the summaries toggle, or in the Voice section for voice edit.
             true
