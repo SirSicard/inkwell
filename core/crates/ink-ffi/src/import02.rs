@@ -274,13 +274,13 @@ mod tests {
         assert!(Import02Query::Run.imports() && !Import02Query::Check.imports());
     }
 
+    /// Only the path is computed: nothing is created or opened. (An absolute home for this OS.)
     #[test]
     fn the_mac_directory_is_tauris_app_data_dir_for_0_2() {
+        let home = std::env::temp_dir().join("someone");
         assert_eq!(
-            mac_source_dir(Some("/home/someone".into())),
-            Some(PathBuf::from(
-                "/home/someone/Library/Application Support/com.inkwell.app"
-            ))
+            mac_source_dir(Some(home.clone())),
+            Some(home.join("Library/Application Support/com.inkwell.app"))
         );
         assert_eq!(mac_source_dir(None), None);
         assert_eq!(mac_source_dir(Some("relative".into())), None);
