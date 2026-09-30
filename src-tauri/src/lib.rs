@@ -25,6 +25,7 @@ pub mod snippets;
 pub mod store;
 pub mod streaming;
 pub mod style;
+mod successor;
 mod tray;
 mod vad;
 pub mod voiceedit;
@@ -205,6 +206,8 @@ pub fn run() {
             polish::get_polish_settings,
             polish::set_polish_settings,
             polish::run_ai_polish,
+            successor::successor_audience,
+            successor::open_successor_site,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

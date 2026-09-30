@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { getVersion } from "@tauri-apps/api/app"
 import type { Update } from "@tauri-apps/plugin-updater"
 import { InkCanvas } from "./components/InkCanvas"
+import { SuccessorNotice } from "./components/SuccessorNotice"
 import type { Settings, UpdateInfo, Tab } from "./types"
 import { formatHotkey } from "./hotkey"
 import { useToasts, toast } from "./state/toasts"
@@ -736,6 +737,7 @@ function App() {
 
       {/* Right: Content Zone */}
       <div className="flex-1 h-full flex flex-col border-l border-border bg-bg-base">
+        <SuccessorNotice />
         <div className="flex-1 flex min-h-0">
           <Sidebar tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
 

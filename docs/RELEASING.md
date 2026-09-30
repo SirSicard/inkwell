@@ -27,6 +27,19 @@ gh run watch "$(gh run list --workflow build.yml --limit 1 --json databaseId --j
 Do this before touching a version number. A failure here costs a re-push; the
 same failure after tagging costs a deleted tag and a burnt version.
 
+## From 0.2.10 on, 1.0 goes live first
+
+0.2.10 and every later 0.2 build show a notice that says Inkwell 1.0 is out and
+sends Apple silicon and Windows users to the homepage (`SITE_URL` in
+`src-tauri/src/successor.rs`) to get it. Tag only once the live homepage offers
+1.0 for Apple silicon Macs and for Windows, including how to get the Windows
+installer past SmartScreen while it is unsigned. Before that, the notice is
+false and the page it opens hands out an older 0.2 than the one reading it.
+Nothing checks this automatically.
+
+From 0.2.10 on, skip step 8 below: the homepage describes 1.0 and must not go
+back to a 0.2 version.
+
 ## Cut it
 
 ```bash
