@@ -10,12 +10,16 @@ a PC once (windows/S3.6-CHECKLIST.md, section 1) before this goes live.
 
 ## Windows
 
-Inkwell for Windows 11 (version 24H2 or later), 64-bit. It installs for your user account alone:
-no administrator password, nothing system-wide.
+Inkwell for 64-bit Windows 11 (version 24H2 or later), on a PC with an Intel or AMD processor or
+with an ARM one. It installs for your user account alone: no administrator password, nothing
+system-wide.
 
-1. **Download** `Inkwell_X.Y.Z_x64-setup.exe` from the [latest release](https://github.com/SirSicard/inkwell/releases/latest).
-   Your browser may say the file "isn't commonly downloaded". In Edge, open the download's **…**
-   menu, choose **Keep**, then **Show more** and **Keep anyway**. In Chrome, choose **Keep**.
+1. **Download** the installer for your PC from the [latest release](https://github.com/SirSicard/inkwell/releases/latest):
+   `Inkwell_X.Y.Z_x64-setup.exe` for an Intel or AMD processor, or `Inkwell_X.Y.Z_arm64-setup.exe`
+   if Settings > System > About says "ARM-based processor". (The ARM version does not yet tell
+   apart the speakers at the far end of a meeting.) Your browser may say the file "isn't commonly
+   downloaded". In Edge, open the download's **…** menu, choose **Keep**, then **Show more** and
+   **Keep anyway**. In Chrome, choose **Keep**.
 
 2. **Check the download** (recommended). The Windows build is not code-signed yet, so this is how
    you know the file is the one we published. In PowerShell:
@@ -24,9 +28,10 @@ no administrator password, nothing system-wide.
    Get-FileHash -Algorithm SHA256 "$HOME\Downloads\Inkwell_X.Y.Z_x64-setup.exe"
    ```
 
-   The hash it prints must match the one in the release notes, and in
-   `Inkwell_X.Y.Z_windows-sha256.txt` on the same release. If it does not, delete the file and do
-   not run it.
+   (with `arm64` in the name for the ARM version). The hash it prints must match the one in the
+   release notes, and in `Inkwell_X.Y.Z_windows-x64-sha256.txt` (or
+   `Inkwell_X.Y.Z_windows-arm64-sha256.txt`) on the same release. If it does not, delete the file
+   and do not run it.
 
 3. **Run it.** Windows SmartScreen will say "Windows protected your PC", with the publisher
    "Unknown publisher". Choose **More info**, then **Run anyway**. Inkwell installs in a few seconds
@@ -64,5 +69,5 @@ Notes for the release-prep step (not homepage text):
   whole feature turned off, and that it cannot then go back to evaluation mode without resetting
   Windows ([Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)).
   Hence the advice to wait rather than to turn it off.
-- `sha256sum -c Inkwell_X.Y.Z_windows-sha256.txt` (Git Bash, WSL) checks all three Windows files at
-  once, for anyone who prefers it.
+- `sha256sum -c Inkwell_X.Y.Z_windows-x64-sha256.txt` (Git Bash, WSL) checks all three x64 files at
+  once, for anyone who prefers it, and `Inkwell_X.Y.Z_windows-arm64-sha256.txt` the ARM64 ones.
