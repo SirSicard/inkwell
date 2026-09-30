@@ -88,7 +88,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
         [
             new("Permissions", new PermissionsSection(models.Permissions)),
             new("Voice", new VoiceSection(models.Ai, importNote)),
-            new("AI", new AiSection(models.Ai)),
+            new("AI", new AiSection(models.Ai, models.Cloud)),
             new("Modes", new ModesSection(models.Modes)),
             new("Snippets", new SnippetsSection(models.Snippets)),
             new("Voice commands", new VoiceCommandsSection(models.VoiceCommands)),

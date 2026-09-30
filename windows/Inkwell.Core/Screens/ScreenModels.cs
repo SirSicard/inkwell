@@ -49,6 +49,7 @@ public sealed class ScreenModels
         EditConsent = AiSettings.NewEditConsent(send);
         MeetingsConsent = AiSettings.NewMeetingsConsent(send);
         Ai = new AiSettings(Polish, Dictation, EditConsent, MeetingsConsent, send);
+        Cloud = new CloudModel(send);
         Snippets = new SnippetsModel(send);
         VoiceCommands = new VoiceCommandsModel(send);
         ImportNote = new ImportNoteModel(send);
@@ -74,6 +75,8 @@ public sealed class ScreenModels
     public ConsentModel MeetingsConsent { get; }
     /// <summary>Settings > AI: the three switches and the voice-edit key's consent.</summary>
     public AiSettings Ai { get; }
+    /// <summary>Settings > AI's language model: an own-key provider (Windows has none on the device).</summary>
+    public CloudModel Cloud { get; }
     public SnippetsModel Snippets { get; }
     public VoiceCommandsModel VoiceCommands { get; }
     public ImportNoteModel ImportNote { get; }
@@ -105,6 +108,7 @@ public sealed class ScreenModels
             Dictation.Apply(e);
             EditConsent.Apply(e);
             MeetingsConsent.Apply(e);
+            Cloud.Apply(e);
             Snippets.Apply(e);
             VoiceCommands.Apply(e);
             ImportNote.Apply(e);
@@ -129,6 +133,8 @@ public sealed class ScreenModels
         Dictation.Load();
         EditConsent.Load();
         MeetingsConsent.Load();
+        // Whether an own-key provider is ready decides whether the AI switches can be used.
+        Cloud.Load();
     }
 
     /// <summary>The app came to the front again.</summary>
@@ -153,7 +159,7 @@ public sealed class ScreenModels
         return PermissionsModel.Handles(failed) || Polish.Handles(failed) || CatalogueModel.Handles(failed)
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
             || MeetingModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed)
-            || Ai.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
+            || Ai.Handles(failed) || CloudModel.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
             || Library.Handles(failed);
     }
 

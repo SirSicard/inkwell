@@ -9,7 +9,8 @@
 // same write.
 //
 // The toggle reads "on" only when the switch is on, the consent covers the model, and the core has
-// a working language model registered (engine.registered, kind llm, not let go of since). With no
+// a working language model: one registered (engine.registered, kind llm, not let go of since), or
+// an own-key provider chosen and ready (llm.providers, Settings > AI's language model). With no
 // working model it reads off, cannot be switched, and says so. Windows has no Apple Intelligence:
 // which models exist is the core's to say (its engines), so the Mac's Apple-engine reasons are gone.
 //
@@ -34,6 +35,8 @@ public sealed class PolishModel : ObservableModel
     private readonly Action<CoreCommand> send;
     /// <summary>Language models the core confirmed and still holds, by id.</summary>
     private readonly HashSet<string> models = new(StringComparer.Ordinal);
+    /// <summary>An own-key provider is chosen and can be called (llm.providers' ready).</summary>
+    private bool cloudReady;
     private bool takeTimedOut;
 
     public PolishModel(Action<CoreCommand> send)
@@ -54,7 +57,7 @@ public sealed class PolishModel : ObservableModel
     public int TimeoutsInARow { get; private set; }
 
     /// <summary>Whether a language model can polish now (summaries and Ask use the same test).</summary>
-    public bool HasWorkingEngine => models.Count > 0;
+    public bool HasWorkingEngine => models.Count > 0 || cloudReady;
 
     /// <summary>The core's state (null until read).</summary>
     public ConsentSnapshot? State => Consent.State;
@@ -182,8 +185,13 @@ public sealed class PolishModel : ObservableModel
                 return models.Add(engine.Id);
             case EngineUnregistered engine:
                 return models.Remove(engine.Id);
+            case LlmProviders providers:
+                var was = cloudReady;
+                cloudReady = providers.Ready;
+                return was != cloudReady;
             case CoreStopped:
                 models.Clear();
+                cloudReady = false;
                 return true;
             case DictationStarted:
                 takeTimedOut = false;

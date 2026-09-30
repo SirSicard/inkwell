@@ -274,6 +274,68 @@ public abstract record CoreCommand
         }
     }
 
+    /// <summary>Settings > AI's language model: the own-key providers and the one chosen (llm.providers with <paramref name="Ref"/>).</summary>
+    public sealed record LlmProviders(string Ref) : CoreCommand
+    {
+        public override string Name => "llm.providers";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Stores <paramref name="Key"/> for <paramref name="Provider"/> in the OS key store (the core
+    /// keeps it nowhere else). Its ToString never shows the key: only Json carries it, once, to the core.
+    /// </summary>
+    public sealed record LlmKeySave(string Provider, string Key, string Ref) : CoreCommand
+    {
+        public override string Name => "llm.key.save";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("provider", Provider), ("key", Key), ("id", Ref)];
+
+        public override string ToString() => $"LlmKeySave {{ Provider = {Provider}, Key = <redacted>, Ref = {Ref} }}";
+    }
+
+    public sealed record LlmKeyDelete(string Provider, string Ref) : CoreCommand
+    {
+        public override string Name => "llm.key.delete";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("provider", Provider), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Chooses <paramref name="Provider"/> ("none": none) and its model. <paramref name="LocalOnlyOff"/>
+    /// is the user's say-so for a provider that is not on this PC: choosing it turns local-only
+    /// mode off, and the core refuses such a choice without it.
+    /// </summary>
+    public sealed record LlmChoose(string Provider, string? Model, string? BaseUrl, bool LocalOnlyOff, string Ref) : CoreCommand
+    {
+        public override string Name => "llm.choose";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("provider", Provider);
+            yield return ("id", Ref);
+            if (Model is not null)
+            {
+                yield return ("model", Model);
+            }
+            if (BaseUrl is not null)
+            {
+                yield return ("base_url", BaseUrl);
+            }
+            if (LocalOnlyOff)
+            {
+                yield return ("local_only", "off");
+            }
+        }
+    }
+
+    /// <summary>One short fixed request to the chosen provider: llm.tested with <paramref name="Ref"/>.</summary>
+    public sealed record LlmTest(string Ref) : CoreCommand
+    {
+        public override string Name => "llm.test";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
     /// <summary>Settings > Snippets: answered by snippets.listed with <paramref name="Ref"/>.</summary>
     public sealed record SnippetsList(string Ref) : CoreCommand
     {
