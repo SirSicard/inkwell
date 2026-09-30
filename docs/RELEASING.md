@@ -262,9 +262,12 @@ Before the tag:
       key in `mac/Info.plist`, and the tag ruleset (the steps under "Once: the update key").
 - [ ] Every notice written without its upstream file compared with that project's own licence
       file, replaced where it differs, and its `verified=` set to the date: the lines of
-      `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`) and of
-      `mac/composed-notices.txt` (replacing the text in `Notices.swift`).
-      `mac/scripts/notices-verified.sh` must pass: the tag refuses to build until it does.
+      `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`), of
+      `mac/composed-notices.txt` (replacing the text in `Notices.swift`), and of the Windows-only
+      `windows/Inkwell.Core/Screens/About/composed-notices.txt` (replacing the text in
+      `Notices.cs`). `mac/scripts/notices-verified.sh` and
+      `windows/scripts/release-version.sh tag v1.0.0` (the same check with the Windows list) must
+      pass: each platform's tag refuses to build until its check does.
 - [ ] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
       `src-tauri/`, `public/`, `index.html`, `package.json`, `package-lock.json`,
       `vite.config.ts`, `eslint.config.js` and the three `tsconfig*.json`. With them, what points
