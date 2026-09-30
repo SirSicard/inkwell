@@ -137,13 +137,18 @@ jobs:
           "SHERPA_ONNX_DIR=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       # Links the ARM64 libraries, and runs the one sherpa test that needs no model: the library
       # loads, reports version 1.13.4, and a missing model is ModelMissing. `--exact` and the
-      # count guard against a filter that matches nothing.
+      # count guard against a filter that matches nothing. Its output is printed whether it
+      # passes or fails (the test's own messages go to stdout, which the capture holds).
       - name: sherpa-onnx (ARM64 library)
         shell: bash
         run: |
           cargo clippy -p ink-engines --all-targets --locked --features engine-sherpa -- -D warnings
           cargo test -p ink-engines --locked --features engine-sherpa
-          out=$(cargo test -p ink-engines --locked --features engine-sherpa --test sherpa -- --ignored --exact a_missing_model_file_is_model_missing)
+          out=$(cargo test -p ink-engines --locked --features engine-sherpa --test sherpa -- --ignored --exact a_missing_model_file_is_model_missing) || {
+            echo "$out"
+            echo "::error::the sherpa library test failed (its output is above)"
+            exit 1
+          }
           echo "$out"
           if ! grep -q 'test result: ok. 1 passed' <<<"$out"; then
             echo "::error::the sherpa library test did not run"
