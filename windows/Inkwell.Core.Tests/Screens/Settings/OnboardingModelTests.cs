@@ -178,9 +178,9 @@ public class OnboardingModelTests
         Assert.Equal(
             "2.32 GB in all, from huggingface.co and GitHub. Nothing downloads until you press Download.",
             OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
-        var name = OnboardingModel.DownloadName(catalogue, CultureInfo.InvariantCulture);
-        Assert.StartsWith("Download Qwen3-ASR 1.7B and ", name, StringComparison.Ordinal);
-        Assert.EndsWith(": 2.32 GB in all, from huggingface.co and GitHub", name, StringComparison.Ordinal);
+        Assert.Equal(
+            "Download Qwen3-ASR 1.7B and Silero VAD: 2.32 GB in all, from huggingface.co and GitHub",
+            OnboardingModel.DownloadName(catalogue, CultureInfo.InvariantCulture));
         foreach (var _ in Enum.GetValues<OnboardingStep>())
         {
             onboarding.Next();

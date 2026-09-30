@@ -124,7 +124,7 @@ public class CatalogueDownloadTests
         Assert.IsType<ModelDownload.Waiting>(Row(catalogue, Qwen).Download);
         Assert.Equal([Qwen, Silero], Updates(sent));
         catalogue.Apply(Finished(Silero, ok: false)); // no reason given
-        Assert.Equal($"Couldn't download {CatalogueModel.Name(Silero)}: the core gave no reason", Row(catalogue, Silero).Status(Invariant));
+        Assert.Equal("Couldn't download Silero VAD: the core gave no reason", Row(catalogue, Silero).Status(Invariant));
         Assert.Equal([Qwen, Silero, Qwen], Updates(sent));
     }
 
@@ -191,6 +191,19 @@ public class CatalogueDownloadTests
         Assert.Equal([Qwen], Updates(sent));
         catalogue.Download(Silero); // Retry
         Assert.Equal([Qwen, Silero], Updates(sent));
+    }
+
+    /// <summary>
+    /// Rows, Downloads and failures name a model, never show its id. The ids are the core's
+    /// (registry.rs, rows.rs); the Mac's Parakeet row is macOS-only, so Windows never lists it.
+    /// </summary>
+    [Fact]
+    public void EveryRegistryModelIsNamed()
+    {
+        foreach (var id in new[] { Qwen, Silero, Nemotron })
+        {
+            Assert.NotEqual(id, CatalogueModel.Name(id));
+        }
     }
 
     /// <summary>What a download fetches is named before the user agrees: the model, its size, and where it comes from.</summary>

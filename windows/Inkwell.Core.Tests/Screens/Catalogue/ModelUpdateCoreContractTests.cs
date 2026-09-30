@@ -21,7 +21,13 @@ public class ModelUpdateCoreContractTests
         try
         {
             session.Command(new CoreCommand.ModelsList().Json);
-            Assert.NotNull(events.Wait<ModelsListed>(TimeSpan.FromSeconds(10)));
+            var listed = events.Wait<ModelsListed>(TimeSpan.FromSeconds(10));
+            Assert.NotNull(listed);
+            Assert.NotEmpty(listed.Models); // Qwen3-ASR runs on Windows in every build
+            foreach (var model in listed.Models)
+            {
+                Assert.NotEqual(model.Id, CatalogueModel.Name(model.Id)); // every model this build lists is named, never shown by its id
+            }
             var update = new CoreCommand.ModelUpdate("not-a-registry-model", "not-a-registry-model");
             session.Command(update.Json);
             var failed = events.Wait<CommandFailed>(TimeSpan.FromSeconds(10));
