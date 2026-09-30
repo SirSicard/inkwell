@@ -19,10 +19,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ink_core::TranscribeOptions;
 use ink_core::{
     AsrEvent, CancelToken, Channel, EngineError, EngineInfo, EventSink, OfflineEngine,
-    StreamingEngine,
+    StreamingEngine, TranscribeOptions, Transcript,
 };
 use ink_engines::sherpa::{MAX_SECONDS, SherpaParakeet};
 use ink_engines::{TrailingWindow, parakeet_tdt_v3_int8};
@@ -187,6 +186,48 @@ fn parakeet_on_the_dictation_set() {
     );
 }
 
+/// A long dictation take: AMI IHM's three clips (231 s) joined into one call, which the adapter
+/// cuts into windows of at most 90 s (see `src/sherpa.rs`). Its words keep their order on the take's
+/// timeline, and it reproduces its measured rate, 29.06: near the clips decoded one by one (27.93),
+/// where no cut falls inside a clip.
+#[test]
+#[ignore = "needs sherpa-onnx, the Parakeet model and AMI under $INK_BENCH_DIR; run locally"]
+fn a_take_longer_than_one_pass_is_decoded_in_windows() {
+    let engine = SherpaParakeet::load(&model_dir(), info()).unwrap();
+    let bench = bench::bench_dir();
+    let rows = bench::read_ami_tsv(&bench.join("ami-ihm.tsv")).unwrap();
+    let mut take = Vec::new();
+    for clip in &rows {
+        take.extend(
+            bench::read_wav(&bench.join("ami-ihm").join(&clip.wav))
+                .unwrap()
+                .1,
+        );
+    }
+    let seconds = take.len() / RATE;
+    assert!(
+        seconds > 2 * MAX_SECONDS as usize,
+        "{seconds} s: three windows or more"
+    );
+    let transcript = engine.transcribe(&take, &options()).unwrap();
+    let starts: Vec<u64> = transcript.segments.iter().map(|w| w.start_ms).collect();
+    assert!(starts.windows(2).all(|p| p[0] <= p[1]), "words in order");
+    let last = transcript.segments.last().unwrap();
+    assert!(last.end_ms <= take.len() as u64 * 1000 / RATE as u64);
+    assert!(
+        last.start_ms > 2 * u64::from(MAX_SECONDS) * 1000,
+        "the last window's words"
+    );
+    let reference: Vec<&str> = rows.iter().map(|r| r.reference.as_str()).collect();
+    let edits = bench::score(&reference.join(" "), &transcript.text());
+    println!("ami-ihm as one {seconds} s take  {edits}");
+    assert!(
+        (edits.wer() - 29.06).abs() <= 0.3,
+        "one long take's WER {:.2} against its measured 29.06",
+        edits.wer()
+    );
+}
+
 /// Windows' live partials: the trailing-window scheme over this engine, fed AMI IHM's first clip
 /// in 20 ms blocks at real time, as a meeting's mic side is. Every push returns within its 20 ms,
 /// partials keep coming, and the finals, joined, score near the whole clip's WER (24.88 in one
@@ -267,11 +308,12 @@ fn odd_input_is_refused_or_empty_never_a_crash() {
         Err(EngineError::Failed(msg)) => assert!(msg.contains("sample 7"), "{msg}"),
         other => panic!("expected a failure, got {other:?}"),
     }
+    // Longer than one pass: decoded in windows, and silence is no words.
     let long = vec![0.0f32; (MAX_SECONDS as usize + 1) * RATE];
-    assert!(matches!(
+    assert_eq!(
         engine.transcribe(&long, &options()),
-        Err(EngineError::Failed(_))
-    ));
+        Ok(Transcript::default())
+    );
     let cancelled = options();
     cancelled.cancel.cancel();
     assert_eq!(

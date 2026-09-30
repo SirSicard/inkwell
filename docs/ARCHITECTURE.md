@@ -220,6 +220,7 @@ the int8 ONNX conversion of the same weights, on sherpa-onnx's C API, on the CPU
   Parakeet about 0.3 s, at 7.2 % WER on FLEURS (level-normalised) against Qwen3-ASR's 4.3 %. So on
   such a machine the router gives dictation to Parakeet first, whatever the error rates
   (`Router::with_gpu_probe`, `Runtime::slow_on_cpu_for_dictation`); with a GPU, Qwen3-ASR dictates.
+  A take longer than 90 s is cut into windows, as Qwen3-ASR's are.
 
 ## Threads
 

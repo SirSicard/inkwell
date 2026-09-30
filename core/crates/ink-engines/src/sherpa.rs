@@ -1,15 +1,20 @@
 //! Parakeet TDT v3 (int8) through sherpa-onnx's C API on the CPU (`engine-sherpa`, Windows): the
 //! non-Apple Parakeet, as an [`OfflineEngine`]. On the Mac, Parakeet runs in FluidAudio instead.
 //!
-//! - **One pass per call**, greedy search, up to [`MAX_SECONDS`] of audio; longer audio is refused
-//!   rather than cut (the callers that use it hand over short windows: live partials re-decode a
-//!   trailing window, a dictation take is short).
+//! - **One pass** of greedy search for up to [`MAX_SECONDS`] of audio. Longer audio (a long
+//!   dictation take or voice edit: push-to-talk holds run to 180 s and toggle takes are uncapped) is
+//!   cut into windows of at most that, each at the quietest 20 ms in its last [`CUT_SEARCH_SECONDS`]
+//!   (`ink_audio::window`), decoded one after another; cancellation is checked between them. Cutting
+//!   shorter would cost accuracy: AMI IHM's 70-88 s clips score 27.93 % WER whole
+//!   (`tests/sherpa.rs`), and 27.22 in 45 s windows but 29.6-31.6 in 10-30 s ones (measured once,
+//!   cut the same way).
 //! - **One segment per word**, placed by the model's token times: a word runs from its first
 //!   token's start to its last token's end. The live-partials scheme (`crate::live`) reads them;
 //!   a dictation reads only the text.
 //! - **The CPU**, with one thread per physical core. ONNX Runtime's other execution providers are
 //!   not in this build of sherpa-onnx.
-//! - **Cancellation** is checked before the decode, which cannot be interrupted once started.
+//! - **Cancellation** is checked before each window's decode, which cannot be interrupted once
+//!   started.
 //!
 //! # Building
 //!
@@ -43,6 +48,7 @@ use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::Mutex;
 
+use ink_audio::window::{WindowConfig, plan_windows};
 use ink_core::{
     CANONICAL_RATE, EngineError, EngineInfo, OfflineEngine, TimedText, TranscribeOptions,
     Transcript,
@@ -57,8 +63,12 @@ pub const SHERPA_ONNX_VERSION: &str = "1.13.4";
 /// The ONNX Runtime that sherpa-onnx 1.13.4's Windows archive carries (the DLL's own version).
 pub const ONNXRUNTIME_VERSION: &str = "1.27.0";
 
-/// The longest audio transcribed in one call, in seconds.
+/// The longest audio decoded in one pass, in seconds. Longer audio is cut into windows.
 pub const MAX_SECONDS: u32 = 90;
+
+/// How far back from the end of a full window the cut may land, in seconds: a long take is cut in
+/// its quietest 20 ms between 60 and 90 s.
+pub const CUT_SEARCH_SECONDS: u32 = 30;
 
 /// sherpa-onnx 1.13.4's C API: the offline recognizer, as `c-api.h` declares it. Every struct is
 /// complete: the library reads the whole configuration.
@@ -369,7 +379,7 @@ impl SherpaParakeet {
         EngineError::Failed(format!("{}: {what}", self.info.id))
     }
 
-    /// One decode of `audio`, which is finite and within the length limit: its words.
+    /// One decode of `audio`, which is finite and at most [`MAX_SECONDS`] long: its words.
     fn decode(&self, audio: &[f32]) -> Result<Vec<TimedText>, EngineError> {
         let n = i32::try_from(audio.len()).map_err(|_| self.failed("too much audio".into()))?;
         let rate = i32::try_from(CANONICAL_RATE).unwrap_or(i32::MAX);
@@ -632,26 +642,48 @@ impl OfflineEngine for SherpaParakeet {
         if let Some(i) = audio.iter().position(|s| !s.is_finite()) {
             return Err(self.failed(format!("audio sample {i} is not a finite number")));
         }
-        if audio.is_empty() {
-            return Ok(Transcript::default());
-        }
-        let limit = MAX_SECONDS as usize * CANONICAL_RATE as usize;
-        if audio.len() > limit {
-            return Err(self.failed(format!(
-                "{} s of audio is more than one pass takes ({MAX_SECONDS} s)",
-                audio.len() / CANONICAL_RATE as usize
-            )));
-        }
         Ok(Transcript {
-            segments: self.decode(audio)?,
+            segments: in_windows(audio, |window| {
+                if options.cancel.is_cancelled() {
+                    return Err(EngineError::Cancelled);
+                }
+                self.decode(window)
+            })?,
         })
     }
 }
 
+/// `audio` decoded a window at a time by `decode` (see the module docs), its words placed in ms
+/// from the start of `audio`. No audio is no windows.
+fn in_windows(
+    audio: &[f32],
+    mut decode: impl FnMut(&[f32]) -> Result<Vec<TimedText>, EngineError>,
+) -> Result<Vec<TimedText>, EngineError> {
+    const RATE: usize = CANONICAL_RATE as usize;
+    let config = WindowConfig {
+        max_len: MAX_SECONDS as usize * RATE,
+        overlap: 0,
+        search: CUT_SEARCH_SECONDS as usize * RATE,
+    };
+    let windows = plan_windows(audio, config)
+        .map_err(|e| EngineError::Failed(format!("cutting long audio into windows: {e}")))?;
+    let mut words = Vec::new();
+    for window in windows {
+        let (start, end) = (window.start as usize, window.end as usize);
+        let offset_ms = window.start * 1000 / u64::from(CANONICAL_RATE);
+        words.extend(decode(&audio[start..end])?.into_iter().map(|w| TimedText {
+            start_ms: w.start_ms + offset_ms,
+            end_ms: w.end_ms + offset_ms,
+            text: w.text,
+        }));
+    }
+    Ok(words)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::words_of;
-    use ink_core::TimedText;
+    use super::{MAX_SECONDS, in_windows, words_of};
+    use ink_core::{EngineError, TimedText};
 
     fn word(text: &str, start_ms: u64, end_ms: u64) -> TimedText {
         TimedText {
@@ -693,6 +725,40 @@ mod tests {
         assert_eq!(words_of(json, 1_000).unwrap(), [word("late", 960, 1000)]);
         let json = br#"{"text": "", "timestamps": [], "durations": [], "tokens": []}"#;
         assert!(words_of(json, 1_000).unwrap().is_empty());
+    }
+
+    /// A take longer than one pass is cut in its quietest stretch between 60 and 90 s, and each
+    /// window's words are placed from the start of the take.
+    #[test]
+    fn a_long_take_is_decoded_in_windows_placed_on_its_timeline() {
+        const RATE: usize = 16_000;
+        // 100 s of loud audio with one silent 20 ms frame at 72 s: the cut lands there.
+        let mut audio = vec![0.5f32; 100 * RATE];
+        audio[72 * RATE..72 * RATE + 320].fill(0.0);
+        let mut lengths = Vec::new();
+        let words = in_windows(&audio, |window| {
+            lengths.push(window.len());
+            Ok(vec![word("w", 1_000, 1_500)])
+        })
+        .unwrap();
+        assert_eq!(lengths, [72 * RATE + 160, 28 * RATE - 160]);
+        assert_eq!(words, [word("w", 1_000, 1_500), word("w", 73_010, 73_510)]);
+        // Up to the limit, one pass; no audio, none.
+        let mut calls = 0;
+        in_windows(&vec![0.1; MAX_SECONDS as usize * RATE], |_| {
+            calls += 1;
+            Ok(Vec::new())
+        })
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(in_windows(&[], |_| unreachable!()), Ok(Vec::new()));
+        // A window's error ends the take.
+        let mut calls = 0;
+        let err = in_windows(&audio, |_| {
+            calls += 1;
+            Err(EngineError::Cancelled)
+        });
+        assert_eq!((err, calls), (Err(EngineError::Cancelled), 1));
     }
 
     #[test]
