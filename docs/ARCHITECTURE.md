@@ -174,7 +174,11 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   lets a local build through with a warning, and a release (`--timestamp`) refuses it. Every
   bundled library must also be one `THIRD_PARTY.md` covers, by name.
 - **On Windows** the same two scripts run in Git Bash inside a Visual Studio developer environment.
-  NeMo-Speech.cpp builds with the upstream `vulkan-diar` preset (MSVC, the dynamic C runtime).
+  NeMo-Speech.cpp builds with the upstream `vulkan-diar` preset (the dynamic C runtime). The
+  developer environment's architecture picks the compiler for all three libraries
+  (`native/lib/windows-toolchain.sh`): MSVC on x64, clang-cl on ARM64, because ggml's CPU backend
+  refuses MSVC on ARM. The ARM64 build must run on an ARM64 machine and needs the Vulkan SDK for
+  Windows on ARM64. It has not run yet: CI type-checks the adapter only.
   SentencePiece and Abseil are built from the same pinned tarballs as static libraries and linked
   into NeMo's own DLL, so the prefix's `bin/` holds only NeMo's DLLs and its ggml's. The Visual C++
   runtime is the system's. The manifest hashes those DLLs and the C API's import library in

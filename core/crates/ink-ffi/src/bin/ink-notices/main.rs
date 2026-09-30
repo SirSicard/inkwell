@@ -55,8 +55,12 @@ const RELEASE_FEATURES: &str = "engine-llama,ink-engines/engine-silero,ink-engin
 const TARGET: &str = "aarch64-apple-darwin";
 /// The generated file, from the repository root.
 const SWIFT_OUT: &str = "mac/Sources/Inkwell/Generated/RustNotices.swift";
-/// The Windows release's target: x64 only for now (windows/Directory.Build.props).
+/// The Windows release's target, whose crates the Windows file lists.
 const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+/// Windows on ARM64 ships the same file, so every crate it links must be among
+/// [`WINDOWS_TARGET`]'s ([`not_covered`]). It links a subset of them: the same crates less two
+/// x86-only CPU-feature detection crates.
+const WINDOWS_ARM64_TARGET: &str = "aarch64-pc-windows-msvc";
 /// The features the Windows release builds the core with. It has no build script yet to hold
 /// them to, as the Mac's has (a test does); its engines are the Mac's (S3.2: llama.cpp, whose
 /// Vulkan backend, `ink-engines/engine-llama-vulkan`, adds no crate, Silero and NeMo-Speech.cpp).
@@ -94,7 +98,7 @@ const MAC: Shell = Shell {
     csharp: false,
 };
 
-/// The Windows app: C#, for x64.
+/// The Windows app: C#, for x64 and ARM64 (from x64's crates).
 const WINDOWS: Shell = Shell {
     target: WINDOWS_TARGET,
     features: WINDOWS_RELEASE_FEATURES,
@@ -373,11 +377,14 @@ fn windows_overrides(overrides: Overrides, crates: &[Package], lock: &str) -> Ov
         .collect()
 }
 
-/// The shell's file, from cargo's resolution and the packages on this machine.
-fn generate(root: &Path, shell: Shell) -> Result<String, Vec<String>> {
-    let core = root.join("core");
-    let tree = run_cargo(
-        &core,
+/// ink-ffi's normal dependencies for `target` with `features`, as (name, version).
+fn release_tree(
+    core: &Path,
+    target: &str,
+    features: &str,
+) -> Result<Vec<(String, String)>, String> {
+    run_cargo(
+        core,
         &[
             "tree",
             "--offline",
@@ -387,9 +394,9 @@ fn generate(root: &Path, shell: Shell) -> Result<String, Vec<String>> {
             "-e",
             "normal,no-proc-macro",
             "--target",
-            shell.target,
+            target,
             "--features",
-            shell.features,
+            features,
             "--prefix",
             "none",
             "--format",
@@ -397,7 +404,39 @@ fn generate(root: &Path, shell: Shell) -> Result<String, Vec<String>> {
         ],
     )
     .and_then(|t| graph::tree(&t))
-    .map_err(|e| vec![e])?;
+}
+
+/// The crates of `other` (another target's tree) that `listed` (the tree a file is made from)
+/// lacks: that target's app would link them with no notice.
+fn not_covered(listed: &[(String, String)], other: &[(String, String)]) -> Vec<String> {
+    other
+        .iter()
+        .filter(|c| !listed.contains(c))
+        .map(|(name, version)| format!("{name} {version}"))
+        .collect()
+}
+
+/// The shell's file, from cargo's resolution and the packages on this machine.
+fn generate(root: &Path, shell: Shell) -> Result<String, Vec<String>> {
+    let core = root.join("core");
+    let tree = release_tree(&core, shell.target, shell.features).map_err(|e| vec![e])?;
+    if shell.csharp {
+        let arm64 =
+            release_tree(&core, WINDOWS_ARM64_TARGET, shell.features).map_err(|e| vec![e])?;
+        let missing = not_covered(&tree, &arm64);
+        if !missing.is_empty() {
+            return Err(missing
+                .into_iter()
+                .map(|c| {
+                    format!(
+                        "{c}: linked on {WINDOWS_ARM64_TARGET} but not on {}, whose crates the \
+                         Windows file lists; its notice needs a decision",
+                        shell.target
+                    )
+                })
+                .collect());
+        }
+    }
     let packages = run_cargo(
         &core,
         &[
@@ -644,6 +683,22 @@ mod tests {
             dir,
             workspace: false,
         }
+    }
+
+    /// The Windows file is made from x64's crates and ships on ARM64 too: a crate only ARM64
+    /// links is named, one ARM64 does not link is fine.
+    #[test]
+    fn a_crate_only_the_other_target_links_is_not_covered() {
+        let key = |n: &str, v: &str| (n.to_string(), v.to_string());
+        let x64 = [key("shared", "1.0.0"), key("x86-only", "0.3.1")];
+        let arm64 = [key("shared", "1.0.0"), key("arm-only", "2.0.0")];
+        assert_eq!(not_covered(&x64, &arm64), ["arm-only 2.0.0"]);
+        assert!(not_covered(&x64, &x64[..1]).is_empty());
+        // The same name at another version is another crate, with its own notice.
+        assert_eq!(
+            not_covered(&x64, &[key("shared", "1.0.1")]),
+            ["shared 1.0.1"]
+        );
     }
 
     fn committed(shell: Shell) -> String {

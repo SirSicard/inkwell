@@ -51,11 +51,14 @@
 # upstream `metal-diar` preset (Metal, standalone diarization, unpatched-ggml code paths) with the
 # CLI off.
 #
-# On Windows (Git Bash inside a Visual Studio developer environment, with the Vulkan SDK for the
-# shader compiler): the upstream `vulkan-diar` preset, built with MSVC. ENGINE_DEPS_DIR is required:
-# SentencePiece and Abseil are the pinned static libraries, linked into NeMo's own DLL, so the
-# prefix carries NeMo's DLLs and its ggml's and nothing else. The manifest hashes every DLL in
-# <prefix>/bin and the C API's import library.
+# On Windows (Git Bash inside a Visual Studio developer environment for x64 or arm64, with the
+# Vulkan SDK for the shader compiler): the upstream `vulkan-diar` preset, built for the developer
+# environment's architecture (lib/windows-toolchain.sh): x64 with MSVC, arm64 with clang-cl, because
+# ggml's CPU backend stops MSVC on ARM ("MSVC is not supported for ARM, use clang"). ARM64 also
+# needs the Vulkan SDK for Windows on ARM64. ENGINE_DEPS_DIR is required, built in the same
+# developer environment: SentencePiece and Abseil are the pinned static libraries, linked into
+# NeMo's own DLL, so the prefix carries NeMo's DLLs and its ggml's and nothing else. The manifest
+# hashes every DLL in <prefix>/bin and the C API's import library.
 set -euo pipefail
 
 NEMO_COMMIT=97a15afa5caa9bce5baaa86c1184103877af4101
@@ -66,6 +69,8 @@ GGML_COMMIT=c03b4e2bcece5134827881af90242086daf75be5
 # that it can be tested without building NeMo; sourced first, so a missing copy fails before the
 # build rather than after it.
 . "$(cd "$(dirname "$0")" && pwd)/lib/self-contained-prefix.sh"
+# windows_toolchain: the Windows architecture and compiler, from the developer environment.
+. "$(cd "$(dirname "$0")" && pwd)/lib/windows-toolchain.sh"
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
     sed -n '2,20p' "$0" >&2
@@ -104,10 +109,7 @@ case "$(uname -s)" in
     MINGW* | MSYS*)
         windows=1
         preset=vulkan-diar
-        command -v cl >/dev/null 2>&1 || {
-            echo "error: no cl on PATH: run from a Visual Studio developer environment" >&2
-            exit 1
-        }
+        windows_toolchain || exit 1
         [ -n "${ENGINE_DEPS_DIR:-}" ] || {
             echo "error: set ENGINE_DEPS_DIR (build-sentencepiece-abseil.sh) on Windows" >&2
             exit 1
@@ -117,8 +119,8 @@ case "$(uname -s)" in
             exit 1
         }
         platform+=(
-            -DCMAKE_C_COMPILER=cl
-            -DCMAKE_CXX_COMPILER=cl
+            "-DCMAKE_C_COMPILER=${win_cc}"
+            "-DCMAKE_CXX_COMPILER=${win_cc}"
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
             # The Visual C++ runtime is the system's (the Rust side needs it too), not a copy in
             # the prefix under Microsoft's redistribution terms.

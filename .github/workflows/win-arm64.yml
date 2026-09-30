@@ -1,0 +1,230 @@
+name: Windows ARM64
+
+# Windows on ARM64, built and tested on an ARM64 machine (GitHub's windows-11-arm runner), so
+# nothing here is cross-compiled or emulated:
+# - core: the Rust core for aarch64-pc-windows-msvc and its tests, and the engines the Windows app
+#   links: Silero, llama.cpp on the CPU (NEON), sherpa-onnx's ARM64 library; NeMo-Speech.cpp is
+#   type-checked only, as in core.yml.
+# - shell: the WinUI shell against the ARM64 core's DLL: its tests, and the app published with
+#   NativeAOT for win-arm64.
+# The x64 builds are core.yml's and win.yml's.
+on:
+  push:
+    branches: [main]
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml']
+  pull_request:
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  core:
+    name: core and engines (windows-11-arm)
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Installs the channel and components pinned in core/rust-toolchain.toml.
+      - run: rustup toolchain install
+      # Pinned to the commit tag v2.9.1 points at, read from GitHub (never typed from memory).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: core
+      # Everything below runs natively: a toolchain whose host is not ARM64 would build an x64
+      # core and test it under emulation.
+      - name: The toolchain is ARM64
+        shell: bash
+        run: |
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          if [ "$host" != aarch64-pc-windows-msvc ]; then
+            echo "::error::rustc's host is '$host', not aarch64-pc-windows-msvc"
+            exit 1
+          fi
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build -p ink-ffi --lib --locked
+      # Visual Studio's ARM64 build environment for the C and C++ the engines compile, with LLVM
+      # first on PATH: ggml refuses MSVC on ARM ("MSVC is not supported for ARM, use clang"), so
+      # llama.cpp is compiled by clang-cl; tract (Silero) assembles its ARM64 kernels with clang
+      # on Windows; llama.cpp's bindings need libclang.
+      - name: ARM64 build environment, with LLVM
+        shell: pwsh
+        run: |
+          # ProgramW6432: the 64-bit Program Files whatever the architecture this shell runs as.
+          $llvm = Join-Path $env:ProgramW6432 'LLVM\bin'
+          foreach ($tool in 'clang.exe', 'clang-cl.exe', 'libclang.dll') {
+            if (-not (Test-Path (Join-Path $llvm $tool))) { Write-Output "::error::no $tool in $llvm"; exit 1 }
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (-not $vs) { Write-Output '::error::no Visual Studio installation'; exit 1 }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          $lines = cmd /c "`"$vcvars`" arm64 >nul && set"
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::vcvarsall arm64 failed ($LASTEXITCODE)"; exit 1 }
+          $vars = @{}
+          foreach ($line in $lines) { if ($line -match '^([^=]+)=(.*)$') { $vars[$Matches[1]] = $Matches[2] } }
+          if ($vars['VSCMD_ARG_TGT_ARCH'] -ne 'arm64') { Write-Output '::error::vcvarsall set no ARM64 environment'; exit 1 }
+          $vars['PATH'] = "$llvm;" + $vars['PATH']
+          $vars['LIBCLANG_PATH'] = $llvm
+          # Only what vcvarsall added or changed (never the runner's own GITHUB_* and RUNNER_*).
+          foreach ($name in $vars.Keys) {
+            if ([Environment]::GetEnvironmentVariable($name) -ne $vars[$name]) {
+              "$name=$($vars[$name])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            }
+          }
+      # Silero VAD: the model its tests run on, from the commit tag v6.2.3 points at, checked
+      # against the hash the registry row pins (as core.yml). A mismatch fails the job.
+      - name: Fetch the Silero VAD model
+        shell: bash
+        env:
+          SILERO_URL: https://raw.githubusercontent.com/snakers4/silero-vad/5cd7945676eb32225748052e2e6a0580e4686a08/src/silero_vad/data/silero_vad_16k_op15.onnx
+          SILERO_SHA256: 7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49
+        run: |
+          model="$RUNNER_TEMP/silero_vad_16k_op15.onnx"
+          curl -fsSL --retry 3 -o "$model" "$SILERO_URL"
+          sum=$(sha256sum <"$model" | cut -d' ' -f1)
+          if [ "$sum" != "$SILERO_SHA256" ]; then
+            echo "::error::Silero VAD model sha256 is $sum, expected $SILERO_SHA256"
+            exit 1
+          fi
+          echo "INK_SILERO_MODEL=$model" >>"$GITHUB_ENV"
+      - run: cargo clippy -p ink-engines --all-targets --locked --features engine-silero -- -D warnings
+      - run: cargo test -p ink-engines --locked --features engine-silero
+      # NeMo-Speech.cpp is a native library CI does not build: the adapter is compiled and linted
+      # without linking it.
+      - run: cargo clippy -p ink-engines --all-targets --locked --features engine-nemo -- -D warnings
+        env:
+          INK_NEMO_CHECK_ONLY: "1"
+      # llama.cpp on the CPU: ggml built by clang-cl with Ninja (CMAKE_* reach llama.cpp's CMake).
+      # No Vulkan: the runner image lists no Vulkan SDK. Its non-ignored tests need no model.
+      - name: llama.cpp (clang-cl, CPU)
+        env:
+          CMAKE_GENERATOR: Ninja
+          CMAKE_C_COMPILER: clang-cl
+          CMAKE_CXX_COMPILER: clang-cl
+        run: |
+          cargo clippy -p ink-engines --all-targets --locked --features engine-llama -- -D warnings
+          cargo test -p ink-engines --locked --features engine-llama
+      # sherpa-onnx 1.13.4's ARM64 "shared, MD, Release, no-tts" archive, the one build.rs pins
+      # file by file, checked against the archive's SHA-256 as GitHub publishes it.
+      # Unpacked by Windows' own tar (Git Bash's GNU tar reads "D:\..." as a remote host).
+      - name: Fetch sherpa-onnx's ARM64 libraries
+        shell: pwsh
+        env:
+          SHERPA_URL: https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-arm64-shared-MD-Release-no-tts-lib.tar.bz2
+          SHERPA_SHA256: 8c9d6f9ecbe81942a61b2229d81a700fe30bb3c4a6be639245b4446a8b0f3028
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'sherpa-onnx-arm64.tar.bz2'
+          curl.exe -fsSL --retry 3 -o $archive $env:SHERPA_URL
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sum = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($sum -ne $env:SHERPA_SHA256) { Write-Output "::error::sherpa-onnx archive sha256 is $sum, expected $env:SHERPA_SHA256"; exit 1 }
+          & (Join-Path $env:SystemRoot 'System32\tar.exe') -xjf $archive -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dir = Join-Path $env:RUNNER_TEMP 'sherpa-onnx-v1.13.4-win-arm64-shared-MD-Release-no-tts-lib'
+          "SHERPA_ONNX_DIR=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      # Links the ARM64 libraries, and runs the one sherpa test that needs no model: the library
+      # loads, reports version 1.13.4, and a missing model is ModelMissing. `--exact` and the
+      # count guard against a filter that matches nothing. Its output is printed whether it
+      # passes or fails (the test's own messages go to stdout, which the capture holds).
+      - name: sherpa-onnx (ARM64 library)
+        shell: bash
+        run: |
+          cargo clippy -p ink-engines --all-targets --locked --features engine-sherpa -- -D warnings
+          cargo test -p ink-engines --locked --features engine-sherpa
+          out=$(cargo test -p ink-engines --locked --features engine-sherpa --test sherpa -- --ignored --exact a_missing_model_file_is_model_missing) || {
+            echo "$out"
+            echo "::error::the sherpa library test failed (its output is above)"
+            exit 1
+          }
+          echo "$out"
+          if ! grep -q 'test result: ok. 1 passed' <<<"$out"; then
+            echo "::error::the sherpa library test did not run"
+            exit 1
+          fi
+
+  shell:
+    name: shell, tests and NativeAOT publish (windows-11-arm)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+        working-directory: core
+      # Pinned to the commit tag v2.9.1 points at, read from GitHub (never typed from memory).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: core
+      # The DLL the shell loads, as the shell links it (engine features off), built for ARM64.
+      - name: Build the core's DLL
+        working-directory: core
+        run: cargo build --locked -p ink-ffi --lib
+      # The SDK windows/global.json pins, read from there. Pinned to the commit tag v6.0.0 points
+      # at, read from GitHub (never typed from memory).
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: windows/global.json
+      # ARM64 is selected project by project with -p:Platform=ARM64 (windows/Directory.Build.props:
+      # a solution build cannot switch it). Each project is restored for ARM64, so the packs
+      # restore adds for the runtime identifier (the ARM64 runtime and NativeAOT packs) are the
+      # ones the licence check reads.
+      - name: Restore for ARM64 (locked)
+        shell: pwsh
+        working-directory: windows
+        run: |
+          foreach ($project in Get-ChildItem -Path . -Recurse -Filter '*.csproj') {
+            dotnet restore $project.FullName --locked-mode -p:Platform=ARM64
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: NuGet licence check
+        shell: pwsh
+        working-directory: windows
+        run: scripts/nuget-licences.ps1
+      # Each test project on its own, with its own results file, as win.yml: a project that finds
+      # no tests fails instead of passing empty.
+      - name: Build and test
+        shell: pwsh
+        working-directory: windows
+        run: |
+          $results = Join-Path $env:RUNNER_TEMP 'tests'
+          $projects = @(Get-ChildItem -Path . -Recurse -Filter '*.Tests.csproj')
+          if ($projects.Count -eq 0) { Write-Output '::error::no test projects found'; exit 1 }
+          foreach ($project in $projects) {
+            $name = $project.BaseName
+            dotnet build $project.FullName --no-restore -p:Platform=ARM64
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            dotnet test $project.FullName --no-build -p:Platform=ARM64 --logger "trx;LogFileName=$name.trx" --results-directory $results
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            [xml]$trx = Get-Content (Join-Path $results "$name.trx") -Raw
+            $total = [int]$trx.TestRun.ResultSummary.Counters.total
+            Write-Output "${name}: tests run: $total"
+            if ($total -eq 0) { Write-Output "::error::$name ran no tests"; exit 1 }
+          }
+      # The app as it ships: NativeAOT, ARM64, with the Windows App SDK's runtime beside the exe.
+      # The restore is locked, so a publish cannot rewrite a lock file. The exe and the core's DLL
+      # must both be ARM64 (PE machine 0xAA64): an x64 file would run only under emulation.
+      - name: Publish the app (NativeAOT, ARM64)
+        shell: pwsh
+        working-directory: windows
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'inkwell-app'
+          dotnet publish Inkwell/Inkwell.csproj -c Release -o $app -p:Platform=ARM64 -p:RestoreLockedMode=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($file in 'Inkwell.exe', 'ink_ffi.dll') {
+            $path = Join-Path $app $file
+            if (-not (Test-Path $path)) { Write-Output "::error::$file is not in the published app"; exit 1 }
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+            if ($machine -ne 0xAA64) { Write-Output ("::error::{0} is machine 0x{1:X4}, not ARM64" -f $file, $machine); exit 1 }
+          }
