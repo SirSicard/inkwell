@@ -190,40 +190,29 @@ find "$bin" -maxdepth 1 -name '*.bundle' -type d -exec cp -R {} "$app/Contents/R
 # Contents/Frameworks under that name from the directories the core was linked against (a link
 # there is followed: the file goes in, under the name it is loaded by), then whatever it loads
 # through @rpath in turn. Only the libraries THIRD_PARTY.md covers, by name.
+# lib/bundle-dylibs.py does the work, for all the executable's libraries in one process. It was a
+# bash function, recursing once per library (SentencePiece alone loads 80 of Abseil's), until
+# macOS's bash 3.2 corrupted its own heap on the ~90 libraries: the build died of a SIGTRAP in a
+# forked child, here or in the bundle check that follows (lib/bundle-check.sh, moved for the same
+# reason), on a Mac and on GitHub's macOS runners alike.
 bundle_dylib() {
-  local name="$1" dir src="" ref refs
-  [ -e "$app/Contents/Frameworks/$name" ] && return 0
-  case "$name" in
-    # NeMo-Speech.cpp, its ggml, SentencePiece (with protobuf-lite and Darts-clone) and Abseil.
-    libnemo_speech_asr*.dylib | libggml*.dylib | libsentencepiece*.dylib | libabsl_*.dylib) ;;
-    *) fail "the app loads @rpath/$name, which THIRD_PARTY.md does not cover: read its licence and list it first" ;;
-  esac
+  local dir
+  local -a from=()
   for dir in ${dylib_dirs[@]+"${dylib_dirs[@]}"}; do
-    if [ -e "$dir/$name" ]; then
-      src="$dir/$name"
-      break
-    fi
+    from+=(--from "$dir")
   done
-  [ -n "$src" ] || fail "the app loads @rpath/$name, which no library directory of the core holds"
-  mkdir -p "$app/Contents/Frameworks"
-  cp "$src" "$app/Contents/Frameworks/$name"
-  chmod u+w "$app/Contents/Frameworks/$name"
-  # Read into a variable, not through a process substitution: this recurses once per library
-  # (SentencePiece alone loads 80 of Abseil's), and with a process substitution still open at each
-  # level, macOS's bash 3.2 died of a SIGTRAP in the bundle check that follows (in
-  # both runs before this read changed; in neither after).
-  refs="$(otool -L "$app/Contents/Frameworks/$name" | sed -nE '2,$ s/^[[:space:]]+([^ ]+) \(.*/\1/p')"
-  while IFS= read -r ref; do
-    case "$ref" in
-      @rpath/*.dylib) bundle_dylib "${ref#@rpath/}" ;;
-    esac
-  done <<<"$refs"
+  # NeMo-Speech.cpp, its ggml, SentencePiece (with protobuf-lite and Darts-clone) and Abseil.
+  python3 "$mac/scripts/lib/bundle-dylibs.py" --into "$app/Contents/Frameworks" \
+    --allow 'libnemo_speech_asr*.dylib' --allow 'libggml*.dylib' \
+    --allow 'libsentencepiece*.dylib' --allow 'libabsl_*.dylib' \
+    ${from[@]+"${from[@]}"} -- "$@"
 }
 
 # The frameworks the executable links through its rpath, as SwiftPM unpacked them from their
 # XCFrameworks next to it. Read from the executable, so a framework left in the build directory by
 # an earlier dependency is not shipped. ditto keeps the symlinks a framework's signature covers.
 app_refs="$(otool -L "$bin/Inkwell" | sed -nE '2,$ s/^[[:space:]]+([^ ]+) \(.*/\1/p')"
+app_dylibs=()
 while IFS= read -r ref; do
   case "$ref" in
     @rpath/*.framework/*)
@@ -232,10 +221,13 @@ while IFS= read -r ref; do
       [ -d "$bin/$framework" ] || fail "the app links $framework, which the build did not produce"
       [ -d "$app/Contents/Frameworks/$framework" ] || ditto "$bin/$framework" "$app/Contents/Frameworks/$framework"
       ;;
-    @rpath/*.dylib) bundle_dylib "${ref#@rpath/}" ;;
+    @rpath/*.dylib) app_dylibs+=("${ref#@rpath/}") ;;
     @rpath/*) fail "the app links $ref through its rpath, which is neither a framework nor a dylib" ;;
   esac
 done <<<"$app_refs"
+if [ ${#app_dylibs[@]} -ne 0 ]; then
+  bundle_dylib "${app_dylibs[@]}"
+fi
 bundled=0
 if [ -d "$app/Contents/Frameworks" ]; then
   bundled="$(find "$app/Contents/Frameworks" -maxdepth 1 -name '*.dylib' -type f | wc -l | tr -d ' ')"
