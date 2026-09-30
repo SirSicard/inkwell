@@ -450,9 +450,18 @@ public sealed class DropTests
         return rect;
     }
 
-    /// <summary>A left button pressed on button <paramref name="down"/> and let go on <paramref name="up"/>, in client pixels.</summary>
-    private static void Click(HWND hwnd, int down, int up, double scale)
+    /// <summary>
+    /// A left button pressed on button <paramref name="down"/> and let go on <paramref name="up"/>, in
+    /// client pixels. First the question Windows asks a window before a click activates it
+    /// (WM_MOUSEACTIVATE, sent here as Windows would: the top-level window, the client area, the
+    /// button's message); the window must answer "don't activate", or the click would take focus
+    /// from the call.
+    /// </summary>
+    private static unsafe void Click(HWND hwnd, int down, int up, double scale)
     {
+        var asked = SendMessageW(hwnd, WM.WM_MOUSEACTIVATE, (WPARAM)(nuint)(nint)hwnd.Value,
+            (LPARAM)(nint)((WM.WM_LBUTTONDOWN << 16) | HTCLIENT));
+        Assert.Equal((nint)MA.MA_NOACTIVATE, (nint)asked);
         foreach (var (msg, button) in new[] { (WM.WM_LBUTTONDOWN, down), (WM.WM_LBUTTONUP, up) })
         {
             var (l, t, r, b) = DropLayout.Button(button);
