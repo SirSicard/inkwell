@@ -30,6 +30,8 @@ With a 1.0 library that has not finished its first run:
 - [ ] No system dialog about the keychain appears (the import only asks whether each provider has
       a key). If one does, press **Deny** and record it.
 - [ ] If 0.2 used a key combination or separate presses, the key note appears under the line.
+- [ ] If 0.2 held a right-hand modifier (right ⌥, say), the Ready step and the foot of Today
+      name that key, not fn.
 
 ## B. After it
 

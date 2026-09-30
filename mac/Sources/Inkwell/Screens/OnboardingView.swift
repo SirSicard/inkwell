@@ -64,10 +64,12 @@ struct OnboardingView: View {
         .accessibilityLabel("Step \((steps.firstIndex(of: step) ?? 0) + 1) of \(steps.count)")
     }
 
+    /// Names the key dictation uses now (after Back, the import step may have changed it).
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let dictation = screens.dictation
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Inkwell").font(Typography.screenTitle).accessibilityAddTraits(.isHeader)
-            Text("Hold fn and speak: your words are typed where your cursor is.")
+            Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key) and speak: your words are typed where your cursor is.")
             Text("In a meeting, Inkwell writes down both sides as they talk, then blots the transcript and lists what you promised.")
             Text("It all happens on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
                 .foregroundStyle(Theme.secondaryText)
@@ -119,10 +121,12 @@ struct OnboardingView: View {
         .polishConsent(polish, host: .onboarding)
     }
 
+    /// Names the key dictation uses now: the import step can change it from fn.
     private var ready: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let dictation = screens.dictation
+        return VStack(alignment: .leading, spacing: 14) {
             Text("Ready").font(Typography.heading).accessibilityAddTraits(.isHeader)
-            Text("Hold fn, say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
+            Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key), say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
             if !screens.permissions.offCards.isEmpty {
                 Text("Still off: \(screens.permissions.offCards.map(\.title).joined(separator: ", ")). Settings can turn them on.")
                     .foregroundStyle(Theme.alert)
