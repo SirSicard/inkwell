@@ -8,6 +8,10 @@
 // SetWindowPos(SWP_NOACTIVATE), never ShowWindow(SW_SHOW). windows/S3.4-CHECKLIST.md is the check
 // by hand.
 //
+// Screen readers read its title and detail, live words included, as VoiceOver reads the Mac's, in
+// a polite live region (ScreenReaderName); the window's title, which any process reads, is the
+// state only.
+//
 // Its pixels: WS_EX_NOREDIRECTIONBITMAP (no GDI surface at all), a DirectComposition visual
 // holding a composition swapchain. Each frame Direct3D draws the ink into an offscreen texture,
 // then Direct2D paints the panel on the swapchain: paper with a 16 DIP corner, the ink fading into
@@ -113,6 +117,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private readonly Func<DropFallback> makeFallback;
     /// <summary>Why the fallback window could not be made, while it could not.</summary>
     private string? fallbackFailure;
+    /// <summary>What screen readers read for the Drop (its title and detail; the window's title is the state only).</summary>
+    private readonly ScreenReaderName speech;
 
     /// <summary>For tests: an HRESULT to fail the next present with (a lost device), once.</summary>
     internal int FailNextPresent { get; set; }
@@ -190,6 +196,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             throw new InkRendererException($"couldn't make the Drop's window (error {error})");
         }
         SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, GCHandle.ToIntPtr(self));
+        speech = new ScreenReaderName(hwnd, "the Drop");
         // The fallback is made now, not when the ink first fails: a machine that cannot make it
         // is known (and said) from the start.
         MakeFallback();
@@ -279,8 +286,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 // Buttons came or went: the panel takes its other size where it is.
                 Place();
             }
-            // What a screen reader reads: the window's name, the title only (see AccessibleName).
-            fixed (char* name = lines.AccessibleName)
+            // The window's title, which any process reads: the title only (see WindowTitle).
+            fixed (char* name = lines.WindowTitle)
             {
                 SetWindowTextW(hwnd, name);
             }
@@ -308,6 +315,10 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 SWP.SWP_NOMOVE | SWP.SWP_NOSIZE | SWP.SWP_NOACTIVATE | SWP.SWP_SHOWWINDOW);
             Surface.SetOnScreen(true);
         }
+        // What a screen reader reads, as on the Mac: the title and the detail (live words too),
+        // read out politely at each change, once the window shows. Only this window announces; the
+        // fallback, over it, holds the same name.
+        speech.Set(lines.AccessibleName, announce: true);
     }
 
     /// <summary>Hides the Drop. Out first: the ink stops without drawing a frame nobody would see.</summary>
@@ -319,6 +330,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         }
         ShowWindow(hwnd, SW.SW_HIDE);
         IsShown = false;
+        // The last words go with the Drop.
+        speech.Clear();
         Surface.SetOnScreen(false);
         Surface.State = InkState.Idle;
     }
@@ -853,6 +866,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         ((IInkTarget)this).ReleaseDeviceResources();
         fallback?.Dispose();
         fallback = null;
+        speech.Dispose();
         if (hwnd != HWND.NULL)
         {
             SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, 0);

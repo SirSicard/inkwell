@@ -207,9 +207,16 @@ reads only the document's length, never its text.
 Not by hand, but it needs a quiet Mac, so it is here. About 45 minutes; it refuses while the
 machine is busy.
 
-- [ ] `INK_BENCH_DIR=<bench data> scripts/dictation-latency.sh`
-- [ ] Record from its summary: warm p50 ______ / p95 ______ ms (target 350 / 700); the first take
-      after 240 s idle with the warm-up ______ ms and without ______ ms.
+**Already run, not owed in this pass:** by the coordinating agent on 2026-09-29, at commit
+0629a21, on a quiet Mac on a 30 W adapter. Warm p50 374 / p95 401 ms over 20 takes (target
+350 / 700); the first take after 240 s idle, p50 of 5 each: 368 ms with the warm-up, 366 ms
+without. The p50 miss is accepted for 1.0; the target stays for later releases.
+
+To run it again:
+
+- `INK_BENCH_DIR=<bench data> scripts/dictation-latency.sh`
+- Record from its summary: warm p50 ______ / p95 ______ ms (target 350 / 700); the first take
+  after 240 s idle with the warm-up ______ ms and without ______ ms.
 
 ## At the end
 

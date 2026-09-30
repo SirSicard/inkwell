@@ -27,12 +27,19 @@ public sealed record DropText(string Title, string Detail, DropTone Tone = DropT
     public DropButtons? Buttons { get; init; }
 
     /// <summary>
-    /// The Drop window's name, which is what a screen reader reads and what any process (or UI
-    /// Automation client) can read from the window: "Inkwell: " and the title only. The detail can
-    /// hold the user's live words, so it never goes into it; it would also change with every
-    /// partial.
+    /// The Drop window's title, which any process can read (GetWindowText): "Inkwell: " and the
+    /// title only. The detail can hold the user's live words, so it never goes into it.
     /// </summary>
-    public string AccessibleName => $"Inkwell: {Title}";
+    public string WindowTitle => $"Inkwell: {Title}";
+
+    /// <summary>
+    /// What a screen reader reads for the Drop, as on the Mac (Drop.swift's accessibility label):
+    /// the title and the detail, live words included. It is not private to screen readers: while
+    /// the Drop shows, any UI Automation or MSAA client running as the same user can read it, as
+    /// any accessibility client can read the Mac's label. What stays word-free is the window's
+    /// title and the logs.
+    /// </summary>
+    public string AccessibleName => $"Inkwell: {Title}, {Detail}";
 
     /// <summary>How many of the newest live words are shown wet, as on the canvas.</summary>
     public const int WetWords = 2;
