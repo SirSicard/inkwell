@@ -54,7 +54,6 @@ public class NoticesTests
     /// <summary>THIRD_PARTY.md's rows that reach only the Mac app (or neither app), by name.</summary>
     private static readonly string[] NotShippedOnWindows =
     [
-        "Handy", // the legacy 0.2 app's base
         "AudioCap", "FluidAudio", "fastcluster", "VBx", "Sparkle", // the Mac's
     ];
 

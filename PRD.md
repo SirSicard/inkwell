@@ -76,7 +76,7 @@ System tray (the app's real home), transparent always-on-top recording overlay, 
 
 ## 8. Roadmap shape
 
-Direction only, no dates. Detail lives in [TODO.md](TODO.md).
+Direction only, no dates. Detail lives in [TODO.md](https://github.com/SirSicard/inkwell/blob/legacy/0.2/TODO.md), on the `legacy/0.2` branch.
 
 1. **macOS platform pass.** Permissions, native input surfaces, kill the Windows residue. The unlock for everything else.
 2. **Debt strangling.** Staged pipeline service, split the command god-file, single model registry, coarse services instead of 22 mutexes. The 60 pipeline tests stay green throughout.

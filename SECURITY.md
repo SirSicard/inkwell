@@ -46,4 +46,4 @@ Taken seriously:
 - Model downloads that could be tampered with in transit or write outside the models directory
 - Webview capability or CSP weaknesses that widen what the frontend can reach
 
-Out of scope: the app is unsigned, so anyone with write access to your machine can tamper with it. That is a known state, not a report. Same for the missing checksum verification on model downloads, which is already tracked in [TODO.md](TODO.md).
+Out of scope: the app is unsigned, so anyone with write access to your machine can tamper with it. That is a known state, not a report. Same for the missing checksum verification on model downloads, which is already tracked in [TODO.md](https://github.com/SirSicard/inkwell/blob/legacy/0.2/TODO.md).

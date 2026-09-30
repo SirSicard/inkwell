@@ -6,7 +6,7 @@ order follows dependencies. English only in 1.0. Step ids (S1.1 …) are the one
 commit messages refer to.
 
 The 0.2 Tauri app keeps shipping from the `legacy/0.2` branch until 1.0 replaces it. Its own list of
-work is [TODO.md](../TODO.md).
+work is [TODO.md](https://github.com/SirSicard/inkwell/blob/legacy/0.2/TODO.md), on that branch.
 
 ## M1: the core
 

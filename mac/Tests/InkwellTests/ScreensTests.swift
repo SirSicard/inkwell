@@ -1009,8 +1009,8 @@ final class NoticesTests: XCTestCase {
             return name.isEmpty ? nil : name
         }
         XCTAssertGreaterThan(names.count, 15, "the table was read")
-        // The legacy 0.2 app's base is not in the Mac app, and wasapi-rs's pattern is in Windows-only code.
-        let shipped = names.filter { $0 != "Handy" && $0 != "wasapi-rs" }
+        // wasapi-rs's pattern is in Windows-only code.
+        let shipped = names.filter { $0 != "wasapi-rs" }
         let about = Notices.components.map { $0.name + " " + $0.text }.joined(separator: "\n")
         for name in shipped {
             let key = name.replacingOccurrences(of: " clustering", with: "").replacingOccurrences(of: " in C", with: "")

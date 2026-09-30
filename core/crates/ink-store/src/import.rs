@@ -65,7 +65,7 @@
 //!   `-wal` and `-shm` files beside it and leaves them there, and with a live writer it reads
 //!   the log and writes into the `-shm`. `immutable=1` would avoid both, but it reads the main
 //!   file alone and silently skips every committed transaction still in a live log, so it is
-//!   not used. Nothing in the source directory is ever opened for writing (invariant I6).
+//!   not used. Nothing in the source directory is ever opened for writing.
 //! - **Regular files only, and only so much of them.** Every source must be a regular file, not a
 //!   symbolic link, directory, FIFO or device: it is inspected without following links before
 //!   anything opens it, and on Unix the file opened must be the one inspected. SQLite opens the
