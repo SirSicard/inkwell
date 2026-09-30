@@ -1,8 +1,10 @@
 // Inkwell's updates on Windows, through Velopack (MIT): the installer (Setup.exe, made by vpk in
 // win-release.yml) installs Inkwell for the current user under %LOCALAPPDATA%\InkwellApp, and this
-// reads the release feed (releases.win.json) of the newest published releases of SirSicard/inkwell
-// on GitHub that carry one. The library is elsewhere (%LOCALAPPDATA%\Inkwell, DataLocation), so
-// neither an update nor an uninstall touches it.
+// reads the release feed of the newest published releases of SirSicard/inkwell on GitHub that carry
+// one: the feed of the channel the app was packed for, which is Velopack's default (x64's
+// releases.win.json, ARM64's releases.win-arm64.json; windows/scripts/pack.ps1), so an install only
+// ever updates to its own architecture. The library is elsewhere (%LOCALAPPDATA%\Inkwell,
+// DataLocation), so neither an update nor an uninstall touches it.
 //
 // What is checked, with no signing key (the Windows build is not code-signed yet): the feed and the
 // packages come over HTTPS from GitHub, and Velopack refuses a downloaded package whose size or

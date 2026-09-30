@@ -1,23 +1,26 @@
 name: Windows release
 
 # Releases the Windows app (docs/RELEASING.md), unsigned for now: no code signing yet, and the
-# homepage tells people how to get past SmartScreen and check the download. On a v1.X.Y tag: build
-# the core with its Windows engines and the app (NativeAOT), check that neither needs anything a
-# PC may lack (a Visual C++ runtime, the Vulkan driver), pack the installer and the update feed with
-# Velopack, write their SHA-256s, and draft the GitHub release holding them (or add them to the
-# draft the Mac's workflow made for the same tag). A person publishes the draft; nothing here does.
+# homepage tells people how to get past SmartScreen and check the download. On a v1.X.Y tag: for x64
+# and for ARM64, each on its own machine, build the core with that architecture's engines and the
+# app (NativeAOT), check that neither needs anything a PC may lack (a Visual C++ runtime, the Vulkan
+# driver, Windows' own older ONNX Runtime), pack the installer and the update feed with Velopack,
+# each architecture on its own update channel, and write their SHA-256s
+# (win-release-build.yml); then draft the GitHub release holding both architectures' files (or add
+# them to the draft the Mac's workflow made for the same tag). A person publishes the draft; nothing
+# here does.
 #
-# A manual run is the dry run: the same build, checks and pack, the release's files kept as run
-# artifacts, and nothing published.
+# A manual run is the dry run: the same builds, checks and packs, the release's files kept as run
+# artifacts, and nothing published. (Pull requests build and pack ARM64 the same way, keeping
+# nothing: win-arm64.yml.)
 #
-# How an unsigned build is still checked, end to end: every input is pinned (actions by commit,
-# the Vulkan SDK by its published SHA-256, crates and NuGet packages by their lock files, vpk by
-# its tool manifest); the release's files carry their SHA-256s in the release and in its notes;
-# the app reads its update feed over HTTPS from this repository's releases, and Velopack refuses a
-# package whose size or SHA-256 differs from the feed's.
+# How an unsigned build is still checked, end to end: every input is pinned (win-release-build.yml
+# lists them); the release's files carry their SHA-256s in the release and in its notes; the app
+# reads its update feed over HTTPS from this repository's releases, and Velopack refuses a package
+# whose size or SHA-256 differs from the feed's.
 #
 # Secrets and privileges, by job:
-# - build: no secret; read access to the repository only.
+# - build-x64, build-arm64: no secret; read access to the repository only.
 # - publish (tag only): write access, in the `release` environment, whose deployment rule admits
 #   v1.* tags alone. It holds no secret for Windows (the Sparkle key there is the Mac's).
 # Neither trigger can come from a pull request, so no fork's code runs next to write access; there
@@ -39,156 +42,34 @@ concurrency:
   group: win-release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-  DOTNET_NOLOGO: '1'
-
 jobs:
-  build:
-    name: build, check, pack (windows-2025)
-    runs-on: windows-2025
+  build-x64:
+    name: x64
+    uses: ./.github/workflows/win-release-build.yml
     permissions:
       contents: read
-    timeout-minutes: 150
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      setup: ${{ steps.version.outputs.setup }}
-      package: ${{ steps.version.outputs.package }}
-      sums: ${{ steps.version.outputs.sums }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+    with:
+      arch: x64
+      kind: ${{ github.event_name == 'push' && 'tag' || 'dry-run' }}
+      version: ${{ inputs.version || '1.0.0' }}
 
-      # From the tag (v1.X.Y exactly) or the dry run's input: passed through the environment and
-      # checked, never pasted into a script. bash, for pipefail: a refusal must fail the step.
-      - name: Version
-        id: version
-        shell: bash
-        env:
-          EVENT: ${{ github.event_name }}
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          if [ "$EVENT" = push ]; then
-            windows/scripts/release-version.sh tag "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
-          else
-            windows/scripts/release-version.sh dry-run "$INPUT_VERSION" | tee -a "$GITHUB_OUTPUT"
-          fi
+  build-arm64:
+    name: ARM64
+    uses: ./.github/workflows/win-release-build.yml
+    permissions:
+      contents: read
+    with:
+      arch: arm64
+      kind: ${{ github.event_name == 'push' && 'tag' || 'dry-run' }}
+      version: ${{ inputs.version || '1.0.0' }}
 
-      # A release is cut from main: a tag on a commit main does not contain stops here.
-      - name: The tag is on main
-        if: github.event_name == 'push'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)"
-          case "$status" in
-            identical | behind) echo "the tag's commit is on main" ;;
-            *)
-              echo "::error title=Not on main::$GITHUB_REF_NAME points at a commit main does not contain ($status)"
-              exit 1
-              ;;
-          esac
-
-      - name: Script tests
-        shell: bash
-        run: bash windows/scripts/tests/test-release-version.sh
-
-      # Installs the channel and components pinned in core/rust-toolchain.toml.
-      - run: rustup toolchain install
-        working-directory: core
-
-      # The Vulkan SDK the engine builds against: headers, the loader's import library and glslc
-      # (ggml's shaders). Build tools only: the core links nothing from it but the import of
-      # vulkan-1.dll, which GPU drivers install. Pinned by version and by the SHA-256 LunarG
-      # publishes for the installer; installed under the runner's temp folder.
-      - name: Vulkan SDK (pinned)
-        shell: pwsh
-        env:
-          VULKAN_SDK_VERSION: 1.4.357.0
-          VULKAN_SDK_SHA256: 81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d
-        run: |
-          $installer = Join-Path $env:RUNNER_TEMP 'vulkansdk.exe'
-          $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
-          curl.exe --fail --silent --show-error --location --proto '=https' --retry 3 --output $installer $url
-          if ($LASTEXITCODE -ne 0) { Write-Output "::error::the Vulkan SDK did not download ($LASTEXITCODE)"; exit 1 }
-          $sum = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
-          if ($sum -ne $env:VULKAN_SDK_SHA256) { Write-Output "::error::the Vulkan SDK installer's SHA-256 is $sum, expected $env:VULKAN_SDK_SHA256"; exit 1 }
-          $root = Join-Path $env:RUNNER_TEMP "VulkanSDK\$env:VULKAN_SDK_VERSION"
-          $p = Start-Process -FilePath $installer -Wait -PassThru -NoNewWindow -ArgumentList @(
-            '--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install')
-          if ($p.ExitCode -ne 0 -or -not (Test-Path (Join-Path $root 'Lib\vulkan-1.lib'))) {
-            Write-Output "::error::the Vulkan SDK did not install ($($p.ExitCode))"; exit 1
-          }
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$root"
-          Write-Output "Vulkan SDK $env:VULKAN_SDK_VERSION, installer sha256 $sum"
-
-      # The core's DLL with the Windows engines (llama.cpp on Vulkan or the CPU, Silero VAD),
-      # static CRT, Vulkan delay-loaded; the script checks the DLL's imports and runs the core
-      # without Vulkan (tests/vulkan_missing.rs).
-      - name: Build the core, with its engines
-        shell: pwsh
-        run: windows/scripts/build-core.ps1
-
-      # About lists what this build links: the C# bindings and the Rust notices must be current.
-      - name: Generated C# and notices are current
-        shell: bash
-        working-directory: core
-        run: |
-          cargo run --locked -p ink-ffi --bin ink-schema -- --check
-          cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
-
-      # The SDK windows/global.json pins. Pinned to the commit tag v6.0.0 points at.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          global-json-file: windows/global.json
-      - name: Restore (locked)
-        working-directory: windows
-        run: dotnet restore Inkwell.slnx --locked-mode
-      - name: NuGet licence check
-        shell: pwsh
-        working-directory: windows
-        run: scripts/nuget-licences.ps1
-
-      # The app as it ships: NativeAOT, x64, the Windows App SDK's runtime beside the exe, the
-      # release core beside it, and the version from the tag (About and the file version).
-      - name: Publish the app (NativeAOT)
-        shell: pwsh
-        working-directory: windows
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $app = Join-Path $env:RUNNER_TEMP 'inkwell-app'
-          $core = Join-Path $env:GITHUB_WORKSPACE 'core\target\release\'
-          dotnet publish Inkwell/Inkwell.csproj -c Release -o $app --no-restore "-p:InkVersion=$env:VERSION" "-p:InkCoreDir=$core"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Content $env:GITHUB_ENV "INK_APP_DIR=$app"
-
-      # The app's dependencies checked, then the installer, the update package and feed, and
-      # their SHA-256s (windows/scripts/pack.ps1).
-      - name: Pack the installer and the update feed
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          windows/scripts/pack.ps1 -Version $env:VERSION -AppDir $env:INK_APP_DIR -OutDir (Join-Path $env:RUNNER_TEMP 'inkwell-release')
-
-      - name: Keep the release's files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: inkwell-windows
-          path: ${{ runner.temp }}/inkwell-release/
-          if-no-files-found: error
-          retention-days: 14
-
-  # A tag's release: the Windows files added to the draft release for the tag (the Mac's workflow
-  # drafts it too; whichever comes first creates it), with a Windows section in its notes.
+  # A tag's release: both architectures' files added to the draft release for the tag (the Mac's
+  # workflow drafts it too; whichever comes first creates it), with a Windows section in its notes.
   # Publishing the draft is a person's step (docs/RELEASING.md): until then no installed app sees
   # it, since the app's updater reads published releases only.
   publish:
     name: add to the draft release
-    needs: build
+    needs: [build-x64, build-arm64]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v1.')
     runs-on: ubuntu-latest
     environment: release
@@ -198,22 +79,38 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: inkwell-windows
+          name: inkwell-windows-x64
+          path: release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: inkwell-windows-arm64
           path: release
 
       # The files the release carries, checked against their SHA-256s once more after the trip
-      # through the artifact store.
+      # through the artifact store; the two builds are of one version.
       - name: Check the files
         working-directory: release
         env:
-          SETUP: ${{ needs.build.outputs.setup }}
-          PACKAGE: ${{ needs.build.outputs.package }}
-          SUMS: ${{ needs.build.outputs.sums }}
+          VERSION_X64: ${{ needs.build-x64.outputs.version }}
+          VERSION_ARM64: ${{ needs.build-arm64.outputs.version }}
+          FILES: >-
+            ${{ needs.build-x64.outputs.setup }} ${{ needs.build-x64.outputs.package }}
+            ${{ needs.build-x64.outputs.feed }} ${{ needs.build-x64.outputs.sums }}
+            ${{ needs.build-arm64.outputs.setup }} ${{ needs.build-arm64.outputs.package }}
+            ${{ needs.build-arm64.outputs.feed }} ${{ needs.build-arm64.outputs.sums }}
+          SUMS_X64: ${{ needs.build-x64.outputs.sums }}
+          SUMS_ARM64: ${{ needs.build-arm64.outputs.sums }}
         run: |
-          for f in "$SETUP" "$PACKAGE" releases.win.json "$SUMS"; do
+          if [ -z "$VERSION_X64" ] || [ "$VERSION_X64" != "$VERSION_ARM64" ]; then
+            echo "::error::the x64 build is version '$VERSION_X64' and the ARM64 build '$VERSION_ARM64'"
+            exit 1
+          fi
+          read -r -a files <<<"$FILES"
+          [ "${#files[@]}" -eq 8 ] || { echo "::error::expected 8 files, the builds named ${#files[@]}"; exit 1; }
+          for f in "${files[@]}"; do
             [ -f "$f" ] || { echo "::error::$f is missing"; exit 1; }
           done
-          sha256sum -c "$SUMS"
+          sha256sum -c "$SUMS_X64" "$SUMS_ARM64"
 
       # A draft: invisible to installed apps and to the Download button until a person publishes
       # it. A re-run replaces a draft's Windows files and never touches a published release.
@@ -221,18 +118,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SETUP: ${{ needs.build.outputs.setup }}
-          PACKAGE: ${{ needs.build.outputs.package }}
-          SUMS: ${{ needs.build.outputs.sums }}
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ needs.build-x64.outputs.version }}
+          FILES: >-
+            ${{ needs.build-x64.outputs.setup }} ${{ needs.build-x64.outputs.package }}
+            ${{ needs.build-x64.outputs.feed }} ${{ needs.build-x64.outputs.sums }}
+            ${{ needs.build-arm64.outputs.setup }} ${{ needs.build-arm64.outputs.package }}
+            ${{ needs.build-arm64.outputs.feed }} ${{ needs.build-arm64.outputs.sums }}
+          SETUP_X64: ${{ needs.build-x64.outputs.setup }}
+          FEED_X64: ${{ needs.build-x64.outputs.feed }}
+          SUMS_X64: ${{ needs.build-x64.outputs.sums }}
+          SETUP_ARM64: ${{ needs.build-arm64.outputs.setup }}
+          FEED_ARM64: ${{ needs.build-arm64.outputs.feed }}
+          SUMS_ARM64: ${{ needs.build-arm64.outputs.sums }}
         run: |
           cd release
-          files=("$SETUP" "$PACKAGE" releases.win.json "$SUMS")
-          sum="$(sha256sum "$SETUP" | cut -d' ' -f1)"
+          read -r -a files <<<"$FILES"
+          sum_x64="$(sha256sum "$SETUP_X64" | cut -d' ' -f1)"
+          sum_arm64="$(sha256sum "$SETUP_ARM64" | cut -d' ' -f1)"
           marker='<!-- inkwell-windows -->'
           cat >"$RUNNER_TEMP/windows.md" <<EOF
           $marker
-          **Windows: download \`$SETUP\`**: Inkwell for 64-bit Windows 11 (24H2 or later), installed for your user alone, no administrator needed. It is not code-signed yet, so SmartScreen warns before it runs: choose **More info**, then **Run anyway**. Check the download first: its SHA-256 is \`$sum\` (also in \`$SUMS\`). \`$PACKAGE\` and \`releases.win.json\` are what the app's updater reads; there is no need to download them.
+          **Windows: download \`$SETUP_X64\`** for a PC with an Intel or AMD processor, or \`$SETUP_ARM64\` for one with an ARM processor (Settings > System > About says "ARM-based processor"): Inkwell for Windows 11 (24H2 or later), installed for your user alone, no administrator needed. The ARM64 build does not yet tell apart the speakers at the far end of a meeting. Neither is code-signed yet, so SmartScreen warns before it runs: choose **More info**, then **Run anyway**. Check the download first: the SHA-256 of \`$SETUP_X64\` is \`$sum_x64\`, and of \`$SETUP_ARM64\` \`$sum_arm64\` (also in \`$SUMS_X64\` and \`$SUMS_ARM64\`). The \`.nupkg\` files, \`$FEED_X64\` and \`$FEED_ARM64\` are what the app's updater reads; there is no need to download them.
 
           Inkwell includes the runtime of Microsoft's Windows App SDK and the Windows SDK's .NET projection, which Microsoft licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those components.
           EOF

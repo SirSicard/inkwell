@@ -7,13 +7,16 @@ name: Windows ARM64
 #   type-checked only, as in core.yml.
 # - shell: the WinUI shell against the ARM64 core's DLL: its tests, and the app published with
 #   NativeAOT for win-arm64.
+# - release: the ARM64 release as a tag builds it, as a dry run (win-release-build.yml): the core
+#   with its engines, the app, the checks of what they load, and the installer and update feed
+#   packed, then kept nowhere: nothing is uploaded.
 # The x64 builds are core.yml's and win.yml's.
 on:
   push:
     branches: [main]
-    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml']
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml', '.github/workflows/win-release-build.yml']
   pull_request:
-    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml']
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml', '.github/workflows/win-release-build.yml']
   workflow_dispatch:
 
 permissions:
@@ -228,3 +231,14 @@ jobs:
             $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
             if ($machine -ne 0xAA64) { Write-Output ("::error::{0} is machine 0x{1:X4}, not ARM64" -f $file, $machine); exit 1 }
           }
+
+  release:
+    name: ARM64 release, dry run
+    uses: ./.github/workflows/win-release-build.yml
+    permissions:
+      contents: read
+    with:
+      arch: arm64
+      kind: dry-run
+      version: '1.0.0'
+      keep: false

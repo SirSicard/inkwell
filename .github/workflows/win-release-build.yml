@@ -1,0 +1,339 @@
+name: Windows release build
+
+# One architecture of the Windows release (docs/RELEASING.md): the core with that architecture's
+# engines, the app (NativeAOT), the checks that neither needs anything a PC may lack, and the
+# installer and update feed packed with Velopack, with their SHA-256s. Called by win-release.yml
+# (a v1 tag, or its manual dry run: x64 and ARM64) and by win-arm64.yml (pull requests: ARM64, as a
+# dry run, keeping nothing). Nothing here publishes: a tag's files become a run artifact, which
+# win-release.yml's publish job adds to the draft release.
+#
+# Each architecture is built natively, never cross-compiled: x64 on windows-2025, ARM64 on
+# windows-11-arm. Their engines are windows/scripts/build-core.ps1's (x64: llama.cpp with Vulkan,
+# Silero, Parakeet on sherpa-onnx, the NeMo-Speech.cpp diarizer; ARM64: llama.cpp on the CPU,
+# Silero, Parakeet), and the diarizer's native library is built here for an architecture whose
+# engines name it.
+#
+# Every input is pinned: actions by commit; the Vulkan SDK (x64) by the SHA-256 LunarG publishes
+# for its installer; sherpa-onnx's archives by their SHA-256s below, and every file the build uses
+# from them by ink-engines' build.rs; NeMo-Speech.cpp and its ggml by commit (build-nemo-speech.sh
+# checks both); SentencePiece and Abseil by tarball SHA-256 (build-sentencepiece-abseil.sh); crates
+# and NuGet packages by their lock files; vpk by its tool manifest. No step restores a cache: what
+# ships is built from the checkout alone. No secret, and read access only.
+on:
+  workflow_call:
+    inputs:
+      arch:
+        description: x64 or arm64.
+        required: true
+        type: string
+      kind:
+        description: tag (a v1.X.Y tag, the version from it) or dry-run (the version below).
+        required: true
+        type: string
+      version:
+        description: A dry run's version (X.Y.Z).
+        required: false
+        type: string
+        default: '1.0.0'
+      keep:
+        description: Keep the release's files as the run artifact inkwell-windows-<arch>.
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      version:
+        value: ${{ jobs.build.outputs.version }}
+      setup:
+        value: ${{ jobs.build.outputs.setup }}
+      package:
+        value: ${{ jobs.build.outputs.package }}
+      feed:
+        value: ${{ jobs.build.outputs.feed }}
+      sums:
+        value: ${{ jobs.build.outputs.sums }}
+
+permissions: {}
+
+jobs:
+  build:
+    name: build, check, pack (${{ inputs.arch }})
+    runs-on: ${{ inputs.arch == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
+    permissions:
+      contents: read
+    timeout-minutes: 180
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      setup: ${{ steps.version.outputs.setup }}
+      package: ${{ steps.version.outputs.package }}
+      feed: ${{ steps.version.outputs.feed }}
+      sums: ${{ steps.version.outputs.sums }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # From the tag (v1.X.Y exactly) or the dry run's input, and this architecture's file names:
+      # passed through the environment and checked, never pasted into a script. A tag also waits
+      # for every licence notice to be compared with its upstream file, the Windows-only ones
+      # included. bash, for pipefail: a refusal must fail the step.
+      - name: Version
+        id: version
+        shell: bash
+        env:
+          KIND: ${{ inputs.kind }}
+          ARCH: ${{ inputs.arch }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$KIND" = tag ]; then
+            windows/scripts/release-version.sh tag "$GITHUB_REF_NAME" "$ARCH" | tee -a "$GITHUB_OUTPUT"
+          else
+            windows/scripts/release-version.sh "$KIND" "$INPUT_VERSION" "$ARCH" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+      # A release is cut from main: a tag on a commit main does not contain stops here.
+      - name: The tag is on main
+        if: inputs.kind == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)"
+          case "$status" in
+            identical | behind) echo "the tag's commit is on main" ;;
+            *)
+              echo "::error title=Not on main::$GITHUB_REF_NAME points at a commit main does not contain ($status)"
+              exit 1
+              ;;
+          esac
+
+      - name: Script tests
+        shell: bash
+        run: |
+          bash windows/scripts/tests/test-release-version.sh
+          pwsh -NoProfile -File windows/scripts/tests/test-dll-imports.ps1
+
+      # Installs the channel and components pinned in core/rust-toolchain.toml.
+      - run: rustup toolchain install
+        working-directory: core
+
+      # Visual Studio's developer environment for this architecture, for every later step: the
+      # engines' C and C++, built by build-core.ps1 and by the diarizer's bash scripts, which read
+      # it. On ARM64 with LLVM first on PATH: ggml refuses MSVC on ARM, so llama.cpp is compiled by
+      # clang-cl, and tract (Silero) assembles its ARM64 kernels with clang.
+      - name: Build environment
+        shell: pwsh
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -property installationPath
+          if (-not $vs) { Write-Output '::error::no Visual Studio installation'; exit 1 }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          $lines = cmd /c "`"$vcvars`" $env:ARCH >nul && set"
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::vcvarsall $env:ARCH failed ($LASTEXITCODE)"; exit 1 }
+          $vars = @{}
+          foreach ($line in $lines) { if ($line -match '^([^=]+)=(.*)$') { $vars[$Matches[1]] = $Matches[2] } }
+          if ($vars['VSCMD_ARG_TGT_ARCH'] -ne $env:ARCH) { Write-Output "::error::vcvarsall set no $env:ARCH environment"; exit 1 }
+          if ($env:ARCH -eq 'arm64') {
+            # ProgramW6432: the 64-bit Program Files whatever the architecture this shell runs as.
+            $llvm = Join-Path $env:ProgramW6432 'LLVM\bin'
+            foreach ($tool in 'clang.exe', 'clang-cl.exe', 'libclang.dll') {
+              if (-not (Test-Path (Join-Path $llvm $tool))) { Write-Output "::error::no $tool in $llvm"; exit 1 }
+            }
+            $vars['PATH'] = "$llvm;" + $vars['PATH']
+            $vars['LIBCLANG_PATH'] = $llvm
+          }
+          # Only what vcvarsall added or changed (never the runner's own GITHUB_* and RUNNER_*).
+          foreach ($name in $vars.Keys) {
+            if ([Environment]::GetEnvironmentVariable($name) -ne $vars[$name]) {
+              "$name=$($vars[$name])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            }
+          }
+
+      # The engines this architecture's release ships (build-core.ps1's list): whether the
+      # diarizer's native library is built below.
+      - name: The release's engines
+        id: engines
+        shell: pwsh
+        run: |
+          $features = @(windows/scripts/build-core.ps1 -ListFeatures)
+          if ($features.Count -ne 1 -or -not $features[0]) { Write-Output '::error::build-core.ps1 listed no features'; exit 1 }
+          $diarizer = ($features[0] -split ',') -contains 'ink-engines/engine-nemo'
+          Write-Output "features: $($features[0])"
+          "features=$($features[0])" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "diarizer=$($diarizer.ToString().ToLowerInvariant())" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
+      # The Vulkan SDK llama.cpp's Vulkan backend and the diarizer build against (x64): headers,
+      # the loader's import library and glslc (ggml's shaders). Build tools only: the core links
+      # nothing from it but the import of vulkan-1.dll, which GPU drivers install. Pinned by version
+      # and by the SHA-256 LunarG publishes for the installer; installed under the runner's temp
+      # folder.
+      - name: Vulkan SDK (pinned)
+        if: inputs.arch == 'x64'
+        shell: pwsh
+        env:
+          VULKAN_SDK_VERSION: 1.4.357.0
+          VULKAN_SDK_SHA256: 81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkansdk.exe'
+          $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
+          curl.exe --fail --silent --show-error --location --proto '=https' --retry 3 --output $installer $url
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::the Vulkan SDK did not download ($LASTEXITCODE)"; exit 1 }
+          $sum = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+          if ($sum -ne $env:VULKAN_SDK_SHA256) { Write-Output "::error::the Vulkan SDK installer's SHA-256 is $sum, expected $env:VULKAN_SDK_SHA256"; exit 1 }
+          $root = Join-Path $env:RUNNER_TEMP "VulkanSDK\$env:VULKAN_SDK_VERSION"
+          $p = Start-Process -FilePath $installer -Wait -PassThru -NoNewWindow -ArgumentList @(
+            '--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install')
+          if ($p.ExitCode -ne 0 -or -not (Test-Path (Join-Path $root 'Lib\vulkan-1.lib'))) {
+            Write-Output "::error::the Vulkan SDK did not install ($($p.ExitCode))"; exit 1
+          }
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$root"
+          Write-Output "Vulkan SDK $env:VULKAN_SDK_VERSION, installer sha256 $sum"
+
+      # sherpa-onnx 1.13.4's "shared, MD, Release, no-tts" archive for this architecture (Parakeet;
+      # no text-to-speech, so none of espeak-ng), checked against the SHA-256 GitHub publishes for
+      # it; ink-engines' build.rs then checks every file the build uses against its own pins.
+      # Unpacked by Windows' own tar (Git Bash's GNU tar reads "D:\..." as a remote host).
+      - name: sherpa-onnx's libraries (pinned)
+        shell: pwsh
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          $archives = @{
+            x64 = @('sherpa-onnx-v1.13.4-win-x64-shared-MD-Release-no-tts-lib', 'dec41ab3944985cce39e596cb757732f1b275720d62f117fc5afe10f51c4bf7d')
+            arm64 = @('sherpa-onnx-v1.13.4-win-arm64-shared-MD-Release-no-tts-lib', '8c9d6f9ecbe81942a61b2229d81a700fe30bb3c4a6be639245b4446a8b0f3028')
+          }
+          $name, $pinned = $archives[$env:ARCH]
+          $archive = Join-Path $env:RUNNER_TEMP "$name.tar.bz2"
+          curl.exe --fail --silent --show-error --location --proto '=https' --retry 3 --output $archive "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/$name.tar.bz2"
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::the sherpa-onnx archive did not download ($LASTEXITCODE)"; exit 1 }
+          $sum = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($sum -ne $pinned) { Write-Output "::error::$name.tar.bz2's SHA-256 is $sum, expected $pinned"; exit 1 }
+          & (Join-Path $env:SystemRoot 'System32\tar.exe') -xjf $archive -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "SHERPA_ONNX_DIR=$(Join-Path $env:RUNNER_TEMP $name)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          Write-Output "$name, sha256 $sum"
+
+      # The diarizer's two libraries, SentencePiece and Abseil (Apache-2.0), pinned: the script
+      # fetches their release tarballs, refuses either unless its SHA-256 is the one committed in
+      # it, and builds both as static libraries for this architecture, linked into NeMo's DLL.
+      - name: SentencePiece and Abseil (pinned)
+        if: steps.engines.outputs.diarizer == 'true'
+        shell: bash
+        run: |
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          core/crates/ink-engines/native/build-sentencepiece-abseil.sh "$tmp/engine-deps" "$tmp/engine-deps-work"
+          echo "ENGINE_DEPS_DIR=$tmp/engine-deps" >>"$GITHUB_ENV"
+
+      # NeMo-Speech.cpp (the diarizer) at the commit the adapter is written against, read from the
+      # build script, with only the ggml submodule. build-nemo-speech.sh checks both commits. No
+      # Git LFS content: the build needs none.
+      - name: NeMo-Speech.cpp source
+        if: steps.engines.outputs.diarizer == 'true'
+        shell: bash
+        env:
+          GIT_LFS_SKIP_SMUDGE: '1'
+        run: |
+          commit="$(sed -n 's/^NEMO_COMMIT=//p' core/crates/ink-engines/native/build-nemo-speech.sh)"
+          src="$(cygpath -u "$RUNNER_TEMP")/nemo-speech-src"
+          git init -q "$src"
+          git -C "$src" remote add origin https://github.com/NVIDIA/NeMo-Speech.cpp.git
+          git -C "$src" fetch -q --depth 1 origin "$commit"
+          git -C "$src" checkout -q --detach FETCH_HEAD
+          git -C "$src" submodule update -q --init --depth 1 ggml
+          echo "NeMo-Speech.cpp $(git -C "$src" rev-parse HEAD), ggml $(git -C "$src/ggml" rev-parse HEAD)"
+
+      # Upstream's Vulkan preset with GGML_NATIVE=OFF, against the pinned SentencePiece and Abseil
+      # (ENGINE_DEPS_DIR, set above). Its DLLs go beside the app (build-core.ps1 copies them).
+      - name: Build NeMo-Speech.cpp
+        if: steps.engines.outputs.diarizer == 'true'
+        shell: bash
+        run: |
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          core/crates/ink-engines/native/build-nemo-speech.sh "$tmp/nemo-speech-src" "$tmp/nemo-speech"
+          echo "NEMO_SPEECH_DIR=$(cygpath -w "$tmp/nemo-speech")" >>"$GITHUB_ENV"
+
+      # The core with this architecture's engines, static CRT, and in core/target/release/
+      # inkwell-core/ with the engines' DLLs; the script checks what they all load, and on x64 runs
+      # the core without Vulkan (tests/vulkan_missing.rs).
+      - name: Build the core, with its engines
+        shell: pwsh
+        run: windows/scripts/build-core.ps1
+
+      # About lists what this build links: the C# bindings and the Rust notices must be current.
+      # The same whatever the architecture, so checked once, in the x64 build.
+      - name: Generated C# and notices are current
+        if: inputs.arch == 'x64'
+        shell: bash
+        working-directory: core
+        run: |
+          cargo run --locked -p ink-ffi --bin ink-schema -- --check
+          cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
+
+      # The SDK windows/global.json pins. Pinned to the commit tag v6.0.0 points at.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: windows/global.json
+      # x64 restores the solution. ARM64 is selected project by project with -p:Platform=ARM64
+      # (windows/Directory.Build.props: a solution build cannot switch it), so the packs restore
+      # adds for its runtime identifier (the ARM64 runtime and NativeAOT packs) are the ones the
+      # licence check reads.
+      - name: Restore (locked)
+        shell: pwsh
+        working-directory: windows
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          if ($env:ARCH -eq 'arm64') {
+            foreach ($project in Get-ChildItem -Path . -Recurse -Filter '*.csproj') {
+              dotnet restore $project.FullName --locked-mode -p:Platform=ARM64
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          } else {
+            dotnet restore Inkwell.slnx --locked-mode
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: NuGet licence check
+        shell: pwsh
+        working-directory: windows
+        run: scripts/nuget-licences.ps1
+
+      # The app as it ships: NativeAOT for this architecture, the Windows App SDK's runtime beside
+      # the exe, the core and the engines' DLLs beside it (InkCoreDir), and the version from the tag
+      # (About and the file version). ARM64 as win-arm64.yml's shell job publishes it: its platform,
+      # and the locked restore run again for it.
+      - name: Publish the app (NativeAOT)
+        shell: pwsh
+        working-directory: windows
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'inkwell-app'
+          $core = Join-Path $env:GITHUB_WORKSPACE 'core\target\release\inkwell-core\'
+          $restore = if ($env:ARCH -eq 'arm64') { @('-p:Platform=ARM64', '-p:RestoreLockedMode=true') } else { @('--no-restore') }
+          dotnet publish Inkwell/Inkwell.csproj -c Release -o $app @restore "-p:InkVersion=$env:VERSION" "-p:InkCoreDir=$core"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content $env:GITHUB_ENV "INK_APP_DIR=$app"
+
+      # The app's architecture and what it loads checked, then the installer, the update package
+      # and feed on this architecture's channel, and their SHA-256s (windows/scripts/pack.ps1).
+      - name: Pack the installer and the update feed
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ inputs.arch }}
+        run: |
+          windows/scripts/pack.ps1 -Arch $env:ARCH -Version $env:VERSION -AppDir $env:INK_APP_DIR -OutDir (Join-Path $env:RUNNER_TEMP 'inkwell-release')
+
+      - name: Keep the release's files
+        if: inputs.keep
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: inkwell-windows-${{ inputs.arch }}
+          path: ${{ runner.temp }}/inkwell-release/
+          if-no-files-found: error
+          retention-days: 14
