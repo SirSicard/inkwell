@@ -7,18 +7,22 @@ mod common;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::*;
-use ink_core::HotkeyEvent;
 use ink_core::mock::MockPlatform;
-use ink_engines::{Downloader, Fetch, FetchError, Fetched, ModelDir, Registry};
+use ink_core::{CancelToken, EventSink, HotkeyEvent};
+use ink_engines::{
+    DownloadError, DownloadProgress, Downloader, EngineRow, Fetch, FetchError, Fetched, ModelDir,
+    Registry,
+};
 use ink_ffi::dictation::Block;
 use ink_ffi::dictation::DictationInbox;
 use ink_ffi::runtime::{Core, DictationParts, Parts};
 use ink_pipeline::chain::DictationSettings;
 use ink_pipeline::events::VadUnavailable;
 use ink_pipeline::gain_stage::Vad;
+use ink_pipeline::update::ModelInstaller;
 
 const BLOCK: usize = 160;
 const BLOCK_NS: u64 = 10_000_000;
@@ -280,6 +284,26 @@ fn an_update_to_itself_installs_a_model_that_is_not_installed_and_changes_nothin
     assert_eq!(finished["ok"], true, "{finished}");
     assert_eq!(finished["no_model_warm"], false);
     assert!(finished.get("message").is_none(), "{finished}");
+    // Its progress, between the two: the start and the end of its three bytes.
+    let progress: Vec<(u64, u64)> = events
+        .all()
+        .iter()
+        .filter(|e| e["type"] == "model.update_progress")
+        .inspect(|e| assert_eq!((&e["id"], &e["next"]), (&ROW_V2.into(), &ROW_V2.into())))
+        .map(|e| {
+            let n = |k: &str| e[k].as_u64().unwrap();
+            (n("done_bytes"), n("total_bytes"))
+        })
+        .collect();
+    assert_eq!(progress, [(0, 3), (3, 3)]);
+    let types = events.types();
+    let at = |ty: &str| types.iter().position(|t| t == ty).unwrap();
+    let last_progress = types
+        .iter()
+        .rposition(|t| t == "model.update_progress")
+        .unwrap();
+    assert!(at("model.update_started") < at("model.update_progress"));
+    assert!(last_progress < at("model.update_finished"));
 
     // Installed: verified, in place, marked.
     assert!(models.is_installed(&fresh));
@@ -301,6 +325,73 @@ fn an_update_to_itself_installs_a_model_that_is_not_installed_and_changes_nothin
         .unwrap();
     let routed = events.wait_type("engine.routed", Duration::from_secs(5));
     assert_eq!(routed["id"], ROW_ID, "the better model still serves");
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// An installer that reports progress as fast as it can, then the end twice (as the downloader can),
+/// and keeps how long that took.
+struct Flooding {
+    took: std::sync::Mutex<Option<Duration>>,
+}
+
+impl ModelInstaller for Flooding {
+    fn install(
+        &self,
+        row: &EngineRow,
+        _: &CancelToken,
+        progress: EventSink<DownloadProgress>,
+    ) -> Result<(), DownloadError> {
+        let total = 1_000_000;
+        let start = Instant::now();
+        let report = |done| {
+            progress(DownloadProgress {
+                id: row.id.clone(),
+                done,
+                total,
+            })
+        };
+        for done in (0..total).step_by(10) {
+            report(done);
+        }
+        report(total);
+        report(total);
+        *self.took.lock().unwrap() = Some(start.elapsed());
+        Ok(())
+    }
+}
+
+#[test]
+fn an_updates_progress_reaches_the_shell_about_four_times_a_second_and_once_at_the_end() {
+    let dir = TempDir::new("progress");
+    let installer = Arc::new(Flooding {
+        took: Default::default(),
+    });
+    let loader = MockLoader::new(Behaviour::Say("words".into()));
+    let (core, events) = start(&dir, &[test_row(ROW_ID)], loader, installer.clone());
+    core.command(&format!(
+        r#"{{"cmd":"model.update","model":"{ROW_ID}","next":"{ROW_ID}"}}"#
+    ))
+    .unwrap();
+    let finished = events.wait_type("model.update_finished", Duration::from_secs(10));
+    assert_eq!(finished["ok"], true, "{finished}");
+    let took = installer.took.lock().unwrap().unwrap();
+    let done: Vec<u64> = events
+        .all()
+        .iter()
+        .filter(|e| e["type"] == "model.update_progress")
+        .map(|e| e["done_bytes"].as_u64().unwrap())
+        .collect();
+    // 100,001 reports: the first, one per quarter second of reporting, and the end once.
+    let most = 2 + (took.as_millis() / 250) as usize;
+    assert!(
+        (2..=most).contains(&done.len()),
+        "{} events in {took:?}: {done:?}",
+        done.len()
+    );
+    assert_eq!(done[0], 0);
+    assert_eq!(done.iter().filter(|&&d| d == 1_000_000).count(), 1);
+    assert_eq!(done.last(), Some(&1_000_000));
     core.shutdown();
     events.assert_valid();
 }

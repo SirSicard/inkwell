@@ -29,6 +29,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case modelRefused(ModelRefused)
     /// `model.update_started`
     case modelUpdateStarted(ModelUpdateStarted)
+    /// `model.update_progress`
+    case modelUpdateProgress(ModelUpdateProgress)
     /// `model.update_finished`
     case modelUpdateFinished(ModelUpdateFinished)
     /// `audio.dropped`
@@ -196,6 +198,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "model.warm_failed": self = .modelWarmFailed(try ModelWarmFailed(from: decoder))
             case "model.refused": self = .modelRefused(try ModelRefused(from: decoder))
             case "model.update_started": self = .modelUpdateStarted(try ModelUpdateStarted(from: decoder))
+            case "model.update_progress": self = .modelUpdateProgress(try ModelUpdateProgress(from: decoder))
             case "model.update_finished": self = .modelUpdateFinished(try ModelUpdateFinished(from: decoder))
             case "audio.dropped": self = .audioDropped(try AudioDropped(from: decoder))
             case "dictation.voice_detection": self = .dictationVoiceDetection(try DictationVoiceDetection(from: decoder))
@@ -282,6 +285,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .modelWarmFailed(let event): try event.encode(to: encoder)
         case .modelRefused(let event): try event.encode(to: encoder)
         case .modelUpdateStarted(let event): try event.encode(to: encoder)
+        case .modelUpdateProgress(let event): try event.encode(to: encoder)
         case .modelUpdateFinished(let event): try event.encode(to: encoder)
         case .audioDropped(let event): try event.encode(to: encoder)
         case .dictationVoiceDetection(let event): try event.encode(to: encoder)
@@ -1964,6 +1968,32 @@ public struct ModelUpdateFinished: Codable, Sendable, Equatable {
         case next
         case noModelWarm = "no_model_warm"
         case ok
+        case type
+    }
+}
+
+/// How far a model update's download has got, between model.update_started and
+/// model.update_finished: about four a second at most, and one when every byte is on disk
+/// (done_bytes equal to total_bytes; model.update_finished then says whether the files checked
+/// out). A model already installed sends only that one.
+public struct ModelUpdateProgress: Codable, Sendable, Equatable {
+    /// Bytes on disk so far across its files. It can go down: a file whose server ignores a
+    /// resume starts over.
+    public let doneBytes: Int64
+    /// The model being replaced (the same as next for a first download).
+    public let id: String
+    /// The model being downloaded.
+    public let next: String
+    /// Its download size (models.listed's size_bytes).
+    public let totalBytes: Int64
+    /// Always `model.update_progress`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case doneBytes = "done_bytes"
+        case id
+        case next
+        case totalBytes = "total_bytes"
         case type
     }
 }

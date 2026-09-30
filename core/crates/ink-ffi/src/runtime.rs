@@ -29,10 +29,12 @@ use std::thread::{self, JoinHandle};
 
 use ink_audio::BandsWriter;
 use ink_core::{
-    CancelToken, Clock, EngineError, FocusReader, Job, Llm, MeetingDetector, OfflineEngine,
-    PermissionProbe, Store, TextInserter,
+    CancelToken, Clock, EngineError, EventSink, FocusReader, Job, Llm, MeetingDetector,
+    OfflineEngine, PermissionProbe, Store, TextInserter,
 };
-use ink_engines::{EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded};
+use ink_engines::{
+    DownloadProgress, EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded,
+};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
 use ink_pipeline::gain_stage::Vad;
 use ink_pipeline::update::{ModelInstaller, update_model};
@@ -1104,6 +1106,7 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
         current_row,
         next_row,
         &shared.shutdown,
+        update_progress(shared, current, next),
     );
     drop(hold);
     let (ok, no_model_warm, message) = match &result {
@@ -1123,13 +1126,67 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
     ));
 }
 
+/// The fewest nanoseconds between two `model.update_progress` events: about four a second, which
+/// moves a bar smoothly without an event per MiB downloaded.
+const PROGRESS_INTERVAL_NS: u64 = 250_000_000;
+
+/// Which of an install's progress reports reach the shell: the first, then none sooner than
+/// [`PROGRESS_INTERVAL_NS`] after the last one sent, and the first that reaches the end whenever
+/// it comes (the downloader can report the end twice; the second is dropped).
+#[derive(Default)]
+struct ProgressThrottle {
+    last_ns: Option<u64>,
+    ended: bool,
+}
+
+impl ProgressThrottle {
+    fn pass(&mut self, now_ns: u64, done: u64, total: u64) -> bool {
+        if self.ended {
+            return false;
+        }
+        if done >= total {
+            self.ended = true;
+            return true;
+        }
+        if self
+            .last_ns
+            .is_some_and(|last| now_ns.saturating_sub(last) < PROGRESS_INTERVAL_NS)
+        {
+            return false;
+        }
+        self.last_ns = Some(now_ns);
+        true
+    }
+}
+
+/// **Worker.** The install's progress as `model.update_progress` events, throttled. Runs on the
+/// command thread, between the download's chunks; the lock is its alone.
+fn update_progress(shared: &Shared, current: &str, next: &str) -> EventSink<DownloadProgress> {
+    let (events, clock) = (shared.events.clone(), shared.clock.clone());
+    let (current, next) = (current.to_owned(), next.to_owned());
+    let throttle = Mutex::new(ProgressThrottle::default());
+    Arc::new(move |p: DownloadProgress| {
+        if lock(&throttle).pass(clock.now_ns(), p.done, p.total) {
+            events.emit(event(
+                "model.update_progress",
+                &[
+                    ("id", Some(current.as_str().into())),
+                    ("next", Some(next.as_str().into())),
+                    ("done_bytes", Some(p.done.into())),
+                    ("total_bytes", Some(p.total.into())),
+                ],
+            ));
+        }
+    })
+}
+
 /// A core for unit tests: an in-memory library, `clock`, no models, and events kept in memory.
 #[cfg(test)]
 pub(crate) mod testing {
     use std::sync::{Arc, Mutex};
 
-    use ink_core::{CancelToken, Clock, EngineError};
-    use ink_engines::{DownloadError, EngineRow, Loader, ModelDir, Registry};
+    use ink_core::{CancelToken, Clock, EngineError, EventSink};
+    use ink_engines::{DownloadError, DownloadProgress, EngineRow, Loader, ModelDir, Registry};
     use ink_pipeline::update::ModelInstaller;
     use serde_json::Value;
 
@@ -1144,7 +1201,12 @@ pub(crate) mod testing {
     }
 
     impl ModelInstaller for NoModels {
-        fn install(&self, _: &EngineRow, _: &CancelToken) -> Result<(), DownloadError> {
+        fn install(
+            &self,
+            _: &EngineRow,
+            _: &CancelToken,
+            _: EventSink<DownloadProgress>,
+        ) -> Result<(), DownloadError> {
             Ok(())
         }
     }
@@ -1232,6 +1294,25 @@ mod tests {
         ] {
             assert!(parse_command(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn progress_reaches_the_shell_at_most_four_times_a_second_and_once_at_the_end() {
+        const MS: u64 = 1_000_000;
+        let mut t = ProgressThrottle::default();
+        // The first report goes; the next ones only a quarter second after the last one sent.
+        assert!(t.pass(1_000 * MS, 0, 100));
+        assert!(!t.pass(1_100 * MS, 10, 100));
+        assert!(!t.pass(1_249 * MS, 20, 100));
+        assert!(t.pass(1_250 * MS, 30, 100));
+        assert!(!t.pass(1_300 * MS, 40, 100));
+        // The end goes whenever it comes, once.
+        assert!(t.pass(1_301 * MS, 100, 100));
+        assert!(!t.pass(2_000 * MS, 100, 100));
+        // A row already installed reports only its end: that one goes.
+        let mut t = ProgressThrottle::default();
+        assert!(t.pass(5, 100, 100));
+        assert!(!t.pass(u64::MAX, 100, 100));
     }
 
     /// Windows: the core's clock is the performance counter, the timebase of the mic's blocks and

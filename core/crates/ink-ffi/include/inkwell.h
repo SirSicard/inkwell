@@ -131,8 +131,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       Replaces a model's files. The model is held exclusively from before it is unloaded until
  *       the new one is installed and warm: meanwhile every job that needs it is refused with
  *       "model.refused", never served from files being replaced. "model.update_started", then
- *       "model.update_finished". While a job is using the model, or another update holds it,
- *       the update is "command.failed" and nothing changes: send it again later.
+ *       "model.update_progress" as the download goes (about four a second, and once when every
+ *       byte is on disk), then "model.update_finished". While a job is using the model, or
+ *       another update holds it, the update is "command.failed" and nothing changes: send it
+ *       again later.
  *       With "model" and "next" the same registry id, it installs that model (the first
  *       download): nothing else is unloaded or warmed, and a model already installed is left as
  *       it is. Only when the user asks for the download.
