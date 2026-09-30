@@ -47,9 +47,6 @@ export const GROQ_CONSOLE_URL = "https://console.groq.com";
 export const SIGNPATH_URL = "https://signpath.io";
 export const SIGNPATH_FOUNDATION_URL = "https://signpath.org";
 
-/** The update check's host, named in the README's privacy section. */
-export const UPDATER_HOST = "inkwell-updater.mattias-e67.workers.dev";
-
 /**
  * The five models. Word error rate, time and size come from the README's model chart
  * (docs/media/models-light.svg: eight recordings of one voice; seconds to transcribe 57 s of audio).
