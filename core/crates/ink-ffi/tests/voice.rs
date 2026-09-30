@@ -23,6 +23,8 @@ use ink_ffi::voice::{DEFAULT_KEY, MIC_IDLE, VoicePlatform};
 use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(10);
+/// How long the bands must go unpublished to count as settled: many pump passes.
+const SETTLED: Duration = Duration::from_millis(200);
 /// 10 ms at the mock mic's 48 kHz.
 const BLOCK: usize = 480;
 
@@ -205,6 +207,26 @@ impl VoiceRig {
     fn mic_open(&self) -> bool {
         self.platform
             .feed(Channel::Mic, &[0.0; 1], self.platform.clock().now_ns())
+    }
+
+    /// The bands once nothing has been published for [`SETTLED`]. The pump publishes on its own
+    /// passes (every 10 ms, later on a loaded runner), so a fixed sleep can end before a publish
+    /// that is already due.
+    fn settled_bands(&self) -> ink_audio::BandsSnapshot {
+        let until = Instant::now() + WAIT;
+        let mut last = self.bands.read();
+        loop {
+            std::thread::sleep(SETTLED);
+            let now = self.bands.read();
+            if now.published == last.published {
+                return now;
+            }
+            assert!(
+                Instant::now() < until,
+                "the bands never stopped being published"
+            );
+            last = now;
+        }
     }
 }
 
@@ -458,15 +480,13 @@ fn the_ink_follows_the_voice_while_a_take_is_open() {
     rig.silence(0.6);
     assert!(rig.events.wait_count("dictation.inserted", 1, WAIT));
     // Room after the take (the mic stays open): the ink rests, and nothing more is published.
-    // (The pump's drain in flight when the take ended may still publish; let it finish.)
-    std::thread::sleep(Duration::from_millis(50));
+    // The take's end still publishes one still frame, on the pump's next pass: wait for the count
+    // to settle rather than for a fixed time (a loaded runner can run that pass late).
     rig.silence(0.3);
-    std::thread::sleep(Duration::from_millis(50));
-    let after = rig.bands.read();
+    let after = rig.settled_bands();
     assert_eq!(after.bands, ink_audio::Bands::default(), "a still frame");
     rig.silence(0.3);
-    std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(rig.bands.read().published, after.published);
+    assert_eq!(rig.settled_bands().published, after.published);
 }
 
 #[test]
