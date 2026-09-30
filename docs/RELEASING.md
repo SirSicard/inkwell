@@ -317,6 +317,14 @@ gh run watch "$(gh run list --workflow build.yml --limit 1 --json databaseId --j
 Do this before touching a version number. A failure here costs a re-push; the
 same failure after tagging costs a deleted tag and a burnt version.
 
+**Only while `build.yml` is on `main`.** GitHub dispatches a workflow only when
+its file is on the default branch (as with `mac-release.yml` above), and `main`
+drops `build.yml` with the rest of the 0.2 app. The run itself uses
+`legacy/0.2`'s copy. So run the dry run of every 0.2 release still to come
+(0.2.10, 0.2.11) before that removal merges. After it there is no dry run: the
+`v0.*` tag is the first build. Its release is a draft (`releaseDraft`), so a
+failed build is undone by deleting the draft and the tag before anyone sees it.
+
 ### Cut it
 
 ```bash
