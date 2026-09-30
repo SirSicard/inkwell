@@ -59,6 +59,11 @@ enum CoreCommand: Equatable, Sendable {
     case voiceCommandsSave(enabled: Bool, wakePrefix: String, commands: [VoiceCommandDraft], replaceUnreadable: Bool, ref: String)
     /// What the Inkwell 0.2 import has to say about the dictation key: `import.notes`.
     case importNotes
+    /// Whether Inkwell 0.2's data is on this Mac and not yet imported (the core knows where it
+    /// is): `import.checked`, or a `command.failed`, with the command's name as its id.
+    case importCheck
+    /// Imports it: `import.finished`, or a `command.failed` whose message is words to show.
+    case importRun
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -118,6 +123,8 @@ enum CoreCommand: Equatable, Sendable {
              "commands": commands.map(\.fields), "id": ref]
                 .merging(replace ? ["replace_unreadable": true] : [:]) { a, _ in a }
         case .importNotes: ["cmd": "import.notes", "id": "import.notes"]
+        case .importCheck: ["cmd": "import.check", "id": "import.check"]
+        case .importRun: ["cmd": "import.run", "id": "import.run"]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -158,6 +165,8 @@ enum CoreCommand: Equatable, Sendable {
         case .voiceCommandsList: "voice_commands.list"
         case .voiceCommandsSave: "voice_commands.save"
         case .importNotes: "import.notes"
+        case .importCheck: "import.check"
+        case .importRun: "import.run"
         }
     }
 }

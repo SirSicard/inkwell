@@ -1,7 +1,7 @@
 // The first-run state: a sheet over the window until the user finishes or skips it. What Inkwell
-// does, the four permissions (each asked for only when the user presses Allow), polish (off, and
-// turned on only through its consent step), and how to dictate. Remembered in the core's store
-// (onboarding.done).
+// does, the four permissions (each asked for only when the user presses Allow), Inkwell 0.2's
+// history (only when there is some to import), polish (off, and turned on only through its consent
+// step), and how to dictate. Remembered in the core's store (onboarding.done).
 import SwiftUI
 
 struct OnboardingView: View {
@@ -15,6 +15,7 @@ struct OnboardingView: View {
                 switch onboarding.step {
                 case .welcome: welcome
                 case .permissions: permissions
+                case .importData: importData
                 case .polish: polish
                 case .ready: ready
                 }
@@ -29,7 +30,7 @@ struct OnboardingView: View {
                 if onboarding.step != .welcome {
                     Button("Back") { onboarding.back() }
                 }
-                Button(onboarding.step == .ready ? "Start" : "Continue") { onboarding.next() }
+                Button(continueTitle(onboarding.step)) { onboarding.next() }
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -40,17 +41,27 @@ struct OnboardingView: View {
         .onDisappear { screens.permissions.screenDisappeared() }
     }
 
-    /// Where the user is: dots, never a bar that fills.
+    /// The import step moves on without importing: Not now, until something came over.
+    private func continueTitle(_ step: OnboardingModel.Step) -> String {
+        switch step {
+        case .ready: "Start"
+        case .importData where screens.import02.imported == nil: "Not now"
+        default: "Continue"
+        }
+    }
+
+    /// Where the user is: dots, never a bar that fills. Only the steps shown.
     private func stepDots(_ step: OnboardingModel.Step) -> some View {
-        HStack(spacing: 8) {
-            ForEach(OnboardingModel.Step.allCases, id: \.self) { s in
+        let steps = screens.onboarding.steps
+        return HStack(spacing: 8) {
+            ForEach(steps, id: \.self) { s in
                 Circle()
                     .fill(s == step ? Theme.text : PaperPalette.border)
                     .frame(width: 7, height: 7)
             }
         }
         .accessibilityElement()
-        .accessibilityLabel("Step \(step.rawValue + 1) of \(OnboardingModel.Step.allCases.count)")
+        .accessibilityLabel("Step \((steps.firstIndex(of: step) ?? 0) + 1) of \(steps.count)")
     }
 
     private var welcome: some View {
@@ -74,6 +85,20 @@ struct OnboardingView: View {
                 .foregroundStyle(Theme.secondaryText)
             PermissionCards(permissions: screens.permissions)
         }
+    }
+
+    /// Shown only while Inkwell 0.2's data is offered: what it left, in words, with Import; after
+    /// an import, what became of its dictation key.
+    private var importData: some View {
+        let dictation = screens.dictation
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Your Inkwell 0.2 history").font(Typography.heading).accessibilityAddTraits(.isHeader)
+            Import02Card(model: screens.import02)
+            if screens.import02.imported != nil {
+                ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
+            }
+        }
+        .foregroundStyle(Theme.text)
     }
 
     private var polish: some View {

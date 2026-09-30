@@ -54,6 +54,8 @@ final class CoreController {
             self?.received(batch)
         }
         let forward = appleEvents
+        // Before the first event: the first run looks for Inkwell 0.2's data as soon as it shows.
+        screens.import02.looks = !DataLocation.isMoved(environment: environment)
         do {
             let data = try DataLocation.dataDirectory(environment: environment)
             let models = try DataLocation.modelsDirectory(environment: environment)

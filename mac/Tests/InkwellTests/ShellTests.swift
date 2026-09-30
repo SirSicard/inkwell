@@ -55,6 +55,9 @@ final class DataLocationTests: XCTestCase {
         let env = ["INK_DATA_DIR": "/tmp/ink-data", "INK_MODELS_DIR": "/tmp/ink-models/"]
         XCTAssertEqual(try DataLocation.dataDirectory(environment: env).path, "/tmp/ink-data")
         XCTAssertEqual(try DataLocation.modelsDirectory(environment: env)?.path, "/tmp/ink-models")
+        XCTAssertTrue(DataLocation.isMoved(environment: env))
+        XCTAssertFalse(DataLocation.isMoved(environment: [:]))
+        XCTAssertFalse(DataLocation.isMoved(environment: ["INK_DATA_DIR": ""]))
         XCTAssertThrowsError(try DataLocation.dataDirectory(environment: ["INK_DATA_DIR": "relative/dir"]))
         XCTAssertThrowsError(try DataLocation.modelsDirectory(environment: ["INK_MODELS_DIR": "~/models"]))
         XCTAssertEqual(try DataLocation.dataDirectory(environment: ["INK_DATA_DIR": ""]), DataLocation.defaultDataDirectory(),
