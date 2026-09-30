@@ -114,7 +114,7 @@ public class NoticesTests
         Assert.Contains("2.9.3", byId["winuiex"].Role, StringComparison.Ordinal);
         Assert.StartsWith("MIT", byId["dotnet-runtime"].Licence, StringComparison.Ordinal);
         Assert.Contains("windows-sdk-net", byId.Keys);
-        Assert.Equal("MIT", byId["cswinrt"].Licence);
+        Assert.Equal("MIT; Inkwell's copy under the Windows SDK licence terms", byId["cswinrt"].Licence);
         Assert.Equal("MIT", byId["velopack"].Licence);
         Assert.Contains("1.2.161", byId["velopack"].Role, StringComparison.Ordinal);
 
@@ -124,10 +124,11 @@ public class NoticesTests
         Assert.Contains("--- NOTICE.txt (Microsoft.WindowsAppSDK.Base 2.0.4) ---", byId["windows-app-sdk"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (C) Microsoft Corporation. All rights reserved.", byId["webview2"].Text, StringComparison.Ordinal);
         Assert.Contains("--- NOTICE.txt ---", byId["webview2"].Text, StringComparison.Ordinal);
-        Assert.Contains("Copyright \u00a9 2021-2026 - Morten Nielsen", byId["winuiex"].Text, StringComparison.Ordinal);
+        Assert.Contains("MIT License\n\nCopyright (c) 2021 Morten Nielsen\n", byId["winuiex"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (c) .NET Foundation and Contributors", byId["dotnet-runtime"].Text, StringComparison.Ordinal);
         Assert.Contains("--- THIRD-PARTY-NOTICES.TXT ---", byId["dotnet-runtime"].Text, StringComparison.Ordinal);
         Assert.Contains("https://aka.ms/WinSDKLicenseURL", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
+        Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT WINDOWS SOFTWARE DEVELOPMENT KIT (SDK) FOR WINDOWS 10", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (c) Microsoft Corporation.", byId["cswinrt"].Text, StringComparison.Ordinal);
         Assert.StartsWith("Copyright \u00a9 2021 Caelan Sayler\nCopyright \u00a9 2024 Velopack Ltd.", byId["velopack"].Text, StringComparison.Ordinal);
     }

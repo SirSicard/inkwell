@@ -724,9 +724,12 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
             "Windows SDK licence terms", WindowsSdkNetText)
         { Composed = true },
+        // C#/WinRT's source is MIT, but the WinRT.Runtime.dll compiled in is Microsoft's build from
+        // Microsoft.Windows.SDK.NET.Ref, Distributable Code under the Windows SDK licence (its REDIST
+        // list names it): the row says both, and the terms the user agrees to cover it.
         new("cswinrt", "C#/WinRT runtime, by Microsoft",
             "How C# calls the Windows APIs, compiled in with the projection: WinRT.Runtime from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
-            "MIT", CsWinRtLicence),
+            "MIT; Inkwell's copy under the Windows SDK licence terms", CsWinRtLicence),
         new("velopack", "Velopack, by Velopack Ltd and Caelan Sayler",
             "Installs Inkwell and brings its updates: the installer, Update.exe beside the app, and the update check in Settings > About. Velopack 1.2.161.",
             "MIT", VelopackLicence),

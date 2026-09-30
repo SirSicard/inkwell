@@ -5,5 +5,5 @@
 #
 #   <notice id> verified=<no|YYYY-MM-DD> <the file to compare it with>
 
-winuiex          verified=no  the LICENSE of dotMorten/WinUIEx at the commit its 2.9.3 package names (72f2975d2a237c0d7ad1113fe617d5894e66feb6): the text is the MIT licence under the copyright line of the package's manifest
-windows-sdk-net  verified=no  the Windows SDK licence terms the package's manifest links (https://aka.ms/WinSDKLicenseURL): the text is the manifest's copyright line and that link
+winuiex          verified=2026-09-30  the LICENSE of dotMorten/WinUIEx at the commit its 2.9.3 package names (72f2975d2a237c0d7ad1113fe617d5894e66feb6): the text is now that file, under a line saying so
+windows-sdk-net  verified=2026-09-30  the Windows SDK licence terms the package's manifest links (https://aka.ms/WinSDKLicenseURL, which serves download.microsoft.com/download/0/F/F/0FF2B061-47DD-4F55-89B6-FD1D8C44F14D/sdk_license.rtf, 246,945 bytes, sha256 dd07eb178e00c6bba4148457fc00ff77cd4887eb521d504186fe59c9ec8bbe62): the text is the manifest's copyright line and that file as plain text, its list numbers and bullets kept
