@@ -1,18 +1,16 @@
 name: Windows release
 
 # Releases the Windows app (docs/RELEASING.md), unsigned for now: no code signing yet, and the
-# homepage tells people how to get past SmartScreen and check the download. On a v1.X.Y tag: for x64
-# and for ARM64, each on its own machine, build the core with that architecture's engines and the
-# app (NativeAOT), check that neither needs anything a PC may lack (a Visual C++ runtime, the Vulkan
-# driver, Windows' own older ONNX Runtime), pack the installer and the update feed with Velopack,
-# each architecture on its own update channel, and write their SHA-256s
-# (win-release-build.yml); then draft the GitHub release holding both architectures' files (or add
-# them to the draft the Mac's workflow made for the same tag). A person publishes the draft; nothing
-# here does.
+# homepage tells people how to get past SmartScreen and check the download. x64 only: 1.0 ships no
+# ARM64 build. On a v1.X.Y tag: build the core with its engines and the app (NativeAOT), check that
+# neither needs anything a PC may lack (the Vulkan driver, Windows' own older ONNX Runtime, a Visual
+# C++ runtime other than the one beside the app), pack the installer and the update feed with
+# Velopack, and write their SHA-256s (win-release-build.yml); then draft the GitHub release holding
+# them (or add them to the draft the Mac's workflow made for the same tag). A person publishes the
+# draft; nothing here does.
 #
-# A manual run is the dry run: the same builds, checks and packs, the release's files kept as run
-# artifacts, and nothing published. (Pull requests build and pack ARM64 the same way, keeping
-# nothing: win-arm64.yml.)
+# A manual run is the dry run: the same build, checks and pack, the release's files kept as run
+# artifacts, and nothing published.
 #
 # How an unsigned build is still checked, end to end: every input is pinned (win-release-build.yml
 # lists them); the release's files carry their SHA-256s in the release and in its notes; the app
@@ -20,7 +18,7 @@ name: Windows release
 # whose size or SHA-256 differs from the feed's.
 #
 # Secrets and privileges, by job:
-# - build-x64, build-arm64: no secret; read access to the repository only.
+# - build: no secret; read access to the repository only.
 # - publish (tag only): write access, in the `release` environment, whose deployment rule admits
 #   v1.* tags alone. It holds no secret for Windows (the Sparkle key there is the Mac's).
 # Neither trigger can come from a pull request, so no fork's code runs next to write access; there
@@ -43,33 +41,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-x64:
+  build:
     name: x64
     uses: ./.github/workflows/win-release-build.yml
     permissions:
       contents: read
     with:
-      arch: x64
       kind: ${{ github.event_name == 'push' && 'tag' || 'dry-run' }}
       version: ${{ inputs.version || '1.0.0' }}
 
-  build-arm64:
-    name: ARM64
-    uses: ./.github/workflows/win-release-build.yml
-    permissions:
-      contents: read
-    with:
-      arch: arm64
-      kind: ${{ github.event_name == 'push' && 'tag' || 'dry-run' }}
-      version: ${{ inputs.version || '1.0.0' }}
-
-  # A tag's release: both architectures' files added to the draft release for the tag (the Mac's
-  # workflow drafts it too; whichever comes first creates it), with a Windows section in its notes.
+  # A tag's release: the Windows files added to the draft release for the tag (the Mac's workflow
+  # drafts it too; whichever comes first creates it), with a Windows section in its notes.
   # Publishing the draft is a person's step (docs/RELEASING.md): until then no installed app sees
   # it, since the app's updater reads published releases only.
   publish:
     name: add to the draft release
-    needs: [build-x64, build-arm64]
+    needs: build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v1.')
     runs-on: ubuntu-latest
     environment: release
@@ -79,38 +66,22 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: inkwell-windows-x64
-          path: release
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: inkwell-windows-arm64
+          name: inkwell-windows
           path: release
 
       # The files the release carries, checked against their SHA-256s once more after the trip
-      # through the artifact store; the two builds are of one version.
+      # through the artifact store.
       - name: Check the files
         working-directory: release
         env:
-          VERSION_X64: ${{ needs.build-x64.outputs.version }}
-          VERSION_ARM64: ${{ needs.build-arm64.outputs.version }}
-          FILES: >-
-            ${{ needs.build-x64.outputs.setup }} ${{ needs.build-x64.outputs.package }}
-            ${{ needs.build-x64.outputs.feed }} ${{ needs.build-x64.outputs.sums }}
-            ${{ needs.build-arm64.outputs.setup }} ${{ needs.build-arm64.outputs.package }}
-            ${{ needs.build-arm64.outputs.feed }} ${{ needs.build-arm64.outputs.sums }}
-          SUMS_X64: ${{ needs.build-x64.outputs.sums }}
-          SUMS_ARM64: ${{ needs.build-arm64.outputs.sums }}
+          SETUP: ${{ needs.build.outputs.setup }}
+          PACKAGE: ${{ needs.build.outputs.package }}
+          SUMS: ${{ needs.build.outputs.sums }}
         run: |
-          if [ -z "$VERSION_X64" ] || [ "$VERSION_X64" != "$VERSION_ARM64" ]; then
-            echo "::error::the x64 build is version '$VERSION_X64' and the ARM64 build '$VERSION_ARM64'"
-            exit 1
-          fi
-          read -r -a files <<<"$FILES"
-          [ "${#files[@]}" -eq 8 ] || { echo "::error::expected 8 files, the builds named ${#files[@]}"; exit 1; }
-          for f in "${files[@]}"; do
+          for f in "$SETUP" "$PACKAGE" releases.win.json "$SUMS"; do
             [ -f "$f" ] || { echo "::error::$f is missing"; exit 1; }
           done
-          sha256sum -c "$SUMS_X64" "$SUMS_ARM64"
+          sha256sum -c "$SUMS"
 
       # A draft: invisible to installed apps and to the Download button until a person publishes
       # it. A re-run replaces a draft's Windows files and never touches a published release.
@@ -118,27 +89,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          VERSION: ${{ needs.build-x64.outputs.version }}
-          FILES: >-
-            ${{ needs.build-x64.outputs.setup }} ${{ needs.build-x64.outputs.package }}
-            ${{ needs.build-x64.outputs.feed }} ${{ needs.build-x64.outputs.sums }}
-            ${{ needs.build-arm64.outputs.setup }} ${{ needs.build-arm64.outputs.package }}
-            ${{ needs.build-arm64.outputs.feed }} ${{ needs.build-arm64.outputs.sums }}
-          SETUP_X64: ${{ needs.build-x64.outputs.setup }}
-          FEED_X64: ${{ needs.build-x64.outputs.feed }}
-          SUMS_X64: ${{ needs.build-x64.outputs.sums }}
-          SETUP_ARM64: ${{ needs.build-arm64.outputs.setup }}
-          FEED_ARM64: ${{ needs.build-arm64.outputs.feed }}
-          SUMS_ARM64: ${{ needs.build-arm64.outputs.sums }}
+          SETUP: ${{ needs.build.outputs.setup }}
+          PACKAGE: ${{ needs.build.outputs.package }}
+          SUMS: ${{ needs.build.outputs.sums }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           cd release
-          read -r -a files <<<"$FILES"
-          sum_x64="$(sha256sum "$SETUP_X64" | cut -d' ' -f1)"
-          sum_arm64="$(sha256sum "$SETUP_ARM64" | cut -d' ' -f1)"
+          files=("$SETUP" "$PACKAGE" releases.win.json "$SUMS")
+          sum="$(sha256sum "$SETUP" | cut -d' ' -f1)"
           marker='<!-- inkwell-windows -->'
           cat >"$RUNNER_TEMP/windows.md" <<EOF
           $marker
-          **Windows: download \`$SETUP_X64\`** for a PC with an Intel or AMD processor, or \`$SETUP_ARM64\` for one with an ARM processor (Settings > System > About says "ARM-based processor"): Inkwell for Windows 11 (24H2 or later), installed for your user alone, no administrator needed. The ARM64 build does not yet tell apart the speakers at the far end of a meeting. Neither is code-signed yet, so SmartScreen warns before it runs: choose **More info**, then **Run anyway**. Check the download first: the SHA-256 of \`$SETUP_X64\` is \`$sum_x64\`, and of \`$SETUP_ARM64\` \`$sum_arm64\` (also in \`$SUMS_X64\` and \`$SUMS_ARM64\`). The \`.nupkg\` files, \`$FEED_X64\` and \`$FEED_ARM64\` are what the app's updater reads; there is no need to download them.
+          **Windows: download \`$SETUP\`**: Inkwell for 64-bit Windows 11 (24H2 or later), installed for your user alone, no administrator needed. It is not code-signed yet, so SmartScreen warns before it runs: choose **More info**, then **Run anyway**. Check the download first: its SHA-256 is \`$sum\` (also in \`$SUMS\`). \`$PACKAGE\` and \`releases.win.json\` are what the app's updater reads; there is no need to download them.
 
           Inkwell includes the runtime of Microsoft's Windows App SDK and the Windows SDK's .NET projection, which Microsoft licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those components.
           EOF

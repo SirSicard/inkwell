@@ -7,16 +7,13 @@ name: Windows ARM64
 #   type-checked only, as in core.yml.
 # - shell: the WinUI shell against the ARM64 core's DLL: its tests, and the app published with
 #   NativeAOT for win-arm64.
-# - release: the ARM64 release as a tag builds it, as a dry run (win-release-build.yml): the core
-#   with its engines, the app, the checks of what they load, and the installer and update feed
-#   packed, then kept nowhere: nothing is uploaded.
 # The x64 builds are core.yml's and win.yml's.
 on:
   push:
     branches: [main]
-    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml', '.github/workflows/win-release-build.yml']
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml']
   pull_request:
-    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml', '.github/workflows/win-release-build.yml']
+    paths: ['windows/**', 'core/**', 'schema/**', '.github/workflows/win-arm64.yml']
   workflow_dispatch:
 
 permissions:
@@ -112,8 +109,8 @@ jobs:
           INK_NEMO_CHECK_ONLY: "1"
       # llama.cpp on the CPU: ggml built by clang-cl with Ninja (CMAKE_* reach llama.cpp's CMake).
       # No Vulkan: the runner image lists no Vulkan SDK. Its non-ignored tests need no model.
-      # CXXFLAGS: C++ exceptions, which clang-cl needs for ggml's try and throw and cmake-rs's
-      # CMAKE_CXX_FLAGS leave out (build-core.ps1 says more).
+      # CXXFLAGS: C++ exceptions. cmake-rs hands CMake cc's flags as CMAKE_CXX_FLAGS, replacing
+      # CMake's default /EHsc; cl only warns without it, but clang-cl refuses ggml's try and throw.
       - name: llama.cpp (clang-cl, CPU)
         env:
           CMAKE_GENERATOR: Ninja
@@ -148,6 +145,12 @@ jobs:
       - name: sherpa-onnx (ARM64 library)
         shell: bash
         run: |
+          # In a developer environment rustc links with the first link.exe on PATH, and in bash that
+          # is Git's own /usr/bin/link (coreutils), not MSVC's: name MSVC's (vcvarsall above set
+          # VCToolsInstallDir).
+          linker="${VCToolsInstallDir}bin\\HostARM64\\ARM64\\link.exe"
+          test -f "$(cygpath -u "$linker")" || { echo "::error::no MSVC linker at $linker"; exit 1; }
+          export CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER="$linker"
           cargo clippy -p ink-engines --all-targets --locked --features engine-sherpa -- -D warnings
           cargo test -p ink-engines --locked --features engine-sherpa
           out=$(cargo test -p ink-engines --locked --features engine-sherpa --test sherpa -- --ignored --exact a_missing_model_file_is_model_missing) || {
@@ -234,14 +237,3 @@ jobs:
             $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
             if ($machine -ne 0xAA64) { Write-Output ("::error::{0} is machine 0x{1:X4}, not ARM64" -f $file, $machine); exit 1 }
           }
-
-  release:
-    name: ARM64 release, dry run
-    uses: ./.github/workflows/win-release-build.yml
-    permissions:
-      contents: read
-    with:
-      arch: arm64
-      kind: dry-run
-      version: '1.0.0'
-      keep: false

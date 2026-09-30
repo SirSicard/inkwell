@@ -1,42 +1,37 @@
 #!/usr/bin/env pwsh
-# The Windows release's files for one architecture, from a published app (win-release-build.yml
-# runs this; run it the same way on a PC, from anywhere): the installer, the update package and
-# feed, and their SHA-256s.
+# The Windows release's files, from a published app (win-release-build.yml runs this; run it the
+# same way on a PC, from anywhere): the installer, the update package and feed, and their SHA-256s.
+# x64 only: 1.0 ships no ARM64 build (docs/RELEASING.md).
 #
-#   pwsh windows/scripts/pack.ps1 -Arch x64 -Version 1.0.0 -AppDir <dotnet publish output> -OutDir <empty folder>
+#   pwsh windows/scripts/pack.ps1 -Version 1.0.0 -AppDir <dotnet publish output> -OutDir <empty folder>
 #
-# First it checks the app is built for -Arch (Inkwell.exe and the core), and what it needs from the
+# First it checks the app is built for x64 (Inkwell.exe and the core), and what it needs from the
 # PC it lands on (windows/scripts/lib/dll-imports.ps1): every DLL any of its binaries loads when it
 # loads is beside Inkwell.exe or part of Windows, so ONNX Runtime must be the app's own, never the
 # older onnxruntime.dll in Windows' System32; the Visual C++ runtime only as the copy beside
-# Inkwell.exe, built for -Arch (the engines' DLLs need it; build-core.ps1 put it with them; the core
+# Inkwell.exe, built for x64 (the engines' DLLs need it; build-core.ps1 put it with them; the core
 # links the CRT statically, and the .NET and Windows App SDK binaries use the UCRT, which is part of
 # Windows); and the Vulkan loader only where it may be missing (delay-loaded by the core, or behind
 # the core's delay-loaded diarizer). It prints the Visual C++ runtime's version.
 #
-# Then Velopack's vpk (the version windows/.config/dotnet-tools.json pins) packs it, each
-# architecture on its own update channel, so that an x64 install never updates to ARM64 packages
-# or the reverse:
-# - Inkwell_X.Y.Z_x64-setup.exe or Inkwell_X.Y.Z_arm64-setup.exe, the installer: per user (no
-#   administrator), into %LOCALAPPDATA%\InkwellApp, with a Start menu entry and an entry in
-#   Settings > Apps that uninstalls it. The library (%LOCALAPPDATA%\Inkwell) is not in that folder,
-#   so an uninstall leaves it. It refuses Windows older than 11 24H2 (10.0.26100), the app's floor.
-#   While it installs it shows a splash with Microsoft's end-user terms ($SplashTerms below).
-# - The update package and the feed the installed app reads from the release (VelopackUpdater.cs):
-#   on x64 InkwellApp-X.Y.Z-full.nupkg and releases.win.json (channel win), on ARM64
-#   InkwellApp-X.Y.Z-win-arm64-full.nupkg and releases.win-arm64.json (channel win-arm64). An
-#   installed app reads the feed of the channel it was installed from. The feed names the package
-#   with its size and SHA-256, which the app checks before installing it; this script checks the
-#   feed says the truth about the package it wrote.
-# - Inkwell_X.Y.Z_windows-x64-sha256.txt or ..._windows-arm64-sha256.txt: the three files'
-#   SHA-256s, in sha256sum's format, for people to check a download against (the homepage says how).
+# Then Velopack's vpk (the version windows/.config/dotnet-tools.json pins) packs it:
+# - Inkwell_X.Y.Z_x64-setup.exe, the installer: per user (no administrator), into
+#   %LOCALAPPDATA%\InkwellApp, with a Start menu entry and an entry in Settings > Apps that
+#   uninstalls it. The library (%LOCALAPPDATA%\Inkwell) is not in that folder, so an uninstall
+#   leaves it. It refuses Windows older than 11 24H2 (10.0.26100), the app's floor. While it
+#   installs it shows a splash with Microsoft's end-user terms ($SplashTerms below).
+# - InkwellApp-X.Y.Z-full.nupkg and releases.win.json: the update and the feed the installed app
+#   reads from the release (VelopackUpdater.cs). The feed names the package with its size and
+#   SHA-256, which the app checks before installing it; this script checks the feed says the
+#   truth about the package it wrote.
+# - Inkwell_X.Y.Z_windows-sha256.txt: the three files' SHA-256s, in sha256sum's format, for people
+#   to check a download against (the homepage says how).
 #
 # The package id, InkwellApp, names the install folder and the update chain: changing it later
-# makes a different app to Velopack (no update path from the old one), so it stays. So do the
-# channels: a new channel name would leave every install on the old one without updates.
+# makes a different app to Velopack (no update path from the old one), so it stays. So does the
+# channel, win: a new channel name would leave every install on the old one without updates.
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)] [ValidateSet('x64', 'arm64', IgnoreCase = $false)] [string]$Arch,
     [Parameter(Mandatory)] [string]$Version,
     [Parameter(Mandatory)] [string]$AppDir,
     [Parameter(Mandatory)] [string]$OutDir
@@ -45,12 +40,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $PackId = 'InkwellApp'
-# The Windows floor: 11 24H2 (Inkwell.csproj's TargetPlatformMinVersion), for this architecture.
-$Runtime = "win10.0.26100-$Arch"
-# Each architecture's update channel (above): x64 kept Velopack's default name for Windows.
-$Channel = if ($Arch -eq 'arm64') { 'win-arm64' } else { 'win' }
-# The PE machine each architecture's binaries are built for.
-$Machine = if ($Arch -eq 'arm64') { 0xAA64 } else { 0x8664 }
+# The Windows floor: 11 24H2 (Inkwell.csproj's TargetPlatformMinVersion), x64.
+$Runtime = 'win10.0.26100-x64'
+# The PE machine x64's binaries are built for.
+$Machine = 0x8664
 
 $windows = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/dll-imports.ps1')
@@ -113,26 +106,20 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 if (@(Get-ChildItem $OutDir -Force).Count -gt 0) { Fail "$OutDir is not empty" }
 
-# The app is built for this architecture: an x64 Inkwell.exe or core in the ARM64 package would reach
-# ARM64 installs through their channel and run there only under emulation (the reverse not at all).
+# The app is built for x64: the release's one architecture.
 foreach ($file in 'Inkwell.exe', 'ink_ffi.dll') {
-    $bytes = [System.IO.File]::ReadAllBytes((Join-Path $AppDir $file))
-    $found = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
-    if ($found -ne $Machine) { Fail ("{0} is machine 0x{1:X4}, not {2} (0x{3:X4})" -f $file, $found, $Arch, $Machine) }
+    $found = Get-PeMachine (Join-Path $AppDir $file)
+    if ($found -ne $Machine) { Fail ("{0} is machine {1}, not x64 (0x{2:X4})" -f $file, $(if ($null -eq $found) { '(unread)' } else { '0x{0:X4}' -f $found }), $Machine) }
 }
 
-# Visual Studio's dumpbin: on PATH in a developer environment, else this machine's own host tools
-# (any dumpbin reads every architecture's binaries).
+# Visual Studio's dumpbin, found as build-core.ps1 finds the developer environment.
 $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue)?.Source
 if (-not $dumpbin) {
-    $hostTools = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'Hostarm64\arm64' } else { 'Hostx64\x64' }
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    $vs = & $vswhere -latest -products * -property installationPath
-    if ($vs) {
-        $dumpbin = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Recurse -Filter dumpbin.exe |
-            Where-Object { $_.FullName -like "*\bin\$hostTools\dumpbin.exe" } | Select-Object -First 1 -ExpandProperty FullName
-    }
-    if (-not $dumpbin) { Fail "no dumpbin.exe (Visual Studio's C++ build tools, bin\$hostTools)" }
+    $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    $dumpbin = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Recurse -Filter dumpbin.exe |
+        Where-Object { $_.FullName -match '\\bin\\Hostx64\\x64\\' } | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $dumpbin) { Fail 'no dumpbin.exe (Visual Studio C++ build tools)' }
 }
 
 # What every binary loads, against what is beside Inkwell.exe and what Windows has
@@ -154,7 +141,7 @@ if ($problems.Count -gt 0) {
 }
 # (Not $runtime: PowerShell's names ignore case, and $Runtime is vpk's.)
 $vcRuntime = Get-VcRuntimeVersion $AppDir
-Write-Output "pack: $($binaries.Count) binaries for $Arch; everything they load is beside Inkwell.exe or part of Windows"
+Write-Output "pack: $($binaries.Count) binaries for x64; everything they load is beside Inkwell.exe or part of Windows"
 Write-Output "pack: the Visual C++ runtime $($vcRuntime.Version) beside Inkwell.exe: $($vcRuntime.Files -join ', ')"
 
 # vpk, as pinned. --skip-updates: it would otherwise ask NuGet for a newer vpk.
@@ -171,42 +158,40 @@ try {
         --packId $PackId --packVersion $Version --packDir $AppDir --mainExe Inkwell.exe `
         --packTitle Inkwell --packAuthors Inkwell --icon (Join-Path $windows 'Inkwell\Assets\Inkwell.ico') `
         --splashImage $splash `
-        --runtime $Runtime --channel $Channel --shortcuts StartMenuRoot --noPortable --delta None `
+        --runtime $Runtime --channel win --shortcuts StartMenuRoot --noPortable --delta None `
         --outputDir $work
     if ($LASTEXITCODE -ne 0) { Fail "vpk pack failed ($LASTEXITCODE)" }
 } finally {
     Pop-Location
 }
 
-# What vpk wrote, and the feed checked against it. vpk 1.2.161 names a package of Windows' default
-# channel (win) without the channel, and one of any other channel with it.
-$setupFrom = Join-Path $work "$PackId-$Channel-Setup.exe"
-$package = Join-Path $work $(if ($Channel -eq 'win') { "$PackId-$Version-full.nupkg" } else { "$PackId-$Version-$Channel-full.nupkg" })
-$feedName = "releases.$Channel.json"
-$feedPath = Join-Path $work $feedName
+# What vpk wrote, and the feed checked against it.
+$setupFrom = Join-Path $work "$PackId-win-Setup.exe"
+$package = Join-Path $work "$PackId-$Version-full.nupkg"
+$feedPath = Join-Path $work 'releases.win.json'
 foreach ($file in $setupFrom, $package, $feedPath) {
     if (-not (Test-Path $file)) { Fail "vpk did not write $(Split-Path -Leaf $file) (it wrote: $((Get-ChildItem $work).Name -join ', '))" }
 }
 $feed = Get-Content $feedPath -Raw | ConvertFrom-Json
 $assets = @($feed.Assets)
-if ($assets.Count -ne 1) { Fail "$feedName lists $($assets.Count) packages, not the one full package" }
+if ($assets.Count -ne 1) { Fail "releases.win.json lists $($assets.Count) packages, not the one full package" }
 $asset = $assets[0]
 $packageHash = (Get-FileHash -Algorithm SHA256 $package).Hash
 $packageSize = (Get-Item $package).Length
 if ($asset.PackageId -ne $PackId -or $asset.Version -ne $Version -or $asset.Type -ne 'Full' -or $asset.FileName -ne (Split-Path -Leaf $package)) {
-    Fail "$feedName names $($asset.PackageId) $($asset.Version) $($asset.Type) $($asset.FileName), not $PackId $Version Full $(Split-Path -Leaf $package)"
+    Fail "releases.win.json names $($asset.PackageId) $($asset.Version) $($asset.Type) $($asset.FileName), not $PackId $Version Full $(Split-Path -Leaf $package)"
 }
 if ([string]::IsNullOrEmpty($asset.SHA256) -or $asset.SHA256 -ine $packageHash -or [long]$asset.Size -ne $packageSize) {
-    Fail "$feedName's size or SHA-256 for the package is not the package's"
+    Fail "releases.win.json's size or SHA-256 for the package is not the package's"
 }
 
 # The release's files, under the names the release carries.
-$setup = Join-Path $OutDir "Inkwell_${Version}_${Arch}-setup.exe"
+$setup = Join-Path $OutDir "Inkwell_${Version}_x64-setup.exe"
 Move-Item $setupFrom $setup
 Move-Item $package $OutDir
 Move-Item $feedPath $OutDir
 Remove-Item -Recurse -Force $work, $splashDir
-$sums = Join-Path $OutDir "Inkwell_${Version}_windows-${Arch}-sha256.txt"
+$sums = Join-Path $OutDir "Inkwell_${Version}_windows-sha256.txt"
 $lines = foreach ($file in Get-ChildItem $OutDir -File | Sort-Object Name) {
     '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant(), $file.Name
 }

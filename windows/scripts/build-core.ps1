@@ -7,10 +7,10 @@
 # Inkwell.csproj puts every DLL in it beside Inkwell.exe).
 #
 # The engines, by architecture ($ReleaseFeatures below):
-# - x64: Qwen3-ASR on llama.cpp with Vulkan (the CPU where the PC has no Vulkan GPU), Silero VAD,
-#   Parakeet on sherpa-onnx, and the NeMo-Speech.cpp diarizer.
-# - ARM64: Qwen3-ASR on llama.cpp on the CPU, Silero VAD and Parakeet on sherpa-onnx; no Vulkan, and
-#   for now no diarizer (the switch below).
+# - x64, the release: Qwen3-ASR on llama.cpp with Vulkan (the CPU where the PC has no Vulkan GPU),
+#   Silero VAD, Parakeet on sherpa-onnx, and the NeMo-Speech.cpp diarizer.
+# - ARM64, not released (1.0 ships x64 alone; docs/RELEASING.md): Qwen3-ASR on llama.cpp on the
+#   CPU, Silero VAD and Parakeet on sherpa-onnx; no Vulkan, and no diarizer.
 #
 # Then it checks what they need from the PC they land on:
 # - No C runtime for the core: its CRT is linked in statically (crt-static for Rust,
@@ -58,13 +58,10 @@ $ErrorActionPreference = 'Stop'
 # win-release-build.yml builds the diarizer's prefix for an architecture whose line names it.
 $ReleaseFeatures = @{
     X64 = 'engine-llama,ink-engines/engine-llama-vulkan,ink-engines/engine-silero,ink-engines/engine-sherpa,ink-engines/engine-nemo'
-    # THE ARM64 DIARIZER SWITCH. ARM64 ships without the NeMo-Speech.cpp diarizer until the
-    # maintainer chooses how it is built there: for the CPU alone, or on Vulkan with the Vulkan SDK
-    # for ARM64 (build-nemo-speech.sh builds upstream's Vulkan preset, and needs that SDK). To ship
-    # it, add ink-engines/engine-nemo to this line; then win-release-build.yml builds the prefix on
-    # ARM64 too, which needs that choice made there first (a pinned ARM64 Vulkan SDK step, or a
-    # CPU-only preset in build-nemo-speech.sh); ink-notices' WINDOWS_ARM64_RELEASE_FEATURES must
-    # match (its test fails until it does); and docs/RELEASING.md says what ARM64 ships.
+    # ARM64 is not released in 1.0 (docs/RELEASING.md): this is what an ARM64 PC builds, without
+    # the diarizer (build-nemo-speech.sh builds upstream's Vulkan preset, and there is no ARM64
+    # Vulkan SDK step). ink-notices' WINDOWS_ARM64_RELEASE_FEATURES must match (its test fails
+    # until it does).
     Arm64 = 'engine-llama,ink-engines/engine-silero,ink-engines/engine-sherpa'
 }
 # What the DLL may import from the Vulkan loader. vkGetInstanceProcAddr is ggml's first Vulkan call,
