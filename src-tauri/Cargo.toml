@@ -28,6 +28,10 @@ tauri-plugin-global-shortcut = "2.3.1"
 hound = "3.5.1"
 rubato = "0.16"
 sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["static"] }
+# Named directly as well, so that a bump of sherpa-onnx to a release needing
+# another sherpa-onnx-sys fails to resolve (both declare links = "sherpa-onnx")
+# instead of quietly dropping the vendored copy below.
+sherpa-onnx-sys = { path = "vendor/sherpa-onnx-sys", default-features = false, features = ["static"] }
 arboard = "3"
 enigo = "0.6"
 rusqlite = { version = "0.40", features = ["bundled"] }

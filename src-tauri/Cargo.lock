@@ -109,6 +109,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sherpa-onnx",
+ "sherpa-onnx-sys",
  "symphonia",
  "tauri",
  "tauri-build",

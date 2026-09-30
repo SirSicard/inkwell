@@ -36,6 +36,10 @@ const SHERPA_ONNX_STATIC_LIBS: &[&str] = &[
 // one GitHub lists for the asset on sherpa-onnx's v1.13.4 release, and matched
 // the hash of the downloaded file. An archive not listed here is refused
 // before anything is downloaded.
+/// Written into an unpacked tree after its archive was checked and unpacked;
+/// holds the archive's pin.
+const VERIFIED_MARKER: &str = ".sha256-verified";
+
 const PINNED_ARCHIVE_SHA256: &[(&str, &str)] = &[
     (
         "sherpa-onnx-v1.13.4-linux-x64-static-no-tts-lib.tar.bz2",
@@ -125,16 +129,10 @@ fn resolve_lib_dir(
     target_os: &str,
     target_arch: &str,
 ) -> Result<PathBuf, DynError> {
-    if let Some(path) = env::var_os("SHERPA_ONNX_LIB_DIR") {
-        let path = PathBuf::from(path);
-        if !path.is_dir() {
-            return Err(format!(
-                "SHERPA_ONNX_LIB_DIR does not exist or is not a directory: {}",
-                path.display()
-            )
-            .into());
-        }
-        return Ok(path);
+    // Refused in this vendored copy: a directory named here would be linked
+    // with nothing checking what it holds (see NOTICE).
+    if env::var_os("SHERPA_ONNX_LIB_DIR").is_some() {
+        return Err("SHERPA_ONNX_LIB_DIR is refused by Inkwell's vendored sherpa-onnx-sys: it would link libraries nothing has checked. Unset it; the pinned archive is downloaded and checked instead.".into());
     }
 
     download_prebuilt_libs(link_mode, target_os, target_arch)
@@ -154,7 +152,12 @@ fn download_prebuilt_libs(
     let extracted_dir = cache_root.join(archive_stem);
     let lib_dir = extracted_dir.join("lib");
 
-    if lib_dir.is_dir() {
+    // An unpacked tree is used again only if it carries the marker a checked
+    // unpack writes last, holding this archive's pin. Anything else (an
+    // interrupted unpack, a failed clean-up, a directory put there by hand) is
+    // unpacked again below, from a checked archive.
+    let marker = extracted_dir.join(VERIFIED_MARKER);
+    if lib_dir.is_dir() && fs::read_to_string(&marker).is_ok_and(|m| m == expected_sha256) {
         return Ok(lib_dir);
     }
 
@@ -235,6 +238,8 @@ fn download_prebuilt_libs(
         )
         .into());
     }
+
+    fs::write(&marker, expected_sha256)?;
 
     eprintln!("Downloaded sherpa-onnx libs to {}", extracted_dir.display());
 

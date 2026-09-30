@@ -21,7 +21,14 @@ Changed for Inkwell 0.2 on 2026-09-30, in build.rs and Cargo.toml only:
 - As a result, static Linux aarch64 is not supported (v1.13.4 publishes no
   no-TTS archive for it) and shared builds fail (no shared archive is
   pinned). Inkwell 0.2 builds neither.
+- An unpacked tree left by an earlier build is used again only if it
+  carries the marker a checked unpack writes last (.sha256-verified, holding
+  the pin); otherwise it is unpacked again from a checked archive. Why: an
+  interrupted unpack or a directory from elsewhere would otherwise be linked
+  unchecked.
+- SHERPA_ONNX_LIB_DIR is refused. Why: it links a directory nothing checks.
 - Cargo.toml adds sha2 as a build dependency, for that check.
 
-Every other file is as published. Cargo.toml.orig and Cargo.lock are
-upstream's and play no part in this build.
+Every other file is as published, except upstream's Cargo.lock, which was
+removed: a path dependency never uses it. Cargo.toml.orig is upstream's and
+plays no part in this build.
