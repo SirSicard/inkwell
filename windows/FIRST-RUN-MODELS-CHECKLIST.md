@@ -41,7 +41,8 @@ set INK_DATA_DIR=%TEMP%\inkwell-first-run
 
 ## B. Download
 
-- [ ] **Download**: the first model reads "Starting the download…", then a bar with "… of …";
+- [ ] **Download**: one model at a time, smallest first (Silero VAD before Qwen3-ASR): it reads
+      "Starting the download…", then a bar with "… of …";
       the others read "Waiting for the download before it". The button and its line go, and "You
       can go on: …" shows.
 - [ ] **Continue** goes on while it downloads; finish the first run. Settings > Models shows the

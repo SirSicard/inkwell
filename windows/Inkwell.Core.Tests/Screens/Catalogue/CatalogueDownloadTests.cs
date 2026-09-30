@@ -65,7 +65,8 @@ public class CatalogueDownloadTests
         var sent = new Sent();
         var catalogue = new CatalogueModel(sent.Send);
         catalogue.Apply(Listed());
-        catalogue.DownloadMissing();
+        catalogue.Download(Qwen);
+        catalogue.Download(Silero);
         Assert.Equal([Qwen], Updates(sent)); // Silero waits for Qwen
         Assert.Equal("Starting the download…", Row(catalogue, Qwen).Status(Invariant));
         Assert.Equal((double?)0, Row(catalogue, Qwen).Progress);
@@ -101,6 +102,34 @@ public class CatalogueDownloadTests
         Assert.Equal([Qwen, Silero], Updates(sent));
         Assert.False(catalogue.Downloading);
         Assert.Equal(2, catalogue.Requeries); // once after each
+    }
+
+    /// <summary>
+    /// The first run's Download fetches the smallest first, as the Mac's does: voice detection,
+    /// the diarizer and Parakeet (live words, and dictation on a PC without a GPU) are in long
+    /// before Qwen3-ASR's gigabytes. The catalogue, and its rows, keep the registry's order.
+    /// </summary>
+    [Fact]
+    public void TheFirstRunsDownloadFetchesTheSmallestFirst()
+    {
+        const string Parakeet = "parakeet-tdt-0.6b-v3-int8";
+        var sent = new Sent();
+        var catalogue = new CatalogueModel(sent.Send);
+        catalogue.Apply(Ev.Of($$"""
+            {"type":"models.listed","models":[
+              {"id":"{{Qwen}}","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[{"job":"meeting_final","wer":16.08},{"job":"dictation_final","wer":4.59}]},
+              {"id":"{{Nemotron}}","licence":"OpenMDW-1.1","size_bytes":107012128,"installed":false,"jobs":[{"job":"diarization","wer":20.2}]},
+              {"id":"{{Silero}}","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[{"job":"voice_activity","wer":1.5}]},
+              {"id":"{{Parakeet}}","licence":"CC-BY-4.0","size_bytes":670478772,"installed":false,"jobs":[{"job":"live_partials","wer":27.93},{"job":"dictation_final","wer":16.36}]}]}
+            """));
+        catalogue.DownloadMissing();
+        Assert.Equal([Silero], Updates(sent));
+        foreach (var id in new[] { Silero, Nemotron, Parakeet })
+        {
+            catalogue.Apply(Finished(id, ok: true));
+        }
+        Assert.Equal([Silero, Nemotron, Parakeet, Qwen], Updates(sent));
+        Assert.Equal([Qwen, Nemotron, Silero, Parakeet], catalogue.Rows.Select(r => r.Id));
     }
 
     /// <summary>
@@ -144,7 +173,8 @@ public class CatalogueDownloadTests
         var sent = new Sent();
         var catalogue = new CatalogueModel(sent.Send);
         catalogue.Apply(Listed());
-        catalogue.DownloadMissing();
+        catalogue.Download(Qwen);
+        catalogue.Download(Silero);
         catalogue.Apply(Progress(Qwen, 1_000_000, 2_500_000_000));
         catalogue.Apply(Finished(Qwen, ok: false, "the new model could not be installed: downloading Qwen3-ASR-1.7B-Q8_0.gguf: connection reset"));
         var qwen = Row(catalogue, Qwen);
@@ -171,7 +201,8 @@ public class CatalogueDownloadTests
         var sent = new Sent();
         var catalogue = new CatalogueModel(sent.Send);
         catalogue.Apply(Listed());
-        catalogue.DownloadMissing();
+        catalogue.Download(Qwen);
+        catalogue.Download(Silero);
         var other = Ev.Of<CommandFailed>("""{"type":"command.failed","command":"model.update","id":"model.update:another-model","message":"x"}""");
         catalogue.Apply(other);
         Assert.IsType<ModelDownload.Running>(Row(catalogue, Qwen).Download); // another model's failure is not this one's
@@ -218,7 +249,8 @@ public class CatalogueDownloadTests
         var sent = new Sent();
         var catalogue = new CatalogueModel(sent.Send);
         catalogue.Apply(Listed());
-        catalogue.DownloadMissing();
+        catalogue.Download(Qwen);
+        catalogue.Download(Silero);
         catalogue.Apply(Ev.Of("""{"type":"core.stopped"}"""));
         Assert.False(catalogue.Downloading);
         Assert.Equal("Couldn't download Qwen3-ASR 1.7B: the core stopped", Row(catalogue, Qwen).Status(Invariant));

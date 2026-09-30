@@ -201,7 +201,7 @@ public class OnboardingModelTests
         onboarding.Next();
         onboarding.Next();
         catalogue.DownloadMissing(); // the step's Download
-        Assert.Equal(["qwen3-asr-1.7b-q8"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
+        Assert.Equal(["silero-vad-v6-16k"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next)); // the smallest first
         Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture)); // nothing left to ask for: the button goes
         Assert.True(catalogue.Downloading); // "You can go on…" shows
         onboarding.Next();
@@ -210,16 +210,16 @@ public class OnboardingModelTests
         onboarding.Next();
         Assert.False(onboarding.Showing);
         screens.Apply([
-            CatalogueDownloadTests.Progress("qwen3-asr-1.7b-q8", 2_500_000_000, 2_500_000_000),
-            CatalogueDownloadTests.Finished("qwen3-asr-1.7b-q8", ok: true),
-            CatalogueDownloadTests.Listed(qwenInstalled: true),
+            CatalogueDownloadTests.Progress("silero-vad-v6-16k", 1_289_603, 1_289_603),
+            CatalogueDownloadTests.Finished("silero-vad-v6-16k", ok: true),
+            CatalogueDownloadTests.Listed(sileroInstalled: true),
         ]);
         // The next one went after the sheet had gone.
-        Assert.Equal(["qwen3-asr-1.7b-q8", "silero-vad-v6-16k"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
+        Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
         // A model installed this run stays on the step, as installed.
         Assert.Equal(["qwen3-asr-1.7b-q8", "silero-vad-v6-16k"], OnboardingModel.ModelRows(catalogue).Select(r => r.Id));
         Assert.Contains("These are not on it yet", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
-        screens.Apply([CatalogueDownloadTests.Finished("silero-vad-v6-16k", ok: true)]);
+        screens.Apply([CatalogueDownloadTests.Finished("qwen3-asr-1.7b-q8", ok: true)]);
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
         Assert.False(catalogue.Downloading);
     }

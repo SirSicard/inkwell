@@ -176,11 +176,15 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         }
     }
 
-    /// <summary>Downloads every model not installed and not asked for yet, in the catalogue's order (the first run's Download).</summary>
+    /// <summary>
+    /// Downloads every model not installed and not asked for yet, smallest first (the first run's
+    /// Download), as the Mac's does: voice detection and Parakeet (live words, and dictation on a
+    /// PC without a GPU) are in long before Qwen3-ASR's gigabytes.
+    /// </summary>
     public void DownloadMissing()
     {
         var asked = false;
-        foreach (var entry in NotAskedFor)
+        foreach (var entry in NotAskedFor.OrderBy(m => m.SizeBytes))
         {
             asked |= Ask(entry.Id);
         }
