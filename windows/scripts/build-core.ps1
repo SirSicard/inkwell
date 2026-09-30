@@ -113,6 +113,11 @@ if ($arch -eq 'Arm64') {
     if (-not (Get-Command clang-cl.exe -ErrorAction SilentlyContinue)) { $env:Path = "$llvm;$env:Path" }
     $env:CMAKE_C_COMPILER = 'clang-cl'
     $env:CMAKE_CXX_COMPILER = 'clang-cl'
+    # C++ exceptions: cmake-rs gives CMake cc's flags as CMAKE_CXX_FLAGS, which replace CMake's own
+    # /EHsc, and clang-cl without it refuses ggml's try and throw ("cannot use 'try' with
+    # exceptions disabled"; cl only warns). cc adds CXXFLAGS to those flags. (Like a CMAKE_*
+    # variable, a change here needs `cargo clean --release -p llama-cpp-sys-2` locally.)
+    $env:CXXFLAGS = '/EHsc'
     $tools += 'clang-cl.exe'
 }
 foreach ($tool in $tools) {

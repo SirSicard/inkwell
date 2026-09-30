@@ -112,11 +112,14 @@ jobs:
           INK_NEMO_CHECK_ONLY: "1"
       # llama.cpp on the CPU: ggml built by clang-cl with Ninja (CMAKE_* reach llama.cpp's CMake).
       # No Vulkan: the runner image lists no Vulkan SDK. Its non-ignored tests need no model.
+      # CXXFLAGS: C++ exceptions, which clang-cl needs for ggml's try and throw and cmake-rs's
+      # CMAKE_CXX_FLAGS leave out (build-core.ps1 says more).
       - name: llama.cpp (clang-cl, CPU)
         env:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER: clang-cl
           CMAKE_CXX_COMPILER: clang-cl
+          CXXFLAGS: /EHsc
         run: |
           cargo clippy -p ink-engines --all-targets --locked --features engine-llama -- -D warnings
           cargo test -p ink-engines --locked --features engine-llama
