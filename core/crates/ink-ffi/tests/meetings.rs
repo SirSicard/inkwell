@@ -7,7 +7,7 @@ mod common;
 
 use std::ffi::{CString, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,7 +29,8 @@ use serde_json::Value;
 const WAIT: Duration = Duration::from_secs(30);
 
 /// A "device" capture: each meeting replays the same two files in real time, as a mic and a tap
-/// would deliver. It records which app each meeting was opened for.
+/// would deliver. It records which app each meeting was opened for, and counts the frames each
+/// side of the latest meeting has handed to capture.
 struct ReplayCapture {
     mic: PathBuf,
     far: PathBuf,
@@ -37,6 +38,69 @@ struct ReplayCapture {
     opened_for: Mutex<Vec<Option<String>>>,
     /// An app's own sound cannot be tapped: everything this "Mac" plays is recorded instead.
     tap_fails: std::sync::atomic::AtomicBool,
+    /// Frames delivered to capture by the latest meeting's mic and far end.
+    delivered: [Arc<AtomicU64>; 2],
+}
+
+impl ReplayCapture {
+    /// Waits until each side of the latest meeting has delivered `frames`, for up to `timeout`.
+    /// Capture starts once the meeting's start is on disk, not at `meeting.started`.
+    fn wait_delivered(&self, frames: u64, timeout: Duration) -> bool {
+        let until = std::time::Instant::now() + timeout;
+        while self
+            .delivered
+            .iter()
+            .any(|d| d.load(std::sync::atomic::Ordering::Acquire) < frames)
+        {
+            if std::time::Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+}
+
+/// A replay that counts the frames it has pushed into capture's ring.
+struct Counted {
+    source: FileReplaySource,
+    frames: Arc<AtomicU64>,
+}
+
+/// The ring's sink, counting each block after the ring has it. Only an atomic add on the
+/// realtime thread.
+struct CountingSink {
+    sink: Box<dyn ink_core::AudioSink>,
+    frames: Arc<AtomicU64>,
+}
+
+impl ink_core::AudioSink for CountingSink {
+    fn push(&mut self, block: &ink_core::AudioBlock<'_>) {
+        self.sink.push(block);
+        self.frames
+            .fetch_add(block.frames() as u64, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl ink_core::AudioSource for Counted {
+    fn channel(&self) -> Channel {
+        self.source.channel()
+    }
+
+    fn format(&self) -> ink_core::StreamFormat {
+        self.source.format()
+    }
+
+    fn start(&mut self, sink: Box<dyn ink_core::AudioSink>) -> Result<(), PlatformError> {
+        self.source.start(Box::new(CountingSink {
+            sink,
+            frames: self.frames.clone(),
+        }))
+    }
+
+    fn stop(&mut self) -> Result<ink_core::SourceStats, PlatformError> {
+        self.source.stop()
+    }
 }
 
 impl MeetingCapture for ReplayCapture {
@@ -49,8 +113,10 @@ impl MeetingCapture for ReplayCapture {
             let source = FileReplaySource::open(path, channel, self.clock.clone())
                 .map_err(|e| e.to_string())?
                 .with_pacing(Pacing::RealTime);
+            let frames = self.delivered[usize::from(channel == Channel::Far)].clone();
+            frames.store(0, std::sync::atomic::Ordering::Release);
             Ok(CaptureSide {
-                source: Box::new(source),
+                source: Box::new(Counted { source, frames }),
                 ring: DEFAULT_RING_DURATION,
                 start_at: None,
             })
@@ -143,6 +209,7 @@ fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Sto
         clock: clock.clone(),
         opened_for: Mutex::default(),
         tap_fails: Default::default(),
+        delivered: Default::default(),
     });
     let detector = Arc::new(FakeDetector::default());
     let parts = Parts {
@@ -239,7 +306,13 @@ fn a_meeting_from_the_devices_starts_named_and_stops_by_hand_into_its_final_pass
             .contains("already running")
     );
 
-    std::thread::sleep(Duration::from_millis(1_500));
+    // Stopped by hand once each side has delivered a second (the files are 16 kHz). Capture
+    // starts once the worker has the meeting's start on disk (its timeline and crash marker, both
+    // synced), not at `meeting.started`: on a slow CI runner that came a second after the event.
+    assert!(
+        r.capture.wait_delivered(16_000, WAIT),
+        "each side delivered a second"
+    );
     r.core
         .command(r#"{"cmd":"meeting.stop","id":"x1"}"#)
         .unwrap();
@@ -255,8 +328,9 @@ fn a_meeting_from_the_devices_starts_named_and_stops_by_hand_into_its_final_pass
         .collect();
     assert_eq!(passes.len(), 2);
     for p in &passes {
+        // Every frame delivered before the stop is on disk, and nothing near the files' 30 s.
         let ms = p["pass"]["captured_ms"].as_u64().unwrap();
-        assert!(ms > 500 && ms < 10_000, "{p}");
+        assert!((1_000..10_000).contains(&ms), "{p}");
     }
     // Nothing to stop now.
     r.core
