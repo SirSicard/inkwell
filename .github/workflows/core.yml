@@ -71,6 +71,10 @@ jobs:
       - run: cargo clippy -p ink-engines --all-targets --locked --features engine-nemo -- -D warnings
         env:
           INK_NEMO_CHECK_ONLY: "1"
+      # sherpa-onnx (engine-sherpa) links prebuilt Windows libraries CI does not have: the same.
+      - run: cargo clippy -p ink-engines --all-targets --locked --features engine-sherpa -- -D warnings
+        env:
+          INK_SHERPA_CHECK_ONLY: "1"
       # llama.cpp (engine-llama) compiles llama.cpp and its ggml with cmake, so it runs on macOS
       # only, where the app uses it. Its non-ignored tests need no model: they include ggml_link.rs,
       # which checks the two ggml copies stay apart in the linked binary. Adds roughly 1-2 minutes

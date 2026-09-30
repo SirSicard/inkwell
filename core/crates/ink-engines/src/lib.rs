@@ -16,10 +16,17 @@
 //! Everything here runs on worker threads, is `Send + Sync`, and holds no lock across a load, a
 //! download or an engine call.
 
-// No unsafe code, except the NeMo-Speech.cpp FFI (`engine-nemo`), which allows it for its own
-// module; every block there carries a SAFETY comment (clippy enforces it).
-#![cfg_attr(not(feature = "engine-nemo"), forbid(unsafe_code))]
-#![cfg_attr(feature = "engine-nemo", deny(unsafe_code))]
+// No unsafe code, except the NeMo-Speech.cpp and sherpa-onnx FFIs (`engine-nemo`,
+// `engine-sherpa`), which allow it for their own modules; every block there carries a SAFETY
+// comment (clippy enforces it).
+#![cfg_attr(
+    not(any(feature = "engine-nemo", feature = "engine-sherpa")),
+    forbid(unsafe_code)
+)]
+#![cfg_attr(
+    any(feature = "engine-nemo", feature = "engine-sherpa"),
+    deny(unsafe_code)
+)]
 #![warn(missing_docs)]
 
 mod adapters;
@@ -37,6 +44,9 @@ mod registry;
 mod residency;
 mod router;
 mod rows;
+#[cfg(feature = "engine-sherpa")]
+#[allow(unsafe_code)]
+pub mod sherpa;
 #[cfg(feature = "engine-silero")]
 mod silero;
 
