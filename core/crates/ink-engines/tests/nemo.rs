@@ -9,8 +9,15 @@
 //!
 //! ```text
 //! NEMO_SPEECH_DIR=<prefix> INK_BENCH_DIR=<bench> INK_DIAR_SET=<set> \
-//!     cargo test -p ink-engines --features engine-nemo --release -- --ignored --test-threads 1
+//!     cargo test -p ink-engines --features engine-nemo --release -- --ignored --test-threads 1 \
+//!     --skip two_diarizers_load_and_run_at_once
+//! NEMO_SPEECH_DIR=<prefix> INK_BENCH_DIR=<bench> INK_DIAR_SET=<set> \
+//!     cargo test -p ink-engines --features engine-nemo --release --test nemo -- --ignored \
+//!     --exact two_diarizers_load_and_run_at_once
 //! ```
+//!
+//! The second runs that test in a process of its own: it proves something only as the process's
+//! first load on the GPU, so after the others it would pass without testing anything.
 //!
 //! The model runs on GPU 0 (Metal on the Mac, Vulkan on Windows); `INK_NEMO_DEVICE=cpu` runs the
 //! same tests on the CPU.
