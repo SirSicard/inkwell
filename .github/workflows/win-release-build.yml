@@ -197,10 +197,13 @@ jobs:
           commit="$(sed -n 's/^NEMO_COMMIT=//p' core/crates/ink-engines/native/build-nemo-speech.sh)"
           src="$(cygpath -u "$RUNNER_TEMP")/nemo-speech-src"
           git init -q "$src"
+          # As committed, without the runner's CRLF conversion: build.rs pins the headers' SHA-256
+          # (diar.h converted to CRLF failed that pin, dry run 36769949392).
+          git -C "$src" config core.autocrlf false
           git -C "$src" remote add origin https://github.com/NVIDIA/NeMo-Speech.cpp.git
           git -C "$src" fetch -q --depth 1 origin "$commit"
           git -C "$src" checkout -q --detach FETCH_HEAD
-          git -C "$src" submodule update -q --init --depth 1 ggml
+          git -C "$src" -c core.autocrlf=false submodule update -q --init --depth 1 ggml
           echo "NeMo-Speech.cpp $(git -C "$src" rev-parse HEAD), ggml $(git -C "$src/ggml" rev-parse HEAD)"
 
       # Upstream's Vulkan preset with GGML_NATIVE=OFF, against the pinned SentencePiece and Abseil
