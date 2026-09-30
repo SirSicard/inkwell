@@ -123,6 +123,9 @@ public sealed class ScreenModels
         Onboarding.Load();
         Polish.Load();
         Meetings.Load();
+        // Meetings a crash interrupted are finished now (the Mac waits for its own engines first;
+        // this shell registers none).
+        Meetings.Recover();
         Permissions.Refresh();
         Catalogue.Requery();
         // Reads the switch, then (unless it is off) the core holds the keys.

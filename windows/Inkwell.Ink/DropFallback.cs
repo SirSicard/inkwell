@@ -3,7 +3,8 @@
 // shader, this plain window takes its place: the paper panel, a still ink dot and the state's two
 // lines, painted with GDI into an ordinary redirected window, so it depends on neither Direct3D nor
 // DirectComposition. It keeps the Drop's rules: WS_EX_NOACTIVATE | WS_EX_TOPMOST |
-// WS_EX_TOOLWINDOW, MA_NOACTIVATE, shown only with SWP_NOACTIVATE.
+// WS_EX_TOOLWINDOW, MA_NOACTIVATE, shown only with SWP_NOACTIVATE. An offer's buttons are drawn
+// and answer clicks here too, where the Drop's own layout puts them (DropLayout).
 using System.Runtime.InteropServices;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -23,6 +24,11 @@ internal sealed unsafe class DropFallback : IDisposable
     private HWND hwnd;
     private DropText text = new("", "");
     private double scale = 1;
+    /// <summary>The button a press went down on, until it comes up.</summary>
+    private int? pressed;
+
+    /// <summary>A button of the text shown was clicked (its index). UI thread.</summary>
+    public event Action<int>? ButtonClicked;
 
     /// <summary>Whether it is on screen.</summary>
     public bool IsShown { get; private set; }
@@ -70,6 +76,10 @@ internal sealed unsafe class DropFallback : IDisposable
     /// <summary>Shows <paramref name="lines"/> over <paramref name="bounds"/> (the Drop's rectangle, in pixels) at <paramref name="dpiScale"/>.</summary>
     public void Show(RECT bounds, DropText lines, double dpiScale)
     {
+        if (lines != text)
+        {
+            pressed = null;
+        }
         text = lines;
         scale = dpiScale;
         int w = bounds.right - bounds.left, h = bounds.bottom - bounds.top;
@@ -139,7 +149,8 @@ internal sealed unsafe class DropFallback : IDisposable
         var detailFont = Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
         var left = S(DropLayout.TextLeft);
         var right = client.right - S(DropLayout.TextRight);
-        var mid = (client.bottom - client.top) / 2;
+        // Centred on the panel, or on the part above the buttons when there are some.
+        var mid = text.Buttons is null ? (client.bottom - client.top) / 2 : S(DropLayout.Button(0).Top - 4) / 2;
         var titleRect = new RECT { left = left, top = mid - S(20), right = right, bottom = mid - S(1) };
         var detailRect = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(22) };
         var oldFont = SelectObject(dc, (HGDIOBJ)titleFont.Value);
@@ -154,6 +165,34 @@ internal sealed unsafe class DropFallback : IDisposable
         {
             _ = DrawTextW(dc, d, text.Detail.Length, &detailRect, DT.DT_LEFT | DT.DT_TOP | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
         }
+        if (text.Buttons is { } buttons)
+        {
+            // The first in ink with paper words (the answer), the second outlined in ink.
+            var buttonFont = Font(S(DropLayout.ButtonTextSize), FW.FW_MEDIUM);
+            SelectObject(dc, (HGDIOBJ)buttonFont.Value);
+            var inkPen = CreatePen(PS.PS_SOLID, Math.Max(1, S(1)), Colour(Palette.Ink));
+            var inkFill = CreateSolidBrush(Colour(Palette.Ink));
+            var penBefore = SelectObject(dc, (HGDIOBJ)inkPen.Value);
+            for (var i = 0; i < buttons.Count; i++)
+            {
+                var (bl, bt, br, bb) = DropLayout.Button(i);
+                var rect = new RECT { left = S(bl), top = S(bt), right = S(br), bottom = S(bb) };
+                var fillBefore = SelectObject(dc, i == 0 ? (HGDIOBJ)inkFill.Value : GetStockObject(NullBrush));
+                RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, S(12), S(12));
+                SelectObject(dc, fillBefore);
+                SetTextColor(dc, Colour(i == 0 ? Palette.Paper : Palette.Ink));
+                var words = buttons[i];
+                fixed (char* w = words)
+                {
+                    _ = DrawTextW(dc, w, words.Length, &rect, DT.DT_CENTER | DT.DT_VCENTER | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
+                }
+            }
+            SelectObject(dc, penBefore);
+            DeleteObject((HGDIOBJ)inkPen.Value);
+            DeleteObject((HGDIOBJ)inkFill.Value);
+            SelectObject(dc, oldFont);
+            DeleteObject((HGDIOBJ)buttonFont.Value);
+        }
         SelectObject(dc, oldFont);
         DeleteObject((HGDIOBJ)titleFont.Value);
         DeleteObject((HGDIOBJ)detailFont.Value);
@@ -166,6 +205,25 @@ internal sealed unsafe class DropFallback : IDisposable
         {
             return CreateFontW(-pixels, 0, 0, 0, weight, 0, 0, 0, DefaultCharset, OutDefaultPrecis, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DefaultPitch, face);
+        }
+    }
+
+    /// <summary>A press at <paramref name="lParam"/> (client pixels): a click is down and up on the same button.</summary>
+    private void Mouse(bool down, LPARAM lParam)
+    {
+        var x = (short)((nint)lParam & 0xFFFF) / scale;
+        var y = (short)(((nint)lParam >> 16) & 0xFFFF) / scale;
+        var button = DropLayout.ButtonAt(text.Buttons, x, y);
+        if (down)
+        {
+            pressed = button;
+            return;
+        }
+        var was = pressed;
+        pressed = null;
+        if (button is int index && index == was)
+        {
+            ButtonClicked?.Invoke(index);
         }
     }
 
@@ -191,10 +249,17 @@ internal sealed unsafe class DropFallback : IDisposable
             case WM.WM_MOUSEACTIVATE:
                 return MA.MA_NOACTIVATE;
             case WM.WM_PAINT:
-                var handle = GetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA);
-                if (handle != 0 && GCHandle.FromIntPtr(handle).Target is DropFallback fallback)
+                if (From(hwnd) is { } fallback)
                 {
                     fallback.Paint();
+                    return 0;
+                }
+                break;
+            case WM.WM_LBUTTONDOWN:
+            case WM.WM_LBUTTONUP:
+                if (From(hwnd) is { IsShown: true } clicked)
+                {
+                    clicked.Mouse(msg == WM.WM_LBUTTONDOWN, lParam);
                     return 0;
                 }
                 break;
@@ -202,6 +267,12 @@ internal sealed unsafe class DropFallback : IDisposable
                 break;
         }
         return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    private static DropFallback? From(HWND hwnd)
+    {
+        var handle = GetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA);
+        return handle == 0 ? null : GCHandle.FromIntPtr(handle).Target as DropFallback;
     }
 
     public void Dispose()

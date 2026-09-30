@@ -335,7 +335,7 @@ public sealed class CoreStore : ObservableModel
                 {
                     Title = started.Title,
                     App = started.App,
-                    AppName = started.AppName,
+                    AppName = AppName(started.App, started.AppName),
                     MicName = started.MicName,
                     MicReason = started.MicReason,
                     FarEnd = started.FarEnd,
@@ -346,7 +346,7 @@ public sealed class CoreStore : ObservableModel
                 // Only while nothing is recorded: the core never offers during a meeting.
                 if (Meeting is null)
                 {
-                    Offer = new MeetingOffer(detected.App, detected.AppName);
+                    Offer = new MeetingOffer(detected.App, AppName(detected.App, detected.AppName) ?? detected.AppName);
                 }
                 break;
             case MeetingDetectionEnded ended:
@@ -433,6 +433,14 @@ public sealed class CoreStore : ObservableModel
     }
 
     /// <summary>Changes the live meeting when <paramref name="record"/> is the one live; another record's event changes nothing.</summary>
+    /// <summary>
+    /// A meeting app's name as the user knows it. Windows' core names an app by its executable's
+    /// stem ("ms-teams"), so a well-known executable gets its app's name ("Microsoft Teams"), as
+    /// Settings > Modes names it; any other name stays the core's.
+    /// </summary>
+    private static string? AppName(string? app, string? coreName) =>
+        app is not null && AppIdentity.Known.TryGetValue(app, out var known) ? known : coreName;
+
     private void UpdateMeeting(string record, Func<LiveMeeting, LiveMeeting> change)
     {
         if (Meeting is { } live && live.Record == record)

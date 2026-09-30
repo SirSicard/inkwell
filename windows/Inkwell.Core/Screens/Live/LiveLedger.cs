@@ -118,6 +118,8 @@ public static class LiveHeader
         {
             MicReason.BuiltInForBluetoothOutput => $"{name}, because your headphones are Bluetooth",
             MicReason.HeadsetMicSetting => $"{name}, the headset's own mic",
+            // An LE Audio headset keeps full quality on its own mic, so Windows records it.
+            MicReason.LeAudioHeadset => $"{name}, the headset's own mic",
             _ => null,
         };
     }

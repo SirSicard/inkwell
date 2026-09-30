@@ -32,6 +32,8 @@ public class ScreenModelsTests
         Assert.Contains(sent.Commands, c => c is CoreCommand.ConsentGet { Feature: LlmFeature.Meetings });
         Assert.Contains(new CoreCommand.SettingGet(ShellSetting.DictationEnabled), sent.Commands);
         Assert.Contains(sent.Commands, c => c is CoreCommand.RecordsList);
+        // S3.5b: a meeting a crash interrupted is finished once the core is up, and asked for once.
+        Assert.Single(sent.Commands, c => c is CoreCommand.MeetingsRecover);
     }
 
     [Fact]

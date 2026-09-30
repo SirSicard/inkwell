@@ -1,5 +1,6 @@
 // Meetings in the shell (as the Mac's MeetingsTests): Settings > Meetings and Storage's retention,
-// Record now and Stop with their failure lines. The Drop's answers are the Drop step's.
+// Record now, the Drop's answers and Stop with their failure lines, and the recovery a launch asks
+// for.
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Xunit;
@@ -104,5 +105,62 @@ public class RecordNowTests
         var none = new Sent();
         new MeetingModel(none.Send).RecordNow();
         Assert.Equal([new CoreCommand.MeetingStart(null, null)], none.Commands);
+    }
+}
+
+public class DropAnswerTests
+{
+    /// <summary>"Record this call" starts the offered app's meeting (titled from the calendar when it has the call); "Not this one" dismisses it.</summary>
+    [Fact]
+    public void TheDropsAnswersNameTheOfferedApp()
+    {
+        var sent = new Sent();
+        var meetings = new MeetingModel(sent.Send, new FixedTitle("Weekly sync"), log: new Logged().Log);
+        meetings.Record("ms-teams.exe");
+        meetings.Dismiss("Zoom.exe");
+        meetings.Perform(new DropAction.Record("chrome.exe"));
+        meetings.Perform(new DropAction.Dismiss("chrome.exe"));
+        Assert.Equal(
+            [
+                new CoreCommand.MeetingStart("ms-teams.exe", "Weekly sync"), new CoreCommand.MeetingDismiss("Zoom.exe"),
+                new CoreCommand.MeetingStart("chrome.exe", "Weekly sync"), new CoreCommand.MeetingDismiss("chrome.exe"),
+            ],
+            sent.Commands);
+    }
+
+    /// <summary>A failed answer shows on the Drop and nowhere else; Record now's shows where it was pressed.</summary>
+    [Fact]
+    public void AFailedAnswerShowsOnTheDropOnly()
+    {
+        var sent = new Sent();
+        var meetings = new MeetingModel(sent.Send, new FixedTitle(null), log: new Logged().Log);
+        meetings.Record("ms-teams.exe");
+        var failed = Ev.Of<CommandFailed>("""{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"the microphone: no input device"}""");
+        meetings.Apply(failed);
+        Assert.Equal("Couldn't start recording: the microphone: no input device", meetings.FailureOn(MeetingPlace.Drop));
+        Assert.Null(meetings.FailureOn(MeetingPlace.RecordNow));
+        Assert.Null(meetings.FailureOn(MeetingPlace.LiveStop));
+
+        meetings.Dismiss("ms-teams.exe");
+        Assert.Null(meetings.FailureOn(MeetingPlace.Drop));
+        var dismissFailed = Ev.Of<CommandFailed>("""{"type":"command.failed","command":"meeting.dismiss","id":"meeting.dismiss","message":"that app is not being offered"}""");
+        Assert.True(MeetingModel.Handles(dismissFailed));
+        meetings.Apply(dismissFailed);
+        Assert.Equal("Couldn't dismiss the offer: that app is not being offered", meetings.FailureOn(MeetingPlace.Drop));
+
+        meetings.RecordNow();
+        meetings.Apply(failed);
+        Assert.Null(meetings.FailureOn(MeetingPlace.Drop));
+        Assert.NotNull(meetings.FailureOn(MeetingPlace.RecordNow));
+    }
+
+    [Fact]
+    public void RecoveryIsAskedForByName()
+    {
+        var sent = new Sent();
+        new MeetingModel(sent.Send).Recover();
+        var recover = Assert.Single(sent.Commands);
+        Assert.Equal("meetings.recover", recover.Name);
+        Assert.IsType<CoreCommand.MeetingsRecover>(recover);
     }
 }

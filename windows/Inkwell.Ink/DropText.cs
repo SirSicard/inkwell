@@ -1,8 +1,8 @@
 // The Drop's two lines, for the five states: the Mac's DropText for a held state
-// (mac/Sources/Inkwell/ShellInk.swift). A dictation's lines come from the shell (the app's
-// ShellInk, from Inkwell.Core's DropModel): while a key is held the second line is its live
-// words, one line with the head cut and the newest words wet. The meeting's app and the consent
-// offer's buttons come with meetings end to end.
+// (mac/Sources/Inkwell/ShellInk.swift). What is live comes from the shell (the app's ShellInk, from
+// Inkwell.Core's DropModel): while a key is held the second line is its live words, one line with
+// the head cut and the newest words wet; during a meeting its app and latest line; and the consent
+// offer's two buttons (DropButtons), which widen the panel as on the Mac.
 namespace Inkwell.Ink;
 
 /// <summary>How the Drop colours its title and border.</summary>
@@ -23,6 +23,9 @@ public enum DropTone
 /// </param>
 public sealed record DropText(string Title, string Detail, DropTone Tone = DropTone.Plain, bool LiveWords = false)
 {
+    /// <summary>The buttons under the lines (the consent offer), or none.</summary>
+    public DropButtons? Buttons { get; init; }
+
     /// <summary>
     /// The Drop window's name, which is what a screen reader reads and what any process (or UI
     /// Automation client) can read from the window: "Inkwell: " and the title only. The detail can
@@ -119,6 +122,21 @@ public sealed record DropText(string Title, string Detail, DropTone Tone = DropT
         InkState.Blotting => new("Blotting", "The final pass"),
         InkState.Problem => new("Far end silent", "Nothing is arriving from the call", DropTone.Alert),
         _ => new("", ""),
+    };
+}
+
+/// <summary>The Drop's buttons' words, in order: the first is the answer, drawn in ink.</summary>
+public sealed record DropButtons(string First, string? Second = null)
+{
+    /// <summary>How many there are.</summary>
+    public int Count => Second is null ? 1 : 2;
+
+    /// <summary>The words of the button at <paramref name="index"/>.</summary>
+    public string this[int index] => index switch
+    {
+        0 => First,
+        1 when Second is not null => Second,
+        _ => throw new ArgumentOutOfRangeException(nameof(index)),
     };
 }
 
