@@ -1,8 +1,10 @@
 ---
 // Download and first run, from the README's Install, Quick start and Requirements sections (the default
-// keys were checked against ink-ffi's voice.rs, the Windows minimum against windows/Inkwell.csproj). The
-// file links are the releases' real assets (see ../lib/release.ts). The Mac build is signed and
-// notarised; the Windows build is not signed yet.
+// keys were checked against ink-ffi's voice.rs, the Windows minimum against windows/Inkwell.csproj, the
+// model totals against ink-engines' rows). The file links are the releases' real assets (see
+// ../lib/release.ts). The Mac build is signed and notarised; the Windows build is not signed yet, and
+// its steps and Microsoft's terms follow windows/HOMEPAGE-INSTALL.md (keep the terms sentence in step
+// with the release notes, the installer's splash and the app's terms step).
 import { BUILD_FROM_SOURCE_URL, RELEASES_URL, SHARED_VERSION } from '../lib/constants';
 import { DOWNLOADS } from '../lib/release';
 ---
@@ -14,7 +16,7 @@ import { DOWNLOADS } from '../lib/release';
       Free, with no account and no email address asked for. Every build is also on the
       <a href={RELEASES_URL}>GitHub releases page</a>, and you can <a href={BUILD_FROM_SOURCE_URL}>build it from
       source</a>. Linux and Intel Macs aren’t supported: Inkwell 0.2 stays the last version for them, on the
-      same page.
+      same page. Windows on ARM64 isn’t supported by 1.0 either: a build for it is planned for 1.0.1.
     </p>
   </div>
 
@@ -53,30 +55,50 @@ import { DOWNLOADS } from '../lib/release';
       <div class="platform-head">
         <h3>Windows</h3>
         <p class="detected-note" hidden>This computer</p>
-        <p>Windows 11 24H2 or later, on x64{DOWNLOADS.windowsArm64 && ' or ARM64'}.</p>
+        <p>Windows 11 24H2 or later, on x64. It installs for your user account alone: no administrator, nothing system-wide.</p>
         <ul class="files">
           <li><a href={DOWNLOADS.windows.url} translate="no">{DOWNLOADS.windows.name}</a> <span>{DOWNLOADS.windows.size}</span></li>
-          {DOWNLOADS.windowsArm64 && (
-            <li><a href={DOWNLOADS.windowsArm64.url} translate="no">{DOWNLOADS.windowsArm64.name}</a> <span>{DOWNLOADS.windowsArm64.size}</span></li>
-          )}
         </ul>
       </div>
       <div class="platform-body">
-        {/* PLACEHOLDER: the guide to installing without a signature. The Windows distribution step (S3.6)
-            drafts its final wording; the README's Install section and the hero link here. */}
+        {/* The README's Install section and the hero link here. */}
         <ol class="steps">
           <li>
-            Download the installer for your PC{DOWNLOADS.windowsArm64 && ', x64 or ARM64'}. If your browser says the
-            file isn’t commonly downloaded, choose to keep it.
+            Download the installer. Your browser may say the file isn’t commonly downloaded: in Edge, open the
+            download’s “…” menu, choose “Keep”, then “Show more” and “Keep anyway”; in Chrome, choose “Keep”.
           </li>
           <li>
-            Run it. The installer is not code signed yet, so SmartScreen says “Windows protected your PC”: click
-            “More info”, then “Run anyway”.
+            Check the download (recommended). The installer is not code signed yet, so this is how you know the
+            file is the one we published: in PowerShell, <code>Get-FileHash</code> followed by the file’s path
+            prints its SHA-256, which must match the one in the release notes. If it does not, delete the file
+            and do not run it.
+          </li>
+          <li>
+            Run it. SmartScreen says “Windows protected your PC”, with an unknown publisher: click “More info”,
+            then “Run anyway”. Inkwell installs in a few seconds, with the Visual C++ runtime its speech engines
+            need beside it, and opens.
+          </li>
+          <li>
+            On its first run, Inkwell shows Microsoft’s terms for the runtimes it includes (below): agree to
+            start, or quit.
           </li>
         </ol>
         <p class="platform-note">
-          Windows warns about any installer without a signature, and Inkwell’s isn’t signed yet. The source and
-          the workflow that built this file are public, so you can check what you are running.
+          If Smart App Control blocked it, there is no “Run anyway”: Smart App Control does not run apps that
+          are not signed. The signed build is on its way; we would rather you wait for it than turn off a
+          protection you chose to keep.
+        </p>
+        <p class="platform-note">
+          Inkwell includes the runtime of Microsoft’s Windows App SDK, the Windows SDK’s .NET projection and
+          the Visual C++ runtime, which Microsoft licenses separately under the Microsoft Software License
+          Terms (shown in full in Inkwell’s Settings &gt; About). By installing or using Inkwell on Windows,
+          you agree to those terms for those components.
+        </p>
+        <p class="platform-note">
+          Updates come when you ask for them, in Settings &gt; About &gt; Check Now, from this project’s
+          releases, each checked against its size and SHA-256. Uninstalling, in Settings &gt; Apps, leaves your
+          library in <span translate="no">%LOCALAPPDATA%\Inkwell</span>. Inkwell 0.2 stays installed beside
+          1.0: import its history before you uninstall it with its application data.
         </p>
       </div>
     </div>
@@ -87,8 +109,14 @@ import { DOWNLOADS } from '../lib/release';
       <h3>First run</h3>
       <ol class="steps">
         <li>
-          Finish the onboarding. The installer holds no speech models: Inkwell downloads them the first time
-          they are needed, the main one about 2.5&nbsp;GB.
+          Finish the onboarding. The installer holds no speech models: its Models step lists each with its
+          licence, size and source, about 3.1&nbsp;GB in all on the Mac and 3.3&nbsp;GB on Windows, and nothing
+          downloads until you press Download. You can go on while they download, or get them later in
+          Settings.
+        </li>
+        <li>
+          If Inkwell 0.2 is on this computer, onboarding offers to import its dictation history, dictionary,
+          snippets and modes. 0.2’s own copy is only read, never changed.
         </li>
         <li>
           The dictation key starts as <kbd>Fn</kbd> on the Mac and right <kbd>Ctrl</kbd> on Windows. Change it in
@@ -100,8 +128,8 @@ import { DOWNLOADS } from '../lib/release';
     <div>
       <h3>Requirements</h3>
       <dl class="reqs">
-        <div><dt>System</dt><dd>A Mac with Apple silicon on macOS 26 or later, or a PC with Windows 11 24H2 or later on x64{DOWNLOADS.windowsArm64 && ' or ARM64'}</dd></div>
-        <div><dt>Disk</dt><dd>About 2.5&nbsp;GB for the main speech model, plus the meetings you keep</dd></div>
+        <div><dt>System</dt><dd>A Mac with Apple silicon on macOS 26 or later, or a PC with Windows 11 24H2 or later on x64</dd></div>
+        <div><dt>Disk</dt><dd>About 3.1&nbsp;GB for the models on the Mac, 3.3&nbsp;GB on Windows, plus the meetings you keep</dd></div>
         <div><dt>Microphone</dt><dd>Any</dd></div>
       </dl>
     </div>

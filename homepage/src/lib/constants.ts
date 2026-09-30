@@ -54,9 +54,9 @@ export const SIGNPATH_FOUNDATION_URL = "https://signpath.org";
  * the README's models table. The maker is the model's publisher.
  */
 export const MODELS = [
-  { name: "Qwen3-ASR 1.7B", maker: "Alibaba", job: "Writes every dictation, and every meeting’s transcript.", runsOn: "llama.cpp: Metal on the Mac, Vulkan or the CPU on Windows", size: "2.5 GB" },
-  { name: "Parakeet TDT 0.6B v3", maker: "NVIDIA", job: "Shows your words while you are still speaking.", runsOn: "FluidAudio on the Mac’s Neural Engine; sherpa-onnx on Windows", size: null },
-  { name: "Nemotron-3-Diarization", maker: "NVIDIA", job: "Tells the other side’s speakers apart when a meeting ends.", runsOn: "NeMo-Speech.cpp", size: "0.11 GB" },
+  { name: "Qwen3-ASR 1.7B", maker: "Alibaba", job: "Writes your dictations, and every meeting’s transcript.", runsOn: "llama.cpp: Metal on the Mac, Vulkan or the CPU on Windows", size: "2.5 GB" },
+  { name: "Parakeet TDT 0.6B v3", maker: "NVIDIA", job: "Shows your words while you are still speaking. On a Windows PC without a GPU, it writes the dictations too.", runsOn: "FluidAudio on the Mac’s Neural Engine; sherpa-onnx on the CPU on Windows", size: null },
+  { name: "Nemotron-3-Diarization", maker: "NVIDIA", job: "Tells the other side’s speakers apart when a meeting ends.", runsOn: "NeMo-Speech.cpp: Metal on the Mac, Vulkan or the CPU on Windows", size: "0.11 GB" },
   { name: "Silero VAD", maker: "Silero", job: "Finds where speech starts and stops.", runsOn: "tract, in Rust", size: "1.3 MB" },
 ] as const;
 

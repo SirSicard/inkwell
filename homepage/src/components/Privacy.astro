@@ -1,8 +1,9 @@
 ---
 // What stays and every network call, from the README's Privacy section ("Every network call, listed")
 // and SECURITY.md. Checked against the 1.0 source: the model rows' download URLs (ink-engines'
-// registry), the Mac's update feed and SUEnableSystemProfiling (mac/Info.plist), a dictation keeping
-// no audio (ink-pipeline), the retention choices (retention.days), the language-model consents
+// registry, fetched only when the user presses Download), the Mac's update feed and
+// SUEnableSystemProfiling (mac/Info.plist), a dictation keeping no audio (ink-pipeline), the
+// retention choices (retention.days), the language-model consents
 // (ink_pipeline::consent) and Windows's providers and key store (ink_llm). Windows's update row follows
 // the updater its distribution step builds: nothing is checked until the user asks. This section
 // doubles as the privacy policy the code signing policy links.
@@ -78,13 +79,13 @@ import { GITHUB_URL, HUGGING_FACE_URL, RELEASES_URL } from '../lib/constants';
           <tr role="row">
             <th scope="row" role="rowheader">Speech model download</th>
             <td role="cell"><span class="m-only">Goes to</span><a href={HUGGING_FACE_URL}>Hugging Face</a></td>
-            <td role="cell"><span class="m-only">When</span>The first time a model is needed</td>
+            <td role="cell"><span class="m-only">When</span>When you press Download, in the first run or in Settings; never before</td>
             <td role="cell"><span class="m-only">What it carries</span>A request for the model’s files, at a pinned revision; each file is checked against its hash</td>
           </tr>
           <tr role="row">
             <th scope="row" role="rowheader">Voice-detection model download</th>
             <td role="cell"><span class="m-only">Goes to</span>GitHub, the Silero VAD repository</td>
-            <td role="cell"><span class="m-only">When</span>The first time it is needed</td>
+            <td role="cell"><span class="m-only">When</span>With the speech models, when you press Download</td>
             <td role="cell"><span class="m-only">What it carries</span>A request for that one file, checked the same way</td>
           </tr>
           <tr role="row">

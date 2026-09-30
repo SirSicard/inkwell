@@ -2,8 +2,8 @@
 // What else it does, as the instrument's spec sheet: grouped definition lists, no cards. Facts come from
 // the README's "What it does" and "Privacy" sections, checked against the 1.0 source: the default keys
 // (ink-ffi's voice.rs), detection's offer and "Record now" (the Mac's MeetingModel), the retention
-// choices (retention.days), the consents (ink_pipeline::consent) and Windows's providers (ink_llm's
-// Provider).
+// choices (retention.days, which never sweeps an import), the consents (ink_pipeline::consent),
+// Windows's providers (ink_llm's Provider) and the 0.2 import (ink-store's import).
 ---
 
 <section class="features wrap" id="features" aria-labelledby="features-title">
@@ -88,12 +88,13 @@
         <dt>The library</dt>
         <dd>
           Every dictation and meeting, newest first and searchable. A meeting’s record shows its transcript,
-          notes and summary, and plays its audio from disk.
+          notes and summary, and plays its audio from disk. Inkwell 0.2’s dictation history, dictionary,
+          snippets and modes can be imported, in the first run or later; 0.2’s own copy is only read.
         </dd>
       </div>
       <div>
         <dt>For as long as you choose</dt>
-        <dd>Keep records forever, the default, or for 7, 30, 90 or 365 days.</dd>
+        <dd>Keep records forever, the default, or for 7, 30, 90 or 365 days. Anything you imported is kept.</dd>
       </div>
     </dl>
   </div>
@@ -102,6 +103,7 @@
     <h3>What it does not do</h3>
     <ul class="not-built">
       <li>Run on Linux or on an Intel Mac. Inkwell 0.2 stays the last version for them.</li>
+      <li>Run on Windows on ARM64, yet: a build for it is planned for 1.0.1.</li>
       <li>Send your words to a model you did not choose: on Windows, only to the provider you set up, and only for a feature you allowed.</li>
       <li>Transcribe an audio or video file, or export to TXT, SRT, JSON or CSV, as 0.2 did.</li>
     </ul>

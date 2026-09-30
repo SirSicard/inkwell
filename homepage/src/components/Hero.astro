@@ -92,15 +92,15 @@ import { DOWNLOADS, PRIMARY } from '../lib/release';
       <li data-platform="Windows">
         <a href={DOWNLOADS.windows.url}>Windows<span class="sr-only"> installer for x64, {DOWNLOADS.windows.size}</span></a>
         <span>
-          Windows 11 24H2 or later on x64, {DOWNLOADS.windows.size}{DOWNLOADS.windowsArm64 && <>, or <a href={DOWNLOADS.windowsArm64.url}>on ARM64<span class="sr-only">: the installer</span></a>, {DOWNLOADS.windowsArm64.size}</>}.
+          Windows 11 24H2 or later on x64, {DOWNLOADS.windows.size}.
           Not code signed yet: <a href="#windows-install">how to install it</a>.
         </span>
       </li>
     </ul>
 
     <p class="calls">
-      It connects to two places: Hugging Face, for the speech models the first time each is needed, and
-      GitHub, for the voice-detection model and for updates from this project’s releases. Your words and your
+      It connects to two places: Hugging Face, for the speech models when you press Download, and GitHub,
+      for the voice-detection model and for updates from this project’s releases. Your words and your
       audio go to neither. On Windows, the language-model features also reach a provider you set up with your
       own key, and only with your OK. <a href="#privacy">What each call carries</a>.
     </p>

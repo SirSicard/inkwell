@@ -23,14 +23,13 @@ function asset(version: string, suffix: string): Asset {
 }
 
 /**
- * The Mac's disk image is named by mac/scripts/release-version.sh. The Windows installers' names must
- * match what the Windows release workflow uploads (0.2's NSIS installer used the x64 one). 0.2 had no
- * ARM64 build, so a 0.x Windows version offers none; from 1.0 its installer must be in the release.
+ * The Mac's disk image is named by mac/scripts/release-version.sh. The Windows installer's name must
+ * match what the Windows release workflow uploads (0.2's NSIS installer used the same one). 1.0 ships
+ * x64 only; an ARM64 installer waits for 1.0.1.
  */
 export const DOWNLOADS = {
   macOS: asset(MAC_VERSION, 'aarch64.dmg'),
   windows: asset(WINDOWS_VERSION, 'x64-setup.exe'),
-  windowsArm64: WINDOWS_VERSION.startsWith('0.') ? null : asset(WINDOWS_VERSION, 'arm64-setup.exe'),
 } as const;
 
 /**
@@ -39,5 +38,5 @@ export const DOWNLOADS = {
  */
 export const PRIMARY = {
   macOS: { href: DOWNLOADS.macOS.url, note: `Version ${MAC_VERSION} for Macs with Apple silicon on macOS 26 or later: the disk image, ${DOWNLOADS.macOS.size}.` },
-  Windows: { href: DOWNLOADS.windows.url, note: `Version ${WINDOWS_VERSION} for Windows 11 24H2 or later on x64: the installer, ${DOWNLOADS.windows.size}. It is not code signed yet; the install steps${DOWNLOADS.windowsArm64 ? ', and the installer for ARM64 PCs,' : ''} are below.` },
+  Windows: { href: DOWNLOADS.windows.url, note: `Version ${WINDOWS_VERSION} for Windows 11 24H2 or later on x64: the installer, ${DOWNLOADS.windows.size}. It is not code signed yet; the install steps are below.` },
 } as const;
