@@ -6,6 +6,10 @@
 // EVENT_OBJECT_LIVEREGIONCHANGED, which UI Automation passes on as its LiveRegionChanged event:
 // Narrator reads it once it has finished what it is saying, and the window never takes focus.
 //
+// The name is not private to screen readers: while it is set, any UI Automation or MSAA client
+// running as the same user reads it, as any accessibility client reads the Mac's label. What stays
+// word-free is the window's title and the log; Clear takes the name away when the Drop hides.
+//
 // The declarations are the Windows SDK's (10.0.26100.0: oleacc.h, UIAutomationCoreApi.h and
 // UIAutomationCore.h), which TerraFX does not carry. The words are the user's: nothing here logs
 // them.

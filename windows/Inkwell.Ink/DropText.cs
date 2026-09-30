@@ -31,8 +31,10 @@ public sealed record DropText(string Title, string Detail, DropTone Tone = DropT
 
     /// <summary>
     /// What a screen reader reads for the Drop, as on the Mac (Drop.swift's accessibility label):
-    /// the title and the detail, live words included. It goes only to screen readers (UI
-    /// Automation), never into the window's title or a log.
+    /// the title and the detail, live words included. It is not private to screen readers: while
+    /// the Drop shows, any UI Automation or MSAA client running as the same user can read it, as
+    /// any accessibility client can read the Mac's label. What stays word-free is the window's
+    /// title and the logs.
     /// </summary>
     public string AccessibleName => $"Inkwell: {Title}, {Detail}";
 

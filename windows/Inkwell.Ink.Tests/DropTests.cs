@@ -255,7 +255,7 @@ public sealed class DropTests
     }
 
     /// <summary>
-    /// The Drop's window name (what screen readers and any process read) is the title only: never
+    /// The Drop's window title (what any process reads with GetWindowText) is the title only: never
     /// the detail, which holds the live words. Runs over SSH: no frame is needed.
     /// </summary>
     [Fact]
