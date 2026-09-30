@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ink_engines::{EngineRow, ModelDir, Registry};
 use ink_ffi::runtime::{Core, Parts};
@@ -229,6 +229,7 @@ pub struct Seen {
     pub headers: Vec<(String, String)>,
     pub body: String,
     pub loopback_only: bool,
+    pub deadline: Option<Instant>,
 }
 
 impl Seen {
@@ -240,11 +241,15 @@ impl Seen {
     }
 }
 
-/// Records every request and answers with `answer`; waits at `gate` first when one is set.
+/// Records every request and answers with `answer`; waits at `gate` first when one is set. With
+/// `stall` set it is a provider that takes the request and never answers: it gives up at the
+/// request's deadline, as the real client does, and says it timed out (without a deadline, after
+/// [`WAIT`]).
 pub struct FakeTransport {
     pub seen: Mutex<Vec<Seen>>,
     pub answer: Mutex<Result<(u16, String), TransportError>>,
     pub gate: Mutex<Option<Arc<Gate>>>,
+    pub stall: AtomicBool,
 }
 
 /// An OpenAI-shaped answer holding `text`.
@@ -259,6 +264,7 @@ impl FakeTransport {
             seen: Mutex::default(),
             answer: Mutex::new(Ok((status, body.to_owned()))),
             gate: Mutex::new(None),
+            stall: AtomicBool::new(false),
         })
     }
 
@@ -282,7 +288,16 @@ impl Transport for FakeTransport {
                 .collect(),
             body: String::from_utf8(request.body.clone()).unwrap(),
             loopback_only: request.loopback_only,
+            deadline: request.deadline,
         });
+        if self.stall.load(Ordering::SeqCst) {
+            let until = request.deadline.map_or_else(
+                || Instant::now() + WAIT,
+                |d| d + ink_llm::transport::DEADLINE_GRACE,
+            );
+            std::thread::sleep(until.saturating_duration_since(Instant::now()));
+            return Err(TransportError::Timeout);
+        }
         let gate = self.gate.lock().unwrap().clone();
         if let Some(gate) = gate {
             gate.wait();

@@ -439,6 +439,77 @@ fn dictation_polish_goes_to_the_chosen_provider_only_with_its_consent() {
     rig.events.assert_valid();
 }
 
+/// A provider that takes the request and never answers costs a take its polish budget, not the
+/// client's read timeout: the budget reaches the request on the wire, the take goes in as said
+/// with `polish_timed_out` (not `polish_failed`), and the next take is processed as usual.
+#[test]
+fn an_own_key_provider_that_never_answers_costs_a_take_its_polish_budget() {
+    let rig = Rig::new("cloud-stall", &[test_row(ROW_ID)]);
+    rig.save_key("openai", "k1");
+    rig.choose_openai("c1");
+    let platform = Arc::new(MockPlatform::new());
+    let mut settings = DictationSettings::default();
+    settings.modes.modes[0].polish_enabled = true;
+    settings.polish_consent = Some(LlmConsent::Cloud {
+        endpoint: OPENAI.into(),
+        name: "gpt-4o-mini (openai)".into(),
+    });
+    settings.polish_budget = Duration::from_millis(300);
+    let inbox = rig
+        .core
+        .start_dictation(DictationParts {
+            inserter: platform.clone(),
+            focus: platform.clone(),
+            llm: None,
+            settings,
+            vad: Vad::Unavailable(VadUnavailable::ModelMissing),
+        })
+        .unwrap();
+
+    rig.net.stall.store(true, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    take(&rig.core, &inbox, 1);
+    assert!(
+        rig.events
+            .wait_count("dictation.inserted", 1, Duration::from_secs(20))
+    );
+    assert!(
+        started.elapsed() < WAIT,
+        "the take waited on the provider past its budget"
+    );
+    assert!(rig.net.seen.lock().unwrap()[0].deadline.is_some());
+    assert!(!platform.inserted().last().unwrap().contains("Polished"));
+    let warnings: Vec<_> = rig
+        .events
+        .all()
+        .into_iter()
+        .filter(|v| v["type"] == "dictation.warning")
+        .collect();
+    assert!(
+        warnings.iter().any(|v| v["kind"] == "polish_timed_out"),
+        "{warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|v| v["kind"] == "polish_failed"),
+        "{warnings:?}"
+    );
+
+    rig.net.stall.store(false, Ordering::SeqCst);
+    rig.net
+        .set(Ok((200, openai_answer("Polished synthetic words."))));
+    take(&rig.core, &inbox, 2);
+    assert!(
+        rig.events
+            .wait_count("dictation.inserted", 2, Duration::from_secs(20))
+    );
+    assert_eq!(
+        platform.inserted().last().map(|s| s.trim().to_owned()),
+        Some("Polished synthetic words.".into())
+    );
+    rig.core.shutdown();
+    rig.events.assert_valid();
+}
+
 #[test]
 fn the_test_sends_one_fixed_request_and_says_how_it_went() {
     let rig = Rig::new("cloud-test", &[]);

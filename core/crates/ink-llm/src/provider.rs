@@ -7,15 +7,17 @@
 //! 3. the key, read from the keychain only now, when it is about to be used. No key is
 //!    [`LlmError::NoKey`]; a refusal is [`LlmError::KeychainDenied`];
 //! 4. the cancel token again (a keychain prompt can take a while);
-//! 5. the request, through the shared [`Transport`];
-//! 6. the cancel token once more: an answer that arrives after cancellation is dropped.
+//! 5. the request, through the shared [`Transport`], with the token's deadline, if it has one, as
+//!    the request's: a budget stops a request on the wire too;
+//! 6. the cancel token once more: an answer, or a failure, that arrives after cancellation is
+//!    [`LlmError::Cancelled`], so a budget that ran out reads as one.
 //!
 //! An HTTP error is [`LlmError::Http`] with the status alone. Inkwell 0.2 kept the provider's
 //! error `code` (`model_decommissioned`, `invalid_api_key`); the contract's error has no field
 //! for it, and the body is never read, because providers echo the request in it.
 //!
-//! Cancelling cannot interrupt a request already on the wire: the client is blocking, and the
-//! transport's read timeout bounds the wait.
+//! Cancelling a token without a deadline cannot interrupt a request already on the wire: the client
+//! is blocking, and the transport's read timeout bounds the wait.
 
 use std::sync::Arc;
 
@@ -196,7 +198,12 @@ impl ByokLlm {
     }
 
     /// The HTTP request for `request`: URL, headers and body, per provider.
-    fn http_request(&self, request: &LlmRequest, key: Option<&ApiKey>) -> HttpRequest {
+    fn http_request(
+        &self,
+        request: &LlmRequest,
+        key: Option<&ApiKey>,
+        cancel: &CancelToken,
+    ) -> HttpRequest {
         let temperature = round_temperature(request.temperature);
         let mut headers = vec![("Content-Type", "application/json".to_owned())];
         let (url, body) = if self.provider == Provider::Anthropic {
@@ -239,6 +246,7 @@ impl ByokLlm {
             headers,
             body: body.to_string().into_bytes(),
             loopback_only: self.local_only.is_on(),
+            deadline: cancel.deadline(),
         }
     }
 
@@ -294,18 +302,19 @@ impl Llm for ByokLlm {
         if cancel.is_cancelled() {
             return Err(LlmError::Cancelled);
         }
-        let http = self.http_request(request, key.as_ref());
+        let http = self.http_request(request, key.as_ref(), cancel);
         drop(key);
-        let response = self.transport.post(&http).map_err(|e| match e {
+        let response = self.transport.post(&http);
+        if cancel.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
+        let response = response.map_err(|e| match e {
             TransportError::NotLoopback => LlmError::LocalOnly {
                 endpoint: self.base.to_string(),
             },
             TransportError::TooLarge => LlmError::BadResponse(e.describe().to_owned()),
             other => LlmError::Network(other.describe().to_owned()),
         })?;
-        if cancel.is_cancelled() {
-            return Err(LlmError::Cancelled);
-        }
         if !(200..300).contains(&response.status) {
             return Err(LlmError::Http {
                 status: response.status,
