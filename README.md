@@ -114,7 +114,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the prerequisites, the checks and the
 ## Requirements
 
 - A Mac with Apple silicon on macOS 26 or later, or an x64 PC on Windows 11 24H2 or later
-- About 3 GB of disk for the models, plus the meetings you keep
+- Disk for the models (the main speech model is about 2.5 GB), plus the meetings you keep
 - A microphone
 
 ## Contributing
