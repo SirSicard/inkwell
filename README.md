@@ -2,155 +2,100 @@
 
 # Inkwell
 
-**Local-first speech to text for your desktop. Free, open source, no account.**
+**Local-first dictation and meeting notes for Mac and Windows. Free, open source, no account.**
 
 [![Release](https://img.shields.io/github/v/release/SirSicard/inkwell?style=flat-square&color=0969da)](https://github.com/SirSicard/inkwell/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/SirSicard/inkwell/build.yml?style=flat-square)](https://github.com/SirSicard/inkwell/actions)
+[![Core](https://img.shields.io/github/actions/workflow/status/SirSicard/inkwell/core.yml?style=flat-square&label=core)](https://github.com/SirSicard/inkwell/actions/workflows/core.yml)
 [![Downloads](https://img.shields.io/github/downloads/SirSicard/inkwell/total?style=flat-square&color=1a7f37)](https://github.com/SirSicard/inkwell/releases)
 [![License](https://img.shields.io/github/license/SirSicard/inkwell?style=flat-square)](LICENSE)
-[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](#install)
+[![Platforms](https://img.shields.io/badge/macOS%20%7C%20Windows-lightgrey?style=flat-square)](#install)
 
 </div>
 
 **Your voice, your words, your machine.**
 
-Hold a hotkey, speak, release. The text lands in whatever app you were typing in. Speech recognition runs on your own CPU, so your audio never leaves the machine.
+Inkwell does two jobs. **Dictation:** hold a key, speak, let go, and the text lands in whatever app you were typing in. **Meeting notes:** your microphone and the other side of the call are recorded as two streams, transcribed live, transcribed again properly when the call ends, and kept as a record you can search. Speech recognition runs on your own machine, so your audio never leaves it.
 
 Inkwell is free and stays free. MIT licensed, no paid tier, no license keys, no accounts, no telemetry.
 
-<p align="center">
-  <img src="docs/media/inkwell-dashboard.png" alt="Inkwell showing transcript history, with the sidebar and the ink panel" width="900">
-</p>
+Inkwell 1.0 is a rebuild: native on each system (SwiftUI and AppKit on the Mac, WinUI 3 on Windows) over one Rust core. It replaces Inkwell 0.2, whose code lives on the [`legacy/0.2`](https://github.com/SirSicard/inkwell/tree/legacy/0.2) branch.
 
 ## What it does
 
-- **Dictation anywhere.** Global hotkey, push to talk or toggle. Transcribes, then pastes into the focused app.
-- **Local speech recognition.** Five models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), each answering a different question about your language, disk and patience. Downloaded on first use and switchable in the app. See [Models](#models).
-- **Style formatting.** Formal, Casual, Relaxed. Controls capitalization and punctuation without touching a model.
-- **Custom dictionary.** Fix the words your model keeps getting wrong. Case insensitive, word boundary matching.
-- **Snippets.** Trigger phrases expand to full text. Variables: `{date}`, `{time}`, `{clipboard}`.
-- **Voice commands.** Wake prefix plus action, for example "inkwell, scratch that" or "inkwell, formal mode".
-- **Modes.** One bundle of style, speech cleanup and AI polish, activated by which app you are typing into. Formal and polished in email, lowercase and unpunctuated in a terminal, without touching a setting. Works on macOS and Windows.
-- **File transcription.** Drag in audio or video. MP3, WAV, FLAC, OGG, M4A, MP4, MKV and more.
-- **History and export.** SQLite-backed transcript history, searchable and editable. Export TXT, SRT, JSON, CSV.
-- **Stats.** Words dictated, speaking time, streak, daily activity and model usage, computed from the history you can see and delete, not from a hidden counter.
-- **Tray and overlay.** Lives in the tray. A small always-on-top overlay shows recording state. The hotkey works with the window hidden.
-- **Live preview (optional, off by default).** Watch the words appear on the overlay while you are still speaking, instead of waiting in silence for the paste. They are lowercase and unpunctuated because they come from a second, faster model; what actually gets pasted is produced the same way it always was. Costs a 73 MB English download.
-- **Voice editing.** Select text anywhere, hold a second hotkey, say what to change, and the rewrite replaces the selection. Needs an API key.
-- **Speech cleanup.** "um", "uh" and immediate stutters removed before the text is pasted, without changing what the sentence says.
-- **AI polish (optional, off by default).** Bring your own API key to clean up grammar and false starts. See below.
+### Dictation
 
-### Modes, the part that is hard to picture
+- **Hold a key, speak, let go.** The key is a modifier held on its own: Fn (Globe) on the Mac and right Ctrl on Windows until you pick another. The text is typed into the focused app.
+- **The Drop.** A small window that shows the words as you say them, then gets out of the way. It never takes the focus from the app you are typing in.
+- **Modes.** How the text is written can follow the app you are typing into.
+- **Snippets.** Trigger phrases that expand to full text.
+- **Polish and voice edit (Mac, optional, off by default).** Polish tidies a dictation before it is typed. Voice edit, on a key of its own, rewrites the text you selected to a spoken instruction. Both run on Apple's on-device model and ask for your OK before their first use.
 
-A mode bundles a writing style, speech cleanup and AI polish, and switches itself on based on which app you are typing into. Formal and polished in email, lowercase and unpunctuated in Slack, without touching a setting. The first mode whose app list matches wins; otherwise the default applies.
+### Meetings
 
-<picture>
-  <img src="docs/media/inkwell-modes.png" alt="The Modes tab, showing a Default mode plus Casual and Relaxed modes bound to lists of application identifiers" width="900">
-</picture>
+- **Offered, never started for you.** When an app has held the microphone for a few seconds, Inkwell offers to record. Nothing records until you say so, and "Record now" starts one by hand.
+- **Two streams.** Your microphone is you; the call's audio is them. Echo cancellation runs on your side only when there is echo to remove.
+- **Live, then final.** A live transcript while the call runs, with notes you can add; when it ends, a final pass replaces the live transcript and labels the other side's speakers when there are two or more.
+- **Summary, commitments and Ask (Mac, optional).** With your OK, Apple's on-device model writes a summary with the decisions and actions it cites, keeps the promises made in the call in **Owed**, and answers questions about the meeting.
+- **Crash recovery.** Audio is written to disk as it arrives, so a crash loses seconds, not the meeting.
+
+### The library
+
+- **Every dictation and meeting**, newest first and searchable. A meeting's record shows its transcript, notes and summary, and plays its audio from disk.
+- **Keep records** for as long as you choose: forever (the default), or 7, 30, 90 or 365 days.
 
 ## Privacy
 
-- Audio is captured, resampled and transcribed locally. It is never uploaded.
-- Transcripts live in a local SQLite file in your app data directory. Nothing syncs.
-- There is no telemetry, no analytics, no crash reporting, no account, no server owned by this project that your text passes through.
-- **AI polish and voice editing can send text to your selected provider when you use those features.** You supply your own API key for OpenAI, Groq, Anthropic, OpenRouter or a custom OpenAI-compatible endpoint. The key is stored in the OS keyring. When polish is on, the transcribed **text** (never the audio) is sent directly from your machine to the provider you chose. Turn it off and Inkwell makes no network calls except model downloads and update checks.
-- **Every network call, listed.** Model downloads fetch files from Hugging Face, plus the Silero VAD model from the sherpa-onnx releases on GitHub if it is missing. Five seconds after launch the update check asks `inkwell-updater.mattias-e67.workers.dev` whether a newer version exists; the request carries the app version, OS target and CPU architecture, and the worker only reads the latest release record. Beyond those, only AI polish and voice editing connect, as above.
-- Earlier builds shipped a free proxy tier that routed polish requests through a server the maintainer paid for. That is gone. BYOK is the only path.
+- Speech recognition, voice detection and speaker labels run on your machine. Audio is never uploaded.
+- Dictations keep their text, never their audio. Meetings keep their audio on disk next to the transcript, because the final pass and the record's playback read it from there.
+- Everything lives in one folder: `~/Library/Application Support/Inkwell` on the Mac, `%LOCALAPPDATA%\Inkwell` on Windows. Nothing syncs.
+- For dictation, the microphone opens when you press the key and is let go of a minute after your last take. For a meeting, it is open while you record.
+- Polish, voice edit, summaries and Ask use Apple's on-device model on the Mac: your words stay on the Mac. Each asks for your OK first, and asks again if where the words would go ever changes.
+- There is no telemetry, no analytics, no crash reporting and no account.
+- **Every network call, listed.** Model downloads fetch pinned files from Hugging Face and GitHub the first time a model is needed. On the Mac, Sparkle checks this repository's releases for updates once you have said yes to its question; a check sends nothing about your Mac. On Windows, updates come from this repository's releases. Nothing else connects.
+
+The details, and what counts as a security issue, are in [SECURITY.md](SECURITY.md).
 
 ## Install
 
-Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases). macOS builds are signed with a Developer ID and notarized by Apple, so they open normally. Windows is not signed yet, so SmartScreen still warns there.
+Builds are on the [Releases page](https://github.com/SirSicard/inkwell/releases).
 
-### macOS (Apple Silicon, primary platform; Intel supported)
+### Mac (Apple silicon, macOS 26 or later)
 
-1. Download the `.dmg` for your Mac (`aarch64` for Apple Silicon, `x64` for Intel), drag Inkwell to Applications, open it. No security warning to click past: the app is signed and notarized.
-2. Grant **Microphone** access when prompted (System Settings > Privacy & Security > Microphone).
-3. Grant **Accessibility** access (System Settings > Privacy & Security > Accessibility). Inkwell types the result into the focused app with a synthetic paste, which macOS blocks until this is granted. Without it, transcription works but nothing appears.
+1. Download the `.dmg`, drag Inkwell to Applications, and open it. It is signed with a Developer ID and notarized by Apple, so there is no warning to click past.
+2. Onboarding asks for what each job needs: **Microphone** for both, **Accessibility** for the dictation key and for typing the text, and **System Audio Recording** for the other side of a call.
+
+Intel Macs are not supported by 1.0: Inkwell 0.2 stays the last version for them, on the Releases page.
 
 > [!NOTE]
-> Accessibility is the one people miss. Without it dictation transcribes fine and nothing appears, which reads like the app is broken.
+> Fn is also macOS's emoji and dictation key. If pressing it opens something else, set "Press 🌐 key to" to "Do Nothing" in System Settings > Keyboard, or pick another key in Inkwell's Settings.
 
-Known macOS limitations: synthetic paste is blocked by Secure Input, so dictation into password fields and some terminals will silently do nothing. Per-app mode detection is implemented on macOS and Windows; actual behavior still depends on the target app and permissions.
+### Windows (x64, Windows 11 24H2 or later)
 
-### Windows (secondary, built in CI)
-
-Download the NSIS installer (recommended) or the MSI.
+Download the installer and run it.
 
 > [!WARNING]
-> Windows builds are not code signed. SmartScreen will block the installer with "Windows protected your PC": click **More info**, then **Run anyway**. Your browser may also flag the download as uncommon. Only macOS is signed today.
+> The Windows installer is not code signed yet. SmartScreen will say "Windows protected your PC": click **More info**, then **Run anyway**. Your browser may also flag the download as uncommon. [The homepage walks through it](https://getinkwell.vercel.app/#windows-install).
 
 ### Linux
 
-Best effort. CI produces `.AppImage` and `.deb`. Not regularly tested.
+Not supported by 1.0. Inkwell 0.2 stays the last version for Linux, on the Releases page.
 
 ## Quick start
 
-1. Launch Inkwell and finish the short onboarding (mic picker, model download, hotkey test).
-2. Pick a model. Parakeet V3 (670 MB) is the default and detects the language for you. If you only dictate in English, switch to Parakeet V2, which is measurably more accurate at the same size. If you want the best accuracy and do not mind a bigger download, take Qwen3 ASR. Models download on first use, they are not inside the installer.
-3. Set your record hotkey in Settings > General. On macOS pick a combination that does not collide with Spotlight or input source switching.
-4. Hold the hotkey, speak, release. The text is pasted where your cursor is.
+1. Open Inkwell and finish onboarding. It downloads the speech models the first time they are needed (the main one is about 2.5 GB); they are never inside the installer.
+2. Hold the dictation key (Fn on the Mac, right Ctrl on Windows), speak, and let go. The text is typed where your cursor is.
+3. Join a call. When the Drop offers to record it, say yes, or start one yourself with **Record now** on Today.
 
 ## Models
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/media/models-dark.svg">
-  <img src="docs/media/models-light.svg" alt="Accuracy and speed of the five models. Qwen3 ASR has the lowest word error rate at 5.6%; SenseVoice is the fastest at 1.7 seconds." width="920">
-</picture>
+Chosen by measuring word error rates on public, human-labelled recordings (AMI meetings and FLEURS English). They download on first use from a pinned revision and are checked against a hash. The full list and the licences are in [docs/MODEL-WEIGHTS.md](docs/MODEL-WEIGHTS.md).
 
-| Model | Languages | Pick it when |
+| Job | Model | Runs on |
 |---|---|---|
-| **Qwen3 ASR** | 30, incl. Nordic | You want the best accuracy, or you move between English and a Nordic language. The only model here that does not force that choice |
-| **Parakeet V3** | 25 European | The default. You switch between European languages, or want it detected for you |
-| **Parakeet V2** | English | You only dictate in English. Same download as V3, meaningfully more accurate |
-| **SenseVoice** | en, zh, ja, ko, yue | Small disk, slow connection, or an older machine. A quarter of the size and the fastest here, at the same accuracy as Whisper |
-| **Whisper Turbo** | 99 | You need a language the others do not reach. Nothing else recommends it |
-
-Word error rates are measured, not quoted: eight recordings of one voice, scored
-against what was actually said, with the tool in `src-tauri/examples/ab_models.rs`.
-Eight clips is directional, not a benchmark, and your voice is not that voice.
-Measure your own with Save Debug Audio and the same tool.
-
-The list is short on purpose. It was thirteen models, most of which lost on
-every axis at once, which asked you to research speech recognition before
-dictating a sentence.
-
-All models run locally on CPU. No internet is needed once a model is downloaded.
-
-## Voice editing
-
-Select text anywhere, hold the edit hotkey (Cmd+Shift+E on macOS, Ctrl+Shift+E elsewhere), say what to change, and the rewrite replaces the selection. "Make this shorter", "fix the grammar", "turn this into bullet points".
-
-This needs an API key, because rewriting text to order is a language-model job and Inkwell has no model of its own to do it with. Dictation itself stays entirely local and needs no key. Clear the hotkey in General to turn the feature off and free the shortcut.
-
-## Getting a free API key
-
-Voice editing and AI polish are the only features that need one. Groq has a free tier that covers ordinary personal use, needs no credit card, and is fast enough that the rewrite feels instant. It takes about two minutes.
-
-1. Go to **[console.groq.com](https://console.groq.com)** and sign in with Google, GitHub or email.
-2. Open **API Keys** in the left sidebar, then **Create API Key**. Name it anything, "Inkwell" is fine.
-3. Copy the key **now**. It starts with `gsk_`, and Groq shows it once. If you lose it, delete that key and make another.
-4. In Inkwell, open **AI** in the sidebar. Groq is the first tab, marked `free key`.
-5. Paste the key into the field and it saves itself. The warning at the top disappears.
-6. Turn on the **AI Polish** toggle if you want it applied to ordinary dictation as well. Voice editing works either way.
-
-<picture>
-  <img src="docs/media/inkwell-ai.png" alt="The AI tab, showing the API key field with Groq selected and marked as a free key" width="900">
-</picture>
-
-Your key is stored in the operating system keyring, macOS Keychain, the Windows Credential Manager or the Secret Service on Linux, never in a config file in plain text. It is sent directly from your machine to the provider you chose. There is no server belonging to this project in the path.
-
-> [!IMPORTANT]
-> Dictation never needs a key and never leaves your machine. This is only for the two features that rewrite text. If you skip this section entirely, everything else still works.
-
-Prefer a different provider? OpenAI, Anthropic and OpenRouter are on the same screen, as is any OpenAI-compatible endpoint if you run your own.
-
-## Not built (so you do not have to ask)
-
-- **Speaker diarization, meeting mode, calendar integration.** Not planned.
-- **GPU acceleration.** CPU inference only.
-- **Voice agent mode.** Removed in this rehaul. It targeted a gateway that no longer exists.
-- **Silence trimming (Silero VAD)** downloads its model (`silero_vad.onnx`) on first run. Until that finishes, dictation works but silence is not trimmed, and the app says so rather than failing quietly.
-
+| Dictation and meeting transcripts | Qwen3-ASR 1.7B | llama.cpp: Metal on the Mac, Vulkan (or the CPU) on Windows |
+| Live words | Parakeet TDT 0.6B v3 | FluidAudio on the Mac's Neural Engine; sherpa-onnx on Windows |
+| The other side's speakers | Nemotron-3-Diarization | NeMo-Speech.cpp |
+| Voice detection | Silero VAD | tract |
 
 ## Support the project
 
@@ -164,28 +109,13 @@ Non-financial help is worth more: file a bug, report what breaks on your hardwar
 
 ## Build from source
 
-```bash
-# Prerequisites: Rust toolchain (rustup.rs), Node.js 20+
-# Platform deps: https://v2.tauri.app/start/prerequisites/
-
-git clone https://github.com/SirSicard/inkwell.git
-cd inkwell
-npm install
-cargo tauri dev
-```
-
-Rust tests: `cargo test` in `src-tauri`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the codebase layout and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for where the code is heading.
-
-## Stack
-
-Rust + [Tauri v2](https://tauri.app), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) for inference (ONNX Runtime, CPU), [Silero VAD](https://github.com/snakers4/silero-vad), cpal for capture, rubato for resampling, SQLite for history. Frontend is React 19, TypeScript, Tailwind v4, Framer Motion, and a WebGL ink shader.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the prerequisites, the checks and the codebase layout, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules the code keeps.
 
 ## Requirements
 
-- macOS on Apple Silicon or Intel, Windows 10/11, or a recent Linux desktop
-- 2 GB free RAM with Parakeet V3, less with the small models
-- Disk: about 50 MB for the app plus the model you choose (240 MB to 940 MB)
-- Any microphone
+- A Mac with Apple silicon on macOS 26 or later, or an x64 PC on Windows 11 24H2 or later
+- About 3 GB of disk for the models, plus the meetings you keep
+- A microphone
 
 ## Contributing
 
@@ -193,7 +123,7 @@ Bug reports and PRs are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first. 
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Third-party code and its licences are listed in [THIRD_PARTY.md](THIRD_PARTY.md), and each app's About screen carries their notices.
 
 ## Code signing policy
 
@@ -204,10 +134,10 @@ Free code signing provided by [SignPath.io](https://signpath.io), certificate by
 
 Only artifacts built by this repository's GitHub Actions workflows from this repository's own source are signed. Each release signing request is approved by hand.
 
-**Privacy policy:** see [Privacy](#privacy). This program does not send your audio anywhere. It contacts networked systems only to check for updates, to download the speech and voice-detection models it runs on, and, when you use AI polish or voice editing with your own API key, to send text to the provider you selected.
+**Privacy policy:** see [Privacy](#privacy). This program does not send your audio anywhere. It contacts networked systems only to check for updates and to download the speech and voice-detection models it runs on.
 
-Status: Windows builds up to v0.2.9 are not signed yet.
+Status: Windows builds are not signed yet.
 
 ## Credits
 
-Built by [Mattias Hjemgaard](https://github.com/SirSicard). Originally based on [Handy](https://github.com/cjpais/Handy) by CJ Pais. Powered by [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), [Tauri](https://tauri.app) and [Silero VAD](https://github.com/snakers4/silero-vad).
+Built by [Mattias Hjemgaard](https://github.com/SirSicard). Inkwell 0.2 was originally based on [Handy](https://github.com/cjpais/Handy) by CJ Pais. Speech recognition by [llama.cpp](https://github.com/ggml-org/llama.cpp) running Qwen3-ASR, live words by [FluidAudio](https://github.com/FluidInference/FluidAudio), speaker labels by [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp), and voice detection by [Silero VAD](https://github.com/snakers4/silero-vad).
