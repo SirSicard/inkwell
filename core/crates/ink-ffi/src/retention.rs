@@ -14,9 +14,11 @@
 //! reused, which only disk encryption (FileVault) covers. The record goes first: if its audio
 //! then cannot be removed, the words are already gone and the failure is counted.
 //!
-//! **What.** Meetings and dictations. An imported file is never swept: the user brought it in on
-//! purpose, and the library may hold its only copy (the Settings copy says "meetings and
-//! dictations").
+//! **What.** Meetings and dictations made here. Nothing an import brought in is ever swept,
+//! however old: an imported file ([`RecordKind::FileImport`]), nor a record an importer wrote
+//! ([`Record::imported`]: Inkwell 0.2's dictations, another app's meetings). The user brought it
+//! in on purpose, and the library may hold its only copy (the Settings copy says "meetings and
+//! dictations", and that what was imported is kept).
 //!
 //! **When.** Never on a timer (nothing ticks while idle): at launch, after each meeting's final
 //! pass (a recovered meeting's too), and when the setting changes.
@@ -258,9 +260,9 @@ fn days(shared: &Shared) -> Result<Option<i64>, StoreError> {
     })
 }
 
-/// **Worker** (the retention thread's). Deletes every ended meeting and dictation that started
-/// before the setting's cut-off, except a meeting whose final pass has not finished (see the
-/// module docs). `None` when the setting keeps everything; otherwise what it did,
+/// **Worker** (the retention thread's). Deletes every ended meeting and dictation made here that
+/// started before the setting's cut-off, except a meeting whose final pass has not finished (see
+/// the module docs). `None` when the setting keeps everything; otherwise what it did,
 /// also sent as `library.swept` when it did anything. It stops early at shutdown.
 pub fn sweep(shared: &Shared) -> Option<Swept> {
     let _one = SWEEPING
@@ -306,7 +308,11 @@ pub fn sweep(shared: &Shared) -> Option<Swept> {
             if shared.shutdown.is_cancelled() {
                 break 'pages;
             }
-            if record.ended_at_unix_ms.is_none() || record.kind == RecordKind::FileImport {
+            // Never a record without an end, nor an import (see What. in the module docs).
+            if record.ended_at_unix_ms.is_none()
+                || record.kind == RecordKind::FileImport
+                || record.imported
+            {
                 continue;
             }
             // Checked and deleted under the holds' lock, so no hold is taken in between (see

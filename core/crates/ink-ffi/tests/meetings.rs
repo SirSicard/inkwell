@@ -1026,6 +1026,104 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
     core.shutdown();
 }
 
+/// Retention never sweeps what an import brought in: records another source's import wrote (a
+/// meeting with its audio, a dictation) are kept however old they are, while a meeting and a
+/// dictation made here, as old, are deleted.
+#[test]
+fn a_sweep_keeps_what_an_import_brought_in() {
+    const DAY: i64 = 86_400_000;
+    let dir = TempDir::new("sweep-imports");
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    let clock = clock();
+    let old = clock.unix_ms() - 40 * DAY;
+    let made_here = |kind| {
+        let id = store
+            .create_record(NewRecord {
+                kind,
+                title: None,
+                started_at_unix_ms: old,
+                source_app: None,
+                audio_dir: None,
+            })
+            .unwrap();
+        store.finish_record(&id, old + 60_000).unwrap();
+        id
+    };
+    let (meeting, dictation) = (
+        made_here(RecordKind::Meeting),
+        made_here(RecordKind::Dictation),
+    );
+    // Written by the importing tool before the import, as `RecordImport` asks.
+    let audio = dir.path().join("meetings/imported");
+    std::fs::create_dir_all(&audio).unwrap();
+    std::fs::write(audio.join("mic-000000-16000x1.pcm"), [0u8; 64]).unwrap();
+    let imported = |kind, audio_dir: Option<&str>| ink_store::import::RecordImport {
+        record: NewRecord {
+            kind,
+            title: None,
+            started_at_unix_ms: old,
+            source_app: None,
+            audio_dir: audio_dir.map(Into::into),
+        },
+        ended_at_unix_ms: Some(old + 60_000),
+        revision: 2,
+        segments: vec![ink_core::Segment {
+            channel: Channel::Mic,
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "an imported line".into(),
+            speaker: None,
+        }],
+        summary: None,
+        speaker_names: vec![],
+        commitments: vec![],
+    };
+    let imports = store
+        .import_records(
+            "import.example-source",
+            "{}",
+            &[
+                imported(RecordKind::Meeting, Some("meetings/imported")),
+                imported(RecordKind::Dictation, None),
+            ],
+        )
+        .unwrap();
+    let parts = Parts {
+        store: store.clone(),
+        clock,
+        registry: Registry::new(Vec::new()).unwrap(),
+        models: ModelDir::new(dir.path().join("models")),
+        loader: MockLoader::new(Behaviour::Say("x".into())),
+        installer: Arc::new(MockInstaller {
+            generation: Arc::default(),
+            gate: None,
+            installs: AtomicUsize::new(0),
+        }),
+        data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: MeetingPlatform::default(),
+    };
+    // Forever until now: the launch's sweep deletes nothing, so the change's sweep is the one.
+    let (core, events) = start_parts(parts);
+    core.command(r#"{"cmd":"setting.set","key":"retention.days","value":"30"}"#)
+        .unwrap();
+    let swept = events.wait_type("library.swept", WAIT);
+    assert_eq!(
+        swept["deleted"], 2,
+        "the meeting and the dictation made here"
+    );
+    assert_eq!(swept["failed"], 0);
+    assert_eq!(store.record(&meeting).unwrap(), None);
+    assert_eq!(store.record(&dictation).unwrap(), None);
+    for id in &imports {
+        assert!(store.record(id).unwrap().is_some(), "an import is kept");
+        assert_eq!(store.segments(id).unwrap().len(), 1);
+    }
+    assert!(audio.exists(), "and the imported meeting's audio");
+    events.assert_valid();
+    core.shutdown();
+}
+
 fn clock_fn() -> Arc<dyn Clock> {
     clock()
 }

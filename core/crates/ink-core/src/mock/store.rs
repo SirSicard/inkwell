@@ -132,6 +132,7 @@ impl Store for MemStore {
             source_app: new.source_app,
             audio_dir: new.audio_dir,
             revision: 1,
+            imported: false,
         };
         inner.records.insert(
             id.clone(),
