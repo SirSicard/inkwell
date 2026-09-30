@@ -12,11 +12,17 @@ of its own so nothing touches the one you use: the models go into `<library>\mod
 
 ## Setup
 
+In a **Developer Command Prompt for VS** (x64), from the repository. The core is built with its
+engines, as for S3.5a: without them Silero VAD is not listed, and Qwen3-ASR downloads but cannot
+run.
+
 ```
 cd core
-cargo build -p ink-ffi --lib
+set LIBCLANG_PATH=C:\Program Files\LLVM\bin
+set CMAKE_GENERATOR=Ninja
+cargo build --release -p ink-ffi --lib --features engine-llama,ink-engines/engine-llama-vulkan,ink-engines/engine-silero
 cd ..\windows
-dotnet publish Inkwell\Inkwell.csproj -c Release -o %TEMP%\inkwell-app
+dotnet publish Inkwell\Inkwell.csproj -c Release -o %TEMP%\inkwell-app -p:InkCoreDir=%CD%\..\core\target\release\
 set INK_DATA_DIR=%TEMP%\inkwell-first-run
 %TEMP%\inkwell-app\Inkwell.exe
 ```
@@ -26,8 +32,8 @@ set INK_DATA_DIR=%TEMP%\inkwell-first-run
 - [ ] The first run has five dots. After the permissions, a step "Models" lists each model that is
       not installed: its name, licence and size, and "not installed".
 - [ ] Under the rows, one line gives the total and where the files come from ("from
-      huggingface.co", and GitHub when Silero VAD is listed), then "Nothing downloads until you
-      press Download."
+      huggingface.co and GitHub": Silero VAD's file is on GitHub), then "Nothing downloads until
+      you press Download."
 - [ ] Nothing downloads before the button: `%TEMP%\inkwell-first-run\models` stays empty while
       you go Back, Continue and Skip.
 - [ ] Narrator reads the step's heading, the rows, and the Download button's name: the models,
@@ -40,15 +46,16 @@ set INK_DATA_DIR=%TEMP%\inkwell-first-run
       can go on: …" shows.
 - [ ] **Continue** goes on while it downloads; finish the first run. Settings > Models shows the
       same bars.
-- [ ] When a model finishes, its row reads "installed" and the next one starts. Settings > Models'
-      lines (Dictation, Meeting transcript, Live words) change to the new model without leaving the
-      screen. Dictation then works.
+- [ ] When a model finishes, its row reads "installed" and the next one starts. In Settings >
+      Models, the lines of the jobs it does change to it without leaving the screen (Qwen3-ASR:
+      Dictation and Meeting transcript). Once Qwen3-ASR is in, dictation works.
 
 ## C. A failure, and Retry
 
 - [ ] Turn the network off during a download: the row reads "Couldn't download …: …" in words,
       with **Retry**; a model waiting behind it starts, and fails the same way while offline.
-- [ ] Network on, **Retry**: the bar starts from where it stopped, not from zero, and finishes.
+- [ ] Network on, **Retry**: after "Starting the download…" (the core first re-reads what it has),
+      the bar picks up where it stopped, not from zero, and finishes.
 
 ## D. Settings > Models
 
