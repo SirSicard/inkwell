@@ -57,13 +57,18 @@ import { DOWNLOADS } from '../lib/release';
         </ul>
       </div>
       <div class="platform-body">
-        <p class="step-single">
-          Run the installer. It is not code signed yet, so SmartScreen says “Windows protected your PC”: click
-          “More info”, then “Run anyway”. Your browser may also flag the download as uncommon.
-        </p>
+        {/* PLACEHOLDER: the guide to installing without a signature. The Windows distribution step (S3.6)
+            drafts its final wording; the README's Install section and the hero link here. */}
+        <ol class="steps">
+          <li>Download the installer. If your browser says the file isn’t commonly downloaded, choose to keep it.</li>
+          <li>
+            Run it. The installer is not code signed yet, so SmartScreen says “Windows protected your PC”: click
+            “More info”, then “Run anyway”.
+          </li>
+        </ol>
         <p class="platform-note">
-          Only macOS is signed today. The source and the workflow that built these files are public, so you
-          can check what you are running.
+          Windows warns about any installer without a signature, and Inkwell’s isn’t signed yet. The source and
+          the workflow that built this file are public, so you can check what you are running.
         </p>
       </div>
     </div>
