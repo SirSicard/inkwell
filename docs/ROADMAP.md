@@ -32,7 +32,7 @@ macOS 26 or later, Apple silicon.
 - **S2.5–S2.6** Screens: Today, Library, Record, Live, Owed, Settings, onboarding.
 - **S2.7–S2.8** Dictation and meetings end to end, then a week of daily use before release.
 - **S2.9a–c** Import from 0.2 history; signed, notarized release with Sparkle updates.
-- 0.2.11 on the legacy branch points 0.2 users to 1.0.
+- 0.2.10 on the legacy branch points 0.2 users to 1.0.
 
 ## M3: Inkwell for Windows
 
