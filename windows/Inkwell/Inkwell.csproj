@@ -42,7 +42,11 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\Inkwell.ico" CopyToOutputDirectory="PreserveNewest" />
-    <!-- The core. Missing, the app still starts and says the core did not start. -->
-    <Content Include="$(InkCoreDir)ink_ffi.dll" Link="ink_ffi.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(InkCoreDir)ink_ffi.dll')" />
+    <!-- The core, and the engines' DLLs beside it: every DLL in InkCoreDir, which for a release is
+         the folder windows/scripts/build-core.ps1 fills with exactly those (inkwell-core). They must
+         sit beside Inkwell.exe, where Windows looks first: sherpa-onnx's onnxruntime.dll there, not
+         Windows' own older one in System32. Missing, the app still starts and says the core did not
+         start. -->
+    <Content Include="$(InkCoreDir)*.dll" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

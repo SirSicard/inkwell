@@ -17,12 +17,12 @@ namespace Inkwell.Core.Screens;
 public static partial class RustNotices
 {
     /// <summary>The cargo features the release builds the core with.</summary>
-    public const string Features = "engine-llama,ink-engines/engine-silero,ink-engines/engine-nemo";
+    public const string Features = "engine-llama,ink-engines/engine-llama-vulkan,ink-engines/engine-silero,ink-engines/engine-sherpa,ink-engines/engine-nemo";
     /// <summary>The target the release builds the core for.</summary>
     public const string Target = "x86_64-pc-windows-msvc";
     /// <summary>FNV-1a (64-bit) of the features, a line feed, the target, a line feed and
     /// core/Cargo.lock (line ends normalised) this was generated from.</summary>
-    public const string LockFingerprint = "7b7cdff31c08c65d";
+    public const string LockFingerprint = "c537cd5ed2235779";
 
     /// <summary>Every crate, in name order.</summary>
     public static IReadOnlyList<RustCrateNotice> Crates { get; } =

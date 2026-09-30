@@ -61,10 +61,14 @@ const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
 /// [`WINDOWS_TARGET`]'s ([`not_covered`]). It links a subset of them: the same crates less two
 /// x86-only CPU-feature detection crates.
 const WINDOWS_ARM64_TARGET: &str = "aarch64-pc-windows-msvc";
-/// The features the Windows release builds the core with. It has no build script yet to hold
-/// them to, as the Mac's has (a test does); its engines are the Mac's (S3.2: llama.cpp, whose
-/// Vulkan backend, `ink-engines/engine-llama-vulkan`, adds no crate, Silero and NeMo-Speech.cpp).
-const WINDOWS_RELEASE_FEATURES: &str = RELEASE_FEATURES;
+/// The features the Windows release builds the x64 core with: `windows/scripts/build-core.ps1`'s
+/// for x64 (a test holds them equal). The Mac's engines, with llama.cpp's Vulkan backend and
+/// Parakeet on sherpa-onnx (whose `serde_json` is in the tree already).
+const WINDOWS_RELEASE_FEATURES: &str = "engine-llama,ink-engines/engine-llama-vulkan,ink-engines/engine-silero,ink-engines/engine-sherpa,ink-engines/engine-nemo";
+/// The features it builds the ARM64 core with: `build-core.ps1`'s for ARM64 (the same test), whose
+/// crates [`not_covered`] checks against the file's. No Vulkan, and no diarizer yet.
+const WINDOWS_ARM64_RELEASE_FEATURES: &str =
+    "engine-llama,ink-engines/engine-silero,ink-engines/engine-sherpa";
 /// The generated C# file, from the repository root.
 const CSHARP_OUT: &str = "windows/Inkwell.Core/Screens/About/RustNotices.g.cs";
 /// The overrides table and its texts, from the repository root.
@@ -421,8 +425,8 @@ fn generate(root: &Path, shell: Shell) -> Result<String, Vec<String>> {
     let core = root.join("core");
     let tree = release_tree(&core, shell.target, shell.features).map_err(|e| vec![e])?;
     if shell.csharp {
-        let arm64 =
-            release_tree(&core, WINDOWS_ARM64_TARGET, shell.features).map_err(|e| vec![e])?;
+        let arm64 = release_tree(&core, WINDOWS_ARM64_TARGET, WINDOWS_ARM64_RELEASE_FEATURES)
+            .map_err(|e| vec![e])?;
         let missing = not_covered(&tree, &arm64);
         if !missing.is_empty() {
             return Err(missing
@@ -767,6 +771,26 @@ mod tests {
             .collect();
         assert_eq!(kept, ["gone", "zeta"], "a crate no lock has stays, to fail");
         let _ = std::fs::remove_dir_all(registry);
+    }
+
+    /// `windows/scripts/build-core.ps1`'s features for each architecture: its line for x64 and its
+    /// line for ARM64 (the diarizer's switch).
+    #[test]
+    fn the_windows_release_features_are_the_ones_build_core_builds() {
+        let script =
+            std::fs::read_to_string(repo_root().join("windows/scripts/build-core.ps1")).unwrap();
+        let features = |arch: &str| {
+            let prefix = format!("{arch} = '");
+            script
+                .lines()
+                .find_map(|l| l.trim_start().strip_prefix(prefix.as_str()))
+                .and_then(|l| l.strip_suffix('\''))
+                .unwrap_or_else(|| panic!("build-core.ps1 sets no {arch} features"))
+                .to_string()
+        };
+        assert_eq!(features("X64"), WINDOWS_RELEASE_FEATURES);
+        assert_eq!(features("Arm64"), WINDOWS_ARM64_RELEASE_FEATURES);
+        assert_eq!(WINDOWS.features, WINDOWS_RELEASE_FEATURES);
     }
 
     #[test]
