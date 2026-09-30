@@ -258,6 +258,22 @@ public class LiveMeetingTests
         Assert.Equal(["And now?", "What do I owe?"], live.RecentAsked.Select(a => a.Question));
     }
 
+    /// <summary>
+    /// Without the user's OK (the meetings consent) the core sends nothing and refuses with its
+    /// NEEDS_CONSENT message: the answer says so and where to give it, not "try again".
+    /// </summary>
+    [Fact]
+    public void AskWithoutConsentSaysWhereToGiveIt()
+    {
+        var sent = new Sent();
+        var live = new LiveModel(sent.Send);
+        live.Apply(Ev.Of("""{"type":"meeting.started","record":"r1"}"""));
+        live.AskText = "What did they ask?";
+        live.SubmitAsk();
+        live.Apply(Ev.Of("""{"type":"command.failed","command":"meeting.ask","id":"ask:0","message":"Ask needs your OK to send the meeting to a language model: turn on summaries and Ask in Settings > AI"}"""));
+        Assert.Equal(new AskAnswer.Unavailable("Ask needs your OK first: turn on Summaries and Ask in Settings > AI."), live.Asked[0].Answer);
+    }
+
     /// <summary>Windows: the header's name is checked here too (LiveHeader), with the store's fields.</summary>
     [Fact]
     public void TheMeetingIsNamedByItsTitleOrItsApp()
