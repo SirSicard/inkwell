@@ -100,11 +100,17 @@ public abstract record AskAnswer
 
     /// <summary>
     /// What the core's failure means for the user. Its message names what failed (never the
-    /// question); only the case without a model and the ended meeting get their own words.
+    /// question); the cases without a model, without the user's OK, and after the meeting get
+    /// their own words.
     /// </summary>
     public static AskAnswer Failed(string message)
     {
         ArgumentNullException.ThrowIfNull(message);
+        // The core's NEEDS_CONSENT (ink-ffi asking.rs): nothing was sent. Its start is stable.
+        if (message.StartsWith("Ask needs your OK", StringComparison.Ordinal))
+        {
+            return new Unavailable("Ask needs your OK first: turn on Summaries and Ask in Settings > AI.");
+        }
         if (message.Contains("no language model", StringComparison.Ordinal))
         {
             // The Mac names Apple Intelligence; on Windows the model is one the core's engines

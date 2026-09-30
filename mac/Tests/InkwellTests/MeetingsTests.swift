@@ -185,6 +185,18 @@ final class LiveMeetingTests: XCTestCase {
         XCTAssertEqual(live.asked.first?.answer, .unavailable("Couldn't answer that. Try asking again."))
     }
 
+    /// Without the user's OK (the `meetings` consent) the core sends nothing and refuses with its
+    /// NEEDS_CONSENT message: the answer says so and where to give it, not "try again".
+    func testAskWithoutConsentSaysWhereToGiveIt() {
+        let sent = Sent()
+        let live = LiveModel(send: sent.send)
+        live.apply(event(#"{"type":"meeting.started","record":"r1"}"#))
+        live.askText = "What did they ask?"
+        live.submitAsk(context: [])
+        live.apply(event(#"{"type":"command.failed","command":"meeting.ask","id":"ask:0","message":"Ask needs your OK to send the meeting to a language model: turn on summaries and Ask in Settings > AI"}"#))
+        XCTAssertEqual(live.asked.first?.answer, .unavailable("Ask needs your OK first: turn on Summaries and Ask in Settings > AI."))
+    }
+
     /// Carried into S2.8: the ledger keeps a window of the newest finals in memory, never the
     /// session (the record keeps every line), and counts what it holds for the dogfood week.
     func testTheLedgerKeepsAWindowAndCountsIt() {
