@@ -37,6 +37,40 @@ public class ScreenModelsTests
         Assert.DoesNotContain(sent.Commands, c => c is CoreCommand.ModelUpdate); // nothing downloads on launch
     }
 
+    /// <summary>
+    /// As the Mac's controller at core.ready: once the screens have read what they need, the
+    /// dictation model is kept warm (model.warm), so the first dictation after a launch is not a
+    /// cold load. Once: the core's answer sends no other.
+    /// </summary>
+    [Fact]
+    public void TheCoreBeingReadyKeepsTheDictationModelWarm()
+    {
+        var sent = new Sent();
+        var screens = new ScreenModels(sent.Send, log: new Logged().Log);
+        screens.Apply([Ready]);
+        Assert.Equal(new CoreCommand.ModelWarm(Job.DictationFinal), sent.Commands[^1]); // after the screens' reads
+        screens.Apply([Ev.Of("""{"type":"model.warmed","job":"dictation_final","id":"qwen3-asr-1.7b-q8"}""")]);
+        Assert.Single(sent.Commands, c => c is CoreCommand.ModelWarm);
+    }
+
+    /// <summary>
+    /// Only when the batch leaves the core ready with this shell's ABI, as the Mac's store status
+    /// decides: not a core with another ABI (no command can be trusted to mean the same to it), nor
+    /// one that stopped in the same batch.
+    /// </summary>
+    [Fact]
+    public void NothingIsWarmedUnlessTheCoreIsLeftReadyWithThisShellsAbi()
+    {
+        var other = new Sent();
+        new ScreenModels(other.Send, log: new Logged().Log).Apply(
+            [Ev.Of($$"""{"type":"core.ready","abi":{{InkSession.AbiVersion + 1}},"version":"9.9.9"}""")]);
+        Assert.DoesNotContain(other.Commands, c => c is CoreCommand.ModelWarm);
+
+        var stopped = new Sent();
+        new ScreenModels(stopped.Send, log: new Logged().Log).Apply([Ready, Ev.Of("""{"type":"core.stopped"}""")]);
+        Assert.DoesNotContain(stopped.Commands, c => c is CoreCommand.ModelWarm);
+    }
+
     [Fact]
     public void AFailureNoScreenHandlesIsLoggedByNameOnly()
     {
