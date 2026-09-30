@@ -343,8 +343,10 @@ public sealed class CoreStore : ObservableModel
                 Offer = null;
                 break;
             case MeetingDetected detected:
-                // Only while nothing is recorded: the core never offers during a meeting.
-                if (Meeting is null)
+                // While nothing is recorded, or while the last meeting's final pass runs: its
+                // capture has ended, so the core offers the next call then (once only). The Drop
+                // shows it when the pass ends.
+                if (Meeting is null or { Stopping: true })
                 {
                     Offer = new MeetingOffer(detected.App, AppName(detected.App, detected.AppName) ?? detected.AppName);
                 }
@@ -432,7 +434,6 @@ public sealed class CoreStore : ObservableModel
         LiveDictation = null;
     }
 
-    /// <summary>Changes the live meeting when <paramref name="record"/> is the one live; another record's event changes nothing.</summary>
     /// <summary>
     /// A meeting app's name as the user knows it. Windows' core names an app by its executable's
     /// stem ("ms-teams"), so a well-known executable gets its app's name ("Microsoft Teams"), as
@@ -441,6 +442,7 @@ public sealed class CoreStore : ObservableModel
     private static string? AppName(string? app, string? coreName) =>
         app is not null && AppIdentity.Known.TryGetValue(app, out var known) ? known : coreName;
 
+    /// <summary>Changes the live meeting when <paramref name="record"/> is the one live; another record's event changes nothing.</summary>
     private void UpdateMeeting(string record, Func<LiveMeeting, LiveMeeting> change)
     {
         if (Meeting is { } live && live.Record == record)

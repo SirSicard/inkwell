@@ -264,6 +264,33 @@ public sealed class MeetingDropTests
         Assert.Equal("Microsoft Teams opened the microphone", rig.Drop.Line!.Title);
     }
 
+    /// <summary>
+    /// Review (S3.5b): back-to-back calls. The next call is offered while the last meeting's final
+    /// pass runs (the core offers once, when its capture has ended): kept, and shown when the pass
+    /// ends.
+    /// </summary>
+    [Fact]
+    public void AnOfferDuringTheFinalPassShowsWhenThePassEnds()
+    {
+        var rig = new Rig();
+        rig.Apply(Offered, Started, """{"type":"meeting.stopped","record":"r1"}""");
+        rig.Apply(ZoomOffered);
+        Assert.Equal(DropInk.Blotting, rig.Drop.Ink);
+        Assert.Equal("Blotting · final pass", rig.Drop.Line!.Title);
+        Assert.Equal(new MeetingOffer("Zoom.exe", "Zoom"), rig.Store.Offer);
+
+        rig.Apply("""{"type":"meeting.finished","record":"r1","revision":2}""");
+        Assert.Equal(DropInk.Idle, rig.Drop.Ink);
+        Assert.Equal("Zoom opened the microphone", rig.Drop.Line!.Title);
+        Assert.Equal(Consent, rig.Drop.Line!.Detail);
+
+        // While a meeting records, an offer is still not taken.
+        rig.Apply(
+            """{"type":"meeting.started","record":"r2","app":"Zoom.exe","app_name":"Zoom","far_end":"app"}""",
+            Offered);
+        Assert.Null(rig.Store.Offer);
+    }
+
     /// <summary>An app the shell does not know keeps the core's name for it.</summary>
     [Fact]
     public void AnUnknownAppKeepsTheCoresName()

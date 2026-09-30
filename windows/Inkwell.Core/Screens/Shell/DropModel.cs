@@ -298,7 +298,8 @@ public sealed class DropModel
             DropInk.Dictating => DictationDrop.Live(store.Dictation, store.LiveDictation),
             _ => MeetingDrop.Live(store.Meeting!, Ink),
         };
-        // The core offers only while nothing is recorded; a take in progress hides it until it ends.
+        // The core offers only while nothing is being captured; what is live (a take, or the last
+        // meeting's final pass) hides the offer until it ends.
         offer = live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure()) : null;
         foreach (var e in batch)
         {
