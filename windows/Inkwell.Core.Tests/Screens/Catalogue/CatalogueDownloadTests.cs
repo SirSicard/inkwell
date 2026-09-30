@@ -80,11 +80,12 @@ public class CatalogueDownloadTests
 
         var before = sent.Commands.Count;
         catalogue.Apply(Finished(Qwen, ok: true));
-        // The list and the routes first (engine.route waits behind a model.update), then the next download.
+        // The list and the routes first (engine.route waits behind a model.update), then the
+        // dictation model kept warm, then the next download.
         CoreCommand[] afterQwen =
         [
             new CoreCommand.ModelsList(), new CoreCommand.EngineRoute(Job.DictationFinal), new CoreCommand.EngineRoute(Job.MeetingFinal),
-            new CoreCommand.EngineRoute(Job.LivePartials), new CoreCommand.ModelUpdate(Silero, Silero),
+            new CoreCommand.EngineRoute(Job.LivePartials), new CoreCommand.ModelWarm(Job.DictationFinal), new CoreCommand.ModelUpdate(Silero, Silero),
         ];
         Assert.Equal(afterQwen, sent.Commands.Skip(before));
         var qwen = Row(catalogue, Qwen);
@@ -99,6 +100,41 @@ public class CatalogueDownloadTests
         Assert.Equal([Qwen, Silero], Updates(sent));
         Assert.False(catalogue.Downloading);
         Assert.Equal(2, catalogue.Requeries); // once after each
+    }
+
+    /// <summary>
+    /// A model that does dictation, once this screen downloaded it, is kept warm (model.warm, as
+    /// on the Mac): the first dictation after the download is not a cold load. The warm goes
+    /// before the next download, so it never waits for that one. A model with no dictation job
+    /// (Silero VAD) and a failed download are not warmed.
+    /// </summary>
+    [Fact]
+    public void AnInstalledDictationModelIsKeptWarmBeforeTheNextDownload()
+    {
+        CoreCommand[] asked =
+        [
+            new CoreCommand.ModelsList(), new CoreCommand.EngineRoute(Job.DictationFinal),
+            new CoreCommand.EngineRoute(Job.MeetingFinal), new CoreCommand.EngineRoute(Job.LivePartials),
+        ];
+        var sent = new Sent();
+        var catalogue = new CatalogueModel(sent.Send);
+        catalogue.Apply(Listed());
+        catalogue.Download(Qwen);
+        catalogue.Download(Silero);
+        var before = sent.Commands.Count;
+        catalogue.Apply(Finished(Qwen, ok: true));
+        CoreCommand[] afterQwen = [.. asked, new CoreCommand.ModelWarm(Job.DictationFinal), new CoreCommand.ModelUpdate(Silero, Silero)];
+        Assert.Equal(afterQwen, sent.Commands.Skip(before));
+        before = sent.Commands.Count;
+        catalogue.Apply(Finished(Silero, ok: true));
+        Assert.Equal(asked, sent.Commands.Skip(before)); // Silero VAD does no dictation: not warmed
+
+        var failing = new CatalogueModel(sent.Send);
+        failing.Apply(Listed());
+        failing.Download(Qwen);
+        before = sent.Commands.Count;
+        failing.Apply(Finished(Qwen, ok: false, "the connection was reset"));
+        Assert.Equal(asked, sent.Commands.Skip(before)); // a failed download is not warmed
     }
 
     [Fact]

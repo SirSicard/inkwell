@@ -48,7 +48,9 @@ set INK_DATA_DIR=%TEMP%\inkwell-first-run
       same bars.
 - [ ] When a model finishes, its row reads "installed" and the next one starts. In Settings >
       Models, the lines of the jobs it does change to it without leaving the screen (Qwen3-ASR:
-      Dictation and Meeting transcript). Once Qwen3-ASR is in, dictation works.
+      Dictation and Meeting transcript). Once Qwen3-ASR is in, dictation works, and the first
+      dictation after it is as quick as the next (it is loaded when its download ends, not by that
+      take).
 
 ## C. A failure, and Retry
 

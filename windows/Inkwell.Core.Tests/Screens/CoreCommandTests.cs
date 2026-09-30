@@ -22,6 +22,11 @@ public class CoreCommandTests
         Assert.True(Fields(new CoreCommand.CommitmentSetDone("c", true)).GetProperty("done").GetBoolean());
         Assert.Equal("system_audio", Fields(new CoreCommand.PermissionRequest(PermissionName.SystemAudio)).GetProperty("permission").GetString());
         Assert.Equal("live_partials", Fields(new CoreCommand.EngineRoute(Job.LivePartials)).GetProperty("job").GetString());
+        var warm = Fields(new CoreCommand.ModelWarm(Job.DictationFinal));
+        Assert.Equal("model.warm", warm.GetProperty("cmd").GetString());
+        Assert.Equal("dictation_final", warm.GetProperty("job").GetString());
+        Assert.Equal("model.warm:dictation_final", warm.GetProperty("id").GetString());
+        Assert.Equal("model.warm", new CoreCommand.ModelWarm(Job.DictationFinal).Name);
         Assert.Equal("note.add", new CoreCommand.NoteAdd("r", 1, "private words", "x").Name);
         Assert.DoesNotContain("private", new CoreCommand.NoteAdd("r", 1, "private words", "x").Name);
     }

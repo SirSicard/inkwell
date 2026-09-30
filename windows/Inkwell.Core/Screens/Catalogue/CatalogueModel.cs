@@ -13,7 +13,9 @@
 // registry id (the core installs it and loads nothing), one at a time in the order asked for: the
 // next is sent only once the one before has ended, by model.update_finished or as a failed
 // command. model.update_progress moves its row; a failure shows on its row in the core's words,
-// and Retry asks again (the core resumes what it has on disk).
+// and Retry asks again (the core resumes what it has on disk). A model that does dictation is kept
+// warm once its download ends well (model.warm, as the Mac's), sent before the next download so it
+// never waits for that one.
 using System.Collections.Immutable;
 using System.Globalization;
 using Inkwell.Core.Events;
@@ -215,6 +217,10 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         send(new CoreCommand.ModelUpdate(id, id));
     }
 
+    /// <summary>Whether the catalogue lists the model doing dictation (Silero VAD and Nemotron do not).</summary>
+    private bool Dictates(string id) =>
+        Models.FirstOrDefault(m => m.Id == id)?.Jobs.Any(j => j.Job == Job.DictationFinal) == true;
+
     /// <summary>The running download ended; the next one goes.</summary>
     private void Ended(ModelDownload outcome)
     {
@@ -339,6 +345,11 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
                 Requery();
                 if (finished.Next == running)
                 {
+                    // Warmed now, not by the first dictation after the download.
+                    if (finished.Ok && Dictates(finished.Next))
+                    {
+                        send(new CoreCommand.ModelWarm(Job.DictationFinal));
+                    }
                     Ended(finished.Ok ? new ModelDownload.Installed() : new ModelDownload.Failed(finished.Message ?? NoReasonText));
                 }
                 break;

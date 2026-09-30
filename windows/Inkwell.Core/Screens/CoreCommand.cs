@@ -103,6 +103,17 @@ public abstract record CoreCommand
             [("cmd", Name), ("model", Model), ("next", Next), ("id", $"{Name}:{Next}")];
     }
 
+    /// <summary>
+    /// Loads the job's model and keeps it loaded: answered by model.warmed, model.refused or
+    /// model.warm_failed. Its id names the job ("model.warm:dictation_final"), as the Mac's.
+    /// </summary>
+    public sealed record ModelWarm(Job Job) : CoreCommand
+    {
+        public override string Name => "model.warm";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("job", Wire.Name(Job)), ("id", $"{Name}:{Wire.Name(Job)}")];
+    }
+
     /// <summary>Its id names the job ("engine.route:dictation_final"), so a failure is matched to its line.</summary>
     public sealed record EngineRoute(Job Job) : CoreCommand
     {
