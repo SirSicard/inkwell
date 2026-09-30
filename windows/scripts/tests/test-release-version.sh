@@ -45,9 +45,15 @@ run "a dry run while a notice is unchecked" 0 "version=1.0.0" dry-run 1.0.0
 out="$(/bin/bash "$script" dry-run 1.0.0 2>/dev/null)"
 assert_absent "the dry run's report stays off stdout (the workflow's outputs)" "$out" "winfoo"
 
-# Without the override, the Windows-only list is among those read (its unchecked lines appear).
+# Without the override, the Windows-only list is among those read: the total counts its lines,
+# whether they are verified yet or not (a tag needs them verified, so no line may be assumed open).
 unset INK_NOTICES_FILES
+entries() { cat "$@" | grep -cvE '^(#|$)' || true; }
+windows_list="$here/../../Inkwell.Core/Screens/About/composed-notices.txt"
+windows_entries="$(entries "$windows_list")"
+[ "$windows_entries" -gt 0 ] && pass "the Windows-only list has notices" || flunk "the Windows-only list has no notices"
+all="$(entries "$here/../../../core/crates/ink-ffi/notices/overrides.txt" "$here/../../../mac/composed-notices.txt" "$windows_list")"
 out="$(/bin/bash "$script" dry-run 1.0.0 2>&1)"
-assert_contains "the real lists include the Windows-only notices" "$out" "composed-notices.txt: winuiex"
+assert_contains "the real lists include the Windows-only notices" "$out" " $all notice(s)"
 
 finish
