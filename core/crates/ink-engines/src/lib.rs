@@ -16,10 +16,17 @@
 //! Everything here runs on worker threads, is `Send + Sync`, and holds no lock across a load, a
 //! download or an engine call.
 
-// No unsafe code, except the NeMo-Speech.cpp FFI (`engine-nemo`), which allows it for its own
-// module; every block there carries a SAFETY comment (clippy enforces it).
-#![cfg_attr(not(feature = "engine-nemo"), forbid(unsafe_code))]
-#![cfg_attr(feature = "engine-nemo", deny(unsafe_code))]
+// No unsafe code, except the NeMo-Speech.cpp FFI (`engine-nemo`) and the delay-load hook of a
+// Windows Vulkan build (`llama/no_vulkan.rs`), which allow it for their own modules; every block
+// there carries a SAFETY comment (clippy enforces it).
+#![cfg_attr(
+    not(any(feature = "engine-nemo", all(windows, feature = "engine-llama-vulkan"))),
+    forbid(unsafe_code)
+)]
+#![cfg_attr(
+    any(feature = "engine-nemo", all(windows, feature = "engine-llama-vulkan")),
+    deny(unsafe_code)
+)]
 #![warn(missing_docs)]
 
 mod adapters;
