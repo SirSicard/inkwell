@@ -3,7 +3,8 @@
 // shader, this plain window takes its place: the paper panel, a still ink dot and the state's two
 // lines, painted with GDI into an ordinary redirected window, so it depends on neither Direct3D nor
 // DirectComposition. It keeps the Drop's rules: WS_EX_NOACTIVATE | WS_EX_TOPMOST |
-// WS_EX_TOOLWINDOW, MA_NOACTIVATE, shown only with SWP_NOACTIVATE.
+// WS_EX_TOOLWINDOW, MA_NOACTIVATE, shown only with SWP_NOACTIVATE. An offer's buttons are drawn
+// and answer clicks here too, where the Drop's own layout puts them (DropLayout).
 using System.Runtime.InteropServices;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -23,6 +24,14 @@ internal sealed unsafe class DropFallback : IDisposable
     private HWND hwnd;
     private DropText text = new("", "");
     private double scale = 1;
+    /// <summary>The button a press went down on, until it comes up.</summary>
+    private int? pressed;
+
+    /// <summary>A button of the text shown was clicked (its index). UI thread.</summary>
+    public event Action<int>? ButtonClicked;
+
+    /// <summary>The Drop's screen reader name, over it (the Drop's window announces it).</summary>
+    private readonly ScreenReaderName speech;
 
     /// <summary>Whether it is on screen.</summary>
     public bool IsShown { get; private set; }
@@ -65,21 +74,27 @@ internal sealed unsafe class DropFallback : IDisposable
             throw new InkRendererException($"couldn't make the Drop's fallback window (error {error})");
         }
         SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, GCHandle.ToIntPtr(self));
+        speech = new ScreenReaderName(hwnd, "the Drop's fallback");
     }
 
     /// <summary>Shows <paramref name="lines"/> over <paramref name="bounds"/> (the Drop's rectangle, in pixels) at <paramref name="dpiScale"/>.</summary>
     public void Show(RECT bounds, DropText lines, double dpiScale)
     {
+        if (lines != text)
+        {
+            pressed = null;
+        }
         text = lines;
         scale = dpiScale;
         int w = bounds.right - bounds.left, h = bounds.bottom - bounds.top;
         var corner = (int)Math.Round(2 * DropLayout.CornerRadius * scale);
         // The window owns the region once set. Without it the panel is square: still shown.
         _ = SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, corner, corner), false);
-        fixed (char* name = lines.AccessibleName)
+        fixed (char* name = lines.WindowTitle)
         {
             SetWindowTextW(hwnd, name);
         }
+        speech.Set(lines.AccessibleName, announce: false);
         SetWindowPos(hwnd, HWND.HWND_TOPMOST, bounds.left, bounds.top, w, h,
             SWP.SWP_NOACTIVATE | SWP.SWP_SHOWWINDOW);
         InvalidateRect(hwnd, null, true);
@@ -92,6 +107,7 @@ internal sealed unsafe class DropFallback : IDisposable
         {
             ShowWindow(hwnd, SW.SW_HIDE);
             IsShown = false;
+            speech.Clear();
         }
     }
 
@@ -137,11 +153,7 @@ internal sealed unsafe class DropFallback : IDisposable
         _ = SetBkMode(dc, TRANSPARENT);
         var titleFont = Font(S(DropLayout.TitleSize), FW.FW_MEDIUM);
         var detailFont = Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
-        var left = S(DropLayout.TextLeft);
-        var right = client.right - S(DropLayout.TextRight);
-        var mid = (client.bottom - client.top) / 2;
-        var titleRect = new RECT { left = left, top = mid - S(20), right = right, bottom = mid - S(1) };
-        var detailRect = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(22) };
+        var (titleRect, detailRect, detailFormat) = Lines(text.Buttons is not null, client, scale);
         var oldFont = SelectObject(dc, (HGDIOBJ)titleFont.Value);
         SetTextColor(dc, Colour(text.Tone == DropTone.Plain ? Palette.Muted : Palette.Seal));
         fixed (char* t = text.Title)
@@ -152,7 +164,35 @@ internal sealed unsafe class DropFallback : IDisposable
         SetTextColor(dc, Colour(Palette.Ink));
         fixed (char* d = text.Detail)
         {
-            _ = DrawTextW(dc, d, text.Detail.Length, &detailRect, DT.DT_LEFT | DT.DT_TOP | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
+            _ = DrawTextW(dc, d, text.Detail.Length, &detailRect, detailFormat);
+        }
+        if (text.Buttons is { } buttons)
+        {
+            // The first in ink with paper words (the answer), the second outlined in ink.
+            var buttonFont = Font(S(DropLayout.ButtonTextSize), FW.FW_MEDIUM);
+            SelectObject(dc, (HGDIOBJ)buttonFont.Value);
+            var inkPen = CreatePen(PS.PS_SOLID, Math.Max(1, S(1)), Colour(Palette.Ink));
+            var inkFill = CreateSolidBrush(Colour(Palette.Ink));
+            var penBefore = SelectObject(dc, (HGDIOBJ)inkPen.Value);
+            for (var i = 0; i < buttons.Count; i++)
+            {
+                var (bl, bt, br, bb) = DropLayout.Button(i);
+                var rect = new RECT { left = S(bl), top = S(bt), right = S(br), bottom = S(bb) };
+                var fillBefore = SelectObject(dc, i == 0 ? (HGDIOBJ)inkFill.Value : GetStockObject(NullBrush));
+                RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, S(12), S(12));
+                SelectObject(dc, fillBefore);
+                SetTextColor(dc, Colour(i == 0 ? Palette.Paper : Palette.Ink));
+                var words = buttons[i];
+                fixed (char* w = words)
+                {
+                    _ = DrawTextW(dc, w, words.Length, &rect, DT.DT_CENTER | DT.DT_VCENTER | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
+                }
+            }
+            SelectObject(dc, penBefore);
+            DeleteObject((HGDIOBJ)inkPen.Value);
+            DeleteObject((HGDIOBJ)inkFill.Value);
+            SelectObject(dc, oldFont);
+            DeleteObject((HGDIOBJ)buttonFont.Value);
         }
         SelectObject(dc, oldFont);
         DeleteObject((HGDIOBJ)titleFont.Value);
@@ -160,12 +200,51 @@ internal sealed unsafe class DropFallback : IDisposable
         EndPaint(hwnd, &ps);
     }
 
-    private static HFONT Font(int pixels, int weight)
+    /// <summary>
+    /// Where the two lines go in a panel whose client area is <paramref name="client"/>, and how the
+    /// detail is drawn. Centred on the panel, one line each. With buttons (the consent offer), over
+    /// them, the detail on up to two lines, as the ink's Drop draws it: the offer's consent
+    /// sentence is the one line the Drop must not cut.
+    /// </summary>
+    internal static (RECT Title, RECT Detail, uint DetailFormat) Lines(bool buttons, RECT client, double scale)
+    {
+        int S(double dips) => (int)Math.Round(dips * scale);
+        var left = S(DropLayout.TextLeft);
+        var right = client.right - S(DropLayout.TextRight);
+        var mid = buttons ? S(25) : (client.bottom - client.top) / 2;
+        var title = new RECT { left = left, top = mid - S(20), right = right, bottom = mid - S(1) };
+        var detail = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(buttons ? 41 : 22) };
+        var format = (uint)(DT.DT_LEFT | DT.DT_TOP | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX
+            | (buttons ? DT.DT_WORDBREAK | DT.DT_EDITCONTROL : DT.DT_SINGLELINE));
+        return (title, detail, format);
+    }
+
+    /// <summary>The fallback's face at <paramref name="pixels"/> high.</summary>
+    internal static HFONT Font(int pixels, int weight)
     {
         fixed (char* face = "Segoe UI")
         {
             return CreateFontW(-pixels, 0, 0, 0, weight, 0, 0, 0, DefaultCharset, OutDefaultPrecis, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DefaultPitch, face);
+        }
+    }
+
+    /// <summary>A press at <paramref name="lParam"/> (client pixels): a click is down and up on the same button.</summary>
+    private void Mouse(bool down, LPARAM lParam)
+    {
+        var x = (short)((nint)lParam & 0xFFFF) / scale;
+        var y = (short)(((nint)lParam >> 16) & 0xFFFF) / scale;
+        var button = DropLayout.ButtonAt(text.Buttons, x, y);
+        if (down)
+        {
+            pressed = button;
+            return;
+        }
+        var was = pressed;
+        pressed = null;
+        if (button is int index && index == was)
+        {
+            ButtonClicked?.Invoke(index);
         }
     }
 
@@ -191,10 +270,17 @@ internal sealed unsafe class DropFallback : IDisposable
             case WM.WM_MOUSEACTIVATE:
                 return MA.MA_NOACTIVATE;
             case WM.WM_PAINT:
-                var handle = GetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA);
-                if (handle != 0 && GCHandle.FromIntPtr(handle).Target is DropFallback fallback)
+                if (From(hwnd) is { } fallback)
                 {
                     fallback.Paint();
+                    return 0;
+                }
+                break;
+            case WM.WM_LBUTTONDOWN:
+            case WM.WM_LBUTTONUP:
+                if (From(hwnd) is { IsShown: true } clicked)
+                {
+                    clicked.Mouse(msg == WM.WM_LBUTTONDOWN, lParam);
                     return 0;
                 }
                 break;
@@ -204,8 +290,15 @@ internal sealed unsafe class DropFallback : IDisposable
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
+    private static DropFallback? From(HWND hwnd)
+    {
+        var handle = GetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA);
+        return handle == 0 ? null : GCHandle.FromIntPtr(handle).Target as DropFallback;
+    }
+
     public void Dispose()
     {
+        speech.Dispose();
         if (hwnd != HWND.NULL)
         {
             SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, 0);

@@ -31,7 +31,8 @@ use crate::runtime::{Runs, Shared, lock};
 pub const MAX_WAITING: usize = 4;
 
 /// Ask's answer while the user has not agreed where the model sends the transcript (the
-/// `meetings` consent): nothing was sent.
+/// `meetings` consent): nothing was sent. The shells match its start ("Ask needs your OK"), never
+/// the rest.
 pub const NEEDS_CONSENT: &str = "Ask needs your OK to send the meeting to a language model: turn on summaries and Ask in Settings > AI";
 
 struct Question {

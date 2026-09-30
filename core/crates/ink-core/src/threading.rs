@@ -61,6 +61,16 @@ impl CancelToken {
         }
     }
 
+    /// A clone (it shares the flag: cancelling either cancels both) that also reads as cancelled
+    /// once `deadline` has passed, or this token's own deadline if that is earlier: a budget for
+    /// one call under a token that lives longer, such as the core's shutdown.
+    pub fn clone_with_deadline(&self, deadline: Instant) -> Self {
+        Self {
+            flag: self.flag.clone(),
+            deadline: Some(self.deadline.map_or(deadline, |own| own.min(deadline))),
+        }
+    }
+
     /// Asks every holder of this token to stop. It cannot be undone.
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::Release);
@@ -108,5 +118,33 @@ mod tests {
         // `cancel` still works before the deadline, on any clone.
         future.cancel();
         assert!(clone.is_cancelled());
+    }
+
+    #[test]
+    fn a_clone_with_a_deadline_is_cancelled_with_the_token_or_at_the_earlier_deadline() {
+        let now = Instant::now();
+        let hour = std::time::Duration::from_secs(3_600);
+        let shutdown = CancelToken::new();
+        let budget = shutdown.clone_with_deadline(now + hour);
+        assert_eq!(budget.deadline(), Some(now + hour));
+        assert!(!budget.is_cancelled());
+        assert!(
+            !shutdown.is_cancelled(),
+            "the deadline is the clone's alone"
+        );
+        shutdown.cancel();
+        assert!(
+            budget.is_cancelled(),
+            "cancelled with the token it came from"
+        );
+
+        assert!(CancelToken::new().clone_with_deadline(now).is_cancelled());
+        let short = CancelToken::with_deadline(now + hour);
+        assert_eq!(
+            short.clone_with_deadline(now + 2 * hour).deadline(),
+            Some(now + hour),
+            "never later than the token's own"
+        );
+        assert_eq!(short.clone_with_deadline(now).deadline(), Some(now));
     }
 }

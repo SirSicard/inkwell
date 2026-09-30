@@ -421,6 +421,32 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertEqual(library.searchLoad, .idle)
     }
 
+    /// "Show older" asked, then the filter changed before the page came: the page belongs to the
+    /// old list and is not appended to the new one (nor is its failure shown under it).
+    func testAPageAskedForBeforeTheListReloadedIsNotAppended() {
+        let (library, sent) = model()
+        library.refreshList()
+        library.apply([event(#"""
+        {"type":"library.records","ref":"\#(requestID(sent().last!))","more":true,"kind":"meeting","records":[\#(row("m1", start: 1_000, end: 2_000))]}
+        """#)])
+        library.loadMore()
+        let olderPage = requestID(sent().last!)
+        XCTAssertEqual(library.moreLoad, .loading)
+        library.filter = .dictation
+        let dictations = requestID(sent().last!)
+        XCTAssertEqual(command(sent().last!)["kind"] as? String, "dictation")
+        library.apply([event(#"""
+        {"type":"library.records","ref":"\#(dictations)","more":false,"kind":"dictation","records":[\#(row("d1", "dictation", start: 5_000, end: 5_100))]}
+        """#)])
+        library.apply([event(#"""
+        {"type":"library.records","ref":"\#(olderPage)","more":false,"kind":"meeting","records":[\#(row("m0", start: 500, end: 900))]}
+        """#)])
+        XCTAssertEqual(library.records.map(\.record), ["d1"], "the old list's page stays out")
+        XCTAssertFalse(library.hasMore)
+        library.apply([event(#"{"type":"command.failed","command":"records.list","id":"\#(olderPage)","message":"x"}"#)])
+        XCTAssertEqual(library.moreLoad, .idle, "nor does its failure show under the new list")
+    }
+
     func testAnAnswerToAnOlderQuestionIsDropped() {
         let (library, sent) = model()
         library.query = "bud"
@@ -484,6 +510,15 @@ final class LibraryModelTests: XCTestCase {
         library.apply([event(#"{"type":"commitment.updated","commitment":"c2","done":true}"#)])
         XCTAssertEqual(sent().count, reads + 1)
         XCTAssertEqual(command(sent().last!)["cmd"] as? String, "record.open")
+    }
+
+    /// Inkwell 0.2's dictations came over: the list and the stats are read again.
+    func testAnImportRefreshesWhatIsShown() {
+        let (library, sent) = model()
+        let before = sent().count
+        library.apply([event(#"{"type":"import.finished","counts":{"dictations":2,"dictionary_entries":0,"snippets":0,"modes":0,"settings":0,"voice_commands":0,"app_style_rules":0,"linked_keys":0},"ref":"import.run"}"#)])
+        let asked = sent()[before...].map { command($0)["cmd"] as? String }
+        XCTAssertTrue(asked.contains("records.list") && asked.contains("library.stats"), "\(asked)")
     }
 
     /// A list or a record that could not be read says so; it never reads as an empty library, and

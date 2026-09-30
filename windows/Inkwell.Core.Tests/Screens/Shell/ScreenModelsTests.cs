@@ -32,6 +32,43 @@ public class ScreenModelsTests
         Assert.Contains(sent.Commands, c => c is CoreCommand.ConsentGet { Feature: LlmFeature.Meetings });
         Assert.Contains(new CoreCommand.SettingGet(ShellSetting.DictationEnabled), sent.Commands);
         Assert.Contains(sent.Commands, c => c is CoreCommand.RecordsList);
+        // S3.5b: a meeting a crash interrupted is finished once the core is up, and asked for once.
+        Assert.Single(sent.Commands, c => c is CoreCommand.MeetingsRecover);
+        Assert.DoesNotContain(sent.Commands, c => c is CoreCommand.ModelUpdate); // nothing downloads on launch
+    }
+
+    /// <summary>
+    /// As the Mac's controller at core.ready: once the screens have read what they need, the
+    /// dictation model is kept warm (model.warm), so the first dictation after a launch is not a
+    /// cold load. Once: the core's answer sends no other.
+    /// </summary>
+    [Fact]
+    public void TheCoreBeingReadyKeepsTheDictationModelWarm()
+    {
+        var sent = new Sent();
+        var screens = new ScreenModels(sent.Send, log: new Logged().Log);
+        screens.Apply([Ready]);
+        Assert.Equal(new CoreCommand.ModelWarm(Job.DictationFinal), sent.Commands[^1]); // after the screens' reads
+        screens.Apply([Ev.Of("""{"type":"model.warmed","job":"dictation_final","id":"qwen3-asr-1.7b-q8"}""")]);
+        Assert.Single(sent.Commands, c => c is CoreCommand.ModelWarm);
+    }
+
+    /// <summary>
+    /// Only when the batch leaves the core ready with this shell's ABI, as the Mac's store status
+    /// decides: not a core with another ABI (no command can be trusted to mean the same to it), nor
+    /// one that stopped in the same batch.
+    /// </summary>
+    [Fact]
+    public void NothingIsWarmedUnlessTheCoreIsLeftReadyWithThisShellsAbi()
+    {
+        var other = new Sent();
+        new ScreenModels(other.Send, log: new Logged().Log).Apply(
+            [Ev.Of($$"""{"type":"core.ready","abi":{{InkSession.AbiVersion + 1}},"version":"9.9.9"}""")]);
+        Assert.DoesNotContain(other.Commands, c => c is CoreCommand.ModelWarm);
+
+        var stopped = new Sent();
+        new ScreenModels(stopped.Send, log: new Logged().Log).Apply([Ready, Ev.Of("""{"type":"core.stopped"}""")]);
+        Assert.DoesNotContain(stopped.Commands, c => c is CoreCommand.ModelWarm);
     }
 
     [Fact]
@@ -53,6 +90,7 @@ public class ScreenModelsTests
             ("setting.get", "setting:dictation.polish"), ("setting.set", "setting:dictation.key"),
             ("setting.set", "setting:meetings.llm"), ("setting.get", "setting:meetings.detect"),
             ("consent.allow", "consent.allow:edit:3"), ("snippets.save", "snippets:2"), ("meeting.start", "meeting.start"),
+            ("model.update", "model.update:qwen3-asr-1.7b-q8"),
         })
         {
             Assert.True(screens.Handles(Failed(command, id)), $"{command} {id}");

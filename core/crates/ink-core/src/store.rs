@@ -77,6 +77,10 @@ pub struct Record {
     pub audio_dir: Option<String>,
     /// The transcript revision: 1 while live, raised by each supersede.
     pub revision: u32,
+    /// Whether an import wrote it: a record brought in whole from elsewhere (Inkwell 0.2's
+    /// dictations, another app's meetings), which retention never deletes. Every record made
+    /// here, a [`RecordKind::FileImport`] too, is `false`.
+    pub imported: bool,
 }
 
 /// The largest time or position, in ms, a store accepts: SQLite integers are signed 64-bit.

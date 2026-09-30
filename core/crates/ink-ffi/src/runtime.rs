@@ -8,6 +8,7 @@
 //! | `ink-meeting`, `ink-pump` | a meeting ([`meeting`](crate::meeting)) |
 //! | `ink-meetings` | starting and stopping meetings, detection ([`control`](crate::control)) |
 //! | `ink-ask` | questions about the live meeting ([`asking`](crate::asking)) |
+//! | `ink-llm-test` | the own-key provider's test request ([`cloud`](crate::cloud)) |
 //! | `ink-recovery` | a crashed meeting's final pass ([`recovery`](crate::recovery)) |
 //! | `ink-retention` | retention sweeps, when asked: at launch, after a final pass, on a setting change ([`retention`](crate::retention)) |
 //! | `ink-dictation` | the dictation chain ([`dictation`](crate::dictation)) |
@@ -29,10 +30,12 @@ use std::thread::{self, JoinHandle};
 
 use ink_audio::BandsWriter;
 use ink_core::{
-    CancelToken, Clock, EngineError, FocusReader, Job, Llm, MeetingDetector, OfflineEngine,
-    PermissionProbe, Store, TextInserter,
+    CancelToken, Clock, EngineError, EventSink, FocusReader, Job, Llm, MeetingDetector,
+    OfflineEngine, PermissionProbe, Store, TextInserter,
 };
-use ink_engines::{EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded};
+use ink_engines::{
+    DownloadProgress, EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded,
+};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
 use ink_pipeline::gain_stage::Vad;
 use ink_pipeline::update::{ModelInstaller, update_model};
@@ -46,6 +49,7 @@ use crate::events::{self, event};
 use crate::external::Registration;
 use crate::gate::{ModelGate, Routed, refused_event};
 use crate::hub::{EventOut, Events, Hub};
+use crate::import02::Import02;
 use crate::llms::{PolishModel, ShellLlms};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureEnded, CaptureSide, MeetingInfo, MeetingRun, Replay};
@@ -164,8 +168,22 @@ impl MeetingPlatform {
         })
     }
 
-    /// Until ink-platform-win (S3.1): neither.
-    #[cfg(not(target_os = "macos"))]
+    /// Windows': the routed mic and the far end by S0.4's plan (WASAPI, on the performance
+    /// counter), and the audio session manager's detector. Nothing is opened or watched until a
+    /// meeting starts or detection is turned on.
+    #[cfg(windows)]
+    fn production() -> Result<Self, String> {
+        let clock = ink_platform_win::WinClock::new().map_err(|e| e.to_string())?;
+        Ok(Self {
+            capture: Arc::new(crate::capture::WinMeetingCapture::new(
+                ink_platform_win::WinCapture::new(clock),
+            )),
+            detector: Some(Arc::new(ink_platform_win::WinMeetingDetector::new())),
+        })
+    }
+
+    /// Any other OS: neither.
+    #[cfg(not(any(target_os = "macos", windows)))]
     fn production() -> Result<Self, String> {
         Ok(Self::default())
     }
@@ -173,17 +191,20 @@ impl MeetingPlatform {
 
 impl Parts {
     /// The real parts: the SQLite library, the platform clock, the built-in registry, the
-    /// downloader over HTTPS, and the adapters this build was compiled with.
-    pub fn production(config: &Config) -> Result<Self, String> {
+    /// downloader over HTTPS, and the adapters this build was compiled with. And the Inkwell 0.2
+    /// import over the same library, for [`Core::set_import02`].
+    pub fn production(config: &Config) -> Result<(Self, Import02), String> {
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| format!("the data directory could not be created: {e}"))?;
         let store = ink_store::SqliteStore::open(config.data_dir.join("library.sqlite"))
             .map_err(|e| format!("the library: {e}"))?;
         let permissions = platform_permissions(&store)?;
+        let store = Arc::new(store);
+        let import02 = Import02::production(store.clone());
         let models = ModelDir::new(&config.models_dir);
         let fetch = ink_engines::HttpFetch::new().map_err(|e| format!("HTTP: {e}"))?;
-        Ok(Self {
-            store: Arc::new(store),
+        let parts = Self {
+            store,
             clock: platform_clock()?,
             registry: Registry::builtin().map_err(|e| format!("the registry: {e}"))?,
             loader: adapters(&models),
@@ -195,7 +216,8 @@ impl Parts {
             data_dir: config.data_dir.clone(),
             permissions,
             meetings: MeetingPlatform::production()?,
-        })
+        };
+        Ok((parts, import02))
     }
 }
 
@@ -264,26 +286,19 @@ impl Clock for StdClock {
 
 /// The loader for this build's adapters.
 fn adapters(models: &ModelDir) -> Arc<dyn Loader<Model>> {
-    #[cfg(feature = "engine-llama")]
-    {
-        Arc::new(Adapters {
-            qwen: ink_engines::llama::QwenAsrLoader::new(models.clone()),
-        })
-    }
-    #[cfg(not(feature = "engine-llama"))]
-    {
-        let _ = models;
-        Arc::new(Adapters)
-    }
+    Arc::new(Adapters {
+        #[cfg(feature = "engine-llama")]
+        qwen: ink_engines::llama::QwenAsrLoader::new(models.clone()),
+        models: models.clone(),
+    })
 }
 
-#[cfg(feature = "engine-llama")]
 struct Adapters {
+    #[cfg(feature = "engine-llama")]
     qwen: ink_engines::llama::QwenAsrLoader,
+    /// For the rows ink-engines loads itself (Windows' Parakeet, `load_speech`).
+    models: ModelDir,
 }
-
-#[cfg(not(feature = "engine-llama"))]
-struct Adapters;
 
 impl Loader<Model> for Adapters {
     fn load(&self, row: &EngineRow) -> Result<Model, EngineError> {
@@ -291,10 +306,23 @@ impl Loader<Model> for Adapters {
         if row.runtime == ink_engines::Runtime::LlamaCpp {
             return self.qwen.load(row).map(|m| Box::new(m) as Model);
         }
-        Err(EngineError::ModelMissing(format!(
-            "{}: this build has no adapter for its runtime",
-            row.id
-        )))
+        // Says by its error when this build has no adapter for the row's runtime.
+        ink_engines::load_speech(&self.models, row)
+    }
+}
+
+/// Whether this machine has a GPU the speech engines use, for the router's dictation choice
+/// ([`Router::with_gpu_probe`]). On Windows, the GPU llama.cpp found (Vulkan): without one, Qwen3-ASR
+/// takes seconds for a dictation, and the router gives it to Parakeet where that is installed.
+/// The Mac always has its GPU (Metal).
+#[cfg(all(windows, feature = "engine-llama"))]
+fn has_gpu() -> bool {
+    match ink_engines::llama::compute() {
+        Ok(compute) => compute.is_gpu(),
+        Err(e) => {
+            log::warn!("dictation routing: llama.cpp did not start ({e}); taken as no GPU");
+            false
+        }
     }
 }
 
@@ -343,6 +371,11 @@ pub struct Shared {
     pub(crate) finishing: Mutex<crate::retention::Holds>,
     /// Dictation, live ([`voice`](crate::voice)): the platform it may use and what runs.
     pub(crate) voice: Mutex<crate::voice::VoiceSlot>,
+    /// Own-key providers' key store and HTTP client, and the test thread's mailbox
+    /// ([`cloud`](crate::cloud)).
+    pub(crate) cloud: crate::cloud::Cloud,
+    /// Inkwell 0.2's import, once the shell's platform gave it ([`Core::set_import02`]).
+    pub(crate) import02: std::sync::OnceLock<Import02>,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -391,7 +424,6 @@ enum Command {
     ModelWarm { job: Job },
     ModelUpdate { id: String, next: String },
     EngineUnregister { id: String },
-    EngineRoute { job: Job },
 }
 
 struct Envelope {
@@ -450,7 +482,6 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
         "model.warm" => &["job"],
         "model.update" => &["model", "next"],
         "engine.unregister" => &["engine"],
-        "engine.route" => &["job"],
         other => return Err(format!("unknown command \"{other}\"")),
     };
     let allowed: Vec<&str> = ["cmd", "id"].iter().chain(fields).copied().collect();
@@ -475,9 +506,6 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
         },
         "engine.unregister" => Command::EngineUnregister {
             id: text("engine")?,
-        },
-        "engine.route" => Command::EngineRoute {
-            job: events::parse_job(&text("job")?).ok_or("engine.route: unknown job")?,
         },
         other => return Err(format!("unknown command \"{other}\"")),
     };
@@ -528,6 +556,7 @@ pub struct Core {
     control: Control,
     asking: Asking,
     retention: Sweeper,
+    tester: crate::cloud::Tester,
 }
 
 impl Core {
@@ -540,10 +569,13 @@ impl Core {
         let meetings = parts.meetings;
         // Read before anything can call a model.
         let local_only = LocalOnly::new(crate::llms::local_only_setting(parts.store.as_ref()));
+        let router = Router::new(&parts.registry, parts.models.clone(), os);
+        #[cfg(all(windows, feature = "engine-llama"))]
+        let router = router.with_gpu_probe(has_gpu);
         let shared = Arc::new(Shared {
             events: hub.events(),
-            models: parts.models.clone(),
-            router: Router::new(&parts.registry, parts.models, os),
+            models: parts.models,
+            router,
             residency: Residency::new(parts.loader, parts.clock.clone()),
             store: parts.store,
             clock: parts.clock,
@@ -561,7 +593,11 @@ impl Core {
             sweeps: std::sync::OnceLock::new(),
             finishing: Mutex::default(),
             voice: Mutex::default(),
+            cloud: crate::cloud::Cloud::default(),
+            import02: std::sync::OnceLock::new(),
         });
+        // The chosen own-key provider, if any, before anything can call a model.
+        crate::cloud::load(&shared);
         let runs = Arc::new(Mutex::new(Runs::default()));
         let (commands, rx) = mpsc::channel::<Envelope>();
         let command_thread = {
@@ -583,6 +619,7 @@ impl Core {
         )?;
         let _ = shared.control.set(Mutex::new(control.sender()));
         let asking = Asking::start(shared.clone(), runs.clone())?;
+        let tester = crate::cloud::Tester::start(shared.clone())?;
         shared.events.emit(events::ready());
         // Detection follows the user's setting (on unless turned off); what it finds is offered
         // only once the shell is listening, after `core.ready`.
@@ -616,7 +653,19 @@ impl Core {
             control,
             asking,
             retention,
+            tester,
         })
+    }
+
+    /// Replaces where own-key providers keep their keys and how they reach the network, and builds
+    /// the chosen provider again over them. The app keeps the OS key store and the process's HTTP
+    /// client; tests pass fakes. Not reachable from the C ABI.
+    pub fn set_cloud_services(
+        &self,
+        keys: Arc<dyn ink_llm::KeyStore>,
+        transport: Arc<dyn ink_llm::Transport>,
+    ) {
+        crate::cloud::set_services(&self.shared, keys, transport);
     }
 
     /// Lends the far end's bands writer, as [`lend_bands`](Self::lend_bands) does the mic's.
@@ -741,6 +790,16 @@ impl Core {
         lock(&self.shared.voice).set_platform(platform);
     }
 
+    /// Gives `import.check` and `import.run` the library as itself, 0.2's data directory and the
+    /// keychain; until then they fail. `import.library` must be the store the core runs on. The
+    /// C ABI sets [`Parts::production`]'s at `ink_init`; tests point it at fixtures. The first
+    /// one given stays.
+    pub fn set_import02(&self, import: Import02) {
+        if self.shared.import02.set(import).is_err() {
+            log::warn!("the 0.2 import was given twice; the first stays");
+        }
+    }
+
     /// Starts the dictation worker with the shell's platform pieces, replacing one already
     /// running. Its engine is whatever the router picks for the dictation job at each take. With
     /// no polish model in `parts`, polish goes to a registered language model, whichever is
@@ -796,6 +855,7 @@ impl Core {
             control,
             asking,
             retention,
+            tester,
         } = self;
         shared.shutdown.cancel();
         drop(commands);
@@ -807,6 +867,8 @@ impl Core {
         // Its model call sees the cancel; detection stops, and a recovery in progress stops at
         // its next region (its marker stays for the next launch).
         asking.stop();
+        // After the queries thread, which hands it tests.
+        tester.stop();
         control.stop();
         retention.stop();
         // Dictation's keys, mic, worker and warm-up: every thread that can hold an engine.
@@ -997,23 +1059,6 @@ fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
         }
         Command::ModelWarm { job } => warm(shared, job),
         Command::ModelUpdate { id: current, next } => update(shared, &current, &next, &fail),
-        Command::EngineRoute { job } => {
-            // What serves `job` now: a model downloaded from the registry, an engine the shell
-            // registered (such as a fallback while that model downloads), or nothing installed.
-            let (id, source) = match shared.router.route(job) {
-                Ok(Route::Model(row)) => (Some(row.id.clone()), Some("registry")),
-                Ok(Route::External { id, .. }) => (Some(id), Some("shell")),
-                Err(_) => (None, None),
-            };
-            shared.events.emit(event(
-                "engine.routed",
-                &[
-                    ("job", Some(events::job(job).into())),
-                    ("id", id.map(Into::into)),
-                    ("source", source.map(Into::into)),
-                ],
-            ));
-        }
         Command::EngineUnregister { id: engine } => {
             let known = {
                 let mut ids = lock(&shared.externals);
@@ -1104,8 +1149,14 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
         current_row,
         next_row,
         &shared.shutdown,
+        update_progress(shared, current, next),
     );
     drop(hold);
+    if result.is_ok() && next == ink_engines::SILERO_VAD_ID {
+        // A running dictation takes the voice detector now, queued before the shell hears that
+        // the install ended, so a take it starts after that is levelled with it.
+        crate::voice::vad_installed(shared);
+    }
     let (ok, no_model_warm, message) = match &result {
         Ok(()) => (true, false, None),
         Err(e) => (false, e.no_model_warm(), Some(Value::from(e.to_string()))),
@@ -1123,13 +1174,67 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
     ));
 }
 
+/// The fewest nanoseconds between two `model.update_progress` events: about four a second, which
+/// moves a bar smoothly without an event per MiB downloaded.
+const PROGRESS_INTERVAL_NS: u64 = 250_000_000;
+
+/// Which of an install's progress reports reach the shell: the first, then none sooner than
+/// [`PROGRESS_INTERVAL_NS`] after the last one sent, and the first that reaches the end whenever
+/// it comes (the downloader can report the end twice; the second is dropped).
+#[derive(Default)]
+struct ProgressThrottle {
+    last_ns: Option<u64>,
+    ended: bool,
+}
+
+impl ProgressThrottle {
+    fn pass(&mut self, now_ns: u64, done: u64, total: u64) -> bool {
+        if self.ended {
+            return false;
+        }
+        if done >= total {
+            self.ended = true;
+            return true;
+        }
+        if self
+            .last_ns
+            .is_some_and(|last| now_ns.saturating_sub(last) < PROGRESS_INTERVAL_NS)
+        {
+            return false;
+        }
+        self.last_ns = Some(now_ns);
+        true
+    }
+}
+
+/// **Worker.** The install's progress as `model.update_progress` events, throttled. Runs on the
+/// command thread, between the download's chunks; the lock is its alone.
+fn update_progress(shared: &Shared, current: &str, next: &str) -> EventSink<DownloadProgress> {
+    let (events, clock) = (shared.events.clone(), shared.clock.clone());
+    let (current, next) = (current.to_owned(), next.to_owned());
+    let throttle = Mutex::new(ProgressThrottle::default());
+    Arc::new(move |p: DownloadProgress| {
+        if lock(&throttle).pass(clock.now_ns(), p.done, p.total) {
+            events.emit(event(
+                "model.update_progress",
+                &[
+                    ("id", Some(current.as_str().into())),
+                    ("next", Some(next.as_str().into())),
+                    ("done_bytes", Some(p.done.into())),
+                    ("total_bytes", Some(p.total.into())),
+                ],
+            ));
+        }
+    })
+}
+
 /// A core for unit tests: an in-memory library, `clock`, no models, and events kept in memory.
 #[cfg(test)]
 pub(crate) mod testing {
     use std::sync::{Arc, Mutex};
 
-    use ink_core::{CancelToken, Clock, EngineError};
-    use ink_engines::{DownloadError, EngineRow, Loader, ModelDir, Registry};
+    use ink_core::{CancelToken, Clock, EngineError, EventSink};
+    use ink_engines::{DownloadError, DownloadProgress, EngineRow, Loader, ModelDir, Registry};
     use ink_pipeline::update::ModelInstaller;
     use serde_json::Value;
 
@@ -1144,7 +1249,12 @@ pub(crate) mod testing {
     }
 
     impl ModelInstaller for NoModels {
-        fn install(&self, _: &EngineRow, _: &CancelToken) -> Result<(), DownloadError> {
+        fn install(
+            &self,
+            _: &EngineRow,
+            _: &CancelToken,
+            _: EventSink<DownloadProgress>,
+        ) -> Result<(), DownloadError> {
             Ok(())
         }
     }
@@ -1225,13 +1335,29 @@ mod tests {
             r#"{"cmd":"replay_meeting"}"#,
             r#"{"cmd":"replay_meeting","mic":"/m.wav","pacing":"slow"}"#,
             r#"{"cmd":"engine.unregister","engine":3}"#,
-            r#"{"cmd":"engine.route"}"#,
-            r#"{"cmd":"engine.route","job":"typing"}"#,
-            r#"{"cmd":"engine.route","job":"live_partials","engine":"x"}"#,
             r#"{"cmd":"model.update","model":"a","next":"b","id":7}"#,
         ] {
             assert!(parse_command(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn progress_reaches_the_shell_at_most_four_times_a_second_and_once_at_the_end() {
+        const MS: u64 = 1_000_000;
+        let mut t = ProgressThrottle::default();
+        // The first report goes; the next ones only a quarter second after the last one sent.
+        assert!(t.pass(1_000 * MS, 0, 100));
+        assert!(!t.pass(1_100 * MS, 10, 100));
+        assert!(!t.pass(1_249 * MS, 20, 100));
+        assert!(t.pass(1_250 * MS, 30, 100));
+        assert!(!t.pass(1_300 * MS, 40, 100));
+        // The end goes whenever it comes, once.
+        assert!(t.pass(1_301 * MS, 100, 100));
+        assert!(!t.pass(2_000 * MS, 100, 100));
+        // A row already installed reports only its end: that one goes.
+        let mut t = ProgressThrottle::default();
+        assert!(t.pass(5, 100, 100));
+        assert!(!t.pass(u64::MAX, 100, 100));
     }
 
     /// Windows: the core's clock is the performance counter, the timebase of the mic's blocks and
@@ -1244,5 +1370,43 @@ mod tests {
         let (a, b, c) = (counter.now_ns(), core.now_ns(), counter.now_ns());
         assert!(a <= b && b <= c, "{a} {b} {c}");
         assert!(c - a < 1_000_000_000, "one read apart: {} ns", c - a);
+    }
+
+    /// Windows (S3.5b): meetings have the platform's detector, made without watching anything.
+    #[cfg(windows)]
+    #[test]
+    fn windows_meetings_have_a_detector() {
+        let platform = MeetingPlatform::production().expect("the platform");
+        assert!(platform.detector.is_some());
+    }
+
+    /// Windows (S3.5b), on a PC with a mic and an output: "Record now" opens the routed mic and
+    /// the default output's loopback through the core's capture, and starts neither. Needs no
+    /// permission and no desktop session.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "talks to the Windows audio service"]
+    fn windows_record_now_opens_the_real_devices_without_starting_them() {
+        let platform = MeetingPlatform::production().expect("the platform");
+        let mut opened = platform.capture.open(None, false).expect("opened");
+        let channels: Vec<_> = opened.sides.iter().map(|s| s.source.channel()).collect();
+        assert_eq!(channels, [ink_core::Channel::Mic, ink_core::Channel::Far]);
+        assert_eq!(opened.far, crate::capture::FarScope::Everything);
+        let mic = opened.mic.expect("the mic is named");
+        assert!(!mic.name.is_empty());
+        assert_ne!(mic.reason, "unknown");
+        for side in &opened.sides {
+            assert!(side.source.format().sample_rate >= 8_000);
+        }
+        // The default output's loopback follows the default: it has not changed, so it stays;
+        // told to, it opens the default output's loopback again (not started either).
+        let follow = opened.sides[1]
+            .follow
+            .as_mut()
+            .expect("device loopback moves");
+        assert!(follow.moved(false).expect("asked").is_none());
+        let (again, name) = follow.moved(true).expect("opened again").expect("a source");
+        assert_eq!(again.channel(), ink_core::Channel::Far);
+        assert!(!name.is_empty());
     }
 }

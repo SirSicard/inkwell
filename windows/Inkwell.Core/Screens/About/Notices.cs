@@ -4,18 +4,26 @@
 //
 // The third-party Rust crates linked into the core (ink_ffi.dll) are not here: their list is
 // generated from cargo's resolution of the Windows release build (RustNotices, RustNotices.g.cs, by
-// `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these.
+// `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these. The
+// crates compiled into Velopack's Setup.exe and Update.exe are generated the same way from
+// Velopack's own lock (VelopackNotices.g.cs, `-- --velopack`) and shown under Velopack's notice.
 //
-// What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, fastcluster,
-// VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback), the Windows App
-// SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection and C#/WinRT in their
-// place. Their texts are in NoticeTexts.cs, copied from the packages the Windows build restores.
+// What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, its copy of
+// fastcluster, VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback),
+// sherpa-onnx, ONNX Runtime and the code compiled into sherpa-onnx's library (Windows' Parakeet),
+// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection, the
+// Visual C++ runtime (beside the engines' DLLs), C#/WinRT and Velopack (the installer and updates)
+// in their place. Their texts are in
+// NoticeTexts.cs, copied from the packages the Windows build restores (sherpa-onnx's is the shared
+// Apache License). sherpa-onnx's library compiles in its own copy of fastcluster (hclust-cpp's),
+// whose notice is here, hclust-cpp's own.
 //
 // The texts shared with the Mac (llama.cpp down to webgl-noise, the Apache License, Silero's) are
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
 // components' own licence files except where Notices.swift says otherwise, and the composed ones
 // (`Composed`) are listed with their upstream check in mac/composed-notices.txt; the Windows-only
-// composed ones (WinUIEx and the Windows SDK projection, whose packages carry no licence text) in
+// composed ones (WinUIEx, the Windows SDK projection, the Visual C++ runtime, ONNX Runtime and the
+// code compiled into sherpa-onnx's library, whose packages carry no licence text) in
 // composed-notices.txt beside this file.
 //
 // No notice ships as a placeholder: `Pending` names where a text must come from while it is one,
@@ -586,6 +594,55 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
         new("abseil", "Abseil, by Google",
             "Loaded by NeMo-Speech.cpp and SentencePiece.",
             "Apache-2.0", Apache2),
+        // sherpa-onnx's LICENSE (its 1.13.4 crates.io package, the version of the libraries) is the
+        // Apache License exactly, but for a blank first line.
+        new("sherpa-onnx", "sherpa-onnx, by the k2-fsa project",
+            "Runs Parakeet on the CPU, for the live words and for dictation on a PC without a GPU: sherpa-onnx 1.13.4, copied beside the app.",
+            "Apache-2.0", Apache2),
+        new("onnxruntime", "ONNX Runtime, by Microsoft",
+            "Runs Parakeet's model for sherpa-onnx: ONNX Runtime 1.27.0, copied beside the app.",
+            "MIT, with the notices of the code it includes",
+            OnnxRuntimeLicence + "\n\n--- Eigen (MPL-2.0): where its source is ---\n" + OnnxRuntimeEigenSource
+            + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
+        { Composed = true },
+        // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL): each
+        // its own licence file at the version sherpa-onnx 1.13.4 builds, compared on 2026-09-30
+        // (composed-notices.txt).
+        new("nlohmann-json", "nlohmann/json, by Niels Lohmann",
+            "Part of sherpa-onnx's library: JSON for Modern C++ 3.12.0.",
+            "MIT", NlohmannJsonLicence)
+        { Composed = true },
+        // kaldi-decoder links Eigen 5.0.1 (MPL-2.0, the scoped exception): the notice says where its
+        // source is and carries its licence, as the ONNX Runtime notice does for its Eigen.
+        new("kaldi-decoder", "kaldi-decoder, inside sherpa-onnx",
+            "Part of sherpa-onnx's library, with the Eigen 5.0.1 it builds on.",
+            "Apache-2.0, with Eigen 5.0.1's MPL-2.0",
+            Apache2 + "\n\n--- Eigen 5.0.1 (MPL-2.0): where its source is ---\n" + SherpaOnnxEigenSource
+            + "\n\n--- Eigen 5.0.1's COPYING.MPL2 ---\n" + EigenMpl2Licence)
+        { Composed = true },
+        new("kaldifst", "kaldifst, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", KaldifstLegalNotices + "\n\n" + Apache2)
+        { Composed = true },
+        new("openfst", "OpenFst, inside sherpa-onnx",
+            "Part of sherpa-onnx's library.",
+            "Apache-2.0", OpenFstCopying + "\n\n--- The Apache License 2.0, which COPYING names ---\n" + Apache2)
+        { Composed = true },
+        new("simple-sentencepiece", "simple-sentencepiece, inside sherpa-onnx",
+            "Part of sherpa-onnx's library, with its own copy of Darts-clone 0.32 (darts.h).",
+            "Apache-2.0, with Darts-clone's BSD-2-Clause notice",
+            Apache2 + "\n\n--- ssentencepiece/csrc/darts.h ---\n" + SimpleSentencepieceDartsNotice)
+        { Composed = true },
+        new("kaldi-native-fbank", "kaldi-native-fbank, inside sherpa-onnx",
+            "Part of sherpa-onnx's library: the features Parakeet listens to.",
+            "Apache-2.0", Apache2)
+        { Composed = true },
+        // hclust-cpp's own LICENSE: fastcluster's licence under hclust-cpp's copyright lines (not
+        // the Mac's fastcluster text, whose lines are those of FluidAudio's copy).
+        new("hclust-cpp", "hclust-cpp's fastcluster, inside sherpa-onnx",
+            "Part of sherpa-onnx's library (hierarchical clustering); not called by Inkwell.",
+            "BSD-2-Clause", HclustCppFastclusterLicence)
+        { Composed = true },
         new("aec3", "aec3, a Rust port of WebRTC AEC3, by Angelos-Ermis Mangos",
             "Cancels the echo of the far end in your microphone.",
             "MIT or BSD-3-Clause, with WebRTC's BSD-3-Clause notice and patent grant", """
@@ -721,13 +778,62 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "Compiled into Inkwell.exe by NativeAOT: .NET 10.0.12.",
             "MIT, with the notices of the code it includes", DotnetText),
         new("windows-sdk-net", "Windows SDK projection for .NET, by Microsoft",
-            "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
+            "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
             "Windows SDK licence terms", WindowsSdkNetText)
         { Composed = true },
+        // The Visual C++ runtime the engines' DLLs link dynamically (sherpa-onnx's archive and
+        // NeMo-Speech.cpp's build), beside the app: windows/scripts/build-core.ps1 copies the DLLs
+        // of it they import from Visual Studio 2026's redistributable folder, Distributable Code
+        // under the Visual Studio licence, whose Distribution Requirements ask that users agree to
+        // terms that protect it at least as much as that licence. The terms the user agrees to
+        // cover it (this row, which the first run's terms step shows).
+        new("vc-runtime", "Visual C++ runtime, by Microsoft",
+            "Beside the app for the speech engines (sherpa-onnx, ONNX Runtime and the diarizer): vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll, msvcp140_1.dll and vcomp140.dll from Visual Studio 2026 (Microsoft.VC145.CRT and Microsoft.VC145.OpenMP). Each release's notes give their version.",
+            "Visual C++ runtime licence terms", VcRuntimeText)
+        { Composed = true },
+        // C#/WinRT's source is MIT, but the WinRT.Runtime.dll compiled in is Microsoft's build from
+        // Microsoft.Windows.SDK.NET.Ref, Distributable Code under the Windows SDK licence (its REDIST
+        // list names it): the row says both, and the terms the user agrees to cover it (the
+        // windows-sdk-net row, which the first run's terms step shows, names the file).
         new("cswinrt", "C#/WinRT runtime, by Microsoft",
             "How C# calls the Windows APIs, compiled in with the projection: WinRT.Runtime from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
-            "MIT", CsWinRtLicence),
+            "MIT; Inkwell's copy under the Windows SDK licence terms", CsWinRtLicence),
+        new("velopack", "Velopack, by Velopack Ltd and Caelan Sayler",
+            "Installs Inkwell and brings its updates: the installer, Update.exe beside the app, and the update check in Settings > About. Velopack 1.2.161.",
+            "MIT, with the notices of the Rust crates in its Setup.exe and Update.exe", VelopackText),
     ];
+
+    /// <summary>
+    /// The end-user terms the Windows App SDK's licence asks of an app that ships its runtime
+    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice), the
+    /// Windows SDK's licence of an app that ships its .NET projection (Distributable Code,
+    /// Distribution Requirements: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll are on its
+    /// REDIST list; the windows-sdk-net notice), and the Visual Studio licence of an app that ships
+    /// the Visual C++ runtime (Distributable Code, Distribution Requirements: its redistributable
+    /// folder is on the Distributable List; the vc-runtime notice): the user agrees to Microsoft's
+    /// terms for those components. The first run asks for that agreement before anything else (TermsStep);
+    /// Settings > About shows it above the notices; the installer's splash
+    /// (windows/scripts/pack.ps1), the release notes and the download page carry it before
+    /// Inkwell first runs.
+    /// </summary>
+    public const string WindowsAppSdkTerms =
+        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK, " +
+        "the Windows SDK's .NET projection and the Visual C++ runtime, which Microsoft licenses separately, under the " +
+        "Microsoft Software License Terms shown below (\"Windows App SDK, by Microsoft\", \"Windows SDK projection " +
+        "for .NET, by Microsoft\" and \"Visual C++ runtime, by Microsoft\"). " +
+        "By installing or using Inkwell, you agree to those terms for those components.";
+
+    /// <summary>
+    /// Velopack's licence, then the notices of the Rust crates compiled into its Setup.exe and
+    /// Update.exe (VelopackNotices.g.cs), each under its name, version and licence.
+    /// </summary>
+    private static string VelopackText =>
+        VelopackLicence
+        + $"\n\n--- The Rust crates in Setup.exe and Update.exe ({VelopackNotices.Crates.Count}) ---\n"
+        // webview2-com-sys carries Microsoft's loader as a static library, which both link (its
+        // strings are in vpk 1.2.161's setup and update binaries).
+        + "[Both also link Microsoft's WebView2 loader, WebView2LoaderStatic.lib from webview2-com-sys, under the WebView2 SDK's licence: \"WebView2 SDK, by Microsoft\", above.]"
+        + string.Concat(VelopackNotices.Crates.Select(c => $"\n\n=== {c.Title} ({c.Detail}) ===\n{c.Text}"));
 
     /// <summary>The ids of the composed notices, which mac/composed-notices.txt lists.</summary>
     public static IReadOnlySet<string> ComposedIds =>
@@ -744,7 +850,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         // credit says so where the Mac's names its Core ML conversion.
         new("parakeet", "Parakeet TDT 0.6B v3", "NVIDIA", "CC-BY-4.0",
             "The live words while you speak and while a meeting runs.",
-            "Parakeet TDT 0.6B v3 by NVIDIA, licensed under the Creative Commons Attribution 4.0 International licence (https://creativecommons.org/licenses/by/4.0/). Converted to ONNX (int8) for sherpa-onnx."),
+            "Parakeet TDT 0.6B v3 by NVIDIA, licensed under the Creative Commons Attribution 4.0 International licence (https://creativecommons.org/licenses/by/4.0/). Converted to ONNX (int8) for sherpa-onnx by csukuangfj on Hugging Face."),
         new("nemotron-diarization", "Nemotron-3-Diarization", "NVIDIA", "OpenMDW-1.1",
             "Who spoke on the far end.", null),
         new("silero-vad", "Silero VAD v6", "the Silero team", "MIT",

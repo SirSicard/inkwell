@@ -19,9 +19,11 @@ pub const REVISION_MARKER: &str = ".revision";
 /// itself keeps, and is validated against, the full revision.
 pub const REVISION_DIR_LEN: usize = 12;
 
-/// The longest path below a [`ModelDir`] root, in characters: id, revision directory and file
-/// name at their limits plus separators and [`PART_SUFFIX`] is 64 + 1 + 12 + 1 + 64 + 5 = 147.
-/// The revision marker and its temporary file (`.revision.tmp`, 13 characters) are shorter.
+/// The longest path below a [`ModelDir`] root, in characters: id, revision directory and a file
+/// name of one component at their limits plus separators and [`PART_SUFFIX`] is
+/// 64 + 1 + 12 + 1 + 64 + 5 = 147. A file name with subdirectories may be longer than one
+/// component; registry validation refuses a row whose paths would pass this. The revision marker
+/// and its temporary file (`.revision.tmp`, 13 characters) are shorter.
 ///
 /// Windows' classic `MAX_PATH` is 260 characters including the drive and the terminating NUL, so a
 /// root of up to about 100 characters keeps every model path inside it. The Windows shell picks a
@@ -70,15 +72,14 @@ impl ModelDir {
         self.row_dir(row).join(REVISION_MARKER)
     }
 
-    /// Where a finished file lives.
+    /// Where a finished file lives: in a subdirectory of the row's when its name has `/`.
     pub fn file_path(&self, row: &EngineRow, file: &ModelFile) -> PathBuf {
-        self.row_dir(row).join(&file.name)
+        below(self.row_dir(row), &file.name)
     }
 
-    /// Where a file lives while it downloads.
+    /// Where a file lives while it downloads, next to where it will be.
     pub fn part_path(&self, row: &EngineRow, file: &ModelFile) -> PathBuf {
-        self.row_dir(row)
-            .join(format!("{}{PART_SUFFIX}", file.name))
+        below(self.row_dir(row), &format!("{}{PART_SUFFIX}", file.name))
     }
 
     /// **Worker.** Whether `row` is installed: its marker holds exactly its revision, and every
@@ -124,6 +125,12 @@ impl ModelDir {
         drop(file);
         fs::rename(&temp, &marker)
     }
+}
+
+/// `dir` joined with each `/`-separated name of `name`, so the path uses the OS's own separator.
+/// Registry validation keeps every name inside the row's directory.
+fn below(dir: PathBuf, name: &str) -> PathBuf {
+    name.split('/').fold(dir, |path, part| path.join(part))
 }
 
 /// The longest revision a valid row has (a SHA-256 commit hash).

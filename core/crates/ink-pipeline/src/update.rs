@@ -20,10 +20,9 @@
 //! them, or with them paused).
 
 use std::fmt;
-use std::sync::Arc;
 
-use ink_core::{CancelToken, EngineError};
-use ink_engines::{DownloadError, Downloader, EngineRow, Residency, Unloaded};
+use ink_core::{CancelToken, EngineError, EventSink};
+use ink_engines::{DownloadError, DownloadProgress, Downloader, EngineRow, Residency, Unloaded};
 
 /// What an update needs from residency. [`Residency`] is the real one.
 pub trait ModelResidency: Send + Sync {
@@ -43,15 +42,24 @@ pub trait ModelResidency: Send + Sync {
 
 /// What an update needs to install a row's files.
 pub trait ModelInstaller: Send + Sync {
-    /// **Worker.** Installs `row`, blocking until it is verified and in place.
-    fn install(&self, row: &EngineRow, cancel: &CancelToken) -> Result<(), DownloadError>;
+    /// **Worker.** Installs `row`, blocking until it is verified and in place. `progress` runs on
+    /// this thread, as the transfer goes, and must not block.
+    fn install(
+        &self,
+        row: &EngineRow,
+        cancel: &CancelToken,
+        progress: EventSink<DownloadProgress>,
+    ) -> Result<(), DownloadError>;
 }
 
 impl ModelInstaller for Downloader {
-    fn install(&self, row: &EngineRow, cancel: &CancelToken) -> Result<(), DownloadError> {
-        // Progress is the shell's to show through its own download call; an update reports only
-        // how it ended.
-        self.download(row, cancel, Arc::new(|_| {}))
+    fn install(
+        &self,
+        row: &EngineRow,
+        cancel: &CancelToken,
+        progress: EventSink<DownloadProgress>,
+    ) -> Result<(), DownloadError> {
+        self.download(row, cancel, progress)
     }
 }
 
@@ -159,13 +167,15 @@ impl fmt::Display for UpdateError {
 
 impl std::error::Error for UpdateError {}
 
-/// **Worker.** Replaces `current` with `next` in the order the module docs give.
+/// **Worker.** Replaces `current` with `next` in the order the module docs give. The install's
+/// progress goes to `progress`, on this thread.
 pub fn update_model(
     residency: &dyn ModelResidency,
     installer: &dyn ModelInstaller,
     current: &EngineRow,
     next: &EngineRow,
     cancel: &CancelToken,
+    progress: EventSink<DownloadProgress>,
 ) -> Result<(), UpdateError> {
     let was_warm = residency.warm().as_deref() == Some(current.id.as_str());
     // Warms the previous model again once the update has stopped, if the update un-warmed it; its
@@ -210,7 +220,7 @@ pub fn update_model(
     }
 
     // 3.
-    if let Err(error) = installer.install(next, cancel) {
+    if let Err(error) = installer.install(next, cancel, progress) {
         return Err(UpdateError::Install {
             error,
             rewarm_failed: rewarm_current(),

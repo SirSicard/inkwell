@@ -11,11 +11,12 @@ use std::time::{Duration, Instant};
 
 use ink_audio::bands_channel;
 use ink_core::{
-    CancelToken, Clock, EngineError, EngineInfo, Job, OfflineEngine, TimedText, TranscribeOptions,
-    Transcript,
+    CancelToken, Clock, EngineError, EngineInfo, EventSink, Job, OfflineEngine, TimedText,
+    TranscribeOptions, Transcript,
 };
 use ink_engines::{
-    DownloadError, EngineRow, JobScore, Loader, ModelDir, ModelFile, Os, Registry, Runtime,
+    DownloadError, DownloadProgress, EngineRow, JobScore, Loader, ModelDir, ModelFile, Os,
+    Registry, Runtime,
 };
 use ink_ffi::hub::EventOut;
 use ink_ffi::runtime::{Core, Model, Parts};
@@ -395,7 +396,12 @@ pub struct MockInstaller {
 }
 
 impl ModelInstaller for MockInstaller {
-    fn install(&self, _: &EngineRow, _: &CancelToken) -> Result<(), DownloadError> {
+    fn install(
+        &self,
+        _: &EngineRow,
+        _: &CancelToken,
+        _: EventSink<DownloadProgress>,
+    ) -> Result<(), DownloadError> {
         self.installs.fetch_add(1, Ordering::SeqCst);
         let before = self.generation.swap(0, Ordering::SeqCst);
         if let Some(gate) = &self.gate {

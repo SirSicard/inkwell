@@ -53,6 +53,7 @@ public abstract record InkEvent
                 "model.warm_failed" => root.Deserialize(InkEventsJson.Default.ModelWarmFailed)!,
                 "model.refused" => root.Deserialize(InkEventsJson.Default.ModelRefused)!,
                 "model.update_started" => root.Deserialize(InkEventsJson.Default.ModelUpdateStarted)!,
+                "model.update_progress" => root.Deserialize(InkEventsJson.Default.ModelUpdateProgress)!,
                 "model.update_finished" => root.Deserialize(InkEventsJson.Default.ModelUpdateFinished)!,
                 "audio.dropped" => root.Deserialize(InkEventsJson.Default.AudioDropped)!,
                 "dictation.voice_detection" => root.Deserialize(InkEventsJson.Default.DictationVoiceDetection)!,
@@ -111,10 +112,14 @@ public abstract record InkEvent
                 "models.listed" => root.Deserialize(InkEventsJson.Default.ModelsListed)!,
                 "setting.value" => root.Deserialize(InkEventsJson.Default.SettingValue)!,
                 "consent.state" => root.Deserialize(InkEventsJson.Default.ConsentState)!,
+                "llm.providers" => root.Deserialize(InkEventsJson.Default.LlmProviders)!,
+                "llm.tested" => root.Deserialize(InkEventsJson.Default.LlmTested)!,
                 "modes.listed" => root.Deserialize(InkEventsJson.Default.ModesListed)!,
                 "snippets.listed" => root.Deserialize(InkEventsJson.Default.SnippetsListed)!,
                 "voice_commands.listed" => root.Deserialize(InkEventsJson.Default.VoiceCommandsListed)!,
                 "import.notes" => root.Deserialize(InkEventsJson.Default.ImportNotes)!,
+                "import.checked" => root.Deserialize(InkEventsJson.Default.ImportChecked)!,
+                "import.finished" => root.Deserialize(InkEventsJson.Default.ImportFinished)!,
                 "library.records" => root.Deserialize(InkEventsJson.Default.LibraryRecords)!,
                 "library.search" => root.Deserialize(InkEventsJson.Default.LibrarySearch)!,
                 "library.record" => root.Deserialize(InkEventsJson.Default.LibraryRecord)!,
@@ -182,6 +187,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(ModelWarmFailed))]
 [JsonSerializable(typeof(ModelRefused))]
 [JsonSerializable(typeof(ModelUpdateStarted))]
+[JsonSerializable(typeof(ModelUpdateProgress))]
 [JsonSerializable(typeof(ModelUpdateFinished))]
 [JsonSerializable(typeof(AudioDropped))]
 [JsonSerializable(typeof(DictationVoiceDetection))]
@@ -240,10 +246,14 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(ModelsListed))]
 [JsonSerializable(typeof(SettingValue))]
 [JsonSerializable(typeof(ConsentState))]
+[JsonSerializable(typeof(LlmProviders))]
+[JsonSerializable(typeof(LlmTested))]
 [JsonSerializable(typeof(ModesListed))]
 [JsonSerializable(typeof(SnippetsListed))]
 [JsonSerializable(typeof(VoiceCommandsListed))]
 [JsonSerializable(typeof(ImportNotes))]
+[JsonSerializable(typeof(ImportChecked))]
+[JsonSerializable(typeof(ImportFinished))]
 [JsonSerializable(typeof(LibraryRecords))]
 [JsonSerializable(typeof(LibrarySearch))]
 [JsonSerializable(typeof(LibraryRecord))]
@@ -367,7 +377,8 @@ public sealed record CatalogueEntry
     public required bool Installed { get; init; }
 
     /// <summary>
-    /// The jobs it fills, each with its measured error rate.
+    /// The jobs it fills, each with its measured error rate. None for a model the core only
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
     /// </summary>
     [JsonPropertyName("jobs")]
     public required global::System.Collections.Generic.IReadOnlyList<JobScore> Jobs { get; init; }
@@ -1486,6 +1497,114 @@ public enum FarEnd
 }
 
 /// <summary>
+/// What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer
+/// (the core knows where), and whether this library holds it already. The data is read, never
+/// written, and the keychain is not asked, so linked_keys is 0 here.
+/// </summary>
+public sealed record ImportChecked : InkEvent
+{
+    /// <summary>
+    /// What an import would bring (the dry run), when found.
+    /// </summary>
+    [JsonPropertyName("counts")]
+    public ImportCounts? Counts { get; init; }
+
+    /// <summary>
+    /// Why the data cannot be read now, when unreadable: words to show (for one, that Inkwell
+    /// 0.2 is still open and should be quit first).
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    /// <summary>
+    /// The command's id.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// Whether there is something to import.
+    /// </summary>
+    [JsonPropertyName("state")]
+    public required ImportState State { get; init; }
+}
+
+/// <summary>
+/// How many of each kind Inkwell 0.2's data holds, or an import wrote.
+/// </summary>
+public sealed record ImportCounts
+{
+    /// <summary>
+    /// Per-app style rules.
+    /// </summary>
+    [JsonPropertyName("app_style_rules")]
+    public required long AppStyleRules { get; init; }
+
+    /// <summary>
+    /// Dictations, each a record in the library.
+    /// </summary>
+    [JsonPropertyName("dictations")]
+    public required long Dictations { get; init; }
+
+    /// <summary>
+    /// Dictionary entries (a word and what replaces it).
+    /// </summary>
+    [JsonPropertyName("dictionary_entries")]
+    public required long DictionaryEntries { get; init; }
+
+    /// <summary>
+    /// Providers whose API key in the keychain is linked, by reference (never copied).
+    /// </summary>
+    [JsonPropertyName("linked_keys")]
+    public required long LinkedKeys { get; init; }
+
+    /// <summary>
+    /// Modes.
+    /// </summary>
+    [JsonPropertyName("modes")]
+    public required long Modes { get; init; }
+
+    /// <summary>
+    /// 0.2's own settings.
+    /// </summary>
+    [JsonPropertyName("settings")]
+    public required long Settings { get; init; }
+
+    /// <summary>
+    /// Snippets.
+    /// </summary>
+    [JsonPropertyName("snippets")]
+    public required long Snippets { get; init; }
+
+    /// <summary>
+    /// Voice commands.
+    /// </summary>
+    [JsonPropertyName("voice_commands")]
+    public required long VoiceCommands { get; init; }
+}
+
+/// <summary>
+/// import.run brought Inkwell 0.2's data into the library, in one transaction: the library's
+/// records changed (list them again), import.notes may have something to say about the
+/// dictation key, and a running dictation already uses what came over. A failure is
+/// command.failed, its message in words to show.
+/// </summary>
+public sealed record ImportFinished : InkEvent
+{
+    /// <summary>
+    /// What it wrote.
+    /// </summary>
+    [JsonPropertyName("counts")]
+    public required ImportCounts Counts { get; init; }
+
+    /// <summary>
+    /// The command's id.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
 /// 0.2's dictation hotkey, and what the import made of it.
 /// </summary>
 public sealed record ImportKeyNote
@@ -1558,6 +1677,24 @@ public sealed record ImportNotes : InkEvent
     /// </summary>
     [JsonPropertyName("ref")]
     public string? Ref { get; init; }
+}
+
+/// <summary>
+/// Inkwell 0.2's data: found (and not imported yet), absent from this computer, imported into
+/// this library already (0.2's data is not opened then), or found but unreadable now
+/// (import.run may still work once the reason is gone).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<ImportState>))]
+public enum ImportState
+{
+    [JsonStringEnumMemberName("found")]
+    Found,
+    [JsonStringEnumMemberName("absent")]
+    Absent,
+    [JsonStringEnumMemberName("imported")]
+    Imported,
+    [JsonStringEnumMemberName("unreadable")]
+    Unreadable,
 }
 
 /// <summary>
@@ -1865,6 +2002,171 @@ public enum LlmFeature
     Edit,
     [JsonStringEnumMemberName("meetings")]
     Meetings,
+}
+
+/// <summary>
+/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
+/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
+/// store.
+/// </summary>
+public sealed record LlmProviderEntry
+{
+    /// <summary>
+    /// Whether llm.choose may name another address (custom only).
+    /// </summary>
+    [JsonPropertyName("custom_url")]
+    public required bool CustomUrl { get; init; }
+
+    /// <summary>
+    /// The model used when llm.choose names none.
+    /// </summary>
+    [JsonPropertyName("default_model")]
+    public required string DefaultModel { get; init; }
+
+    /// <summary>
+    /// Its address: fixed for a built-in provider; for custom, the address used when llm.choose
+    /// names none.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public required string Endpoint { get; init; }
+
+    /// <summary>
+    /// Whether a key is stored for it in the OS key store, asked without reading the key. False
+    /// when that could not be asked (llm.providers' error says so).
+    /// </summary>
+    [JsonPropertyName("has_key")]
+    public required bool HasKey { get; init; }
+
+    /// <summary>
+    /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
+    /// server).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Whether a call needs its API key (a custom server usually runs without one).
+    /// </summary>
+    [JsonPropertyName("needs_key")]
+    public required bool NeedsKey { get; init; }
+}
+
+/// <summary>
+/// The own-key language model providers and the one chosen, in answer to llm.providers,
+/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
+/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
+/// with the user's consent for its endpoint (consent.state).
+/// </summary>
+public sealed record LlmProviders : InkEvent
+{
+    /// <summary>
+    /// For custom, the server's address as chosen; absent otherwise.
+    /// </summary>
+    [JsonPropertyName("base_url")]
+    public string? BaseUrl { get; init; }
+
+    /// <summary>
+    /// The chosen provider's id; absent when none is chosen.
+    /// </summary>
+    [JsonPropertyName("chosen")]
+    public string? Chosen { get; init; }
+
+    /// <summary>
+    /// Where the chosen provider sends, as consent.state names it; absent with chosen.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public string? Endpoint { get; init; }
+
+    /// <summary>
+    /// What could not be read (the stored keys, or the choice), as a sentence starting
+    /// "couldn't"; absent when all was read.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// Local-only mode (llm.local_only): while on, a provider that is not on this machine is
+    /// never called.
+    /// </summary>
+    [JsonPropertyName("local_only")]
+    public required bool LocalOnly { get; init; }
+
+    /// <summary>
+    /// The model the chosen provider is asked for; absent with chosen.
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
+
+    /// <summary>
+    /// Every provider, in preference order.
+    /// </summary>
+    [JsonPropertyName("providers")]
+    public required global::System.Collections.Generic.IReadOnlyList<LlmProviderEntry> Providers { get; init; }
+
+    /// <summary>
+    /// Whether the chosen provider can be called: its key is stored (when it needs one), and
+    /// local-only mode lets it through. Each feature still needs its own consent.
+    /// </summary>
+    [JsonPropertyName("ready")]
+    public required bool Ready { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// Whether the chosen provider is on this machine (on_device) or not (cloud); absent with
+    /// chosen.
+    /// </summary>
+    [JsonPropertyName("to")]
+    public LlmDestination? To { get; init; }
+}
+
+/// <summary>
+/// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
+/// provider with its stored key, and whether it answered.
+/// </summary>
+public sealed record LlmTested : InkEvent
+{
+    /// <summary>
+    /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
+    /// failed, never the key.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// The model asked.
+    /// </summary>
+    [JsonPropertyName("model")]
+    public required string Model { get; init; }
+
+    /// <summary>
+    /// Whether the provider answered.
+    /// </summary>
+    [JsonPropertyName("ok")]
+    public required bool Ok { get; init; }
+
+    /// <summary>
+    /// The provider tested.
+    /// </summary>
+    [JsonPropertyName("provider")]
+    public required string Provider { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The HTTP status of a refusal (401 or 403: the key; 404: the model or address; 429: the
+    /// account's limits); absent otherwise.
+    /// </summary>
+    [JsonPropertyName("status")]
+    public long? Status { get; init; }
 }
 
 /// <summary>
@@ -2808,10 +3110,11 @@ public sealed record MeetingsRecovered : InkEvent
 
 /// <summary>
 /// Why a meeting records this microphone: the system default input; the built-in mic because
-/// the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because
-/// the user's setting says so; the default because this Mac has no built-in mic; the first
-/// input because no default is set; it was named; or a reason this build of the core does not
-/// name (unknown).
+/// the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be
+/// the one kept); the headset's own mic because the user's setting says so; the default because
+/// this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because
+/// no default is set; it was named; the LE Audio headset's own mic, which keeps full quality
+/// (Windows); or a reason this build of the core does not name (unknown).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<MicReason>))]
 public enum MicReason
@@ -2828,6 +3131,8 @@ public enum MicReason
     FirstInput,
     [JsonStringEnumMemberName("requested")]
     Requested,
+    [JsonStringEnumMemberName("le_audio_headset")]
+    LeAudioHeadset,
     [JsonStringEnumMemberName("unknown")]
     Unknown,
 }
@@ -2969,6 +3274,40 @@ public sealed record ModelUpdateFinished : InkEvent
     /// </summary>
     [JsonPropertyName("ok")]
     public required bool Ok { get; init; }
+}
+
+/// <summary>
+/// How far a model update's download has got, between model.update_started and
+/// model.update_finished: about four a second at most, and one when every byte is on disk
+/// (done_bytes equal to total_bytes; model.update_finished then says whether the files checked
+/// out). A model already installed sends only that one.
+/// </summary>
+public sealed record ModelUpdateProgress : InkEvent
+{
+    /// <summary>
+    /// Bytes on disk so far across its files. It can go down: a file whose server ignores a
+    /// resume starts over.
+    /// </summary>
+    [JsonPropertyName("done_bytes")]
+    public required long DoneBytes { get; init; }
+
+    /// <summary>
+    /// The model being replaced (the same as next for a first download).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// The model being downloaded.
+    /// </summary>
+    [JsonPropertyName("next")]
+    public required string Next { get; init; }
+
+    /// <summary>
+    /// Its download size (models.listed's size_bytes).
+    /// </summary>
+    [JsonPropertyName("total_bytes")]
+    public required long TotalBytes { get; init; }
 }
 
 /// <summary>

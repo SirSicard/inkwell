@@ -68,6 +68,10 @@ public class CatalogueModelTests
         Assert.Equal("Nothing installed yet", catalogue.Line(Job.MeetingFinal).EngineText);
         // Windows: the downloadable line sizes as Windows does.
         Assert.Equal("Qwen3-ASR 1.7B · Apache-2.0 · 2.32 GB · installed", CatalogueModel.Downloadable(catalogue.Models[0], CultureInfo.InvariantCulture));
+        // Every registry id Windows lists has its name (ink-engines' rows.rs), never the raw id.
+        Assert.Equal("Parakeet TDT v3", CatalogueModel.Name("parakeet-tdt-0.6b-v3-int8"));
+        Assert.Equal("Nemotron-3-Diarization", CatalogueModel.Name("nemotron-3-diarization-q8"));
+        Assert.Equal("Silero VAD", CatalogueModel.Name("silero-vad-v6-16k"));
         catalogue.Apply(Ev.Of("""{"type":"core.stopped"}"""));
         Assert.False(catalogue.Line(Job.DictationFinal).Known); // a stopped core's answers are gone
     }

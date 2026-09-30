@@ -6,7 +6,7 @@ use common::{REV, row, sha256_hex};
 use ink_core::Job;
 use ink_engines::{
     ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_RELATIVE_PATH_LEN, ModelDir, ModelFile, Os,
-    REVISION_MARKER, Registry, RegistryError, builtin_rows,
+    REVISION_MARKER, Registry, RegistryError, Runtime, builtin_rows,
 };
 
 fn valid() -> EngineRow {
@@ -166,9 +166,23 @@ fn ids_and_file_names_cannot_leave_the_model_directory() {
         "w.bin.",
         "nul.bin",
         REVISION_MARKER,
-        "sub/w.bin",
         "sub\\w.bin",
         "w.bin.part",
+        // In a subdirectory: every name in the path is held to the same rules.
+        "/w.bin",
+        "/etc/w.bin",
+        "C:/w.bin",
+        "sub/",
+        "sub//w.bin",
+        "sub/../w.bin",
+        "sub/../../w.bin",
+        "./w.bin",
+        "sub/./w.bin",
+        "sub/.hidden",
+        "sub./w.bin",
+        "aux/w.bin",
+        "sub.part/w.bin",
+        "sub/w.bin.part",
     ] {
         let mut r = valid();
         r.files[0].name = name.into();
@@ -177,6 +191,71 @@ fn ids_and_file_names_cannot_leave_the_model_directory() {
             "file name {name:?} was accepted"
         );
     }
+}
+
+#[test]
+fn file_names_may_name_subdirectories_of_the_row() {
+    let mut r = valid();
+    let bytes = b"weights";
+    r.files = [
+        "Encoder.mlmodelc/weights/weight.bin",
+        "Encoder.mlmodelc/model.mil",
+        "vocab.json",
+    ]
+    .iter()
+    .map(|name| ModelFile {
+        name: (*name).into(),
+        url: format!("https://models.example/synthetic/x/resolve/{REV}/{name}"),
+        sha256: sha256_hex(bytes),
+        size: bytes.len() as u64,
+    })
+    .collect();
+    let reg = Registry::new(vec![r]).expect("names below the row's directory are valid");
+    let r = &reg.rows()[0];
+
+    // Each lands below the row's directory, split into the OS's own path components.
+    let dir = ModelDir::new(std::env::temp_dir().join("ink-engines-subdirectories"));
+    let row_dir = dir.row_dir(r);
+    assert_eq!(
+        dir.file_path(r, &r.files[0]),
+        row_dir
+            .join("Encoder.mlmodelc")
+            .join("weights")
+            .join("weight.bin")
+    );
+    assert_eq!(
+        dir.part_path(r, &r.files[0]),
+        row_dir
+            .join("Encoder.mlmodelc")
+            .join("weights")
+            .join("weight.bin.part")
+    );
+    assert_eq!(dir.file_path(r, &r.files[2]), row_dir.join("vocab.json"));
+    for f in &r.files {
+        let path = dir.file_path(r, f);
+        assert!(path.starts_with(&row_dir), "{path:?}");
+        assert!(
+            path.components()
+                .all(|c| !matches!(c, std::path::Component::ParentDir)),
+            "{path:?}"
+        );
+    }
+}
+
+#[test]
+fn a_file_name_that_is_also_another_files_directory_is_rejected() {
+    let mut r = valid();
+    let mut below = r.files[0].clone();
+    below.name = format!("{}/inner.bin", r.files[0].name);
+    below.url = format!(
+        "https://models.example/synthetic/x/resolve/{REV}/{}",
+        below.name
+    );
+    r.files.push(below);
+    assert!(matches!(refused(r.clone()), RegistryError::Invalid { .. }));
+    // Either order.
+    r.files.reverse();
+    assert!(matches!(refused(r), RegistryError::Invalid { .. }));
 }
 
 #[test]
@@ -219,6 +298,18 @@ fn rows_need_jobs_files_an_os_a_size_and_finite_error_rates() {
         wer: 1.0,
     });
     assert!(matches!(refused(r), RegistryError::Invalid { .. }));
+}
+
+#[test]
+fn a_row_the_shell_runs_fills_no_job_and_every_other_row_fills_one() {
+    // Core ML runs in the Mac shell: the core only downloads such a row, so a job on it would
+    // route to a model the core cannot load.
+    let mut r = valid();
+    r.runtime = Runtime::CoreMl;
+    assert!(matches!(refused(r.clone()), RegistryError::Invalid { .. }));
+    r.scores.clear();
+    let reg = Registry::new(vec![r]).expect("a download-only row");
+    assert!(reg.rows()[0].info().jobs.is_empty());
 }
 
 #[test]
@@ -276,4 +367,26 @@ fn paths_at_the_name_limits_fit_the_windows_path_budget() {
     let mut long_name = reg.rows()[0].clone();
     long_name.files[0].name.push('n');
     assert!(matches!(refused(long_name), RegistryError::Invalid { .. }));
+
+    // A name with subdirectories is held to the whole budget: with a 64-character id, 70
+    // characters of name make 70 + 64 + 1 + 12 + 1 + 5 = 153 below the root, and are refused;
+    // 67 make exactly 150 and are accepted.
+    for (len, ok) in [(70, false), (67, true)] {
+        let mut deep = reg.rows()[0].clone();
+        let name = format!("{}/{}", "d".repeat(40), "f".repeat(len - 41));
+        assert_eq!(name.len(), len);
+        deep.files[0].url =
+            format!("https://models.example/synthetic/{id}/resolve/{revision}/{name}");
+        deep.files[0].name = name;
+        match ok {
+            true => {
+                let reg = Registry::new(vec![deep]).unwrap();
+                let r = &reg.rows()[0];
+                let part = dir.part_path(r, &r.files[0]);
+                let relative = part.strip_prefix(&root).unwrap().as_os_str().len();
+                assert_eq!(relative, BUDGET);
+            }
+            false => assert!(matches!(refused(deep), RegistryError::Invalid { .. })),
+        }
+    }
 }

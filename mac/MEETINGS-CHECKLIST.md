@@ -19,7 +19,8 @@ name or a meeting title into this file or a bug: the repository is public.
 
 - [ ] Build the signed app with the engines (an ad-hoc signature is a new app to TCC every time):
       `INK_SIGN_IDENTITY=... NEMO_SPEECH_DIR=... mac/scripts/build-mac.sh --engines`.
-- [ ] Models installed (Settings > Models lists Qwen3-ASR, Silero and Nemotron as installed), and
+- [ ] Models installed (Settings > Models lists Qwen3-ASR, Parakeet, Silero and Nemotron as "On
+      this Mac"; Parakeet gives the live words), and
       Apple Intelligence on (Settings > AI: Polish can be turned on). Without Apple Intelligence
       meetings get no summary, and say so.
 - [ ] Settings > AI, before turning anything on: "Summaries and Ask" is off, and says meetings are
@@ -87,6 +88,12 @@ name or a meeting title into this file or a bug: the repository is public.
 - [ ] Settings > Storage > Keep records: choose 30 days on a library that has meetings or
       dictations older than that (or wait): they leave the Library at once, imports stay, and
       Settings > Storage's sizes go down after a relaunch. Set it back to Forever.
+      Nothing in the repository makes records older than 30 days in a scratch library
+      (`seed_library`'s are at most about four days old), so the deletion side can't be checked by
+      hand without deleting real records; `cargo test -p ink-ffi --test meetings` covers it
+      (`retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words`,
+      `a_sweep_keeps_what_an_import_brought_in`), and `--test import02` covers imports
+      (`imported_dictations_outlive_a_retention_change`).
 
 ## 5. Consent and honesty (read, don't just click)
 

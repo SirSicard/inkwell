@@ -869,6 +869,42 @@ fn an_import_into_a_store_in_use_keeps_what_was_there() {
     assert_eq!(store.setting("ui.theme").unwrap().as_deref(), Some("light"));
 }
 
+/// Retention never deletes what an import brought in: each dictation the import writes is marked
+/// as imported, and a record made here, before the import or after it, is not.
+#[test]
+fn the_dictations_an_import_writes_are_marked_and_nothing_else() {
+    let legacy = Legacy::full("marked");
+    let db = TempDb::new("import-marked");
+    let store = db.open();
+    let made_here = |kind| {
+        store
+            .create_record(NewRecord {
+                kind,
+                title: None,
+                started_at_unix_ms: T0 * 1_000,
+                source_app: None,
+                audio_dir: None,
+            })
+            .unwrap()
+    };
+    let before = made_here(RecordKind::Dictation);
+    store.import_inkwell02(&legacy.read().unwrap()).unwrap();
+    let after = made_here(RecordKind::Meeting);
+
+    let records = all_records(&store);
+    assert_eq!(records.len(), 7);
+    let marked: Vec<&Record> = records.iter().filter(|r| r.imported).collect();
+    assert_eq!(marked.len(), 5, "the five 0.2 dictations");
+    for record in &marked {
+        assert_eq!(record.kind, RecordKind::Dictation);
+        assert!(record.id != before && record.id != after);
+        assert!(store.record(&record.id).unwrap().unwrap().imported);
+    }
+    for id in [&before, &after] {
+        assert!(!store.record(id).unwrap().unwrap().imported);
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Malformed and partial sources: a clear error, and the store unchanged
 // ---------------------------------------------------------------------------------------------

@@ -30,6 +30,12 @@ enum DataLocation {
         try override("INK_MODELS_DIR", environment)
     }
 
+    /// Whether INK_DATA_DIR moves the library. A moved library never looks at the user's Inkwell
+    /// 0.2 data either (Import02Model.looks).
+    static func isMoved(environment: [String: String]) -> Bool {
+        !(environment["INK_DATA_DIR"] ?? "").isEmpty
+    }
+
     /// The single-instance lock. Always in the default directory, even when the library is moved:
     /// two running copies would both hold the dictation key and the microphone, whichever library
     /// each one writes to.

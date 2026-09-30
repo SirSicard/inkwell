@@ -90,6 +90,30 @@ public abstract record CoreCommand
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name)];
     }
 
+    /// <summary>
+    /// Installs <paramref name="Next"/> in place of <paramref name="Model"/>: with both the same
+    /// registry id, the first download of that model (nothing else is unloaded or warmed). Only
+    /// when the user asks for it. Its id names the model ("model.update:&lt;next&gt;"), so a failure
+    /// is matched to its row.
+    /// </summary>
+    public sealed record ModelUpdate(string Model, string Next) : CoreCommand
+    {
+        public override string Name => "model.update";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("model", Model), ("next", Next), ("id", $"{Name}:{Next}")];
+    }
+
+    /// <summary>
+    /// Loads the job's model and keeps it loaded: answered by model.warmed, model.refused or
+    /// model.warm_failed. Its id names the job ("model.warm:dictation_final"), as the Mac's.
+    /// </summary>
+    public sealed record ModelWarm(Job Job) : CoreCommand
+    {
+        public override string Name => "model.warm";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("job", Wire.Name(Job)), ("id", $"{Name}:{Wire.Name(Job)}")];
+    }
+
     /// <summary>Its id names the job ("engine.route:dictation_final"), so a failure is matched to its line.</summary>
     public sealed record EngineRoute(Job Job) : CoreCommand
     {
@@ -274,6 +298,68 @@ public abstract record CoreCommand
         }
     }
 
+    /// <summary>Settings > AI's language model: the own-key providers and the one chosen (llm.providers with <paramref name="Ref"/>).</summary>
+    public sealed record LlmProviders(string Ref) : CoreCommand
+    {
+        public override string Name => "llm.providers";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Stores <paramref name="Key"/> for <paramref name="Provider"/> in the OS key store (the core
+    /// keeps it nowhere else). Its ToString never shows the key: only Json carries it, once, to the core.
+    /// </summary>
+    public sealed record LlmKeySave(string Provider, string Key, string Ref) : CoreCommand
+    {
+        public override string Name => "llm.key.save";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("provider", Provider), ("key", Key), ("id", Ref)];
+
+        public override string ToString() => $"LlmKeySave {{ Provider = {Provider}, Key = <redacted>, Ref = {Ref} }}";
+    }
+
+    public sealed record LlmKeyDelete(string Provider, string Ref) : CoreCommand
+    {
+        public override string Name => "llm.key.delete";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("provider", Provider), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Chooses <paramref name="Provider"/> ("none": none) and its model. <paramref name="LocalOnlyOff"/>
+    /// is the user's say-so for a provider that is not on this PC: choosing it turns local-only
+    /// mode off, and the core refuses such a choice without it.
+    /// </summary>
+    public sealed record LlmChoose(string Provider, string? Model, string? BaseUrl, bool LocalOnlyOff, string Ref) : CoreCommand
+    {
+        public override string Name => "llm.choose";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("provider", Provider);
+            yield return ("id", Ref);
+            if (Model is not null)
+            {
+                yield return ("model", Model);
+            }
+            if (BaseUrl is not null)
+            {
+                yield return ("base_url", BaseUrl);
+            }
+            if (LocalOnlyOff)
+            {
+                yield return ("local_only", "off");
+            }
+        }
+    }
+
+    /// <summary>One short fixed request to the chosen provider: llm.tested with <paramref name="Ref"/>.</summary>
+    public sealed record LlmTest(string Ref) : CoreCommand
+    {
+        public override string Name => "llm.test";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
     /// <summary>Settings > Snippets: answered by snippets.listed with <paramref name="Ref"/>.</summary>
     public sealed record SnippetsList(string Ref) : CoreCommand
     {
@@ -340,6 +426,23 @@ public abstract record CoreCommand
     public sealed record ImportNotes : CoreCommand
     {
         public override string Name => "import.notes";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
+    }
+
+    /// <summary>
+    /// Whether Inkwell 0.2's data is on this PC and not yet imported (the core knows where it is):
+    /// import.checked, or a command.failed, with the command's name as its id.
+    /// </summary>
+    public sealed record ImportCheck : CoreCommand
+    {
+        public override string Name => "import.check";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
+    }
+
+    /// <summary>Imports it: import.finished, or a command.failed whose message is words to show.</summary>
+    public sealed record ImportRun : CoreCommand
+    {
+        public override string Name => "import.run";
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
     }
 }

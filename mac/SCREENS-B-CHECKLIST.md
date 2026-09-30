@@ -6,14 +6,16 @@ to `mac/Sources/Inkwell/Screens/` and note the date, the macOS version and the c
 
 Automated checks cover the logic behind each line (`swift test --package-path mac`): the
 permission cards' reaction to a probe change, the Polish and the summaries-and-Ask toggles, modes
-without bundle ids, owed grouping, the notes' saving, the ledger and the question stack, and every
-screen command against the real core.
+without bundle ids, owed grouping, the notes' saving, the ledger and the question stack, the model
+downloads (only from a press, one at a time, failures and Retry), and every screen command against
+the real core.
 
 ## Setup
 
-- [ ] Build: `mac/scripts/build-mac.sh`. The ad-hoc build is fine for everything except section 2,
-      which needs the signed build (`INK_SIGN_IDENTITY` set): an ad-hoc signature is a new app to
-      TCC every time.
+- [ ] Build the signed debug build:
+      `INK_SIGN_IDENTITY=<your Developer ID> mac/scripts/build-mac.sh --debug`. Debug, because the
+      replayed meeting below (`INK_REPLAY_MEETING`, for section 3) is compiled out of release
+      builds. Signed, for section 2: an ad-hoc signature is a new app to TCC every time.
 - [ ] Start it on a scratch library, with a meeting replayed from the fixtures once the engines are
       up (30 seconds of audio):
 
@@ -23,9 +25,22 @@ screen command against the real core.
 
 ## 1. First run
 
-- [ ] A fresh library opens the first-run sheet over the window: four steps shown as dots.
+- [ ] A fresh library opens the first-run sheet over the window: five steps shown as dots.
 - [ ] Permissions step: four cards, "Hear you", "Hear the others", "Type for you", "Know your
       meetings", each with its state. Nothing is asked for until you press Allow.
+- [ ] Models step (it downloads about 3 GB: only with your OK, into the scratch library's own
+      models folder): each model not on this Mac with its licence, size and where it comes from
+      (huggingface.co; Silero VAD from raw.githubusercontent.com), and the total. Nothing is fetched until you
+      press Download (Activity Monitor > Network: Inkwell receives nothing before it). Then one
+      model at a time, smallest first, with its bar, the others "Waiting". Continue works at once,
+      and the downloads keep going through the rest of the first run and after it.
+- [ ] Once Parakeet is in, Settings > Models reads Parakeet TDT v3 for Live words without a
+      restart, and dictating shows live words in the Drop; once Qwen3-ASR is in, Dictation reads
+      Qwen3-ASR 1.7B, and the first dictation after it is as quick as the next (it is loaded when
+      its download ends, not by that take).
+- [ ] A download that fails (turn Wi-Fi off while one runs): its row says "Couldn't download it"
+      and why, in red, with Retry, and nothing tries again by itself. Wi-Fi back on, Retry: it
+      downloads.
 - [ ] Polish step: the switch is off and cannot be turned on if Apple Intelligence is off or not
       on this Mac, and the line under it says why. With Apple Intelligence on, switching it on
       asks first ("Turn on polish?", naming Apple's on-device model); Cancel leaves it off.
@@ -33,6 +48,36 @@ screen command against the real core.
 - [ ] On a fresh library, with the sheet up, press Command-Q (and, separately, choose Quit Inkwell
       from the menu-bar item): Inkwell quits at once. Start it again on the same library: the
       sheet shows again (quitting is not skipping).
+
+## 1b. Installed over 0.2 with Open at Login on (signed build; needs you)
+
+Run on the first install over 0.2, and after a change to `LoginItemMigration.swift`. It acts only
+on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/Applications`.
+
+- [ ] Before: 0.2 in `/Applications/Inkwell.app` with its open-at-login setting on.
+      `plutil -p ~/Library/LaunchAgents/Inkwell.plist` shows label `Inkwell` and the one program
+      `/Applications/Inkwell.app/Contents/MacOS/app`. Keep a copy for the steps below
+      (`cp ~/Library/LaunchAgents/Inkwell.plist ~/Desktop/agent-0.2.plist`) and note
+      `ls ~/Library/LaunchAgents`.
+- [ ] Quit 0.2, replace `/Applications/Inkwell.app` with the signed build, open it. The menu-bar
+      item's "Open at Login" is checked, or reads "Open at Login (approve in System Settings)"
+      until you approve it in System Settings > General > Login Items. No alert.
+- [ ] `~/Library/LaunchAgents/Inkwell.plist` is gone; every other file there is as before.
+      `log show --last 10m --predicate 'subsystem == "com.inkwell.app" AND category == "login"'`
+      says "carried over" and "login agent removed", with no path in either line.
+- [ ] Log out and back in: Inkwell starts, in the menu bar only.
+- [ ] Once: turn Open at Login off, quit, put the copy back
+      (`cp ~/Desktop/agent-0.2.plist ~/Library/LaunchAgents/Inkwell.plist`), open Inkwell. Open at
+      Login stays off and the file stays.
+- [ ] A failed removal is said: quit Inkwell, run
+      `defaults delete com.inkwell.app LoginItemCarriedOverFrom02`, then
+      `chflags uchg ~/Library/LaunchAgents/Inkwell.plist`, open Inkwell. An alert "Inkwell could
+      not remove Inkwell 0.2's login item." names `~/Library/LaunchAgents/Inkwell.plist`; Open at
+      Login is on. Then `chflags nouchg` the file and delete it.
+- [ ] A copy elsewhere leaves it alone: quit Inkwell, put the copy back, run the `defaults delete`
+      above, and open `mac/build/Inkwell.app` (not the one in `/Applications`). The file stays,
+      Open at Login does not change, and the log says the agent "opens a copy of the app other
+      than this one". Delete the file and `~/Desktop/agent-0.2.plist` when done.
 
 ## 2. Permissions (signed build; needs you)
 
@@ -65,10 +110,12 @@ screen command against the real core.
       with their times).
 - [ ] Edit an earlier line and move off it: the change is kept. Delete a line: it is gone from the
       record.
-- [ ] Ask: Command-I puts the cursor in "Ask about this call". A question asked gets the honest
-      "not available in this version" answer, never a made-up one. Far-end questions, when the
-      replay has any, stack above it (newest first, at most four), and Command-1 to Command-4 ask
-      them.
+- [ ] Ask: Command-I puts the cursor in "Ask about this call". Ask needs the "Summaries and Ask"
+      consent (Settings > AI), off on a scratch library: without it a question sends nothing, and
+      the answer says Ask needs your OK in Settings > AI. With it on, the answer is in plain words,
+      or, without Apple Intelligence, "Answers need Apple Intelligence, which is off or not ready
+      on this Mac."; never a made-up one. Far-end questions, when the replay has any, stack above
+      it (newest first, at most four), and Command-1 to Command-4 ask them.
 - [ ] When the replay ends, Live leaves the sidebar and the window shows Today.
 - [ ] Resize the window as small as it goes and back: nothing overlaps, and the window never grows
       by itself as lines arrive.
@@ -112,7 +159,8 @@ screen command against the real core.
       a restart; turning it on again asks again.
 - [ ] Models: Dictation, Meeting transcript and Live words, each with the engine that serves it now
       and its measured accuracy. After a model finishes installing, the line changes to it without
-      a restart.
+      a restart. Each model not on this Mac has Download (downloads: only with your OK); a second
+      Download while one runs reads "Waiting" and starts when the first ends.
 - [ ] Meetings and Storage read true for this Mac; "Show in Finder" opens the library's folder.
 - [ ] About: the version, update settings, the model credits (Parakeet under CC-BY 4.0 with its
       attribution), and every component's notice, each opening to its full licence text.

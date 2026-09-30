@@ -4,6 +4,8 @@ Two release chains share this repository until the 0.2 app retires:
 
 - **Inkwell 1.x, the native Mac app** (`mac/`): `.github/workflows/mac-release.yml`, on `v1.X.Y`
   tags. It is described first.
+- **Inkwell 1.x on Windows** (`windows/`): `.github/workflows/win-release.yml`, on the same tags,
+  into the same release. It is described [after the Mac's](#inkwell-1x-on-windows).
 - **Inkwell 0.2, the Tauri app** (branch `legacy/0.2`): `build.yml`, on `v0.*` tags. Its chain is
   [below](#inkwell-02-the-tauri-app).
 
@@ -254,37 +256,182 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
 What the first 1.x release needs beyond the chain above, in order. The 0.2 app has left `main`;
 `legacy/0.2` keeps it.
 
+1.0 is one release on the Mac and on Windows together: the tag waits until the Windows app is
+ready too. Windows ships unsigned at first, with the homepage explaining how to install it past
+SmartScreen; its release chain is [below](#inkwell-1x-on-windows). Linux and Intel Macs are
+dropped: 0.2 is their last version.
+
 Before the tag:
 
-- [ ] **The maintainer:** the update key, the `release` environment and its secret, the public
+- [x] **The maintainer:** the update key, the `release` environment and its secret, the public
       key in `mac/Info.plist`, and the tag ruleset (the steps under "Once: the update key").
 - [ ] Every notice written without its upstream file compared with that project's own licence
       file, replaced where it differs, and its `verified=` set to the date: the lines of
-      `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`) and of
-      `mac/composed-notices.txt` (replacing the text in `Notices.swift`).
-      `mac/scripts/notices-verified.sh` must pass: the tag refuses to build until it does.
+      `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`), of
+      `mac/composed-notices.txt` (replacing the text in `Notices.swift`), and of the Windows-only
+      `windows/Inkwell.Core/Screens/About/composed-notices.txt` (replacing the text in
+      `Notices.cs`). `mac/scripts/notices-verified.sh` and
+      `windows/scripts/release-version.sh tag v1.0.0` (the same check with the Windows list) must
+      pass: each platform's tag refuses to build until its check does.
 - [x] The 0.2 app removed from `main`, with what pointed at it (`build.yml` among them: a `v0.*`
       tag builds from `legacy/0.2`'s own copy). `docs/legacy/` stays.
 - [x] The README rewritten for 1.0.
+- [ ] The Windows app ready for the same release, through its own chain.
 - [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
 
-After CI goes green:
+After CI goes green, on the draft, before anything is published:
 
-- [ ] Steps 3 to 5 above: the draft checked with `--update-key`, published as latest, the feed
-      read back.
-- [ ] **The maintainer:** the downloaded dmg installed on a fresh macOS user account (onboarding,
-      one dictation, one meeting), and on the everyday account over the installed 0.2: it
-      replaces it in place, and the microphone and Accessibility grants carry over (same bundle
-      id and team; compare `codesign -d -r-` of both apps).
-- [ ] 0.2.11 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
+- [ ] Step 3 above: the draft's dmg checked with `--update-key`.
+- [ ] **The maintainer:** that dmg installed on a fresh macOS user account (onboarding, one
+      dictation, one meeting), and on the everyday account over the installed 0.2: it replaces
+      it in place, and the microphone and Accessibility grants carry over (same bundle id and
+      team; compare `codesign -d -r-` of both apps).
+- [ ] **The maintainer:** the draft's Windows installer (`gh release download v1.0.0 --repo
+      SirSicard/inkwell --pattern '*_x64-setup.exe'`) on a fresh Windows account (one dictation,
+      one meeting), and on an account with 0.2 installed (`windows/S3.6-CHECKLIST.md`, section 6).
+
+Then:
+
+- [ ] Steps 4 and 5 above: published as latest, the feed read back.
+- [ ] 0.2.10 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
       install 1.0): the 0.2 chain below, published with `--latest=false` so that 1.0 stays the
-      release the feed follows, then `inkwell-updater/publish-latest.sh v0.2.11`.
-- [ ] `inkwell-updater/` decided: kept while 0.2 installs still check it, or retired after 0.2.11.
-- [ ] The cask: `packaging/homebrew/inkwell.rb` for 1.0 (macOS 26 or later; 1.0's data folder,
-      `~/Library/Application Support/Inkwell`, in `zap`), then `bin/update-cask.sh 1.0.0`.
+      release the feed follows, then `inkwell-updater/publish-latest.sh v0.2.10`. On Linux and
+      Intel Macs the notice says 0.2 is their last version.
+- [ ] `inkwell-updater/` retired once 1.0 has shipped on Windows too and 0.2.10 has gone out
+      through it (0.2 installs read the notice from it until then).
+- No Homebrew cask in 1.0: `packaging/homebrew/inkwell.rb` stays on 0.2.9. 1.x gets its cask at
+  1.0.1 (macOS 26 or later; 1.0's data folder, `~/Library/Application Support/Inkwell`, in
+  `zap`; then `bin/update-cask.sh`).
 - [ ] The homepage's `MAC_VERSION` and `WINDOWS_VERSION` and its release snapshot, only once
       1.0.0 is published (`homepage/README.md`, "After a release"), in a commit authored as
       SirSicard: Vercel builds no other author's commits.
+
+## Inkwell 1.x on Windows
+
+The same `v1.X.Y` tag starts `win-release.yml` beside `mac-release.yml`. On x64, the one Windows
+architecture 1.0 ships (`win-release-build.yml`, on `windows-2025`; ARM64 waits for 1.0.1), it
+builds the core with the Windows engines and the app with NativeAOT, checks what they need from a
+PC, packs the installer and the update feed with Velopack, and then adds them to the tag's
+**draft** release (creating it if the Mac's workflow has not yet). A manual run is the dry run:
+everything but the release, the files kept as the run artifact `inkwell-windows` for 14 days.
+
+The engines it ships (`windows/scripts/build-core.ps1`, whose list ink-notices' Windows features
+are held to): Qwen3-ASR on llama.cpp for dictation and meeting finals (Vulkan, and the CPU where a
+PC has no Vulkan GPU), Silero VAD on tract, Parakeet v3 int8 on sherpa-onnx (live words; dictation
+without a GPU), and Nemotron diarization of the far end on NeMo-Speech.cpp (Vulkan, then the CPU).
+
+- **sherpa-onnx**: its 1.13.4 "shared, MD, Release, no-tts" archive for x64, fetched
+  by `win-release-build.yml` and checked against the SHA-256 GitHub publishes for it, and every file
+  the build uses from it against ink-engines' `build.rs` pins (`SHERPA_ONNX_DIR`). No
+  text-to-speech, so none of espeak-ng. Its `sherpa-onnx-c-api.dll`, `onnxruntime.dll` and
+  `onnxruntime_providers_shared.dll` ship beside `Inkwell.exe`.
+- **NeMo-Speech.cpp**: built from its pinned commit with `build-nemo-speech.sh` (Git Bash inside
+  the developer environment), against SentencePiece and Abseil built from their pinned tarballs by
+  `build-sentencepiece-abseil.sh` and linked into NeMo's own DLL (`ENGINE_DEPS_DIR`), as for the
+  Mac. Its `nemo_speech_asr_c.dll`, `nemo_speech_asr.dll` and its ggml's DLLs ship beside
+  `Inkwell.exe`. The core delay-loads it: its Vulkan backend needs the Vulkan loader as soon as it
+  loads, so a PC without a Vulkan driver runs everything but the diarizer.
+- **The Visual C++ runtime**: both engines' DLLs link it dynamically (`/MD`), so `build-core.ps1`
+  copies the DLLs of it they import, and no others, from the build machine's Visual Studio 2026
+  redistributable folder (`VCToolsRedistDir`: `Microsoft.VC145.CRT` and `Microsoft.VC145.OpenMP`;
+  on the runner and on a PC today `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`,
+  `msvcp140_1.dll` and `vcomp140.dll`). They ship beside `Inkwell.exe` (app-local, so the per-user
+  install needs no administrator and no Visual C++ Redistributable). Another redistributable than
+  VC145 stops the build: About shows the licence terms of this one. The build prints the version,
+  and the release notes give it (`win-release-build.yml`'s `vcruntime` output).
+- `build-core.ps1` puts the core's DLL, the engines' DLLs and that runtime in
+  `core/target/release/inkwell-core/`, and the publish takes every DLL there (`InkCoreDir`).
+
+**Unsigned, for now.** The Windows build is not code-signed. SmartScreen warns before the installer
+runs, and Smart App Control blocks it outright; the homepage says how to check the download and get
+past SmartScreen (`windows/HOMEPAGE-INSTALL.md` is its draft). Signing is a later step.
+
+| Job | Runs on | Holds | Does |
+|---|---|---|---|
+| `build` (`win-release-build.yml`) | tag and dry run | nothing secret; read access | sherpa-onnx's archive, the Vulkan SDK (pinned by LunarG's published SHA-256) and the diarizer's prefix, all pinned; `windows/scripts/build-core.ps1`; the generated-code and notice checks; the locked restore and NuGet licence check; the NativeAOT publish with the tag's version; `windows/scripts/pack.ps1` |
+| `publish` | tag only | write access (environment `release`) | the files checked against their SHA-256s, then added to the tag's draft release, with a Windows section in its notes |
+
+What a release carries for Windows:
+
+- `Inkwell_X.Y.Z_x64-setup.exe`, the installer. Per user, no administrator: it installs into
+  `%LOCALAPPDATA%\InkwellApp`, adds a Start menu entry and an entry in Settings > Apps, and starts
+  the app. Uninstalling removes that folder only: the library, in `%LOCALAPPDATA%\Inkwell`, stays.
+  It refuses Windows older than 11 24H2. The package id `InkwellApp` is the update chain's name: it
+  never changes. While it installs it shows a splash with Microsoft's end-user terms, which the
+  licences of the Windows App SDK (its section 3(b)(ii)), of the Windows SDK's .NET projection and
+  of Visual Studio for the Visual C++ runtime (their Distribution Requirements) ask for, drawn by
+  `pack.ps1`; the release notes and the homepage carry them too, and Settings > About in full.
+  Velopack's installer has no licence page, so the app's first run asks instead: the terms and the
+  three licences, with Agree and Quit, before anything else starts (`TermsStep`). The agreement is
+  kept in `terms-agreed.txt` in the library folder with the terms' version, a SHA-256 of the
+  sentence and the three licence texts (`TermsStep.CurrentVersion`): editing the sentence or
+  re-copying any of the licences asks every existing user again at their next start.
+- `InkwellApp-X.Y.Z-full.nupkg` and `releases.win.json`: the update and its feed (Velopack's
+  channel `win`, which is part of the update chain too: it never changes). The app's Settings >
+  About > Check Now reads the feeds of the repository's latest published releases (GitHub's API,
+  then the assets over HTTPS), and Velopack installs a package only if its size and SHA-256 match
+  the feed's. `pack.ps1` checks the feed against the package it wrote.
+- `Inkwell_X.Y.Z_windows-sha256.txt`: the SHA-256s of the three, in `sha256sum` format. The
+  installer's is also in the release notes.
+
+What the checks guarantee:
+
+- **The Visual C++ runtime is the app's own.** The core's DLL links the CRT statically
+  (`crt-static`, and llama.cpp's CMake build with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`); the
+  .NET and Windows App SDK binaries use only the UCRT, which is part of Windows; the engines' DLLs
+  need the Visual C++ runtime DLLs above, and `build-core.ps1` (for the core and the engines' DLLs)
+  and `pack.ps1` (for the whole app) accept one only when it is beside `Inkwell.exe` and built for
+  x64, never the build machine's copy in System32 (nor the debug UCRT). `pack.ps1` prints the
+  runtime's version and refuses DLLs of two versions.
+- **Everything it loads is in the package or part of Windows.** Every DLL a binary of the app
+  loads when it loads must be beside `Inkwell.exe` or part of Windows (`windows/scripts/lib/dll-imports.ps1`,
+  which both scripts use). A file in the build machine's System32 counts only if Windows signs it
+  as its own, so nothing a PC gets elsewhere passes for Windows because the build machine has it:
+  the Vulkan loader (GPU drivers), a Visual C++ runtime, LLVM's OpenMP. ONNX Runtime never
+  counts: Windows 11 has an older `onnxruntime.dll` of its own there, and sherpa-onnx must get the
+  one the app ships (the adapter also refuses any other version when it loads).
+- **It starts without Vulkan.** `vulkan-1.dll` is delay-loaded, and only for the functions
+  `build-core.ps1` lists; the core then runs llama.cpp on the CPU (`tests/vulkan_missing.rs` runs
+  in the same job). The diarizer's DLL is delay-loaded too, and its Vulkan backend is the one
+  binary allowed to need the loader when it loads; the core checks the diarizer loads before its
+  first call (ink-engines' `src/nemo.rs`).
+- **It is x64's.** `pack.ps1` refuses an `Inkwell.exe` or core built for another architecture.
+- **Notices first.** A tag waits, as the Mac's does, for every notice written without its upstream
+  file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
+  included (`windows/scripts/release-version.sh`).
+
+The same build on a PC (Visual Studio's C++ build tools, CMake, Ninja, LLVM, Git Bash, the Vulkan
+SDK with `VULKAN_SDK` set, the .NET SDK `windows/global.json` pins), x64:
+
+```powershell
+# SHERPA_ONNX_DIR: the unpacked sherpa-onnx-v1.13.4-win-x64-shared-MD-Release-no-tts-lib archive.
+# NEMO_SPEECH_DIR: the prefix build-nemo-speech.sh installed (ENGINE_DEPS_DIR from
+# build-sentencepiece-abseil.sh), both run from Git Bash inside Visual Studio's developer
+# environment, as win-release-build.yml runs them.
+pwsh windows/scripts/build-core.ps1
+cd windows
+dotnet restore Inkwell.slnx --locked-mode
+dotnet publish Inkwell/Inkwell.csproj -c Release -o $env:TEMP\inkwell-app --no-restore -p:InkVersion=1.0.0 "-p:InkCoreDir=$PWD\..\core\target\release\inkwell-core\"
+pwsh scripts/pack.ps1 -Version 1.0.0 -AppDir $env:TEMP\inkwell-app -OutDir $env:TEMP\inkwell-release
+```
+
+**Publishing.** The draft holds both platforms' files once both workflows are green. Read the notes
+before publishing: whichever workflow drafted the release wrote its opening, and the Mac's workflow
+does not add its paragraph to a draft the Windows workflow made. Then step 4 of the Mac's chain
+publishes both at once. Every 1.x release carries both platforms: the Windows app looks for its
+feed in the latest ten releases, so a Mac-only release does not stop Windows updates, but a
+Windows user would miss a fix that only shipped on the Mac.
+
+**The dry run** (a dispatch needs the workflow on `main` first):
+
+```bash
+gh workflow run win-release.yml --repo SirSicard/inkwell --ref main -f version=1.0.0
+run="$(gh run list --repo SirSicard/inkwell --workflow win-release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run" --repo SirSicard/inkwell
+gh run download "$run" --repo SirSicard/inkwell --name inkwell-windows --dir ~/Downloads/inkwell-windows-dry-run
+```
+
+Then `windows/S3.6-CHECKLIST.md` on a PC with the downloaded installer.
 
 ## Inkwell 0.2, the Tauri app
 
@@ -321,7 +468,7 @@ same failure after tagging costs a deleted tag and a burnt version.
 its file is on the default branch (as with `mac-release.yml` above), and `main`
 drops `build.yml` with the rest of the 0.2 app. The run itself uses
 `legacy/0.2`'s copy. So run the dry run of every 0.2 release still to come
-(0.2.10, 0.2.11) before that removal merges. After it there is no dry run: the
+(0.2.10) before that removal merges. After it there is no dry run: the
 `v0.*` tag is the first build. Its release is a draft (`releaseDraft`), so a
 failed build is undone by deleting the draft and the tag before anyone sees it.
 

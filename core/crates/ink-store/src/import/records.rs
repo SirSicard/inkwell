@@ -90,7 +90,7 @@ impl<'a> Prepared<'a> {
     fn insert(&self, tx: &rusqlite::Transaction<'_>) -> Result<(), crate::codec::Fail> {
         let r = self.source;
         let id = RecordId(self.id.clone());
-        insert_record_at(tx, &self.id, &r.record, r.revision)?;
+        insert_record_at(tx, &self.id, &r.record, r.revision, true)?;
         insert_segments(tx, &id, r.revision, &self.segments)?;
         if let Some(end) = r.ended_at_unix_ms {
             set_ended(tx, &self.id, end)?;
@@ -108,8 +108,9 @@ impl<'a> Prepared<'a> {
 impl SqliteStore {
     /// Imports whole records in **one transaction** and returns their new ids, in order. Every
     /// record, segment, summary, speaker name and commitment goes through the same inserts as the
-    /// [`Store`](ink_core::Store) methods that write them one at a time, and the setting
-    /// `marker_key` is set to `marker_value` in the same transaction.
+    /// [`Store`](ink_core::Store) methods that write them one at a time, each record is marked as
+    /// imported ([`Record::imported`](ink_core::Record::imported), which retention never
+    /// deletes), and the setting `marker_key` is set to `marker_value` in the same transaction.
     ///
     /// - **Refused** with [`ImportError::MarkerPresent`] when `marker_key` is already set: one
     ///   import per source and store. Nothing is written then.

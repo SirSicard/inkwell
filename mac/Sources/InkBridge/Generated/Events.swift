@@ -29,6 +29,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case modelRefused(ModelRefused)
     /// `model.update_started`
     case modelUpdateStarted(ModelUpdateStarted)
+    /// `model.update_progress`
+    case modelUpdateProgress(ModelUpdateProgress)
     /// `model.update_finished`
     case modelUpdateFinished(ModelUpdateFinished)
     /// `audio.dropped`
@@ -145,6 +147,10 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case settingValue(SettingValue)
     /// `consent.state`
     case consentState(ConsentState)
+    /// `llm.providers`
+    case llmProviders(LlmProviders)
+    /// `llm.tested`
+    case llmTested(LlmTested)
     /// `modes.listed`
     case modesListed(ModesListed)
     /// `snippets.listed`
@@ -153,6 +159,10 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case voiceCommandsListed(VoiceCommandsListed)
     /// `import.notes`
     case importNotes(ImportNotes)
+    /// `import.checked`
+    case importChecked(ImportChecked)
+    /// `import.finished`
+    case importFinished(ImportFinished)
     /// `library.records`
     case libraryRecords(LibraryRecords)
     /// `library.search`
@@ -196,6 +206,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "model.warm_failed": self = .modelWarmFailed(try ModelWarmFailed(from: decoder))
             case "model.refused": self = .modelRefused(try ModelRefused(from: decoder))
             case "model.update_started": self = .modelUpdateStarted(try ModelUpdateStarted(from: decoder))
+            case "model.update_progress": self = .modelUpdateProgress(try ModelUpdateProgress(from: decoder))
             case "model.update_finished": self = .modelUpdateFinished(try ModelUpdateFinished(from: decoder))
             case "audio.dropped": self = .audioDropped(try AudioDropped(from: decoder))
             case "dictation.voice_detection": self = .dictationVoiceDetection(try DictationVoiceDetection(from: decoder))
@@ -254,10 +265,14 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
+            case "llm.providers": self = .llmProviders(try LlmProviders(from: decoder))
+            case "llm.tested": self = .llmTested(try LlmTested(from: decoder))
             case "modes.listed": self = .modesListed(try ModesListed(from: decoder))
             case "snippets.listed": self = .snippetsListed(try SnippetsListed(from: decoder))
             case "voice_commands.listed": self = .voiceCommandsListed(try VoiceCommandsListed(from: decoder))
             case "import.notes": self = .importNotes(try ImportNotes(from: decoder))
+            case "import.checked": self = .importChecked(try ImportChecked(from: decoder))
+            case "import.finished": self = .importFinished(try ImportFinished(from: decoder))
             case "library.records": self = .libraryRecords(try LibraryRecords(from: decoder))
             case "library.search": self = .librarySearch(try LibrarySearch(from: decoder))
             case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
@@ -282,6 +297,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .modelWarmFailed(let event): try event.encode(to: encoder)
         case .modelRefused(let event): try event.encode(to: encoder)
         case .modelUpdateStarted(let event): try event.encode(to: encoder)
+        case .modelUpdateProgress(let event): try event.encode(to: encoder)
         case .modelUpdateFinished(let event): try event.encode(to: encoder)
         case .audioDropped(let event): try event.encode(to: encoder)
         case .dictationVoiceDetection(let event): try event.encode(to: encoder)
@@ -340,10 +356,14 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
+        case .llmProviders(let event): try event.encode(to: encoder)
+        case .llmTested(let event): try event.encode(to: encoder)
         case .modesListed(let event): try event.encode(to: encoder)
         case .snippetsListed(let event): try event.encode(to: encoder)
         case .voiceCommandsListed(let event): try event.encode(to: encoder)
         case .importNotes(let event): try event.encode(to: encoder)
+        case .importChecked(let event): try event.encode(to: encoder)
+        case .importFinished(let event): try event.encode(to: encoder)
         case .libraryRecords(let event): try event.encode(to: encoder)
         case .librarySearch(let event): try event.encode(to: encoder)
         case .libraryRecord(let event): try event.encode(to: encoder)
@@ -420,7 +440,8 @@ public struct CatalogueEntry: Codable, Sendable, Equatable {
     public let id: String
     /// Whether its files are installed and complete.
     public let installed: Bool
-    /// The jobs it fills, each with its measured error rate.
+    /// The jobs it fills, each with its measured error rate. None for a model the core only
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
     public let jobs: [JobScore]
     /// Its weights' licence.
     public let licence: String
@@ -1097,6 +1118,67 @@ public enum FarEnd: String, Codable, Sendable, Equatable, CaseIterable {
     case everything
 }
 
+/// What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer
+/// (the core knows where), and whether this library holds it already. The data is read, never
+/// written, and the keychain is not asked, so linked_keys is 0 here.
+public struct ImportChecked: Codable, Sendable, Equatable {
+    /// What an import would bring (the dry run), when found.
+    public let counts: ImportCounts?
+    /// Why the data cannot be read now, when unreadable: words to show (for one, that Inkwell
+    /// 0.2 is still open and should be quit first).
+    public let message: String?
+    /// The command's id.
+    public let ref: String?
+    /// Whether there is something to import.
+    public let state: ImportState
+    /// Always `import.checked`.
+    public let type: String
+}
+
+/// How many of each kind Inkwell 0.2's data holds, or an import wrote.
+public struct ImportCounts: Codable, Sendable, Equatable {
+    /// Per-app style rules.
+    public let appStyleRules: Int64
+    /// Dictations, each a record in the library.
+    public let dictations: Int64
+    /// Dictionary entries (a word and what replaces it).
+    public let dictionaryEntries: Int64
+    /// Providers whose API key in the keychain is linked, by reference (never copied).
+    public let linkedKeys: Int64
+    /// Modes.
+    public let modes: Int64
+    /// 0.2's own settings.
+    public let settings: Int64
+    /// Snippets.
+    public let snippets: Int64
+    /// Voice commands.
+    public let voiceCommands: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case appStyleRules = "app_style_rules"
+        case dictations
+        case dictionaryEntries = "dictionary_entries"
+        case linkedKeys = "linked_keys"
+        case modes
+        case settings
+        case snippets
+        case voiceCommands = "voice_commands"
+    }
+}
+
+/// import.run brought Inkwell 0.2's data into the library, in one transaction: the library's
+/// records changed (list them again), import.notes may have something to say about the
+/// dictation key, and a running dictation already uses what came over. A failure is
+/// command.failed, its message in words to show.
+public struct ImportFinished: Codable, Sendable, Equatable {
+    /// What it wrote.
+    public let counts: ImportCounts
+    /// The command's id.
+    public let ref: String?
+    /// Always `import.finished`.
+    public let type: String
+}
+
 /// 0.2's dictation hotkey, and what the import made of it.
 public struct ImportKeyNote: Codable, Sendable, Equatable {
     /// The import set it as the dictation key (a key already chosen in 1.0 is kept).
@@ -1132,6 +1214,16 @@ public struct ImportNotes: Codable, Sendable, Equatable {
     public let ref: String?
     /// Always `import.notes`.
     public let type: String
+}
+
+/// Inkwell 0.2's data: found (and not imported yet), absent from this computer, imported into
+/// this library already (0.2's data is not opened then), or found but unreadable now
+/// (import.run may still work once the reason is gone).
+public enum ImportState: String, Codable, Sendable, Equatable, CaseIterable {
+    case found
+    case absent
+    case imported
+    case unreadable
 }
 
 /// How a dictation went in. blocked: Secure Input or an elevated target refused synthetic
@@ -1304,6 +1396,104 @@ public enum LlmFeature: String, Codable, Sendable, Equatable, CaseIterable {
     case polish
     case edit
     case meetings
+}
+
+/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
+/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
+/// store.
+public struct LlmProviderEntry: Codable, Sendable, Equatable {
+    /// Whether llm.choose may name another address (custom only).
+    public let customUrl: Bool
+    /// The model used when llm.choose names none.
+    public let defaultModel: String
+    /// Its address: fixed for a built-in provider; for custom, the address used when llm.choose
+    /// names none.
+    public let endpoint: String
+    /// Whether a key is stored for it in the OS key store, asked without reading the key. False
+    /// when that could not be asked (llm.providers' error says so).
+    public let hasKey: Bool
+    /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
+    /// server).
+    public let id: String
+    /// Whether a call needs its API key (a custom server usually runs without one).
+    public let needsKey: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case customUrl = "custom_url"
+        case defaultModel = "default_model"
+        case endpoint
+        case hasKey = "has_key"
+        case id
+        case needsKey = "needs_key"
+    }
+}
+
+/// The own-key language model providers and the one chosen, in answer to llm.providers,
+/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
+/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
+/// with the user's consent for its endpoint (consent.state).
+public struct LlmProviders: Codable, Sendable, Equatable {
+    /// For custom, the server's address as chosen; absent otherwise.
+    public let baseUrl: String?
+    /// The chosen provider's id; absent when none is chosen.
+    public let chosen: String?
+    /// Where the chosen provider sends, as consent.state names it; absent with chosen.
+    public let endpoint: String?
+    /// What could not be read (the stored keys, or the choice), as a sentence starting
+    /// "couldn't"; absent when all was read.
+    public let error: String?
+    /// Local-only mode (llm.local_only): while on, a provider that is not on this machine is
+    /// never called.
+    public let localOnly: Bool
+    /// The model the chosen provider is asked for; absent with chosen.
+    public let model: String?
+    /// Every provider, in preference order.
+    public let providers: [LlmProviderEntry]
+    /// Whether the chosen provider can be called: its key is stored (when it needs one), and
+    /// local-only mode lets it through. Each feature still needs its own consent.
+    public let ready: Bool
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Whether the chosen provider is on this machine (on_device) or not (cloud); absent with
+    /// chosen.
+    public let to: LlmDestination?
+    /// Always `llm.providers`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case baseUrl = "base_url"
+        case chosen
+        case endpoint
+        case error
+        case localOnly = "local_only"
+        case model
+        case providers
+        case ready
+        case ref
+        case to
+        case type
+    }
+}
+
+/// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
+/// provider with its stored key, and whether it answered.
+public struct LlmTested: Codable, Sendable, Equatable {
+    /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
+    /// failed, never the key.
+    public let error: String?
+    /// The model asked.
+    public let model: String
+    /// Whether the provider answered.
+    public let ok: Bool
+    /// The provider tested.
+    public let provider: String
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// The HTTP status of a refusal (401 or 403: the key; 404: the model or address; 429: the
+    /// account's limits); absent otherwise.
+    public let status: Int64?
+    /// Always `llm.tested`.
+    public let type: String
 }
 
 /// An answer to meeting.ask about the live meeting: the model's words. Render them as text only
@@ -1872,10 +2062,11 @@ public struct MeetingsRecovered: Codable, Sendable, Equatable {
 }
 
 /// Why a meeting records this microphone: the system default input; the built-in mic because
-/// the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because
-/// the user's setting says so; the default because this Mac has no built-in mic; the first
-/// input because no default is set; it was named; or a reason this build of the core does not
-/// name (unknown).
+/// the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be
+/// the one kept); the headset's own mic because the user's setting says so; the default because
+/// this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because
+/// no default is set; it was named; the LE Audio headset's own mic, which keeps full quality
+/// (Windows); or a reason this build of the core does not name (unknown).
 public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
     case defaultInput = "default_input"
     case builtInForBluetoothOutput = "built_in_for_bluetooth_output"
@@ -1883,6 +2074,7 @@ public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
     case noBuiltInMic = "no_built_in_mic"
     case firstInput = "first_input"
     case requested
+    case leAudioHeadset = "le_audio_headset"
     case unknown
 }
 
@@ -1964,6 +2156,32 @@ public struct ModelUpdateFinished: Codable, Sendable, Equatable {
         case next
         case noModelWarm = "no_model_warm"
         case ok
+        case type
+    }
+}
+
+/// How far a model update's download has got, between model.update_started and
+/// model.update_finished: about four a second at most, and one when every byte is on disk
+/// (done_bytes equal to total_bytes; model.update_finished then says whether the files checked
+/// out). A model already installed sends only that one.
+public struct ModelUpdateProgress: Codable, Sendable, Equatable {
+    /// Bytes on disk so far across its files. It can go down: a file whose server ignores a
+    /// resume starts over.
+    public let doneBytes: Int64
+    /// The model being replaced (the same as next for a first download).
+    public let id: String
+    /// The model being downloaded.
+    public let next: String
+    /// Its download size (models.listed's size_bytes).
+    public let totalBytes: Int64
+    /// Always `model.update_progress`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case doneBytes = "done_bytes"
+        case id
+        case next
+        case totalBytes = "total_bytes"
         case type
     }
 }

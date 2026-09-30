@@ -7,6 +7,7 @@
 //! | [`Router`] | Job → the installed engine for this OS with the lowest measured error rate. Engines the shell registers over the C ABI compete on the same terms. |
 //! | [`Residency`] | Keeps the dictation model warm, loads others on demand, unloads what has been idle for five minutes, never loads two copies. |
 //! | [`Compute`] | Where a ggml engine runs: a GPU when the machine has one (Metal, Vulkan), else the CPU on every physical core ([`choose`]). |
+//! | [`TrailingWindow`] | Live partials from an offline engine the core loads itself (Windows' Parakeet), by re-decoding a trailing window. |
 //!
 //! How the pipeline uses them: [`Router::route`] a job; a [`Route::External`] engine is called
 //! directly, a [`Route::Model`] is loaded with [`Residency::acquire`] and called through the
@@ -16,10 +17,25 @@
 //! Everything here runs on worker threads, is `Send + Sync`, and holds no lock across a load, a
 //! download or an engine call.
 
-// No unsafe code, except the NeMo-Speech.cpp FFI (`engine-nemo`), which allows it for its own
-// module; every block there carries a SAFETY comment (clippy enforces it).
-#![cfg_attr(not(feature = "engine-nemo"), forbid(unsafe_code))]
-#![cfg_attr(feature = "engine-nemo", deny(unsafe_code))]
+// No unsafe code, except the NeMo-Speech.cpp and sherpa-onnx FFIs (`engine-nemo`,
+// `engine-sherpa`) and the delay-load hook of a Windows Vulkan build (`llama/no_vulkan.rs`), which
+// allow it for their own modules; every block there carries a SAFETY comment (clippy enforces it).
+#![cfg_attr(
+    not(any(
+        feature = "engine-nemo",
+        feature = "engine-sherpa",
+        all(windows, feature = "engine-llama-vulkan")
+    )),
+    forbid(unsafe_code)
+)]
+#![cfg_attr(
+    any(
+        feature = "engine-nemo",
+        feature = "engine-sherpa",
+        all(windows, feature = "engine-llama-vulkan")
+    ),
+    deny(unsafe_code)
+)]
 #![warn(missing_docs)]
 
 mod adapters;
@@ -27,6 +43,7 @@ mod compute;
 mod download;
 #[cfg(feature = "http")]
 mod http;
+mod live;
 #[cfg(feature = "engine-llama")]
 pub mod llama;
 mod model_dir;
@@ -37,14 +54,18 @@ mod registry;
 mod residency;
 mod router;
 mod rows;
+#[cfg(feature = "engine-sherpa")]
+#[allow(unsafe_code)]
+pub mod sherpa;
 #[cfg(feature = "engine-silero")]
 mod silero;
 
-pub use adapters::{VadModel, load_diarizer, load_vad};
+pub use adapters::{VadModel, load_diarizer, load_speech, load_vad};
 pub use compute::{Compute, Device, DeviceKind, choose, physical_cores};
 pub use download::{DownloadError, DownloadProgress, Downloader, Fetch, FetchError, Fetched};
 #[cfg(feature = "http")]
 pub use http::HttpFetch;
+pub use live::TrailingWindow;
 pub use model_dir::{
     MAX_RELATIVE_PATH_LEN, ModelDir, PART_SUFFIX, REVISION_DIR_LEN, REVISION_MARKER,
 };
@@ -56,7 +77,11 @@ pub use registry::{
 };
 pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 pub use router::{ExternalEngine, Route, RouteError, Router};
-pub use rows::{NEMOTRON_DIARIZATION_ID, SILERO_VAD_ID, nemotron_3_diarization, silero_vad};
+pub use rows::{
+    NEMOTRON_DIARIZATION_ID, PARAKEET_COREML_FOLDER, PARAKEET_COREML_ID, PARAKEET_INT8_ID,
+    SILERO_VAD_ID, nemotron_3_diarization, parakeet_tdt_v3_coreml, parakeet_tdt_v3_int8,
+    silero_vad,
+};
 #[cfg(feature = "engine-silero")]
 pub use silero::{CONTEXT as SILERO_CONTEXT, SileroLoader, SileroModel, SileroVad};
 

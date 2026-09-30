@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Builds the two libraries NeMo-Speech.cpp loads from outside the OS, SentencePiece and Abseil
-# (both Apache-2.0, by Google), from pinned release tarballs, so that a Mac release bundles the
-# same versions every time instead of whatever a package manager serves that day.
+# (both Apache-2.0, by Google), from pinned release tarballs, so that a release carries the same
+# versions every time instead of whatever a package manager serves that day. On macOS they are
+# shared libraries the app bundles; on Windows, static libraries linked into NeMo-Speech.cpp's own
+# DLL (below).
 #
 #   build-sentencepiece-abseil.sh <prefix> <work dir>
 #
@@ -38,7 +40,17 @@
 # The SentencePiece release asset is the Python source distribution, which carries the complete C++
 # source under sentencepiece/: that directory is what gets built.
 #
-# Needs CMake 3.24 or later, Ninja and curl (on macOS `brew install cmake ninja`).
+# On Windows (Git Bash, inside a Visual Studio developer environment for x64 or arm64):
+# - The developer environment's architecture, with the compiler NeMo-Speech.cpp is built with
+#   (lib/windows-toolchain.sh): x64 with MSVC (`cl`), arm64 with clang-cl (ggml refuses MSVC on
+#   ARM). The dynamic C runtime (/MD, what Rust's MSVC target links), Release.
+# - Static libraries. SentencePiece's CMake builds only a static library on Windows, and Abseil is
+#   static too, so NeMo-Speech.cpp's DLL links both privately and the prefix ships no DLL of
+#   theirs. SentencePiece is still compiled against this Abseil, and NeMo against the same one.
+# - The manifest lists each installed `.lib` in place of the dylibs.
+#
+# Needs CMake 3.24 or later, Ninja and curl (on macOS `brew install cmake ninja`; on Windows the
+# Visual Studio build tools carry both CMake and Ninja).
 set -euo pipefail
 
 ABSEIL_VERSION=20260817.0
@@ -55,6 +67,8 @@ fail() { echo "build-sentencepiece-abseil: $*" >&2; exit 1; }
 # safe_extract: lists a tarball, refuses an entry that would land outside its directory, then
 # extracts it without its owners.
 . "$(cd "$(dirname "$0")" && pwd)/lib/safe-extract.sh"
+# windows_toolchain: the Windows architecture and compiler, from the developer environment.
+. "$(cd "$(dirname "$0")" && pwd)/lib/windows-toolchain.sh"
 
 if [ "$#" -ne 2 ]; then
     sed -n '6,15p' "$0" >&2
@@ -102,11 +116,22 @@ mkdir -p "${downloads}"
 fetch "${ABSEIL_TARBALL}" "${ABSEIL_URL}" "${ABSEIL_SHA256}"
 fetch "${SENTENCEPIECE_TARBALL}" "${SENTENCEPIECE_URL}" "${SENTENCEPIECE_SHA256}"
 
-[ "$(uname -s)" = Darwin ] || fail "builds the Mac app's libraries: run it on macOS"
+case "$(uname -s)" in
+    Darwin) os=macos ;;
+    MINGW* | MSYS*) os=windows ;;
+    *) fail "builds the libraries for the macOS and Windows apps: run it on one of those" ;;
+esac
+# CMake on Windows takes Windows paths (C:/...), not Git Bash's (/c/...).
+native() {
+    if [ "${os}" = windows ]; then cygpath -m "$1"; else printf '%s\n' "$1"; fi
+}
+if [ "${os}" = windows ]; then
+    windows_toolchain || fail "no Windows toolchain (above)"
+fi
 deployment_target="${MACOSX_DEPLOYMENT_TARGET:-26.0}"
 
 mkdir -p "${prefix}"
-prefix="$(cd "${prefix}" && pwd -P)"
+prefix="$(native "$(cd "${prefix}" && pwd -P)")"
 work="$(cd "${work}" && pwd -P)"
 src="${work}/src"
 build="${work}/build"
@@ -122,43 +147,58 @@ spm_src="${src}/sentencepiece-${SENTENCEPIECE_VERSION}/sentencepiece"
     || fail "${SENTENCEPIECE_TARBALL}'s VERSION.txt is not ${SENTENCEPIECE_VERSION}"
 rm -rf "${spm_src}/third_party/absl" "${spm_src}/third_party/abseil-cpp"
 
-# Both projects, the same way: Release, arm64 for the deployment target, installed by @rpath.
+# Both projects, the same way: Release; on macOS arm64 for the deployment target, installed by
+# @rpath and shared; on Windows the developer environment's architecture and compiler, with the
+# dynamic C runtime, static.
 common=(
     -G Ninja
     -DCMAKE_BUILD_TYPE=Release
-    -DCMAKE_OSX_ARCHITECTURES=arm64
-    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment_target}"
     -DCMAKE_CXX_STANDARD=17
     "-DCMAKE_INSTALL_PREFIX=${prefix}"
     -DCMAKE_INSTALL_LIBDIR=lib
-    -DCMAKE_INSTALL_NAME_DIR=@rpath
-    -DCMAKE_INSTALL_RPATH=@loader_path
 )
+if [ "${os}" = macos ]; then
+    shared=ON
+    common+=(
+        -DCMAKE_OSX_ARCHITECTURES=arm64
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment_target}"
+        -DCMAKE_INSTALL_NAME_DIR=@rpath
+        -DCMAKE_INSTALL_RPATH=@loader_path
+    )
+else
+    shared=OFF
+    common+=(
+        "-DCMAKE_C_COMPILER=${win_cc}"
+        "-DCMAKE_CXX_COMPILER=${win_cc}"
+        -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
+    )
+fi
 
-cmake --fresh -S "${absl_src}" -B "${build}/abseil" "${common[@]}" \
-    -DBUILD_SHARED_LIBS=ON \
+cmake --fresh -S "$(native "${absl_src}")" -B "$(native "${build}/abseil")" "${common[@]}" \
+    "-DBUILD_SHARED_LIBS=${shared}" \
     -DABSL_PROPAGATE_CXX_STD=ON \
     -DABSL_ENABLE_INSTALL=ON \
     -DABSL_BUILD_TESTING=OFF \
     -DBUILD_TESTING=OFF
-cmake --build "${build}/abseil"
-cmake --install "${build}/abseil"
+cmake --build "$(native "${build}/abseil")"
+cmake --install "$(native "${build}/abseil")"
 
 # The Abseil just installed, and nothing else: its package by path, and the search for others off.
-cmake --fresh -S "${spm_src}" -B "${build}/sentencepiece" "${common[@]}" \
+cmake --fresh -S "$(native "${spm_src}")" -B "$(native "${build}/sentencepiece")" "${common[@]}" \
     -DSPM_ABSL_PROVIDER=package \
     "-Dabsl_DIR=${prefix}/lib/cmake/absl" \
     -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON \
     -DSPM_PROTOBUF_PROVIDER=internal \
-    -DSPM_ENABLE_SHARED=ON \
+    "-DSPM_ENABLE_SHARED=${shared}" \
+    -DSPM_ENABLE_MSVC_MT_BUILD=OFF \
     -DSPM_ENABLE_TCMALLOC=OFF \
     -DSPM_ENABLE_NFKC_COMPILE=OFF \
     -DSPM_BUILD_TEST=OFF
 # Read back: the Abseil it configured against is this prefix's.
 used="$(sed -n 's/^absl_DIR:[A-Z]*=//p' "${build}/sentencepiece/CMakeCache.txt")"
 [ "${used}" = "${prefix}/lib/cmake/absl" ] || fail "SentencePiece was configured against the Abseil at '${used}'"
-cmake --build "${build}/sentencepiece"
-cmake --install "${build}/sentencepiece"
+cmake --build "$(native "${build}/sentencepiece")"
+cmake --install "$(native "${build}/sentencepiece")"
 
 # The licences that ship with the libraries (the app's About screen shows them).
 licences="${prefix}/share/licenses"
@@ -168,7 +208,8 @@ cp "${spm_src}/LICENSE" "${licences}/sentencepiece/LICENSE"
 cp "${spm_src}/third_party/protobuf-lite/LICENSE" "${licences}/sentencepiece/protobuf-lite/LICENSE"
 cp "${spm_src}/third_party/darts_clone/LICENSE" "${licences}/sentencepiece/darts_clone/LICENSE"
 
-# --- the layout Contents/Frameworks needs, checked ------------------------------------------------
+# --- the layout Contents/Frameworks needs, checked (macOS) ----------------------------------------
+if [ "${os}" = macos ]; then
 # Every library loads the others as @rpath/<name> and finds them by `@loader_path` alone (CMake
 # leaves SentencePiece's own absolute rpath in: it sets one itself). Anything else it loads must be
 # the OS's. A library whose load commands change is signed again, ad hoc, as build-nemo-speech.sh
@@ -217,6 +258,7 @@ for f in "${libs[@]}"; do
     [ "${minos%.0}" = "${deployment_target%.0}" ] \
         || fail "${name} is built for macOS ${minos:-?}, not ${deployment_target}"
 done
+fi
 
 # --- the manifest ---------------------------------------------------------------------------------
 # build-nemo-speech.sh's manifest records where each library it bundles was copied from, and
@@ -227,14 +269,20 @@ mkdir -p "$(dirname "${manifest}")"
     echo "# SentencePiece and Abseil as built by build-sentencepiece-abseil.sh, from pinned tarballs."
     echo "source abseil ${ABSEIL_VERSION} ${ABSEIL_SHA256} ${ABSEIL_TARBALL}"
     echo "source sentencepiece ${SENTENCEPIECE_VERSION} ${SENTENCEPIECE_SHA256} ${SENTENCEPIECE_TARBALL}"
-    echo "deployment_target ${deployment_target}"
+    if [ "${os}" = macos ]; then
+        echo "deployment_target ${deployment_target}"
+        pattern='lib/*.dylib'
+    else
+        echo "platform windows-${win_arch} ${win_cc_name} static /MD"
+        pattern='lib/*.lib'
+    fi
     (
         cd "${prefix}"
-        for f in lib/*.dylib; do
+        for f in ${pattern}; do
             [ -f "${f}" ] && [ ! -L "${f}" ] || continue
             case "${f}" in
-                lib/libabsl_*) component=abseil ;;
-                lib/libsentencepiece*) component=sentencepiece ;;
+                lib/libabsl_* | lib/absl_*) component=abseil ;;
+                lib/libsentencepiece* | lib/sentencepiece*) component=sentencepiece ;;
                 *) echo "build-sentencepiece-abseil: ${f} belongs to neither project" >&2; exit 1 ;;
             esac
             echo "lib ${component} $(sha256 "${f}") ${f}"
@@ -244,5 +292,9 @@ mkdir -p "$(dirname "${manifest}")"
 
 echo
 echo "Installed SentencePiece ${SENTENCEPIECE_VERSION} and Abseil ${ABSEIL_VERSION} to ${prefix}"
-echo "(arm64, macOS ${deployment_target}). Build NeMo-Speech.cpp against them with:"
+if [ "${os}" = macos ]; then
+    echo "(arm64, macOS ${deployment_target}). Build NeMo-Speech.cpp against them with:"
+else
+    echo "(${win_arch}, ${win_cc}, static). Build NeMo-Speech.cpp against them with:"
+fi
 echo "  ENGINE_DEPS_DIR=${prefix} core/crates/ink-engines/native/build-nemo-speech.sh <source> <prefix>"

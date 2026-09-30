@@ -13,6 +13,10 @@ final class OnboardingModel {
     enum Step: Int, CaseIterable, Sendable {
         case welcome
         case permissions
+        /// The speech models: downloaded only when the user presses Download there.
+        case models
+        /// Only while Inkwell 0.2's data is offered (`offersImport`).
+        case importData
         case polish
         case ready
     }
@@ -34,12 +38,18 @@ final class OnboardingModel {
     /// Whether the window shows it.
     var showing: Bool { completed == false && !quitting }
 
+    /// Whether the import step is shown: Inkwell 0.2's data is offered (ScreenModels wires it).
+    @ObservationIgnored var offersImport: @MainActor () -> Bool = { false }
+
+    /// The steps shown, in order.
+    var steps: [Step] { Step.allCases.filter { $0 != .importData || offersImport() } }
+
     func load() {
         send(.settingGet(.onboardingDone))
     }
 
     func next() {
-        if let following = Step(rawValue: step.rawValue + 1) {
+        if let following = steps.first(where: { $0.rawValue > step.rawValue }) {
             step = following
         } else {
             finish()
@@ -47,7 +57,7 @@ final class OnboardingModel {
     }
 
     func back() {
-        if let previous = Step(rawValue: step.rawValue - 1) {
+        if let previous = steps.last(where: { $0.rawValue < step.rawValue }) {
             step = previous
         }
     }
@@ -190,6 +200,8 @@ final class ScreenModels {
     let snippets: SnippetsModel
     let voiceCommands: VoiceCommandsModel
     let importNote: ImportNoteModel
+    /// Inkwell 0.2's data: the first run's step and a row in Settings > Voice.
+    let import02: Import02Model
 
     /// The id of the meetings switch's command (a `command.failed` carries it).
     static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
@@ -222,6 +234,8 @@ final class ScreenModels {
         snippets = SnippetsModel(send: send)
         voiceCommands = VoiceCommandsModel(send: send)
         importNote = ImportNoteModel(send: send)
+        import02 = Import02Model(send: send, log: log)
+        onboarding.offersImport = { [import02] in import02.offered }
     }
 
     /// A batch of the core's events, after the CoreStore has applied it.
@@ -238,6 +252,21 @@ final class ScreenModels {
             live.apply(event)
             meetings.apply(event)
             onboarding.apply(event)
+            import02.apply(event)
+            if onboarding.showing {
+                // The first run offers its import step only when there is something to import.
+                import02.checkOnce()
+            }
+            if case .importFinished = event {
+                // What became of 0.2's key, and the key it set.
+                importNote.load()
+                send(.settingGet(.dictationKey))
+                // The lists it brought, which Settings may show already: an edit to the old list
+                // would save it over the import's (the user's own list wins in the core).
+                snippets.load()
+                voiceCommands.load()
+                modes.load()
+            }
             dictation.apply(event)
             editConsent.apply(event)
             meetingsConsent.apply(event)
@@ -341,6 +370,9 @@ final class ScreenModels {
              "commitment.not_yet", "note.add", "note.update", "note.delete",
              "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
             true
+        case "model.update":
+            // The download's row says it failed, and why (the first run and Settings > Models).
+            true
         case "setting.get":
             failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
@@ -350,12 +382,18 @@ final class ScreenModels {
                 || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
+        case "engine.route":
+            // Settings > Models says so on the job's line.
+            CatalogueModel.routeJob(failed) != nil
         case "consent.get", "consent.allow":
             // Shown under the Polish or the summaries toggle, or in the Voice section for voice edit.
             true
         // Settings > Snippets and Voice commands say so. The key note that could not be read is
         // not shown (there is nothing to say then); it is logged.
         case "snippets.list", "snippets.save", "voice_commands.list", "voice_commands.save":
+            true
+        // The import says so where it is offered; a check that failed is logged by the model.
+        case "import.check", "import.run":
             true
         default:
             false

@@ -92,6 +92,13 @@ pub trait AudioSource: Send {
     /// **Worker.** Stops delivery. When it returns, no `push` is running or will run, and the sink
     /// has been dropped. Stopping a stopped source returns zeroed stats.
     fn stop(&mut self) -> Result<SourceStats, PlatformError>;
+
+    /// **Pump** (or worker). Whether delivery has ended by itself since `start`: the device was
+    /// removed or changed format, and no more `push` will come. [`stop`](Self::stop) then says
+    /// why. A source that cannot tell says `false`, the default: its end shows when it is stopped.
+    fn ended(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -118,5 +125,29 @@ mod tests {
             ..stereo
         };
         assert_eq!(broken.frames(), 960);
+    }
+
+    /// A source that does not say when it ends by itself never reads as ended.
+    #[test]
+    fn a_source_is_not_ended_unless_it_says_so() {
+        struct Quiet;
+        impl AudioSource for Quiet {
+            fn channel(&self) -> Channel {
+                Channel::Far
+            }
+            fn format(&self) -> StreamFormat {
+                StreamFormat {
+                    sample_rate: 48_000,
+                    channels: 2,
+                }
+            }
+            fn start(&mut self, _: Box<dyn AudioSink>) -> Result<(), PlatformError> {
+                Ok(())
+            }
+            fn stop(&mut self) -> Result<SourceStats, PlatformError> {
+                Ok(SourceStats::default())
+            }
+        }
+        assert!(!Quiet.ended());
     }
 }

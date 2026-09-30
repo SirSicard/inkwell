@@ -1,8 +1,11 @@
 // The first-run state: a sheet over the window until the user finishes or skips it, remembered in
 // the core's store (onboarding.done). What Inkwell does, the four permission cards (nothing asked
-// for until the user presses a card's button), polish (off, and turned on only through its consent
-// step: the sheet's switch calls PolishModel.SetOn(on, ConsentHost.Onboarding), which only asks),
-// and how to dictate. A port of the Mac's OnboardingModel and OnboardingView's words.
+// for until the user presses a card's button), the models not on this PC yet (nothing downloads
+// until the user presses the step's Download, which says what, how much and from where; the
+// downloads are the CatalogueModel's and go on after the sheet), Inkwell 0.2's history (only while
+// there is some to import: Import02Model.Offered), polish (off, and turned on only through its
+// consent step: the sheet's switch calls PolishModel.SetOn(on, ConsentHost.Onboarding), which only
+// asks), and how to dictate. A port of the Mac's OnboardingModel and OnboardingView's words.
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
@@ -11,6 +14,10 @@ public enum OnboardingStep
 {
     Welcome,
     Permissions,
+    /// <summary>The models not on this PC yet, and one Download for them.</summary>
+    Models,
+    /// <summary>Only while Inkwell 0.2's data is offered.</summary>
+    ImportData,
     Polish,
     Ready,
 }
@@ -21,13 +28,20 @@ public sealed class OnboardingModel : ObservableModel
 
     private readonly Action<CoreCommand> send;
     private readonly ScreenLog log;
+    private readonly Import02Model? import;
 
-    public OnboardingModel(Action<CoreCommand> send, ScreenLog? log = null)
+    /// <param name="import">Inkwell 0.2's import, whose step shows while it is offered (null: never).</param>
+    public OnboardingModel(Action<CoreCommand> send, ScreenLog? log = null, Import02Model? import = null)
     {
         ArgumentNullException.ThrowIfNull(send);
         this.send = send;
         this.log = log ?? ScreenLog.System;
+        this.import = import;
     }
+
+    /// <summary>The steps shown, in order.</summary>
+    public IReadOnlyList<OnboardingStep> ShownSteps =>
+        Steps.Where(s => s != OnboardingStep.ImportData || import?.Offered == true).ToList();
 
     /// <summary>The id of this model's setting commands.</summary>
     public static string SettingId => ShellSetting.OnboardingDone.CommandId();
@@ -47,22 +61,24 @@ public sealed class OnboardingModel : ObservableModel
 
     public void Next()
     {
-        if (Step == OnboardingStep.Ready)
+        var following = ShownSteps.Where(s => s > Step).ToList();
+        if (following.Count == 0)
         {
             Finish();
             return;
         }
-        Step++;
+        Step = following[0];
         Changed();
     }
 
     public void Back()
     {
-        if (Step == OnboardingStep.Welcome)
+        var previous = ShownSteps.Where(s => s < Step).ToList();
+        if (previous.Count == 0)
         {
             return;
         }
-        Step--;
+        Step = previous[^1];
         Changed();
     }
 
@@ -126,13 +142,26 @@ public sealed class OnboardingModel : ObservableModel
     // The sheet's words and buttons.
 
     /// <summary>Where the user is, for the step dots' accessible name.</summary>
-    public string StepLabel => $"Step {(int)Step + 1} of {Steps.Length}";
+    public string StepLabel
+    {
+        get
+        {
+            var shown = ShownSteps.ToList();
+            return $"Step {Math.Max(0, shown.IndexOf(Step)) + 1} of {shown.Count}";
+        }
+    }
 
     public bool ShowsSkip => Step != OnboardingStep.Ready;
 
     public bool ShowsBack => Step != OnboardingStep.Welcome;
 
-    public string NextTitle => Step == OnboardingStep.Ready ? "Start" : "Continue";
+    /// <summary>Start on the last step; on the import step, Not now until something came over.</summary>
+    public string NextTitle => Step switch
+    {
+        OnboardingStep.Ready => "Start",
+        OnboardingStep.ImportData when import?.Imported is null => Import02Model.NotNow,
+        _ => "Continue",
+    };
 
     public const string SkipHint = "Closes this; Settings has everything here";
 
@@ -147,6 +176,68 @@ public sealed class OnboardingModel : ObservableModel
     public const string PermissionsTitle = "What Inkwell needs";
 
     public const string PermissionsNote = "Nothing is asked for until you press a card's button, and each can be changed later in Settings.";
+
+    public const string ModelsTitle = "Models";
+
+    /// <summary>The step's one Download: every model its line names (CatalogueModel.DownloadMissing).</summary>
+    public const string DownloadTitle = "Download";
+
+    /// <summary>Shown while a download runs: Continue does not wait for it.</summary>
+    public const string ModelsGoOn = "You can go on: the downloads continue, and Settings > Models shows them.";
+
+    /// <summary>Asks for the model list again when it could not be read.</summary>
+    public const string ModelsTryAgain = "Try again";
+
+    /// <summary>The models step's rows: every model not installed, and any downloaded this run (it stays, as installed).</summary>
+    public static IReadOnlyList<ModelRow> ModelRows(CatalogueModel catalogue)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        return catalogue.Rows.Where(r => !r.Entry.Installed || r.Download is not null).ToList();
+    }
+
+    /// <summary>The line over the models step's rows: what they are, or where the list is.</summary>
+    public static string ModelsNote(CatalogueModel catalogue)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        if (catalogue.Failed)
+        {
+            return CatalogueModel.FailedText;
+        }
+        if (!catalogue.Listed)
+        {
+            return "Checking which models are on this PC…";
+        }
+        return ModelRows(catalogue).Any(r => !r.Installed)
+            ? "Inkwell turns speech into text with models that run on this PC. These are not on it yet:"
+            : "Every model Inkwell uses is on this PC.";
+    }
+
+    /// <summary>The line by the step's Download: how much in all, and from where; null when there is nothing left to ask for.</summary>
+    public static string? DownloadLine(CatalogueModel catalogue, IFormatProvider? format = null)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        var models = catalogue.NotAskedFor;
+        return models.Count == 0
+            ? null
+            : $"{StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}. Nothing downloads until you press Download.";
+    }
+
+    /// <summary>The step's Download for screen readers: which models, how much in all, from where.</summary>
+    public static string DownloadName(CatalogueModel catalogue, IFormatProvider? format = null)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        var models = catalogue.NotAskedFor;
+        return $"Download {And(models.Select(m => CatalogueModel.Name(m.Id)))}: {StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}";
+    }
+
+    private static string Sources(IEnumerable<CatalogueEntry> models) => And(models.Select(m => CatalogueModel.Source(m.Id)).Distinct());
+
+    /// <summary>"a", "a and b", "a, b and c".</summary>
+    private static string And(IEnumerable<string> items)
+    {
+        var list = items.ToList();
+        return list.Count < 2 ? string.Concat(list) : $"{string.Join(", ", list.Take(list.Count - 1))} and {list[^1]}";
+    }
 
     public const string PolishTitle = "Polish";
 

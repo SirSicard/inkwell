@@ -113,7 +113,9 @@ public class NoticesTests
         Assert.Contains("2.9.3", byId["winuiex"].Role, StringComparison.Ordinal);
         Assert.StartsWith("MIT", byId["dotnet-runtime"].Licence, StringComparison.Ordinal);
         Assert.Contains("windows-sdk-net", byId.Keys);
-        Assert.Equal("MIT", byId["cswinrt"].Licence);
+        Assert.Equal("MIT; Inkwell's copy under the Windows SDK licence terms", byId["cswinrt"].Licence);
+        Assert.Equal("MIT, with the notices of the Rust crates in its Setup.exe and Update.exe", byId["velopack"].Licence);
+        Assert.Contains("1.2.161", byId["velopack"].Role, StringComparison.Ordinal);
 
         // The texts are the packages' own (NoticeTexts.cs).
         Assert.StartsWith("Copyright (c) 2020 Henrik Enquist", byId["wasapi-rs"].Text, StringComparison.Ordinal);
@@ -121,11 +123,66 @@ public class NoticesTests
         Assert.Contains("--- NOTICE.txt (Microsoft.WindowsAppSDK.Base 2.0.4) ---", byId["windows-app-sdk"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (C) Microsoft Corporation. All rights reserved.", byId["webview2"].Text, StringComparison.Ordinal);
         Assert.Contains("--- NOTICE.txt ---", byId["webview2"].Text, StringComparison.Ordinal);
-        Assert.Contains("Copyright \u00a9 2021-2026 - Morten Nielsen", byId["winuiex"].Text, StringComparison.Ordinal);
+        Assert.Contains("MIT License\n\nCopyright (c) 2021 Morten Nielsen\n", byId["winuiex"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (c) .NET Foundation and Contributors", byId["dotnet-runtime"].Text, StringComparison.Ordinal);
         Assert.Contains("--- THIRD-PARTY-NOTICES.TXT ---", byId["dotnet-runtime"].Text, StringComparison.Ordinal);
         Assert.Contains("https://aka.ms/WinSDKLicenseURL", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
+        Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT WINDOWS SOFTWARE DEVELOPMENT KIT (SDK) FOR WINDOWS 10", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (c) Microsoft Corporation.", byId["cswinrt"].Text, StringComparison.Ordinal);
+        // The Visual C++ runtime beside the app: Visual Studio 2026's (VC145, the redistributable
+        // build-core.ps1 copies from), under the licence terms Microsoft publishes for it.
+        Assert.Contains("Microsoft.VC145.CRT", byId["vc-runtime"].Role, StringComparison.Ordinal);
+        Assert.Contains("$VcRedist = 'VC145'", AboutCheckout.ReadWindows("scripts/build-core.ps1"), StringComparison.Ordinal);
+        Assert.StartsWith("\u00a9 Microsoft Corporation. All rights reserved.\n", byId["vc-runtime"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/", byId["vc-runtime"].Text, StringComparison.Ordinal);
+        Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT VISUAL C++ V14 REDISTRIBUTABLE and RUNTIME \nLast Updated: October 1, 2025\n", byId["vc-runtime"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\nEULA ID: Cpp_v14_ENU.1033", byId["vc-runtime"].Text, StringComparison.Ordinal);
+
+        // Windows' Parakeet runs on sherpa-onnx and the ONNX Runtime its archive carries.
+        Assert.Equal("Apache-2.0", byId["sherpa-onnx"].Licence);
+        Assert.Equal(Notices.Apache2, byId["sherpa-onnx"].Text);
+        Assert.Contains("1.13.4", byId["sherpa-onnx"].Role, StringComparison.Ordinal);
+        Assert.StartsWith("MIT", byId["onnxruntime"].Licence, StringComparison.Ordinal);
+        Assert.StartsWith("MIT License\n\nCopyright (c) Microsoft Corporation\n", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        Assert.Contains("1.27.0", byId["onnxruntime"].Role, StringComparison.Ordinal);
+        // With the notices of the code it compiles in.
+        Assert.Contains("--- ThirdPartyNotices.txt ---\nTHIRD PARTY SOFTWARE NOTICES AND INFORMATION", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        foreach (var part in new[] { "google/flatbuffers", "nlohmann/json", "Eigen", "Mozilla Public License Version 2.0" })
+        {
+            Assert.Contains(part, byId["onnxruntime"].Text, StringComparison.Ordinal);
+        }
+        // Eigen inside it is MPL-2.0 (a scoped exception): the notice says so and where its source
+        // is, the commit ONNX Runtime 1.27.0's cmake/deps.txt pins.
+        Assert.Contains("onnxruntime.dll includes Eigen, which is licensed under the Mozilla Public License 2.0", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip", byId["onnxruntime"].Text, StringComparison.Ordinal);
+        // And the code compiled into sherpa-onnx's library: each its own licence file at the version
+        // sherpa-onnx 1.13.4 builds (composed-notices.txt).
+        Assert.StartsWith("MIT License\n\nCopyright (c) 2013-2025 Niels Lohmann\n", byId["nlohmann-json"].Text, StringComparison.Ordinal);
+        Assert.Contains("3.12.0", byId["nlohmann-json"].Role, StringComparison.Ordinal);
+        Assert.Equal(Notices.Apache2, byId["kaldi-native-fbank"].Text);
+        // kaldi-decoder's, then the Eigen 5.0.1 it builds on, MPL-2.0 (the scoped exception): where
+        // its source is (the archive sherpa-onnx 1.13.4's cmake/eigen.cmake pins) and its COPYING.MPL2.
+        Assert.StartsWith(Notices.Apache2 + "\n\n--- Eigen 5.0.1 (MPL-2.0): where its source is ---\n", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.Contains("sherpa-onnx-c-api.dll is built with Eigen 5.0.1, which kaldi-decoder builds on and which is licensed under the Mozilla Public License 2.0", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz (SHA-256 e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec)", byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n\n--- Eigen 5.0.1's COPYING.MPL2 ---\n" + Notices.EigenMpl2Licence, byId["kaldi-decoder"].Text, StringComparison.Ordinal);
+        // Byte for byte that file (its SHA-256; the literal drops only its final line end).
+        Assert.Equal("66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(Notices.EigenMpl2Licence + "\n"))));
+        // kaldifst's LICENSE puts a note on its copyright model above the Apache License.
+        Assert.StartsWith("                                 Legal Notices\n\n   NOTE (this is not from the Apache License):", byId["kaldifst"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\n\n" + Notices.Apache2, byId["kaldifst"].Text, StringComparison.Ordinal);
+        // OpenFst's COPYING names the Apache License and Google's copyright; the licence's text follows.
+        Assert.StartsWith("Licensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use these files", byId["openfst"].Text, StringComparison.Ordinal);
+        Assert.Contains("Copyright 2005-2026 Google LLC.", byId["openfst"].Text, StringComparison.Ordinal);
+        Assert.EndsWith(Notices.Apache2, byId["openfst"].Text, StringComparison.Ordinal);
+        // simple-sentencepiece's own darts.h carries Darts-clone 0.32's BSD 2-clause notice (not SentencePiece's copy).
+        Assert.StartsWith(Notices.Apache2 + "\n\n", byId["simple-sentencepiece"].Text, StringComparison.Ordinal);
+        Assert.Contains("The BSD 2-clause license\n\nCopyright (c) 2008-2014, Susumu Yata All rights reserved.", byId["simple-sentencepiece"].Text, StringComparison.Ordinal);
+        // hclust-cpp's LICENSE: fastcluster's licence under its own copyright lines (BSD-2: it must ship with the binary).
+        Assert.StartsWith("Copyright:\n  * fastcluster_dm.cpp & fastcluster_R_dm.cpp:\n     \u00a9 2011 Daniel M\u00fcllner", byId["hclust-cpp"].Text, StringComparison.Ordinal);
+        Assert.Contains("\u00a9 2018 Christoph Dalitz", byId["hclust-cpp"].Text, StringComparison.Ordinal);
+        Assert.StartsWith("Copyright \u00a9 2021 Caelan Sayler\nCopyright \u00a9 2024 Velopack Ltd.", byId["velopack"].Text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -181,7 +238,7 @@ public class NoticesTests
     {
         var mac = MacNotices.Texts(AboutCheckout.Read("mac/Sources/Inkwell/Screens/Notices.swift"));
         Assert.True(mac.Count > 15, "Notices.swift was read");
-        string[] windowsOnly = ["wasapi-rs", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt"];
+        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "vc-runtime", "cswinrt", "velopack"];
         var shared = Notices.Components.Where(c => !windowsOnly.Contains(c.Id)).ToList();
         Assert.Equal(16, shared.Count);
         Assert.All(windowsOnly, id => Assert.False(mac.ContainsKey(id), id));
@@ -191,6 +248,8 @@ public class NoticesTests
             Assert.True(mac[c.Id] == c.Text, $"{c.Id}: the text differs from Notices.swift's");
         }
         Assert.Equal(mac["silero-vad"], Notices.Models.Single(m => m.Id == "silero-vad").Notice);
+        // sherpa-onnx's copy of fastcluster (hclust-cpp's) shows hclust-cpp's own licence, not the Mac's copy's.
+        Assert.NotEqual(mac["fastcluster"], Notices.Components.Single(c => c.Id == "hclust-cpp").Text);
     }
 }
 
@@ -328,7 +387,7 @@ public class ComposedNoticesTests
         Assert.Equal([], Problems(declared, ours + "\n" + windows));
         // Every line is well formed (a short line would drop out of the comparison above).
         Assert.All(Lines(mac).Concat(Lines(windows)), l => Assert.True(l.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 3, l));
-        Assert.Equal(["winuiex", "windows-sdk-net"], Markers(windows).Keys);
+        Assert.Equal(["winuiex", "windows-sdk-net", "vc-runtime", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp"], Markers(windows).Keys);
     }
 
     /// <summary>The check fails when a composed notice has no line, and when a line names no composed notice.</summary>

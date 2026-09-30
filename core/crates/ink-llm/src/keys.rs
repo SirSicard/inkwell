@@ -101,6 +101,8 @@ pub enum ExistenceCheck {
 pub struct OsKeyStore {
     store: Arc<CredentialStore>,
     existence: ExistenceCheck,
+    /// What every entry is built with: nothing, except on Windows (see [`OsKeyStore::native`]).
+    modifiers: Option<HashMap<&'static str, &'static str>>,
 }
 
 impl OsKeyStore {
@@ -115,7 +117,16 @@ impl OsKeyStore {
         #[cfg(target_os = "windows")]
         {
             let store = windows_native_keyring_store::Store::new().map_err(|e| map_error(&e))?;
-            Ok(Self::with_store(store, ExistenceCheck::Attributes))
+            // Keys stay on this PC. With no modifier the store writes CRED_PERSIST_ENTERPRISE,
+            // which Windows documents as visible to this user's logon sessions on other
+            // computers (it roams with a roaming profile). "local" writes
+            // CRED_PERSIST_LOCAL_MACHINE: this PC only. The store applies it on every write, so
+            // a key written without it becomes local when it is next saved.
+            Ok(Self {
+                store,
+                existence: ExistenceCheck::Attributes,
+                modifiers: Some(HashMap::from([("persistence", "local")])),
+            })
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -124,14 +135,19 @@ impl OsKeyStore {
     }
 
     /// Any `keyring-core` store (the mock store in tests), answering existence with `existence`.
-    /// Pass [`ExistenceCheck::Search`] for a store whose reads can prompt.
+    /// Pass [`ExistenceCheck::Search`] for a store whose reads can prompt. Entries are built with
+    /// no modifiers (the mock store refuses any).
     pub fn with_store(store: Arc<CredentialStore>, existence: ExistenceCheck) -> Self {
-        Self { store, existence }
+        Self {
+            store,
+            existence,
+            modifiers: None,
+        }
     }
 
     fn entry(&self, provider: &str) -> Result<keyring_core::Entry, KeyStoreError> {
         self.store
-            .build(KEYRING_SERVICE, provider, None)
+            .build(KEYRING_SERVICE, provider, self.modifiers.as_ref())
             .map_err(|e| map_error(&e))
     }
 }
@@ -275,7 +291,8 @@ mod tests {
 
     /// Writes, finds and deletes an item in the real login keychain (macOS) or credential manager
     /// (Windows), under its own account name so it never touches a real provider's key. Run it by
-    /// hand: on macOS, watch that `has_key` raises no prompt.
+    /// hand: on macOS, watch that `has_key` raises no prompt. On Windows it also checks that the
+    /// item is kept on this PC.
     #[test]
     #[ignore = "touches the real OS keychain; run by hand (manual checklist)"]
     fn the_os_existence_check_agrees_with_what_was_stored() {
@@ -287,6 +304,11 @@ mod tests {
             .save_key(account, "test-value-not-a-real-key")
             .unwrap();
         assert_eq!(store.has_key(account), Ok(true));
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            store.entry(account).unwrap().get_attributes().unwrap()["persistence"],
+            "Local"
+        );
         store.delete_key(account).unwrap();
         assert_eq!(store.has_key(account), Ok(false));
     }

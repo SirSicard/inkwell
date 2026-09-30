@@ -16,6 +16,13 @@ enum CoreCommand: Equatable, Sendable {
     case noteUpdate(note: String, text: String, ref: String)
     case noteDelete(note: String, ref: String)
     case modelsList
+    /// A registry model's first download (`model.update` with the model as its own next), sent
+    /// only when the user pressed Download. `ref` comes back as the id of a `command.failed`; the
+    /// download's progress and end are model.update_progress and model.update_finished for it.
+    case modelInstall(String, ref: String)
+    /// Loads the job's model and keeps it loaded: answered by model.warmed, model.refused or
+    /// model.warm_failed.
+    case modelWarm(Job)
     case engineRoute(Job)
     case settingGet(ShellSetting)
     case settingSet(ShellSetting, String)
@@ -59,6 +66,11 @@ enum CoreCommand: Equatable, Sendable {
     case voiceCommandsSave(enabled: Bool, wakePrefix: String, commands: [VoiceCommandDraft], replaceUnreadable: Bool, ref: String)
     /// What the Inkwell 0.2 import has to say about the dictation key: `import.notes`.
     case importNotes
+    /// Whether Inkwell 0.2's data is on this Mac and not yet imported (the core knows where it
+    /// is): `import.checked`, or a `command.failed`, with the command's name as its id.
+    case importCheck
+    /// Imports it: `import.finished`, or a `command.failed` whose message is words to show.
+    case importRun
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -78,7 +90,10 @@ enum CoreCommand: Equatable, Sendable {
         case .noteUpdate(let note, let text, let ref): ["cmd": "note.update", "note": note, "text": text, "id": ref]
         case .noteDelete(let note, let ref): ["cmd": "note.delete", "note": note, "id": ref]
         case .modelsList: ["cmd": "models.list"]
-        case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue]
+        case .modelInstall(let model, let ref): ["cmd": "model.update", "model": model, "next": model, "id": ref]
+        case .modelWarm(let job): ["cmd": "model.warm", "job": job.rawValue, "id": "model.warm:\(job.rawValue)"]
+        // The id names the job ("engine.route:dictation_final"), so a failure is matched to its line.
+        case .engineRoute(let job): ["cmd": "engine.route", "job": job.rawValue, "id": "engine.route:\(job.rawValue)"]
         // The id names the setting, so a failure can be matched to it (command.failed has no key).
         case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue, "id": "setting:\(key.rawValue)"]
         case .settingSet(let key, let value):
@@ -118,6 +133,8 @@ enum CoreCommand: Equatable, Sendable {
              "commands": commands.map(\.fields), "id": ref]
                 .merging(replace ? ["replace_unreadable": true] : [:]) { a, _ in a }
         case .importNotes: ["cmd": "import.notes", "id": "import.notes"]
+        case .importCheck: ["cmd": "import.check", "id": "import.check"]
+        case .importRun: ["cmd": "import.run", "id": "import.run"]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -135,6 +152,8 @@ enum CoreCommand: Equatable, Sendable {
         case .noteUpdate: "note.update"
         case .noteDelete: "note.delete"
         case .modelsList: "models.list"
+        case .modelInstall: "model.update"
+        case .modelWarm: "model.warm"
         case .engineRoute: "engine.route"
         case .settingGet: "setting.get"
         case .settingSet: "setting.set"
@@ -158,7 +177,28 @@ enum CoreCommand: Equatable, Sendable {
         case .voiceCommandsList: "voice_commands.list"
         case .voiceCommandsSave: "voice_commands.save"
         case .importNotes: "import.notes"
+        case .importCheck: "import.check"
+        case .importRun: "import.run"
         }
+    }
+
+    /// Its "id", when it carries one (answers echo it as `ref`; a `command.failed` as its id).
+    var commandID: String? {
+        let fields = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+        return fields?["id"] as? String
+    }
+
+    /// The `command.failed` the core would have sent had it run this command and failed: the
+    /// shell raises it when the command never reached the core (no core, or the core refused to
+    /// queue it), so the screen waiting for an answer says it couldn't instead of waiting forever.
+    /// `message` names what went wrong, never the command's fields.
+    func notSent(_ message: String) -> InkEvent {
+        var fields = ["type": "command.failed", "command": name, "message": message]
+        fields["id"] = commandID
+        // Decoded as the core's own events are, so it reaches the screens the same way. Strings
+        // only, with the fields command.failed requires: neither step can fail.
+        let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return (try? InkEvent.decode(data)) ?? .undecodable(type: "command.failed", record: nil)
     }
 }
 

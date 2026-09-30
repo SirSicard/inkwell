@@ -1,8 +1,10 @@
 // The ink the shell shows: one state for every surface that draws it (the Drop, an InkPanel in the
 // window), the process's pipeline and frame clock, and the Drop itself. The Mac's ShellInk
 // (mac/Sources/Inkwell/ShellInk.swift). What the core says arrives through Show, from the app's
-// DropModel (Inkwell.Core): a take's line with the ink dictating, a note after a take with the
-// ink still, or nothing (the Drop hides). Held pins a state for the Drop's focus check
+// DropModel (Inkwell.Core): a meeting's line with the ink recording, blotting or in trouble, a
+// take's line with the ink dictating, a note after a take or the offer to record a call with the
+// ink still, or nothing (the Drop hides). The offer's buttons go to the app's callback as the
+// model's actions (DropAction). Held pins a state for the Drop's focus check
 // (INK_DROP_DEMO). Every ink reads the live levels (your mic's bands, and the far end's during a
 // meeting) once per frame while it moves. Nothing here polls.
 //
@@ -22,6 +24,9 @@ internal sealed class ShellInk : IDisposable
 {
     private DropWindow? drop;
     private readonly Action<string?> report;
+    private readonly Action<DropAction> act;
+    /// <summary>The line shown, whose buttons a click answers.</summary>
+    private DropLine? shown;
     private readonly DropDemo? demo;
     private InkState live = InkState.Idle;
     private DropText? text;
@@ -35,9 +40,13 @@ internal sealed class ShellInk : IDisposable
     /// <summary>The pipeline, compiled once off the UI thread from launch.</summary>
     public static InkPipelineLoader Loader => InkPipelineLoader.Shared;
 
-    /// <summary>UI thread. Starts the pipeline's compile and makes the (hidden) Drop; <paramref name="showFailure"/> shows why the ink cannot draw (null: it draws).</summary>
-    public ShellInk(DispatcherQueue ui, Action<string?> showFailure)
+    /// <summary>
+    /// UI thread. Starts the pipeline's compile and makes the (hidden) Drop; <paramref name="showFailure"/>
+    /// shows why the ink cannot draw (null: it draws); <paramref name="act"/> runs a button the Drop offers.
+    /// </summary>
+    public ShellInk(DispatcherQueue ui, Action<string?> showFailure, Action<DropAction> act)
     {
+        this.act = act;
         Clock = new InkClock(work =>
         {
             // False only while the app shuts down, when no frame matters any more.
@@ -69,14 +78,39 @@ internal sealed class ShellInk : IDisposable
     public event Action? Changed;
 
     /// <summary>
-    /// UI thread. What the Drop says (<paramref name="line"/>; null hides it) and whether a take is
-    /// live (the ink dictating) or not (a note, the ink still).
+    /// UI thread. What the Drop says (<paramref name="line"/>; null hides it, its actions become its
+    /// buttons) and what its ink shows (<paramref name="ink"/>: still for a note or an offer).
     /// </summary>
-    public void Show(DropLine? line, bool isLive)
+    public void Show(DropLine? line, DropInk ink)
     {
-        text = line is null ? null : new DropText(line.Title, line.Detail, Tone(line.Tone), line.LiveWords);
-        live = isLive ? InkState.Dictating : InkState.Idle;
+        shown = line;
+        text = line is null
+            ? null
+            : new DropText(line.Title, line.Detail, Tone(line.Tone), line.LiveWords)
+            {
+                Buttons = line.Actions is { } a ? new DropButtons(a.First.Title, a.Second?.Title) : null,
+            };
+        live = InkFor(ink);
         Update();
+    }
+
+    /// <summary>The renderer's state for the model's ink.</summary>
+    internal static InkState InkFor(DropInk ink) => ink switch
+    {
+        DropInk.Dictating => InkState.Dictating,
+        DropInk.Meeting => InkState.Meeting,
+        DropInk.Blotting => InkState.Blotting,
+        DropInk.Problem => InkState.Problem,
+        _ => InkState.Idle,
+    };
+
+    /// <summary>A button of the Drop was clicked: its action, if the line shown still offers it.</summary>
+    private void Clicked(int index)
+    {
+        if (held is null && shown?.Actions?.At(index) is { } action)
+        {
+            act(action);
+        }
     }
 
     private static DropTone Tone(DropLineTone tone) => tone switch
@@ -119,6 +153,7 @@ internal sealed class ShellInk : IDisposable
         {
             drop = new DropWindow(Loader, Clock);
             drop.Surface.Levels = LiveLevels;
+            drop.ButtonClicked += Clicked;
             drop.ProblemChanged += report;
             report(drop.Problem);
         }

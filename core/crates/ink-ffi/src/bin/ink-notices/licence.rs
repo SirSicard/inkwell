@@ -142,7 +142,13 @@ fn is_operator(token: &str) -> bool {
 /// Lower case with every run of whitespace one space, and typographic quotes plain: the same
 /// licence wrapped at another width, or typeset, reads the same.
 fn normalise(text: &str) -> String {
-    let plain: String = text
+    // A licence written as source comments reads the same without the `//` each line starts with.
+    let uncommented: Vec<&str> = text
+        .lines()
+        .map(|l| l.trim_start().strip_prefix("//").unwrap_or(l))
+        .collect();
+    let plain: String = uncommented
+        .join("\n")
         .chars()
         .map(|c| match c {
             '\u{2018}' | '\u{2019}' => '\'',
@@ -201,6 +207,11 @@ pub fn classify(text: &str) -> BTreeSet<&'static str> {
     }
     if has("unicode license v3") {
         ids.insert("Unicode-3.0");
+    }
+    if has("community data license agreement - permissive - version 2.0")
+        && has("makes available the text of this agreement with the shared data")
+    {
+        ids.insert("CDLA-Permissive-2.0");
     }
     if has("blue oak model license")
         && has(
@@ -589,6 +600,18 @@ mod tests {
         assert_eq!(classify(zlib), BTreeSet::from(["Zlib"]));
         let isc = "Permission to use, copy, modify, and/or distribute this software for any\npurpose with or without fee is hereby granted";
         assert_eq!(classify(isc), BTreeSet::from(["ISC"]));
+        // Written as source comments (untrusted 0.9.0's LICENSE.txt): the same words.
+        let commented = "// Copyright 2015-2016 Someone.\n//\n// Permission to use, copy, modify, and/or distribute this software for any\n// purpose with or without fee is hereby granted";
+        assert_eq!(classify(commented), BTreeSet::from(["ISC"]));
+        // webpki-roots' data licence (one of Velopack's exceptions), by its title and its sharing term.
+        let cdla = "# Community Data License Agreement - Permissive - Version 2.0\n\n2.1. A Data Recipient may share Data, with or without modifications, so\nlong as the Data Recipient makes available the text of this agreement\nwith the shared Data.";
+        assert_eq!(classify(cdla), BTreeSet::from(["CDLA-Permissive-2.0"]));
+        assert!(
+            classify(
+                "Licensed under the Community Data License Agreement - Permissive - Version 2.0."
+            )
+            .is_empty()
+        );
         // A statement naming licences carries none of their texts.
         assert!(classify("Licensed under either of Apache License, Version 2.0 or MIT license at your option.").is_empty());
         // MIT-0 has no notice clause: not MIT.

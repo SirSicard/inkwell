@@ -1,5 +1,6 @@
 //! The screens' commands: permissions, what is owed, a live meeting's notes, settings, modes, the
-//! model catalogue, and the library's records ([`library`](crate::library)). They run on their own thread, `ink-queries`, in the order they were sent.
+//! model catalogue, the library's records ([`library`](crate::library)), and Inkwell 0.2's data
+//! ([`import02`](crate::import02)). They run on their own thread, `ink-queries`, in the order they were sent.
 //!
 //! Apart from the command thread on purpose: a model update holds that thread for as long as its
 //! download takes, and a note typed during it, or a permission card the user is looking at, must
@@ -21,7 +22,7 @@ use ink_core::{
     Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState, PlatformError,
     RecordId, Store,
 };
-use ink_engines::{ModelDir, Os};
+use ink_engines::{ModelDir, Os, Route};
 use ink_pipeline::style::Style;
 use serde_json::{Map, Value, json};
 
@@ -129,6 +130,9 @@ pub enum Query {
     },
     /// `models.list`: the catalogue's models for this OS.
     ModelsList,
+    /// `engine.route`: what serves a job now. A router read, so it is here, where a model
+    /// download on the command thread never delays it.
+    EngineRoute(ink_core::Job),
     /// `setting.get`.
     SettingGet {
         /// One of [`SHELL_SETTINGS`].
@@ -158,6 +162,10 @@ pub enum Query {
     Library(crate::library::LibraryQuery),
     /// Snippets, voice commands and the import's key note ([`phrases`](crate::phrases)).
     Phrases(crate::phrases::PhrasesQuery),
+    /// Own-key language model providers and their keys ([`cloud`](crate::cloud)).
+    Cloud(crate::cloud::CloudQuery),
+    /// Inkwell 0.2's data: looked for, or imported ([`import02`](crate::import02)).
+    Import02(crate::import02::Import02Query),
 }
 
 /// A query with the command's name and id, for its events.
@@ -171,6 +179,7 @@ struct Job {
 fn fields(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
         "permissions.check" | "models.list" | "modes.list" => &[],
+        "engine.route" => &["job"],
         "permission.request" => &["permission"],
         "commitments.list" => &["limit"],
         "commitment.set_done" => &["commitment", "done"],
@@ -219,6 +228,12 @@ pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     }
     if let Some(query) = crate::phrases::parse(name, v) {
         return Some(query.map(Query::Phrases));
+    }
+    if let Some(query) = crate::cloud::parse(name, v) {
+        return Some(query.map(Query::Cloud));
+    }
+    if let Some(query) = crate::import02::parse(name, v) {
+        return Some(query.map(Query::Import02));
     }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
@@ -284,6 +299,9 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             note: text("note")?,
         },
         "models.list" => Query::ModelsList,
+        "engine.route" => Query::EngineRoute(
+            events::parse_job(&text("job")?).ok_or_else(|| format!("{name}: unknown job"))?,
+        ),
         "setting.get" => Query::SettingGet {
             key: shell_setting(name, &text("key")?)?,
         },
@@ -595,6 +613,7 @@ impl Ctx<'_> {
                 Err(e) => fail(e.to_string()),
             },
             Query::ModelsList => emit(self.catalogue()),
+            Query::EngineRoute(job) => emit(routed(self.shared, job)),
             Query::SettingGet { key } => match store.setting(&key) {
                 Ok(value) => emit(setting(&key, value)),
                 Err(e) => fail(e.to_string()),
@@ -670,6 +689,27 @@ impl Ctx<'_> {
                     Err(e) => fail_coded(e.message, e.code),
                 }
             }
+            Query::Cloud(query) => match crate::cloud::answer(self.shared, query, id.as_deref()) {
+                Ok(Some(e)) => emit(e),
+                // llm.test: the test thread answers.
+                Ok(None) => {}
+                Err(e) => fail(e),
+            },
+            // A store call and a read of 0.2's files: about a second for a long history, and
+            // apart from the command thread, which a model download can hold for minutes.
+            Query::Import02(query) => {
+                let import = self.shared.import02.get();
+                match crate::import02::answer(import, query, id.as_deref()) {
+                    Ok(e) => {
+                        emit(e);
+                        // A running dictation takes the imported key and lists at once.
+                        if query.imports() {
+                            crate::voice::settings_changed(self.shared);
+                        }
+                    }
+                    Err(e) => fail(e),
+                }
+            }
         }
     }
 
@@ -724,6 +764,24 @@ fn setting(key: &str, value: Option<String>) -> Value {
     event(
         "setting.value",
         &[("key", Some(key.into())), ("value", value.map(Into::into))],
+    )
+}
+
+/// `engine.routed`: what serves `job` now: a model downloaded from the registry, an engine the
+/// shell registered (such as a fallback while that model downloads), or nothing installed.
+fn routed(shared: &Shared, job: ink_core::Job) -> Value {
+    let (id, source) = match shared.router.route(job) {
+        Ok(Route::Model(row)) => (Some(row.id.clone()), Some("registry")),
+        Ok(Route::External { id, .. }) => (Some(id), Some("shell")),
+        Err(_) => (None, None),
+    };
+    event(
+        "engine.routed",
+        &[
+            ("job", Some(events::job(job).into())),
+            ("id", id.map(Into::into)),
+            ("source", source.map(Into::into)),
+        ],
     )
 }
 
@@ -972,7 +1030,14 @@ mod tests {
                 value: "off".into()
             }))
         );
+        assert_eq!(
+            p(r#"{"cmd":"engine.route","job":"live_partials","id":"r"}"#),
+            Some(Ok(Query::EngineRoute(ink_core::Job::LivePartials)))
+        );
         for bad in [
+            r#"{"cmd":"engine.route"}"#,
+            r#"{"cmd":"engine.route","job":"typing"}"#,
+            r#"{"cmd":"engine.route","job":"live_partials","engine":"x"}"#,
             // Only the user's consent turns polish on: consent.allow, never setting.set.
             r#"{"cmd":"setting.set","key":"dictation.polish","value":"on"}"#,
             r#"{"cmd":"setting.set","key":"llm.consent.polish","value":"{\"to\":\"on_device\"}"}"#,

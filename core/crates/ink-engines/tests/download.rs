@@ -353,6 +353,74 @@ fn every_file_of_a_row_is_downloaded_and_progress_covers_the_row() {
 }
 
 #[test]
+fn files_in_subdirectories_download_into_them_and_resume_there() {
+    let scratch = Scratch::new("subdirs");
+    let dir = scratch.model_dir();
+    let id = "synthetic-bundle";
+    let (weight, mil, vocab) = (weights(3, 4_000), weights(4, 1_500), weights(5, 700));
+    let analytics = weights(6, 243);
+    let mut row = one_file_row(id, &weight);
+    row.files = vec![
+        file(id, "Encoder.mlmodelc/weights/weight.bin", &weight),
+        file(id, "Encoder.mlmodelc/model.mil", &mil),
+        file(id, "vocab.json", &vocab),
+        // A directory nothing has made yet.
+        file(id, "Decoder.mlmodelc/analytics/coremldata.bin", &analytics),
+    ];
+    let fetch = Arc::new(MemFetch::new());
+    for (f, bytes) in row.files.iter().zip([&weight, &mil, &vocab, &analytics]) {
+        fetch.serve(&f.url, bytes);
+    }
+    // An earlier attempt left part of the deepest file, in its own directory.
+    let part = dir.part_path(&row, &row.files[0]);
+    fs::create_dir_all(part.parent().unwrap()).unwrap();
+    fs::write(&part, &weight[..1_234]).unwrap();
+
+    let dl = Downloader::new(fetch.clone(), dir.clone());
+    dl.download(&row, &CancelToken::new(), no_progress())
+        .unwrap();
+    let row_dir = dir.row_dir(&row);
+    assert_eq!(
+        fs::read(
+            row_dir
+                .join("Encoder.mlmodelc")
+                .join("weights")
+                .join("weight.bin")
+        )
+        .unwrap(),
+        weight
+    );
+    assert_eq!(
+        fs::read(row_dir.join("Encoder.mlmodelc").join("model.mil")).unwrap(),
+        mil
+    );
+    assert_eq!(fs::read(row_dir.join("vocab.json")).unwrap(), vocab);
+    assert_eq!(
+        fs::read(
+            row_dir
+                .join("Decoder.mlmodelc")
+                .join("analytics")
+                .join("coremldata.bin")
+        )
+        .unwrap(),
+        analytics
+    );
+    assert!(!part.exists());
+    assert!(dir.is_installed(&row));
+    assert_eq!(
+        fetch.requests()[0],
+        (row.files[0].url.clone(), 1_234),
+        "resumed from the part in the subdirectory"
+    );
+    // Nothing was written anywhere but the row's directory.
+    let written: Vec<_> = fs::read_dir(dir.root())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(written, [id]);
+}
+
+#[test]
 fn an_unpinned_row_is_refused_before_any_fetch() {
     let mut s = setup("unpinned");
     s.row.files[0].url = "https://models.example/synthetic/x/resolve/main/weights.bin".into();

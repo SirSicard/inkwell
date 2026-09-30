@@ -604,11 +604,13 @@ final class CatalogueModelTests: XCTestCase {
 
     func testAFailedListReadsAsFailedNotAsNothingInstalled() {
         let catalogue = CatalogueModel(send: { _ in })
+        XCTAssertFalse(catalogue.listed, "not answered yet: not known, which is not empty")
         catalogue.apply(event(#"{"type":"command.failed","command":"models.list","message":"the registry could not be read"}"#))
         XCTAssertTrue(catalogue.failed)
         XCTAssertEqual(CatalogueModel.failedText, "The model list could not be read.")
         catalogue.apply(event(#"{"type":"models.listed","models":[]}"#))
         XCTAssertFalse(catalogue.failed, "a list that arrives clears it")
+        XCTAssertTrue(catalogue.listed)
     }
 
     func testEachJobShowsWhatServesItAndItsMeasuredAccuracy() {
@@ -627,6 +629,247 @@ final class CatalogueModelTests: XCTestCase {
         XCTAssertEqual(catalogue.line(.livePartials).wer, 21.3)
         XCTAssertTrue(catalogue.line(.meetingFinal).known)
         XCTAssertNil(catalogue.line(.meetingFinal).engine, "nothing fills it")
+    }
+
+    /// A route question that failed reads "couldn't", never "nothing installed", until its answer
+    /// comes; it is matched to its line by the id the command carries.
+    func testAFailedRouteQuestionSaysSoOnItsLine() {
+        let catalogue = CatalogueModel(send: { _ in })
+        guard case .commandFailed(let failed) = CoreCommand.engineRoute(.meetingFinal).notSent("couldn't send it: the core is not running")
+        else { return XCTFail("not a command.failed") }
+        XCTAssertEqual(CatalogueModel.routeJob(failed), .meetingFinal)
+        catalogue.apply(.commandFailed(failed))
+        XCTAssertEqual(catalogue.line(.meetingFinal).engineText, CatalogueModel.routeFailedText)
+        XCTAssertEqual(catalogue.line(.dictationFinal).engineText, "Checking…")
+        catalogue.apply(event(#"{"type":"engine.routed","job":"meeting_final"}"#))
+        XCTAssertEqual(catalogue.line(.meetingFinal).engineText, "Nothing installed yet", "the answer clears it")
+
+        // The core's own failure carries the same id.
+        catalogue.apply(event(#"{"type":"command.failed","command":"engine.route","id":"engine.route:live_partials","message":"the command thread has stopped"}"#))
+        XCTAssertTrue(catalogue.line(.livePartials).failed)
+        catalogue.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertFalse(catalogue.line(.livePartials).failed, "a stopped core's answers are gone")
+
+        // Settings shows the ones naming a job; one naming none is left to the controller's log.
+        guard case .commandFailed(let noJob) = event(#"{"type":"command.failed","command":"engine.route","message":"x"}"#)
+        else { return XCTFail("not a command.failed") }
+        XCTAssertNil(CatalogueModel.routeJob(noJob))
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        XCTAssertTrue(screens.handles(failed))
+        XCTAssertFalse(screens.handles(noJob))
+    }
+}
+
+/// The catalogue's downloads: only from a press, one at a time, each row with its own state.
+@MainActor
+final class ModelDownloadTests: XCTestCase {
+    private let qwen = "qwen3-asr-1.7b-q8"
+    private let parakeet = "parakeet-tdt-0.6b-v3-coreml"
+    private let asked: [CoreCommand] = [.modelsList, .engineRoute(.dictationFinal), .engineRoute(.meetingFinal), .engineRoute(.livePartials)]
+
+    /// The catalogue with Qwen3-ASR and the Mac's Parakeet, installed or not.
+    private func listed(qwen qwenInstalled: Bool = false, parakeet parakeetInstalled: Bool = false) -> InkEvent {
+        event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":\#(qwenInstalled),"jobs":[{"job":"dictation_final","wer":4.59},{"job":"meeting_final","wer":16.08}]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":\#(parakeetInstalled),"jobs":[]}]}"#)
+    }
+
+    private func progress(_ id: String, next: String? = nil, _ done: Int64, of total: Int64) -> InkEvent {
+        event(#"{"type":"model.update_progress","id":"\#(id)","next":"\#(next ?? id)","done_bytes":\#(done),"total_bytes":\#(total)}"#)
+    }
+
+    private func finished(_ id: String, ok: Bool = true, message: String? = nil) -> InkEvent {
+        let why = message.map { #","message":"\#($0)""# } ?? ""
+        return event(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":\#(ok),"no_model_warm":false\#(why)}"#)
+    }
+
+    private func installs(_ sent: Sent) -> [CoreCommand] {
+        sent.commands.filter { if case .modelInstall = $0 { true } else { false } }
+    }
+
+    private func entry(_ catalogue: CatalogueModel, _ id: String) throws -> CatalogueEntry {
+        try XCTUnwrap(catalogue.models.first { $0.id == id })
+    }
+
+    /// Nothing downloads until the user presses Download: not at launch, not while the first run is
+    /// walked through. The press then says what goes, smallest first, and sends one at a time.
+    func testNothingIsSentBeforeThePressAndThenOneAtATimeSmallestFirst() throws {
+        let sent = Sent()
+        let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.apply([
+            event(#"{"type":"core.ready","version":"1.0.0","abi":2}"#),
+            event(#"{"type":"setting.value","key":"onboarding.done"}"#), listed(),
+        ])
+        while screens.onboarding.step != .ready { screens.onboarding.next() }
+        XCTAssertEqual(installs(sent), [], "nothing sent before the press")
+        let catalogue = screens.catalogue
+        XCTAssertEqual(catalogue.firstRunModels.map(\.id), [parakeet, qwen], "smallest first")
+        XCTAssertEqual(catalogue.firstRunModels.map(\.sizeBytes).reduce(0, +), 3_003_849_933, "the total it states")
+        XCTAssertEqual(CatalogueModel.sources(catalogue.firstRunModels), "huggingface.co")
+
+        catalogue.downloadFirstRunModels()
+        XCTAssertEqual(installs(sent), [.modelInstall(parakeet, ref: "model.update:1")], "one at a time")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .downloading(nil))
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .waiting)
+        catalogue.downloadFirstRunModels()
+        XCTAssertEqual(installs(sent).count, 1, "a second press queues nothing twice")
+    }
+
+    /// Each install waits for the one before to end; each end asks again what the catalogue holds
+    /// and what serves each job, and a finished model stays listed in the first run, installed.
+    func testTheNextInstallWaitsForTheOneBeforeAndEachEndAsksAgain() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listed())
+        catalogue.download([parakeet, qwen])
+        catalogue.apply(progress(parakeet, 120_000_000, of: 483_105_645))
+        XCTAssertEqual(
+            catalogue.download(of: try entry(catalogue, parakeet)),
+            .downloading(.init(done: 120_000_000, total: 483_105_645)))
+        sent.commands = []
+        catalogue.apply(progress(parakeet, 483_105_645, of: 483_105_645))
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(sent.commands, asked + [.modelInstall(qwen, ref: "model.update:2")])
+        catalogue.apply(listed(parakeet: true))
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .installed)
+        XCTAssertEqual(catalogue.firstRunModels.map(\.id), [parakeet, qwen], "still listed, as downloaded")
+        sent.commands = []
+        catalogue.apply(finished(qwen))
+        XCTAssertEqual(sent.commands, asked + [.modelWarm(.dictationFinal)], "nothing left to install; the dictation model kept warm")
+    }
+
+    /// A model that does dictation, once this screen installed it, is kept warm as the one at launch
+    /// is (the first take after the download is not a cold load), and the warm goes before the next
+    /// install, so it never waits for that download. Parakeet (the shell runs it: it does no job in
+    /// the catalogue) and a failed download are not warmed.
+    func testAnInstalledDictationModelIsKeptWarmBeforeTheNextInstall() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listed())
+        catalogue.download([qwen, parakeet])
+        sent.commands = []
+        catalogue.apply(finished(qwen))
+        XCTAssertEqual(sent.commands, asked + [.modelWarm(.dictationFinal), .modelInstall(parakeet, ref: "model.update:2")])
+        sent.commands = []
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(sent.commands, asked, "Parakeet is not warmed: the shell loads it")
+        catalogue.download([qwen])
+        sent.commands = []
+        catalogue.apply(finished(qwen, ok: false, message: "the connection was reset"))
+        XCTAssertEqual(sent.commands, asked, "a failed download is not warmed")
+    }
+
+    /// Only the model being installed moves its bar: progress for another model, or for a
+    /// replacement (another model updated to it), and another model's end, change nothing.
+    func testProgressAndEndsForAnotherModelAreIgnored() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listed())
+        catalogue.download([parakeet, qwen])
+        catalogue.apply(progress(qwen, 1_000, of: 2_520_744_288))
+        catalogue.apply(progress("some-older-model", next: parakeet, 5_000, of: 483_105_645))
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .downloading(nil), "not its progress")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .waiting)
+        catalogue.apply(finished(qwen))
+        XCTAssertEqual(catalogue.installing, parakeet, "another model's end does not end this one")
+        XCTAssertEqual(installs(sent).count, 1)
+    }
+
+    /// A failed download is shown in the core's words, and stays failed until Retry: the next one
+    /// goes on, and nothing is tried again on its own.
+    func testAFailedDownloadIsShownUntilRetryAndTheNextGoesOn() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listed())
+        catalogue.download([parakeet, qwen])
+        catalogue.apply(finished(parakeet, ok: false, message: "the new files could not be installed: the connection was reset"))
+        catalogue.apply(listed())
+        XCTAssertEqual(
+            catalogue.download(of: try entry(catalogue, parakeet)),
+            .failed("the new files could not be installed: the connection was reset"))
+        XCTAssertEqual(installs(sent), [.modelInstall(parakeet, ref: "model.update:1"), .modelInstall(qwen, ref: "model.update:2")])
+        catalogue.apply(finished(qwen))
+        XCTAssertEqual(installs(sent).count, 2, "never retried on its own")
+
+        catalogue.download([parakeet])  // Retry
+        XCTAssertEqual(installs(sent).last, .modelInstall(parakeet, ref: "model.update:3"))
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .downloading(nil), "the failure goes with the retry")
+    }
+
+    /// A download the core refused before it started (another update held the model) fails by its
+    /// command's id; a refusal carrying any other id is not this one's.
+    func testARefusedInstallIsMatchedByItsIDAndAStaleOneIsNot() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listed())
+        catalogue.download([qwen])
+        catalogue.apply(event(#"{"type":"command.failed","command":"model.update","id":"model.update:7","message":"stale"}"#))
+        XCTAssertEqual(catalogue.installing, qwen)
+        catalogue.apply(event(#"{"type":"command.failed","command":"model.update","id":"model.update:1","message":"another update holds qwen3-asr-1.7b-q8"}"#))
+        XCTAssertNil(catalogue.installing)
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .failed("another update holds qwen3-asr-1.7b-q8"))
+    }
+
+    /// The first run's "the downloads keep going" holds only while one runs or waits: not before
+    /// the press, and not once every one has ended, failed or done.
+    func testDownloadingHoldsOnlyWhileADownloadRunsOrWaits() {
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(listed())
+        XCTAssertFalse(catalogue.downloading, "nothing pressed")
+        catalogue.download([parakeet, qwen])
+        XCTAssertTrue(catalogue.downloading)
+        catalogue.apply(finished(parakeet, ok: false, message: "offline"))
+        XCTAssertTrue(catalogue.downloading, "Qwen3-ASR goes next")
+        catalogue.apply(finished(qwen, ok: false, message: "offline"))
+        XCTAssertFalse(catalogue.downloading, "every download failed: none keeps going")
+        catalogue.download([qwen])
+        catalogue.apply(finished(qwen))
+        XCTAssertFalse(catalogue.downloading, "all done")
+    }
+
+    /// The core stopping ends what was queued: nothing is sent after it, and no row stays
+    /// "downloading".
+    func testTheCoreStoppingClearsTheQueue() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listed())
+        catalogue.download([parakeet, qwen])
+        catalogue.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertNil(catalogue.installing)
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .notInstalled)
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(installs(sent).count, 1)
+    }
+
+    func testEveryDownloadableModelIsNamedWithWhereItComesFrom() {
+        for id in ["qwen3-asr-1.7b-q8", "parakeet-tdt-0.6b-v3-coreml", "nemotron-3-diarization-q8", "silero-vad-v6-16k"] {
+            XCTAssertNotEqual(CatalogueModel.name(id), id, "named: \(id)")
+            XCTAssertNotNil(CatalogueModel.source(id), id)
+        }
+        XCTAssertEqual(CatalogueModel.source("silero-vad-v6-16k"), "raw.githubusercontent.com", "the host its row names")
+        XCTAssertNil(CatalogueModel.source("a-model-this-build-does-not-know"), "never a host it cannot vouch for")
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(CatalogueModel.sources(catalogue.firstRunModels), "huggingface.co and raw.githubusercontent.com", "most bytes first")
+    }
+
+    /// Where the screens say each model comes from is the host its row's URLs name in the core's
+    /// registry (ink-engines), the host the download connects to: a firewall rule written from
+    /// that sentence lets the download through.
+    func testEachModelsSourceIsTheHostItsRowNamesInTheCore() throws {
+        let engines = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("core/crates/ink-engines/src")
+        let registry = try String(contentsOf: engines.appendingPathComponent("registry.rs"), encoding: .utf8)
+        let rows = try String(contentsOf: engines.appendingPathComponent("rows.rs"), encoding: .utf8)
+        for (id, source, row) in [
+            ("qwen3-asr-1.7b-q8", registry, "fn qwen3_asr_1_7b_q8()"),
+            ("parakeet-tdt-0.6b-v3-coreml", rows, "pub fn parakeet_tdt_v3_coreml()"),
+            ("nemotron-3-diarization-q8", rows, "pub fn nemotron_3_diarization()"),
+            ("silero-vad-v6-16k", rows, "pub fn silero_vad()"),
+        ] {
+            let start = try XCTUnwrap(source.range(of: row), "\(row) is not in the core's source")
+            let url = try XCTUnwrap(source[start.upperBound...].firstMatch(of: /"https:\/\/([^\/"]+)\//), "no URL in \(row)")
+            XCTAssertEqual(CatalogueModel.source(id), String(url.output.1), id)
+        }
     }
 }
 
@@ -959,6 +1202,18 @@ final class OnboardingModelTests: XCTestCase {
         XCTAssertFalse(other.showing)
     }
 
+    /// The speech models come right after the permissions, before polish.
+    func testTheModelsStepFollowsThePermissions() {
+        typealias Step = OnboardingModel.Step
+        XCTAssertEqual(Step.models.rawValue, Step.permissions.rawValue + 1)
+        XCTAssertLessThan(Step.models.rawValue, Step.polish.rawValue)
+        // Continue leaves it whatever the downloads are doing: the step holds nothing back.
+        let onboarding = OnboardingModel(send: { _ in })
+        onboarding.step = .models
+        onboarding.next()
+        XCTAssertGreaterThan(onboarding.step.rawValue, Step.models.rawValue)
+    }
+
     func testTheFirstRunStateShowsUntilItIsCompletedAndRemembersThat() {
         let sent = Sent()
         let onboarding = OnboardingModel(send: sent.send)
@@ -966,7 +1221,7 @@ final class OnboardingModelTests: XCTestCase {
         onboarding.load()
         onboarding.apply(event(#"{"type":"setting.value","key":"onboarding.done"}"#))
         XCTAssertTrue(onboarding.showing, "never completed")
-        for _ in OnboardingModel.Step.allCases { onboarding.next() }
+        for _ in onboarding.steps { onboarding.next() }
         XCTAssertFalse(onboarding.showing)
         XCTAssertEqual(sent.commands, [.settingGet(.onboardingDone), .settingSet(.onboardingDone, "true")])
         let again = OnboardingModel(send: { _ in })
@@ -988,8 +1243,38 @@ final class CoreCommandTests: XCTestCase {
         XCTAssertEqual(done["done"] as? Bool, true)
         XCTAssertEqual(try fields(.permissionRequest(.systemAudio))["permission"] as? String, "system_audio")
         XCTAssertEqual(try fields(.engineRoute(.livePartials))["job"] as? String, "live_partials")
+        let install = try fields(.modelInstall("qwen3-asr-1.7b-q8", ref: "model.update:1"))
+        XCTAssertEqual(install["cmd"] as? String, "model.update")
+        XCTAssertEqual(install["model"] as? String, "qwen3-asr-1.7b-q8")
+        XCTAssertEqual(install["next"] as? String, "qwen3-asr-1.7b-q8", "its own next: the first download")
+        XCTAssertEqual(install["id"] as? String, "model.update:1")
+        XCTAssertEqual(CoreCommand.modelInstall("x", ref: "r").name, "model.update")
+        let warm = try fields(.modelWarm(.dictationFinal))
+        XCTAssertEqual(warm["cmd"] as? String, "model.warm")
+        XCTAssertEqual(warm["job"] as? String, "dictation_final")
+        XCTAssertEqual(warm["id"] as? String, "model.warm:dictation_final")
+        XCTAssertEqual(CoreCommand.modelWarm(.dictationFinal).name, "model.warm")
         XCTAssertEqual(CoreCommand.noteAdd(record: "r", atMs: 1, text: "private words", ref: "x").name, "note.add",
                        "the name logged never carries the words")
+    }
+
+    /// A command that never reached the core fails as the core would have failed it: its name and
+    /// id, and a message that never carries its fields.
+    func testACommandThatNeverReachedTheCoreFailsWithItsNameAndId() {
+        let ask = CoreCommand.meetingAsk(question: "a private question", ref: "ask:3")
+        guard case .commandFailed(let failed) = ask.notSent("couldn't send it: the core is not running") else {
+            return XCTFail("not a command.failed")
+        }
+        XCTAssertEqual(failed.type, "command.failed")
+        XCTAssertEqual(failed.command, "meeting.ask")
+        XCTAssertEqual(failed.id, "ask:3")
+        XCTAssertEqual(failed.message, "couldn't send it: the core is not running")
+        XCTAssertFalse(failed.message.contains("private"))
+        guard case .commandFailed(let noID) = CoreCommand.modesList.notSent("x") else {
+            return XCTFail("not a command.failed")
+        }
+        XCTAssertNil(noID.id)
+        XCTAssertEqual(CoreCommand.engineRoute(.livePartials).commandID, "engine.route:live_partials")
     }
 }
 
@@ -1009,8 +1294,15 @@ final class NoticesTests: XCTestCase {
             return name.isEmpty ? nil : name
         }
         XCTAssertGreaterThan(names.count, 15, "the table was read")
-        // wasapi-rs's pattern is in Windows-only code.
-        let shipped = names.filter { $0 != "wasapi-rs" }
+        // wasapi-rs's pattern is in Windows-only code, as are sherpa-onnx, ONNX Runtime, the code
+        // compiled into sherpa-onnx's library (Windows' Parakeet) and the Eigen in both, and Velopack
+        // (the Windows installer).
+        let windowsOnly: Set = [
+            "wasapi-rs", "sherpa-onnx", "ONNX Runtime", "Eigen",
+            "nlohmann/json", "kaldi-decoder", "kaldifst", "OpenFst", "simple-sentencepiece",
+            "kaldi-native-fbank", "hclust-cpp", "Velopack",
+        ]
+        let shipped = names.filter { !windowsOnly.contains($0) }
         let about = Notices.components.map { $0.name + " " + $0.text }.joined(separator: "\n")
         for name in shipped {
             let key = name.replacingOccurrences(of: " clustering", with: "").replacingOccurrences(of: " in C", with: "")
@@ -1124,8 +1416,23 @@ final class ScreensCoreContractTests: XCTestCase {
         XCTAssertEqual(modes?.modes.map(\.name), ["Default"])
         let owed = try answer(.commitmentsList) { if case .commitmentsListed(let c) = $0 { c } else { nil } }
         XCTAssertEqual(owed?.items, [])
-        XCTAssertNotNil(try answer(.modelsList) { if case .modelsListed(let m) = $0 { m } else { nil } })
+        let catalogue = try XCTUnwrap(try answer(.modelsList) { if case .modelsListed(let m) = $0 { m } else { nil } })
+        XCTAssertTrue(catalogue.models.contains { $0.id == ParakeetFiles.rowID && $0.jobs.isEmpty }, "the Mac's Parakeet, only downloaded")
+        MainActor.assumeIsolated {
+            for model in catalogue.models {
+                XCTAssertNotEqual(CatalogueModel.name(model.id), model.id, "named: \(model.id)")
+                XCTAssertNotNil(CatalogueModel.source(model.id), "where \(model.id) comes from")
+            }
+        }
+        // An id the registry does not hold: refused before anything is fetched, matched by its id.
+        // (Never a real model here: that would download it.)
+        let install = try answer(.modelInstall("no-such-model", ref: "model.update:1")) { if case .commandFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(install?.command, "model.update")
+        XCTAssertEqual(install?.id, "model.update:1")
         XCTAssertNotNil(try answer(.engineRoute(.dictationFinal)) { if case .engineRouted(let r) = $0 { r } else { nil } })
+        // Nothing installed here: nothing to keep warm, and it says so.
+        let warm = try answer(.modelWarm(.dictationFinal)) { if case .modelWarmFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(warm?.job, .dictationFinal)
         let permissions = try answer(.permissionsCheck) { if case .permissionsChecked(let p) = $0 { p } else { nil } }
         XCTAssertEqual(permissions?.systemAudio, .notDetermined, "never asked here, so never probed")
         let refused = try answer(.noteAdd(record: "no-such-record", atMs: 1_000, text: "private words", ref: "note-line-7")) {
@@ -1178,6 +1485,11 @@ final class LiveLayoutTests: XCTestCase {
     func testOwedAndSettingsNeverRaiseTheWindowsMinimumSizeEither() {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
         screens.owed.apply(event(#"{"type":"commitments.listed","items":[{"id":"a","record":"r","record_started_at_unix_ms":0,"text":"A promise long enough to wrap onto more than one line when the window is narrow","merged":1}]}"#))
+        // Models with a download under way, one waiting, and one failed with the core's words.
+        screens.catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]}]}"#))
+        screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
+        screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
+        screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
         for view in [
             AnyView(OwedScreen()), AnyView(SettingsScreen()), AnyView(LiveScreen()),
         ] {
@@ -1231,6 +1543,7 @@ final class CoreControllerCommandTests: XCTestCase {
         let logged = Logged()
         let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
         core.start(environment: ["INK_DATA_DIR": data.path])
+        XCTAssertFalse(core.screens.import02.looks, "a moved library never looks at this Mac's Inkwell 0.2 data")
         try await until { if case .ready = core.store.status { true } else { false } }
         let fixtures = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -1268,7 +1581,7 @@ final class CoreControllerCommandTests: XCTestCase {
         XCTAssertFalse(logged.messages[0].contains("zebra"), "never the core's message or a field")
         XCTAssertFalse(logged.messages[0].contains("onboarding.done"))
         // Handled ones are the screens' to show.
-        for handled in ["permissions.check", "models.list", "modes.list", "commitment.set_done", "note.add", "note.update", "note.delete"] {
+        for handled in ["permissions.check", "models.list", "modes.list", "commitment.set_done", "note.add", "note.update", "note.delete", "model.update"] {
             core.received([event(#"{"type":"command.failed","command":"\#(handled)","message":"x"}"#)])
         }
         // (Owed lists again after a failed set_done; with no core running that is logged as not sent.)
@@ -1280,6 +1593,54 @@ final class CoreControllerCommandTests: XCTestCase {
         XCTAssertEqual(failures().count, 1)
         core.received([event(#"{"type":"command.failed","command":"setting.get","id":"setting:somebody.else","message":"x"}"#)])
         XCTAssertEqual(failures().count, 2, "a setting no screen reads is logged")
+    }
+
+    /// With no core to take them, the commands screens wait on fail one hop later, as if the core
+    /// had failed them: the list loading, Ask thinking and a consent read each say they couldn't
+    /// instead of waiting forever. Each is logged once as not sent, and no failure goes unshown.
+    func testACommandWithNoCoreFailsSoItsScreenStopsWaiting() async throws {
+        let logged = Logged()
+        let core = CoreController(registersAppleEngines: false, commandLog: logged.log)
+        core.library.refreshList()
+        core.screens.live.askText = "What did we decide?"
+        core.screens.live.submitAsk(context: [])
+        core.screens.polish.load()
+        XCTAssertEqual(core.library.listLoad, .loading, "after this turn, not inside the send")
+        XCTAssertNil(core.screens.live.asked.first?.answer)
+
+        try await until {
+            core.library.listLoad == .failed && core.screens.live.asked.first?.answer != nil
+                && core.screens.polish.failure != nil
+        }
+        XCTAssertEqual(core.screens.live.asked.first?.answer, .unavailable("Couldn't answer that. Try asking again."))
+        XCTAssertEqual(core.screens.polish.failure, .read)
+        XCTAssertEqual(logged.messages.count, 3, "\(logged.messages)")
+        XCTAssertTrue(logged.messages.allSatisfy { $0.hasPrefix("no core is running") }, "\(logged.messages)")
+        XCTAssertFalse(logged.messages.joined().contains("decide"), "never the question")
+    }
+
+    /// A command the core refuses to queue fails the same way, with its id, so its screen hears.
+    func testACommandTheCoreRefusesFailsWithItsId() async throws {
+        let data = FileManager.default.temporaryDirectory.appendingPathComponent("inkwell-refused-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: data) }
+        let core = CoreController(registersAppleEngines: false, commandLog: Logged().log)
+        var failures: [CommandFailed] = []
+        core.observer = { batch in
+            for case .commandFailed(let failed) in batch { failures.append(failed) }
+        }
+        core.start(environment: ["INK_DATA_DIR": data.path])
+        try await until { if case .ready = core.store.status { true } else { false } }
+
+        // A page of no records: the core cannot read it, so it never queues it.
+        core.send(.recordsList(kind: nil, before: nil, limit: 0, ref: "list-99"))
+        try await until { failures.contains { $0.id == "list-99" } }
+        let refused = failures.first { $0.id == "list-99" }
+        XCTAssertEqual(refused?.command, "records.list")
+        XCTAssertEqual(refused?.message, "couldn't send it: the core could not read the argument")
+
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            core.stop { done.resume() }
+        }
     }
 
     private func until(_ timeout: Duration = .seconds(20), _ done: () -> Bool) async throws {

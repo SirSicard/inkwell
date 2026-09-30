@@ -8,6 +8,10 @@
 // SetWindowPos(SWP_NOACTIVATE), never ShowWindow(SW_SHOW). windows/S3.4-CHECKLIST.md is the check
 // by hand.
 //
+// Screen readers read its title and detail, live words included, as VoiceOver reads the Mac's, in
+// a polite live region (ScreenReaderName); the window's title, which any process reads, is the
+// state only.
+//
 // Its pixels: WS_EX_NOREDIRECTIONBITMAP (no GDI surface at all), a DirectComposition visual
 // holding a composition swapchain. Each frame Direct3D draws the ink into an offscreen texture,
 // then Direct2D paints the panel on the swapchain: paper with a 16 DIP corner, the ink fading into
@@ -16,6 +20,10 @@
 // off, one still frame per change; hidden, none.
 //
 // Paper in both themes, like the Mac's: ink on a dark page would vanish.
+//
+// The consent offer's buttons ("Record this call", "Not this one") widen and deepen the panel, as
+// on the Mac. A click on one (down and up on the same button) raises ButtonClicked; the click
+// still never activates the Drop or Inkwell (MA_NOACTIVATE).
 //
 // The Drop is the recording indicator, so it never goes blank. A lost device (TDR, driver update),
 // a lost composition device (DWM restarted) or a failed present releases every Direct3D,
@@ -44,6 +52,42 @@ internal static class DropLayout
     public const float TitleSize = 12;
     public const float DetailSize = 14;
     public const string Face = "Segoe UI Variable Text";
+
+    /// <summary>With buttons (the consent offer): wider and taller, as the Mac's sizeWithActions.</summary>
+    public const double WidthWithButtons = 380;
+    public const double HeightWithButtons = 112;
+    public const double ButtonWidth = 128;
+    public const double ButtonHeight = 26;
+    public const double ButtonGap = 8;
+    /// <summary>From the panel's bottom edge to the buttons'.</summary>
+    public const double ButtonBottom = 12;
+    public const float ButtonTextSize = 12;
+
+    /// <summary>The panel's size for <paramref name="text"/>, in DIPs.</summary>
+    public static (double W, double H) Size(DropText text) =>
+        text.Buttons is null ? (Width, Height) : (WidthWithButtons, HeightWithButtons);
+
+    /// <summary>Button <paramref name="index"/>'s rectangle, in DIPs from the panel's top left: a row under the lines.</summary>
+    public static (double Left, double Top, double Right, double Bottom) Button(int index)
+    {
+        var left = TextLeft + index * (ButtonWidth + ButtonGap);
+        var top = HeightWithButtons - ButtonBottom - ButtonHeight;
+        return (left, top, left + ButtonWidth, top + ButtonHeight);
+    }
+
+    /// <summary>The index of the button of <paramref name="buttons"/> at (<paramref name="x"/>, <paramref name="y"/>) in DIPs, or null.</summary>
+    public static int? ButtonAt(DropButtons? buttons, double x, double y)
+    {
+        for (var i = 0; i < (buttons?.Count ?? 0); i++)
+        {
+            var (left, top, right, bottom) = Button(i);
+            if (x >= left && x < right && y >= top && y < bottom)
+            {
+                return i;
+            }
+        }
+        return null;
+    }
 }
 
 /// <summary>The Drop's window. UI thread only (the thread whose message loop it lives on).</summary>
@@ -62,6 +106,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private ID2D1Bitmap1* inkBitmap;
     private IDWriteTextFormat* titleFormat;
     private IDWriteTextFormat* detailFormat;
+    private IDWriteTextFormat* buttonFormat;
     private IDWriteTextLayout* titleLayout;
     private IDWriteTextLayout* detailLayout;
     /// <summary>The live words' wet ones in <see cref="detailLayout"/> (empty unless the text is live words).</summary>
@@ -72,9 +117,17 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private readonly Func<DropFallback> makeFallback;
     /// <summary>Why the fallback window could not be made, while it could not.</summary>
     private string? fallbackFailure;
+    /// <summary>What screen readers read for the Drop (its title and detail; the window's title is the state only).</summary>
+    private readonly ScreenReaderName speech;
 
     /// <summary>For tests: an HRESULT to fail the next present with (a lost device), once.</summary>
     internal int FailNextPresent { get; set; }
+
+    /// <summary>The button a press went down on, until it comes up.</summary>
+    private int? pressed;
+
+    /// <summary>A button of the text shown was clicked (its index). UI thread.</summary>
+    public event Action<int>? ButtonClicked;
 
     /// <summary>Whether the plain fallback is on screen in the Drop's place.</summary>
     public bool ShowsFallback => fallback?.IsShown == true;
@@ -120,6 +173,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                     lpfnWndProc = &WndProc,
                     hInstance = (HINSTANCE)instance,
                     lpszClassName = name,
+                    // An arrow over the buttons, not whatever shape the pointer came in with.
+                    hCursor = LoadCursorW(HINSTANCE.NULL, IDC.IDC_ARROW),
                 };
                 if (RegisterClassExW(&wc) == 0)
                 {
@@ -141,6 +196,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             throw new InkRendererException($"couldn't make the Drop's window (error {error})");
         }
         SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, GCHandle.ToIntPtr(self));
+        speech = new ScreenReaderName(hwnd, "the Drop");
         // The fallback is made now, not when the ink first fails: a machine that cannot make it
         // is known (and said) from the start.
         MakeFallback();
@@ -188,6 +244,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         try
         {
             fallback = makeFallback();
+            fallback.ButtonClicked += index => ButtonClicked?.Invoke(index);
             fallbackFailure = null;
         }
         catch (InkRendererException e)
@@ -220,10 +277,17 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         var textChanged = lines != text;
         if (textChanged)
         {
+            var resized = DropLayout.Size(lines) != DropLayout.Size(text);
             text = lines;
+            pressed = null;
             DropLayouts();
-            // What a screen reader reads: the window's name, the title only (see AccessibleName).
-            fixed (char* name = lines.AccessibleName)
+            if (resized && IsShown)
+            {
+                // Buttons came or went: the panel takes its other size where it is.
+                Place();
+            }
+            // The window's title, which any process reads: the title only (see WindowTitle).
+            fixed (char* name = lines.WindowTitle)
             {
                 SetWindowTextW(hwnd, name);
             }
@@ -251,6 +315,10 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 SWP.SWP_NOMOVE | SWP.SWP_NOSIZE | SWP.SWP_NOACTIVATE | SWP.SWP_SHOWWINDOW);
             Surface.SetOnScreen(true);
         }
+        // What a screen reader reads, as on the Mac: the title and the detail (live words too),
+        // read out politely at each change, once the window shows. Only this window announces; the
+        // fallback, over it, holds the same name.
+        speech.Set(lines.AccessibleName, announce: true);
     }
 
     /// <summary>Hides the Drop. Out first: the ink stops without drawing a frame nobody would see.</summary>
@@ -262,6 +330,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         }
         ShowWindow(hwnd, SW.SW_HIDE);
         IsShown = false;
+        // The last words go with the Drop.
+        speech.Clear();
         Surface.SetOnScreen(false);
         Surface.State = InkState.Idle;
     }
@@ -303,8 +373,11 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         SetWindowPos(hwnd, HWND.HWND_TOPMOST, x, y, w, h, SWP.SWP_NOACTIVATE);
     }
 
-    private (int W, int H) PixelSize() =>
-        ((int)Math.Round(DropLayout.Width * dpiScale), (int)Math.Round(DropLayout.Height * dpiScale));
+    private (int W, int H) PixelSize()
+    {
+        var (w, h) = DropLayout.Size(text);
+        return ((int)Math.Round(w * dpiScale), (int)Math.Round(h * dpiScale));
+    }
 
     /// <summary>Sizes the swapchain and the ink canvas for a DPI scale.</summary>
     private void Layout(double scale)
@@ -379,6 +452,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         DropLayouts();
         Com.Release(ref titleFormat);
         Com.Release(ref detailFormat);
+        Com.Release(ref buttonFormat);
         Com.Release(ref inkBitmap);
         inkTexture?.Dispose();
         inkTexture = null;
@@ -434,10 +508,11 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             titleFormat = Format(pipeline, DropLayout.TitleSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_MEDIUM, wrap: false);
             detailFormat = Format(pipeline, DropLayout.DetailSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL, wrap: true);
+            buttonFormat = Format(pipeline, DropLayout.ButtonTextSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_MEDIUM, wrap: false);
         }
         if (titleLayout is null)
         {
-            var width = (float)(DropLayout.Width - DropLayout.TextLeft - DropLayout.TextRight);
+            var width = (float)(DropLayout.Size(text).W - DropLayout.TextLeft - DropLayout.TextRight);
             titleLayout = Layout(pipeline, text.Title, titleFormat, width, 100);
             DWRITE_LINE_METRICS line;
             uint count;
@@ -539,7 +614,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         d2d->SetDpi(dpi, dpi);
         d2d->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE.D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         d2d->BeginDraw();
-        ID2D1SolidColorBrush* paper = null, border = null, title = null, detail = null, wet = null;
+        ID2D1SolidColorBrush* paper = null, border = null, title = null, detail = null, wet = null, ink = null;
         ID2D1GradientStopCollection* stops = null;
         ID2D1LinearGradientBrush* fade = null;
         ID2D1RoundedRectangleGeometry* panel = null;
@@ -548,9 +623,10 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             var clear = new DXGI_RGBA();
             d2d->Clear(&clear);
+            var (panelW, panelH) = DropLayout.Size(text);
             var bounds = new D2D1_ROUNDED_RECT
             {
-                rect = new D2D_RECT_F { left = 0, top = 0, right = (float)DropLayout.Width, bottom = (float)DropLayout.Height },
+                rect = new D2D_RECT_F { left = 0, top = 0, right = (float)panelW, bottom = (float)panelH },
                 radiusX = (float)DropLayout.CornerRadius,
                 radiusY = (float)DropLayout.CornerRadius,
             };
@@ -564,9 +640,10 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             var inkRect = new D2D_RECT_F
             {
                 left = 0,
-                top = (float)((DropLayout.Height - DropLayout.Height) / 2),
+                // The ink keeps its size, centred on the panel's height, whichever size the panel takes.
+                top = (float)((panelH - DropLayout.Height) / 2),
                 right = (float)DropLayout.InkWidth,
-                bottom = (float)DropLayout.Height,
+                bottom = (float)((panelH + DropLayout.Height) / 2),
             };
             var gradient = stackalloc D2D1_GRADIENT_STOP[3];
             gradient[0] = new D2D1_GRADIENT_STOP { position = 0, color = new DXGI_RGBA { a = 1 } };
@@ -600,7 +677,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             border = alert ? Brush(d2d, Palette.Seal, 1) : Brush(d2d, Palette.Ink, 0.12f);
             var inset = new D2D1_ROUNDED_RECT
             {
-                rect = new D2D_RECT_F { left = width / 2, top = width / 2, right = (float)DropLayout.Width - width / 2, bottom = (float)DropLayout.Height - width / 2 },
+                rect = new D2D_RECT_F { left = width / 2, top = width / 2, right = (float)panelW - width / 2, bottom = (float)panelH - width / 2 },
                 radiusX = (float)DropLayout.CornerRadius - width / 2,
                 radiusY = (float)DropLayout.CornerRadius - width / 2,
             };
@@ -620,11 +697,46 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             titleLayout->GetMetrics(&tm);
             detailLayout->GetMetrics(&dm);
             var total = tm.height + DropLayout.LineSpacing + dm.height;
-            var top = (DropLayout.Height - total) / 2;
+            // Above the buttons when there are some, else centred on the panel.
+            var linesHeight = text.Buttons is null ? panelH : DropLayout.Button(0).Top - 4;
+            var top = (linesHeight - total) / 2;
             d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)top), titleLayout, (ID2D1Brush*)title,
                 D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
             d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)(top + tm.height + DropLayout.LineSpacing)),
                 detailLayout, (ID2D1Brush*)detail, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+
+            if (text.Buttons is { } buttons)
+            {
+                // The first in ink with paper words (the answer), the second outlined.
+                ink = Brush(d2d, Palette.Ink, 1);
+                for (var i = 0; i < buttons.Count; i++)
+                {
+                    var (left, btop, right, bottom) = DropLayout.Button(i);
+                    var shape = new D2D1_ROUNDED_RECT
+                    {
+                        rect = new D2D_RECT_F { left = (float)left + 0.5f, top = (float)btop + 0.5f, right = (float)right - 0.5f, bottom = (float)bottom - 0.5f },
+                        radiusX = 6,
+                        radiusY = 6,
+                    };
+                    if (i == 0)
+                    {
+                        d2d->FillRoundedRectangle(&shape, (ID2D1Brush*)ink);
+                    }
+                    else
+                    {
+                        d2d->DrawRoundedRectangle(&shape, (ID2D1Brush*)ink, 1, null);
+                    }
+                    var words = buttonFormat is null ? null : Layout(pipeline, buttons[i], buttonFormat, (float)(right - left), (float)(bottom - btop));
+                    if (words != null)
+                    {
+                        words->SetTextAlignment(DWRITE_TEXT_ALIGNMENT.DWRITE_TEXT_ALIGNMENT_CENTER);
+                        words->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT.DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                        d2d->DrawTextLayout(new D2D_POINT_2F((float)left, (float)btop), words, (ID2D1Brush*)(i == 0 ? paper : ink),
+                            D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        words->Release();
+                    }
+                }
+            }
         }
         finally
         {
@@ -636,6 +748,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 detailLayout->SetDrawingEffect(null, wetWords);
             }
             Com.Release(ref wet);
+            Com.Release(ref ink);
             Com.Release(ref detail);
             Com.Release(ref title);
             Com.Release(ref border);
@@ -681,6 +794,14 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             case WM.WM_MOUSEACTIVATE:
                 // A click on the Drop never activates it (or Inkwell).
                 return MA.MA_NOACTIVATE;
+            case WM.WM_LBUTTONDOWN:
+            case WM.WM_LBUTTONUP:
+                if (From(hwnd) is { IsShown: true } clicked)
+                {
+                    clicked.Mouse(msg == WM.WM_LBUTTONDOWN, lParam);
+                    return 0;
+                }
+                break;
             case WM.WM_SETTINGCHANGE:
                 // Every top-level window hears it, hidden ones included: Animation effects may
                 // have changed.
@@ -697,6 +818,34 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 break;
         }
         return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    /// <summary>A left button went down or up at <paramref name="lParam"/> (client pixels).</summary>
+    private void Mouse(bool down, LPARAM lParam) => Press(down, ClientDips(lParam));
+
+    /// <summary>The client point in <paramref name="lParam"/>, in DIPs.</summary>
+    internal (double X, double Y) ClientDips(LPARAM lParam)
+    {
+        var x = (short)((nint)lParam & 0xFFFF);
+        var y = (short)(((nint)lParam >> 16) & 0xFFFF);
+        return (x / dpiScale, y / dpiScale);
+    }
+
+    /// <summary>A press at <paramref name="at"/> (DIPs): a click is down and up on the same button.</summary>
+    internal void Press(bool down, (double X, double Y) at)
+    {
+        var button = DropLayout.ButtonAt(text.Buttons, at.X, at.Y);
+        if (down)
+        {
+            pressed = button;
+            return;
+        }
+        var was = pressed;
+        pressed = null;
+        if (button is int index && index == was)
+        {
+            ButtonClicked?.Invoke(index);
+        }
     }
 
     private static DropWindow? From(HWND hwnd)
@@ -717,6 +866,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         ((IInkTarget)this).ReleaseDeviceResources();
         fallback?.Dispose();
         fallback = null;
+        speech.Dispose();
         if (hwnd != HWND.NULL)
         {
             SetWindowLongPtrW(hwnd, GWLP.GWLP_USERDATA, 0);

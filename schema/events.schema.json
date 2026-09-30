@@ -35,6 +35,9 @@
       "$ref": "#/$defs/ModelUpdateStarted"
     },
     {
+      "$ref": "#/$defs/ModelUpdateProgress"
+    },
+    {
       "$ref": "#/$defs/ModelUpdateFinished"
     },
     {
@@ -209,6 +212,12 @@
       "$ref": "#/$defs/ConsentState"
     },
     {
+      "$ref": "#/$defs/LlmProviders"
+    },
+    {
+      "$ref": "#/$defs/LlmTested"
+    },
+    {
       "$ref": "#/$defs/ModesListed"
     },
     {
@@ -219,6 +228,12 @@
     },
     {
       "$ref": "#/$defs/ImportNotes"
+    },
+    {
+      "$ref": "#/$defs/ImportChecked"
+    },
+    {
+      "$ref": "#/$defs/ImportFinished"
     },
     {
       "$ref": "#/$defs/LibraryRecords"
@@ -784,6 +799,41 @@
         "type",
         "id",
         "next"
+      ],
+      "additionalProperties": false
+    },
+    "ModelUpdateProgress": {
+      "type": "object",
+      "description": "How far a model update's download has got, between model.update_started and model.update_finished: about four a second at most, and one when every byte is on disk (done_bytes equal to total_bytes; model.update_finished then says whether the files checked out). A model already installed sends only that one.",
+      "properties": {
+        "type": {
+          "const": "model.update_progress"
+        },
+        "id": {
+          "type": "string",
+          "description": "The model being replaced (the same as next for a first download)."
+        },
+        "next": {
+          "type": "string",
+          "description": "The model being downloaded."
+        },
+        "done_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Bytes on disk so far across its files. It can go down: a file whose server ignores a resume starts over."
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its download size (models.listed's size_bytes)."
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "next",
+        "done_bytes",
+        "total_bytes"
       ],
       "additionalProperties": false
     },
@@ -1541,7 +1591,7 @@
     },
     "MicReason": {
       "type": "string",
-      "description": "Why a meeting records this microphone: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio); the headset's own mic because the user's setting says so; the default because this Mac has no built-in mic; the first input because no default is set; it was named; or a reason this build of the core does not name (unknown).",
+      "description": "Why a meeting records this microphone: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be the one kept); the headset's own mic because the user's setting says so; the default because this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because no default is set; it was named; the LE Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the core does not name (unknown).",
       "enum": [
         "default_input",
         "built_in_for_bluetooth_output",
@@ -1549,6 +1599,7 @@
         "no_built_in_mic",
         "first_input",
         "requested",
+        "le_audio_headset",
         "unknown"
       ]
     },
@@ -2823,6 +2874,145 @@
       ],
       "additionalProperties": false
     },
+    "LlmProviderEntry": {
+      "type": "object",
+      "description": "An own-key (BYOK) language model provider the user can choose: its id, what it uses unless told otherwise, and whether its API key is stored. The key itself never leaves the OS key store.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible server)."
+        },
+        "default_model": {
+          "type": "string",
+          "description": "The model used when llm.choose names none."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Its address: fixed for a built-in provider; for custom, the address used when llm.choose names none."
+        },
+        "custom_url": {
+          "type": "boolean",
+          "description": "Whether llm.choose may name another address (custom only)."
+        },
+        "needs_key": {
+          "type": "boolean",
+          "description": "Whether a call needs its API key (a custom server usually runs without one)."
+        },
+        "has_key": {
+          "type": "boolean",
+          "description": "Whether a key is stored for it in the OS key store, asked without reading the key. False when that could not be asked (llm.providers' error says so)."
+        }
+      },
+      "required": [
+        "id",
+        "default_model",
+        "endpoint",
+        "custom_url",
+        "needs_key",
+        "has_key"
+      ],
+      "additionalProperties": false
+    },
+    "LlmProviders": {
+      "type": "object",
+      "description": "The own-key language model providers and the one chosen, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and Ask) sends to the chosen provider only when no model is registered by the shell, and only with the user's consent for its endpoint (consent.state).",
+      "properties": {
+        "type": {
+          "const": "llm.providers"
+        },
+        "providers": {
+          "type": "array",
+          "description": "Every provider, in preference order.",
+          "items": {
+            "$ref": "#/$defs/LlmProviderEntry",
+            "description": "A provider."
+          }
+        },
+        "chosen": {
+          "type": "string",
+          "description": "The chosen provider's id; absent when none is chosen."
+        },
+        "model": {
+          "type": "string",
+          "description": "The model the chosen provider is asked for; absent with chosen."
+        },
+        "base_url": {
+          "type": "string",
+          "description": "For custom, the server's address as chosen; absent otherwise."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Where the chosen provider sends, as consent.state names it; absent with chosen."
+        },
+        "to": {
+          "$ref": "#/$defs/LlmDestination",
+          "description": "Whether the chosen provider is on this machine (on_device) or not (cloud); absent with chosen."
+        },
+        "local_only": {
+          "type": "boolean",
+          "description": "Local-only mode (llm.local_only): while on, a provider that is not on this machine is never called."
+        },
+        "ready": {
+          "type": "boolean",
+          "description": "Whether the chosen provider can be called: its key is stored (when it needs one), and local-only mode lets it through. Each feature still needs its own consent."
+        },
+        "error": {
+          "type": "string",
+          "description": "What could not be read (the stored keys, or the choice), as a sentence starting \"couldn't\"; absent when all was read."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "providers",
+        "local_only",
+        "ready"
+      ],
+      "additionalProperties": false
+    },
+    "LlmTested": {
+      "type": "object",
+      "description": "The answer to llm.test: one short fixed request (never the user's words) sent to the chosen provider with its stored key, and whether it answered.",
+      "properties": {
+        "type": {
+          "const": "llm.tested"
+        },
+        "provider": {
+          "type": "string",
+          "description": "The provider tested."
+        },
+        "model": {
+          "type": "string",
+          "description": "The model asked."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "Whether the provider answered."
+        },
+        "status": {
+          "type": "integer",
+          "description": "The HTTP status of a refusal (401 or 403: the key; 404: the model or address; 429: the account's limits); absent otherwise."
+        },
+        "error": {
+          "type": "string",
+          "description": "Why it did not answer, as a sentence starting \"couldn't\"; absent when ok. Names what failed, never the key."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "provider",
+        "model",
+        "ok"
+      ],
+      "additionalProperties": false
+    },
     "ModesListed": {
       "type": "object",
       "description": "The user's modes, in answer to modes.list, in the order they are matched: the first mode naming the frontmost app wins, else the default.",
@@ -3062,6 +3252,125 @@
         "other_key"
       ]
     },
+    "ImportChecked": {
+      "type": "object",
+      "description": "What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer (the core knows where), and whether this library holds it already. The data is read, never written, and the keychain is not asked, so linked_keys is 0 here.",
+      "properties": {
+        "type": {
+          "const": "import.checked"
+        },
+        "state": {
+          "$ref": "#/$defs/ImportState",
+          "description": "Whether there is something to import."
+        },
+        "counts": {
+          "$ref": "#/$defs/ImportCounts",
+          "description": "What an import would bring (the dry run), when found."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why the data cannot be read now, when unreadable: words to show (for one, that Inkwell 0.2 is still open and should be quit first)."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's id."
+        }
+      },
+      "required": [
+        "type",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "ImportState": {
+      "type": "string",
+      "description": "Inkwell 0.2's data: found (and not imported yet), absent from this computer, imported into this library already (0.2's data is not opened then), or found but unreadable now (import.run may still work once the reason is gone).",
+      "enum": [
+        "found",
+        "absent",
+        "imported",
+        "unreadable"
+      ]
+    },
+    "ImportCounts": {
+      "type": "object",
+      "description": "How many of each kind Inkwell 0.2's data holds, or an import wrote.",
+      "properties": {
+        "dictations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dictations, each a record in the library."
+        },
+        "dictionary_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dictionary entries (a word and what replaces it)."
+        },
+        "snippets": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Snippets."
+        },
+        "modes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Modes."
+        },
+        "settings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0.2's own settings."
+        },
+        "voice_commands": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Voice commands."
+        },
+        "app_style_rules": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-app style rules."
+        },
+        "linked_keys": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Providers whose API key in the keychain is linked, by reference (never copied)."
+        }
+      },
+      "required": [
+        "dictations",
+        "dictionary_entries",
+        "snippets",
+        "modes",
+        "settings",
+        "voice_commands",
+        "app_style_rules",
+        "linked_keys"
+      ],
+      "additionalProperties": false
+    },
+    "ImportFinished": {
+      "type": "object",
+      "description": "import.run brought Inkwell 0.2's data into the library, in one transaction: the library's records changed (list them again), import.notes may have something to say about the dictation key, and a running dictation already uses what came over. A failure is command.failed, its message in words to show.",
+      "properties": {
+        "type": {
+          "const": "import.finished"
+        },
+        "counts": {
+          "$ref": "#/$defs/ImportCounts",
+          "description": "What it wrote."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's id."
+        }
+      },
+      "required": [
+        "type",
+        "counts"
+      ],
+      "additionalProperties": false
+    },
     "CatalogueEntry": {
       "type": "object",
       "description": "A model in the catalogue that runs on this OS.",
@@ -3085,7 +3394,7 @@
         },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills, each with its measured error rate.",
+          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."

@@ -1,6 +1,6 @@
 // Settings: permissions with their live state, the voice key, modes, snippets and voice commands
-// (PhrasesSections), AI (polish, summaries and Ask), meetings, models (read-only, with measured accuracy), storage,
-// and About with every notice the app ships.
+// (PhrasesSections), AI (polish, summaries and Ask), meetings, models (with measured accuracy, and
+// Download for those not on this Mac), storage, and About with every notice the app ships.
 import AppleEngines
 import InkBridge
 import SwiftUI
@@ -85,6 +85,7 @@ struct SettingsScreen: View {
             screens.snippets.load()
             screens.voiceCommands.load()
             screens.importNote.load()
+            screens.import02.check()
             screens.catalogue.requery()
             screens.storage.measure()
         }
@@ -294,6 +295,12 @@ private struct VoiceSection: View {
             .font(Typography.caption)
             .fixedSize(horizontal: false, vertical: true)
             ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
+            // Inkwell 0.2's history, while there is some to import (or the look for it failed).
+            if screens.import02.offered || screens.import02.checkFailed {
+                Import02Card(model: screens.import02)
+                    .padding(12)
+                    .paperCard()
+            }
             Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
@@ -526,7 +533,7 @@ private struct ModelsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(text: "Models", note: "Read-only")
+            SectionTitle(text: "Models")
             if catalogue.failed {
                 Text(CatalogueModel.failedText).foregroundStyle(Theme.alert)
             }
@@ -537,7 +544,7 @@ private struct ModelsSection: View {
                         .font(.system(.body, weight: .semibold))
                         .frame(width: 150, alignment: .leading)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(line.engine ?? (line.known ? "Nothing installed yet" : "Checking…"))
+                        Text(line.engineText)
                             .foregroundStyle(line.engine == nil ? Theme.secondaryText : Theme.text)
                         if let accuracy = line.accuracy {
                             Text(accuracy)
@@ -553,10 +560,11 @@ private struct ModelsSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Paper.Eyebrow(text: "Downloadable")
                     ForEach(catalogue.models, id: \.id) { model in
-                        Text("\(CatalogueModel.name(model.id)) · \(model.licence) · \(ByteCountFormatter.string(fromByteCount: model.sizeBytes, countStyle: .file)) · \(model.installed ? "installed" : "not installed")")
-                            .font(Typography.caption)
-                            .foregroundStyle(Theme.secondaryText)
+                        ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: true)
                     }
+                    Text("Nothing is downloaded until you press Download. Downloads run one at a time.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
                 }
                 .padding(.top, 6)
             }
@@ -564,6 +572,87 @@ private struct ModelsSection: View {
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
         }
+    }
+}
+
+/// A catalogue model: its name, licence, size and where it comes from, and its download: a
+/// Download button (when `offersDownload`) while it is not on this Mac, its bar while it downloads,
+/// and why it failed, with Retry. Settings > Models and the first run's Models step list these.
+struct ModelDownloadRow: View {
+    let catalogue: CatalogueModel
+    let model: CatalogueEntry
+    let offersDownload: Bool
+
+    var body: some View {
+        let name = CatalogueModel.name(model.id)
+        let state = catalogue.download(of: model)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(name).font(.system(.body, weight: .semibold))
+                Spacer(minLength: 8)
+                trailing(state, name: name)
+            }
+            Text(facts)
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+            if case .failed(let why) = state {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Couldn't download it: \(why)")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Retry") { catalogue.download([model.id]) }
+                        .accessibilityLabel("Retry downloading \(name)")
+                }
+            }
+        }
+        .foregroundStyle(Theme.text)
+        .padding(.vertical, 4)
+    }
+
+    /// Its licence, its size, and where it comes from.
+    private var facts: String {
+        var parts = [model.licence, Self.size(model.sizeBytes)]
+        if let source = CatalogueModel.source(model.id) {
+            parts.append("from \(source)")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func trailing(_ state: CatalogueModel.Download, name: String) -> some View {
+        switch state {
+        case .installed:
+            Text("On this Mac").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        case .notInstalled:
+            if offersDownload {
+                Button("Download") { catalogue.download([model.id]) }
+                    .accessibilityLabel("Download \(name), \(facts)")
+            }
+        case .waiting:
+            Text("Waiting").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        case .downloading(let progress?):
+            HStack(spacing: 8) {
+                ProgressView(value: progress.fraction).frame(width: 120)
+                Text("\(Self.size(progress.done)) of \(Self.size(progress.total))")
+                    .font(Typography.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Downloading \(name)")
+            .accessibilityValue("\(Int(progress.fraction * 100)) percent")
+        case .downloading(nil):
+            Text("Starting…").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        case .failed:
+            // Said on its own line, with Retry.
+            EmptyView()
+        }
+    }
+
+    static func size(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
 
@@ -587,7 +676,7 @@ private struct StorageSection: View {
                     .labelsHidden()
                     .fixedSize()
                     .disabled(meetings.retention == nil)
-                    Text("Older meetings and dictations are deleted with their recordings: their words are overwritten in the library's files, not only hidden. Nothing is deleted while it is forever.")
+                    Text("Older meetings and dictations are deleted with their recordings: their words are overwritten in the library's files, not only hidden. Anything you imported is kept. Nothing is deleted while it is forever.")
                         .font(Typography.caption)
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)

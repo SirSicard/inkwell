@@ -68,7 +68,7 @@ fn migrations_from_empty_reach_the_current_version() {
     drop(db.open());
     let raw = db.raw();
     assert_eq!(user_version(&raw), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 3);
+    assert_eq!(SCHEMA_VERSION, 4);
 
     let mut stmt = raw
         .prepare(
@@ -134,7 +134,7 @@ fn a_database_from_before_removed_lines_is_brought_up_to_date() {
         raw.execute_batch(
             "DROP TABLE removed_line; DROP TABLE summary_item;
              DROP TABLE commitment_done_evidence; ALTER TABLE commitment DROP COLUMN recipient;
-             PRAGMA user_version = 1;",
+             ALTER TABLE record DROP COLUMN imported; PRAGMA user_version = 1;",
         )
         .unwrap();
     }
@@ -186,7 +186,8 @@ fn a_database_from_before_summary_items_is_brought_up_to_date() {
         let raw = db.raw();
         raw.execute_batch(
             "DROP TABLE summary_item; DROP TABLE commitment_done_evidence;
-             ALTER TABLE commitment DROP COLUMN recipient; PRAGMA user_version = 2;",
+             ALTER TABLE commitment DROP COLUMN recipient; ALTER TABLE record DROP COLUMN imported;
+             PRAGMA user_version = 2;",
         )
         .unwrap();
     }
@@ -212,6 +213,54 @@ fn a_database_from_before_summary_items_is_brought_up_to_date() {
         store.commitments(&id).unwrap()[0].looks_done,
         Some(evidence)
     );
+}
+
+/// Retention never sweeps an import, so records carry whether an import wrote them. A schema-3
+/// library's records were all written before that was known: after the migration they read as
+/// made here, not imported, whether the store or the build before it wrote them.
+#[test]
+fn a_database_from_before_imports_were_marked_is_brought_up_to_date() {
+    let db = TempDb::new("migrate-v3");
+    let id = {
+        let store = db.open();
+        let id = meeting(&store, 1);
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "kept through the upgrade")])
+            .unwrap();
+        id
+    };
+    // As a build of schema 3 left it, with a row that build wrote.
+    {
+        let raw = db.raw();
+        raw.execute_batch(
+            "ALTER TABLE record DROP COLUMN imported; PRAGMA user_version = 3;
+             INSERT INTO record (id, kind, started_at_unix_ms) VALUES ('from-v3', 'dictation', 2);",
+        )
+        .unwrap();
+    }
+    let store = db.open();
+    let raw = db.raw();
+    assert_eq!(user_version(&raw), SCHEMA_VERSION);
+    let column: (bool, String) = raw
+        .query_row(
+            "SELECT \"notnull\", dflt_value FROM pragma_table_info('record') WHERE name = 'imported'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(column, (true, "0".to_string()), "NOT NULL DEFAULT 0");
+    let record = store.record(&id).unwrap().unwrap();
+    assert!(!record.imported);
+    assert_eq!(store.segments(&id).unwrap().len(), 1);
+    let listed = store
+        .records(&RecordQuery {
+            kind: None,
+            before: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|r| !r.imported), "{listed:?}");
 }
 
 #[test]

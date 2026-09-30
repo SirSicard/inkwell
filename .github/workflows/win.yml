@@ -27,6 +27,8 @@ jobs:
   shell:
     name: licences, build and tests (windows-2025)
     runs-on: windows-2025
+    # A run takes 5 to 11 minutes; a hang fails here, not after 6 hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Installs the channel and components pinned in core/rust-toolchain.toml.
@@ -37,12 +39,14 @@ jobs:
         with:
           workspaces: core
       # The C# event types (ink-schema) and P/Invoke declarations (csbindgen) match the schema and
-      # the core's C ABI, and About's Rust notices (ink-notices) match the Windows build's crates.
+      # the core's C ABI, and About's Rust notices (ink-notices) match the Windows build's crates and
+      # those of the Velopack release vpk packs the installer from (--velopack fetches its crates).
       - name: Generated C# is current
         working-directory: core
         run: |
           cargo run --locked -p ink-ffi --bin ink-schema -- --check
           cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
+          cargo run --locked -p ink-ffi --bin ink-notices -- --velopack --check
           cargo test --locked -p ink-ffi --test csharp_binding --test schema
       # The DLL the shell loads, as the shell links it: engine features off.
       - name: Build the core's DLL
@@ -68,18 +72,26 @@ jobs:
         run: dotnet build Inkwell.slnx --no-restore
       # Each test project on its own, with its own results file: a project that finds no tests (a
       # discovery or adapter problem) fails instead of passing empty. The ink's GPU tests draw with
-      # WARP, Direct3D's software rasteriser, so the runner needs no GPU.
+      # WARP, Direct3D's software rasteriser, so the runner needs no GPU. A test still running
+      # after 5 minutes is stopped and named (the longest takes about 20 s).
       - name: Tests
         shell: pwsh
         working-directory: windows
+        timeout-minutes: 15
         run: |
           $results = Join-Path $env:RUNNER_TEMP 'tests'
           $projects = @(Get-ChildItem -Path . -Recurse -Filter '*.Tests.csproj')
           if ($projects.Count -eq 0) { Write-Output '::error::no test projects found'; exit 1 }
           foreach ($project in $projects) {
             $name = $project.BaseName
-            dotnet test $project.FullName --no-build --logger "trx;LogFileName=$name.trx" --results-directory $results
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            dotnet test $project.FullName --no-build --logger "trx;LogFileName=$name.trx" --results-directory $results --blame-hang-timeout 5m --blame-hang-dump-type none
+            if ($LASTEXITCODE -ne 0) {
+              $code = $LASTEXITCODE
+              # xUnit v3 runs the tests in a process of their own, which outlives the host a hang
+              # stops and would hold the step open: it is stopped too.
+              Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$PWD*" } | Stop-Process -Force
+              exit $code
+            }
             [xml]$trx = Get-Content (Join-Path $results "$name.trx") -Raw
             $total = [int]$trx.TestRun.ResultSummary.Counters.total
             Write-Output "${name}: tests run: $total"

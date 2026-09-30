@@ -7,7 +7,7 @@
 # releases carry no latest.json, and 1.x is the release marked latest.
 # Requires wrangler to be logged in (npx wrangler login).
 #
-#   inkwell-updater/publish-latest.sh v0.2.11
+#   inkwell-updater/publish-latest.sh v0.2.10
 set -e
 cd "$(dirname "$0")"
 

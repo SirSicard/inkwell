@@ -7,17 +7,24 @@
 //! 3. the key, read from the keychain only now, when it is about to be used. No key is
 //!    [`LlmError::NoKey`]; a refusal is [`LlmError::KeychainDenied`];
 //! 4. the cancel token again (a keychain prompt can take a while);
-//! 5. the request, through the shared [`Transport`];
-//! 6. the cancel token once more: an answer that arrives after cancellation is dropped.
+//! 5. the request, through the shared [`Transport`], with the token's deadline, if it has one, as
+//!    the request's: a budget stops a request on the wire too;
+//! 6. the cancel token once more: an answer, or a failure, that arrives after cancellation is
+//!    [`LlmError::Cancelled`], so a budget that ran out reads as one.
 //!
 //! An HTTP error is [`LlmError::Http`] with the status alone. Inkwell 0.2 kept the provider's
 //! error `code` (`model_decommissioned`, `invalid_api_key`); the contract's error has no field
 //! for it, and the body is never read, because providers echo the request in it.
 //!
-//! Cancelling cannot interrupt a request already on the wire: the client is blocking, and the
-//! transport's read timeout bounds the wait.
+//! The client is blocking, so the request goes out from a thread of its own while the call waits
+//! for it, looking at the cancel token as it waits: a call cancelled while its request is on the
+//! wire (the core's shutdown, a meeting stopped) returns [`LlmError::Cancelled`] at once, and the
+//! request is left to end on its own, within the transport's timeouts, its answer unread.
 
 use std::sync::Arc;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
 use ink_core::{CancelToken, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
 use serde_json::{Value, json};
@@ -25,7 +32,11 @@ use serde_json::{Value, json};
 use crate::guard::{EndpointError, EndpointUrl, LocalOnly};
 use crate::json::{bad, bad_field};
 use crate::keys::{ApiKey, KeyStore, KeyStoreError};
-use crate::transport::{HttpRequest, Transport, TransportError};
+use crate::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+
+/// How often a call waiting on its request looks at its cancel token. A token is a flag with no
+/// wake-up, so the call looks this often, and only while its request is in flight.
+const CANCEL_POLL: Duration = Duration::from_millis(20);
 
 /// A bring-your-own-key provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -92,6 +103,17 @@ impl Provider {
             Self::Anthropic => "claude-haiku-4-5-20251001",
             Self::OpenRouter => "openai/gpt-4o-mini",
             Self::Custom => "llama3",
+        }
+    }
+
+    /// The context a request may fill, in tokens, prompt and answer together: the default model's
+    /// (all of them hold at least 128,000), taken for any model chosen there. `None` for a custom
+    /// server, whose model and its context are unknown.
+    pub fn context_tokens(self) -> Option<u32> {
+        match self {
+            Self::OpenAi | Self::Groq | Self::OpenRouter => Some(128_000),
+            Self::Anthropic => Some(200_000),
+            Self::Custom => None,
         }
     }
 
@@ -176,9 +198,20 @@ impl ByokLlm {
         })
     }
 
+    /// The context a request may fill, in tokens ([`Provider::context_tokens`]).
+    pub fn context_tokens(&self) -> Option<u32> {
+        self.provider.context_tokens()
+    }
+
     /// Whether a key may travel to this endpoint: over `https`, or to this machine.
     fn key_may_travel(&self) -> bool {
         self.base.is_https() || self.base.is_loopback()
+    }
+
+    /// Whether a stored key is kept back from this endpoint (a custom server over plain `http` on
+    /// another machine): its requests go without one, so a refusal there is not the key's fault.
+    pub fn key_withheld(&self) -> bool {
+        !self.key_may_travel()
     }
 
     fn key(&self) -> Result<Option<ApiKey>, LlmError> {
@@ -196,7 +229,12 @@ impl ByokLlm {
     }
 
     /// The HTTP request for `request`: URL, headers and body, per provider.
-    fn http_request(&self, request: &LlmRequest, key: Option<&ApiKey>) -> HttpRequest {
+    fn http_request(
+        &self,
+        request: &LlmRequest,
+        key: Option<&ApiKey>,
+        cancel: &CancelToken,
+    ) -> HttpRequest {
         let temperature = round_temperature(request.temperature);
         let mut headers = vec![("Content-Type", "application/json".to_owned())];
         let (url, body) = if self.provider == Provider::Anthropic {
@@ -239,6 +277,41 @@ impl ByokLlm {
             headers,
             body: body.to_string().into_bytes(),
             loopback_only: self.local_only.is_on(),
+            deadline: cancel.deadline(),
+        }
+    }
+
+    /// **Worker.** Sends `http` from a thread of its own and waits for the answer, looking at
+    /// `cancel` every [`CANCEL_POLL`]. Cancelled first, it returns [`LlmError::Cancelled`] and
+    /// leaves the request to end on its own, within the transport's timeouts: the client blocks
+    /// until the server answers, and nothing may wait on it past a cancel.
+    fn post(
+        &self,
+        http: HttpRequest,
+        cancel: &CancelToken,
+    ) -> Result<Result<HttpResponse, TransportError>, LlmError> {
+        let (answered, answer) = mpsc::sync_channel(1);
+        let transport = Arc::clone(&self.transport);
+        thread::Builder::new()
+            .name("ink-llm-request".into())
+            .spawn(move || {
+                // Refused once the call has stopped waiting: the answer goes unread.
+                let _ = answered.send(transport.post(&http));
+            })
+            .map_err(|_| LlmError::Network("the request could not be started".into()))?;
+        loop {
+            match answer.recv_timeout(CANCEL_POLL) {
+                Ok(response) => return Ok(response),
+                Err(RecvTimeoutError::Timeout) if cancel.is_cancelled() => {
+                    return Err(LlmError::Cancelled);
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(LlmError::Network(
+                        "the request ended without an answer".into(),
+                    ));
+                }
+            }
         }
     }
 
@@ -294,18 +367,19 @@ impl Llm for ByokLlm {
         if cancel.is_cancelled() {
             return Err(LlmError::Cancelled);
         }
-        let http = self.http_request(request, key.as_ref());
+        let http = self.http_request(request, key.as_ref(), cancel);
         drop(key);
-        let response = self.transport.post(&http).map_err(|e| match e {
+        let response = self.post(http, cancel)?;
+        if cancel.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
+        let response = response.map_err(|e| match e {
             TransportError::NotLoopback => LlmError::LocalOnly {
                 endpoint: self.base.to_string(),
             },
             TransportError::TooLarge => LlmError::BadResponse(e.describe().to_owned()),
             other => LlmError::Network(other.describe().to_owned()),
         })?;
-        if cancel.is_cancelled() {
-            return Err(LlmError::Cancelled);
-        }
         if !(200..300).contains(&response.status) {
             return Err(LlmError::Http {
                 status: response.status,

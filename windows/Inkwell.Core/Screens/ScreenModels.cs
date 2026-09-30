@@ -9,6 +9,7 @@ namespace Inkwell.Core.Screens;
 public sealed class ScreenModels
 {
     private readonly ScreenLog log;
+    private readonly Action<CoreCommand> send;
 
     /// <param name="send">Where the screens' commands go.</param>
     /// <param name="dataDirectory">The library's folder (Storage), or null when it could not be found.</param>
@@ -19,6 +20,7 @@ public sealed class ScreenModels
     /// <param name="makePlayer">Makes a record's player over the app's audio output (null: no player).</param>
     /// <param name="search">Waits for typing to pause before a Library search (null: at once).</param>
     /// <param name="appVersion">The app's version for About (null: a development build).</param>
+    /// <param name="updater">About's updater (null: this copy does not update itself).</param>
     public ScreenModels(
         Action<CoreCommand> send,
         string? dataDirectory = null,
@@ -29,9 +31,11 @@ public sealed class ScreenModels
         Func<RecordDocument, RecordPlayer?>? makePlayer = null,
         ISearchScheduler? search = null,
         string? appVersion = null,
-        ScreenLog? log = null)
+        ScreenLog? log = null,
+        IUpdater? updater = null)
     {
         ArgumentNullException.ThrowIfNull(send);
+        this.send = send;
         this.log = log ?? ScreenLog.System;
         // No calendar in this unpackaged build (Calendar.cs): every screen says so. Packaging (S3.6)
         // can pass Windows' calendar here.
@@ -43,12 +47,14 @@ public sealed class ScreenModels
         Owed = new OwedModel(send);
         Live = new LiveModel(send, log: this.log);
         Meetings = new MeetingModel(send, cal, log: this.log);
-        Onboarding = new OnboardingModel(send, this.log);
+        Import02 = new Import02Model(send, this.log);
+        Onboarding = new OnboardingModel(send, this.log, Import02);
         Storage = new StorageModel(dataDirectory, modelsDirectory, reveal, this.log);
         Dictation = new DictationModel(send);
         EditConsent = AiSettings.NewEditConsent(send);
         MeetingsConsent = AiSettings.NewMeetingsConsent(send);
         Ai = new AiSettings(Polish, Dictation, EditConsent, MeetingsConsent, send);
+        Cloud = new CloudModel(send);
         Snippets = new SnippetsModel(send);
         VoiceCommands = new VoiceCommandsModel(send);
         ImportNote = new ImportNoteModel(send);
@@ -56,6 +62,7 @@ public sealed class ScreenModels
         UpNext = new UpNextModel(cal, cal, wake ?? NoWake.Instance);
         Library = new LibraryModel(send, makePlayer, search);
         About = new AboutModel(appVersion);
+        Updates = new UpdatesModel(updater ?? NoUpdater.Instance, this.log);
     }
 
     public PermissionsModel Permissions { get; }
@@ -74,15 +81,22 @@ public sealed class ScreenModels
     public ConsentModel MeetingsConsent { get; }
     /// <summary>Settings > AI: the three switches and the voice-edit key's consent.</summary>
     public AiSettings Ai { get; }
+    /// <summary>Settings > AI's language model: an own-key provider (Windows has none on the device).</summary>
+    public CloudModel Cloud { get; }
     public SnippetsModel Snippets { get; }
     public VoiceCommandsModel VoiceCommands { get; }
     public ImportNoteModel ImportNote { get; }
+    /// <summary>Inkwell 0.2's data: the first run's step and a row in Settings > Voice.</summary>
+    public Import02Model Import02 { get; }
     /// <summary>The foot of Today's ink zone.</summary>
     public RecordControlsModel RecordControls { get; }
     public UpNextModel UpNext { get; }
     /// <summary>What Today, the Library and a record show of the library.</summary>
     public LibraryModel Library { get; }
     public AboutModel About { get; }
+
+    /// <summary>About's updates row.</summary>
+    public UpdatesModel Updates { get; }
 
     /// <summary>A batch of the core's events, after the CoreStore has applied it.</summary>
     public void Apply(IReadOnlyList<InkEvent> batch)
@@ -102,9 +116,27 @@ public sealed class ScreenModels
             Live.Apply(e);
             Meetings.Apply(e);
             Onboarding.Apply(e);
+            Import02.Apply(e);
+            if (Onboarding.Showing)
+            {
+                // The first run offers its import step only when there is something to import.
+                Import02.CheckOnce();
+            }
+            if (e is ImportFinished)
+            {
+                // What became of 0.2's key, and the key it set.
+                ImportNote.Load();
+                send(new CoreCommand.SettingGet(ShellSetting.DictationKey));
+                // The lists it brought, which Settings may show already: an edit to the old list
+                // would save it over the import's (the user's own list wins in the core).
+                Snippets.Load();
+                VoiceCommands.Load();
+                Modes.Load();
+            }
             Dictation.Apply(e);
             EditConsent.Apply(e);
             MeetingsConsent.Apply(e);
+            Cloud.Apply(e);
             Snippets.Apply(e);
             VoiceCommands.Apply(e);
             ImportNote.Apply(e);
@@ -112,6 +144,14 @@ public sealed class ScreenModels
         }
         // The Library folds a batch at once, and refreshes once per batch.
         Library.Apply(batch);
+        // As the Mac's controller, once the screens have read what they need: the dictation model
+        // is kept warm from the start, so the first dictation after a launch is not a cold load.
+        // Only when this batch leaves the core ready with this shell's ABI (the Mac's store status:
+        // another ABI fails, and a core.stopped after it stops).
+        if (batch.LastOrDefault(e => e is Events.CoreReady or CoreStopped) is Events.CoreReady { Abi: InkSession.AbiVersion })
+        {
+            send(new CoreCommand.ModelWarm(Job.DictationFinal));
+        }
     }
 
     /// <summary>
@@ -123,12 +163,17 @@ public sealed class ScreenModels
         Onboarding.Load();
         Polish.Load();
         Meetings.Load();
+        // Meetings a crash interrupted are finished now (the Mac waits for its own engines first;
+        // this shell registers none).
+        Meetings.Recover();
         Permissions.Refresh();
         Catalogue.Requery();
         // Reads the switch, then (unless it is off) the core holds the keys.
         Dictation.Load();
         EditConsent.Load();
         MeetingsConsent.Load();
+        // Whether an own-key provider is ready decides whether the AI switches can be used.
+        Cloud.Load();
     }
 
     /// <summary>The app came to the front again.</summary>
@@ -153,8 +198,8 @@ public sealed class ScreenModels
         return PermissionsModel.Handles(failed) || Polish.Handles(failed) || CatalogueModel.Handles(failed)
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
             || MeetingModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed)
-            || Ai.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
-            || Library.Handles(failed);
+            || Ai.Handles(failed) || CloudModel.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
+            || Library.Handles(failed) || Import02Model.Handles(failed);
     }
 
     /// <summary>

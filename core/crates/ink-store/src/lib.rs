@@ -389,22 +389,24 @@ fn revision(conn: &Connection, id: &RecordId) -> Result<u32, Fail> {
     .ok_or_else(|| StoreError::NotFound.into())
 }
 
-/// Inserts a record at revision 1 under `id`. [`Store::create_record`] and the importers share it.
+/// Inserts a record made here at revision 1 under `id`: [`Store::create_record`]'s.
 fn insert_record(conn: &Connection, id: &str, record: &NewRecord) -> Result<(), Fail> {
-    insert_record_at(conn, id, record, 1)
+    insert_record_at(conn, id, record, 1, false)
 }
 
 /// Inserts a record at `revision` under `id`: an imported record arrives with the passes it has
-/// already had.
+/// already had. The importers pass `imported`, which retention reads ([`Record::imported`]).
 fn insert_record_at(
     conn: &Connection,
     id: &str,
     record: &NewRecord,
     revision: u32,
+    imported: bool,
 ) -> Result<(), Fail> {
     conn.execute(
-        "INSERT INTO record (id, kind, title, started_at_unix_ms, source_app, audio_dir, revision)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO record
+             (id, kind, title, started_at_unix_ms, source_app, audio_dir, revision, imported)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             id,
             kind_text(record.kind),
@@ -412,7 +414,8 @@ fn insert_record_at(
             record.started_at_unix_ms,
             record.source_app,
             record.audio_dir,
-            revision
+            revision,
+            imported
         ],
     )?;
     Ok(())
@@ -446,7 +449,8 @@ fn put_setting(conn: &Connection, key: &str, value: &str) -> Result<(), Fail> {
 /// The columns [`record_at`] reads, as a macro so queries can be `concat!`-ed constants.
 macro_rules! record_columns {
     () => {
-        "id, kind, title, started_at_unix_ms, ended_at_unix_ms, source_app, audio_dir, revision"
+        "id, kind, title, started_at_unix_ms, ended_at_unix_ms, source_app, audio_dir, revision, \
+         imported"
     };
 }
 
@@ -460,6 +464,7 @@ fn record_at(row: &Row<'_>) -> rusqlite::Result<Record> {
         source_app: row.get(5)?,
         audio_dir: row.get(6)?,
         revision: row.get(7)?,
+        imported: row.get(8)?,
     })
 }
 

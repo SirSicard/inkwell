@@ -318,8 +318,13 @@ enum AskAnswer: Equatable, Sendable {
     case unavailable(String)
 
     /// What the core's failure means for the user. Its message names what failed (never the
-    /// question); only the case without a model gets its own words.
+    /// question); the cases without a model, without the user's OK, and after the meeting get their
+    /// own words.
     static func failed(_ message: String) -> AskAnswer {
+        // The core's NEEDS_CONSENT (ink-ffi asking.rs): nothing was sent. Its start is stable.
+        if message.hasPrefix("Ask needs your OK") {
+            return .unavailable("Ask needs your OK first: turn on Summaries and Ask in Settings > AI.")
+        }
         if message.contains("no language model") {
             return .unavailable("Answers need Apple Intelligence, which is off or not ready on this Mac.")
         }

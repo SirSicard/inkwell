@@ -1,8 +1,9 @@
 // Today's foot of the ink zone, as the Mac's RecordControls (ShellView.swift): whether Inkwell
 // listens for calls, which key dictates, and Record now (the meetings model's command; its failure
 // is that model's to show). The listening line follows the core's state (meeting.detection), never
-// the setting. The Mac's line is a fixed "Hold fn to dictate"; Windows names the key the core
-// bound, from dictation.ready ("Hold Right Ctrl to dictate"), and says nothing before it knows.
+// the setting. The Mac's line names the key picked (fn until the core says otherwise); Windows
+// names the key the core bound, from dictation.ready ("Hold Right Ctrl to dictate"), and says
+// nothing before it knows.
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;

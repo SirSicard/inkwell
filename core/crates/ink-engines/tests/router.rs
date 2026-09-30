@@ -11,7 +11,7 @@ use ink_core::{
     TranscribeOptions, Transcript,
 };
 use ink_engines::{
-    EngineRow, ExternalEngine, JobScore, ModelDir, Os, Registry, Route, RouteError, Router,
+    EngineRow, ExternalEngine, JobScore, ModelDir, Os, Registry, Route, RouteError, Router, Runtime,
 };
 
 fn router(scratch: &Scratch, rows: Vec<EngineRow>, os: Os) -> (Router, ModelDir) {
@@ -480,4 +480,153 @@ fn racing_registrations_of_one_id_admit_exactly_one() {
     assert_eq!(r.route(Job::MeetingFinal).unwrap().id(), "shell-contested");
     assert!(r.unregister("shell-contested"));
     assert!(!r.unregister("shell-contested"));
+}
+
+/// A model that dictates quickly on the CPU (sherpa-onnx), competing with a more accurate one that
+/// takes seconds there (llama.cpp), both installed.
+fn quick_and_slow(s: &Scratch) -> (Registry, ModelDir) {
+    let slow = row(
+        "synthetic-llama",
+        &[(Job::DictationFinal, 4.6), (Job::MeetingFinal, 16.1)],
+    );
+    let quick = EngineRow {
+        runtime: Runtime::SherpaOnnx,
+        ..row(
+            "synthetic-sherpa",
+            &[(Job::DictationFinal, 16.4), (Job::LivePartials, 27.9)],
+        )
+    };
+    let dir = s.model_dir();
+    install(&dir, &slow);
+    install(&dir, &quick);
+    (Registry::new(vec![slow, quick]).unwrap(), dir)
+}
+
+#[test]
+fn with_a_gpu_the_lowest_error_rate_dictates() {
+    let s = Scratch::new("gpu");
+    let (reg, dir) = quick_and_slow(&s);
+    for r in [
+        Router::new(&reg, dir.clone(), Os::Windows),
+        Router::new(&reg, dir.clone(), Os::Windows).with_gpu_probe(|| true),
+    ] {
+        assert_eq!(
+            model_id(r.route(Job::DictationFinal).unwrap()),
+            "synthetic-llama"
+        );
+    }
+}
+
+#[test]
+fn without_a_gpu_dictation_goes_to_the_engine_quick_on_the_cpu() {
+    let s = Scratch::new("no-gpu");
+    let (reg, dir) = quick_and_slow(&s);
+    let asked = Arc::new(Mutex::new(0));
+    let probe = {
+        let asked = asked.clone();
+        move || {
+            *asked.lock().unwrap() += 1;
+            false
+        }
+    };
+    let r = Router::new(&reg, dir.clone(), Os::Windows).with_gpu_probe(probe);
+    assert_eq!(*asked.lock().unwrap(), 0, "not asked until it matters");
+    // Other jobs are not asked about: the meeting's final pass keeps the most accurate model.
+    assert_eq!(
+        model_id(r.route(Job::MeetingFinal).unwrap()),
+        "synthetic-llama"
+    );
+    assert_eq!(
+        model_id(r.route(Job::LivePartials).unwrap()),
+        "synthetic-sherpa"
+    );
+    assert_eq!(*asked.lock().unwrap(), 0);
+    for _ in 0..3 {
+        assert_eq!(
+            model_id(r.route(Job::DictationFinal).unwrap()),
+            "synthetic-sherpa"
+        );
+    }
+    assert_eq!(*asked.lock().unwrap(), 1, "asked once");
+}
+
+#[test]
+fn without_a_gpu_the_slow_engine_still_dictates_when_it_is_the_only_one() {
+    let s = Scratch::new("no-gpu-only");
+    let (reg, dir) = quick_and_slow(&s);
+    let quick = reg.get("synthetic-sherpa").unwrap().clone();
+    std::fs::remove_file(dir.marker_path(&quick)).unwrap();
+    let r = Router::new(&reg, dir, Os::Windows).with_gpu_probe(|| false);
+    assert_eq!(
+        model_id(r.route(Job::DictationFinal).unwrap()),
+        "synthetic-llama",
+        "slow is better than nothing"
+    );
+}
+
+/// The probe may start a runtime (llama.cpp's backend and its devices), so a row that is not
+/// installed never makes it run: not when a quick engine dictates, nor when nothing is installed.
+#[test]
+fn a_slow_row_that_is_not_installed_never_asks_the_gpu_probe() {
+    let s = Scratch::new("no-gpu-uninstalled");
+    let (reg, dir) = quick_and_slow(&s);
+    let slow = reg.get("synthetic-llama").unwrap().clone();
+    std::fs::remove_file(dir.marker_path(&slow)).unwrap();
+    let asked = Arc::new(Mutex::new(0));
+    let probe = {
+        let asked = asked.clone();
+        move || {
+            *asked.lock().unwrap() += 1;
+            false
+        }
+    };
+    let r = Router::new(&reg, dir.clone(), Os::Windows).with_gpu_probe(probe);
+    assert_eq!(
+        model_id(r.route(Job::DictationFinal).unwrap()),
+        "synthetic-sherpa"
+    );
+    let quick = reg.get("synthetic-sherpa").unwrap().clone();
+    std::fs::remove_file(dir.marker_path(&quick)).unwrap();
+    assert_eq!(
+        r.route(Job::DictationFinal).unwrap_err(),
+        RouteError::NoEngine {
+            job: Job::DictationFinal
+        }
+    );
+    assert_eq!(*asked.lock().unwrap(), 0, "never asked");
+}
+
+#[test]
+fn without_a_gpu_a_shell_engine_still_competes_on_its_error_rate() {
+    let s = Scratch::new("no-gpu-shell");
+    let (reg, dir) = quick_and_slow(&s);
+    let r = Router::new(&reg, dir, Os::Windows).with_gpu_probe(|| false);
+    let shell = Arc::new(MockEngine::new("shell-dictation", &[Job::DictationFinal]));
+    r.register_offline(shell, &scores(&[(Job::DictationFinal, 10.0)]))
+        .unwrap();
+    assert_eq!(
+        r.route(Job::DictationFinal).unwrap().id(),
+        "shell-dictation"
+    );
+}
+
+#[test]
+fn an_installed_row_the_shell_runs_is_never_routed() {
+    // A Core ML row fills no job: installed, it is still no candidate for any, and a shell engine
+    // serves as before.
+    let s = Scratch::new("core-ml");
+    let mut core_ml = row("synthetic-core-ml", &[]);
+    core_ml.runtime = Runtime::CoreMl;
+    let (r, dir) = router(&s, vec![core_ml.clone()], Os::MacOs);
+    install(&dir, &core_ml);
+    assert!(dir.is_installed(&core_ml));
+    for job in [
+        Job::DictationFinal,
+        Job::MeetingFinal,
+        Job::LivePartials,
+        Job::Diarization,
+        Job::VoiceActivity,
+    ] {
+        assert_eq!(r.route(job).unwrap_err(), RouteError::NoEngine { job });
+    }
 }

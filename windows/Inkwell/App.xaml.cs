@@ -1,7 +1,9 @@
 // The app: one window and a tray icon over the core. Closing the window hides it; the tray's Quit
 // stops the core, then the app. The screens' models (ScreenModels) follow the core's events after
-// the store; each route's screen is made from them (Screens.cs). The Drop follows dictation through
-// DropModel after the store too.
+// the store; each route's screen is made from them (Screens.cs). The Drop follows meetings,
+// dictation and the offer to record a call through DropModel after the store too; its buttons
+// answer through the meetings model. Before any of it, Microsoft's terms (TermsStep, TermsWindow):
+// until they are agreed to, nothing else is made, shown or started.
 using Inkwell.Core.Screens;
 using Inkwell.Screens;
 using Microsoft.UI.Xaml;
@@ -14,6 +16,8 @@ namespace Inkwell;
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA1001", Justification = "Disposed on Quit")]
 public partial class App : Application
 {
+    /// <summary>The terms step's window, while it is up (held, as the main window is).</summary>
+    private TermsWindow? terms;
     private MainWindow? window;
     private TrayIcon? tray;
     private CoreController? core;
@@ -31,6 +35,35 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        var step = new TermsStep(TermsFile(), Launch, Exit);
+        step.Launch();
+        if (step.Showing)
+        {
+            terms = new TermsWindow(step);
+            terms.Closed += (_, _) => terms = null;
+            terms.Activate();
+        }
+    }
+
+    /// <summary>
+    /// Where the agreement to the terms is kept: in the library's folder, or null when that folder
+    /// is not known (INK_DATA_DIR is not an absolute path; the core then says so when it starts).
+    /// </summary>
+    private static TermsRecord? TermsFile()
+    {
+        try
+        {
+            return new TermsRecord(Path.Combine(DataLocation.DataDirectory(), TermsRecord.FileName));
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Everything the app does, once the terms are agreed to: the window, the core, the screens and the tray.</summary>
+    private void Launch()
+    {
         window = new MainWindow();
         window.AppWindow.Closing += (_, e) =>
         {
@@ -43,20 +76,40 @@ public partial class App : Application
         };
         core = new CoreController(window.DispatcherQueue);
         // The ink's pipeline compiles off the UI thread from here; the Drop waits, hidden.
-        ink = new ShellInk(window.DispatcherQueue, InkProblem);
+        ink = new ShellInk(window.DispatcherQueue, InkProblem, action => screens?.Meetings.Perform(action));
         InkPanel.Clock = ink.Clock;
         window.ShowInk(ink);
-        screens = AppScreens.Models(core, window.DispatcherQueue);
+        screens = AppScreens.Models(core, window.DispatcherQueue, new VelopackUpdater(Quit));
         var models = screens;
-        // What the Drop says about dictation, after the store has taken each batch.
-        var drop = new DropModel(new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine);
+        // What the Drop says, after the store has taken each batch.
+        var drop = new DropModel(
+            new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine,
+            () => models.Meetings.FailureOn(MeetingPlace.Drop));
         var shellInk = ink;
-        drop.Changed += () => shellInk.Show(drop.Line, drop.IsLive);
+        drop.Changed += () => shellInk.Show(drop.Line, drop.Ink);
         var store = core.Store;
+        var applying = false;
+        // An answer sent again clears the Drop's failure line at once, not at the next batch (a
+        // change during a batch is the batch's: the Drop takes it whole, after the screens).
+        models.Meetings.PropertyChanged += (_, _) =>
+        {
+            if (!applying)
+            {
+                drop.Refresh(store);
+            }
+        };
         core.Observer = batch =>
         {
-            models.Apply(batch);
-            models.LogUnshown(batch);
+            applying = true;
+            try
+            {
+                models.Apply(batch);
+                models.LogUnshown(batch);
+            }
+            finally
+            {
+                applying = false;
+            }
             drop.Apply(store, batch);
         };
         var made = new AppScreens(core.Store, models, router);

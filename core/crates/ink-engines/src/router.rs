@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use ink_core::{EngineError, EngineInfo, Job, OfflineEngine, StreamingEngine};
 
@@ -119,6 +119,13 @@ struct External {
 /// Picks, for a job, the installed engine for this OS with the lowest measured error rate on that
 /// job. Registry rows and engines the shell registered compete on the same terms.
 ///
+/// One exception, for what the machine has: on a machine without a GPU
+/// ([`with_gpu_probe`](Self::with_gpu_probe)), a dictation goes first to an installed engine that is
+/// quick on the CPU, and only then to one whose runtime takes seconds there
+/// ([`Runtime::slow_on_cpu_for_dictation`](crate::Runtime::slow_on_cpu_for_dictation)), however
+/// their error rates compare. A dictation that waits seconds for its text is not one anyone keeps
+/// using.
+///
 /// Ties break deterministically: a shell-registered engine before a registry model (the shell
 /// registers the engines that run on the platform's accelerators, architecture rule 2), then by id.
 ///
@@ -129,17 +136,38 @@ pub struct Router {
     dir: ModelDir,
     os: Os,
     externals: RwLock<BTreeMap<String, External>>,
+    /// Asked once, the first time it matters: whether this machine has a GPU the engines use.
+    gpu_probe: Box<dyn Fn() -> bool + Send + Sync>,
+    gpu: OnceLock<bool>,
 }
 
 impl Router {
-    /// A router over `registry`'s rows installed in `dir`, for `os`.
+    /// A router over `registry`'s rows installed in `dir`, for `os`, on a machine taken to have a
+    /// GPU (until [`with_gpu_probe`](Self::with_gpu_probe) says otherwise).
     pub fn new(registry: &Registry, dir: ModelDir, os: Os) -> Self {
         Self {
             rows: registry.rows().iter().cloned().map(Arc::new).collect(),
             dir,
             os,
             externals: RwLock::default(),
+            gpu_probe: Box::new(|| true),
+            gpu: OnceLock::new(),
         }
+    }
+
+    /// Asks `probe` whether the machine has a GPU the engines use, once, on the first dictation
+    /// routed while a row slow on the CPU competes (it may start a runtime to list its devices, so
+    /// it runs on a worker thread, and only when it matters).
+    pub fn with_gpu_probe(mut self, probe: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        self.gpu_probe = Box::new(probe);
+        self
+    }
+
+    /// **Worker.** Whether `row` goes after the quick engines for `job` on this machine.
+    fn slow_here(&self, row: &EngineRow, job: Job) -> bool {
+        job == Job::DictationFinal
+            && row.runtime.slow_on_cpu_for_dictation()
+            && !*self.gpu.get_or_init(|| (self.gpu_probe)())
     }
 
     /// **Worker.** The best engine for `job`, or [`RouteError::NoEngine`].
@@ -156,21 +184,25 @@ impl Router {
             })
             .collect();
 
-        // Sort key: error rate, then shell engines first, then id. Ids are unique across rows and
-        // shell engines (registration refuses a clash), so the order is total.
-        let mut best: Option<(f32, bool, &str, Route)> = None;
-        let better =
-            |wer: f32, is_model: bool, id: &str, best: &Option<(f32, bool, &str, Route)>| {
-                best.as_ref().is_none_or(|(b_wer, b_model, b_id, _)| {
-                    wer.total_cmp(b_wer)
+        // Sort key: slow on this machine's CPU last, then error rate, then shell engines first,
+        // then id. Ids are unique across rows and shell engines (registration refuses a clash), so
+        // the order is total.
+        type Best<'a> = Option<(bool, f32, bool, &'a str, Route)>;
+        let mut best: Best = None;
+        let better = |slow: bool, wer: f32, is_model: bool, id: &str, best: &Best| {
+            best.as_ref()
+                .is_none_or(|(b_slow, b_wer, b_model, b_id, _)| {
+                    slow.cmp(b_slow)
+                        .then(wer.total_cmp(b_wer))
                         .then(is_model.cmp(b_model))
                         .then(id.cmp(b_id))
                         .is_lt()
                 })
-            };
+        };
         for (wer, id, engine) in &externals {
-            if better(*wer, false, id, &best) {
+            if better(false, *wer, false, id, &best) {
                 best = Some((
+                    false,
                     *wer,
                     false,
                     id,
@@ -183,14 +215,17 @@ impl Router {
         }
         for row in &self.rows {
             let Some(wer) = row.wer(job) else { continue };
-            if row.runs_on(self.os)
-                && better(wer, true, &row.id, &best)
-                && self.dir.is_installed(row)
-            {
-                best = Some((wer, true, &row.id, Route::Model(Arc::clone(row))));
+            // Installed first: only a row that competes may ask the GPU probe, which can start a
+            // runtime.
+            if !row.runs_on(self.os) || !self.dir.is_installed(row) {
+                continue;
+            }
+            let slow = self.slow_here(row, job);
+            if better(slow, wer, true, &row.id, &best) {
+                best = Some((slow, wer, true, &row.id, Route::Model(Arc::clone(row))));
             }
         }
-        best.map(|(_, _, _, route)| route)
+        best.map(|(_, _, _, _, route)| route)
             .ok_or(RouteError::NoEngine { job })
     }
 

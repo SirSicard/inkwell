@@ -7,7 +7,7 @@ mod common;
 
 use std::ffi::{CString, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,7 +29,8 @@ use serde_json::Value;
 const WAIT: Duration = Duration::from_secs(30);
 
 /// A "device" capture: each meeting replays the same two files in real time, as a mic and a tap
-/// would deliver. It records which app each meeting was opened for.
+/// would deliver. It records which app each meeting was opened for, and counts the frames each
+/// side of the latest meeting has handed to capture.
 struct ReplayCapture {
     mic: PathBuf,
     far: PathBuf,
@@ -37,6 +38,69 @@ struct ReplayCapture {
     opened_for: Mutex<Vec<Option<String>>>,
     /// An app's own sound cannot be tapped: everything this "Mac" plays is recorded instead.
     tap_fails: std::sync::atomic::AtomicBool,
+    /// Frames delivered to capture by the latest meeting's mic and far end.
+    delivered: [Arc<AtomicU64>; 2],
+}
+
+impl ReplayCapture {
+    /// Waits until each side of the latest meeting has delivered `frames`, for up to `timeout`.
+    /// Capture starts once the meeting's start is on disk, not at `meeting.started`.
+    fn wait_delivered(&self, frames: u64, timeout: Duration) -> bool {
+        let until = std::time::Instant::now() + timeout;
+        while self
+            .delivered
+            .iter()
+            .any(|d| d.load(std::sync::atomic::Ordering::Acquire) < frames)
+        {
+            if std::time::Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+}
+
+/// A replay that counts the frames it has pushed into capture's ring.
+struct Counted {
+    source: FileReplaySource,
+    frames: Arc<AtomicU64>,
+}
+
+/// The ring's sink, counting each block after the ring has it. Only an atomic add on the
+/// realtime thread.
+struct CountingSink {
+    sink: Box<dyn ink_core::AudioSink>,
+    frames: Arc<AtomicU64>,
+}
+
+impl ink_core::AudioSink for CountingSink {
+    fn push(&mut self, block: &ink_core::AudioBlock<'_>) {
+        self.sink.push(block);
+        self.frames
+            .fetch_add(block.frames() as u64, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl ink_core::AudioSource for Counted {
+    fn channel(&self) -> Channel {
+        self.source.channel()
+    }
+
+    fn format(&self) -> ink_core::StreamFormat {
+        self.source.format()
+    }
+
+    fn start(&mut self, sink: Box<dyn ink_core::AudioSink>) -> Result<(), PlatformError> {
+        self.source.start(Box::new(CountingSink {
+            sink,
+            frames: self.frames.clone(),
+        }))
+    }
+
+    fn stop(&mut self) -> Result<ink_core::SourceStats, PlatformError> {
+        self.source.stop()
+    }
 }
 
 impl MeetingCapture for ReplayCapture {
@@ -49,10 +113,13 @@ impl MeetingCapture for ReplayCapture {
             let source = FileReplaySource::open(path, channel, self.clock.clone())
                 .map_err(|e| e.to_string())?
                 .with_pacing(Pacing::RealTime);
+            let frames = self.delivered[usize::from(channel == Channel::Far)].clone();
+            frames.store(0, std::sync::atomic::Ordering::Release);
             Ok(CaptureSide {
-                source: Box::new(source),
+                source: Box::new(Counted { source, frames }),
                 ring: DEFAULT_RING_DURATION,
                 start_at: None,
+                follow: None,
             })
         };
         Ok(Opened {
@@ -143,6 +210,7 @@ fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Sto
         clock: clock.clone(),
         opened_for: Mutex::default(),
         tap_fails: Default::default(),
+        delivered: Default::default(),
     });
     let detector = Arc::new(FakeDetector::default());
     let parts = Parts {
@@ -239,7 +307,13 @@ fn a_meeting_from_the_devices_starts_named_and_stops_by_hand_into_its_final_pass
             .contains("already running")
     );
 
-    std::thread::sleep(Duration::from_millis(1_500));
+    // Stopped by hand once each side has delivered a second (the files are 16 kHz). Capture
+    // starts once the worker has the meeting's start on disk (its timeline and crash marker, both
+    // synced), not at `meeting.started`: on a slow CI runner that came a second after the event.
+    assert!(
+        r.capture.wait_delivered(16_000, WAIT),
+        "each side delivered a second"
+    );
     r.core
         .command(r#"{"cmd":"meeting.stop","id":"x1"}"#)
         .unwrap();
@@ -255,8 +329,9 @@ fn a_meeting_from_the_devices_starts_named_and_stops_by_hand_into_its_final_pass
         .collect();
     assert_eq!(passes.len(), 2);
     for p in &passes {
+        // Every frame delivered before the stop is on disk, and nothing near the files' 30 s.
         let ms = p["pass"]["captured_ms"].as_u64().unwrap();
-        assert!(ms > 500 && ms < 10_000, "{p}");
+        assert!((1_000..10_000).contains(&ms), "{p}");
     }
     // Nothing to stop now.
     r.core
@@ -948,6 +1023,104 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
         core.command(r#"{"cmd":"setting.set","key":"retention.days","value":"1"}"#)
             .is_err()
     );
+    core.shutdown();
+}
+
+/// Retention never sweeps what an import brought in: records another source's import wrote (a
+/// meeting with its audio, a dictation) are kept however old they are, while a meeting and a
+/// dictation made here, as old, are deleted.
+#[test]
+fn a_sweep_keeps_what_an_import_brought_in() {
+    const DAY: i64 = 86_400_000;
+    let dir = TempDir::new("sweep-imports");
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    let clock = clock();
+    let old = clock.unix_ms() - 40 * DAY;
+    let made_here = |kind| {
+        let id = store
+            .create_record(NewRecord {
+                kind,
+                title: None,
+                started_at_unix_ms: old,
+                source_app: None,
+                audio_dir: None,
+            })
+            .unwrap();
+        store.finish_record(&id, old + 60_000).unwrap();
+        id
+    };
+    let (meeting, dictation) = (
+        made_here(RecordKind::Meeting),
+        made_here(RecordKind::Dictation),
+    );
+    // Written by the importing tool before the import, as `RecordImport` asks.
+    let audio = dir.path().join("meetings/imported");
+    std::fs::create_dir_all(&audio).unwrap();
+    std::fs::write(audio.join("mic-000000-16000x1.pcm"), [0u8; 64]).unwrap();
+    let imported = |kind, audio_dir: Option<&str>| ink_store::import::RecordImport {
+        record: NewRecord {
+            kind,
+            title: None,
+            started_at_unix_ms: old,
+            source_app: None,
+            audio_dir: audio_dir.map(Into::into),
+        },
+        ended_at_unix_ms: Some(old + 60_000),
+        revision: 2,
+        segments: vec![ink_core::Segment {
+            channel: Channel::Mic,
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "an imported line".into(),
+            speaker: None,
+        }],
+        summary: None,
+        speaker_names: vec![],
+        commitments: vec![],
+    };
+    let imports = store
+        .import_records(
+            "import.example-source",
+            "{}",
+            &[
+                imported(RecordKind::Meeting, Some("meetings/imported")),
+                imported(RecordKind::Dictation, None),
+            ],
+        )
+        .unwrap();
+    let parts = Parts {
+        store: store.clone(),
+        clock,
+        registry: Registry::new(Vec::new()).unwrap(),
+        models: ModelDir::new(dir.path().join("models")),
+        loader: MockLoader::new(Behaviour::Say("x".into())),
+        installer: Arc::new(MockInstaller {
+            generation: Arc::default(),
+            gate: None,
+            installs: AtomicUsize::new(0),
+        }),
+        data_dir: dir.path().to_owned(),
+        permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        meetings: MeetingPlatform::default(),
+    };
+    // Forever until now: the launch's sweep deletes nothing, so the change's sweep is the one.
+    let (core, events) = start_parts(parts);
+    core.command(r#"{"cmd":"setting.set","key":"retention.days","value":"30"}"#)
+        .unwrap();
+    let swept = events.wait_type("library.swept", WAIT);
+    assert_eq!(
+        swept["deleted"], 2,
+        "the meeting and the dictation made here"
+    );
+    assert_eq!(swept["failed"], 0);
+    assert_eq!(store.record(&meeting).unwrap(), None);
+    assert_eq!(store.record(&dictation).unwrap(), None);
+    for id in &imports {
+        assert!(store.record(id).unwrap().is_some(), "an import is kept");
+        assert_eq!(store.segments(id).unwrap().len(), 1);
+    }
+    assert!(audio.exists(), "and the imported meeting's audio");
+    events.assert_valid();
     core.shutdown();
 }
 

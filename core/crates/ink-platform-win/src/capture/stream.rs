@@ -22,9 +22,10 @@
 //! (idle, not lost). `TIMESTAMP_ERROR`, or no stamp, is stamped with the clock's time instead.
 //!
 //! **The stream's end.** An error from the capture client (the device was unplugged, or its
-//! format changed: `AUDCLNT_E_DEVICE_INVALIDATED`) ends delivery; `stop` reports it. So does a
-//! panic, which `catch_unwind` stops at the thread's edge. Reopening at the new device mid-session
-//! is the device-change work of the meeting chain (S3.5b), as on the Mac.
+//! format changed: `AUDCLNT_E_DEVICE_INVALIDATED`) ends delivery; the source says so while it runs
+//! (`AudioSource::ended`) and `stop` reports why. So does a panic, which `catch_unwind` stops at
+//! the thread's edge. Opening the stream again, where the far end plays now, is the meeting's
+//! (`ink-ffi`'s pump, S3.5b).
 #![cfg(windows)]
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -137,6 +138,13 @@ pub struct IoStats {
     pub mmcss: bool,
     /// The error that ended delivery, as an HRESULT; 0 while none has.
     pub ended_by: i32,
+}
+
+impl IoStats {
+    /// Delivery ended before `stop`: an error from the capture client, or a caught panic.
+    pub fn ended(&self) -> bool {
+        self.ended_by != 0 || self.panics > 0
+    }
 }
 
 /// The live counters behind [`IoStats`].
@@ -1102,6 +1110,8 @@ pub(crate) mod tests {
         assert!(!wake(&unguarded(), &mut script, &mut delivery));
         let stats = counters.snapshot();
         assert_eq!(stats.ended_by, AUDCLNT_E_DEVICE_INVALIDATED.0);
+        assert!(stats.ended(), "said while it runs, not only at stop");
+        assert!(!IoStats::default().ended());
         let error = session_result(stats, "the microphone").unwrap_err();
         assert!(
             matches!(&error, PlatformError::Device(m) if m.contains("removed or changed format")),

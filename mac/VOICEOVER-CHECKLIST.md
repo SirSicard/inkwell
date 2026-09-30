@@ -32,8 +32,8 @@ VO means Control-Option (or Caps Lock, if VoiceOver uses it as its modifier).
 - [ ] The ink beside the content (the wide zone with the wordmark on Today, the narrow rail
       elsewhere) is never announced: it is decorative.
 - [ ] VO-U (the rotor) lists the screen title under Headings.
-- [ ] Live is not listed: it appears only while a meeting runs, which this build cannot start.
-      It is checked with the Live screen.
+- [ ] Live is not listed: it appears only while a meeting runs, and is checked with the Live
+      screen (SCREENS-B-CHECKLIST.md, sections 3 and 6).
 
 ## Closing and quitting
 

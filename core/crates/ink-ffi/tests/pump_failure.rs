@@ -50,6 +50,7 @@ fn a_pump_that_panics_ends_the_meeting_and_shutdown_still_returns() {
             source: Box::new(PanicsOnStart),
             ring: Duration::from_secs(2),
             start_at: None,
+            follow: None,
         }],
         ink_ffi::meeting::MeetingInfo {
             title: Some("Faulty capture".into()),

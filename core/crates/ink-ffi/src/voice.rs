@@ -172,7 +172,8 @@ impl VoiceSlot {
 }
 
 fn lock(m: &Mutex<VoiceSlot>) -> MutexGuard<'_, VoiceSlot> {
-    // Taken only by the queries thread and shutdown; every step leaves the slot consistent.
+    // Taken by the queries thread and shutdown, and briefly by the command thread after an
+    // install ([`vad_installed`]); every step leaves the slot consistent.
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -345,6 +346,26 @@ pub fn settings_changed(shared: &Shared) {
                 None,
             ));
         }
+    }
+}
+
+/// **Command thread**, when a model install ends. The voice detector just installed reaches a
+/// running dictation now, not at its next start: its VAD is resolved again ([`crate::vad`]) and
+/// queued to the chain, which tells the shell when that changes (`dictation.voice_detection`).
+/// The slot's lock is let go of before the model is read.
+pub fn vad_installed(shared: &Shared) {
+    let Some(inbox) = lock(&shared.voice)
+        .running
+        .as_ref()
+        .map(|voice| voice.inbox.clone())
+    else {
+        return;
+    };
+    let vad = crate::vad::installed(shared, &shared.models);
+    if inbox.send(Input::SetVad(vad)).is_err() {
+        log::info!(
+            "voice detection was installed after dictation stopped; its next start loads it"
+        );
     }
 }
 
@@ -591,7 +612,7 @@ enum Rebind {
 }
 
 /// The live-partials engine as the router picks it at each take (on the Mac, FluidAudio's
-/// Parakeet, registered by the shell).
+/// Parakeet, registered by the shell; on Windows, Parakeet on sherpa-onnx, a registry model).
 struct RoutedLive {
     shared: Arc<Shared>,
 }
@@ -600,7 +621,8 @@ impl StreamingEngine for RoutedLive {
     fn info(&self) -> EngineInfo {
         match self.shared.router.route(Job::LivePartials) {
             Ok(Route::External { engine, .. }) => engine.info(),
-            _ => EngineInfo {
+            Ok(Route::Model(row)) => row.info(),
+            Err(_) => EngineInfo {
                 id: "none".into(),
                 jobs: vec![Job::LivePartials],
                 licence: String::new(),
@@ -618,8 +640,11 @@ impl StreamingEngine for RoutedLive {
                 engine: ExternalEngine::Streaming(engine),
                 ..
             } => engine.open_stream(channel, events),
+            Route::Model(row) => {
+                crate::gate::live_model(&self.shared, &row).open_stream(channel, events)
+            }
             other => Err(EngineError::Failed(format!(
-                "live partials route to {}, which this build cannot stream",
+                "live partials route to {}, which is not a streaming engine",
                 other.id()
             ))),
         }
@@ -947,9 +972,11 @@ fn controller(
             Ok(mic) => mic,
             Err(message) => {
                 log::warn!("dictation: the mic could not be opened: {message}");
-                shared.events.emit(mic_failed(&message));
-                // The press waiting for audio is dropped (reported as cancelled).
+                // The press waiting for audio is dropped (reported as cancelled). Queued before the
+                // failure is said, so a press made in answer to it comes after it and is not the
+                // one cancelled.
                 let _ = inbox.send(Input::StreamEnded);
+                shared.events.emit(mic_failed(&message));
                 continue;
             }
         };

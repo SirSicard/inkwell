@@ -1,0 +1,139 @@
+name: Windows release
+
+# Releases the Windows app (docs/RELEASING.md), unsigned for now: no code signing yet, and the
+# homepage tells people how to get past SmartScreen and check the download. x64 only: 1.0 ships no
+# ARM64 build. On a v1.X.Y tag: build the core with its engines and the app (NativeAOT), check that
+# neither needs anything a PC may lack (the Vulkan driver, Windows' own older ONNX Runtime, a Visual
+# C++ runtime other than the one beside the app), pack the installer and the update feed with
+# Velopack, and write their SHA-256s (win-release-build.yml); then draft the GitHub release holding
+# them (or add them to the draft the Mac's workflow made for the same tag). A person publishes the
+# draft; nothing here does.
+#
+# A manual run is the dry run: the same build, checks and pack, the release's files kept as run
+# artifacts, and nothing published.
+#
+# How an unsigned build is still checked, end to end: every input is pinned (win-release-build.yml
+# lists them); the release's files carry their SHA-256s in the release and in its notes; the app
+# reads its update feed over HTTPS from this repository's releases, and Velopack refuses a package
+# whose size or SHA-256 differs from the feed's.
+#
+# Secrets and privileges, by job:
+# - build: no secret; read access to the repository only.
+# - publish (tag only): write access, in the `release` environment, whose deployment rule admits
+#   v1.* tags alone. It holds no secret for Windows (the Sparkle key there is the Mac's).
+# Neither trigger can come from a pull request, so no fork's code runs next to write access; there
+# is no pull_request_target. Actions are pinned by commit, and no step restores a cache: what
+# ships is built from the checkout alone.
+on:
+  push:
+    tags: ['v1.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to build the dry run as (X.Y.Z). Nothing is published.
+        required: true
+        default: '1.0.0'
+
+permissions: {}
+
+concurrency:
+  group: win-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: x64
+    uses: ./.github/workflows/win-release-build.yml
+    permissions:
+      contents: read
+    with:
+      kind: ${{ github.event_name == 'push' && 'tag' || 'dry-run' }}
+      version: ${{ inputs.version || '1.0.0' }}
+
+  # A tag's release: the Windows files added to the draft release for the tag (the Mac's workflow
+  # drafts it too; whichever comes first creates it), with a Windows section in its notes.
+  # Publishing the draft is a person's step (docs/RELEASING.md): until then no installed app sees
+  # it, since the app's updater reads published releases only.
+  publish:
+    name: add to the draft release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v1.')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: inkwell-windows
+          path: release
+
+      # The files the release carries, checked against their SHA-256s once more after the trip
+      # through the artifact store.
+      - name: Check the files
+        working-directory: release
+        env:
+          SETUP: ${{ needs.build.outputs.setup }}
+          PACKAGE: ${{ needs.build.outputs.package }}
+          SUMS: ${{ needs.build.outputs.sums }}
+        run: |
+          for f in "$SETUP" "$PACKAGE" releases.win.json "$SUMS"; do
+            [ -f "$f" ] || { echo "::error::$f is missing"; exit 1; }
+          done
+          sha256sum -c "$SUMS"
+
+      # A draft: invisible to installed apps and to the Download button until a person publishes
+      # it. A re-run replaces a draft's Windows files and never touches a published release.
+      - name: Draft the release, or add to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SETUP: ${{ needs.build.outputs.setup }}
+          PACKAGE: ${{ needs.build.outputs.package }}
+          SUMS: ${{ needs.build.outputs.sums }}
+          VERSION: ${{ needs.build.outputs.version }}
+          VC_RUNTIME: ${{ needs.build.outputs.vcruntime }}
+        run: |
+          # The Visual C++ runtime's version, as the build read it from the DLLs it ships.
+          [[ "$VC_RUNTIME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the build named no Visual C++ runtime version ('$VC_RUNTIME')"; exit 1; }
+          cd release
+          files=("$SETUP" "$PACKAGE" releases.win.json "$SUMS")
+          sum="$(sha256sum "$SETUP" | cut -d' ' -f1)"
+          marker='<!-- inkwell-windows -->'
+          cat >"$RUNNER_TEMP/windows.md" <<EOF
+          $marker
+          **Windows: download \`$SETUP\`**: Inkwell for 64-bit Windows 11 (24H2 or later), installed for your user alone, no administrator needed. It is not code-signed yet, so SmartScreen warns before it runs: choose **More info**, then **Run anyway**. Check the download first: its SHA-256 is \`$sum\` (also in \`$SUMS\`). \`$PACKAGE\` and \`releases.win.json\` are what the app's updater reads; there is no need to download them.
+
+          Inkwell includes the runtime of Microsoft's Windows App SDK, the Windows SDK's .NET projection and the Visual C++ runtime, which Microsoft licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those components. This release's Visual C++ runtime, beside Inkwell.exe for its speech engines, is version $VC_RUNTIME.
+          EOF
+          attach() {
+            local draft
+            draft="$(gh release view "$GITHUB_REF_NAME" --repo "$REPO" --json isDraft --jq .isDraft)"
+            if [ "$draft" != true ]; then
+              echo "::error title=Already published::$GITHUB_REF_NAME is a published release; it is never replaced"
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber --repo "$REPO"
+            body="$(gh release view "$GITHUB_REF_NAME" --repo "$REPO" --json body --jq .body)"
+            if ! grep -qF -- "$marker" <<<"$body"; then
+              printf '%s\n\n%s' "$body" "$(cat "$RUNNER_TEMP/windows.md")" >"$RUNNER_TEMP/notes.md"
+              gh release edit "$GITHUB_REF_NAME" --repo "$REPO" --notes-file "$RUNNER_TEMP/notes.md"
+            fi
+            echo "draft $GITHUB_REF_NAME: Windows files added"
+          }
+          if gh release view "$GITHUB_REF_NAME" --repo "$REPO" --json isDraft >/dev/null 2>&1; then
+            attach
+          else
+            {
+              cat "$RUNNER_TEMP/windows.md"
+              printf '\nSee the [changelog](https://github.com/%s/blob/main/CHANGELOG.md) for what changed.\n' "$REPO"
+            } >"$RUNNER_TEMP/notes.md"
+            if gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$REPO" \
+              --draft --verify-tag --title "Inkwell $VERSION" --notes-file "$RUNNER_TEMP/notes.md"; then
+              echo "drafted $GITHUB_REF_NAME"
+            else
+              # The Mac's workflow may have drafted it meanwhile: add to that one.
+              attach
+            fi
+          fi

@@ -17,6 +17,35 @@ public class AboutModelTests
     }
 
     [Fact]
+    public void TheCopyrightLineIsTheLicencesAndInkwellExeCarriesIt()
+    {
+        // The Windows SDK's licence (Distributable Code, Distribution Requirements): an app that ships
+        // its code displays its own valid copyright notice. It is LICENSE's first copyright line,
+        // Inkwell's (the second covers the legacy 0.2 app, which the Windows build does not
+        // contain), shown under the version; Inkwell.exe's file properties carry it too
+        // (Inkwell.csproj's Copyright).
+        var root = AboutCheckout.Root();
+        var licence = File.ReadAllLines(Path.Combine(root, "LICENSE"));
+        Assert.Equal(AboutModel.CopyrightLine, licence.First(l => l.StartsWith("Copyright", StringComparison.Ordinal)));
+        Assert.Contains(
+            $"<Copyright>{AboutModel.CopyrightLine}</Copyright>",
+            File.ReadAllText(Path.Combine(root, "windows", "Inkwell", "Inkwell.csproj")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheTermsForTheWindowsAppSdkAreAgreedToAndPointAtItsLicence()
+    {
+        // Section 3(b)(ii) of the Windows App SDK's licence: end users agree to terms that protect
+        // its code at least as much; these are its own terms, whose full text is a notice below.
+        Assert.Contains("Microsoft Software License Terms", AboutModel.Terms, StringComparison.Ordinal);
+        Assert.Contains("you agree to those terms", AboutModel.Terms, StringComparison.Ordinal);
+        Assert.Contains($"\"{Notices.Components.Single(c => c.Id == "windows-app-sdk").Name}\"", AboutModel.Terms, StringComparison.Ordinal);
+        // And the Visual C++ runtime beside the app (the Visual Studio licence's Distributable Code).
+        Assert.Contains($"\"{Notices.Components.Single(c => c.Id == "vc-runtime").Name}\"", AboutModel.Terms, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheRowsAreTheNoticesInOrderWithTheMacsTitles()
     {
         var about = new AboutModel(null);

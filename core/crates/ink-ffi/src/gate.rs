@@ -22,8 +22,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use ink_core::{EngineError, EngineInfo, Job, OfflineEngine, TranscribeOptions, Transcript};
-use ink_engines::{ExternalEngine, Route};
+use ink_core::{
+    EngineError, EngineInfo, Job, OfflineEngine, StreamingEngine, TranscribeOptions, Transcript,
+};
+use ink_engines::{EngineRow, ExternalEngine, Route, TrailingWindow};
 use serde_json::Value;
 
 use crate::events::{self, event};
@@ -202,6 +204,17 @@ impl OfflineEngine for Routed {
             }
         }
     }
+}
+
+/// Live partials from a registry model the core runs itself (Windows' Parakeet): the trailing
+/// window scheme ([`TrailingWindow`]) over [`Routed`] for [`Job::LivePartials`], so each window's
+/// decode goes through the gate and residency like any other job, and the model is the one copy
+/// dictation uses too. Reported as `row`.
+pub fn live_model(shared: &Arc<Shared>, row: &EngineRow) -> Arc<dyn StreamingEngine> {
+    Arc::new(TrailingWindow::new(
+        Arc::new(Routed::new(shared.clone(), Job::LivePartials)),
+        row.info(),
+    ))
 }
 
 #[cfg(test)]

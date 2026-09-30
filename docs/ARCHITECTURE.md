@@ -48,7 +48,8 @@ in [legacy/ARCHITECTURE-0.2.md](legacy/ARCHITECTURE-0.2.md).
 10. **Engines per job**, chosen by measurement (word error rate on public human-labelled sets:
     AMI meetings and FLEURS English). The models are listed in [MODEL-WEIGHTS.md](MODEL-WEIGHTS.md).
     - Dictation final and meeting final: Qwen3-ASR 1.7B via llama.cpp (Metal on the Mac, Vulkan or
-      CPU on Windows). One resident model serves both.
+      CPU on Windows). One resident model serves both. On a Windows PC without a GPU, dictation
+      goes to Parakeet instead (below).
     - Live partials: Parakeet TDT v3, via FluidAudio on the Mac and sherpa-onnx on Windows.
     - Far-end diarization: Nemotron-3-Diarization via NeMo-Speech.cpp.
 11. **A gain stage before every engine.** A per-utterance robust-peak gain for dictation and file
@@ -126,9 +127,11 @@ model reads the audio. So one Windows build runs on a Vulkan GPU where there is 
 where there is none. The CPU is a fallback, not a peer: it fits a meeting's final pass, but a
 dictation takes seconds.
 
-- The Vulkan build loads `vulkan-1.dll`, which GPU drivers install. A machine without it cannot
-  start that build at all, so the Windows release must handle that case itself rather than rely on
-  the CPU fallback.
+- The Vulkan build needs `vulkan-1.dll`, which GPU drivers install, so the core's DLL delay-loads
+  it: the DLL loads on a machine without it, and when ggml registers its Vulkan backend a
+  delay-load hook answers the missing loader so that Vulkan fails to start the ordinary way and
+  llama.cpp runs on the CPU (`ink-engines/src/llama/no_vulkan.rs`; `tests/vulkan_missing.rs`).
+  `windows/scripts/build-core.ps1` builds the release's DLL and checks its imports.
 - Building it needs the Vulkan SDK, libclang (llama-cpp-sys-2 generates its bindings) and the
   Ninja generator: see the feature's note in `ink-engines/Cargo.toml`.
 
@@ -172,6 +175,23 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   Homebrew's SentencePiece and Abseil (built for a Mac's own, newer macOS) fails that last check; `INK_ALLOW_NEWER_MACOS=1`
   lets a local build through with a warning, and a release (`--timestamp`) refuses it. Every
   bundled library must also be one `THIRD_PARTY.md` covers, by name.
+- **On Windows** the same two scripts run in Git Bash inside a Visual Studio developer environment.
+  NeMo-Speech.cpp builds with the upstream `vulkan-diar` preset (the dynamic C runtime). The
+  developer environment's architecture picks the compiler for all three libraries
+  (`native/lib/windows-toolchain.sh`): MSVC on x64, clang-cl on ARM64, because ggml's CPU backend
+  refuses MSVC on ARM. The ARM64 build must run on an ARM64 machine and needs the Vulkan SDK for
+  Windows on ARM64. It has not run yet: CI type-checks the adapter only.
+  SentencePiece and Abseil are built from the same pinned tarballs as static libraries and linked
+  into NeMo's own DLL, so the prefix's `bin/` holds only NeMo's DLLs and its ggml's. The Visual C++
+  runtime is the system's. The manifest hashes those DLLs and the C API's import library in
+  `lib/`. With no rpath on Windows, `build.rs` copies the checked DLLs into its `OUT_DIR` and
+  declares that directory as a native search path, which cargo puts on `PATH` for tests. The
+  diarizer runs on GPU 0 (Vulkan) and, where that does not load, on the CPU (about ten times
+  slower: 23× real time on a 12-core desktop, not a measurement, as other builds shared it). Its
+  Vulkan backend loads `vulkan-1.dll` as soon as it loads, so the core's DLL delay-loads
+  `nemo_speech_asr_c.dll` and the adapter loads it before its first call (`src/nemo.rs`): on a PC
+  without a Vulkan driver the diarizer is unavailable and everything else runs. The release ships
+  the prefix's DLLs beside `Inkwell.exe` (`windows/scripts/build-core.ps1`).
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
   apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
@@ -184,6 +204,35 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   as shared libraries installed by `@rpath`; `build-nemo-speech.sh` builds against them when
   `ENGINE_DEPS_DIR` names their prefix, as the release does. The build manifest published with each
   release records their versions and hashes.
+
+## Parakeet on Windows (sherpa-onnx)
+
+On the Mac, Parakeet runs in FluidAudio on the Neural Engine. On Windows the core runs it itself:
+the int8 ONNX conversion of the same weights, on sherpa-onnx's C API, on the CPU (`engine-sherpa`,
+`ink-engines/src/sherpa.rs`), as a registry model.
+
+- **Not built here.** `SHERPA_ONNX_DIR` names sherpa-onnx 1.13.4's prebuilt "shared, MD, Release,
+  no-tts" archive, unpacked; `build.rs` checks each file it uses against its SHA-256 before linking.
+  The no-tts build carries no espeak-ng (GPL-3.0). The sherpa-onnx crates are not used: their build
+  script downloads archives. In CI the adapter is type-checked without the libraries
+  (`INK_SHERPA_CHECK_ONLY=1`); the real-model tests run locally.
+- **Its DLLs sit beside the executable.** Windows 11 has its own, older `onnxruntime.dll` in
+  System32, which Windows finds before anything on `PATH`, and sherpa-onnx given that one crashes
+  the process. So the app ships `sherpa-onnx-c-api.dll`, `onnxruntime.dll` and
+  `onnxruntime_providers_shared.dll` beside its executable, `build.rs` copies them beside the test
+  and binary executables too, and the adapter refuses to load (with an error that says why) when
+  the ONNX Runtime the process loaded is not the archive's.
+- **Live partials**: [`TrailingWindow`](../core/crates/ink-engines/src/live.rs) re-decodes the
+  utterance not yet settled every half second, the Mac's scheme ported (hide the newest 0.16 s;
+  settle on a 0.8 s pause or at 12 s). Each window goes through the router and residency like any
+  job, so live partials and dictation share one loaded copy. A still window (nothing pending, a
+  stationary speech band: silence, room tone, hum) is not decoded, so a quiet side costs no CPU.
+- **Dictation on a PC without a GPU.** There Qwen3-ASR takes 1.6-1.9 s for 5 s of speech, and
+  Parakeet about 0.3 s (not a measurement: other builds shared the machine), at 7.2 % WER on FLEURS
+  (level-normalised) against Qwen3-ASR's 4.3 %. So on such a machine the router gives dictation to
+  Parakeet first, whatever the error rates (`Router::with_gpu_probe`,
+  `Runtime::slow_on_cpu_for_dictation`); with a GPU, Qwen3-ASR dictates. A take longer than 90 s
+  is cut into windows, as Qwen3-ASR's are.
 
 ## Threads
 
@@ -326,8 +375,14 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   detection is on (`meetings.detect`).
 - **Capture.** On the Mac: the routed mic's own IOProc (the built-in mic with Bluetooth output,
   unless `meetings.headset_mic`) and a process tap of the meeting's app, else of everything this
-  Mac plays except Inkwell. `meeting.started` names the title (the calendar's event on now, from
-  the shell), the app and the mic.
+  Mac plays except Inkwell. On Windows: the routed mic (WASAPI), and for the far end process
+  loopback of Zoom and the browsers (the app alone) or device loopback of the output any other app
+  plays to (everything that device plays, said as such), else of the default output. Device
+  loopback moves with the call: the pump asks every 2 s whether its output went or the app plays
+  elsewhere, and hands the side's ring to the new source. A side left with no source (it ended by
+  itself, or could not be opened again) must deliver from then on, so the watchdog says its
+  silence. `meeting.started` names the title (the calendar's event on now, from the shell), the
+  app and the mic.
 - **What it runs on.** The VAD (Silero), loaded at the start; the far end's diarizer (Nemotron),
   loaded only for the final pass and let go of after it; and the language model the shell
   registered, for the summary, commitments and Ask, sized to its context (`context_tokens`: the

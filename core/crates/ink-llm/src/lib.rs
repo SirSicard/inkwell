@@ -6,7 +6,8 @@
 //!
 //! [`Llm::complete`](ink_core::Llm::complete) is a **worker**-thread call that blocks until the
 //! answer arrives. The HTTP client is [`ureq`], which is blocking too, so nothing here needs an
-//! async runtime: a worker thread makes the request and waits for it. Inkwell 0.2 built a Tokio
+//! async runtime: each request goes out from a thread of its own while the worker waits for it,
+//! and stops waiting at a cancel ([`provider`]). Inkwell 0.2 built a Tokio
 //! runtime and an HTTP client for every call; here one client ([`UreqTransport::shared`]) is
 //! built once per process and every provider shares it, with its connection pool.
 //!

@@ -17,14 +17,21 @@ use ink_core::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ink_engines::{ModelDir, Registry};
+use ink_engines::{EngineRow, ModelDir, Registry, SILERO_VAD_ID};
 use ink_ffi::runtime::{Core, Parts};
 use ink_ffi::voice::{DEFAULT_KEY, MIC_IDLE, VoicePlatform};
+use ink_pipeline::tail::TailConfig;
 use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(10);
+/// How long the bands must go unpublished to count as settled: many pump passes.
+const SETTLED: Duration = Duration::from_millis(200);
 /// 10 ms at the mock mic's 48 kHz.
 const BLOCK: usize = 480;
+/// Silence fed after a release, in seconds: room for the tail, which the chain waits for in
+/// audio (`TAIL`, 300 ms at most), and short of the deadline where it stops waiting (the tail and
+/// its grace, 550 ms after the release on the mock clock). See [`VoiceRig::release_take`].
+const TAIL_ROOM: f64 = 0.4;
 
 struct VoiceRig {
     core: Option<Core>,
@@ -64,6 +71,21 @@ impl VoiceRig {
     }
 
     fn build_with(label: &str, with_platform: bool, store: Arc<dyn ink_core::Store>) -> Self {
+        Self::build_rows(label, with_platform, store, Vec::new())
+    }
+
+    /// A rig whose registry also lists `rows`, none of them installed.
+    fn with_rows(label: &str, rows: Vec<EngineRow>) -> Self {
+        let sqlite = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+        Self::build_rows(label, true, sqlite, rows)
+    }
+
+    fn build_rows(
+        label: &str,
+        with_platform: bool,
+        store: Arc<dyn ink_core::Store>,
+        rows: Vec<EngineRow>,
+    ) -> Self {
         let dir = TempDir::new(label);
         let platform = Arc::new(MockPlatform::new());
         let edit = Arc::new(MockPlatform::new());
@@ -74,7 +96,7 @@ impl VoiceRig {
         let parts = Parts {
             store,
             clock: platform.clock(),
-            registry: Registry::new(vec![row]).unwrap(),
+            registry: Registry::new([vec![row], rows].concat()).unwrap(),
             models,
             loader: loader.clone(),
             installer: Arc::new(MockInstaller {
@@ -181,18 +203,57 @@ impl VoiceRig {
             .collect()
     }
 
+    /// The events so far, and what the warnings and discards among them said: why a take ended
+    /// without the outcome a test waited for.
+    fn said(&self) -> String {
+        let said: Vec<String> = self
+            .events
+            .all()
+            .into_iter()
+            .filter(|v| v["type"] == "dictation.warning" || v["type"] == "dictation.discarded")
+            .map(|v| v.to_string())
+            .collect();
+        format!("{:?}; {said:?}", self.events.types())
+    }
+
+    /// Lets go of `key` once the take its press opened has started (`started` takes had started
+    /// before that press), then feeds [`TAIL_ROOM`]. The caller waits for the outcome.
+    ///
+    /// [`feed`](Self::feed) moves the mock clock about 50 times faster than the pump hands the
+    /// chain the mic's audio (every 10 ms of real time, later on a loaded machine), so both waits
+    /// are for the chain. A release sent at once can reach it before any audio of a stream the
+    /// press opened, and then sits at the press: a take of 0 ms. A take starts only once the chain
+    /// has heard the minimum hold, which places the release on the stream's timeline. And a clock
+    /// moved past the tail's deadline while the take's audio is still on its way ends the take
+    /// with what the chain has heard (`tail_cut_short`, then `too_short`). The tail arrives in
+    /// audio, so the room completes it however late the pump is, and the clock stays short of the
+    /// deadline until the caller has the outcome.
+    fn release_take(&self, key: &MockPlatform, started: usize) {
+        let room = Duration::from_secs_f64(TAIL_ROOM);
+        let tail = ink_audio::take::TAIL;
+        assert!(room > tail && room < tail + TailConfig::default().grace);
+        assert!(
+            self.events
+                .wait_count("dictation.started", started + 1, WAIT),
+            "{}",
+            self.said()
+        );
+        assert!(key.release());
+        self.silence(TAIL_ROOM);
+    }
+
     /// Press, speak, release, and room for the tail; waits for the take to end.
     fn dictate(&self, seconds: f64, seed: u64) -> Value {
         let before = self.events.count("dictation.inserted");
+        let started = self.events.count("dictation.started");
         assert!(self.platform.press());
         self.feed(&Self::speech(seconds, seed));
-        assert!(self.platform.release());
-        self.silence(0.6);
+        self.release_take(&self.platform, started);
         assert!(
             self.events
                 .wait_count("dictation.inserted", before + 1, WAIT),
-            "{:?}",
-            self.events.types()
+            "{}",
+            self.said()
         );
         self.events
             .all()
@@ -205,6 +266,26 @@ impl VoiceRig {
     fn mic_open(&self) -> bool {
         self.platform
             .feed(Channel::Mic, &[0.0; 1], self.platform.clock().now_ns())
+    }
+
+    /// The bands once nothing has been published for [`SETTLED`]. The pump publishes on its own
+    /// passes (every 10 ms, later on a loaded runner), so a fixed sleep can end before a publish
+    /// that is already due.
+    fn settled_bands(&self) -> ink_audio::BandsSnapshot {
+        let until = Instant::now() + WAIT;
+        let mut last = self.bands.read();
+        loop {
+            std::thread::sleep(SETTLED);
+            let now = self.bands.read();
+            if now.published == last.published {
+                return now;
+            }
+            assert!(
+                Instant::now() < until,
+                "the bands never stopped being published"
+            );
+            last = now;
+        }
     }
 }
 
@@ -249,11 +330,51 @@ fn a_second_press_never_wipes_the_take() {
     rig.feed(&VoiceRig::speech(0.8, 2));
     assert!(rig.platform.press(), "the key-down again, mid-hold");
     rig.feed(&VoiceRig::speech(0.8, 3));
-    assert!(rig.platform.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.platform, 0);
     assert!(rig.events.wait_count("dictation.inserted", 1, WAIT));
     assert_eq!(rig.events.count("dictation.started"), 1);
     assert_eq!(rig.platform.inserted(), ["Hello world. "]);
+}
+
+/// The voice detector installed while dictation runs reaches it at once, not at the next launch:
+/// when the install ends, the core resolves dictation's VAD again. Its row here has a stand-in
+/// file, so a build with Silero (the release's `ink-engines/engine-silero`) says it could not load
+/// it, which shows the install was acted on; a build without Silero has nothing to load and says
+/// nothing new. The take after it is the barrier: the chain handles what was queued before it.
+#[test]
+fn a_voice_detector_installed_while_dictation_runs_is_taken_at_once() {
+    let mut vad = ink_engines::silero_vad();
+    vad.files[0].size = 4;
+    let rig = VoiceRig::with_rows("vad-installed", vec![vad.clone()]);
+    rig.enable();
+    let first = rig.events.wait_type("dictation.voice_detection", WAIT);
+    assert_eq!(
+        (&first["available"], &first["reason"]),
+        (&false.into(), &"model_missing".into())
+    );
+
+    // The download: its files arrive as the downloader leaves them, and the install ends.
+    install(&ModelDir::new(rig._dir.path().join("models")), &vad);
+    rig.command(&format!(
+        r#"{{"cmd":"model.update","model":"{SILERO_VAD_ID}","next":"{SILERO_VAD_ID}"}}"#
+    ));
+    let finished = rig.events.wait_type("model.update_finished", WAIT);
+    assert_eq!(finished["ok"], true, "{finished}");
+    rig.dictate(1.2, 4);
+
+    let said: Vec<Value> = rig
+        .events
+        .all()
+        .into_iter()
+        .filter(|e| e["type"] == "dictation.voice_detection")
+        .collect();
+    if Registry::builtin().unwrap().get(SILERO_VAD_ID).is_some() {
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[1]["reason"], "load_failed", "{said:?}");
+    } else {
+        assert_eq!(said.len(), 1, "nothing to load in this build: {said:?}");
+    }
+    rig.events.assert_valid();
 }
 
 #[test]
@@ -404,8 +525,7 @@ fn an_edit_without_a_language_model_leaves_the_selection_alone() {
     assert!(rig.edit.press());
     rig.feed(&VoiceRig::speech(1.0, 4));
     rig.sync_edit_clock();
-    assert!(rig.edit.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.edit, 0);
     let failed = rig
         .events
         .wait_for(WAIT, |v| v["type"] == "dictation.edit_failed")
@@ -454,19 +574,16 @@ fn the_ink_follows_the_voice_while_a_take_is_open() {
         during.bands.low + during.bands.mid + during.bands.high > 0.0,
         "{during:?}"
     );
-    assert!(rig.platform.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.platform, 0);
     assert!(rig.events.wait_count("dictation.inserted", 1, WAIT));
     // Room after the take (the mic stays open): the ink rests, and nothing more is published.
-    // (The pump's drain in flight when the take ended may still publish; let it finish.)
-    std::thread::sleep(Duration::from_millis(50));
+    // The take's end still publishes one still frame, on the pump's next pass: wait for the count
+    // to settle rather than for a fixed time (a loaded runner can run that pass late).
     rig.silence(0.3);
-    std::thread::sleep(Duration::from_millis(50));
-    let after = rig.bands.read();
+    let after = rig.settled_bands();
     assert_eq!(after.bands, ink_audio::Bands::default(), "a still frame");
     rig.silence(0.3);
-    std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(rig.bands.read().published, after.published);
+    assert_eq!(rig.settled_bands().published, after.published);
 }
 
 #[test]
@@ -824,8 +941,7 @@ fn a_voice_edit_refuses_a_model_that_is_not_local() {
     assert!(rig.edit.press());
     rig.feed(&VoiceRig::speech(1.0, 12));
     rig.sync_edit_clock();
-    assert!(rig.edit.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.edit, 0);
     let failed = rig
         .events
         .wait_for(WAIT, |v| v["type"] == "dictation.edit_failed")
@@ -1165,23 +1281,19 @@ impl VoiceRig {
                 .collect()
         };
         let before = outcomes(&self.events).len();
+        let started = self.events.count("dictation.started");
         self.platform.set_selection(Some("teh cat"));
         self.sync_edit_clock();
         assert!(self.edit.press());
         self.feed(&VoiceRig::speech(1.0, seed));
         self.sync_edit_clock();
-        assert!(self.edit.release());
-        self.silence(0.6);
+        self.release_take(&self.edit, started);
         let until = Instant::now() + WAIT;
         loop {
             if let Some(v) = outcomes(&self.events).into_iter().nth(before) {
                 return v;
             }
-            assert!(
-                Instant::now() < until,
-                "no edit outcome: {:?}",
-                self.events.types()
-            );
+            assert!(Instant::now() < until, "no edit outcome: {}", self.said());
             std::thread::sleep(Duration::from_millis(5));
         }
     }
@@ -1446,8 +1558,7 @@ fn an_imported_voice_command_is_carried_out() {
     // "hello world" is now the wake word and a trigger.
     assert!(rig.platform.press());
     rig.feed(&VoiceRig::speech(1.2, 1));
-    assert!(rig.platform.release());
-    rig.silence(0.6);
+    rig.release_take(&rig.platform, 0);
     let command = rig.events.wait_type("dictation.command", WAIT);
     assert_eq!(command["action"], "insert_text");
     assert_eq!(command["carried_out"], true);
@@ -1456,6 +1567,50 @@ fn an_imported_voice_command_is_carried_out() {
     let listed = rig.ask(r#"{"cmd":"voice_commands.list","id":"l"}"#, "l");
     assert_eq!(listed["from_import"], true);
     assert_eq!(listed["commands"][0]["value"], "Typed by voice");
+    rig.events.assert_valid();
+}
+
+/// The screens' import (`import.run`) while dictation is live: the running dictation holds the
+/// imported key and expands the imported snippets at once, without being enabled again.
+#[test]
+fn an_import_from_the_screens_reaches_a_running_dictation_at_once() {
+    let rig = VoiceRig::new("import-run-live");
+    let source = TempDir::new("legacy-0.2-live");
+    for (name, text) in [
+        (
+            "settings.json",
+            r#"{"hotkey":"right_opt","recording_mode":"ptt"}"#,
+        ),
+        ("snippets.json", SNIPPETS_0_2),
+    ] {
+        std::fs::write(source.path().join(name), text).unwrap();
+    }
+    rig.core().set_import02(ink_ffi::import02::Import02 {
+        library: rig.sqlite.clone().unwrap(),
+        source: Some(source.path().to_owned()),
+        keys: None,
+    });
+    assert_eq!(rig.enable()["key"], DEFAULT_KEY);
+    let finished = rig.ask(r#"{"cmd":"import.run","id":"i"}"#, "i");
+    assert_eq!(finished["type"], "import.finished", "{finished}");
+    // After the answer, the running dictation is handed its settings again.
+    assert!(rig.events.wait_count("dictation.ready", 2, WAIT));
+    let types = rig.events.types();
+    let answered = types.iter().position(|t| t == "import.finished").unwrap();
+    let rebound = types.iter().rposition(|t| t == "dictation.ready").unwrap();
+    assert!(answered < rebound, "answered first: {types:?}");
+    let ready = rig
+        .events
+        .all()
+        .into_iter()
+        .rfind(|v| v["type"] == "dictation.ready")
+        .unwrap();
+    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_option")
+    );
+    assert_eq!(rig.dictate(1.2, 1)["text"], "Greetings world.");
     rig.events.assert_valid();
 }
 

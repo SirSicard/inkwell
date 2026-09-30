@@ -45,6 +45,10 @@
 
 mod asr;
 mod llm;
+// A Windows Vulkan build that starts on a PC without Vulkan (see the module).
+#[cfg(all(windows, feature = "engine-llama-vulkan"))]
+#[allow(unsafe_code)]
+mod no_vulkan;
 
 pub use asr::{MAX_NEW_TOKENS, MAX_WINDOW_SECONDS, QwenAsr, QwenAsrLoader};
 pub use llm::{JSON_OBJECT_GRAMMAR, LlamaLlm};
@@ -126,6 +130,10 @@ fn backend() -> Result<&'static LlamaBackend, EngineError> {
 /// model tries the GPU again.
 pub fn compute() -> Result<&'static Compute, EngineError> {
     static COMPUTE: OnceLock<Compute> = OnceLock::new();
+    // Before ggml's Vulkan backend registers: its loader is delay-loaded, and this hook answers
+    // where the PC has none.
+    #[cfg(all(windows, feature = "engine-llama-vulkan"))]
+    no_vulkan::keep();
     // The devices are only listed once the backend (and with it ggml's device registry) is up.
     backend()?;
     Ok(COMPUTE.get_or_init(|| {
@@ -145,8 +153,27 @@ pub fn compute() -> Result<&'static Compute, EngineError> {
             .collect();
         let chosen = choose(&devices, physical_cores());
         log_choice(&devices, &chosen, cfg!(feature = "engine-llama-vulkan"));
+        if vulkan_loader_missing() {
+            tracing::warn!(
+                "this PC has no Vulkan loader (vulkan-1.dll): llama.cpp runs on the {chosen}"
+            );
+        }
         chosen
     }))
+}
+
+/// **Any thread.** Whether this process started llama.cpp on a PC without the Vulkan loader
+/// (`vulkan-1.dll`), so a Vulkan build runs on the CPU. Known once [`compute`] has run.
+#[cfg(all(windows, feature = "engine-llama-vulkan"))]
+pub fn vulkan_loader_missing() -> bool {
+    no_vulkan::loader_missing()
+}
+
+/// **Any thread.** Whether this process started llama.cpp on a PC without the Vulkan loader: never,
+/// in a build without Vulkan on Windows.
+#[cfg(not(all(windows, feature = "engine-llama-vulkan")))]
+pub fn vulkan_loader_missing() -> bool {
+    false
 }
 
 /// Logs where llama.cpp computes and what ggml offered, so a CPU fallback is never silent: a

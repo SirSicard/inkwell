@@ -54,6 +54,8 @@ final class CoreController {
             self?.received(batch)
         }
         let forward = appleEvents
+        // Before the first event: the first run looks for Inkwell 0.2's data as soon as it shows.
+        screens.import02.looks = !DataLocation.isMoved(environment: environment)
         do {
             let data = try DataLocation.dataDirectory(environment: environment)
             let models = try DataLocation.modelsDirectory(environment: environment)
@@ -64,6 +66,8 @@ final class CoreController {
                 forward.handle($0)
             })
             session = started
+            // Parakeet loads from where the core installs it: the core's models directory.
+            ParakeetModel.useModelsDirectory(models ?? data.appendingPathComponent("models", isDirectory: true))
             let engines = AppleEngines(session: started)
             apple = engines
             appleEvents.attach(engines)
@@ -88,16 +92,31 @@ final class CoreController {
         }
     }
 
-    /// Queues one of the screens' commands (see `CoreCommand`).
+    /// Queues one of the screens' commands (see `CoreCommand`). One with no core to take it, or
+    /// one the core refuses to queue, never ran: logged by name, and failed (`notSent`).
     func send(_ command: CoreCommand) {
         guard let session else {
             commandLog.write("no core is running: a \(command.name) command was not sent")
+            notSent(command, why: "the core is not running")
             return
         }
         do {
             try session.command(command.json)
         } catch {
             log.error("the core refused a \(command.name, privacy: .public) command: \(String(describing: error), privacy: .public)")
+            // The error names a core status, never the command's fields.
+            notSent(command, why: String(describing: error))
+        }
+    }
+
+    /// A command that never reached the core fails as if the core had failed it: its
+    /// command.failed goes the way the core's events go, one main-queue hop later (a model may be
+    /// sending from inside its own apply), so the screen waiting for it says it couldn't instead
+    /// of waiting forever.
+    private func notSent(_ command: CoreCommand, why: String) {
+        let failed = command.notSent("couldn't send it: \(why)")
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.received([failed]) }
         }
     }
 
@@ -223,7 +242,8 @@ final class CoreController {
 }
 
 /// Hands the core's events to the Apple engines, from the core's event thread (it returns at once:
-/// a take starting only prewarms polish). The engines are attached once the session has started.
+/// a take starting only prewarms polish, and Parakeet's finished download starts its load). The
+/// engines are attached once the session has started.
 final class AppleEventForwarder: Sendable {
     private let engines = Mutex<AppleEngines?>(nil)
 
