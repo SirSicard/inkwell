@@ -79,9 +79,10 @@ public class RustNoticesTests
     /// <summary>
     /// The list was generated from this checkout's Cargo.lock and the release's features: a
     /// dependency change without regenerating fails here. (Its crates are cargo's resolution of the
-    /// release build; here, each one is at least in the lock at the version listed.) Windows: the
-    /// Windows release builds the Mac's engines, so its features are build-mac.sh's (ink-notices'
-    /// WINDOWS_RELEASE_FEATURES says so), for the Windows target.
+    /// release build; here, each one is at least in the lock at the version listed.) Windows: its
+    /// features are those windows/scripts/build-core.ps1 builds the x64 release with (ink-notices'
+    /// WINDOWS_RELEASE_FEATURES; the ARM64 release links a subset of its crates), for the Windows
+    /// target.
     /// </summary>
     [Fact]
     public void TheListWasGeneratedFromTheCurrentLockAndTheReleaseFeatures()
@@ -111,8 +112,8 @@ public class RustNoticesTests
             Assert.True(locked.Contains(notice.Id), $"{notice.Id} is not in Cargo.lock");
         }
 
-        var script = AboutCheckout.Read("mac/scripts/build-mac.sh");
-        Assert.Contains($"release_features=\"{RustNotices.Features}\"", script, StringComparison.Ordinal);
+        var script = AboutCheckout.Read("windows/scripts/build-core.ps1");
+        Assert.Contains($"X64 = '{RustNotices.Features}'", script, StringComparison.Ordinal);
         Assert.Equal("x86_64-pc-windows-msvc", RustNotices.Target);
     }
 }

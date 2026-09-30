@@ -44,10 +44,10 @@ SHA-256 against the release before installing it.
 dictations, notes and downloaded models) stays in `%LOCALAPPDATA%\Inkwell`, so a reinstall picks up
 where you left off. To remove it as well, delete that folder after uninstalling.
 
-**Microsoft's terms.** Inkwell includes the runtime of Microsoft's Windows App SDK and the Windows
-SDK's .NET projection, which Microsoft licenses separately under the Microsoft Software License
-Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you
-agree to those terms for those components.
+**Microsoft's terms.** Inkwell includes the runtime of Microsoft's Windows App SDK, the Windows
+SDK's .NET projection and the Visual C++ runtime, which Microsoft licenses separately under the
+Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or
+using Inkwell on Windows, you agree to those terms for those components.
 
 **Why the warnings?** Windows warns about any app that is not signed with a code-signing
 certificate it recognises. Signing the Windows build is planned; until then, the SHA-256 in step 2

@@ -130,6 +130,14 @@ public class NoticesTests
         Assert.Contains("https://aka.ms/WinSDKLicenseURL", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
         Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT WINDOWS SOFTWARE DEVELOPMENT KIT (SDK) FOR WINDOWS 10", byId["windows-sdk-net"].Text, StringComparison.Ordinal);
         Assert.Contains("Copyright (c) Microsoft Corporation.", byId["cswinrt"].Text, StringComparison.Ordinal);
+        // The Visual C++ runtime beside the app: Visual Studio 2026's (VC145, the redistributable
+        // build-core.ps1 copies from), under the licence terms Microsoft publishes for it.
+        Assert.Contains("Microsoft.VC145.CRT", byId["vc-runtime"].Role, StringComparison.Ordinal);
+        Assert.Contains("$VcRedist = 'VC145'", AboutCheckout.ReadWindows("scripts/build-core.ps1"), StringComparison.Ordinal);
+        Assert.StartsWith("\u00a9 Microsoft Corporation. All rights reserved.\n", byId["vc-runtime"].Text, StringComparison.Ordinal);
+        Assert.Contains("https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/", byId["vc-runtime"].Text, StringComparison.Ordinal);
+        Assert.Contains("MICROSOFT SOFTWARE LICENSE TERMS\nMICROSOFT VISUAL C++ V14 REDISTRIBUTABLE and RUNTIME \nLast Updated: October 1, 2025\n", byId["vc-runtime"].Text, StringComparison.Ordinal);
+        Assert.EndsWith("\nEULA ID: Cpp_v14_ENU.1033", byId["vc-runtime"].Text, StringComparison.Ordinal);
 
         // Windows' Parakeet runs on sherpa-onnx and the ONNX Runtime its archive carries.
         Assert.Equal("Apache-2.0", byId["sherpa-onnx"].Licence);
@@ -231,7 +239,7 @@ public class NoticesTests
     {
         var mac = MacNotices.Texts(AboutCheckout.Read("mac/Sources/Inkwell/Screens/Notices.swift"));
         Assert.True(mac.Count > 15, "Notices.swift was read");
-        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "cswinrt", "velopack"];
+        string[] windowsOnly = ["wasapi-rs", "sherpa-onnx", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp", "windows-app-sdk", "webview2", "winuiex", "dotnet-runtime", "windows-sdk-net", "vc-runtime", "cswinrt", "velopack"];
         var shared = Notices.Components.Where(c => !windowsOnly.Contains(c.Id)).ToList();
         Assert.Equal(16, shared.Count);
         Assert.All(windowsOnly, id => Assert.False(mac.ContainsKey(id), id));
@@ -380,7 +388,7 @@ public class ComposedNoticesTests
         Assert.Equal([], Problems(declared, ours + "\n" + windows));
         // Every line is well formed (a short line would drop out of the comparison above).
         Assert.All(Lines(mac).Concat(Lines(windows)), l => Assert.True(l.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 3, l));
-        Assert.Equal(["winuiex", "windows-sdk-net", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp"], Markers(windows).Keys);
+        Assert.Equal(["winuiex", "windows-sdk-net", "vc-runtime", "onnxruntime", "nlohmann-json", "kaldi-decoder", "kaldifst", "openfst", "simple-sentencepiece", "kaldi-native-fbank", "hclust-cpp"], Markers(windows).Keys);
     }
 
     /// <summary>The check fails when a composed notice has no line, and when a line names no composed notice.</summary>

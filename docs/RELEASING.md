@@ -265,7 +265,7 @@ Before the tag:
 
 - [x] **The maintainer:** the update key, the `release` environment and its secret, the public
       key in `mac/Info.plist`, and the tag ruleset (the steps under "Once: the update key").
-- [x] Every notice written without its upstream file compared with that project's own licence
+- [ ] Every notice written without its upstream file compared with that project's own licence
       file, replaced where it differs, and its `verified=` set to the date: the lines of
       `core/crates/ink-ffi/notices/overrides.txt` (then `mac/scripts/rust-notices.sh`), of
       `mac/composed-notices.txt` (replacing the text in `Notices.swift`), and of the Windows-only
@@ -310,12 +310,39 @@ After CI goes green:
 
 ## Inkwell 1.x on Windows
 
-The same `v1.X.Y` tag starts `win-release.yml` beside `mac-release.yml`. It builds the core with the
-Windows engines (Qwen3-ASR on llama.cpp with Vulkan, the CPU where a PC has no Vulkan GPU; Silero
-VAD) and the app with NativeAOT, checks what they need from a PC, packs the installer and the update
-feed with Velopack, and adds them to the tag's **draft** release (creating it if the Mac's workflow
-has not yet). A manual run is the dry run: everything but the release, the files kept as the run
-artifact `inkwell-windows` for 14 days.
+The same `v1.X.Y` tag starts `win-release.yml` beside `mac-release.yml`. On x64, the one Windows
+architecture 1.0 ships (`win-release-build.yml`, on `windows-2025`; ARM64 waits for 1.0.1), it
+builds the core with the Windows engines and the app with NativeAOT, checks what they need from a
+PC, packs the installer and the update feed with Velopack, and then adds them to the tag's
+**draft** release (creating it if the Mac's workflow has not yet). A manual run is the dry run:
+everything but the release, the files kept as the run artifact `inkwell-windows` for 14 days.
+
+The engines it ships (`windows/scripts/build-core.ps1`, whose list ink-notices' Windows features
+are held to): Qwen3-ASR on llama.cpp for dictation and meeting finals (Vulkan, and the CPU where a
+PC has no Vulkan GPU), Silero VAD on tract, Parakeet v3 int8 on sherpa-onnx (live words; dictation
+without a GPU), and Nemotron diarization of the far end on NeMo-Speech.cpp (Vulkan, then the CPU).
+
+- **sherpa-onnx**: its 1.13.4 "shared, MD, Release, no-tts" archive for x64, fetched
+  by `win-release-build.yml` and checked against the SHA-256 GitHub publishes for it, and every file
+  the build uses from it against ink-engines' `build.rs` pins (`SHERPA_ONNX_DIR`). No
+  text-to-speech, so none of espeak-ng. Its `sherpa-onnx-c-api.dll`, `onnxruntime.dll` and
+  `onnxruntime_providers_shared.dll` ship beside `Inkwell.exe`.
+- **NeMo-Speech.cpp**: built from its pinned commit with `build-nemo-speech.sh` (Git Bash inside
+  the developer environment), against SentencePiece and Abseil built from their pinned tarballs by
+  `build-sentencepiece-abseil.sh` and linked into NeMo's own DLL (`ENGINE_DEPS_DIR`), as for the
+  Mac. Its `nemo_speech_asr_c.dll`, `nemo_speech_asr.dll` and its ggml's DLLs ship beside
+  `Inkwell.exe`. The core delay-loads it: its Vulkan backend needs the Vulkan loader as soon as it
+  loads, so a PC without a Vulkan driver runs everything but the diarizer.
+- **The Visual C++ runtime**: both engines' DLLs link it dynamically (`/MD`), so `build-core.ps1`
+  copies the DLLs of it they import, and no others, from the build machine's Visual Studio 2026
+  redistributable folder (`VCToolsRedistDir`: `Microsoft.VC145.CRT` and `Microsoft.VC145.OpenMP`;
+  on the runner and on a PC today `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`,
+  `msvcp140_1.dll` and `vcomp140.dll`). They ship beside `Inkwell.exe` (app-local, so the per-user
+  install needs no administrator and no Visual C++ Redistributable). Another redistributable than
+  VC145 stops the build: About shows the licence terms of this one. The build prints the version,
+  and the release notes give it (`win-release-build.yml`'s `vcruntime` output).
+- `build-core.ps1` puts the core's DLL, the engines' DLLs and that runtime in
+  `core/target/release/inkwell-core/`, and the publish takes every DLL there (`InkCoreDir`).
 
 **Unsigned, for now.** The Windows build is not code-signed. SmartScreen warns before the installer
 runs, and Smart App Control blocks it outright; the homepage says how to check the download and get
@@ -323,7 +350,7 @@ past SmartScreen (`windows/HOMEPAGE-INSTALL.md` is its draft). Signing is a late
 
 | Job | Runs on | Holds | Does |
 |---|---|---|---|
-| `build` | tag and dry run | nothing secret; read access | the Vulkan SDK (pinned by LunarG's published SHA-256), `windows/scripts/build-core.ps1`, the generated-code and notice checks, the locked restore and NuGet licence check, the NativeAOT publish with the tag's version, `windows/scripts/pack.ps1` |
+| `build` (`win-release-build.yml`) | tag and dry run | nothing secret; read access | sherpa-onnx's archive, the Vulkan SDK (pinned by LunarG's published SHA-256) and the diarizer's prefix, all pinned; `windows/scripts/build-core.ps1`; the generated-code and notice checks; the locked restore and NuGet licence check; the NativeAOT publish with the tag's version; `windows/scripts/pack.ps1` |
 | `publish` | tag only | write access (environment `release`) | the files checked against their SHA-256s, then added to the tag's draft release, with a Windows section in its notes |
 
 What a release carries for Windows:
@@ -331,45 +358,62 @@ What a release carries for Windows:
 - `Inkwell_X.Y.Z_x64-setup.exe`, the installer. Per user, no administrator: it installs into
   `%LOCALAPPDATA%\InkwellApp`, adds a Start menu entry and an entry in Settings > Apps, and starts
   the app. Uninstalling removes that folder only: the library, in `%LOCALAPPDATA%\Inkwell`, stays.
-  It refuses Windows older than 11 24H2. The package id `InkwellApp` is the update chain's name:
-  it never changes. While it installs it shows a splash with Microsoft's end-user terms, which the
-  licences of the Windows App SDK (its section 3(b)(ii)) and of the Windows SDK's .NET projection
-  (its Distribution Requirements) ask for, drawn by `pack.ps1`; the release notes and the homepage
-  carry them too, and Settings > About in full. Velopack's installer has no licence page, so the
-  app's first run asks instead: the terms and both licences, with Agree and Quit, before anything
-  else starts (`TermsStep`). The agreement is kept in `terms-agreed.txt` in the library folder with
-  the terms' version, a SHA-256 of the sentence and both licence texts (`TermsStep.CurrentVersion`):
-  editing the sentence or re-copying either licence asks every existing user again at their next
-  start.
-- `InkwellApp-X.Y.Z-full.nupkg` and `releases.win.json`: the update and its feed. The app's
-  Settings > About > Check Now reads the feeds of the repository's latest published releases
-  (GitHub's API, then the assets over HTTPS), and Velopack installs a package only if its size and
-  SHA-256 match the feed's. `pack.ps1` checks the feed against the package it wrote.
+  It refuses Windows older than 11 24H2. The package id `InkwellApp` is the update chain's name: it
+  never changes. While it installs it shows a splash with Microsoft's end-user terms, which the
+  licences of the Windows App SDK (its section 3(b)(ii)), of the Windows SDK's .NET projection and
+  of Visual Studio for the Visual C++ runtime (their Distribution Requirements) ask for, drawn by
+  `pack.ps1`; the release notes and the homepage carry them too, and Settings > About in full.
+  Velopack's installer has no licence page, so the app's first run asks instead: the terms and the
+  three licences, with Agree and Quit, before anything else starts (`TermsStep`). The agreement is
+  kept in `terms-agreed.txt` in the library folder with the terms' version, a SHA-256 of the
+  sentence and the three licence texts (`TermsStep.CurrentVersion`): editing the sentence or
+  re-copying any of the licences asks every existing user again at their next start.
+- `InkwellApp-X.Y.Z-full.nupkg` and `releases.win.json`: the update and its feed (Velopack's
+  channel `win`, which is part of the update chain too: it never changes). The app's Settings >
+  About > Check Now reads the feeds of the repository's latest published releases (GitHub's API,
+  then the assets over HTTPS), and Velopack installs a package only if its size and SHA-256 match
+  the feed's. `pack.ps1` checks the feed against the package it wrote.
 - `Inkwell_X.Y.Z_windows-sha256.txt`: the SHA-256s of the three, in `sha256sum` format. The
   installer's is also in the release notes.
 
 What the checks guarantee:
 
-- **No Visual C++ runtime needed.** The core's DLL links the CRT statically (`crt-static`, and
-  llama.cpp's CMake build with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`); the .NET and Windows
-  App SDK binaries use only the UCRT, which is part of Windows. `pack.ps1` fails on any binary that
-  needs a Visual C++ runtime DLL, or anything at load time that is neither beside the app nor in
-  System32.
+- **The Visual C++ runtime is the app's own.** The core's DLL links the CRT statically
+  (`crt-static`, and llama.cpp's CMake build with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`); the
+  .NET and Windows App SDK binaries use only the UCRT, which is part of Windows; the engines' DLLs
+  need the Visual C++ runtime DLLs above, and `build-core.ps1` (for the core and the engines' DLLs)
+  and `pack.ps1` (for the whole app) accept one only when it is beside `Inkwell.exe` and built for
+  x64, never the build machine's copy in System32 (nor the debug UCRT). `pack.ps1` prints the
+  runtime's version and refuses DLLs of two versions.
+- **Everything it loads is in the package or part of Windows.** Every DLL a binary of the app
+  loads when it loads must be beside `Inkwell.exe` or part of Windows (`windows/scripts/lib/dll-imports.ps1`,
+  which both scripts use). A file in the build machine's System32 counts only if Windows signs it
+  as its own, so nothing a PC gets elsewhere passes for Windows because the build machine has it:
+  the Vulkan loader (GPU drivers), a Visual C++ runtime, LLVM's OpenMP. ONNX Runtime never
+  counts: Windows 11 has an older `onnxruntime.dll` of its own there, and sherpa-onnx must get the
+  one the app ships (the adapter also refuses any other version when it loads).
 - **It starts without Vulkan.** `vulkan-1.dll` is delay-loaded, and only for the functions
   `build-core.ps1` lists; the core then runs llama.cpp on the CPU (`tests/vulkan_missing.rs` runs
-  in the same job).
+  in the same job). The diarizer's DLL is delay-loaded too, and its Vulkan backend is the one
+  binary allowed to need the loader when it loads; the core checks the diarizer loads before its
+  first call (ink-engines' `src/nemo.rs`).
+- **It is x64's.** `pack.ps1` refuses an `Inkwell.exe` or core built for another architecture.
 - **Notices first.** A tag waits, as the Mac's does, for every notice written without its upstream
   file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
   included (`windows/scripts/release-version.sh`).
 
-The same build on a PC (Visual Studio's C++ build tools, CMake, Ninja, LLVM, the Vulkan SDK with
-`VULKAN_SDK` set, the .NET SDK `windows/global.json` pins):
+The same build on a PC (Visual Studio's C++ build tools, CMake, Ninja, LLVM, Git Bash, the Vulkan
+SDK with `VULKAN_SDK` set, the .NET SDK `windows/global.json` pins), x64:
 
 ```powershell
+# SHERPA_ONNX_DIR: the unpacked sherpa-onnx-v1.13.4-win-x64-shared-MD-Release-no-tts-lib archive.
+# NEMO_SPEECH_DIR: the prefix build-nemo-speech.sh installed (ENGINE_DEPS_DIR from
+# build-sentencepiece-abseil.sh), both run from Git Bash inside Visual Studio's developer
+# environment, as win-release-build.yml runs them.
 pwsh windows/scripts/build-core.ps1
 cd windows
 dotnet restore Inkwell.slnx --locked-mode
-dotnet publish Inkwell/Inkwell.csproj -c Release -o $env:TEMP\inkwell-app --no-restore -p:InkVersion=1.0.0 "-p:InkCoreDir=$PWD\..\core\target\release\"
+dotnet publish Inkwell/Inkwell.csproj -c Release -o $env:TEMP\inkwell-app --no-restore -p:InkVersion=1.0.0 "-p:InkCoreDir=$PWD\..\core\target\release\inkwell-core\"
 pwsh scripts/pack.ps1 -Version 1.0.0 -AppDir $env:TEMP\inkwell-app -OutDir $env:TEMP\inkwell-release
 ```
 

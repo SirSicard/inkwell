@@ -9,8 +9,15 @@
 //!
 //! ```text
 //! NEMO_SPEECH_DIR=<prefix> INK_BENCH_DIR=<bench> INK_DIAR_SET=<set> \
-//!     cargo test -p ink-engines --features engine-nemo --release -- --ignored --test-threads 1
+//!     cargo test -p ink-engines --features engine-nemo --release -- --ignored --test-threads 1 \
+//!     --skip two_diarizers_load_and_run_at_once
+//! NEMO_SPEECH_DIR=<prefix> INK_BENCH_DIR=<bench> INK_DIAR_SET=<set> \
+//!     cargo test -p ink-engines --features engine-nemo --release --test nemo -- --ignored \
+//!     --exact two_diarizers_load_and_run_at_once
 //! ```
+//!
+//! The second runs that test in a process of its own: it proves something only as the process's
+//! first load on the GPU, so after the others it would pass without testing anything.
 //!
 //! The model runs on GPU 0 (Metal on the Mac, Vulkan on Windows); `INK_NEMO_DEVICE=cpu` runs the
 //! same tests on the CPU.
@@ -24,7 +31,7 @@ mod der;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
 use ink_core::mock::MockClock;
@@ -32,7 +39,8 @@ use ink_core::{
     CancelToken, Diarizer, EngineError, EngineInfo, EventSink, Job, SliceWindows, SpeakerTurn,
 };
 use ink_engines::{
-    ModelDir, NemoDevice, NemoDiarizer, NemoLoader, Residency, nemotron_3_diarization,
+    ModelDir, NemoDevice, NemoDiarizer, NemoLoader, Residency, load_diarizer,
+    nemotron_3_diarization,
 };
 use sha2::{Digest, Sha256};
 
@@ -315,6 +323,40 @@ fn the_windowed_feed_leaves_the_final_pass_unchanged() {
     }
 }
 
+// --- Two at once. -------------------------------------------------------------------------------
+
+/// Two diarizers, each loading its own model, started together, as a crash recovery's final pass
+/// and a live meeting's can be: both finish, with the same turns. On the PC, before loads waited
+/// for each other (`src/nemo.rs`), two at once ended the process (0xC0000409) or gave one of them
+/// the CPU's turns while ggml-vulkan created its device for the first. That happens only at a
+/// process's first load on the GPU: run this test alone (`--exact`), since after another test's
+/// load it proves nothing.
+#[test]
+#[ignore = "needs the Nemotron model and the AMI meetings (INK_BENCH_DIR, INK_DIAR_SET)"]
+fn two_diarizers_load_and_run_at_once() {
+    let (audio, _) = meeting("EN2002c");
+    let minute = &audio[..60 * 16_000];
+    let diarizers = [diarizer(), diarizer()];
+    let start = Barrier::new(diarizers.len());
+    let turns: Vec<Vec<SpeakerTurn>> = std::thread::scope(|s| {
+        let runs: Vec<_> = diarizers
+            .iter()
+            .map(|diarizer| {
+                let start = &start;
+                s.spawn(move || {
+                    start.wait();
+                    diarizer.diarize(&mut SliceWindows::new(minute), &CancelToken::new())
+                })
+            })
+            .collect();
+        runs.into_iter()
+            .map(|run| run.join().unwrap().unwrap())
+            .collect()
+    });
+    assert!(!turns[0].is_empty());
+    assert_eq!(turns[0], turns[1], "the same audio gave other turns");
+}
+
 // --- Live labels. -------------------------------------------------------------------------------
 
 /// Everything a live stream reported, with how much audio had been pushed when each turn came.
@@ -411,6 +453,58 @@ fn a_corrupt_model_fails_on_first_use_with_the_librarys_reason() {
         matches!(&err, EngineError::Failed(m) if m.contains("loading the model")),
         "{err:?}"
     );
+}
+
+/// The app's diarizer (`load_diarizer`): on Windows the CPU is tried after GPU 0, where the model
+/// loads, at the first use; on the Mac GPU 0 is the only device.
+#[test]
+fn the_apps_diarizer_tries_the_cpu_after_the_gpu_on_windows() {
+    let root = temp_dir("app-fallback");
+    let dir = ModelDir::new(&root);
+    let row = nemotron_3_diarization();
+    let path = dir.file_path(&row, &row.files[0]);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, b"not a gguf file").unwrap();
+    let diarizer = load_diarizer(&dir, &row).unwrap();
+    let second = [0.0; 16_000];
+    let err = diarizer
+        .diarize(&mut SliceWindows::new(&second), &CancelToken::new())
+        .unwrap_err();
+    let _ = fs::remove_dir_all(&root);
+    let EngineError::Failed(m) = &err else {
+        panic!("{err:?}")
+    };
+    assert!(m.contains("loading the model"), "{m}");
+    assert_eq!(
+        m.contains("Gpu(0): ") && m.contains("Cpu: "),
+        cfg!(windows),
+        "{m}"
+    );
+}
+
+/// A GPU the model does not load on: the diarizer runs on the CPU instead. No machine has a
+/// hundredth GPU, and NeMo-Speech.cpp refuses its index as it refuses GPU 0 on a PC whose Vulkan
+/// has no device it can use ("no matching GPU device found").
+#[test]
+#[ignore = "needs the Nemotron model and the AMI meetings (INK_BENCH_DIR, INK_DIAR_SET)"]
+fn a_model_that_does_not_load_on_the_gpu_runs_on_the_cpu() {
+    let (audio, _) = meeting("EN2002c");
+    let minute = &audio[..60 * 16_000];
+    let absent = NemoDevice::Gpu(99);
+    let err = NemoDiarizer::new(&model_path(), info(), absent)
+        .unwrap()
+        .diarize(&mut SliceWindows::new(minute), &CancelToken::new())
+        .unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Failed(m) if m.contains("no matching GPU device")),
+        "{err:?}"
+    );
+    let turns = NemoDiarizer::new(&model_path(), info(), absent)
+        .unwrap()
+        .with_fallback(NemoDevice::Cpu)
+        .diarize(&mut SliceWindows::new(minute), &CancelToken::new())
+        .unwrap();
+    assert!(!turns.is_empty());
 }
 
 #[test]

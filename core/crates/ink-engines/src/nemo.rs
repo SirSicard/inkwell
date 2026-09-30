@@ -37,6 +37,9 @@
 //! - The model handle is used only under a mutex (open a stream, destroy), so it is never used
 //!   from two threads at once. The header gives it no thread affinity, so it may be used and
 //!   destroyed from any thread. Streams opened from it run concurrently, as lines 85-86 allow.
+//! - Models are created one at a time in the process ([`CREATING`]): the header does not say two
+//!   creates may run at once, and on Vulkan they may not. On Vulkan a GPU whose first create
+//!   failed is not created on again.
 
 #![warn(clippy::undocumented_unsafe_blocks)]
 
@@ -45,7 +48,7 @@ use std::ffi::{CStr, CString};
 use std::fmt;
 use std::path::Path;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ink_core::{
     CANONICAL_RATE, CancelToken, DiarizeInput, Diarizer, EngineError, EngineInfo, EngineStream,
@@ -221,6 +224,111 @@ fn check(what: &str, status: ffi::Status) -> Result<(), EngineError> {
     }
 }
 
+/// Windows: that NeMo-Speech.cpp's library loads, checked before its first call.
+///
+/// The core's DLL delay-loads it (ink-ffi's build script passes `/DELAYLOAD`): NeMo's Vulkan backend,
+/// `ggml-vulkan.dll`, loads the Vulkan loader (`vulkan-1.dll`, which GPU drivers install) when it
+/// loads, so a core that loaded NeMo at once would not start at all on a PC without a Vulkan driver.
+/// Delay-loaded, NeMo loads at its first call, where a library that cannot load would make MSVC's
+/// delay-load helper raise a structured exception and end the process. So it is loaded here first,
+/// with the search the helper uses (flags 0), and a failure is an error of this load: the diarizer
+/// is unavailable, and nothing else is. Once loaded it stays loaded, and the helper finds it. (Where
+/// the library is linked the usual way, as in tests, it is found loaded already.)
+#[cfg(windows)]
+fn library_loads() -> Result<(), EngineError> {
+    load_library(c"nemo_speech_asr_c.dll")
+}
+
+/// Loads the DLL `name` with the default search and keeps it loaded, or says why it did not load.
+#[cfg(windows)]
+fn load_library(name: &CStr) -> Result<(), EngineError> {
+    use std::ffi::{c_char, c_void};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LoadLibraryExA(name: *const c_char, file: *mut c_void, flags: u32) -> *mut c_void;
+    }
+    // SAFETY: `name` is a NUL-terminated string; no file handle, default flags. The module is
+    // never freed: it stays loaded for the life of the process, as a DLL loaded at start does.
+    let module = unsafe { LoadLibraryExA(name.as_ptr(), std::ptr::null_mut(), 0) };
+    if module.is_null() {
+        // Windows names no DLL: its "module not found" is the same for this one and for any it
+        // loads, so the message gives the likely ones as examples, not as the cause.
+        let error = std::io::Error::last_os_error();
+        return Err(EngineError::Failed(format!(
+            "couldn't load {} or a DLL it loads ({error}), for example the Vulkan loader \
+             (vulkan-1.dll, which GPU drivers install) or the Visual C++ runtime",
+            name.to_string_lossy()
+        )));
+    }
+    Ok(())
+}
+
+/// Held across each call that creates a model, so that creates run one at a time in the process,
+/// whichever diarizer, preset or device asks. The header promises nothing about two at once, and
+/// on Vulkan they are not safe: the first model a process creates makes ggml-vulkan create its
+/// device, which the pinned ggml lists as created before it is, without a lock
+/// (`ggml_vk_get_device`), so a second create in that window uses the unfinished device. On the
+/// PC that ended the process (the Vulkan loader's "vkCreateFence: Invalid device", 0xC0000409) or
+/// gave one of the two the CPU's turns (`tests/nemo.rs`). Once the device existed, creates,
+/// streams and destroys ran two at once without fault, so only the create waits here.
+///
+/// It also holds what creates found out ([`Creates`]): on Vulkan, a GPU whose first create failed
+/// is not created on again. ggml-vulkan keeps the device it listed even when making it fails (the
+/// same `ggml_vk_get_device` has no `catch`) and hands it to the next create on that GPU, which
+/// ends the process the same way: on the PC, with the first `vkCreateDevice` made to fail under a
+/// debugger, the CPU ran that pass and the next pass's create on GPU 0 ended the process. So after
+/// a failed first create a GPU's creates fail at once, and the diarizer's next device (the CPU, in
+/// the app) runs the model. The unfinished device still ends the process when it exits
+/// (ggml-vulkan's destructor: "vkDestroyFence: Invalid device"); only a change to ggml-vulkan can
+/// prevent that. A GPU a model was created on has its device whole, so it is tried again after a
+/// later failure (too little memory for the model, say).
+static CREATING: Mutex<Creates> = Mutex::new(Creates {
+    built: Vec::new(),
+    failed: Vec::new(),
+});
+
+/// What creates found out about the GPUs, kept under [`CREATING`].
+struct Creates {
+    /// GPUs a model was created on in this process.
+    built: Vec<u16>,
+    /// GPUs whose first create in this process failed, where the GPU is Vulkan's: not created on
+    /// again.
+    failed: Vec<u16>,
+}
+
+impl Creates {
+    /// Notes whether a create on GPU `ix` `created` a model. Only a GPU no model was created on
+    /// yet is kept from more creates by a failure, and only on Vulkan: the Mac's Metal makes its
+    /// devices when its backend registers, under a lock, and keeps none half made.
+    fn note(&mut self, ix: u16, created: bool) {
+        if self.built.contains(&ix) {
+            return;
+        }
+        if created {
+            self.built.push(ix);
+        } else if !cfg!(target_os = "macos") {
+            self.failed.push(ix);
+        }
+    }
+}
+
+/// `nemo_speech_diar_create`, only with [`CREATING`] held: the guard is an argument, so a create
+/// cannot be written without the lock, or with the lock let go before the call.
+///
+/// # Safety
+///
+/// The strings `cfg` points to must be live for the call.
+unsafe fn create(
+    _creating: &MutexGuard<'_, Creates>,
+    cfg: &ffi::DiarModelConfig,
+    out: &mut *mut ffi::DiarModel,
+) -> ffi::Status {
+    // SAFETY: `cfg`'s strings are live (the caller's contract), and its `size` covers the whole
+    // struct as declared in the pinned header; `out` is a valid place for the handle.
+    unsafe { ffi::nemo_speech_diar_create(cfg, out) }
+}
+
 /// A model handle. Only [`Model`] holds one, behind its mutex.
 struct ModelHandle(NonNull<ffi::DiarModel>);
 
@@ -241,6 +349,9 @@ struct Model {
 
 impl Model {
     fn load(path: &CStr, preset: Option<&CStr>, device: NemoDevice) -> Result<Self, EngineError> {
+        // Every call into the library starts here: it must load first (delay-loaded on Windows).
+        #[cfg(windows)]
+        library_loads()?;
         let cfg = ffi::DiarModelConfig {
             size: size_of::<ffi::DiarModelConfig>(),
             model_path: path.as_ptr(),
@@ -258,9 +369,21 @@ impl Model {
             update_period_frames: 0,
         };
         let mut out = std::ptr::null_mut();
-        // SAFETY: `cfg` and the strings it points to outlive the call, and its `size` covers the
-        // whole struct as declared in the pinned header; `out` is a valid place for the handle.
-        let status = unsafe { ffi::nemo_speech_diar_create(&cfg, &mut out) };
+        let mut creating = lock(&CREATING);
+        if let NemoDevice::Gpu(ix) = device
+            && creating.failed.contains(&ix)
+        {
+            return Err(EngineError::Failed(format!(
+                "couldn't load the model on GPU {ix}: its first load in this process failed, and \
+                 it is not tried again"
+            )));
+        }
+        // SAFETY: `cfg` and the strings it points to outlive the call.
+        let status = unsafe { create(&creating, &cfg, &mut out) };
+        if let NemoDevice::Gpu(ix) = device {
+            creating.note(ix, status == ffi::OK);
+        }
+        drop(creating);
         // On a failure `out` is not read: the header defines no handle then, so there is nothing
         // this side may free. (At the pinned commit, `c_api.cpp:489` clears `*out` first and the
         // handle is only released to it on success, lines 515-517, so nothing is left behind.)
@@ -469,12 +592,14 @@ fn check_samples(audio: &[f32]) -> Result<(), EngineError> {
 ///
 /// Each preset's model is loaded when first used (the final pass's at the first
 /// [`diarize`](Diarizer::diarize), the live one at the first
-/// [`open_stream`](Diarizer::open_stream)) and kept until this value is dropped. A failed load
+/// [`open_stream`](Diarizer::open_stream)), on the first of its devices it loads on
+/// ([`with_fallback`](Self::with_fallback)), and kept until this value is dropped. A failed load
 /// is returned and tried again on the next call.
 pub struct NemoDiarizer {
     info: EngineInfo,
     path: CString,
-    device: NemoDevice,
+    /// Where the model runs: tried in this order at each load.
+    devices: Vec<NemoDevice>,
     offline: Mutex<Option<Arc<Model>>>,
     live: Mutex<Option<Arc<Model>>>,
 }
@@ -483,7 +608,7 @@ impl fmt::Debug for NemoDiarizer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NemoDiarizer")
             .field("id", &self.info.id)
-            .field("device", &self.device)
+            .field("devices", &self.devices)
             .finish_non_exhaustive()
     }
 }
@@ -512,10 +637,20 @@ impl NemoDiarizer {
         Ok(Self {
             info,
             path,
-            device,
+            devices: vec![device],
             offline: Mutex::new(None),
             live: Mutex::new(None),
         })
+    }
+
+    /// The same diarizer, loading on `device` where the model does not load on the devices before
+    /// it: Windows' CPU behind GPU 0, for a PC whose Vulkan has no device the model loads on (no
+    /// Vulkan GPU, or too little memory on it). The fallback is tried where the model loads, at
+    /// its first use; nothing is loaded here.
+    #[must_use]
+    pub fn with_fallback(mut self, device: NemoDevice) -> Self {
+        self.devices.push(device);
+        self
     }
 
     /// The model for the final pass or for live labels, loading it on first use.
@@ -534,7 +669,10 @@ impl NemoDiarizer {
         if let Some(model) = slot.as_ref() {
             return Ok(Arc::clone(model));
         }
-        let model = Arc::new(Model::load(&self.path, preset, self.device)?);
+        let model = Arc::new(crate::adapters::first_that_loads(
+            &self.devices,
+            |device| Model::load(&self.path, preset, device),
+        )?);
         *slot = Some(Arc::clone(&model));
         Ok(model)
     }
@@ -728,6 +866,10 @@ impl Loader<NemoDiarizer> for NemoLoader {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use ink_core::SliceWindows;
+
     use super::*;
 
     fn segment(start_time: f64, end_time: f64, speaker: i32) -> ffi::DiarSegment {
@@ -868,10 +1010,128 @@ mod tests {
         assert_eq!(OFFLINE_PRESET_C.to_str(), Ok(OFFLINE_PRESET));
     }
 
+    /// Loads run one at a time in the process: while one is under way (holding the lock), another
+    /// diarizer's load waits, and goes on when it ends. A corrupt file on the CPU: the library is
+    /// called and refuses it, so no model is needed. That the create itself runs under the lock is
+    /// the compiler's to check: [`create`] takes the guard.
+    #[test]
+    fn a_load_waits_while_another_is_under_way() {
+        let dir =
+            std::env::temp_dir().join(format!("ink-engines-nemo-one-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.gguf");
+        std::fs::write(&path, b"not a gguf file").unwrap();
+        let info = crate::nemotron_3_diarization().info();
+        let diarizer = NemoDiarizer::new(&path, info, NemoDevice::Cpu).unwrap();
+        let second = [0.0; 16_000];
+        let load = || diarizer.diarize(&mut SliceWindows::new(&second), &CancelToken::new());
+        // Once alone first, so that the library's first-call set-up is not what the wait sees.
+        assert!(load().is_err());
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            // Inside the scope, so that a failed assertion lets go of it before the join.
+            let under_way = lock(&CREATING);
+            s.spawn(|| {
+                let _ = done.send(load());
+            });
+            assert!(
+                result.recv_timeout(Duration::from_millis(500)).is_err(),
+                "the load did not wait for the one under way"
+            );
+            drop(under_way);
+            let loaded = result
+                .recv_timeout(Duration::from_secs(60))
+                .expect("the load went on");
+            assert!(
+                matches!(&loaded, Err(EngineError::Failed(m)) if m.contains("loading the model")),
+                "{loaded:?}"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Vulkan a failed first create keeps a GPU from more; after a model was created on it, no
+    /// failure does. On the Mac nothing is kept from more.
+    #[test]
+    fn only_a_failed_first_create_keeps_a_gpu_from_more() {
+        let mut creates = Creates {
+            built: Vec::new(),
+            failed: Vec::new(),
+        };
+        creates.note(0, true);
+        creates.note(0, false);
+        creates.note(1, false);
+        assert_eq!(creates.built, [0]);
+        let kept: &[u16] = if cfg!(target_os = "macos") { &[] } else { &[1] };
+        assert_eq!(creates.failed, kept);
+    }
+
+    /// On Vulkan, the next load on a GPU whose first load failed fails at once, without the
+    /// library, and the CPU behind it is tried; on the Mac the library is asked again. GPU 99: no
+    /// machine has one, so the library refuses it ("no matching GPU device") before it reads the
+    /// file. The file is not a model, so the CPU refuses it too, and the error names both.
+    #[test]
+    fn a_gpu_whose_first_load_failed_is_not_tried_again_on_vulkan() {
+        let dir = std::env::temp_dir().join(format!(
+            "ink-engines-nemo-failed-gpu-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.gguf");
+        std::fs::write(&path, b"not a gguf file").unwrap();
+        let info = crate::nemotron_3_diarization().info();
+        let second = [0.0; 16_000];
+        let error = |diarizer: NemoDiarizer| match diarizer
+            .diarize(&mut SliceWindows::new(&second), &CancelToken::new())
+        {
+            Err(EngineError::Failed(m)) => m,
+            other => panic!("{other:?}"),
+        };
+        let first = error(NemoDiarizer::new(&path, info.clone(), NemoDevice::Gpu(99)).unwrap());
+        let again = error(
+            NemoDiarizer::new(&path, info, NemoDevice::Gpu(99))
+                .unwrap()
+                .with_fallback(NemoDevice::Cpu),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(first.contains("no matching GPU device"), "{first}");
+        assert_eq!(
+            again.contains("couldn't load the model on GPU 99: its first load"),
+            !cfg!(target_os = "macos"),
+            "{again}"
+        );
+        assert_eq!(
+            again.contains("no matching GPU device"),
+            cfg!(target_os = "macos"),
+            "{again}"
+        );
+        assert!(again.contains("Cpu: "), "{again}");
+    }
+
     #[test]
     fn non_finite_audio_is_refused() {
         assert!(check_samples(&[0.0, 0.5]).is_ok());
         assert!(check_samples(&[0.0, f32::NAN]).is_err());
         assert!(check_samples(&[f32::INFINITY]).is_err());
+    }
+
+    /// Windows: a library that does not load is an error naming it, not the delay-load helper's
+    /// exception at the first call. The DLL it lacks may be any it loads, so none is given as the
+    /// cause.
+    #[test]
+    #[cfg(windows)]
+    fn a_library_that_does_not_load_is_an_error_naming_it() {
+        let err = load_library(c"no-such-library-for-inkwell.dll").unwrap_err();
+        assert!(
+            matches!(&err, EngineError::Failed(m)
+                if m.starts_with("couldn't load no-such-library-for-inkwell.dll or a DLL it loads (")
+                    && m.contains("for example")),
+            "{err}"
+        );
+        assert_eq!(load_library(c"kernel32.dll"), Ok(()));
+        // Tests link the library the usual way, and cargo puts its directory on PATH: it loads.
+        assert_eq!(library_loads(), Ok(()));
     }
 }

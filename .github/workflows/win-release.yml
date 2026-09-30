@@ -1,20 +1,21 @@
 name: Windows release
 
 # Releases the Windows app (docs/RELEASING.md), unsigned for now: no code signing yet, and the
-# homepage tells people how to get past SmartScreen and check the download. On a v1.X.Y tag: build
-# the core with its Windows engines and the app (NativeAOT), check that neither needs anything a
-# PC may lack (a Visual C++ runtime, the Vulkan driver), pack the installer and the update feed with
-# Velopack, write their SHA-256s, and draft the GitHub release holding them (or add them to the
-# draft the Mac's workflow made for the same tag). A person publishes the draft; nothing here does.
+# homepage tells people how to get past SmartScreen and check the download. x64 only: 1.0 ships no
+# ARM64 build. On a v1.X.Y tag: build the core with its engines and the app (NativeAOT), check that
+# neither needs anything a PC may lack (the Vulkan driver, Windows' own older ONNX Runtime, a Visual
+# C++ runtime other than the one beside the app), pack the installer and the update feed with
+# Velopack, and write their SHA-256s (win-release-build.yml); then draft the GitHub release holding
+# them (or add them to the draft the Mac's workflow made for the same tag). A person publishes the
+# draft; nothing here does.
 #
 # A manual run is the dry run: the same build, checks and pack, the release's files kept as run
 # artifacts, and nothing published.
 #
-# How an unsigned build is still checked, end to end: every input is pinned (actions by commit,
-# the Vulkan SDK by its published SHA-256, crates and NuGet packages by their lock files, vpk by
-# its tool manifest); the release's files carry their SHA-256s in the release and in its notes;
-# the app reads its update feed over HTTPS from this repository's releases, and Velopack refuses a
-# package whose size or SHA-256 differs from the feed's.
+# How an unsigned build is still checked, end to end: every input is pinned (win-release-build.yml
+# lists them); the release's files carry their SHA-256s in the release and in its notes; the app
+# reads its update feed over HTTPS from this repository's releases, and Velopack refuses a package
+# whose size or SHA-256 differs from the feed's.
 #
 # Secrets and privileges, by job:
 # - build: no secret; read access to the repository only.
@@ -39,150 +40,15 @@ concurrency:
   group: win-release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-  DOTNET_NOLOGO: '1'
-
 jobs:
   build:
-    name: build, check, pack (windows-2025)
-    runs-on: windows-2025
+    name: x64
+    uses: ./.github/workflows/win-release-build.yml
     permissions:
       contents: read
-    timeout-minutes: 150
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      setup: ${{ steps.version.outputs.setup }}
-      package: ${{ steps.version.outputs.package }}
-      sums: ${{ steps.version.outputs.sums }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # From the tag (v1.X.Y exactly) or the dry run's input: passed through the environment and
-      # checked, never pasted into a script. bash, for pipefail: a refusal must fail the step.
-      - name: Version
-        id: version
-        shell: bash
-        env:
-          EVENT: ${{ github.event_name }}
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          if [ "$EVENT" = push ]; then
-            windows/scripts/release-version.sh tag "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
-          else
-            windows/scripts/release-version.sh dry-run "$INPUT_VERSION" | tee -a "$GITHUB_OUTPUT"
-          fi
-
-      # A release is cut from main: a tag on a commit main does not contain stops here.
-      - name: The tag is on main
-        if: github.event_name == 'push'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          status="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" --jq .status)"
-          case "$status" in
-            identical | behind) echo "the tag's commit is on main" ;;
-            *)
-              echo "::error title=Not on main::$GITHUB_REF_NAME points at a commit main does not contain ($status)"
-              exit 1
-              ;;
-          esac
-
-      - name: Script tests
-        shell: bash
-        run: bash windows/scripts/tests/test-release-version.sh
-
-      # Installs the channel and components pinned in core/rust-toolchain.toml.
-      - run: rustup toolchain install
-        working-directory: core
-
-      # The Vulkan SDK the engine builds against: headers, the loader's import library and glslc
-      # (ggml's shaders). Build tools only: the core links nothing from it but the import of
-      # vulkan-1.dll, which GPU drivers install. Pinned by version and by the SHA-256 LunarG
-      # publishes for the installer; installed under the runner's temp folder.
-      - name: Vulkan SDK (pinned)
-        shell: pwsh
-        env:
-          VULKAN_SDK_VERSION: 1.4.357.0
-          VULKAN_SDK_SHA256: 81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d
-        run: |
-          $installer = Join-Path $env:RUNNER_TEMP 'vulkansdk.exe'
-          $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_SDK_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_SDK_VERSION.exe"
-          curl.exe --fail --silent --show-error --location --proto '=https' --retry 3 --output $installer $url
-          if ($LASTEXITCODE -ne 0) { Write-Output "::error::the Vulkan SDK did not download ($LASTEXITCODE)"; exit 1 }
-          $sum = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
-          if ($sum -ne $env:VULKAN_SDK_SHA256) { Write-Output "::error::the Vulkan SDK installer's SHA-256 is $sum, expected $env:VULKAN_SDK_SHA256"; exit 1 }
-          $root = Join-Path $env:RUNNER_TEMP "VulkanSDK\$env:VULKAN_SDK_VERSION"
-          $p = Start-Process -FilePath $installer -Wait -PassThru -NoNewWindow -ArgumentList @(
-            '--root', $root, '--accept-licenses', '--default-answer', '--confirm-command', 'install')
-          if ($p.ExitCode -ne 0 -or -not (Test-Path (Join-Path $root 'Lib\vulkan-1.lib'))) {
-            Write-Output "::error::the Vulkan SDK did not install ($($p.ExitCode))"; exit 1
-          }
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$root"
-          Write-Output "Vulkan SDK $env:VULKAN_SDK_VERSION, installer sha256 $sum"
-
-      # The core's DLL with the Windows engines (llama.cpp on Vulkan or the CPU, Silero VAD),
-      # static CRT, Vulkan delay-loaded; the script checks the DLL's imports and runs the core
-      # without Vulkan (tests/vulkan_missing.rs).
-      - name: Build the core, with its engines
-        shell: pwsh
-        run: windows/scripts/build-core.ps1
-
-      # About lists what this build links: the C# bindings and the Rust notices (the core's, and
-      # those of the Velopack release vpk packs the installer from) must be current.
-      - name: Generated C# and notices are current
-        shell: bash
-        working-directory: core
-        run: |
-          cargo run --locked -p ink-ffi --bin ink-schema -- --check
-          cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
-          cargo run --locked -p ink-ffi --bin ink-notices -- --velopack --check
-
-      # The SDK windows/global.json pins. Pinned to the commit tag v6.0.0 points at.
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          global-json-file: windows/global.json
-      - name: Restore (locked)
-        working-directory: windows
-        run: dotnet restore Inkwell.slnx --locked-mode
-      - name: NuGet licence check
-        shell: pwsh
-        working-directory: windows
-        run: scripts/nuget-licences.ps1
-
-      # The app as it ships: NativeAOT, x64, the Windows App SDK's runtime beside the exe, the
-      # release core beside it, and the version from the tag (About and the file version).
-      - name: Publish the app (NativeAOT)
-        shell: pwsh
-        working-directory: windows
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $app = Join-Path $env:RUNNER_TEMP 'inkwell-app'
-          $core = Join-Path $env:GITHUB_WORKSPACE 'core\target\release\'
-          dotnet publish Inkwell/Inkwell.csproj -c Release -o $app --no-restore "-p:InkVersion=$env:VERSION" "-p:InkCoreDir=$core"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Content $env:GITHUB_ENV "INK_APP_DIR=$app"
-
-      # The app's dependencies checked, then the installer, the update package and feed, and
-      # their SHA-256s (windows/scripts/pack.ps1).
-      - name: Pack the installer and the update feed
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          windows/scripts/pack.ps1 -Version $env:VERSION -AppDir $env:INK_APP_DIR -OutDir (Join-Path $env:RUNNER_TEMP 'inkwell-release')
-
-      - name: Keep the release's files
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: inkwell-windows
-          path: ${{ runner.temp }}/inkwell-release/
-          if-no-files-found: error
-          retention-days: 14
+    with:
+      kind: ${{ github.event_name == 'push' && 'tag' || 'dry-run' }}
+      version: ${{ inputs.version || '1.0.0' }}
 
   # A tag's release: the Windows files added to the draft release for the tag (the Mac's workflow
   # drafts it too; whichever comes first creates it), with a Windows section in its notes.
@@ -227,7 +93,10 @@ jobs:
           PACKAGE: ${{ needs.build.outputs.package }}
           SUMS: ${{ needs.build.outputs.sums }}
           VERSION: ${{ needs.build.outputs.version }}
+          VC_RUNTIME: ${{ needs.build.outputs.vcruntime }}
         run: |
+          # The Visual C++ runtime's version, as the build read it from the DLLs it ships.
+          [[ "$VC_RUNTIME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the build named no Visual C++ runtime version ('$VC_RUNTIME')"; exit 1; }
           cd release
           files=("$SETUP" "$PACKAGE" releases.win.json "$SUMS")
           sum="$(sha256sum "$SETUP" | cut -d' ' -f1)"
@@ -236,7 +105,7 @@ jobs:
           $marker
           **Windows: download \`$SETUP\`**: Inkwell for 64-bit Windows 11 (24H2 or later), installed for your user alone, no administrator needed. It is not code-signed yet, so SmartScreen warns before it runs: choose **More info**, then **Run anyway**. Check the download first: its SHA-256 is \`$sum\` (also in \`$SUMS\`). \`$PACKAGE\` and \`releases.win.json\` are what the app's updater reads; there is no need to download them.
 
-          Inkwell includes the runtime of Microsoft's Windows App SDK and the Windows SDK's .NET projection, which Microsoft licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those components.
+          Inkwell includes the runtime of Microsoft's Windows App SDK, the Windows SDK's .NET projection and the Visual C++ runtime, which Microsoft licenses separately under the Microsoft Software License Terms (shown in full in Inkwell's Settings > About). By installing or using Inkwell on Windows, you agree to those terms for those components. This release's Visual C++ runtime, beside Inkwell.exe for its speech engines, is version $VC_RUNTIME.
           EOF
           attach() {
             local draft

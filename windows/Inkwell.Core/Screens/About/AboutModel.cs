@@ -40,7 +40,7 @@ public sealed class AboutModel
     /// </summary>
     public const string CopyrightLine = "Copyright (c) 2026 Mattias Hjemgaard";
 
-    /// <summary>The end-user terms for Microsoft's components, the Windows App SDK and the Windows SDK's .NET projection (Notices.WindowsAppSdkTerms), above the notices.</summary>
+    /// <summary>The end-user terms for Microsoft's components, the Windows App SDK, the Windows SDK's .NET projection and the Visual C++ runtime (Notices.WindowsAppSdkTerms), above the notices.</summary>
     public static string Terms => Notices.WindowsAppSdkTerms;
 
     /// <summary>The weights, each credited; a CC-BY model's row opens onto its credit.</summary>

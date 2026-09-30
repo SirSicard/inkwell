@@ -39,8 +39,8 @@
                 TextWrapping="Wrap" />
         </StackPanel>
 
-        <!-- The end-user terms Microsoft's licences require, for the Windows App SDK and the Windows
-             SDK's .NET projection (Notices.WindowsAppSdkTerms). -->
+        <!-- The end-user terms Microsoft's licences require, for the Windows App SDK, the Windows
+             SDK's .NET projection and the Visual C++ runtime (Notices.WindowsAppSdkTerms). -->
         <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Terms" Style="{StaticResource InkEyebrowStyle}" Text="TERMS" />
         <TextBlock IsTextSelectionEnabled="True" Style="{StaticResource InkBodyStyle}" Text="{x:Bind core:AboutModel.Terms}" TextWrapping="Wrap" />
 

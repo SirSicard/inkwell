@@ -1,12 +1,18 @@
 #!/usr/bin/env pwsh
-# The Windows release's files, from a published app (win-release.yml runs this; run it the same
-# way on a PC, from anywhere): the installer, the update package and feed, and their SHA-256s.
+# The Windows release's files, from a published app (win-release-build.yml runs this; run it the
+# same way on a PC, from anywhere): the installer, the update package and feed, and their SHA-256s.
+# x64 only: 1.0 ships no ARM64 build (docs/RELEASING.md).
 #
 #   pwsh windows/scripts/pack.ps1 -Version 1.0.0 -AppDir <dotnet publish output> -OutDir <empty folder>
 #
-# First it checks what the app needs from the PC it lands on: no Visual C++ runtime DLL at all
-# (the core links the CRT statically; the .NET and Windows App SDK binaries use the UCRT, which is
-# part of Windows), and nothing at load time that is neither beside the app nor in System32.
+# First it checks the app is built for x64 (Inkwell.exe and the core), and what it needs from the
+# PC it lands on (windows/scripts/lib/dll-imports.ps1): every DLL any of its binaries loads when it
+# loads is beside Inkwell.exe or part of Windows, so ONNX Runtime must be the app's own, never the
+# older onnxruntime.dll in Windows' System32; the Visual C++ runtime only as the copy beside
+# Inkwell.exe, built for x64 (the engines' DLLs need it; build-core.ps1 put it with them; the core
+# links the CRT statically, and the .NET and Windows App SDK binaries use the UCRT, which is part of
+# Windows); and the Vulkan loader only where it may be missing (delay-loaded by the core, or behind
+# the core's delay-loaded diarizer). It prints the Visual C++ runtime's version.
 #
 # Then Velopack's vpk (the version windows/.config/dotnet-tools.json pins) packs it:
 # - Inkwell_X.Y.Z_x64-setup.exe, the installer: per user (no administrator), into
@@ -22,7 +28,8 @@
 #   to check a download against (the homepage says how).
 #
 # The package id, InkwellApp, names the install folder and the update chain: changing it later
-# makes a different app to Velopack (no update path from the old one), so it stays.
+# makes a different app to Velopack (no update path from the old one), so it stays. So does the
+# channel, win: a new channel name would leave every install on the old one without updates.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string]$Version,
@@ -35,11 +42,15 @@ $ErrorActionPreference = 'Stop'
 $PackId = 'InkwellApp'
 # The Windows floor: 11 24H2 (Inkwell.csproj's TargetPlatformMinVersion), x64.
 $Runtime = 'win10.0.26100-x64'
+# The PE machine x64's binaries are built for.
+$Machine = 0x8664
 
 $windows = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'lib/dll-imports.ps1')
 
-# The end-user terms the Windows App SDK's licence asks for (its section 3(b)(ii)), and the Windows
-# SDK's for its .NET projection (its Distribution Requirements), on the installer's splash:
+# The end-user terms the Windows App SDK's licence asks for (its section 3(b)(ii)), the Windows
+# SDK's for its .NET projection and Visual Studio's for the Visual C++ runtime (their Distribution
+# Requirements), on the installer's splash:
 # Velopack's Setup has no text page, only an image shown while it installs, so the terms are on
 # screen before Inkwell first runs, wherever the installer came from; the first run then asks the
 # user to agree. The same terms are in Settings > About and the first run's step
@@ -47,8 +58,8 @@ $windows = Split-Path -Parent $PSScriptRoot
 # (windows/HOMEPAGE-INSTALL.md): keep the four in step. The non-breaking spaces
 # keep "Settings > About" on one line.
 $SplashTerms = "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's " +
-    "Windows App SDK and the Windows SDK's .NET projection, which Microsoft licenses separately under " +
-    "the Microsoft Software License Terms, " +
+    "Windows App SDK, the Windows SDK's .NET projection and the Visual C++ runtime, which Microsoft " +
+    "licenses separately under the Microsoft Software License Terms, " +
     "shown in full in Inkwell's Settings`u{00A0}>`u{00A0}About. By installing or using Inkwell, you " +
     "agree to those terms for those components."
 
@@ -96,6 +107,12 @@ New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path $OutDir).Path
 if (@(Get-ChildItem $OutDir -Force).Count -gt 0) { Fail "$OutDir is not empty" }
 
+# The app is built for x64: the release's one architecture.
+foreach ($file in 'Inkwell.exe', 'ink_ffi.dll') {
+    $found = Get-PeMachine (Join-Path $AppDir $file)
+    if ($found -ne $Machine) { Fail ("{0} is machine {1}, not x64 (0x{2:X4})" -f $file, $(if ($null -eq $found) { '(unread)' } else { '0x{0:X4}' -f $found }), $Machine) }
+}
+
 # Visual Studio's dumpbin, found as build-core.ps1 finds the developer environment.
 $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue)?.Source
 if (-not $dumpbin) {
@@ -106,32 +123,27 @@ if (-not $dumpbin) {
     if (-not $dumpbin) { Fail 'no dumpbin.exe (Visual Studio C++ build tools)' }
 }
 
-# What every binary loads. Delay-loaded DLLs (the core's vulkan-1.dll) are checked by
-# build-core.ps1 and may be missing by design; load-time ones may not.
-$local = @(Get-ChildItem $AppDir -Recurse -File -Include *.dll | ForEach-Object { $_.Name.ToLowerInvariant() })
-$problems = [System.Collections.Generic.List[string]]::new()
+# What every binary loads, against what is beside Inkwell.exe and what Windows has
+# (windows/scripts/lib/dll-imports.ps1). Inkwell.exe loads the core as it starts.
+$imports = @{}
 $binaries = @(Get-ChildItem $AppDir -Recurse -File -Include *.exe, *.dll)
 foreach ($binary in $binaries) {
-    $section = $null
-    foreach ($line in (& $dumpbin /nologo /dependents $binary.FullName)) {
-        if ($line -match 'Image has the following dependencies') { $section = 'load'; continue }
-        if ($line -match 'Image has the following delay load dependencies') { $section = 'delay'; continue }
-        if ($line -match '^\s*Summary') { $section = $null; continue }
-        if ($null -eq $section -or $line -notmatch '^\s+(\S+\.dll)\s*$') { continue }
-        $name = $Matches[1].ToLowerInvariant()
-        if ($name -match '^(vcruntime|msvcp|concrt|vcomp|mfc|vccorlib)') {
-            $problems.Add("$($binary.Name) needs $name, a Visual C++ runtime DLL a PC may not have")
-        } elseif ($section -eq 'load' -and $local -notcontains $name -and $name -notmatch '^(api|ext)-ms-win-' -and
-            -not (Test-Path (Join-Path $env:SystemRoot "System32\$name"))) {
-            $problems.Add("$($binary.Name) needs $name, which is neither beside the app nor in System32")
-        }
-    }
+    $imports[$binary.Name.ToLowerInvariant()] = Read-DllImports $dumpbin $binary.FullName
 }
+$beside = @(Get-ChildItem $AppDir -File | ForEach-Object { $_.Name.ToLowerInvariant() })
+$machines = @{}
+foreach ($binary in Get-ChildItem $AppDir -File | Where-Object { $_.Extension -in '.exe', '.dll' }) {
+    $machines[$binary.Name.ToLowerInvariant()] = Get-PeMachine $binary.FullName
+}
+$problems = @(Find-ImportProblems -Imports $imports -Beside $beside -Machines $machines -Machine $Machine -Roots 'inkwell.exe', 'ink_ffi.dll' -Core 'ink_ffi.dll')
 if ($problems.Count -gt 0) {
     $problems | Sort-Object -Unique | ForEach-Object { Write-Output "::error title=pack::$_" }
     Fail "the app needs what a PC may not have ($($problems.Count) problem(s), above)"
 }
-Write-Output "pack: $($binaries.Count) binaries: no Visual C++ runtime, nothing outside the app and System32"
+# (Not $runtime: PowerShell's names ignore case, and $Runtime is vpk's.)
+$vcRuntime = Get-VcRuntimeVersion $AppDir
+Write-Output "pack: $($binaries.Count) binaries for x64; everything they load is beside Inkwell.exe or part of Windows"
+Write-Output "pack: the Visual C++ runtime $($vcRuntime.Version) beside Inkwell.exe: $($vcRuntime.Files -join ', ')"
 
 # vpk, as pinned. --skip-updates: it would otherwise ask NuGet for a newer vpk.
 Push-Location $windows

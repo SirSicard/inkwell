@@ -1,12 +1,13 @@
 // The first run's terms step (Windows only). The licences of the Windows App SDK (section
-// 3(b)(ii)) and of the Windows SDK (Distribution Requirements) ask that the people who use an app
-// shipping their code agree to terms that protect it at least as much, and Velopack's installer has
-// no page to agree on. So before the app makes, shows or starts anything else, this step shows the
-// terms sentence (Notices.WindowsAppSdkTerms) and each Microsoft licence in full, as About shows
-// them, with Agree and Quit. Agree starts the app; Quit exits it with nothing started.
+// 3(b)(ii)), of the Windows SDK and of Visual Studio, for the Visual C++ runtime (their
+// Distribution Requirements), ask that the people who use an app shipping their code agree to terms
+// that protect it at least as much, and Velopack's installer has no page to agree on. So before the
+// app makes, shows or starts anything else, this step shows the terms sentence
+// (Notices.WindowsAppSdkTerms) and each Microsoft licence in full, as About shows them, with Agree
+// and Quit. Agree starts the app; Quit exits it with nothing started.
 //
 // The agreement is remembered with the version of the terms agreed to (a hash of the sentence and
-// the two licences), so changed terms ask again. It is kept in a one-line file in the library's
+// the three licences), so changed terms ask again. It is kept in a one-line file in the library's
 // folder, beside the core's store rather than in it: the core's settings are read only by a
 // running core, and starting the core starts work of its own (the library's retention sweep, and
 // meeting detection wherever the platform has a detector), none of which may run before Agree.
@@ -150,9 +151,9 @@ public sealed class TermsStep
     /// <summary>The terms sentence, as About shows it (Notices.WindowsAppSdkTerms).</summary>
     public static string Sentence => Notices.WindowsAppSdkTerms;
 
-    /// <summary>The two Microsoft licences the sentence names, each as About's row shows it, text in full.</summary>
+    /// <summary>The three Microsoft licences the sentence names, each as About's row shows it, text in full.</summary>
     public static IReadOnlyList<NoticeRow> Licences { get; } =
-        [.. new[] { "windows-app-sdk", "windows-sdk-net" }
+        [.. new[] { "windows-app-sdk", "windows-sdk-net", "vc-runtime" }
             .Select(id => Notices.Components.Single(c => c.Id == id))
             .Select(c => new NoticeRow(c.Title, c.Role, c.Text))];
 
@@ -161,10 +162,10 @@ public sealed class TermsStep
     public const string QuitTitle = "Quit";
 
     /// <summary>
-    /// The version of the terms: a hash of the sentence and the two licences' texts, so that any
+    /// The version of the terms: a hash of the sentence and the three licences' texts, so that any
     /// change to what the user agrees to asks again.
     /// </summary>
-    public static string CurrentVersion { get; } = VersionOf(Sentence, Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText);
+    public static string CurrentVersion { get; } = VersionOf(Sentence, Notices.WindowsAppSdkLicence, Notices.WindowsSdkNetText, Notices.VcRuntimeText);
 
     internal static string VersionOf(params string[] texts) =>
         "sha256:" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(

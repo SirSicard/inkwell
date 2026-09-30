@@ -41,6 +41,8 @@ public class AboutModelTests
         Assert.Contains("Microsoft Software License Terms", AboutModel.Terms, StringComparison.Ordinal);
         Assert.Contains("you agree to those terms", AboutModel.Terms, StringComparison.Ordinal);
         Assert.Contains($"\"{Notices.Components.Single(c => c.Id == "windows-app-sdk").Name}\"", AboutModel.Terms, StringComparison.Ordinal);
+        // And the Visual C++ runtime beside the app (the Visual Studio licence's Distributable Code).
+        Assert.Contains($"\"{Notices.Components.Single(c => c.Id == "vc-runtime").Name}\"", AboutModel.Terms, StringComparison.Ordinal);
     }
 
     [Fact]

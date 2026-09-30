@@ -11,8 +11,9 @@
 // What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, its copy of
 // fastcluster, VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback),
 // sherpa-onnx, ONNX Runtime and the code compiled into sherpa-onnx's library (Windows' Parakeet),
-// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection,
-// C#/WinRT and Velopack (the installer and updates) in their place. Their texts are in
+// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection, the
+// Visual C++ runtime (beside the engines' DLLs), C#/WinRT and Velopack (the installer and updates)
+// in their place. Their texts are in
 // NoticeTexts.cs, copied from the packages the Windows build restores (sherpa-onnx's is the shared
 // Apache License). sherpa-onnx's library compiles in its own copy of fastcluster (hclust-cpp's),
 // whose notice is here, hclust-cpp's own.
@@ -21,9 +22,9 @@
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
 // components' own licence files except where Notices.swift says otherwise, and the composed ones
 // (`Composed`) are listed with their upstream check in mac/composed-notices.txt; the Windows-only
-// composed ones (WinUIEx, the Windows SDK projection, ONNX Runtime and the code compiled into
-// sherpa-onnx's library, whose packages carry no licence text) in composed-notices.txt beside this
-// file.
+// composed ones (WinUIEx, the Windows SDK projection, the Visual C++ runtime, ONNX Runtime and the
+// code compiled into sherpa-onnx's library, whose packages carry no licence text) in
+// composed-notices.txt beside this file.
 //
 // No notice ships as a placeholder: `Pending` names where a text must come from while it is one,
 // and NoticesTests holds the list of pending notices empty.
@@ -780,6 +781,16 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
             "Windows SDK licence terms", WindowsSdkNetText)
         { Composed = true },
+        // The Visual C++ runtime the engines' DLLs link dynamically (sherpa-onnx's archive and
+        // NeMo-Speech.cpp's build), beside the app: windows/scripts/build-core.ps1 copies the DLLs
+        // of it they import from Visual Studio 2026's redistributable folder, Distributable Code
+        // under the Visual Studio licence, whose Distribution Requirements ask that users agree to
+        // terms that protect it at least as much as that licence. The terms the user agrees to
+        // cover it (this row, which the first run's terms step shows).
+        new("vc-runtime", "Visual C++ runtime, by Microsoft",
+            "Beside the app for the speech engines (sherpa-onnx, ONNX Runtime and the diarizer): vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll, msvcp140_1.dll and vcomp140.dll from Visual Studio 2026 (Microsoft.VC145.CRT and Microsoft.VC145.OpenMP). Each release's notes give their version.",
+            "Visual C++ runtime licence terms", VcRuntimeText)
+        { Composed = true },
         // C#/WinRT's source is MIT, but the WinRT.Runtime.dll compiled in is Microsoft's build from
         // Microsoft.Windows.SDK.NET.Ref, Distributable Code under the Windows SDK licence (its REDIST
         // list names it): the row says both, and the terms the user agrees to cover it (the
@@ -794,19 +805,22 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
     /// <summary>
     /// The end-user terms the Windows App SDK's licence asks of an app that ships its runtime
-    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice), and
-    /// the Windows SDK's licence of an app that ships its .NET projection (Distributable Code,
+    /// (section 3(b)(ii) of the Microsoft Software License Terms, the windows-app-sdk notice), the
+    /// Windows SDK's licence of an app that ships its .NET projection (Distributable Code,
     /// Distribution Requirements: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll are on its
-    /// REDIST list; the windows-sdk-net notice): the user agrees to Microsoft's terms for those
-    /// components. The first run asks for that agreement before anything else (TermsStep);
+    /// REDIST list; the windows-sdk-net notice), and the Visual Studio licence of an app that ships
+    /// the Visual C++ runtime (Distributable Code, Distribution Requirements: its redistributable
+    /// folder is on the Distributable List; the vc-runtime notice): the user agrees to Microsoft's
+    /// terms for those components. The first run asks for that agreement before anything else (TermsStep);
     /// Settings > About shows it above the notices; the installer's splash
     /// (windows/scripts/pack.ps1), the release notes and the download page carry it before
     /// Inkwell first runs.
     /// </summary>
     public const string WindowsAppSdkTerms =
-        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK " +
-        "and the Windows SDK's .NET projection, which Microsoft licenses separately, under the Microsoft Software " +
-        "License Terms shown below (\"Windows App SDK, by Microsoft\" and \"Windows SDK projection for .NET, by Microsoft\"). " +
+        "Inkwell is free software under the MIT licence. It includes the runtime of Microsoft's Windows App SDK, " +
+        "the Windows SDK's .NET projection and the Visual C++ runtime, which Microsoft licenses separately, under the " +
+        "Microsoft Software License Terms shown below (\"Windows App SDK, by Microsoft\", \"Windows SDK projection " +
+        "for .NET, by Microsoft\" and \"Visual C++ runtime, by Microsoft\"). " +
         "By installing or using Inkwell, you agree to those terms for those components.";
 
     /// <summary>

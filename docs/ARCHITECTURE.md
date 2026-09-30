@@ -187,7 +187,11 @@ VAD (Silero) needs no native code: it runs on tract, a pure-Rust ONNX runtime.
   `lib/`. With no rpath on Windows, `build.rs` copies the checked DLLs into its `OUT_DIR` and
   declares that directory as a native search path, which cargo puts on `PATH` for tests. The
   diarizer runs on GPU 0 (Vulkan) and, where that does not load, on the CPU (about ten times
-  slower: 23× real time on a 12-core desktop, not a measurement, as other builds shared it).
+  slower: 23× real time on a 12-core desktop, not a measurement, as other builds shared it). Its
+  Vulkan backend loads `vulkan-1.dll` as soon as it loads, so the core's DLL delay-loads
+  `nemo_speech_asr_c.dll` and the adapter loads it before its first call (`src/nemo.rs`): on a PC
+  without a Vulkan driver the diarizer is unavailable and everything else runs. The release ships
+  the prefix's DLLs beside `Inkwell.exe` (`windows/scripts/build-core.ps1`).
 - **Its ggml stays its own**, apart from llama.cpp's static copy: see "ggml: two copies, kept
   apart" above. Linux is not a target; if it becomes one, its flat namespace would let one copy's
   symbols stand in for the other's, and the llama.cpp adapter's ggml must then hide its symbols.
