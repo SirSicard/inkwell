@@ -21,6 +21,14 @@
 //! audio, the words the next decode most often changes (the owner's choice, 2026-09-27); finals keep
 //! every word.
 //!
+//! **A still window is not decoded** (Windows' addition: there each decode is seconds of CPU work
+//! on every core, where the Mac's runs on the Neural Engine). When the last decode left no words
+//! pending and the window's speech band is stationary, as digital silence, room tone and hum are
+//! (its contrast under 4 dB: [`ink_audio::speech_band`], the test the no-VAD gain fallback uses),
+//! the window counts as a decode that heard nothing and the engine is not called. That test errs
+//! toward decoding: speech, knocks and typing all pass it. Speech buried in steady noise (under
+//! about 8 dB over it) can read as still; its words then come from the final pass alone.
+//!
 //! The engine places its words: one [`TimedText`] segment per word, in ms from the start of the
 //! audio it was given (as [`crate::sherpa`] returns them). An engine that returns one segment for
 //! the whole window still works, but settles only by length.
@@ -154,6 +162,9 @@ struct LiveWindow {
     dropped_unheard: usize,
     /// `dropped_unheard` when [`take_unheard_drops`](Self::take_unheard_drops) last reported it.
     reported_unheard: usize,
+    /// The audio not settled yet holds words the last decode heard: its window is decoded even
+    /// when still, so a pause can settle them.
+    pending: bool,
 }
 
 impl LiveWindow {
@@ -167,6 +178,7 @@ impl LiveWindow {
             last_partial: String::new(),
             dropped_unheard: 0,
             reported_unheard: 0,
+            pending: false,
         }
     }
 
@@ -220,14 +232,18 @@ impl LiveWindow {
             // Nothing said: keep only the last moment of it, in front of whatever comes next.
             let keep_from = window.end().saturating_sub(self.config.keep_silence);
             self.drop_to(self.buffer_start.max(keep_from), false);
+            self.pending = false;
             return self.partial(String::new());
         };
+        // Words stay pending unless everything heard is settled below.
+        self.pending = true;
         if len.saturating_sub(last.end) >= self.config.pause {
             // A pause after the last word: the utterance is settled.
             self.drop_to(
                 window.start + (last.end + self.config.after_word).min(len),
                 false,
             );
+            self.pending = false;
             return self.settle(words, window, String::new());
         }
         if len >= self.config.max_utterance {
@@ -249,6 +265,7 @@ impl LiveWindow {
                         window.start + (last.end + self.config.after_word).min(len),
                         false,
                     );
+                    self.pending = false;
                     self.settle(words, window, String::new())
                 }
             };
@@ -272,6 +289,7 @@ impl LiveWindow {
             return Vec::new();
         }
         self.drop_to(window.end(), false);
+        self.pending = false;
         if words.is_empty() {
             return self.partial(String::new());
         }
@@ -282,6 +300,7 @@ impl LiveWindow {
     /// partial is cleared.
     fn end_without_window(&mut self) -> Vec<Output> {
         self.drop_to(self.buffer_start + self.buffer.len(), false);
+        self.pending = false;
         self.partial(String::new())
     }
 
@@ -340,6 +359,13 @@ fn segment(words: &[Word], window: &Window) -> TimedText {
     }
 }
 
+/// Whether `samples` hold nothing worth decoding: their speech band is stationary (see the module
+/// docs). Allocates one `f32` per 20 ms.
+fn still(samples: &[f32]) -> bool {
+    use ink_audio::speech_band::{contrast_db, envelope};
+    contrast_db(&envelope(samples)) < ink_audio::gain::MIN_DYNAMICS_DB
+}
+
 /// A transcript's words, in samples, kept inside the `len` samples decoded.
 fn words_of(transcript: &Transcript, len: usize) -> Vec<Word> {
     transcript
@@ -364,6 +390,8 @@ pub struct TrailingWindow {
     engine: Arc<dyn OfflineEngine>,
     info: EngineInfo,
     config: LiveConfig,
+    /// [`still`]; the tests of the scheme's mechanics, whose audio is not sound, turn it off.
+    still: fn(&[f32]) -> bool,
 }
 
 impl TrailingWindow {
@@ -374,6 +402,7 @@ impl TrailingWindow {
             engine,
             info,
             config: LiveConfig::default(),
+            still,
         }
     }
 }
@@ -401,6 +430,7 @@ impl StreamingEngine for TrailingWindow {
             send: Mutex::new(()),
             events,
             engine: self.engine.clone(),
+            still: self.still,
             channel,
             cancel: CancelToken::new(),
         });
@@ -443,6 +473,8 @@ struct Shared {
     send: Mutex<()>,
     events: EventSink<AsrEvent>,
     engine: Arc<dyn OfflineEngine>,
+    /// Whether a window with no words pending can go undecoded ([`still`]).
+    still: fn(&[f32]) -> bool,
     channel: Channel,
     /// Cancelled when the stream is dropped, for a decode under way.
     cancel: CancelToken,
@@ -475,10 +507,19 @@ impl Shared {
                 s = self.wake.wait(s).unwrap_or_else(PoisonError::into_inner);
                 continue;
             };
+            let may_skip = !s.window.pending;
             s.decoding = true;
             drop(s);
-            // No lock is held while the engine works: push only appends meanwhile.
-            let decoded = window.as_ref().map(|w| self.decode(w));
+            // No lock is held while the engine works, or while the window is judged: push only
+            // appends meanwhile. A still window with nothing pending is a decode that heard
+            // nothing (see the module docs).
+            let decoded = window.as_ref().map(|w| {
+                if may_skip && (self.still)(&w.samples) {
+                    Ok(Vec::new())
+                } else {
+                    self.decode(w)
+                }
+            });
             s = self.lock();
             if s.closed {
                 return;
@@ -1016,8 +1057,13 @@ mod tests {
         }
     }
 
+    /// A stream over `engine` whose every window is decoded: the scripted audio is sample
+    /// indices, not sound, so the still test would judge it at random.
     fn open(engine: &Arc<Scripted>) -> (Box<dyn EngineStream>, Arc<Mutex<Vec<AsrEvent>>>) {
-        let live = TrailingWindow::new(engine.clone(), info());
+        let live = TrailingWindow {
+            still: |_| false,
+            ..TrailingWindow::new(engine.clone(), info())
+        };
         let (events, kept) = sink();
         (live.open_stream(Channel::Mic, events).unwrap(), kept)
     }
@@ -1143,6 +1189,80 @@ mod tests {
         // The thread holds the engine until it has seen the drop and ended.
         wait_for("the thread to end", || Arc::strong_count(&engine) == 1);
         assert!(lock(&kept).is_empty(), "{:?}", lock(&kept));
+    }
+
+    // --- Still windows. -------------------------------------------------------------------------
+
+    #[test]
+    fn silence_room_tone_and_hum_are_still_and_speech_is_not() {
+        use ink_audio::synth::{Slope, noise, rumble, speech_like, with_noise};
+        // A window as the scheme takes one with nothing pending: 3 s kept, then a 0.5 s hop.
+        assert!(still(&[0.0; 56_000]), "digital silence");
+        assert!(still(&noise(3.5, -50.0, 1)), "room tone");
+        assert!(still(&rumble(3.5, -40.0, 120.0, Slope::Gentle, 2)), "hum");
+        assert!(!still(&speech_like(3.5, -30.0, 3)), "speech");
+        let onset: Vec<f32> = [vec![0.0; 48_000], speech_like(0.5, -30.0, 4)].concat();
+        assert!(!still(&onset), "speech starting in the newest hop");
+        let noisy = with_noise(&speech_like(3.5, -30.0, 5), 8.0, -30.0, 6);
+        assert!(!still(&noisy), "speech 8 dB over room tone");
+    }
+
+    #[test]
+    fn words_stay_pending_until_they_are_settled() {
+        let mut live = LiveWindow::new(LiveConfig::default());
+        let script = unbroken(3, 8_000, "w"); // 0.5 s to about 1.2 s
+        live.append(&indexed(0, 16_000));
+        let window = live.take_window();
+        live.apply(&decode(&window, &script), &window);
+        assert!(live.pending, "heard, not settled");
+        live.append(&indexed(16_000, 48_000));
+        let window = live.take_window();
+        let out = live.apply(&decode(&window, &script), &window);
+        assert!(matches!(out[0], Output::Final(_)), "{out:?}");
+        assert!(!live.pending, "settled by the pause");
+        live.append(&indexed(48_000, 56_000));
+        let window = live.take_window();
+        live.apply(&[], &window);
+        assert!(!live.pending, "nothing heard");
+    }
+
+    /// A stream over `engine` with the still test on, as the app runs it, fed `audio` in 20 ms
+    /// blocks and finished.
+    fn run_through(engine: &Arc<Scripted>, audio: &[f32]) -> Vec<AsrEvent> {
+        let live = TrailingWindow::new(engine.clone(), info());
+        let (events, kept) = sink();
+        let mut stream = live.open_stream(Channel::Far, events).unwrap();
+        for block in audio.chunks(320) {
+            stream.push(block).unwrap();
+        }
+        stream.finish().unwrap();
+        lock(&kept).clone()
+    }
+
+    #[test]
+    fn a_still_stream_never_calls_the_engine_and_speech_does() {
+        use ink_audio::synth::{noise, speech_like};
+        let engine = Scripted::new(Vec::new());
+        // Each alone: the step from digital silence to room tone is an onset, decoded once.
+        for quiet in [vec![0.0; 20 * RATE], noise(20.0, -50.0, 7)] {
+            // Pushed far faster than real time, so a stall may be reported; no words are.
+            let words = run_through(&engine, &quiet)
+                .into_iter()
+                .filter(|e| !matches!(e, AsrEvent::Stalled { .. }))
+                .count();
+            assert_eq!(words, 0);
+        }
+        assert_eq!(
+            engine.calls.load(Ordering::SeqCst),
+            0,
+            "20 s of silence, 20 of room tone"
+        );
+        let speech: Vec<f32> = [vec![0.0; 3 * RATE], speech_like(1.0, -30.0, 8)].concat();
+        run_through(&engine, &speech);
+        assert!(
+            engine.calls.load(Ordering::SeqCst) >= 1,
+            "speech is decoded"
+        );
     }
 
     #[test]

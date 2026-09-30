@@ -16,6 +16,7 @@
 mod bench;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -228,67 +229,114 @@ fn a_take_longer_than_one_pass_is_decoded_in_windows() {
     );
 }
 
-/// Windows' live partials: the trailing-window scheme over this engine, fed AMI IHM's first clip
-/// in 20 ms blocks at real time, as a meeting's mic side is. Every push returns within its 20 ms,
-/// partials keep coming, and the finals, joined, score near the whole clip's WER (24.88 in one
-/// pass). Prints the finals' WER, the partials and stalls sent, and the slowest push.
-#[test]
-#[ignore = "needs sherpa-onnx, the Parakeet model and AMI under $INK_BENCH_DIR; about 70 s"]
-fn live_partials_settle_a_meeting_into_finals_at_real_time() {
-    let engine = Arc::new(SherpaParakeet::load(&model_dir(), info()).unwrap());
-    let live = TrailingWindow::new(engine, info());
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let sink: EventSink<AsrEvent> = {
-        let events = events.clone();
-        Arc::new(move |e| events.lock().unwrap().push(e))
-    };
-    let mut stream = live.open_stream(Channel::Mic, sink).unwrap();
-    let bench = bench::bench_dir();
-    let clip = &bench::read_ami_tsv(&bench.join("ami-ihm.tsv")).unwrap()[0];
-    let (_, audio) = bench::read_wav(&bench.join("ami-ihm").join(&clip.wav)).unwrap();
-    let started = Instant::now();
-    let mut slowest = Duration::ZERO;
-    for (i, block) in audio.chunks(RATE / 50).enumerate() {
-        if let Some(wait) = Duration::from_millis(20 * i as u64).checked_sub(started.elapsed()) {
-            std::thread::sleep(wait);
-        }
-        let pushed = Instant::now();
-        stream.push(block).unwrap();
-        slowest = slowest.max(pushed.elapsed());
+/// An engine that counts its decodes, so a stream's work shows.
+struct Counting {
+    engine: Arc<SherpaParakeet>,
+    decodes: AtomicUsize,
+}
+
+impl OfflineEngine for Counting {
+    fn info(&self) -> EngineInfo {
+        self.engine.info()
     }
-    stream.finish().unwrap();
-    let events = events.lock().unwrap();
-    let finals: Vec<&str> = events
-        .iter()
-        .filter_map(|e| match e {
-            AsrEvent::Final(t) => Some(t.text.as_str()),
-            _ => None,
+
+    fn transcribe(
+        &self,
+        audio: &[f32],
+        options: &TranscribeOptions,
+    ) -> Result<Transcript, EngineError> {
+        self.decodes.fetch_add(1, Ordering::SeqCst);
+        self.engine.transcribe(audio, options)
+    }
+}
+
+/// Windows' live partials for a meeting's two sides: the trailing-window scheme over one engine
+/// (one recognizer, as in the app, where both sides route to one loaded copy), AMI IHM's first clip
+/// on the mic side and its second on the far side, each fed in 20 ms blocks at real time from its
+/// own thread. Every push returns within its 20 ms, partials keep coming on both sides, and each
+/// side's finals, joined, score near its clip's WER in one pass. Prints each side's finals' WER, the
+/// partials and stalls sent, the decodes it took (still windows take none), and its slowest push.
+#[test]
+#[ignore = "needs sherpa-onnx, the Parakeet model and AMI under $INK_BENCH_DIR; about 90 s"]
+fn live_partials_settle_a_meetings_two_sides_into_finals_at_real_time() {
+    let engine = Arc::new(SherpaParakeet::load(&model_dir(), info()).unwrap());
+    let bench = bench::bench_dir();
+    let clips = bench::read_ami_tsv(&bench.join("ami-ihm.tsv")).unwrap();
+    let sides: Vec<_> = [(Channel::Mic, &clips[0]), (Channel::Far, &clips[1])]
+        .into_iter()
+        .map(|(channel, clip)| {
+            let (_, audio) = bench::read_wav(&bench.join("ami-ihm").join(&clip.wav)).unwrap();
+            let counting = Arc::new(Counting {
+                engine: engine.clone(),
+                decodes: AtomicUsize::new(0),
+            });
+            let live = TrailingWindow::new(counting.clone(), info());
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let sink: EventSink<AsrEvent> = {
+                let events = events.clone();
+                Arc::new(move |e| events.lock().unwrap().push(e))
+            };
+            let mut stream = live.open_stream(channel, sink).unwrap();
+            let feeder = std::thread::spawn(move || {
+                let started = Instant::now();
+                let mut slowest = Duration::ZERO;
+                for (i, block) in audio.chunks(RATE / 50).enumerate() {
+                    if let Some(wait) =
+                        Duration::from_millis(20 * i as u64).checked_sub(started.elapsed())
+                    {
+                        std::thread::sleep(wait);
+                    }
+                    let pushed = Instant::now();
+                    stream.push(block).unwrap();
+                    slowest = slowest.max(pushed.elapsed());
+                }
+                stream.finish().unwrap();
+                slowest
+            });
+            (channel, clip, counting, events, feeder)
         })
         .collect();
-    let partials = events
-        .iter()
-        .filter(|e| matches!(e, AsrEvent::Partial { .. }))
-        .count();
-    let stalls = events
-        .iter()
-        .filter(|e| matches!(e, AsrEvent::Stalled { .. }))
-        .count();
-    let edits = bench::score(&clip.reference, &finals.join(" "));
-    println!(
-        "{}  live finals {edits}  ({} finals, {partials} partials, {stalls} stalls, slowest push {slowest:?})",
-        clip.wav,
-        finals.len()
-    );
-    assert!(
-        slowest < Duration::from_millis(20),
-        "a push waited {slowest:?}"
-    );
-    assert!(
-        partials > 20 && finals.len() > 3,
-        "{partials} partials, {} finals",
-        finals.len()
-    );
-    assert!(edits.wer() < 40.0, "live finals' WER {:.2}", edits.wer());
+    for (channel, clip, counting, events, feeder) in sides {
+        let slowest = feeder.join().unwrap();
+        let events = events.lock().unwrap();
+        let finals: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                AsrEvent::Final(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        let partials = events
+            .iter()
+            .filter(|e| matches!(e, AsrEvent::Partial { .. }))
+            .count();
+        let stalls = events
+            .iter()
+            .filter(|e| matches!(e, AsrEvent::Stalled { .. }))
+            .count();
+        let edits = bench::score(&clip.reference, &finals.join(" "));
+        println!(
+            "{channel:?} {}  live finals {edits}  ({} finals, {partials} partials, {stalls} stalls, \
+             {} decodes, slowest push {slowest:?})",
+            clip.wav,
+            finals.len(),
+            counting.decodes.load(Ordering::SeqCst)
+        );
+        assert!(
+            slowest < Duration::from_millis(20),
+            "{channel:?}: a push waited {slowest:?}"
+        );
+        assert!(
+            partials > 20 && finals.len() > 3,
+            "{channel:?}: {partials} partials, {} finals",
+            finals.len()
+        );
+        assert!(
+            edits.wer() < 40.0,
+            "{channel:?}: live finals' WER {:.2}",
+            edits.wer()
+        );
+    }
 }
 
 #[test]

@@ -215,7 +215,8 @@ the int8 ONNX conversion of the same weights, on sherpa-onnx's C API, on the CPU
 - **Live partials**: [`TrailingWindow`](../core/crates/ink-engines/src/live.rs) re-decodes the
   utterance not yet settled every half second, the Mac's scheme ported (hide the newest 0.16 s;
   settle on a 0.8 s pause or at 12 s). Each window goes through the router and residency like any
-  job, so live partials and dictation share one loaded copy.
+  job, so live partials and dictation share one loaded copy. A still window (nothing pending, a
+  stationary speech band: silence, room tone, hum) is not decoded, so a quiet side costs no CPU.
 - **Dictation on a PC without a GPU.** There Qwen3-ASR takes 1.6-1.9 s for 5 s of speech, and
   Parakeet about 0.3 s, at 7.2 % WER on FLEURS (level-normalised) against Qwen3-ASR's 4.3 %. So on
   such a machine the router gives dictation to Parakeet first, whatever the error rates
