@@ -4,22 +4,26 @@
 //
 // The third-party Rust crates linked into the core (ink_ffi.dll) are not here: their list is
 // generated from cargo's resolution of the Windows release build (RustNotices, RustNotices.g.cs, by
-// `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these.
+// `cargo run -p ink-ffi --bin ink-notices -- --windows`), and About shows it after these. The
+// crates compiled into Velopack's Setup.exe and Update.exe are generated the same way from
+// Velopack's own lock (VelopackNotices.g.cs, `-- --velopack`) and shown under Velopack's notice.
 //
 // What differs from the Mac's list: no AudioCap (the Mac's process tap), FluidAudio, its copy of
 // fastcluster, VBx or Sparkle (Mac only); wasapi-rs (the Windows capture's process loopback),
 // sherpa-onnx, ONNX Runtime and the code compiled into sherpa-onnx's library (Windows' Parakeet),
-// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection,
-// C#/WinRT and Velopack (the installer and updates) in their place. Their texts are in
+// the Windows App SDK, WebView2, WinUIEx, the .NET runtime, the Windows SDK's .NET projection, the
+// Visual C++ runtime (beside the engines' DLLs), C#/WinRT and Velopack (the installer and updates)
+// in their place. Their texts are in
 // NoticeTexts.cs, copied from the packages the Windows build restores (sherpa-onnx's is the shared
 // Apache License). sherpa-onnx's library compiles in its own copy of fastcluster (hclust-cpp's),
-// whose notice is here, composed from the Mac's.
+// whose notice is here, hclust-cpp's own.
 //
 // The texts shared with the Mac (llama.cpp down to webgl-noise, the Apache License, Silero's) are
 // the Mac's, copied verbatim from Notices.swift; NoticesTests holds them equal to it. They are the
 // components' own licence files except where Notices.swift says otherwise, and the composed ones
 // (`Composed`) are listed with their upstream check in mac/composed-notices.txt; the Windows-only
-// composed ones (WinUIEx and the Windows SDK projection, whose packages carry no licence text) in
+// composed ones (WinUIEx, the Windows SDK projection, the Visual C++ runtime, ONNX Runtime and the
+// code compiled into sherpa-onnx's library, whose packages carry no licence text) in
 // composed-notices.txt beside this file.
 //
 // No notice ships as a placeholder: `Pending` names where a text must come from while it is one,
@@ -598,36 +602,43 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
         new("onnxruntime", "ONNX Runtime, by Microsoft",
             "Runs Parakeet's model for sherpa-onnx: ONNX Runtime 1.27.0, copied beside the app.",
             "MIT, with the notices of the code it includes",
-            OnnxRuntimeLicence + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
+            OnnxRuntimeLicence + "\n\n--- Eigen (MPL-2.0): where its source is ---\n" + OnnxRuntimeEigenSource
+            + "\n\n--- ThirdPartyNotices.txt ---\n" + OnnxRuntimeNotices)
         { Composed = true },
-        // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL). Their
-        // own licence files were not on hand: composed-notices.txt lists each until compared.
+        // Compiled into sherpa-onnx's library (its symbols and source paths are in the DLL): each
+        // its own licence file at the version sherpa-onnx 1.13.4 builds, compared on 2026-09-30
+        // (composed-notices.txt).
         new("nlohmann-json", "nlohmann/json, by Niels Lohmann",
             "Part of sherpa-onnx's library: JSON for Modern C++ 3.12.0.",
             "MIT", NlohmannJsonLicence)
         { Composed = true },
+        // kaldi-decoder links Eigen 5.0.1 (MPL-2.0, the scoped exception): the notice says where its
+        // source is and carries its licence, as the ONNX Runtime notice does for its Eigen.
         new("kaldi-decoder", "kaldi-decoder, inside sherpa-onnx",
-            "Part of sherpa-onnx's library.",
-            "Apache-2.0", Apache2)
+            "Part of sherpa-onnx's library, with the Eigen 5.0.1 it builds on.",
+            "Apache-2.0, with Eigen 5.0.1's MPL-2.0",
+            Apache2 + "\n\n--- Eigen 5.0.1 (MPL-2.0): where its source is ---\n" + SherpaOnnxEigenSource
+            + "\n\n--- Eigen 5.0.1's COPYING.MPL2 ---\n" + EigenMpl2Licence)
         { Composed = true },
         new("kaldifst", "kaldifst, inside sherpa-onnx",
             "Part of sherpa-onnx's library.",
-            "Apache-2.0", Apache2)
+            "Apache-2.0", KaldifstLegalNotices + "\n\n" + Apache2)
         { Composed = true },
         new("openfst", "OpenFst, inside sherpa-onnx",
             "Part of sherpa-onnx's library.",
-            "Apache-2.0", Apache2)
+            "Apache-2.0", OpenFstCopying + "\n\n--- The Apache License 2.0, which COPYING names ---\n" + Apache2)
         { Composed = true },
         new("simple-sentencepiece", "simple-sentencepiece, inside sherpa-onnx",
-            "Part of sherpa-onnx's library, with Darts-clone's darts.h (its notice is Darts-clone's, above).",
-            "Apache-2.0", Apache2)
+            "Part of sherpa-onnx's library, with its own copy of Darts-clone 0.32 (darts.h).",
+            "Apache-2.0, with Darts-clone's BSD-2-Clause notice",
+            Apache2 + "\n\n--- ssentencepiece/csrc/darts.h ---\n" + SimpleSentencepieceDartsNotice)
         { Composed = true },
         new("kaldi-native-fbank", "kaldi-native-fbank, inside sherpa-onnx",
             "Part of sherpa-onnx's library: the features Parakeet listens to.",
             "Apache-2.0", Apache2)
         { Composed = true },
-        // fastcluster's own notice (the Mac's text, from FluidAudio's copy), which hclust-cpp's C++
-        // port of it is taken to keep; hclust-cpp's own copyright lines may add to it.
+        // hclust-cpp's own LICENSE: fastcluster's licence under hclust-cpp's copyright lines (not
+        // the Mac's fastcluster text, whose lines are those of FluidAudio's copy).
         new("hclust-cpp", "hclust-cpp's fastcluster, inside sherpa-onnx",
             "Part of sherpa-onnx's library (hierarchical clustering); not called by Inkwell.",
             "BSD-2-Clause", HclustCppFastclusterLicence)
@@ -789,7 +800,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "MIT; Inkwell's copy under the Windows SDK licence terms", CsWinRtLicence),
         new("velopack", "Velopack, by Velopack Ltd and Caelan Sayler",
             "Installs Inkwell and brings its updates: the installer, Update.exe beside the app, and the update check in Settings > About. Velopack 1.2.161.",
-            "MIT", VelopackLicence),
+            "MIT, with the notices of the Rust crates in its Setup.exe and Update.exe", VelopackText),
     ];
 
     /// <summary>
@@ -811,6 +822,18 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         "Microsoft Software License Terms shown below (\"Windows App SDK, by Microsoft\", \"Windows SDK projection " +
         "for .NET, by Microsoft\" and \"Visual C++ runtime, by Microsoft\"). " +
         "By installing or using Inkwell, you agree to those terms for those components.";
+
+    /// <summary>
+    /// Velopack's licence, then the notices of the Rust crates compiled into its Setup.exe and
+    /// Update.exe (VelopackNotices.g.cs), each under its name, version and licence.
+    /// </summary>
+    private static string VelopackText =>
+        VelopackLicence
+        + $"\n\n--- The Rust crates in Setup.exe and Update.exe ({VelopackNotices.Crates.Count}) ---\n"
+        // webview2-com-sys carries Microsoft's loader as a static library, which both link (its
+        // strings are in vpk 1.2.161's setup and update binaries).
+        + "[Both also link Microsoft's WebView2 loader, WebView2LoaderStatic.lib from webview2-com-sys, under the WebView2 SDK's licence: \"WebView2 SDK, by Microsoft\", above.]"
+        + string.Concat(VelopackNotices.Crates.Select(c => $"\n\n=== {c.Title} ({c.Detail}) ===\n{c.Text}"));
 
     /// <summary>The ids of the composed notices, which mac/composed-notices.txt lists.</summary>
     public static IReadOnlySet<string> ComposedIds =>
