@@ -271,7 +271,101 @@ public sealed class DropTests
             Assert.Equal("Inkwell: Dictating \u00B7 Notepad", new string(buffer, 0, length));
             drop.Hide();
         }
-        Assert.Equal("Inkwell: Too short", new DropText("Too short", "Try again").AccessibleName);
+        Assert.Equal("Inkwell: Too short", new DropText("Too short", "Try again").WindowTitle);
+    }
+
+    /// <summary>
+    /// What a screen reader reads for the Drop is the Mac's accessibility label: the title and the
+    /// detail, live words included.
+    /// </summary>
+    [Fact]
+    public void TheScreenReaderNameIsTheMacs()
+    {
+        var held = new DropText("Dictating \u00B7 Notepad", "a synthetic line", LiveWords: true);
+        Assert.Equal("Inkwell: Dictating \u00B7 Notepad, a synthetic line", held.AccessibleName);
+        Assert.Equal("Inkwell: Dictating \u00B7 Notepad", held.WindowTitle);
+        Assert.Equal("Inkwell: \u25CF REC, Recording this meeting", DropText.For(InkState.Meeting).AccessibleName);
+        Assert.Equal("Inkwell: Too short, Try again", new DropText("Too short", "Try again").AccessibleName);
+    }
+
+    /// <summary>
+    /// Narrator reads the Drop through UI Automation: its name is the title and the detail, the
+    /// live words too, in a polite live region announced once per change (never for the same text
+    /// again), without the Drop taking focus. The window's title stays the state only, and the
+    /// words go when the Drop hides. Runs over SSH: no frame is needed.
+    /// </summary>
+    [Fact]
+    public void ScreenReadersReadTheLiveWordsAndTheTitleNeverHoldsThem()
+    {
+        lock (TestPipeline.Lock)
+        {
+            var ui = new UiThread();
+            using var drop = new DropWindow(Loader, new InkClock(ui.Post));
+            using var events = new LiveRegionEvents();
+            var foreground = GetForegroundWindow();
+            var held = new DropText("Dictating \u00B7 Notepad", "a synthetic line", LiveWords: true);
+            drop.Show(held, InkState.Dictating);
+            ui.Pump(0.1);
+            var read = Uia.Read(drop.Handle, ui);
+            Assert.Equal("Inkwell: Dictating \u00B7 Notepad, a synthetic line", read.Name);
+            Assert.Equal(ScreenReaderName.Polite, read.LiveSetting);
+            Assert.Equal("Inkwell: Dictating \u00B7 Notepad", WindowText(drop.Handle));
+            Assert.Equal(1, events.For(drop.Handle));
+
+            var grown = held with { Detail = "a synthetic line grows" };
+            drop.Show(grown, InkState.Dictating);
+            drop.Show(grown, InkState.Dictating);
+            ui.Pump(0.1);
+            Assert.Equal("Inkwell: Dictating \u00B7 Notepad, a synthetic line grows", Uia.Read(drop.Handle, ui).Name);
+            Assert.Equal(2, events.For(drop.Handle));
+            Assert.Equal("Inkwell: Dictating \u00B7 Notepad", WindowText(drop.Handle));
+            Assert.Equal(foreground, GetForegroundWindow());
+            Assert.NotEqual((HWND)drop.Handle, GetActiveWindow());
+
+            // Hidden, the words go; shown again with the same lines, they are said again.
+            drop.Hide();
+            ui.Pump(0.1);
+            Assert.DoesNotContain("synthetic", Uia.Read(drop.Handle, ui).Name ?? "", StringComparison.Ordinal);
+            drop.Show(grown, InkState.Dictating);
+            ui.Pump(0.1);
+            Assert.Equal(3, events.For(drop.Handle));
+            drop.Hide();
+        }
+    }
+
+    /// <summary>
+    /// The plain fallback, over the Drop, reads the same to a screen reader and has the same
+    /// title; only the Drop's own window announces, so nothing is said twice.
+    /// </summary>
+    [Fact]
+    public void ThePlainFallbackReadsTheSameAndOnlyTheDropAnnounces()
+    {
+        var ui = new UiThread();
+        var loader = new InkPipelineLoader(() => new InkPipeline(InkAdapter.Warp, "not a shader"));
+        Assert.True(loader.Wait().Permanent);
+        using var drop = new DropWindow(loader, new InkClock(ui.Post));
+        ui.Pump(0.2);
+        using var events = new LiveRegionEvents();
+        var held = new DropText("Dictating \u00B7 Notepad", "a synthetic line", LiveWords: true);
+        drop.Show(held, InkState.Dictating);
+        ui.Pump(0.2);
+        Assert.True(drop.ShowsFallback);
+        var fallback = drop.FallbackHandle;
+        Assert.Equal(held.AccessibleName, Uia.Read(fallback, ui).Name);
+        Assert.Equal("Inkwell: Dictating \u00B7 Notepad", WindowText(fallback));
+        Assert.Equal(1, events.For(drop.Handle));
+        Assert.Equal(0, events.For(fallback));
+
+        drop.Hide();
+        ui.Pump(0.1);
+        Assert.DoesNotContain("synthetic", Uia.Read(fallback, ui).Name ?? "", StringComparison.Ordinal);
+    }
+
+    private static unsafe string WindowText(nint hwnd)
+    {
+        var buffer = stackalloc char[256];
+        var length = GetWindowTextW((HWND)hwnd, buffer, 256);
+        return new string(buffer, 0, length);
     }
 
     [Fact]
