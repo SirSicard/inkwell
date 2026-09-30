@@ -285,7 +285,7 @@ After CI goes green:
       id and team; compare `codesign -d -r-` of both apps).
 - [ ] 0.2.11 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
       install 1.0): the 0.2 chain below, published with `--latest=false` so that 1.0 stays the
-      release the feed follows, then `inkwell-updater/publish-latest.sh`.
+      release the feed follows, then `inkwell-updater/publish-latest.sh v0.2.11`.
 - [ ] `inkwell-updater/` decided: kept while 0.2 installs still check it, or retired after 0.2.11.
 - [ ] The cask: `packaging/homebrew/inkwell.rb` for 1.0 (macOS 26 or later; 1.0's data folder,
       `~/Library/Application Support/Inkwell`, in `zap`), then `bin/update-cask.sh 1.0.0`.
@@ -362,9 +362,11 @@ spctl --assess -vv --type open --context context:primary-signature Inkwell_X.Y.Z
 # 5. Publish
 gh release edit vX.Y.Z --draft=false --latest
 
-# 6. Push the updater manifest into Cloudflare KV. Retries once and then reads
-#    the value back, so it cannot report success without having written.
-inkwell-updater/publish-latest.sh
+# 6. Push the updater manifest into Cloudflare KV, naming the release (not
+#    releases/latest, which is 1.x's and has no latest.json). Refuses a
+#    manifest of another version, retries once and then reads the value back,
+#    so it cannot report success without having written.
+inkwell-updater/publish-latest.sh vX.Y.Z
 
 # 7. Point the cask at the release. Refuses on a draft, on a no-op rewrite,
 #    and on a URL that does not return 200.
