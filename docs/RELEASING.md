@@ -4,6 +4,8 @@ Two release chains share this repository until the 0.2 app retires:
 
 - **Inkwell 1.x, the native Mac app** (`mac/`): `.github/workflows/mac-release.yml`, on `v1.X.Y`
   tags. It is described first.
+- **Inkwell 1.x on Windows** (`windows/`): `.github/workflows/win-release.yml`, on the same tags,
+  into the same release. It is described [after the Mac's](#inkwell-1x-on-windows).
 - **Inkwell 0.2, the Tauri app** (branch `legacy/0.2`): `build.yml`, on `v0.*` tags. Its chain is
   [below](#inkwell-02-the-tauri-app).
 
@@ -291,6 +293,81 @@ After CI goes green:
       `~/Library/Application Support/Inkwell`, in `zap`), then `bin/update-cask.sh 1.0.0`.
 - [ ] The homepage's `APP_VERSION` and release snapshot, only once 1.0.0 is published (step 8 of
       the 0.2 chain), in a commit authored as SirSicard: Vercel builds no other author's commits.
+
+## Inkwell 1.x on Windows
+
+The same `v1.X.Y` tag starts `win-release.yml` beside `mac-release.yml`. It builds the core with the
+Windows engines (Qwen3-ASR on llama.cpp with Vulkan, the CPU where a PC has no Vulkan GPU; Silero
+VAD) and the app with NativeAOT, checks what they need from a PC, packs the installer and the update
+feed with Velopack, and adds them to the tag's **draft** release (creating it if the Mac's workflow
+has not yet). A manual run is the dry run: everything but the release, the files kept as the run
+artifact `inkwell-windows` for 14 days.
+
+**Unsigned, for now.** The Windows build is not code-signed. SmartScreen warns before the installer
+runs, and Smart App Control blocks it outright; the homepage says how to check the download and get
+past SmartScreen (`windows/HOMEPAGE-INSTALL.md` is its draft). Signing is a later step.
+
+| Job | Runs on | Holds | Does |
+|---|---|---|---|
+| `build` | tag and dry run | nothing secret; read access | the Vulkan SDK (pinned by LunarG's published SHA-256), `windows/scripts/build-core.ps1`, the generated-code and notice checks, the locked restore and NuGet licence check, the NativeAOT publish with the tag's version, `windows/scripts/pack.ps1` |
+| `publish` | tag only | write access (environment `release`) | the files checked against their SHA-256s, then added to the tag's draft release, with a Windows section in its notes |
+
+What a release carries for Windows:
+
+- `Inkwell_X.Y.Z_x64-setup.exe`, the installer. Per user, no administrator: it installs into
+  `%LOCALAPPDATA%\InkwellApp`, adds a Start menu entry and an entry in Settings > Apps, and starts
+  the app. Uninstalling removes that folder only: the library, in `%LOCALAPPDATA%\Inkwell`, stays.
+  It refuses Windows older than 11 24H2. The package id `InkwellApp` is the update chain's name:
+  it never changes.
+- `InkwellApp-X.Y.Z-full.nupkg` and `releases.win.json`: the update and its feed. The app's
+  Settings > About > Check Now reads the feeds of the repository's latest published releases
+  (GitHub's API, then the assets over HTTPS), and Velopack installs a package only if its size and
+  SHA-256 match the feed's. `pack.ps1` checks the feed against the package it wrote.
+- `Inkwell_X.Y.Z_windows-sha256.txt`: the SHA-256s of the three, in `sha256sum` format. The
+  installer's is also in the release notes.
+
+What the checks guarantee:
+
+- **No Visual C++ runtime needed.** The core's DLL links the CRT statically (`crt-static`, and
+  llama.cpp's CMake build with `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`); the .NET and Windows
+  App SDK binaries use only the UCRT, which is part of Windows. `pack.ps1` fails on any binary that
+  needs a Visual C++ runtime DLL, or anything at load time that is neither beside the app nor in
+  System32.
+- **It starts without Vulkan.** `vulkan-1.dll` is delay-loaded, and only for the functions
+  `build-core.ps1` lists; the core then runs llama.cpp on the CPU (`tests/vulkan_missing.rs` runs
+  in the same job).
+- **Notices first.** A tag waits, as the Mac's does, for every notice written without its upstream
+  file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
+  included (`windows/scripts/release-version.sh`).
+
+The same build on a PC (Visual Studio's C++ build tools, CMake, Ninja, LLVM, the Vulkan SDK with
+`VULKAN_SDK` set, the .NET SDK `windows/global.json` pins):
+
+```powershell
+pwsh windows/scripts/build-core.ps1
+cd windows
+dotnet restore Inkwell.slnx --locked-mode
+dotnet publish Inkwell/Inkwell.csproj -c Release -o $env:TEMP\inkwell-app --no-restore -p:InkVersion=1.0.0 "-p:InkCoreDir=$PWD\..\core\target\release\"
+pwsh scripts/pack.ps1 -Version 1.0.0 -AppDir $env:TEMP\inkwell-app -OutDir $env:TEMP\inkwell-release
+```
+
+**Publishing.** The draft holds both platforms' files once both workflows are green. Read the notes
+before publishing: whichever workflow drafted the release wrote its opening, and the Mac's workflow
+does not add its paragraph to a draft the Windows workflow made. Then step 4 of the Mac's chain
+publishes both at once. Every 1.x release carries both platforms: the Windows app looks for its
+feed in the latest ten releases, so a Mac-only release does not stop Windows updates, but a
+Windows user would miss a fix that only shipped on the Mac.
+
+**The dry run** (a dispatch needs the workflow on `main` first):
+
+```bash
+gh workflow run win-release.yml --repo SirSicard/inkwell --ref main -f version=1.0.0
+run="$(gh run list --repo SirSicard/inkwell --workflow win-release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run" --repo SirSicard/inkwell
+gh run download "$run" --repo SirSicard/inkwell --name inkwell-windows --dir ~/Downloads/inkwell-windows-dry-run
+```
+
+Then `windows/S3.6-CHECKLIST.md` on a PC with the downloaded installer.
 
 ## Inkwell 0.2, the Tauri app
 
