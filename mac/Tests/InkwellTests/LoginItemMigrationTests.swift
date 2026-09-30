@@ -74,18 +74,26 @@ final class LoginItemMigrationTests: XCTestCase {
     private let bundle = URL(fileURLWithPath: "/Applications/Inkwell.app")
     private var files: FakeFiles!
     private var loginItem: FakeLoginItem!
+    private var dir: URL!
     private var suite: String!
     private var defaults: UserDefaults!
 
     override func setUp() async throws {
         files = FakeFiles()
         loginItem = FakeLoginItem()
-        suite = "ink-login-migration-\(UUID().uuidString)"
+        // The defaults live in a temporary folder: a suite named by an absolute path is kept at that
+        // path plus ".plist". A plain suite name leaves an empty plist in ~/Library/Preferences,
+        // written by cfprefsd seconds after the test, too late for tearDown to remove.
+        dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ink-login-migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        suite = dir.appendingPathComponent("defaults").path
         defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
     }
 
     override func tearDown() async throws {
         defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: dir)
     }
 
     private func migration(bundle: URL? = nil) -> LoginItemMigration {
