@@ -228,6 +228,12 @@ jobs:
         shell: bash
         working-directory: core
         run: |
+          # In a developer environment rustc links with the first link.exe on PATH, and in bash that
+          # is Git's own /usr/bin/link (coreutils), not MSVC's: name MSVC's (vcvarsall above set
+          # VCToolsInstallDir).
+          linker="${VCToolsInstallDir}bin\\Hostx64\\x64\\link.exe"
+          test -f "$(cygpath -u "$linker")" || { echo "::error::no MSVC linker at $linker"; exit 1; }
+          export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER="$linker"
           cargo run --locked -p ink-ffi --bin ink-schema -- --check
           cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
           cargo run --locked -p ink-ffi --bin ink-notices -- --velopack --check
