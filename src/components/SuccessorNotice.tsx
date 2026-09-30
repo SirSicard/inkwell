@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { toast } from "../state/toasts"
+import { SITE_URL } from "../constants"
 
 /** Mirrors successor::Audience in src-tauri/src/successor.rs. */
 type Audience = "apple_silicon" | "windows" | "intel_mac" | "linux"
@@ -67,7 +68,8 @@ export function SuccessorNotice() {
   }
 
   const openSite = () => {
-    invoke("open_successor_site").catch((e) => toast(String(e), "warning"))
+    // An error toast stays longest; the address is also printed in the notice.
+    invoke("open_successor_site").catch((e) => toast(String(e), "error"))
   }
 
   return (
@@ -78,6 +80,7 @@ export function SuccessorNotice() {
       <div className="flex-1 space-y-1">
         <p className="text-sm font-medium text-text-primary">{copy.title}</p>
         <p className="text-xs text-text-secondary leading-relaxed">{copy.body}</p>
+        <p className="text-xs text-text-tertiary select-text">{SITE_URL}</p>
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <button

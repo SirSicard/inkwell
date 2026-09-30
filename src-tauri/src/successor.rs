@@ -13,7 +13,8 @@ use serde::Serialize;
 
 /// The page that offers Inkwell 1.0. Fixed here, and the command that opens it
 /// takes no argument, so the webview can open this page and nothing else.
-/// Must match SITE_URL in homepage/lib/constants.ts (a test below checks).
+/// Must match SITE_URL in homepage/lib/constants.ts and in src/constants.ts,
+/// which the notice prints (tests below check).
 ///
 /// The notice is only true once the live page offers 1.0, which nothing here
 /// can check: docs/RELEASING.md holds the release until it does.
@@ -192,6 +193,18 @@ mod tests {
         assert!(
             constants.contains(&format!("export const SITE_URL = \"{}\";", SITE_URL)),
             "SITE_URL differs from homepage/lib/constants.ts"
+        );
+    }
+
+    /// The address the notice prints is the one this command opens.
+    #[test]
+    fn the_notice_prints_the_address_it_opens() {
+        let constants =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/constants.ts"))
+                .unwrap();
+        assert!(
+            constants.contains(&format!("export const SITE_URL = \"{}\"", SITE_URL)),
+            "SITE_URL differs from src/constants.ts"
         );
     }
 }
