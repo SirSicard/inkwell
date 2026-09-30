@@ -115,6 +115,26 @@ public class Import02ModelTests
     }
 
     [Fact]
+    public void ALaterLookThatCanReadTheDataClearsAnOldFailure()
+    {
+        var sent = new Sent();
+        var model = new Import02Model(sent.Send);
+        model.Apply(Found);
+        model.Run();
+        model.Apply(Ev.Of("""{"type":"command.failed","command":"import.run","id":"import.run","message":"Inkwell 0.2 is in the middle of saving its history. Quit Inkwell 0.2, then try again"}"""));
+        Assert.NotNull(model.Failure);
+        // 0.2 quit, Settings opened again: the look reads the data now.
+        model.Check();
+        Assert.Equal([new CoreCommand.ImportRun(), new CoreCommand.ImportCheck()], sent.Commands);
+        model.Apply(Found);
+        Assert.Null(model.Failure); // the old failure no longer applies
+        Assert.True(model.CanImport);
+        Assert.Equal(
+            "Inkwell 0.2 left 12 dictations, 1 snippet, 2 modes and your settings on this PC. Import brings them into this library; 0.2’s own copy stays as it is.",
+            model.Line);
+    }
+
+    [Fact]
     public void ALookThatFailedIsLoggedAndShownOnlyInSettings()
     {
         var logged = new Logged();

@@ -94,6 +94,10 @@ final class Import02Model {
         case .importChecked(let checked) where checked.ref == Self.checkID:
             found = checked
             checkFailed = false
+            // A look that answers says where it stands now: an earlier import's failure is past.
+            if !running {
+                failure = nil
+            }
         case .importFinished(let finished) where finished.ref == Self.runID:
             running = false
             imported = finished.counts

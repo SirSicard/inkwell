@@ -152,6 +152,11 @@ public sealed class Import02Model : ObservableModel
             case ImportChecked checkedNow when checkedNow.Ref == CheckId:
                 Found = checkedNow;
                 CheckFailed = false;
+                // A look that answers says where it stands now: an earlier import's failure is past.
+                if (!Running)
+                {
+                    Failure = null;
+                }
                 Changed();
                 break;
             case ImportFinished finished when finished.Ref == RunId:

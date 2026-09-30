@@ -113,6 +113,24 @@ final class Import02ModelTests: XCTestCase {
         XCTAssertNil(model.failure, "cleared while it tries again")
     }
 
+    func testALaterLookThatCanReadTheDataClearsAnOldFailure() {
+        let sent = Sent()
+        let model = Import02Model(send: sent.send)
+        model.apply(checked("found", counts: counts))
+        model.run()
+        model.apply(event(#"{"type":"command.failed","command":"import.run","id":"import.run","message":"Inkwell 0.2 is in the middle of saving its history. Quit Inkwell 0.2, then try again"}"#))
+        XCTAssertNotNil(model.failure)
+        // 0.2 quit, Settings opened again: the look reads the data now.
+        model.check()
+        XCTAssertEqual(sent.commands, [.importRun, .importCheck])
+        model.apply(checked("found", counts: counts))
+        XCTAssertNil(model.failure, "the old failure no longer applies")
+        XCTAssertTrue(model.canImport)
+        XCTAssertEqual(
+            model.line,
+            "Inkwell 0.2 left 12 dictations, 1 snippet, 2 modes and your settings on this Mac. Import brings them into this library; 0.2\u{2019}s own copy stays as it is.")
+    }
+
     func testALookThatFailedIsLoggedAndOffersNothing() {
         let logged = Logged()
         let model = Import02Model(send: { _ in }, log: logged.log)
