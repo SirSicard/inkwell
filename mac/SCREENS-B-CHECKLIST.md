@@ -34,6 +34,35 @@ screen command against the real core.
       from the menu-bar item): Inkwell quits at once. Start it again on the same library: the
       sheet shows again (quitting is not skipping).
 
+## 1b. Installed over 0.2 with Open at Login on (signed build; needs you)
+
+Run on the first install over 0.2, and after a change to `LoginItemMigration.swift`. It acts only
+on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/Applications`.
+
+- [ ] Before: 0.2 in `/Applications/Inkwell.app` with its open-at-login setting on.
+      `plutil -p ~/Library/LaunchAgents/Inkwell.plist` shows label `Inkwell` and the one program
+      `/Applications/Inkwell.app/Contents/MacOS/app`. Keep a copy for the steps below
+      (`cp ~/Library/LaunchAgents/Inkwell.plist ~/Desktop/agent-0.2.plist`) and note
+      `ls ~/Library/LaunchAgents`.
+- [ ] Quit 0.2, replace `/Applications/Inkwell.app` with the signed build, open it. The menu-bar
+      item's "Open at Login" is checked, or reads "Open at Login (approve in System Settings)"
+      until you approve it in System Settings > General > Login Items. No alert.
+- [ ] `~/Library/LaunchAgents/Inkwell.plist` is gone; every other file there is as before.
+      `log show --last 10m --predicate 'subsystem == "com.inkwell.app" AND category == "login"'`
+      says "carried over" and "login agent removed", with no path in either line.
+- [ ] Log out and back in: Inkwell starts, in the menu bar only.
+- [ ] Once: turn Open at Login off, quit, put the copy back
+      (`cp ~/Desktop/agent-0.2.plist ~/Library/LaunchAgents/Inkwell.plist`), open Inkwell. Open at
+      Login stays off and the file stays.
+- [ ] A failed removal is said: `defaults delete com.inkwell.app LoginItemCarriedOverFrom02`, then
+      `chflags uchg ~/Library/LaunchAgents/Inkwell.plist`, open Inkwell. An alert "Inkwell could
+      not remove Inkwell 0.2's login item." names `~/Library/LaunchAgents/Inkwell.plist`; Open at
+      Login is on. Then `chflags nouchg` the file and delete it.
+- [ ] A copy elsewhere leaves it alone: quit Inkwell, put the copy back, run the `defaults delete`
+      above, and open `mac/build/Inkwell.app` (not the one in `/Applications`). The file stays,
+      Open at Login does not change, and the log says the agent "opens a copy of the app other
+      than this one". Delete the file and `~/Desktop/agent-0.2.plist` when done.
+
 ## 2. Permissions (signed build; needs you)
 
 - [ ] Settings > Permissions shows the four cards with their state now.
