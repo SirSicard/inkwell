@@ -119,22 +119,22 @@ pub fn llm(shared: &Shared) -> Option<Arc<dyn Llm>> {
     })
 }
 
-/// The context the registered language model holds, in tokens (an own-key provider's is taken
-/// as the default).
+/// The context the language model a meeting uses holds, in tokens: the registered model's, else
+/// the chosen own-key provider's, else [`DEFAULT_CONTEXT_TOKENS`].
 pub fn context_tokens(shared: &Shared) -> u32 {
-    shared
-        .llms
-        .pick_shell()
-        .and_then(|llm| llm.context_tokens())
-        .unwrap_or(DEFAULT_CONTEXT_TOKENS)
+    match shared.llms.pick_shell() {
+        Some(shell) => shell.context_tokens(),
+        None => shared.llms.cloud().and_then(|cloud| cloud.context_tokens()),
+    }
+    .unwrap_or(DEFAULT_CONTEXT_TOKENS)
 }
 
-/// How a meeting's summary is sized for the registered language model.
+/// How a meeting's summary is sized for the language model it uses.
 pub fn summary_options(shared: &Shared) -> SummaryOptions {
     SummaryOptions::for_context(context_tokens(shared))
 }
 
-/// How an Ask is sized for the registered language model.
+/// How an Ask is sized for the language model it uses.
 pub fn ask_options(shared: &Shared) -> AskOptions {
     AskOptions::for_context(context_tokens(shared))
 }

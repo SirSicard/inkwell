@@ -97,6 +97,17 @@ impl Provider {
         }
     }
 
+    /// The context a request may fill, in tokens, prompt and answer together: the default model's
+    /// (all of them hold at least 128,000), taken for any model chosen there. `None` for a custom
+    /// server, whose model and its context are unknown.
+    pub fn context_tokens(self) -> Option<u32> {
+        match self {
+            Self::OpenAi | Self::Groq | Self::OpenRouter => Some(128_000),
+            Self::Anthropic => Some(200_000),
+            Self::Custom => None,
+        }
+    }
+
     /// Whether a call needs a key. A custom server usually runs without one.
     pub fn needs_key(self) -> bool {
         self != Self::Custom
@@ -176,6 +187,11 @@ impl ByokLlm {
             transport,
             local_only,
         })
+    }
+
+    /// The context a request may fill, in tokens ([`Provider::context_tokens`]).
+    pub fn context_tokens(&self) -> Option<u32> {
+        self.provider.context_tokens()
     }
 
     /// Whether a key may travel to this endpoint: over `https`, or to this machine.

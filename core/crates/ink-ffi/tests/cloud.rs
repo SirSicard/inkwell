@@ -250,6 +250,38 @@ fn a_cloud_provider_is_chosen_only_with_local_only_mode_turned_off_by_the_shell(
     rig.events.assert_valid();
 }
 
+/// Summaries and Ask are sized for the chosen provider's context, not the on-device model's: one
+/// pass and the whole meeting for a cloud model, the small default for a custom server.
+#[test]
+fn summaries_and_ask_are_sized_for_the_chosen_providers_context() {
+    use ink_ffi::engines::{DEFAULT_CONTEXT_TOKENS, ask_options, context_tokens, summary_options};
+    use ink_llm::tasks::ask::AskOptions;
+    use ink_llm::tasks::summary::SummaryOptions;
+
+    let rig = Rig::new("cloud-context", &[]);
+    let shared = rig.core.shared().clone();
+    assert_eq!(context_tokens(&shared), DEFAULT_CONTEXT_TOKENS);
+
+    rig.choose_openai("c1");
+    assert_eq!(context_tokens(&shared), 128_000);
+    assert_eq!(ask_options(&shared), AskOptions::default());
+    assert_eq!(summary_options(&shared), SummaryOptions::default());
+    rig.ask(
+        json!({"cmd": "llm.choose", "provider": "anthropic", "local_only": "off"}),
+        "c2",
+    );
+    assert_eq!(context_tokens(&shared), 200_000);
+
+    rig.ask(
+        json!({"cmd": "llm.choose", "provider": "custom", "base_url": "http://127.0.0.1:11434/v1"}),
+        "c3",
+    );
+    assert_eq!(context_tokens(&shared), DEFAULT_CONTEXT_TOKENS);
+    drop(shared);
+    rig.core.shutdown();
+    rig.events.assert_valid();
+}
+
 fn request(user: &str) -> LlmRequest {
     LlmRequest {
         system: "Synthetic instructions.".into(),
