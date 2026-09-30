@@ -1678,7 +1678,7 @@ DEALINGS IN THE SOFTWARE.
 """),
         new("fs_at", "0.2.1", "Apache-2.0", "Apache-2.0", """
 --- Apache-2.0 ---
-[The published crate carries no text of this licence. Supplied by Inkwell: the Apache License 2.0, which the crate is under (its manifest says so); its package holds no licence file.]
+[The published crate carries no text of this licence. Supplied by Inkwell: the Apache License 2.0's text; the crate is Apache-2.0 (its manifest says so; its package and repository hold no licence file).]
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
