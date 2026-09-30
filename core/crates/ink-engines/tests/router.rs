@@ -564,6 +564,38 @@ fn without_a_gpu_the_slow_engine_still_dictates_when_it_is_the_only_one() {
     );
 }
 
+/// The probe may start a runtime (llama.cpp's backend and its devices), so a row that is not
+/// installed never makes it run: not when a quick engine dictates, nor when nothing is installed.
+#[test]
+fn a_slow_row_that_is_not_installed_never_asks_the_gpu_probe() {
+    let s = Scratch::new("no-gpu-uninstalled");
+    let (reg, dir) = quick_and_slow(&s);
+    let slow = reg.get("synthetic-llama").unwrap().clone();
+    std::fs::remove_file(dir.marker_path(&slow)).unwrap();
+    let asked = Arc::new(Mutex::new(0));
+    let probe = {
+        let asked = asked.clone();
+        move || {
+            *asked.lock().unwrap() += 1;
+            false
+        }
+    };
+    let r = Router::new(&reg, dir.clone(), Os::Windows).with_gpu_probe(probe);
+    assert_eq!(
+        model_id(r.route(Job::DictationFinal).unwrap()),
+        "synthetic-sherpa"
+    );
+    let quick = reg.get("synthetic-sherpa").unwrap().clone();
+    std::fs::remove_file(dir.marker_path(&quick)).unwrap();
+    assert_eq!(
+        r.route(Job::DictationFinal).unwrap_err(),
+        RouteError::NoEngine {
+            job: Job::DictationFinal
+        }
+    );
+    assert_eq!(*asked.lock().unwrap(), 0, "never asked");
+}
+
 #[test]
 fn without_a_gpu_a_shell_engine_still_competes_on_its_error_rate() {
     let s = Scratch::new("no-gpu-shell");

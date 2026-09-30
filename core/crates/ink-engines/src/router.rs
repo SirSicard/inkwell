@@ -215,11 +215,13 @@ impl Router {
         }
         for row in &self.rows {
             let Some(wer) = row.wer(job) else { continue };
-            if !row.runs_on(self.os) {
+            // Installed first: only a row that competes may ask the GPU probe, which can start a
+            // runtime.
+            if !row.runs_on(self.os) || !self.dir.is_installed(row) {
                 continue;
             }
             let slow = self.slow_here(row, job);
-            if better(slow, wer, true, &row.id, &best) && self.dir.is_installed(row) {
+            if better(slow, wer, true, &row.id, &best) {
                 best = Some((slow, wer, true, &row.id, Route::Model(Arc::clone(row))));
             }
         }
