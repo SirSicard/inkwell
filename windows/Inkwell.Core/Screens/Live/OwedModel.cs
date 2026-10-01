@@ -238,16 +238,20 @@ public sealed class OwedModel : ObservableModel
         {
             var owner = item.Owner?.Trim();
             var recipient = item.Recipient?.Trim();
+            // The summary names people as the transcript does: "You", "Them", a name. The user's
+            // own promises are grouped by meeting, like those with no owner; "Them" alone is no
+            // heading.
+            var ownedBySomeoneElse = !string.IsNullOrEmpty(owner) && !owner.Equals("you", StringComparison.OrdinalIgnoreCase);
             string key;
             if (!string.IsNullOrEmpty(recipient))
             {
                 key = "to:" + recipient.ToLowerInvariant();
-                titles.TryAdd(key, ("To " + recipient, null));
+                titles.TryAdd(key, (recipient.Equals("you", StringComparison.OrdinalIgnoreCase) ? "Owed to you" : "To " + recipient, null));
             }
-            else if (!string.IsNullOrEmpty(owner))
+            else if (ownedBySomeoneElse && owner is not null)
             {
                 key = "owner:" + owner.ToLowerInvariant();
-                titles.TryAdd(key, (owner, null));
+                titles.TryAdd(key, (owner.Equals("them", StringComparison.OrdinalIgnoreCase) ? "Owed by the others" : owner, null));
             }
             else
             {

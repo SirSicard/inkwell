@@ -189,13 +189,17 @@ final class OwedModel {
         for item in items {
             let owner = item.owner?.trimmingCharacters(in: .whitespaces)
             let recipient = item.recipient?.trimmingCharacters(in: .whitespaces)
+            // The summary names people as the transcript does: "You", "Them", a name. The user's
+            // own promises are grouped by meeting, like those with no owner; "Them" alone is no
+            // heading.
+            let ownedBySomeoneElse = owner.map { !$0.isEmpty && $0.lowercased() != "you" } ?? false
             let key: String
             if let recipient, !recipient.isEmpty {
                 key = "to:" + recipient.lowercased()
-                titles[key] = titles[key] ?? ("To " + recipient, nil)
-            } else if let owner, !owner.isEmpty {
+                titles[key] = titles[key] ?? (recipient.lowercased() == "you" ? "Owed to you" : "To " + recipient, nil)
+            } else if let owner, ownedBySomeoneElse {
                 key = "owner:" + owner.lowercased()
-                titles[key] = titles[key] ?? (owner, nil)
+                titles[key] = titles[key] ?? (owner.lowercased() == "them" ? "Owed by the others" : owner, nil)
             } else {
                 key = "record:" + item.record
                 // An untitled meeting is already named by its day: no second date beside it.
