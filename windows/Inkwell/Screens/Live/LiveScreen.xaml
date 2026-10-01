@@ -123,7 +123,7 @@
                         FontSize="27"
                         FontWeight="Medium"
                         Style="{StaticResource InkScreenTitleStyle}" />
-                    <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Ellipse
                                 x:Name="RecordingDot"
@@ -137,7 +137,7 @@
                         <TextBlock x:Name="AppLine" Style="{StaticResource InkTimestampStyle}" />
                         <TextBlock x:Name="StartedLine" Style="{StaticResource InkTimestampStyle}" />
                         <TextBlock x:Name="MicLine" Style="{StaticResource InkTimestampStyle}" />
-                        <StackPanel x:Name="SideWarnings" Orientation="Horizontal" Spacing="10" />
+                        <StackPanel x:Name="SideWarnings" Orientation="Horizontal" Spacing="4" />
                     </StackPanel>
                     <TextBlock x:Name="FarEndLine" Style="{StaticResource InkCaptionStyle}" />
                     <TextBlock x:Name="FarEndAlert" Style="{StaticResource InkAlertTextStyle}" />

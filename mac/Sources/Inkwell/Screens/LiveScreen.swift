@@ -77,18 +77,26 @@ struct LiveMeetingView: View {
                     .font(.system(.title, design: .serif, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .accessibilityAddTraits(.isHeader)
-                HStack(spacing: 10) {
+                // One line, its parts set apart with the status's own "·".
+                // The status shows while blotting or once the clock started (`status`).
+                let hasStatus = meeting.stopping || live.startedAt != nil
+                let app = meeting.title != nil ? meeting.appName : nil
+                HStack(spacing: 6) {
                     status
-                    if let app = meeting.appName, meeting.title != nil {
+                    if let app {
+                        if hasStatus { separator }
                         Text(app)
                     }
                     if let started = live.startedAt {
+                        separator
                         Text("started \(started.formatted(date: .omitted, time: .shortened))")
                     }
                     if let mic = micLine {
+                        if hasStatus || app != nil { separator }
                         Text(mic)
                     }
-                    ForEach(sideWarnings, id: \.self) { warning in
+                    ForEach(Array(sideWarnings.enumerated()), id: \.element) { index, warning in
+                        if hasStatus || app != nil || micLine != nil || index > 0 { separator }
                         Text(warning).foregroundStyle(Theme.alert)
                     }
                 }
@@ -156,6 +164,11 @@ struct LiveMeetingView: View {
                 }
             }
         }
+    }
+
+    /// Between the header line's parts; VoiceOver reads the parts, not the dots.
+    private var separator: some View {
+        Text(verbatim: "·").accessibilityHidden(true)
     }
 
     /// A side that stopped or delivers only silence, in words.

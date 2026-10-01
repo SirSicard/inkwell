@@ -118,6 +118,17 @@ public sealed partial class LiveScreen : UserControl
         block.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    /// <summary>
+    /// A part of the header line: after anything shown before it, it starts with "· " (Narrator
+    /// reads the part's own words, not the dot).
+    /// </summary>
+    private static void ShowPart(TextBlock block, string? text, ref bool before)
+    {
+        Show(block, text is null ? null : before ? $"· {text}" : text);
+        AutomationProperties.SetName(block, text ?? "");
+        before |= text is not null;
+    }
+
     private void Render()
     {
         var meeting = store.Meeting;
@@ -139,13 +150,17 @@ public sealed partial class LiveScreen : UserControl
         }
 
         MeetingTitle.Text = LiveHeader.Title(meeting);
-        Show(AppLine, LiveHeader.AppLine(meeting));
-        Show(StartedLine, live.StartedLine);
-        Show(MicLine, LiveHeader.MicLine(meeting));
+        // One line, its parts after the status set apart with the status's own "·".
+        var before = meeting.Stopping || live.StartedAt is not null;
+        ShowPart(AppLine, LiveHeader.AppLine(meeting), ref before);
+        ShowPart(StartedLine, live.StartedLine, ref before);
+        ShowPart(MicLine, LiveHeader.MicLine(meeting), ref before);
         SideWarnings.Children.Clear();
         foreach (var warning in LiveHeader.SideWarnings(meeting))
         {
-            SideWarnings.Children.Add(new TextBlock { Text = warning, Style = Styled("InkAlertTextStyle") });
+            var block = new TextBlock { Style = Styled("InkAlertTextStyle") };
+            ShowPart(block, warning, ref before);
+            SideWarnings.Children.Add(block);
         }
         var far = LiveHeader.FarEnd(meeting);
         Show(FarEndLine, far is { Alert: false } ? far.Text : null);
