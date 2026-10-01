@@ -73,6 +73,12 @@ public sealed partial class TodayScreen : UserControl
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += (_, _) => Layout();
+        // The rows are built in code with brushes of the theme they were built in: build them again.
+        ActualThemeChanged += (_, _) =>
+        {
+            shownNeeds = null;
+            Render();
+        };
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -437,7 +443,8 @@ public sealed partial class TodayScreen : UserControl
 
     private static Visibility Show(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
-    private static Brush BrushOf(string key) => (Brush)Application.Current.Resources[key];
+    /// <summary>A token brush in this screen's theme, not the app's (Parts.Brush).</summary>
+    private Brush BrushOf(string key) => Parts.Brush(key, this);
 
     private static Style StyleOf(string key) => (Style)Application.Current.Resources[key];
 
