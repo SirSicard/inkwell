@@ -96,7 +96,10 @@ struct InkRail: View {
             .accessibilityHidden(true)
             .overlay(alignment: .bottom) {
                 if wide {
+                    // The rail is paper in both themes, so its foot keeps the light theme's
+                    // colours (in the dark theme its text and Record now vanished into the paper).
                     RecordControls().padding(22)
+                        .environment(\.colorScheme, .light)
                 }
             }
     }
