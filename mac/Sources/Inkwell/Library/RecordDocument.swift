@@ -8,6 +8,9 @@ import InkBridge
 enum Speaker: Equatable, Hashable, Sendable {
     /// The mic: the user.
     case you
+    /// An imported file's one track, which the core keeps on the mic channel: whoever is on it,
+    /// not the user.
+    case recording
     /// The far end: a name the user gave, a numbered speaker the diarizer found, or the far end
     /// as a whole when labels were not kept.
     case them(String)
@@ -15,11 +18,16 @@ enum Speaker: Equatable, Hashable, Sendable {
     var label: String {
         switch self {
         case .you: "You"
+        case .recording: "Speaker"
         case .them(let name): name
         }
     }
 
-    var isYou: Bool { self == .you }
+    /// The mic channel's: the user's, or an imported file's track.
+    var isYou: Bool {
+        if case .them = self { return false }
+        return true
+    }
 }
 
 /// One line of the ledger transcript.
@@ -147,7 +155,7 @@ struct RecordDocument: Equatable, Sendable {
             }
         }
         func speaker(_ segment: RecordSegment) -> Speaker {
-            guard segment.channel == .far else { return .you }
+            guard segment.channel == .far else { return answer.record.kind == .fileImport ? .recording : .you }
             guard let label = segment.speaker else { return .them("Them") }
             if let name = names[label] { return .them(name) }
             return .them("Speaker \(numbered[label] ?? 1)")

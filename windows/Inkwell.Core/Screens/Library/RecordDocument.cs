@@ -20,6 +20,12 @@ public sealed record Speaker
     /// <summary>The mic: the user.</summary>
     public static Speaker You { get; } = new(true, "You");
 
+    /// <summary>
+    /// An imported file's one track, which the core keeps on the mic channel: whoever is on it, not
+    /// the user. On the mic's side, like <see cref="You"/>.
+    /// </summary>
+    public static Speaker Recording { get; } = new(true, "Speaker");
+
     /// <summary>The far end, as named or numbered.</summary>
     public static Speaker Them(string name) => new(false, name);
 
@@ -165,7 +171,7 @@ public sealed class RecordDocument
         {
             if (segment.Channel != Channel.Far)
             {
-                return Speaker.You;
+                return answer.Record.Kind == RecordKind.FileImport ? Speaker.Recording : Speaker.You;
             }
             if (segment.Speaker is not string label)
             {
