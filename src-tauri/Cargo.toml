@@ -57,7 +57,7 @@ symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "aac", "
 tauri-plugin-single-instance = "2.4.3"
 
 [target."cfg(target_os = \"macos\")".dependencies]
-cocoa = "0.26"
+cocoa = "0.27"
 keyring = { version = "3", features = ["apple-native"] }
 # Every read path keyring exposes returns the secret, and macOS authorizes each
 # one with a dialog. Used directly to ask whether an item *exists*, which is an
