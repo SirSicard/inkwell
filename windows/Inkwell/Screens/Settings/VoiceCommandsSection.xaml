@@ -76,7 +76,7 @@
                             <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Triggers}" />
                             <StackPanel Grid.Column="1" Spacing="2">
                                 <TextBlock MaxLines="2" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Does}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Not available in this version: Inkwell hears it and types nothing." Visibility="{x:Bind NotCarriedOut}" />
+                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Its action comes in a later version. While on, saying it types nothing." Visibility="{x:Bind NotCarriedOut}" />
                             </StackPanel>
                             <ToggleSwitch
                                 x:Name="Toggle"

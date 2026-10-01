@@ -28,7 +28,10 @@ public sealed partial class ModelsSection : UserControl
 
     private void Render()
     {
-        Lines.ItemsSource = CatalogueModel.Jobs.Select(job => CatalogueLineItem.Of(Model, job)).ToList();
+        var lines = CatalogueModel.Jobs.Select(job => CatalogueLineItem.Of(Model, job)).ToList();
+        Lines.ItemsSource = lines;
+        // Where the accuracy comes from, only when a line shows one.
+        SourceLine.Visibility = lines.Any(l => l.Accuracy is not null) ? Visibility.Visible : Visibility.Collapsed;
         DownloadablePanel.Visibility = Model.Models.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 }

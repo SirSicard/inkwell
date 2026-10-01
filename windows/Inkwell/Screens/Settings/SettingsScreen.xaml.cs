@@ -15,8 +15,11 @@ public sealed partial class SettingsScreen : UserControl
     private readonly IReadOnlyList<SettingsSectionEntry> sections;
     /// <summary>The list was set from the page's scroll, not by the user: no jump.</summary>
     private bool syncing;
-    /// <summary>A jump the list asked for is under way: the scroll it causes does not move the list.</summary>
-    private bool jumping;
+    /// <summary>
+    /// The section a click scrolled to: it stays selected while any of it is in view, as the last
+    /// sections cannot scroll to the top (and a click on one already in place scrolls nothing).
+    /// </summary>
+    private int? clicked;
 
     public SettingsScreen(IReadOnlyList<SettingsSectionEntry> sections)
     {
@@ -43,7 +46,7 @@ public sealed partial class SettingsScreen : UserControl
         {
             return;
         }
-        jumping = true;
+        clicked = i;
         sections[i].Content.StartBringIntoView(new BringIntoViewOptions { VerticalAlignmentRatio = 0, AnimationDesired = true });
     }
 
@@ -53,19 +56,26 @@ public sealed partial class SettingsScreen : UserControl
         {
             return;
         }
-        if (jumping)
+        if (clicked is int chosen && chosen < sections.Count && InView(sections[chosen].Content))
         {
-            jumping = false;
             return;
         }
-        // The last section whose top has reached the top of the page (with a little slack).
+        clicked = null;
+        // At the end of the page the last section; else the last section whose top has reached
+        // the top of the page (with a little slack).
         var current = 0;
-        for (var i = 0; i < sections.Count; i++)
+        if (Scroller.VerticalOffset >= Scroller.ScrollableHeight - 1)
         {
-            var top = sections[i].Content.TransformToVisual(Sections).TransformPoint(new Point(0, 0)).Y;
-            if (top <= Scroller.VerticalOffset + 40)
+            current = sections.Count - 1;
+        }
+        else
+        {
+            for (var i = 0; i < sections.Count; i++)
             {
-                current = i;
+                if (Top(sections[i].Content) <= Scroller.VerticalOffset + 40)
+                {
+                    current = i;
+                }
             }
         }
         if (SectionList.SelectedIndex != current)
@@ -74,5 +84,15 @@ public sealed partial class SettingsScreen : UserControl
             SectionList.SelectedIndex = current;
             syncing = false;
         }
+    }
+
+    /// <summary>Where a section starts on the page.</summary>
+    private double Top(UIElement content) => content.TransformToVisual(Sections).TransformPoint(new Point(0, 0)).Y;
+
+    /// <summary>Whether any of a section is in view.</summary>
+    private bool InView(UIElement content)
+    {
+        var top = Top(content);
+        return top + content.ActualSize.Y > Scroller.VerticalOffset && top < Scroller.VerticalOffset + Scroller.ViewportHeight;
     }
 }

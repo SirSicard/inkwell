@@ -38,6 +38,11 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsScreen: View {
     @Environment(ScreenModels.self) private var screens
     @State private var section: SettingsSection? = .permissions
+    /// The section a click scrolled to: it stays selected while any of it is in view, as the last
+    /// sections cannot scroll to the top.
+    @State private var clicked: SettingsSection?
+    /// The selection the scrolling made, which must not scroll the page again.
+    @State private var followed: SettingsSection?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -66,13 +71,33 @@ struct SettingsScreen: View {
                             .id(SettingsSection.storage)
                         AboutSection().id(SettingsSection.about)
                     }
+                    // The sections are the scroll's targets, for the list to follow (below).
+                    .scrollTargetLayout()
                     .frame(maxWidth: 760, alignment: .leading)
                     .padding(.horizontal, 40)
                     .padding(.vertical, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: section) { _, section in
-                    if let section { proxy.scrollTo(section, anchor: .top) }
+                    guard let section else { return }
+                    if section == followed {
+                        followed = nil
+                        return
+                    }
+                    clicked = section
+                    proxy.scrollTo(section, anchor: .top)
+                }
+                // The list follows the scrolling: the topmost section in view, and at the end of
+                // the page the last one.
+                .onScrollTargetVisibilityChange(idType: SettingsSection.self, threshold: 0.01) { visible in
+                    if let clicked, visible.contains(clicked) { return }
+                    clicked = nil
+                    follow(SettingsSection.allCases.first(where: visible.contains))
+                }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 1
+                } action: { _, atEnd in
+                    if atEnd, clicked == nil { follow(SettingsSection.allCases.last) }
                 }
             }
         }
@@ -90,6 +115,13 @@ struct SettingsScreen: View {
             screens.storage.measure()
         }
         .onDisappear { screens.permissions.screenDisappeared() }
+    }
+
+    /// Selects `next` for the scrolling, without scrolling.
+    private func follow(_ next: SettingsSection?) {
+        guard let next, next != section else { return }
+        followed = next
+        section = next
     }
 }
 
@@ -345,7 +377,7 @@ private struct ModesSection: View {
                             ForEach(row.traits, id: \.self) { Paper.Chip(text: $0) }
                         }
                         if row.apps.isEmpty {
-                            Text(row.isDefault ? "Every app no other mode names" : "No apps")
+                            Text(row.isDefault ? "Every app without a mode of its own" : "No apps")
                                 .font(Typography.caption).foregroundStyle(Theme.secondaryText)
                         } else {
                             HStack(spacing: 6) {
@@ -568,9 +600,12 @@ private struct ModelsSection: View {
                 }
                 .padding(.top, 6)
             }
-            Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
-                .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
+            // Where the accuracy comes from, only when a row shows one.
+            if CatalogueModel.jobs.contains(where: { catalogue.line($0).accuracy != nil }) {
+                Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+            }
         }
     }
 }

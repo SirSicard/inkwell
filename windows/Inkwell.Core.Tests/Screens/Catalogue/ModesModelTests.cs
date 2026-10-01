@@ -68,7 +68,7 @@ public partial class ModesModelTests
         Assert.Equal(["Formal", "Clean up speech", "Polish"], model.Rows[1].Traits);
         Assert.True(model.Rows[1].IsDefault); // the default is listed last
         Assert.Equal("Everywhere else", model.Title(model.Rows[1]));
-        Assert.Equal("Every app no other mode names", model.Rows[1].AppsText);
+        Assert.Equal("Every app without a mode of its own", model.Rows[1].AppsText);
     }
 
     /// <summary>

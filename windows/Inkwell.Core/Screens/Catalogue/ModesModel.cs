@@ -135,7 +135,7 @@ public sealed record ModeRow(string Id, string Name, bool IsDefault, IReadOnlyLi
 {
     /// <summary>The apps' names in one line, or what an empty list means.</summary>
     public string AppsText => Apps.Count == 0
-        ? (IsDefault ? "Every app no other mode names" : "No apps")
+        ? (IsDefault ? "Every app without a mode of its own" : "No apps")
         : string.Join(", ", Apps.Select(a => a.Name));
 
     /// <summary>The row read aloud.</summary>

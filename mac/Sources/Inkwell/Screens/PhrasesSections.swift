@@ -231,7 +231,7 @@ private struct CommandRow: View {
                     .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
                     .lineLimit(2)
                 if !row.carriedOut {
-                    Text("Not available in this version: Inkwell hears it and types nothing.")
+                    Text("Its action comes in a later version. While on, saying it types nothing.")
                         .font(Typography.caption)
                         .foregroundStyle(Theme.secondaryText)
                 }
@@ -249,7 +249,7 @@ private struct CommandRow: View {
         .accessibilityLabel(
             "Voice command \(row.triggers.joined(separator: ", ")): \(VoiceCommandsModel.describe(row))"
                 + (row.enabled ? "" : ", off")
-                + (row.carriedOut ? "" : ". Not available in this version: it types nothing"))
+                + (row.carriedOut ? "" : ". Its action comes in a later version; while on, saying it types nothing"))
     }
 }
 
