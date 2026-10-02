@@ -1,5 +1,5 @@
 // Inkwell 0.2's data on this Mac: looked for when the first run shows and each time Settings
-// opens, and imported from the first run's step or Settings > Voice. The core knows where 0.2 kept
+// opens, and imported from the first run's step or Settings > General. The core knows where 0.2 kept
 // its data; the shell asks (import.check, import.run) and says what came back in plain words.
 // After an import, ScreenModels reads the key note, the dictation key and Settings' lists again,
 // and the Library lists again (import.finished).
@@ -148,7 +148,7 @@ final class Import02Model {
 }
 
 /// Where it stands and the Import button; the failure under it. Shown by the first run's step and
-/// Settings > Voice while the model offers an import.
+/// Settings > General while the model offers an import.
 struct Import02Card: View {
     let model: Import02Model
 

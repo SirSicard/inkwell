@@ -71,6 +71,16 @@ enum CoreCommand: Equatable, Sendable {
     case importCheck
     /// Imports it: `import.finished`, or a `command.failed` whose message is words to show.
     case importRun
+    /// Settings > AI's own-key language model (CloudModel). Each is answered by `llm.providers`
+    /// (Test by `llm.tested`) with `ref`, or a `command.failed` with it as the id. The key travels
+    /// once, in `llmKeySave`, to the keychain: never log a command's fields (`name` is safe).
+    case llmProviders(ref: String)
+    case llmKeySave(provider: String, key: String, ref: String)
+    case llmKeyDelete(provider: String, ref: String)
+    /// "none" for no provider. `localOnlyOff`: the user's say-so that choosing a provider off this
+    /// Mac turns local-only mode off (the core refuses such a choice without it).
+    case llmChoose(provider: String, model: String?, baseURL: String?, localOnlyOff: Bool, ref: String)
+    case llmTest(ref: String)
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -135,6 +145,15 @@ enum CoreCommand: Equatable, Sendable {
         case .importNotes: ["cmd": "import.notes", "id": "import.notes"]
         case .importCheck: ["cmd": "import.check", "id": "import.check"]
         case .importRun: ["cmd": "import.run", "id": "import.run"]
+        case .llmProviders(let ref): ["cmd": "llm.providers", "id": ref]
+        case .llmKeySave(let provider, let key, let ref): ["cmd": "llm.key.save", "provider": provider, "key": key, "id": ref]
+        case .llmKeyDelete(let provider, let ref): ["cmd": "llm.key.delete", "provider": provider, "id": ref]
+        case .llmChoose(let provider, let model, let baseURL, let localOnlyOff, let ref):
+            ["cmd": "llm.choose", "provider": provider, "id": ref]
+                .merging(model.map { ["model": $0] } ?? [:]) { a, _ in a }
+                .merging(baseURL.map { ["base_url": $0] } ?? [:]) { a, _ in a }
+                .merging(localOnlyOff ? ["local_only": "off"] : [:]) { a, _ in a }
+        case .llmTest(let ref): ["cmd": "llm.test", "id": ref]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -179,6 +198,11 @@ enum CoreCommand: Equatable, Sendable {
         case .importNotes: "import.notes"
         case .importCheck: "import.check"
         case .importRun: "import.run"
+        case .llmProviders: "llm.providers"
+        case .llmKeySave: "llm.key.save"
+        case .llmKeyDelete: "llm.key.delete"
+        case .llmChoose: "llm.choose"
+        case .llmTest: "llm.test"
         }
     }
 
@@ -223,7 +247,7 @@ enum ShellSetting: String, Sendable {
     /// The voice-edit key, or "off" (which withdraws its consent). Turned on (from off) through the
     /// consent step (`consentAllow` with the key).
     case dictationEditKey = "dictation.edit_key"
-    /// "on" or "off": whether dictation is live (Settings > Voice). Never set: on.
+    /// "on" or "off": whether dictation is live (Settings > Dictation). Never set: on.
     case dictationEnabled = "dictation.enabled"
     /// "dismissed": the note about Inkwell 0.2's dictation key has been read.
     case importKeyNote = "import.key_note"

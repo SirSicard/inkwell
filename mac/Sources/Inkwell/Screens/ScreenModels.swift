@@ -204,6 +204,8 @@ final class ScreenModels {
     let import02: Import02Model
     /// The theme: the appearance settings and what they resolve to.
     let theme: GlowTheme
+    /// Settings > AI: the language model you bring, and local-only mode.
+    let cloud: CloudModel
 
     /// The id of the meetings switch's command (a `command.failed` carries it).
     static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
@@ -220,6 +222,7 @@ final class ScreenModels {
         log: ScreenLog = .system
     ) {
         theme = GlowTheme(send: send)
+        cloud = CloudModel(send: send)
         permissions = PermissionsModel(send: send, calendar: calendar)
         polish = PolishModel(send: send)
         catalogue = CatalogueModel(send: send)
@@ -256,6 +259,7 @@ final class ScreenModels {
             meetings.apply(event)
             onboarding.apply(event)
             theme.apply(event)
+            cloud.apply(event)
             import02.apply(event)
             if onboarding.showing {
                 // The first run offers its import step only when there is something to import.
@@ -284,6 +288,8 @@ final class ScreenModels {
     /// each launch (the Today banner and the sidebar read it too).
     private func coreReady() {
         theme.load()
+        // Whether a language model of the user's own can polish (PolishModel reads the answer).
+        cloud.load()
         onboarding.load()
         // The sidebar's overdue count.
         owed.load()
@@ -298,7 +304,7 @@ final class ScreenModels {
         meetingsConsent.load()
     }
 
-    /// The Voice section's edit picker. Off turns voice edit off (the core withdraws its consent in
+    /// The Dictation section's edit picker. Off turns voice edit off (the core withdraws its consent in
     /// the same write). A key while voice edit is on and allowed only changes the key; otherwise
     /// the consent step asks first (Allow sends the key with the consent; Cancel changes nothing).
     func chooseEditKey(_ token: String?) {
@@ -383,19 +389,22 @@ final class ScreenModels {
         case "setting.get":
             failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
-                || GlowTheme.settingIDs.contains(failed.id ?? "")
+                || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
             failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
                 || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
-                || GlowTheme.settingIDs.contains(failed.id ?? "")
+                || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
         case "engine.route":
             // Settings > Models says so on the job's line.
             CatalogueModel.routeJob(failed) != nil
+        case "llm.providers", "llm.key.save", "llm.key.delete", "llm.choose", "llm.test":
+            // Said under Settings > AI's language model.
+            CloudModel.handles(failed)
         case "consent.get", "consent.allow":
-            // Shown under the Polish or the summaries toggle, or in the Voice section for voice edit.
+            // Shown under the Polish or the summaries toggle, or in the Dictation section for voice edit.
             true
         // Settings > Snippets and Voice commands say so. The key note that could not be read is
         // not shown (there is nothing to say then); it is logged.

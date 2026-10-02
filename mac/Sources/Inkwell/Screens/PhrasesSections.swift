@@ -1,5 +1,5 @@
 // Settings > Snippets and Settings > Voice commands (PhrasesModel), and the one-time note about
-// Inkwell 0.2's dictation key in Settings > Voice. The user's own words are shown as plain text:
+// Inkwell 0.2's dictation key in Settings > Dictation. The user's own words are shown as plain text:
 // nothing here is a link.
 import InkBridge
 import SwiftUI
@@ -270,7 +270,7 @@ private struct FailureLine: View {
     }
 }
 
-// MARK: - The 0.2 key note (Settings > Voice)
+// MARK: - The 0.2 key note (Settings > Dictation)
 
 struct ImportKeyNoteView: View {
     let model: ImportNoteModel
