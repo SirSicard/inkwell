@@ -21,6 +21,17 @@ public enum InkState
     Problem,
 }
 
+/// <summary>
+/// Where the orb sits on its canvas: its centre as shares of the width and of the height (from the
+/// top), and its unit as a share of the shorter side. The shell passes the tokens' placements
+/// (GlowTokens.Orb); until then, the centre at the shorter side.
+/// </summary>
+public readonly record struct InkPlacement(double X, double Y, double Unit)
+{
+    /// <summary>Centred, one unit the shorter side.</summary>
+    public static InkPlacement Centre => new(0.5, 0.5, 1);
+}
+
 /// <summary>InkState helpers.</summary>
 public static class InkStates
 {

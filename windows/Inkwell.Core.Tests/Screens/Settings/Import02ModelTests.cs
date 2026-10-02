@@ -203,26 +203,28 @@ public class Import02ModelTests
     {
         var screens = new ScreenModels(_ => { }, log: new Logged().Log);
         var onboarding = screens.Onboarding;
-        Assert.Equal([OnboardingStep.Welcome, OnboardingStep.Permissions, OnboardingStep.Models, OnboardingStep.Polish, OnboardingStep.Ready], onboarding.ShownSteps);
+        Assert.Equal(
+            [OnboardingStep.Welcome, OnboardingStep.Permissions, OnboardingStep.Models, OnboardingStep.Appearance, OnboardingStep.Polish, OnboardingStep.Ready],
+            onboarding.ShownSteps);
         onboarding.Next();
         onboarding.Next();
         onboarding.Next();
-        Assert.Equal(OnboardingStep.Polish, onboarding.Step); // no 0.2 data: no step
+        Assert.Equal(OnboardingStep.Appearance, onboarding.Step); // no 0.2 data: no step
 
         screens.Apply([Found]);
         Assert.Equal(
-            [OnboardingStep.Welcome, OnboardingStep.Permissions, OnboardingStep.Models, OnboardingStep.ImportData, OnboardingStep.Polish, OnboardingStep.Ready],
+            [OnboardingStep.Welcome, OnboardingStep.Permissions, OnboardingStep.Models, OnboardingStep.ImportData, OnboardingStep.Appearance, OnboardingStep.Polish, OnboardingStep.Ready],
             onboarding.ShownSteps);
-        Assert.Equal("Step 5 of 6", onboarding.StepLabel);
+        Assert.Equal("Step 5 of 7", onboarding.StepLabel);
         onboarding.Back();
         Assert.Equal(OnboardingStep.ImportData, onboarding.Step);
-        Assert.Equal("Step 4 of 6", onboarding.StepLabel);
+        Assert.Equal("Step 4 of 7", onboarding.StepLabel);
         Assert.Equal(Import02Model.NotNow, onboarding.NextTitle);
         onboarding.Back();
         Assert.Equal(OnboardingStep.Models, onboarding.Step);
         onboarding.Next();
         onboarding.Next();
-        Assert.Equal(OnboardingStep.Polish, onboarding.Step); // Not now moves on
+        Assert.Equal(OnboardingStep.Appearance, onboarding.Step); // Not now moves on
         onboarding.Back();
         screens.Apply([Finished()]);
         Assert.Equal("Continue", onboarding.NextTitle); // something came over

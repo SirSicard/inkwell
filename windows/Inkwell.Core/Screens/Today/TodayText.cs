@@ -25,6 +25,34 @@ public static class TodayText
         return $"{local.ToString("dddd", calendar.Culture)} {local.ToString(calendar.Culture.DateTimeFormat.MonthDayPattern, calendar.Culture)}";
     }
 
+    /// <summary>The hero's status line: "Listening for meetings · Hold Right Ctrl to dictate" (each part once the core says it).</summary>
+    public static string HeroStatus(bool recording, bool? listening, string? dictate) =>
+        string.Join(" · ", new[] { RecordControlsModel.ListeningText(recording, listening).Trim(), dictate }.Where(p => !string.IsNullOrEmpty(p)));
+
+    /// <summary>
+    /// The live card's line, while a meeting records or blots: "Zoom · Recording · 12:04", or
+    /// "Zoom · Blotting… · transcribed · speakers sorted" as the final pass goes.
+    /// </summary>
+    /// <param name="status">LiveModel.StatusText: "Recording · 12:04" or "Blotting…".</param>
+    public static string LiveCardLine(LiveMeeting meeting, string? status)
+    {
+        ArgumentNullException.ThrowIfNull(meeting);
+        var parts = new List<string>();
+        if (LiveHeader.AppLine(meeting) is string app)
+        {
+            parts.Add(app);
+        }
+        if (status is not null)
+        {
+            parts.Add(status);
+        }
+        if (meeting.Stopping && meeting.Blotted.Words is string done)
+        {
+            parts.Add(done);
+        }
+        return string.Join(" · ", parts);
+    }
+
     /// <summary>The counts at the foot: today's dictation and this week's meetings. A count that could not be read says so; it is never shown as zero. A count not answered yet is left out.</summary>
     /// <param name="today">library.stats since the start of today, when answered.</param>
     /// <param name="todayFailed">That question failed.</param>

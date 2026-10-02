@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The first-run sheet (the Mac's OnboardingView), as a ContentDialog over the window: where the
-     user is (dots, never a bar that fills), one of five steps (six while Inkwell 0.2's history is
+     user is (dots, never a bar that fills), one of six steps (seven while Inkwell 0.2's history is
      offered), and Skip / Back / Continue (Start on the last, Not now on the import step). Its own
      buttons, in the Mac's order, rather than the dialog's. Polish's consent step shows inside the
-     sheet (WinUI shows one dialog at a time). -->
+     sheet (WinUI shows one dialog at a time). Welcome has the orb as its hero, playing a short
+     demo (dictating, then a call); Appearance the mode and the dots; Ready a place to try it,
+     where the orb answers the voice. -->
 <ContentDialog
     x:Class="Inkwell.Screens.OnboardingSheet"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell"
     Closed="OnClosed"
     Closing="OnClosing">
     <ContentDialog.Resources>
@@ -28,11 +31,19 @@
             <Ellipse x:Name="Dot3" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
             <Ellipse x:Name="Dot4" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
             <Ellipse x:Name="Dot5" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
+            <Ellipse x:Name="Dot6" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
         </StackPanel>
 
         <Grid Grid.Row="1">
             <StackPanel x:Name="WelcomeStep" Spacing="14">
-                <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Inkwell" />
+                <!-- The orb as the hero: a short demo, dictating then a call. Decorative. -->
+                <local:InkPanel
+                    x:Name="WelcomeOrb"
+                    Height="190"
+                    AutomationProperties.AccessibilityView="Raw"
+                    IsHitTestVisible="False" />
+                <!-- The same scale as every other step's title. -->
+                <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" Text="Inkwell" />
                 <TextBlock x:Name="WelcomeLine0" Style="{StaticResource InkReadingStyle}" />
                 <TextBlock x:Name="WelcomeLine1" Style="{StaticResource InkReadingStyle}" />
                 <TextBlock x:Name="WelcomeLine2" Foreground="{ThemeResource InkSecondaryTextBrush}" Style="{StaticResource InkReadingStyle}" />
@@ -52,7 +63,7 @@
                 <ContentPresenter x:Name="ModelRowsHost" />
                 <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button x:Name="DownloadButton" Click="OnDownload" Style="{StaticResource AccentButtonStyle}" />
+                    <Button x:Name="DownloadButton" Click="OnDownload" Style="{StaticResource InkAccentButtonStyle}" />
                     <Button x:Name="ModelsTryAgain" Click="OnModelsTryAgain" />
                 </StackPanel>
                 <TextBlock x:Name="ModelsGoOn" Style="{StaticResource InkCaptionStyle}" />
@@ -64,6 +75,22 @@
                 <TextBlock x:Name="ImportTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <ContentPresenter x:Name="ImportCardHost" />
                 <ContentPresenter x:Name="ImportNoteHost" />
+            </StackPanel>
+
+            <!-- Light, dark or the system's, and the dots; Settings > Appearance has the rest. -->
+            <StackPanel x:Name="AppearanceStep" Spacing="12">
+                <TextBlock x:Name="AppearanceTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
+                <RadioButtons
+                    x:Name="ModeChoice"
+                    AutomationProperties.Name="Mode"
+                    MaxColumns="3"
+                    SelectionChanged="OnModeChosen">
+                    <x:String>Light</x:String>
+                    <x:String>Dark</x:String>
+                    <x:String>Match system</x:String>
+                </RadioButtons>
+                <StackPanel x:Name="PresetRow" Orientation="Horizontal" Spacing="8" />
+                <TextBlock x:Name="AppearanceNote" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
 
             <StackPanel x:Name="PolishStep" Spacing="12">
@@ -82,7 +109,7 @@
                         <TextBlock x:Name="ConsentMessage" Style="{StaticResource InkBodyStyle}" />
                         <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
                             <Button x:Name="ConsentCancel" Click="OnConsentCancel" Content="Cancel" />
-                            <Button x:Name="ConsentAllow" Click="OnConsentAllow" Style="{StaticResource AccentButtonStyle}" />
+                            <Button x:Name="ConsentAllow" Click="OnConsentAllow" Style="{StaticResource InkAccentButtonStyle}" />
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -91,6 +118,26 @@
             <StackPanel x:Name="ReadyStep" Spacing="14">
                 <TextBlock x:Name="ReadyTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <TextBlock x:Name="ReadyLine" Style="{StaticResource InkReadingStyle}" />
+                <!-- Try it: the orb answers the voice, and the words land in the box. -->
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <local:InkPanel
+                        x:Name="ReadyOrb"
+                        Height="120"
+                        AutomationProperties.AccessibilityView="Raw"
+                        IsHitTestVisible="False" />
+                    <TextBox
+                        x:Name="TryIt"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        AcceptsReturn="True"
+                        AutomationProperties.Name="Try dictating here"
+                        MinHeight="80"
+                        TextWrapping="Wrap" />
+                </Grid>
                 <TextBlock x:Name="StillOffLine" Foreground="{ThemeResource InkAlertBrush}" Style="{StaticResource InkReadingStyle}" />
             </StackPanel>
         </Grid>
@@ -104,7 +151,7 @@
             </Grid.ColumnDefinitions>
             <Button x:Name="SkipButton" Click="OnSkip" Content="Skip" />
             <Button x:Name="BackButton" Grid.Column="2" Click="OnBack" Content="Back" />
-            <Button x:Name="NextButton" Grid.Column="3" Click="OnNext" Style="{StaticResource AccentButtonStyle}" />
+            <Button x:Name="NextButton" Grid.Column="3" Click="OnNext" Style="{StaticResource InkAccentButtonStyle}" />
         </Grid>
     </Grid>
 </ContentDialog>

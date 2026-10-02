@@ -15,6 +15,11 @@ public sealed partial class LibraryScreen : UserControl
     private readonly LibraryModel _library;
     private readonly RecordScreen _record;
     private readonly Dictionary<RecordKind, ToggleButton> _chips = [];
+    private readonly ToggleButton _allChip;
+
+    /// <summary>A kind chip: a pill.</summary>
+    private static ToggleButton Chip(string title) =>
+        new() { Content = title, CornerRadius = new CornerRadius(999), MinHeight = 30, Padding = new Thickness(14, 4, 14, 5) };
     private IReadOnlyList<RecordRow>? _listed;
     private IReadOnlyList<SearchHit>? _matched;
     private bool _syncing;
@@ -34,9 +39,13 @@ public sealed partial class LibraryScreen : UserControl
         ListRetry.Content = LibraryModel.TryAgainText;
         NothingTitle.Text = LibraryModel.NothingSelectedTitle;
         NothingDetail.Text = LibraryModel.NothingSelectedDetail;
+        // All first: the list opens on every kind.
+        _allChip = Chip(LibraryModel.AllTitle);
+        _allChip.Click += (_, _) => _library.Filter = null;
+        Chips.Children.Add(_allChip);
         foreach (var kind in LibraryModel.Kinds)
         {
-            var chip = new ToggleButton { Content = kind.Title, CornerRadius = new CornerRadius(14), MinHeight = 28, Padding = new Thickness(10, 3, 10, 4) };
+            var chip = Chip(kind.Title);
             chip.Click += (_, _) => _library.ToggleFilter(kind.Kind);
             _chips[kind.Kind] = chip;
             Chips.Children.Add(chip);
@@ -56,6 +65,8 @@ public sealed partial class LibraryScreen : UserControl
             // The title bar's search box asked: show its words here too.
             SearchBox.Text = _library.Query;
         }
+        _allChip.IsChecked = _library.Filter is null;
+        AutomationProperties.SetHelpText(_allChip, _library.AllHint);
         foreach (var kind in LibraryModel.Kinds)
         {
             var chip = _chips[kind.Kind];

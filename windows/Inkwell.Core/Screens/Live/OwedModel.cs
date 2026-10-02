@@ -158,14 +158,50 @@ public sealed class OwedModel : ObservableModel
 
     public void Load() => send(new CoreCommand.CommitmentsList());
 
+    /// <summary>The Undo toast's button.</summary>
+    public const string UndoTitle = "Undo";
+
+    /// <summary>How long the Undo toast stays.</summary>
+    public static readonly TimeSpan UndoShown = TimeSpan.FromSeconds(6);
+
+    /// <summary>The promise marked done last, while its Undo toast shows; null when none does.</summary>
+    public OwedItem? JustDone { get; private set; }
+
+    /// <summary>The Undo toast's line: "Marked done: Send the revised plan".</summary>
+    public string? JustDoneLine => JustDone is { } item ? $"Marked done: {item.Text}" : null;
+
     /// <summary>Marks a promise done: it leaves the list at once, and the core's list replaces it.</summary>
     public void MarkDone(string id)
     {
         Failure = null;
+        JustDone = Items.Find(i => i.Id == id) ?? JustDone;
         Items = Items.RemoveAll(i => i.Id == id);
         Suggestions = Suggestions.RemoveAll(s => s.Commitment == id);
         send(new CoreCommand.CommitmentSetDone(id, true));
         Changed();
+    }
+
+    /// <summary>The toast's Undo: the promise marked done last is open again (the core's list brings it back).</summary>
+    public void UndoDone()
+    {
+        if (JustDone is not { } item)
+        {
+            return;
+        }
+        Failure = null;
+        JustDone = null;
+        send(new CoreCommand.CommitmentSetDone(item.Id, false));
+        Changed();
+    }
+
+    /// <summary>The toast went (its time ran out, or the screen went): nothing to undo any more.</summary>
+    public void UndoExpired()
+    {
+        if (JustDone is not null)
+        {
+            JustDone = null;
+            Changed();
+        }
     }
 
     /// <summary>The user says a suggestion is wrong: it goes, the promise stays.</summary>
@@ -221,6 +257,9 @@ public sealed class OwedModel : ObservableModel
         }
         return string.Join(" · ", parts);
     }
+
+    /// <summary>How many promises are overdue now (the navigation's count beside Owed).</summary>
+    public int OverdueCount(DateTimeOffset now) => Items.Count(i => Due(i, now).IsOverdue);
 
     public DueLabel Due(OwedItem item, DateTimeOffset now)
     {

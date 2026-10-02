@@ -57,7 +57,10 @@ public sealed class LibraryModel : ObservableModel
     /// <summary>How long typing must pause before a search is asked: one question per pause, not one per key.</summary>
     public static readonly TimeSpan SearchDelay = TimeSpan.FromMilliseconds(250);
 
-    /// <summary>Meetings, Dictations, Files: one at a time, or none for everything.</summary>
+    /// <summary>The chip before the kinds: every kind, where the list opens.</summary>
+    public const string AllTitle = "All";
+
+    /// <summary>Meetings, Dictations, Files: one at a time, or none for everything (All).</summary>
     public static IReadOnlyList<KindChip> Kinds { get; } =
     [
         new(RecordKind.Meeting, "Meetings", "meetings"),
@@ -104,7 +107,8 @@ public sealed class LibraryModel : ObservableModel
     /// <summary>Where to put the playhead once the record being opened arrives.</summary>
     private long? _pendingSeek;
     private bool _pendingPlay;
-    private RecordKind? _filter = RecordKind.Meeting;
+    // Every kind until a chip narrows it (the All chip).
+    private RecordKind? _filter;
     private string _query = "";
 
     /// <param name="makePlayer">Makes the player for a record with audio (the app's builds it over its audio output; null: no player).</param>
@@ -623,6 +627,9 @@ public sealed class LibraryModel : ObservableModel
         LibraryLoad.Loaded => $"Nothing said matches “{HitsQuery}”.",
         _ => "Searching…",
     };
+
+    /// <summary>The All chip's hint for a screen reader.</summary>
+    public string AllHint => Filter is null ? "Shows every kind, as now" : "Shows every kind";
 
     /// <summary>A chip's hint for a screen reader.</summary>
     public string ChipHint(KindChip chip)

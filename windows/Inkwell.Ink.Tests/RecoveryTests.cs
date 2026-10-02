@@ -28,14 +28,14 @@ internal sealed class FlakyTarget : IInkTarget, IDisposable
     public List<bool> Fallbacks { get; } = [];
     public bool Fallback => Fallbacks.Count > 0 && Fallbacks[^1];
 
-    public bool Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark)
+    public bool Render(InkPipeline pipeline, in InkUniforms uniforms)
     {
         if (FailNext)
         {
             FailNext = false;
             throw new InkRendererException("present the ink", (HRESULT)FailWith);
         }
-        return inner.Render(pipeline, uniforms, mark);
+        return inner.Render(pipeline, uniforms);
     }
 
     public void ReleaseDeviceResources()
@@ -83,7 +83,7 @@ public sealed class RecoveryTests
                 retries.Enqueue(action);
             };
             Surface.FailureChanged += Failures.Add;
-            Surface.SetCanvas(96, 84, 96);
+            Surface.SetCanvas(96, 84);
             Surface.SetOnScreen(true);
         }
 

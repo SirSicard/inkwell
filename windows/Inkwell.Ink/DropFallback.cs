@@ -1,8 +1,8 @@
 // The Drop when the ink cannot draw: the Drop is the recording indicator, so it never goes blank.
 // While Direct3D is starting, lost (TDR, driver update, DWM restart) or unable to compile the
-// shader, this plain window takes its place: the paper panel, a still ink dot and the state's two
-// lines, painted with GDI into an ordinary redirected window, so it depends on neither Direct3D nor
-// DirectComposition. It keeps the Drop's rules: WS_EX_NOACTIVATE | WS_EX_TOPMOST |
+// shader, this plain window takes its place: the pill in the app's mode (DropLook), a still dot
+// where the orb would be and the state's two lines, painted with GDI into an ordinary redirected
+// window, so it depends on neither Direct3D nor DirectComposition. It keeps the Drop's rules: WS_EX_NOACTIVATE | WS_EX_TOPMOST |
 // WS_EX_TOOLWINDOW, MA_NOACTIVATE, shown only with SWP_NOACTIVATE. An offer's buttons are drawn
 // and answer clicks here too, where the Drop's own layout puts them (DropLayout).
 using System.Runtime.InteropServices;
@@ -23,6 +23,7 @@ internal sealed unsafe class DropFallback : IDisposable
     private GCHandle self;
     private HWND hwnd;
     private DropText text = new("", "");
+    private DropLook look = DropLook.Default;
     private double scale = 1;
     /// <summary>The button a press went down on, until it comes up.</summary>
     private int? pressed;
@@ -101,6 +102,16 @@ internal sealed unsafe class DropFallback : IDisposable
         IsShown = true;
     }
 
+    /// <summary>The pill's colours (the app's mode): repainted at once if it shows.</summary>
+    public void SetLook(DropLook value)
+    {
+        look = value;
+        if (IsShown)
+        {
+            InvalidateRect(hwnd, null, true);
+        }
+    }
+
     public void Hide()
     {
         if (IsShown)
@@ -124,23 +135,23 @@ internal sealed unsafe class DropFallback : IDisposable
         GetClientRect(hwnd, &client);
         int S(double dips) => (int)Math.Round(dips * scale);
 
-        var paper = CreateSolidBrush(Colour(Palette.Paper));
+        var paper = CreateSolidBrush(Colour(look.Background));
         _ = FillRect(dc, &client, paper);
         DeleteObject((HGDIOBJ)paper.Value);
 
-        // A still drop of ink where the ink would be.
-        var ink = CreateSolidBrush(Colour(Palette.Ink));
+        // A still dot where the orb would be.
+        var ink = CreateSolidBrush(Colour(look.Secondary));
         var noPen = GetStockObject(NullPen);
         var oldPen = SelectObject(dc, noPen);
         var oldBrush = SelectObject(dc, (HGDIOBJ)ink.Value);
-        int cx = S(DropLayout.InkWidth / 2), cy = (client.bottom - client.top) / 2, r = S(22);
+        int cx = S(DropLayout.OrbInset + DropLayout.OrbSize / 2), cy = S(DropLayout.Height / 2), r = S(12);
         Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
         SelectObject(dc, oldBrush);
         DeleteObject((HGDIOBJ)ink.Value);
 
-        // The border: seal red for an alert, else a light hairline.
+        // The border: the alert colour for an alert, else the mode's hairline.
         var alert = text.Tone == DropTone.Alert;
-        var border = CreatePen(PS.PS_SOLID, Math.Max(1, S(alert ? 1.5 : 1)), Colour(alert ? Palette.Seal : (0.85f, 0.84f, 0.81f)));
+        var border = CreatePen(PS.PS_SOLID, Math.Max(1, S(alert ? 1.5 : 1)), Colour(alert ? look.Alert : look.Border));
         SelectObject(dc, (HGDIOBJ)border.Value);
         var hollow = SelectObject(dc, GetStockObject(NullBrush));
         var corner = S(2 * DropLayout.CornerRadius);
@@ -155,33 +166,33 @@ internal sealed unsafe class DropFallback : IDisposable
         var detailFont = Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
         var (titleRect, detailRect, detailFormat) = Lines(text.Buttons is not null, client, scale);
         var oldFont = SelectObject(dc, (HGDIOBJ)titleFont.Value);
-        SetTextColor(dc, Colour(text.Tone == DropTone.Plain ? Palette.Muted : Palette.Seal));
+        SetTextColor(dc, Colour(text.Tone == DropTone.Plain ? look.Secondary : look.Alert));
         fixed (char* t = text.Title)
         {
             _ = DrawTextW(dc, t, text.Title.Length, &titleRect, DT.DT_LEFT | DT.DT_BOTTOM | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
         }
         SelectObject(dc, (HGDIOBJ)detailFont.Value);
-        SetTextColor(dc, Colour(Palette.Ink));
+        SetTextColor(dc, Colour(look.Text));
         fixed (char* d = text.Detail)
         {
             _ = DrawTextW(dc, d, text.Detail.Length, &detailRect, detailFormat);
         }
         if (text.Buttons is { } buttons)
         {
-            // The first in ink with paper words (the answer), the second outlined in ink.
-            var buttonFont = Font(S(DropLayout.ButtonTextSize), FW.FW_MEDIUM);
+            // The first in the button fill (the answer), the second outlined in the text colour.
+            var buttonFont = Font(S(DropLayout.ButtonTextSize), FW.FW_SEMIBOLD);
             SelectObject(dc, (HGDIOBJ)buttonFont.Value);
-            var inkPen = CreatePen(PS.PS_SOLID, Math.Max(1, S(1)), Colour(Palette.Ink));
-            var inkFill = CreateSolidBrush(Colour(Palette.Ink));
+            var inkPen = CreatePen(PS.PS_SOLID, Math.Max(1, S(1)), Colour(look.Text));
+            var inkFill = CreateSolidBrush(Colour(look.ButtonFill));
             var penBefore = SelectObject(dc, (HGDIOBJ)inkPen.Value);
             for (var i = 0; i < buttons.Count; i++)
             {
                 var (bl, bt, br, bb) = DropLayout.Button(i);
                 var rect = new RECT { left = S(bl), top = S(bt), right = S(br), bottom = S(bb) };
                 var fillBefore = SelectObject(dc, i == 0 ? (HGDIOBJ)inkFill.Value : GetStockObject(NullBrush));
-                RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, S(12), S(12));
+                RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, S(DropLayout.ButtonHeight), S(DropLayout.ButtonHeight));
                 SelectObject(dc, fillBefore);
-                SetTextColor(dc, Colour(i == 0 ? Palette.Paper : Palette.Ink));
+                SetTextColor(dc, Colour(i == 0 ? look.ButtonLabel : look.Text));
                 var words = buttons[i];
                 fixed (char* w = words)
                 {
@@ -211,9 +222,9 @@ internal sealed unsafe class DropFallback : IDisposable
         int S(double dips) => (int)Math.Round(dips * scale);
         var left = S(DropLayout.TextLeft);
         var right = client.right - S(DropLayout.TextRight);
-        var mid = buttons ? S(25) : (client.bottom - client.top) / 2;
+        var mid = buttons ? S(30) : (client.bottom - client.top) / 2;
         var title = new RECT { left = left, top = mid - S(20), right = right, bottom = mid - S(1) };
-        var detail = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(buttons ? 41 : 22) };
+        var detail = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(buttons ? 52 : 26) };
         var format = (uint)(DT.DT_LEFT | DT.DT_TOP | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX
             | (buttons ? DT.DT_WORDBREAK | DT.DT_EDITCONTROL : DT.DT_SINGLELINE));
         return (title, detail, format);

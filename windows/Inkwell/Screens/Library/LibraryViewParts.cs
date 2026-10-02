@@ -2,7 +2,6 @@
 // its words to Narrator: ListView speaks an item's ToString), the timestamp chip, the eyebrow, the
 // clipboard, and the search's one-shot wait on the UI thread. No logic: the words come from the
 // models (Inkwell.Core.Screens).
-using System.Globalization;
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Microsoft.UI.Dispatching;
@@ -71,15 +70,23 @@ internal static class Parts
 {
     public static Style TextStyle(string key) => (Style)Application.Current.Resources[key];
 
-    /// <summary>A token brush in <paramref name="scope"/>'s theme (the views build again when the theme changes).</summary>
+    private static readonly Windows.UI.ViewManagement.AccessibilitySettings Accessibility = new();
+
+    /// <summary>
+    /// A token brush in <paramref name="scope"/>'s theme, High Contrast's while it is on (the views
+    /// build again when the theme changes); a key outside the theme dictionaries is the app's.
+    /// </summary>
     public static Brush Brush(string key, FrameworkElement scope)
     {
         var resources = Application.Current.Resources;
-        var theme = scope.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
-        if (resources.ThemeDictionaries.TryGetValue(theme, out var dictionary)
-            && dictionary is ResourceDictionary themed && themed.TryGetValue(key, out var brush) && brush is Brush found)
+        var theme = Accessibility.HighContrast ? "HighContrast" : scope.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
+        foreach (var name in new[] { theme, "Light" })
         {
-            return found;
+            if (resources.ThemeDictionaries.TryGetValue(name, out var dictionary)
+                && dictionary is ResourceDictionary themed && themed.TryGetValue(key, out var brush) && brush is Brush found)
+            {
+                return found;
+            }
         }
         return (Brush)resources[key];
     }
@@ -88,10 +95,10 @@ internal static class Parts
 
     public static TextBlock Text(string text, string style = "InkBodyStyle") => new() { Text = text, Style = TextStyle(style) };
 
-    /// <summary>A section's small spaced capitals (the Mac's Paper.Eyebrow), a heading for Narrator.</summary>
+    /// <summary>A section's small label (Glow's eyebrow, in sentence case), a heading for Narrator.</summary>
     public static TextBlock Eyebrow(string text)
     {
-        var eyebrow = Text(text.ToUpper(CultureInfo.CurrentCulture), "InkEyebrowStyle");
+        var eyebrow = Text(text, "InkEyebrowStyle");
         AutomationProperties.SetHeadingLevel(eyebrow, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level3);
         AutomationProperties.SetName(eyebrow, text);
         return eyebrow;
@@ -107,7 +114,7 @@ internal static class Parts
                 Text = LibraryFormat.Stamp(ms),
                 FontFamily = Font("InkMonoFontFamily"),
                 FontSize = 11,
-                Foreground = Brush("InkThemBrush", scope),
+                Foreground = Brush("InkSecondaryTextBrush", scope),
             },
             Padding = new Thickness(5, 0, 5, 1),
             MinWidth = 0,

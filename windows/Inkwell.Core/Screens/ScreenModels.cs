@@ -20,7 +20,9 @@ public sealed class ScreenModels
     /// <param name="makePlayer">Makes a record's player over the app's audio output (null: no player).</param>
     /// <param name="search">Waits for typing to pause before a Library search (null: at once).</param>
     /// <param name="appVersion">The app's version for About (null: a development build).</param>
-    /// <param name="updater">About's updater (null: this copy does not update itself).</param>
+    /// <param name="updater">General's updater (null: this copy does not update itself).</param>
+    /// <param name="updatePreference">Where "Check for updates automatically" is kept (null: not offered).</param>
+    /// <param name="startup">Where Start with Windows is set (null: this copy cannot start with Windows).</param>
     public ScreenModels(
         Action<CoreCommand> send,
         string? dataDirectory = null,
@@ -32,7 +34,9 @@ public sealed class ScreenModels
         ISearchScheduler? search = null,
         string? appVersion = null,
         ScreenLog? log = null,
-        IUpdater? updater = null)
+        IUpdater? updater = null,
+        IUpdatePreference? updatePreference = null,
+        IStartupEntry? startup = null)
     {
         ArgumentNullException.ThrowIfNull(send);
         this.send = send;
@@ -62,7 +66,9 @@ public sealed class ScreenModels
         UpNext = new UpNextModel(cal, cal, wake ?? NoWake.Instance);
         Library = new LibraryModel(send, makePlayer, search);
         About = new AboutModel(appVersion);
-        Updates = new UpdatesModel(updater ?? NoUpdater.Instance, this.log);
+        Updates = new UpdatesModel(updater ?? NoUpdater.Instance, this.log, updatePreference);
+        Startup = new StartupModel(startup, this.log);
+        Appearance = new AppearanceModel(send, this.log);
     }
 
     public PermissionsModel Permissions { get; }
@@ -88,15 +94,21 @@ public sealed class ScreenModels
     public ImportNoteModel ImportNote { get; }
     /// <summary>Inkwell 0.2's data: the first run's step and a row in Settings > Voice.</summary>
     public Import02Model Import02 { get; }
-    /// <summary>The foot of Today's ink zone.</summary>
+    /// <summary>Today's hero: whether Inkwell listens, the dictation key, Record now.</summary>
     public RecordControlsModel RecordControls { get; }
     public UpNextModel UpNext { get; }
     /// <summary>What Today, the Library and a record show of the library.</summary>
     public LibraryModel Library { get; }
     public AboutModel About { get; }
 
-    /// <summary>About's updates row.</summary>
+    /// <summary>General's updates row, and the tray's Check for Updates….</summary>
     public UpdatesModel Updates { get; }
+
+    /// <summary>Start with Windows (General, and the tray).</summary>
+    public StartupModel Startup { get; }
+
+    /// <summary>Glow's mode, dots, colours, edge glow and motion (Settings > Appearance, and every surface).</summary>
+    public AppearanceModel Appearance { get; }
 
     /// <summary>A batch of the core's events, after the CoreStore has applied it.</summary>
     public void Apply(IReadOnlyList<InkEvent> batch)
@@ -141,6 +153,7 @@ public sealed class ScreenModels
             VoiceCommands.Apply(e);
             ImportNote.Apply(e);
             RecordControls.Apply(e);
+            Appearance.Apply(e);
         }
         // The Library folds a batch at once, and refreshes once per batch.
         Library.Apply(batch);
@@ -174,6 +187,7 @@ public sealed class ScreenModels
         MeetingsConsent.Load();
         // Whether an own-key provider is ready decides whether the AI switches can be used.
         Cloud.Load();
+        Appearance.Load();
     }
 
     /// <summary>The app came to the front again.</summary>
@@ -199,7 +213,7 @@ public sealed class ScreenModels
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
             || MeetingModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed)
             || Ai.Handles(failed) || CloudModel.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
-            || Library.Handles(failed) || Import02Model.Handles(failed);
+            || Library.Handles(failed) || Import02Model.Handles(failed) || AppearanceModel.Handles(failed);
     }
 
     /// <summary>

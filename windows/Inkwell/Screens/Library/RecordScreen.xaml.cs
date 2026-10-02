@@ -1,12 +1,14 @@
 // The record's code: it shows LibraryModel.Document and sends the user's presses to the model.
 // The record is built once per answer (a new document), not per change of the model; the ledger
-// marks the line under the playhead when the player bar's timer ticks (only while playing).
+// marks the line under the playhead when the player bar's timer ticks (only while playing). Space
+// plays and pauses while no text field has the focus (a focused button keeps its own Space).
 using Inkwell.Core.Screens;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 
 namespace Inkwell.Screens;
@@ -38,6 +40,7 @@ public sealed partial class RecordScreen : UserControl
         EmptyLedger.Text = RecordDocument.EmptyLedgerText;
         LedgerEyebrow.Content = Parts.Eyebrow("What was said");
         _library.PropertyChanged += (_, _) => Render();
+        KeyDown += OnKeyDown;
         ActualThemeChanged += (_, _) =>
         {
             _shown = null;
@@ -88,6 +91,21 @@ public sealed partial class RecordScreen : UserControl
 
     private void Play(long ms) => _library.PlayFrom(ms);
 
+    /// <summary>Space plays or pauses the record, unless a text field has the focus.</summary>
+    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled || e.Key != Windows.System.VirtualKey.Space || _library.Player is not { } player)
+        {
+            return;
+        }
+        if (FocusManager.GetFocusedElement(XamlRoot) is TextBox or RichEditBox or PasswordBox or AutoSuggestBox)
+        {
+            return;
+        }
+        player.Toggle();
+        e.Handled = true;
+    }
+
     // Notes and transcript
 
     private void FillNotes(RecordDocument document)
@@ -128,7 +146,7 @@ public sealed partial class RecordScreen : UserControl
         {
             Text = $"{speaker.Label}: ",
             FontWeight = FontWeights.SemiBold,
-            Foreground = Parts.Brush(speaker.IsYou ? "InkTextBrush" : "InkThemBrush", this),
+            Foreground = Parts.Brush("InkTextBrush", this),
         });
         words.Inlines.Add(new Run { Text = entry.Text });
         return Parts.WithChip(words, entry.AtMs, Play, this);
@@ -139,7 +157,7 @@ public sealed partial class RecordScreen : UserControl
         var row = new Grid { ColumnSpacing = 6 };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var mark = new FontIcon { Glyph = "", FontSize = 13, Foreground = Parts.Brush("InkThemBrush", this), VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 4, 0, 0) };
+        var mark = new FontIcon { Glyph = "", FontSize = 13, Foreground = Parts.Brush("InkTextBrush", this), VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 4, 0, 0) };
         AutomationProperties.SetName(mark, "Owed");
         var words = Parts.Text(entry.Text, "InkReadingStyle");
         words.FontSize = 15;

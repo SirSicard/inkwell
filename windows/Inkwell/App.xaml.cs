@@ -2,10 +2,17 @@
 // stops the core, then the app. The screens' models (ScreenModels) follow the core's events after
 // the store; each route's screen is made from them (Screens.cs). The Drop follows meetings,
 // dictation and the offer to record a call through DropModel after the store too; its buttons
-// answer through the meetings model. Before any of it, Microsoft's terms (TermsStep, TermsWindow):
-// until they are agreed to, nothing else is made, shown or started.
+// answer through the meetings model. The look is Glow's (GlowTheme): the window, the Drop and the
+// tray icon's state dot follow the appearance settings. Before any of it, Microsoft's terms
+// (TermsStep, TermsWindow): until they are agreed to, nothing else is made, shown or started.
+//
+// The tray icon shows the state (idle, dictating in your colour, recording in theirs, a problem
+// in the alert colour: TrayGlyph draws the dot) and its menu is made when it opens (TrayMenu): a
+// left click opens the window. The automatic update check, when on, runs once here at launch.
 using Inkwell.Core.Screens;
+using Inkwell.Ink;
 using Inkwell.Screens;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using WinUIEx;
@@ -23,6 +30,11 @@ public partial class App : Application
     private CoreController? core;
     private ScreenModels? screens;
     private ShellInk? ink;
+    private GlowTheme? theme;
+    private DropModel? dropModel;
+    /// <summary>The tray icon's state icons, made for the colours shown (TrayGlyph), by state.</summary>
+    private readonly Dictionary<TrayState, nint> trayIcons = [];
+    private TrayState? trayShown;
     /// <summary>What stops the Drop working now, or null: kept for the tray icon made after it.</summary>
     private string? inkProblem;
     private bool quitting;
@@ -81,12 +93,28 @@ public partial class App : Application
         window.ShowInk(ink);
         screens = AppScreens.Models(core, window.DispatcherQueue, new VelopackUpdater(Quit));
         var models = screens;
+        // The look: the window's mode and colours, the Drop's pill and orb, the tray's dots.
+        var glow = new GlowTheme(models.Appearance, window.DispatcherQueue);
+        theme = glow;
+        window.ShowTheme(glow);
+        var shownInk = ink;
+        glow.Changed += () =>
+        {
+            shownInk.SetLook(glow.Look, glow.DropLook, glow.AlwaysStill);
+            ColoursChanged();
+        };
+        shownInk.SetLook(glow.Look, glow.DropLook, glow.AlwaysStill);
         // What the Drop says, after the store has taken each batch.
         var drop = new DropModel(
             new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine,
             () => models.Meetings.FailureOn(MeetingPlace.Drop));
+        dropModel = drop;
         var shellInk = ink;
-        drop.Changed += () => shellInk.Show(drop.Line, drop.Ink);
+        drop.Changed += () =>
+        {
+            shellInk.Show(drop.Line, drop.Ink);
+            ShowTrayState();
+        };
         var store = core.Store;
         var applying = false;
         // An answer sent again clears the Drop's failure line at once, not at the next batch (a
@@ -112,8 +140,8 @@ public partial class App : Application
             }
             drop.Apply(store, batch);
         };
-        var made = new AppScreens(core.Store, models, router);
-        window.Attach(core.Store, router, made.Screen, made.InkZoneFoot(), made.Search);
+        var made = new AppScreens(core.Store, models, router, glow, shownInk);
+        window.Attach(core.Store, router, made.Screen, made.Search, models.Meetings, models.Owed);
         made.AttachFirstRun(window.Content as FrameworkElement);
         // Up next's minute redraws only while the window is on screen (rule 9).
         window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: true);
@@ -132,25 +160,150 @@ public partial class App : Application
                 models.AppBecameActive();
             }
         };
-        tray = new TrayIcon(1, Path.Combine(AppContext.BaseDirectory, "Assets", "Inkwell.ico"), "Inkwell");
+        tray = new TrayIcon(1, IconPath, "Inkwell");
         tray.Selected += (_, _) => ShowWindow();
-        tray.ContextMenu += (_, e) =>
-        {
-            var show = new MenuFlyoutItem { Text = "Show Inkwell" };
-            show.Click += (_, _) => ShowWindow();
-            var quit = new MenuFlyoutItem { Text = "Quit Inkwell" };
-            quit.Click += (_, _) => Quit();
-            var menu = new MenuFlyout();
-            menu.Items.Add(show);
-            menu.Items.Add(quit);
-            e.Flyout = menu;
-        };
+        tray.ContextMenu += (_, e) => e.Flyout = TrayMenuFlyout();
         tray.Tooltip = TrayTooltip(inkProblem);
         tray.IsVisible = true;
+        ShowTrayState();
         window.Activate();
         // On screen from the start: the window's own change events may not come for the first show.
         made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
         core.Start();
+        // Once, at launch, when the user turned the automatic check on (never on a timer).
+        _ = models.Updates.CheckAtLaunch();
+    }
+
+    private static string IconPath => Path.Combine(AppContext.BaseDirectory, "Assets", "Inkwell.ico");
+
+    /// <summary>The tray icon's menu, made as it opens: its status line is read now, so nothing ticks.</summary>
+    private MenuFlyout TrayMenuFlyout()
+    {
+        var menu = new MenuFlyout();
+        if (core is null || screens is null)
+        {
+            return menu;
+        }
+        var store = core.Store;
+        var models = screens;
+        var elapsed = store.Meeting is { Stopping: false } && models.Live.StartedAt is not null ? models.Live.ElapsedMs() : (long?)null;
+        menu.Items.Add(new MenuFlyoutItem { Text = TrayMenu.StatusLine(store, elapsed), IsEnabled = false });
+        var (recordTitle, recordEnabled) = TrayMenu.RecordItem(store);
+        var record = new MenuFlyoutItem { Text = recordTitle, IsEnabled = recordEnabled };
+        record.Click += (_, _) =>
+        {
+            if (store.Meeting is null)
+            {
+                models.Meetings.RecordNow();
+            }
+            else
+            {
+                models.Meetings.Stop();
+            }
+        };
+        menu.Items.Add(record);
+        var dictation = new ToggleMenuFlyoutItem { Text = TrayMenu.DictationTitle, IsChecked = models.Dictation.IsOn };
+        dictation.Click += (_, _) => models.Dictation.SetOn(dictation.IsChecked);
+        menu.Items.Add(dictation);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        var open = new MenuFlyoutItem { Text = TrayMenu.OpenTitle };
+        open.Click += (_, _) => ShowWindow();
+        menu.Items.Add(open);
+        var settings = new MenuFlyoutItem { Text = TrayMenu.SettingsTitle };
+        settings.Click += (_, _) => ShowSettings();
+        menu.Items.Add(settings);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        models.Startup.Refresh();
+        var startup = new ToggleMenuFlyoutItem
+        {
+            Text = StartupModel.Title,
+            IsChecked = models.Startup.IsOn,
+            IsEnabled = models.Startup.Available,
+        };
+        if (models.Startup.Unavailable is string why)
+        {
+            ToolTipService.SetToolTip(startup, why);
+        }
+        startup.Click += (_, _) => models.Startup.SetOn(startup.IsChecked);
+        menu.Items.Add(startup);
+        var updates = new MenuFlyoutItem { Text = TrayMenu.CheckForUpdatesTitle };
+        updates.Click += (_, _) =>
+        {
+            // The answer shows where the updates row is: Settings > General.
+            ShowSettings();
+            _ = models.Updates.CheckNow();
+        };
+        menu.Items.Add(updates);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        var quit = new MenuFlyoutItem { Text = TrayMenu.QuitTitle };
+        quit.Click += (_, _) => Quit();
+        menu.Items.Add(quit);
+        return menu;
+    }
+
+    private void ShowSettings()
+    {
+        ShowWindow();
+        router.Open(Route.Settings);
+    }
+
+    /// <summary>The tray icon for the Drop's state now: its dot in the colours shown.</summary>
+    private void ShowTrayState()
+    {
+        if (tray is null || dropModel is null)
+        {
+            return;
+        }
+        var state = TrayMenu.State(dropModel.Ink);
+        if (state == trayShown)
+        {
+            return;
+        }
+        if (!trayIcons.TryGetValue(state, out var icon))
+        {
+            try
+            {
+                icon = TrayGlyph.Make(IconPath, DotColour(state));
+            }
+            catch (InkRendererException e)
+            {
+                // The icon keeps the state it showed; the tooltip and the Drop still say it.
+                InkLog.Write(e.Message);
+                return;
+            }
+            trayIcons[state] = icon;
+        }
+        tray.SetIcon(Win32Interop.GetIconIdFromIcon(icon));
+        trayShown = state;
+    }
+
+    /// <summary>The colours changed: the icons are drawn again; the old ones go once the new one shows (the shell keeps its own copy).</summary>
+    private void ColoursChanged()
+    {
+        var old = trayIcons.Values.ToList();
+        trayIcons.Clear();
+        trayShown = null;
+        ShowTrayState();
+        foreach (var icon in old)
+        {
+            TrayGlyph.Destroy(icon);
+        }
+    }
+
+    /// <summary>A state's dot: your colour, theirs, or the alert colour; none at rest.</summary>
+    private (float R, float G, float B)? DotColour(TrayState state)
+    {
+        if (theme is null)
+        {
+            return null;
+        }
+        return state switch
+        {
+            TrayState.Dictating => theme.Look.YouA,
+            TrayState.Recording => theme.Look.ThemA,
+            TrayState.Problem => theme.DropLook.Alert,
+            _ => null,
+        };
     }
 
     /// <summary>
@@ -206,6 +359,11 @@ public partial class App : Application
             ink = null;
             tray?.Dispose();
             tray = null;
+            foreach (var (_, icon) in trayIcons)
+            {
+                TrayGlyph.Destroy(icon);
+            }
+            trayIcons.Clear();
             window.Close();
             Exit();
         });

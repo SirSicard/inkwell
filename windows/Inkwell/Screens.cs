@@ -1,16 +1,15 @@
-// Each route's screen, made once from the screens' models (ScreenModels), and the pieces the
-// window holds beside them: the foot of Today's ink zone and the first-run sheet. Navigation between
-// screens goes through the Router; opening a record goes to the Library with the record asked for.
+// Each route's screen, made once from the screens' models (ScreenModels), and the first-run sheet
+// the window holds over them. Navigation between screens goes through the Router; opening a record
+// goes to the Library with the record asked for.
 using Inkwell.Core;
 using Inkwell.Core.Screens;
 using Inkwell.Screens;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
 
 namespace Inkwell;
 
-internal sealed class AppScreens(CoreStore store, ScreenModels models, Router router)
+internal sealed class AppScreens(CoreStore store, ScreenModels models, Router router, GlowTheme theme, ShellInk ink)
 {
     /// <summary>Whether the window is on screen (the window updates it): Up next's minute redraws only then.</summary>
     public WindowPresence Presence { get; } = new();
@@ -42,7 +41,10 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             search: new DispatcherSearchScheduler(ui),
             appVersion: AppVersion.Release,
             log: core.CommandLog,
-            updater: updater);
+            updater: updater,
+            // "Check for updates automatically" beside the library, as the terms' record is.
+            updatePreference: data is null ? null : new UpdatePreferenceFile(Path.Combine(data, UpdatePreferenceFile.FileName)),
+            startup: new WindowsStartup());
         // A moved library (development, tests, scripts) never looks at this PC's Inkwell 0.2 data.
         screens.Import02.Looks = !DataLocation.IsMoved();
         return screens;
@@ -51,7 +53,9 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     /// <summary>A route's screen.</summary>
     public UIElement Screen(Route route) => route switch
     {
-        Route.Today => new TodayScreen(store, models.Library, models.Owed, models.Permissions, models.UpNext, Presence, router.Open, OpenRecord),
+        Route.Today => new TodayScreen(
+            store, models.Library, models.Owed, models.Permissions, models.UpNext, Presence, router.Open, OpenRecord,
+            models.RecordControls, models.Meetings, models.Live),
         Route.Library => new LibraryScreen(models.Library, () => models.Ai.SummaryOffNote, Presence),
         Route.Owed => new OwedScreen(models.Owed, (record, ms) => OpenRecord(record, ms, play: true)),
         Route.Live => new LiveScreen(store, models.Live, models.Meetings, Presence),
@@ -66,9 +70,6 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
         models.Library.Query = query;
     }
 
-    /// <summary>The foot of Today's ink zone.</summary>
-    public UIElement InkZoneFoot() => new InkZoneFoot(store, models.RecordControls, models.Meetings);
-
     /// <summary>The first-run sheet, over the window while it is not completed.</summary>
     public void AttachFirstRun(FrameworkElement? host)
     {
@@ -76,7 +77,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
         {
             OnboardingSheet.Attach(
                 host, models.Onboarding, models.Permissions, models.Polish, models.Dictation, models.Catalogue,
-                models.Import02, models.ImportNote);
+                models.Import02, models.ImportNote, theme, ink);
         }
     }
 
@@ -87,26 +88,27 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
         models.Library.Open(record, ms, play);
     }
 
-    /// <summary>Settings' sections, in the canvas's order.</summary>
+    /// <summary>Settings' sections, in the plan's order.</summary>
     private List<SettingsSectionEntry> SettingsSections()
     {
         var importNote = new ImportKeyNoteView(models.ImportNote, () => DictationModel.Key(models.Dictation.CurrentKey)?.Name ?? DictationModel.Cap(models.Dictation.CurrentKey));
-        // Inkwell 0.2's history beside the key note, looked for each time Settings shows it.
+        // Inkwell 0.2's history, in General, looked for each time Settings shows it.
         var import02 = new Import02Card(models.Import02, inSettings: true);
         import02.Loaded += (_, _) => models.Import02.Check();
-        var imports = new StackPanel { Spacing = 12, Children = { importNote, import02 } };
         return
         [
+            new("General", new GeneralSection(models.Startup, models.Updates, import02)),
+            new("Appearance", new AppearanceSection(theme)),
             new("Permissions", new PermissionsSection(models.Permissions)),
-            new("Voice", new VoiceSection(models.Ai, imports)),
-            new("AI", new AiSection(models.Ai, models.Cloud)),
+            new("Dictation", new VoiceSection(models.Ai, importNote)),
             new("Modes", new ModesSection(models.Modes)),
             new("Snippets", new SnippetsSection(models.Snippets)),
             new("Voice commands", new VoiceCommandsSection(models.VoiceCommands)),
+            new("AI", new AiSection(models.Ai, models.Cloud)),
             new("Meetings", new MeetingsSection(models.Meetings)),
             new("Models", new ModelsSection(models.Catalogue)),
             new("Storage", new StorageSection(models.Storage, models.Meetings)),
-            new("About", new AboutSection(models.About, models.Updates)),
+            new("About", new AboutSection(models.About)),
         ];
     }
 }

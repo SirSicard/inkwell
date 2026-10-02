@@ -64,6 +64,8 @@ public sealed record LiveMeeting(string Record)
     public bool FarEndFallback { get; init; }
     /// <summary>meeting.stopped arrived: capture ended and the final pass is running.</summary>
     public bool Stopping { get; init; }
+    /// <summary>How far the final pass has come (meeting.transcribed, .diarized, .summarized), while Stopping.</summary>
+    public BlotProgress Blotted { get; init; }
     /// <summary>The latest state of each side's capture.</summary>
     public ImmutableDictionary<Channel, SideState> Sides { get; init; } = ImmutableDictionary<Channel, SideState>.Empty;
     /// <summary>Each channel's current partial: replaced by the next one, cleared by its final.</summary>
@@ -90,7 +92,7 @@ public sealed record LiveMeeting(string Record)
     public bool Equals(LiveMeeting? other) =>
         other is not null && Record == other.Record && Title == other.Title && App == other.App && AppName == other.AppName
         && MicName == other.MicName && MicReason == other.MicReason && FarEnd == other.FarEnd
-        && FarEndFallback == other.FarEndFallback && Stopping == other.Stopping
+        && FarEndFallback == other.FarEndFallback && Stopping == other.Stopping && Blotted == other.Blotted
         && Sides.Count == other.Sides.Count && !Sides.Except(other.Sides).Any()
         && Partials.Count == other.Partials.Count && !Partials.Except(other.Partials).Any()
         && Finals.SequenceEqual(other.Finals) && Ledger == other.Ledger;
@@ -98,6 +100,32 @@ public sealed record LiveMeeting(string Record)
     public override int GetHashCode() => HashCode.Combine(Record, Stopping, Finals.Count);
 
     private static int Utf8(string text) => System.Text.Encoding.UTF8.GetByteCount(text);
+}
+
+/// <summary>The final pass's steps done so far: each comes once, in this order (diarizing only with several far voices).</summary>
+public readonly record struct BlotProgress(bool Transcribed, bool Diarized, bool Summarized)
+{
+    /// <summary>The steps done, in words: "transcribed · speakers sorted · summarized"; null before the first.</summary>
+    public string? Words
+    {
+        get
+        {
+            var done = new List<string>();
+            if (Transcribed)
+            {
+                done.Add("transcribed");
+            }
+            if (Diarized)
+            {
+                done.Add("speakers sorted");
+            }
+            if (Summarized)
+            {
+                done.Add("summarized");
+            }
+            return done.Count == 0 ? null : string.Join(" · ", done);
+        }
+    }
 }
 
 /// <summary>An app the core offers to record.</summary>
@@ -392,6 +420,16 @@ public sealed class CoreStore : ObservableModel
             case MeetingStopped stopped:
                 UpdateMeeting(stopped.Record, m => m with { Stopping = true, Partials = m.Partials.Clear() });
                 break;
+            // The final pass's progress (Today's live card shows it while the meeting blots).
+            case MeetingTranscribed transcribed:
+                UpdateMeeting(transcribed.Record, m => m with { Blotted = m.Blotted with { Transcribed = true } });
+                break;
+            case MeetingDiarized diarized:
+                UpdateMeeting(diarized.Record, m => m with { Blotted = m.Blotted with { Diarized = true } });
+                break;
+            case MeetingSummarized summarized:
+                UpdateMeeting(summarized.Record, m => m with { Blotted = m.Blotted with { Summarized = true } });
+                break;
             case MeetingVoiceDetection vad when !vad.Available:
                 Notice(new NoticeKind.VoiceDetectionUnavailable(vad.Reason));
                 break;
@@ -420,7 +458,7 @@ public sealed class CoreStore : ObservableModel
             case UnknownEvent or UndecodableEvent:
                 Notice(new NoticeKind.MismatchedBuild(evt.Type));
                 break;
-            // Nothing to keep: the final pass's progress, whose screens read the record from the
+            // Nothing to keep: the rest of the final pass, whose screens read the record from the
             // store, and the answers the screens' models take. An event added to the schema later
             // lands here too until the store learns it.
             default:

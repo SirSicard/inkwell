@@ -349,8 +349,29 @@ public sealed class CloudModel : ObservableModel
     public static bool Handles(CommandFailed failed)
     {
         ArgumentNullException.ThrowIfNull(failed);
-        return failed.Command.StartsWith("llm.", StringComparison.Ordinal)
-            && (failed.Id?.StartsWith(RefPrefix, StringComparison.Ordinal) ?? false);
+        return (failed.Command.StartsWith("llm.", StringComparison.Ordinal)
+            && (failed.Id?.StartsWith(RefPrefix, StringComparison.Ordinal) ?? false))
+            || (failed.Command == "setting.set" && failed.Id == ShellSetting.LlmLocalOnly.CommandId());
+    }
+
+    /// <summary>The Local only switch's caption.</summary>
+    public const string LocalOnlyTitle = "Nothing leaves this computer";
+
+    /// <summary>
+    /// The Local only switch: on, no language model off this computer is called, whatever is
+    /// chosen; off, the chosen provider may be. The core answers with setting.value, and the
+    /// providers are read again (Apply).
+    /// </summary>
+    public void SetLocalOnly(bool on)
+    {
+        if (on == LocalOnly)
+        {
+            return;
+        }
+        Failure = null;
+        LocalOnly = on;
+        send(new CoreCommand.SettingSet(ShellSetting.LlmLocalOnly, on ? "on" : "off"));
+        Changed();
     }
 
     public void Apply(InkEvent e)
@@ -411,6 +432,11 @@ public sealed class CloudModel : ObservableModel
                     Failure = message.StartsWith("couldn't", StringComparison.Ordinal)
                         ? $"{Sentence(message)}."
                         : $"Couldn't do that: {message}.";
+                    if (failed.Command == "setting.set")
+                    {
+                        // The Local only switch: show what the core holds.
+                        Load();
+                    }
                 }
                 return true;
             case SettingValue { Key: "llm.local_only" }:
