@@ -199,7 +199,7 @@ struct LiveMeetingView: View {
             legendItem(theme.them, "them")
             Text("grey = still settling")
         }
-        .font(Typography.timestamp)
+        .font(Typography.caption)
         .foregroundStyle(Theme.secondaryText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Your lines have your colour's dot, the others' theirs; grey lines are still settling.")

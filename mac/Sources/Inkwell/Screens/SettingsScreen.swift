@@ -240,8 +240,9 @@ private struct PermissionRow: View {
                 Button(actionTitle, action: request)
             }
         } else {
+            // A state in words, in the caption's face: mono is for timestamps and versions.
             Text(state == .allowed ? "Allowed" : "Checking…")
-                .font(Typography.timestamp)
+                .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
         }
     }

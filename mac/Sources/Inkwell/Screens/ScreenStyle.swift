@@ -90,8 +90,9 @@ enum Paper {
                         .foregroundStyle(Theme.text)
                         .accessibilityAddTraits(.isHeader)
                     if let subtitle {
+                        // Counts in words ("5 open · 1 overdue"), not a time: the caption's face.
                         Text(subtitle)
-                            .font(Typography.timestamp)
+                            .font(Typography.caption)
                             .foregroundStyle(Theme.secondaryText)
                     }
                 }
