@@ -66,7 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self?.measurement?.inkReady(outcome, took: took)
         }
-        let drop = DropController(ink: ink, notes: core.screens.dictation)
+        // The theme follows the system's appearance and accessibility settings from now on.
+        core.screens.theme.start()
+        let drop = DropController(ink: ink, notes: core.screens.dictation, theme: core.screens.theme)
         let screens = core.screens
         drop.onAction = { action in screens.meetings.perform(action, permissions: screens.permissions) }
         self.drop = drop
