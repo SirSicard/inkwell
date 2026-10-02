@@ -29,7 +29,7 @@
             </ItemsRepeater.ItemTemplate>
         </ItemsRepeater>
         <StackPanel x:Name="DownloadablePanel" Margin="0,6,0,0" Spacing="4">
-            <TextBlock Style="{StaticResource InkEyebrowStyle}" Text="DOWNLOADABLE" />
+            <TextBlock Style="{StaticResource InkEyebrowStyle}" Text="Downloadable" />
             <ContentPresenter x:Name="DownloadableHost" />
         </StackPanel>
         <TextBlock x:Name="SourceLine" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:ModelsSection.SourceText}" />

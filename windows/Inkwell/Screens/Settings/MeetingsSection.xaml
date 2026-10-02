@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Settings > Meetings: listening for calls, the headset's microphone, and what a meeting records.
-     As the Mac's MeetingsSection, in Windows words. Record now is on Today's rail; how long records
+     As the Mac's MeetingsSection, in Windows words. Record now is on Today; how long records
      are kept is in Storage, as on the Mac. Windows asks no permission for the other side's sound,
      so the Mac's line about that permission has no place here. -->
 <UserControl

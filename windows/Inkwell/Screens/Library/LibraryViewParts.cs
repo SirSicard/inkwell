@@ -2,7 +2,6 @@
 // its words to Narrator: ListView speaks an item's ToString), the timestamp chip, the eyebrow, the
 // clipboard, and the search's one-shot wait on the UI thread. No logic: the words come from the
 // models (Inkwell.Core.Screens).
-using System.Globalization;
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Microsoft.UI.Dispatching;
@@ -88,10 +87,10 @@ internal static class Parts
 
     public static TextBlock Text(string text, string style = "InkBodyStyle") => new() { Text = text, Style = TextStyle(style) };
 
-    /// <summary>A section's small spaced capitals (the Mac's Paper.Eyebrow), a heading for Narrator.</summary>
+    /// <summary>A section's small label (Glow's eyebrow, in sentence case), a heading for Narrator.</summary>
     public static TextBlock Eyebrow(string text)
     {
-        var eyebrow = Text(text.ToUpper(CultureInfo.CurrentCulture), "InkEyebrowStyle");
+        var eyebrow = Text(text, "InkEyebrowStyle");
         AutomationProperties.SetHeadingLevel(eyebrow, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level3);
         AutomationProperties.SetName(eyebrow, text);
         return eyebrow;
@@ -107,7 +106,7 @@ internal static class Parts
                 Text = LibraryFormat.Stamp(ms),
                 FontFamily = Font("InkMonoFontFamily"),
                 FontSize = 11,
-                Foreground = Brush("InkThemBrush", scope),
+                Foreground = Brush("InkSecondaryTextBrush", scope),
             },
             Padding = new Thickness(5, 0, 5, 1),
             MinWidth = 0,

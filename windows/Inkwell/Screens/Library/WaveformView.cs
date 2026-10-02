@@ -1,7 +1,7 @@
-// The player's two lanes of bars (the Mac's WaveformView): them above the middle in sepia, you
-// below in ink, the played part solid and the rest faded, the playhead in the alert colour.
-// Clicking or dragging moves the playhead; with focus, the arrow keys move it 10 s. Narrator reads
-// it as "Waveform: you in ink, them in sepia" with the time as its value.
+// The player's two lanes of bars (the Mac's WaveformView): them above the middle in their colour,
+// you below in yours (the theme's), the played part solid and the rest faded, the playhead in the
+// alert colour. Clicking or dragging moves the playhead; with focus, the arrow keys move it 10 s.
+// Narrator reads it as "Waveform: you below, them above" with the time as its value.
 //
 // The bars are built once per waveform, size and theme; the playhead only moves a clip and a line,
 // and only when the player bar's timer (which runs while playing) says so.
@@ -21,7 +21,7 @@ namespace Inkwell.Screens;
 
 public sealed partial class WaveformView : UserControl
 {
-    public const string AccessibleName = "Waveform: you in ink, them in sepia";
+    public const string AccessibleName = "Waveform: you below, them above";
 
     private readonly Canvas _canvas = new();
     private readonly Canvas _faded = new() { Opacity = 0.42 };
@@ -86,8 +86,9 @@ public sealed partial class WaveformView : UserControl
         {
             return;
         }
-        var them = Parts.Brush("InkThemBrush", this);
-        var you = Parts.Brush("InkTextBrush", this);
+        // The lanes in the theme's colours (GlowTheme keeps the two brushes current).
+        var them = (Brush)Application.Current.Resources["GlowThemBrush"];
+        var you = (Brush)Application.Current.Resources["GlowYouBrush"];
         _head.Fill = Parts.Brush("InkAlertBrush", this);
         var bars = Math.Max(Math.Max(_waveform.You.Count, _waveform.Them.Count), 1);
         var step = width / bars;

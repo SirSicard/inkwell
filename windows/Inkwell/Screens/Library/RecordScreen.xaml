@@ -133,7 +133,7 @@
                                         Margin="0,7,0,0"
                                         VerticalAlignment="Top"
                                         AutomationProperties.AccessibilityView="Raw"
-                                        Fill="{ThemeResource InkTextBrush}"
+                                        Fill="{StaticResource GlowYouBrush}"
                                         Visibility="{x:Bind local:Show.If(IsYou)}" />
                                     <Ellipse
                                         Grid.Column="1"
@@ -142,7 +142,7 @@
                                         Margin="0,7,0,0"
                                         VerticalAlignment="Top"
                                         AutomationProperties.AccessibilityView="Raw"
-                                        Fill="{ThemeResource InkThemBrush}"
+                                        Fill="{StaticResource GlowThemBrush}"
                                         Visibility="{x:Bind local:Show.Unless(IsYou)}" />
                                     <StackPanel Grid.Column="2" Spacing="2">
                                         <TextBlock
@@ -154,7 +154,7 @@
                                         <TextBlock
                                             FontSize="12"
                                             FontWeight="SemiBold"
-                                            Foreground="{ThemeResource InkThemBrush}"
+                                            Foreground="{ThemeResource InkTextBrush}"
                                             Text="{x:Bind Who}"
                                             Visibility="{x:Bind local:Show.Unless(IsYou)}" />
                                         <TextBlock FontSize="15.5" Style="{StaticResource InkReadingStyle}" Text="{x:Bind Text}" />

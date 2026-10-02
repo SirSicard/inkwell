@@ -47,7 +47,7 @@ public sealed partial class PermissionRow : UserControl
         if (card.ActionTitle(state) is string action)
         {
             ActionButton.Content = action;
-            ActionButton.Style = off ? (Style)Application.Current.Resources["AccentButtonStyle"] : null;
+            ActionButton.Style = off ? (Style)Application.Current.Resources["InkAccentButtonStyle"] : null;
             ActionButton.Visibility = Visibility.Visible;
             StateText.Visibility = Visibility.Collapsed;
         }

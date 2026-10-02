@@ -121,7 +121,7 @@ public sealed class ConsentDialog
         var resources = Application.Current.Resources;
         var cancel = new Style(typeof(Button)) { BasedOn = (Style)resources["DefaultButtonStyle"] };
         cancel.Setters.Add(new Setter(AutomationProperties.NameProperty, ConsentModel.CancelName(feature)));
-        var allow = new Style(typeof(Button)) { BasedOn = (Style)resources["AccentButtonStyle"] };
+        var allow = new Style(typeof(Button)) { BasedOn = (Style)resources["InkAccentButtonStyle"] };
         allow.Setters.Add(new Setter(AutomationProperties.NameProperty, ConsentModel.AllowName(feature, destination)));
         return new ContentDialog
         {
