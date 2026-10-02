@@ -1,7 +1,9 @@
 // The shell's own logic: the routes the sidebar lists, where the data lives, the single-instance
-// lock and the design tokens. (The window itself is checked by hand: mac/VOICEOVER-CHECKLIST.md.)
+// lock and the design tokens; the main window's frame and the height of its toolbar. (The rest of
+// the window is checked by hand: mac/VOICEOVER-CHECKLIST.md.)
 import AppKit
 import Foundation
+import InkBridge
 import XCTest
 
 @testable import Inkwell
@@ -82,6 +84,37 @@ final class WindowFrameTests: XCTestCase {
         XCTAssertEqual(fitted.size, minimum)
         XCTAssertEqual(fitted.minX, 0, "the left edge stays reachable")
         XCTAssertEqual(fitted.maxY, 400, "and the title bar")
+    }
+}
+
+/// The main window's chrome (title bar and toolbar) is as tall on every screen: a screen with no
+/// toolbar item of its own once dropped the toolbar, and the title and window buttons moved up.
+@MainActor
+final class WindowChromeTests: XCTestCase {
+    private struct NoCalendar: CalendarAccess {
+        func state() -> CardState { .notAsked }
+        func request(done: @escaping @MainActor @Sendable () -> Void) {}
+    }
+
+    func testTheToolbarIsAsTallOnEveryScreen() throws {
+        _ = NSApplication.shared
+        let store = CoreStore()
+        let router = Router()
+        let controller = MainWindowController(
+            router: router, store: store, ink: ShellInk(store: store), updates: Updates(infoDictionary: nil),
+            screens: ScreenModels(send: { _ in }, calendar: NoCalendar(), apps: WorkspaceApps()),
+            library: LibraryModel(send: { _ in }))
+        let window = try XCTUnwrap(controller.window)
+        // Never shown: SwiftUI bridges the toolbar as it lays the window out.
+        var heights: [Route: CGFloat] = [:]
+        for route in Route.allCases {
+            router.open(route)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            window.contentView?.layoutSubtreeIfNeeded()
+            heights[route] = window.frame.height - window.contentLayoutRect.height
+        }
+        XCTAssertEqual(Set(heights.values).count, 1, "the chrome's height per screen: \(heights)")
+        XCTAssertNotNil(window.toolbar)
     }
 }
 

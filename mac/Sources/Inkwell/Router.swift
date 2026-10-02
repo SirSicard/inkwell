@@ -87,8 +87,7 @@ final class Router {
     /// The route whose screen is shown.
     var current: Route { selection ?? .today }
 
-    /// Find was chosen: the search field (Today's or the Library's) takes the keyboard once it
-    /// shows, and clears this.
+    /// Find was chosen: the toolbar's search field takes the keyboard, and clears this.
     var searchPending = false
 
     /// Shows `route`.
@@ -96,12 +95,8 @@ final class Router {
         selection = route
     }
 
-    /// Find (⌘F): the search field, on Today or in the Library (from any other screen, the
-    /// Library's).
+    /// Find (⌘F): the search field, on the screen showing (every screen has it).
     func focusSearch() {
-        if current != .today && current != .library {
-            open(.library)
-        }
         searchPending = true
     }
 

@@ -19,11 +19,23 @@ import SwiftUI
 struct ShellView: View {
     @Bindable var router: Router
     @Environment(CoreStore.self) private var store
+    @Environment(LibraryModel.self) private var library
     @Environment(ScreenModels.self) private var screens
     @Environment(GlowTheme.self) private var theme
     @Environment(ShellInk.self) private var ink
+    @FocusState private var searchFocused: Bool
 
     private var meetingLive: Bool { store.meeting != nil }
+
+    /// The search is the Library's: typing anywhere else opens the Library's matches.
+    private var searchText: Binding<String> {
+        Binding(get: { library.query }, set: { words in
+            library.query = words
+            if !words.trimmingCharacters(in: .whitespaces).isEmpty, router.current != .library {
+                router.open(.library)
+            }
+        })
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -33,6 +45,18 @@ struct ShellView: View {
             RouteScreen(route: router.current)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle(router.current.title)
+                // "Search everything said" on every screen, as Windows has it in the navigation
+                // pane. A screen without a toolbar item of its own would drop the toolbar, and the
+                // title and the window buttons would move up.
+                .searchable(text: searchText, placement: .toolbar, prompt: "Search everything said")
+                .searchFocused($searchFocused)
+                .onChange(of: router.searchPending, initial: true) { _, pending in
+                    // Find (⌘F) chose this field.
+                    if pending {
+                        searchFocused = true
+                        router.searchPending = false
+                    }
+                }
         }
         .background {
             OrbLayer(
