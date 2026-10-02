@@ -62,22 +62,26 @@ struct SettingsScreen: View {
             Rectangle().fill(PaperPalette.border).frame(width: 1).accessibilityHidden(true)
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 30) {
+                    // Each section after the first starts at a hairline, with room above it: where
+                    // one ends and the next begins reads at a glance.
+                    VStack(alignment: .leading, spacing: 40) {
                         GeneralSection(screens: screens).id(SettingsSection.general)
-                        AppearanceSection(theme: screens.theme).id(SettingsSection.appearance)
-                        PermissionsSection(permissions: screens.permissions).id(SettingsSection.permissions)
+                        AppearanceSection(theme: screens.theme).sectionStart().id(SettingsSection.appearance)
+                        PermissionsSection(permissions: screens.permissions).sectionStart().id(SettingsSection.permissions)
                         DictationSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
-                            .id(SettingsSection.dictation)
-                        ModesSection(modes: screens.modes).id(SettingsSection.modes)
-                        SnippetsSection(snippets: screens.snippets).id(SettingsSection.snippets)
-                        VoiceCommandsSection(commands: screens.voiceCommands).id(SettingsSection.voiceCommands)
-                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).id(SettingsSection.ai)
+                            .sectionStart().id(SettingsSection.dictation)
+                        ModesSection(modes: screens.modes).sectionStart().id(SettingsSection.modes)
+                        SnippetsSection(snippets: screens.snippets).sectionStart().id(SettingsSection.snippets)
+                        VoiceCommandsSection(commands: screens.voiceCommands).sectionStart()
+                            .id(SettingsSection.voiceCommands)
+                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).sectionStart()
+                            .id(SettingsSection.ai)
                         MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
-                            .id(SettingsSection.meetings)
-                        ModelsSection(catalogue: screens.catalogue).id(SettingsSection.models)
+                            .sectionStart().id(SettingsSection.meetings)
+                        ModelsSection(catalogue: screens.catalogue).sectionStart().id(SettingsSection.models)
                         StorageSection(storage: screens.storage, meetings: screens.meetings)
-                            .id(SettingsSection.storage)
-                        AboutSection().id(SettingsSection.about)
+                            .sectionStart().id(SettingsSection.storage)
+                        AboutSection().sectionStart().id(SettingsSection.about)
                     }
                     // The sections are the scroll's targets, for the list to follow (below).
                     .scrollTargetLayout()
@@ -132,6 +136,17 @@ struct SettingsScreen: View {
         guard let next, next != section else { return }
         followed = next
         section = next
+    }
+}
+
+extension View {
+    /// A Settings section's start: a hairline across the column, and room under it before the
+    /// heading. Inside the section, so the list's scroll to it lands on the hairline.
+    func sectionStart() -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Rectangle().fill(PaperPalette.border).frame(height: 1).accessibilityHidden(true)
+            self
+        }
     }
 }
 
