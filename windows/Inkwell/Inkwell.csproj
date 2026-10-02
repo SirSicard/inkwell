@@ -15,6 +15,8 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
     <ApplicationIcon>Assets\Inkwell.ico</ApplicationIcon>
+    <!-- Per-monitor DPI awareness (app.manifest says why). -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>Inkwell</RootNamespace>
     <!-- ReadyToRun on publish (dotnet publish -c Release), not NativeAOT. Under NativeAOT, CsWinRT
          has no list it can hand to WinUI: every ItemsSource (the terms' licences, the Library,
