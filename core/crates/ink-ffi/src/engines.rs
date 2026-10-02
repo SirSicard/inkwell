@@ -125,7 +125,10 @@ pub fn llm(shared: &Shared) -> Option<Arc<dyn Llm>> {
 pub fn context_tokens(shared: &Shared) -> u32 {
     match shared.llms.cloud() {
         Some(cloud) => cloud.context_tokens(),
-        None => shared.llms.pick_shell().and_then(|shell| shell.context_tokens()),
+        None => shared
+            .llms
+            .pick_shell()
+            .and_then(|shell| shell.context_tokens()),
     }
     .unwrap_or(DEFAULT_CONTEXT_TOKENS)
 }
