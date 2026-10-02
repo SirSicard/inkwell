@@ -127,6 +127,38 @@ public class CloudModelTests
         Assert.True(cloud.CanTest);
     }
 
+    /// <summary>
+    /// The first run's own key (onboarding's Polish step): one press picks the provider, stores the
+    /// key once and chooses the provider with its default model, the commands Settings > AI's
+    /// picker, Save key and Use send. No key, or providers not read yet, sends nothing and says so.
+    /// </summary>
+    [Fact]
+    public void TheFirstRunsOwnKeyPicksStoresAndChoosesInOnePress()
+    {
+        var early = new Sent();
+        var unread = new CloudModel(early.Send);
+        unread.UseKey("groq", Key);
+        Assert.Empty(early.Commands);
+        Assert.NotNull(unread.Failure);
+
+        var (cloud, sent) = Loaded();
+        var before = sent.Commands.Count;
+        cloud.UseKey("groq", "  ");
+        Assert.Equal(before, sent.Commands.Count);
+        Assert.Equal("Type or paste the key first.", cloud.Failure);
+
+        cloud.UseKey("groq", Key);
+        Assert.Equal(before + 2, sent.Commands.Count);
+        var save = Assert.IsType<CoreCommand.LlmKeySave>(sent.Commands[^2]);
+        Assert.Equal("groq", save.Provider);
+        var choose = Assert.IsType<CoreCommand.LlmChoose>(sent.Commands[^1]);
+        Assert.Equal("groq", choose.Provider);
+        Assert.Null(choose.Model); // the provider's default
+        Assert.True(choose.LocalOnlyOff); // the step says so before the press
+        Assert.Equal("groq", cloud.Selected);
+        Assert.Null(cloud.Failure);
+    }
+
     /// <summary>A server on this PC keeps local-only mode on: Use says so, and sends no say-so.</summary>
     [Fact]
     public void AServerOnThisPcKeepsLocalOnlyOn()

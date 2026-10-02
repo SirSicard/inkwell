@@ -5,7 +5,9 @@
 // cancels the step and the sheet stays. The polish switch only asks (PolishModel.SetOn with
 // ConsentHost.Onboarding); only the step's agreeing button sends anything. The models step's
 // Download is the only thing in the sheet that downloads (CatalogueModel.DownloadMissing). The
-// import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps).
+// import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps). While
+// this PC has no language model, the Polish step offers Groq's free key through Settings > AI's
+// flow (CloudModel.UseKey); its box is sent once and cleared, as there.
 //
 // Glow's steps: Welcome's orb plays a short demo (dictating, then a call: a one-shot timer per
 // part, only while Welcome shows); Appearance sets the mode and the dots of the mode shown, as
@@ -32,6 +34,7 @@ public sealed partial class OnboardingSheet : ContentDialog
     private readonly OnboardingModel onboarding;
     private readonly PermissionsModel permissions;
     private readonly PolishModel polish;
+    private readonly CloudModel cloud;
     private readonly DictationModel dictation;
     private readonly CatalogueModel catalogue;
     private readonly Import02Model import02;
@@ -46,8 +49,9 @@ public sealed partial class OnboardingSheet : ContentDialog
     private bool rendering;
 
     private OnboardingSheet(
-        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, DictationModel dictation,
-        CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme, ShellInk? ink, ScreenLog log)
+        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
+        DictationModel dictation, CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme,
+        ShellInk? ink, ScreenLog log)
     {
         this.theme = theme;
         this.ink = ink;
@@ -55,6 +59,7 @@ public sealed partial class OnboardingSheet : ContentDialog
         this.onboarding = onboarding;
         this.permissions = permissions;
         this.polish = polish;
+        this.cloud = cloud;
         this.dictation = dictation;
         this.catalogue = catalogue;
         this.import02 = import02;
@@ -74,6 +79,13 @@ public sealed partial class OnboardingSheet : ContentDialog
         PolishTitle.Text = OnboardingModel.PolishTitle;
         PolishNote.Text = OnboardingModel.PolishNote;
         AutomationProperties.SetName(PolishSwitch, OnboardingModel.PolishToggle);
+        OwnKeyLine.Text = OnboardingModel.OwnKeyLine;
+        OwnKeyLink.NavigateUri = new Uri(OnboardingModel.OwnKeyUrl);
+        AutomationProperties.SetName(OwnKeyBox, OnboardingModel.OwnKeyBoxName);
+        OwnKeyBox.PlaceholderText = OnboardingModel.OwnKeyBoxName;
+        OwnKeyUse.Content = OnboardingModel.OwnKeyButton;
+        AutomationProperties.SetHelpText(OwnKeyUse, OnboardingModel.OwnKeyNote);
+        OwnKeyNote.Text = OnboardingModel.OwnKeyNote;
         ReadyTitle.Text = OnboardingModel.ReadyTitle;
         AutomationProperties.SetHelpText(SkipButton, OnboardingModel.SkipHint);
         ConsentTitle.Text = PolishModel.ConsentTitle;
@@ -157,21 +169,26 @@ public sealed partial class OnboardingSheet : ContentDialog
     /// once, on the UI thread; the models are the ones the aggregator feeds.
     /// </summary>
     internal static OnboardingSheet Attach(
-        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, DictationModel dictation,
-        CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme, ShellInk? ink, ScreenLog? log = null)
+        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
+        DictationModel dictation, CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme,
+        ShellInk? ink, ScreenLog? log = null)
     {
         ArgumentNullException.ThrowIfNull(theme);
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(onboarding);
         ArgumentNullException.ThrowIfNull(permissions);
         ArgumentNullException.ThrowIfNull(polish);
+        ArgumentNullException.ThrowIfNull(cloud);
         ArgumentNullException.ThrowIfNull(dictation);
         ArgumentNullException.ThrowIfNull(catalogue);
         ArgumentNullException.ThrowIfNull(import02);
         ArgumentNullException.ThrowIfNull(importNote);
-        var sheet = new OnboardingSheet(host, onboarding, permissions, polish, dictation, catalogue, import02, importNote, theme, ink, log ?? ScreenLog.System);
+        var sheet = new OnboardingSheet(
+            host, onboarding, permissions, polish, cloud, dictation, catalogue, import02, importNote, theme, ink, log ?? ScreenLog.System);
         onboarding.PropertyChanged += (_, _) => sheet.Update();
         polish.PropertyChanged += (_, _) => sheet.RenderIfOpen();
+        // The own key's answer: stored and chosen (polish then has a model), or why not.
+        cloud.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         permissions.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         dictation.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         // The models step's lines: the list, what is left to ask for, whether a download runs.
@@ -302,6 +319,11 @@ public sealed partial class OnboardingSheet : ContentDialog
             AutomationProperties.SetHelpText(PolishSwitch, polish.Status);
             PolishStatus.Text = polish.Status;
             PolishStatus.Style = (Style)Application.Current.Resources[polish.IsProblem ? "InkAlertTextStyle" : "InkCaptionStyle"];
+            // Offered only while there is no language model; once one is ready, the switch can be used.
+            OwnKeyPanel.Visibility = Visible(!polish.HasWorkingEngine);
+            OwnKeyUse.IsEnabled = cloud.Loaded;
+            OwnKeyStatus.Text = cloud.Failure ?? "";
+            OwnKeyStatus.Visibility = Visible(cloud.Failure is not null);
             var asking = polish.Consent.IsShowingStep(ConsentHost.Onboarding) ? polish.PendingConsent : null;
             ConsentCard.Visibility = Visible(asking is not null);
             if (asking is not null)
@@ -348,6 +370,14 @@ public sealed partial class OnboardingSheet : ContentDialog
             polish.SetOn(PolishSwitch.IsOn, ConsentHost.Onboarding);
             Render();
         }
+    }
+
+    private void OnOwnKeyUse(object sender, RoutedEventArgs e)
+    {
+        // Sent once, then gone from the box: the key is never kept or shown here (as in Settings > AI).
+        var key = OwnKeyBox.Password;
+        OwnKeyBox.Password = "";
+        cloud.UseKey(OnboardingModel.OwnKeyProvider, key);
     }
 
     private void OnConsentCancel(object sender, RoutedEventArgs e) => polish.CancelConsent();

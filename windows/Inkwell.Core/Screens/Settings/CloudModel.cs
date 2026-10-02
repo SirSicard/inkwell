@@ -317,6 +317,28 @@ public sealed class CloudModel : ObservableModel
         Changed();
     }
 
+    /// <summary>
+    /// The first run's own key: picks <paramref name="provider"/>, stores <paramref name="key"/>
+    /// and chooses the provider with its default model, as the picker, Save key and Use do one
+    /// after another in Settings > AI. Nothing is sent before the providers are read, or without a key.
+    /// </summary>
+    public void UseKey(string provider, string key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!Loaded || Providers.All(p => p.Id != provider))
+        {
+            Failure = "Inkwell hasn't read its language model settings yet. Try again in a moment.";
+            Changed();
+            return;
+        }
+        Select(provider);
+        SaveKey(key);
+        if (Failure is null)
+        {
+            Use();
+        }
+    }
+
     /// <summary>Test: one short fixed request to the chosen provider.</summary>
     public void Test()
     {

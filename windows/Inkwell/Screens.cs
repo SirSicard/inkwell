@@ -76,7 +76,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
         if (host is not null)
         {
             OnboardingSheet.Attach(
-                host, models.Onboarding, models.Permissions, models.Polish, models.Dictation, models.Catalogue,
+                host, models.Onboarding, models.Permissions, models.Polish, models.Cloud, models.Dictation, models.Catalogue,
                 models.Import02, models.ImportNote, theme, ink);
         }
     }

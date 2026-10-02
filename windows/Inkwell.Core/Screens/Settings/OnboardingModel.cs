@@ -253,6 +253,24 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string PolishToggle = "Polish my words";
 
+    /// <summary>The own-key provider the Polish step offers while this PC has no language model: Groq, for its free tier.</summary>
+    public const string OwnKeyProvider = "groq";
+
+    /// <summary>Where Groq's keys are made (the homepage's link).</summary>
+    public const string OwnKeyUrl = "https://console.groq.com";
+
+    /// <summary>The Polish step's own key, while no language model is available (the homepage's words).</summary>
+    public const string OwnKeyLine =
+        "Or bring your own key. Groq's free tier covers ordinary personal use and needs no credit card: sign in at console.groq.com, create a key under API Keys, copy it (Groq shows it once) and paste it here. Settings > AI has the other providers.";
+
+    /// <summary>What pressing the own-key button means, said before it is pressed.</summary>
+    public const string OwnKeyNote =
+        "Using Groq turns local-only mode off, so polish can send to Groq once you turn it on and allow it. The key is kept in Windows Credential Manager, never in Inkwell's files.";
+
+    public const string OwnKeyButton = "Use Groq";
+
+    public const string OwnKeyBoxName = "Groq API key";
+
     public const string ReadyTitle = "Ready";
 
     public static string ReadyLine(string keyName) =>
