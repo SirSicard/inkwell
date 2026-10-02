@@ -1,10 +1,19 @@
-// One display link for every live ink. With the Drop and the window's rail both live, one callback
-// per vsync steps and draws both, instead of a link per view each waking the main thread. Each
-// view's schedule (InkSchedule) still decides whether it takes part: a view joins when its ink
-// goes live on screen and leaves when it settles, is covered or cannot draw. The link exists only
-// while at least one view is on it (architecture rule 9: nothing ticks while idle).
+// One display link for every live ink. With the Drop, the window's orb and its edge glow all live,
+// one callback per vsync steps and draws them all, instead of a link per view each waking the main
+// thread. Each view's schedule (InkSchedule) still decides whether it takes part: a view joins when
+// its ink goes live on screen and leaves when it settles, is covered or cannot draw. The link exists
+// only while at least one view is on it (architecture rule 9: nothing ticks while idle).
 import AppKit
 import QuartzCore
+
+/// A view the clock steps once per vsync: the orb (InkView) or the edge glow (GlowEdgeView).
+@MainActor
+protocol InkClockClient: AnyObject {
+    /// The window it is in: the link starts on that window's screen.
+    var window: NSWindow? { get }
+    /// One vsync, at the display link's timestamp.
+    func clockTicked(at now: CFTimeInterval)
+}
 
 /// The display link the live inks share. Main thread only.
 @MainActor
@@ -13,7 +22,7 @@ public final class InkClock: NSObject {
     public static let shared = InkClock()
 
     private struct Client {
-        weak var view: InkView?
+        weak var view: (any InkClockClient)?
     }
 
     private var clients: [Client] = []
@@ -33,12 +42,12 @@ public final class InkClock: NSObject {
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
-    func contains(_ view: InkView) -> Bool {
+    func contains(_ view: any InkClockClient) -> Bool {
         clients.contains { $0.view === view }
     }
 
     /// Puts `view` on the clock; the first view starts the link, on its own screen.
-    func add(_ view: InkView) {
+    func add(_ view: any InkClockClient) {
         guard !contains(view) else { return }
         clients.append(Client(view: view))
         if link == nil {
@@ -47,7 +56,7 @@ public final class InkClock: NSObject {
     }
 
     /// Takes `view` off the clock; the last view to leave stops the link.
-    func remove(_ view: InkView) {
+    func remove(_ view: any InkClockClient) {
         clients.removeAll { $0.view === view || $0.view == nil }
         if clients.isEmpty {
             stopLink()

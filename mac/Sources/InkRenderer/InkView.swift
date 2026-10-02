@@ -43,6 +43,31 @@ public final class InkView: NSView {
         }
     }
 
+    /// The orb's colours, as the theme resolves them.
+    public var palette: OrbPalette = .neutral {
+        didSet {
+            guard palette != oldValue else { return }
+            perform(schedule.invalidate())
+        }
+    }
+
+    /// Where the orb sits in the view.
+    public var placement: OrbPlacement = .centred {
+        didSet {
+            guard placement != oldValue else { return }
+            perform(schedule.invalidate())
+        }
+    }
+
+    /// Still: the orb holds one frame whatever is live, as under Reduce Motion (Settings >
+    /// Appearance, "Always still").
+    public var motionStill = false {
+        didSet {
+            guard motionStill != oldValue else { return }
+            perform(schedule.set(reduceMotion: reduceMotion))
+        }
+    }
+
     /// The ink body's centre height, 0...1 from the bottom.
     public var inkCentreHeight = 0.5 {
         didSet {
@@ -81,9 +106,9 @@ public final class InkView: NSView {
         didSet { perform(schedule.set(reduceMotion: reduceMotion)) }
     }
 
-    /// The system's Reduce Motion setting, unless a test pinned it.
+    /// The system's Reduce Motion setting, unless a test pinned it, or the user's "Always still".
     private var reduceMotion: Bool {
-        assumeReduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        motionStill || (assumeReduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 
     private var pipeline: InkPipeline?
@@ -331,3 +356,5 @@ public final class InkView: NSView {
         InkRenderer.frames.tick()
     }
 }
+
+extension InkView: InkClockClient {}

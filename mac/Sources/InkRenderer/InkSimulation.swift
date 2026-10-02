@@ -115,6 +115,10 @@ public struct InkSimulation: Sendable {
     public private(set) var envA = 0.0, envB = 0.0, prevA = 0.0, prevB = 0.0
     public private(set) var coolA = 0.0, coolB = 0.0, breath = 0.0
     public private(set) var drops = [InkDroplet](repeating: InkDroplet(), count: 6)
+    /// The Glow orb's and edge glow's weights: dictating, meeting, blotting and problem, each
+    /// 0...1, eased toward the state's (`weights(for:)`) by 0.04 per 60 Hz frame on a time basis,
+    /// so a state change fades in at any frame rate. A still frame has them at their targets.
+    public private(set) var w = SIMD4<Double>(0, 0, 0, 0)
     /// Droplets spawned so far (diagnostics and tests).
     public private(set) var spawns = 0
 
@@ -224,7 +228,24 @@ public struct InkSimulation: Sendable {
         }
         prevA = envA
         prevB = envB
+        let kw = snap ? 1 : 1 - pow(1 - Self.weightEase, dt * 60)
+        w += (Self.weights(for: state) - w) * kw
         physics(dt)
+    }
+
+    /// How far each weight moves toward its target per 60 Hz frame.
+    static let weightEase = 0.04
+
+    /// Each state's weights: dictating, meeting, blotting, problem. Blotting is a meeting being
+    /// blotted, and a problem a meeting whose far end went quiet.
+    public static func weights(for state: InkState) -> SIMD4<Double> {
+        switch state {
+        case .idle: SIMD4(0, 0, 0, 0)
+        case .dictating: SIMD4(1, 0, 0, 0)
+        case .meeting: SIMD4(0, 1, 0, 0)
+        case .blotting: SIMD4(0, 1, 1, 0)
+        case .problem: SIMD4(0, 1, 0, 1)
+        }
     }
 
     /// The still frame: droplets cleared and every spring settled at its target, time unchanged.
@@ -250,6 +271,7 @@ public struct InkSimulation: Sendable {
         coolA = 0
         coolB = 0
         breath = 0
+        w = .zero
         blotT = state == .blotting ? Self.fixedBlotT : 0
         hold = false
         echo = false
