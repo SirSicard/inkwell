@@ -41,6 +41,15 @@ public final class InkView: NSView {
         }
     }
 
+    /// How far blotting condenses the orb (InkSimulation.blotDepth).
+    public var blotDepth = 1.0 {
+        didSet {
+            guard blotDepth != oldValue else { return }
+            simulation.blotDepth = blotDepth
+            perform(schedule.invalidate())
+        }
+    }
+
     /// Still: the orb holds one frame whatever is live, as under Reduce Motion (Settings >
     /// Appearance, "Always still").
     public var motionStill = false {

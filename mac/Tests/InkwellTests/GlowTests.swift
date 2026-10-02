@@ -190,14 +190,15 @@ final class OrbBehindTextTests: XCTestCase {
             let secondary = luminance(GlowColours.rgb(mode.secondary))
             for preset in Glow.presets {
                 let palette = GlowColours.palette(preset: preset, you: nil, them: nil, dark: dark)
-                for state in InkState.allCases where state != .blotting {
+                for state in InkState.allCases {
                     let opacity = Double(OrbLayer.opacity(state: state, behindText: true, dimmed: false))
                     var worstText = Double.infinity, worstSecondary = Double.infinity
                     for t in [3.0, 12, 27] {
                         // The orb scales with the window, so a small canvas holds the same colours.
                         let image = try InkSnapshot.render(
                             state, t: t, width: 208, height: 140, palette: palette, placement: Glow.Orb.main,
-                            voice: .levels(near: 1, far: 1), pipeline: pipeline)
+                            voice: .levels(near: 1, far: 1), blotDepth: OrbLayer.blotDepth(behindText: true),
+                            pipeline: pipeline)
                         for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] > 0 {
                             let alpha = Double(image.rgba[i + 3]) / 255
                             let orb = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / 255
@@ -212,6 +213,36 @@ final class OrbBehindTextTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(worstSecondary, 3, label)
                 }
             }
+        }
+    }
+
+    /// The blotting orb behind the main window (a recorded-call test: during the final pass it
+    /// shrank to a hard-edged white disc sitting on Live's column divider). Behind text it keeps a
+    /// soft edge: across the orb's middle row, its coverage never jumps by a quarter or more from
+    /// one pixel to the next. The design's full blot, which the Drop keeps, is that disc.
+    func testTheBlottingOrbBehindTextHasNoHardEdge() throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let pipeline = try InkPipelineLoader.shared.wait().get()
+        // The default window (1040 x 700) at a quarter.
+        let width = 260, height = 175
+        func steepestEdge(blotDepth: Double, dark: Bool) throws -> Int {
+            let palette = GlowColours.palette(preset: Glow.preset("aurora"), you: nil, them: nil, dark: dark)
+            var steepest = 0
+            for t in [3.0, 12, 27] {
+                let image = try InkSnapshot.render(
+                    .blotting, t: t, width: width, height: height, palette: palette, placement: Glow.Orb.main,
+                    voice: .silent, blotDepth: blotDepth, pipeline: pipeline)
+                let y = Int((Double(height) * Glow.Orb.main.yFromTop).rounded())
+                for x in 1..<width {
+                    steepest = max(steepest, abs(Int(image.alpha(x, y)) - Int(image.alpha(x - 1, y))))
+                }
+            }
+            return steepest
+        }
+        for dark in [false, true] {
+            XCTAssertLessThan(try steepestEdge(blotDepth: OrbLayer.blotDepth(behindText: true), dark: dark), 64, "dark: \(dark)")
+            XCTAssertGreaterThanOrEqual(try steepestEdge(blotDepth: OrbLayer.blotDepth(behindText: false), dark: dark), 128,
+                                        "the full blot's drop is hard-edged: the check sees it")
         }
     }
 }

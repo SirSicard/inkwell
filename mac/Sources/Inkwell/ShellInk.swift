@@ -256,6 +256,18 @@ struct OrbLayer: NSViewRepresentable {
     /// idle colour, which text already reads over, and stays as designed.
     nonisolated static let liveBehindText: CGFloat = 0.3
 
+    /// How far blotting condenses an orb behind text (InkSimulation.blotDepth). The design's full
+    /// blot ends in a small hard-edged drop of ink: in the Drop's pill it reads as that drop, but
+    /// behind the main window it is a solid disc in the text's own colour (ivory at night),
+    /// landing on whatever rule, divider or heading the window's layout puts at the orb's centre,
+    /// for as long as the final pass runs. Behind text the blot stops on the way: the two orbs draw
+    /// together, shrink and take the ink's colour, with a soft edge.
+    nonisolated static let blotBehindText = 0.45
+
+    nonisolated static func blotDepth(behindText: Bool) -> Double {
+        behindText ? blotBehindText : 1
+    }
+
     /// The orb's opacity for `state`.
     nonisolated static func opacity(state: InkState, behindText: Bool, dimmed: Bool) -> CGFloat {
         let rest: CGFloat = dimmed ? 0.45 : 1
@@ -275,6 +287,7 @@ struct OrbLayer: NSViewRepresentable {
         view.palette = palette
         view.placement = placement
         view.motionStill = still
+        view.blotDepth = Self.blotDepth(behindText: behindText)
         let opacity = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
         if view.alphaValue != opacity {
             // Faded with the ink's own change of state (its colours ease in over about a second),
