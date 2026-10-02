@@ -28,16 +28,23 @@ the real core.
 - [ ] A fresh library opens the first-run sheet over the window: five steps shown as dots.
 - [ ] Permissions step: four cards, "Hear you", "Hear the others", "Type for you", "Know your
       meetings", each with its state. Nothing is asked for until you press Allow.
-- [ ] Models step (it downloads about 3 GB: only with your OK, into the scratch library's own
-      models folder): each model not on this Mac with its licence, size and where it comes from
-      (huggingface.co; Silero VAD from raw.githubusercontent.com), and the total. Nothing is fetched until you
-      press Download (Activity Monitor > Network: Inkwell receives nothing before it). Then one
-      model at a time, smallest first, with its bar, the others "Waiting". Continue works at once,
-      and the downloads keep going through the rest of the first run and after it.
-- [ ] Once Parakeet is in, Settings > Models reads Parakeet TDT v3 for Live words without a
-      restart, and dictating shows live words in the Drop; once Qwen3-ASR is in, Dictation reads
-      Qwen3-ASR 1.7B, and the first dictation after it is as quick as the next (it is loaded when
-      its download ends, not by that take).
+- [ ] Models step (Download fetches about 485 MB: only with your OK, into the scratch library's
+      own models folder): under "Recommended", Silero VAD and Parakeet TDT v3, each with its
+      licence, size and where it comes from (huggingface.co; Silero VAD from
+      raw.githubusercontent.com), and their total; under "Optional", Nemotron-3-Diarization and
+      Qwen3-ASR 1.7B, each with its own Download and a line saying what it adds. Nothing is fetched
+      until you press a Download (Activity Monitor > Network: Inkwell receives nothing before it).
+      The recommended Download fetches only those two, one at a time, smallest first, with its
+      bar, the other "Waiting"; the extras stay "Download". Continue works at once, and the
+      downloads keep going through the rest of the first run and after it.
+- [ ] With only the recommended set in: Settings > Models reads Parakeet TDT v3 for Dictation,
+      Meeting transcript and Live words without a restart, and dictating shows live words in the
+      Drop and types the take. A recorded call's far end is one voice, "Them".
+- [ ] An extra's Download in the first run (or in Settings > Models): once Qwen3-ASR is in,
+      Dictation and Meeting transcript read Qwen3-ASR 1.7B (Live words stays Parakeet), and the
+      first dictation after it is as quick as the next (it is loaded when its download ends, not
+      by that take). Once the diarizer is in, a call with two or more people on the far end reads
+      Speaker 1, Speaker 2 after it ends.
 - [ ] A download that fails (turn Wi-Fi off while one runs): its row says "Couldn't download it"
       and why, in red, with Retry, and nothing tries again by itself. Wi-Fi back on, Retry: it
       downloads.

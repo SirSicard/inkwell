@@ -689,28 +689,95 @@ final class ModelDownloadTests: XCTestCase {
         try XCTUnwrap(catalogue.models.first { $0.id == id })
     }
 
+    private let silero = "silero-vad-v6-16k"
+    private let nemotron = "nemotron-3-diarization-q8"
+
+    /// The whole Mac catalogue, as the core lists it, nothing installed.
+    private func listedAll() -> InkEvent {
+        event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[{"job":"dictation_final","wer":4.59},{"job":"meeting_final","wer":16.08}]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"nemotron-3-diarization-q8","licence":"OpenMDW-1.1","size_bytes":107012128,"installed":false,"jobs":[{"job":"diarization","wer":20.2}]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[{"job":"voice_activity","wer":1.5}]}]}"#)
+    }
+
     /// Nothing downloads until the user presses Download: not at launch, not while the first run is
-    /// walked through. The press then says what goes, smallest first, and sends one at a time.
-    func testNothingIsSentBeforeThePressAndThenOneAtATimeSmallestFirst() throws {
+    /// walked through. The press then fetches the recommended set only (voice detection and
+    /// Parakeet), smallest first, one at a time; Qwen3-ASR and the diarizer wait for their own.
+    func testNothingIsSentBeforeThePressAndThenTheRecommendedSetOneAtATime() throws {
         let sent = Sent()
         let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: WorkspaceApps())
         screens.apply([
             event(#"{"type":"core.ready","version":"1.0.0","abi":2}"#),
-            event(#"{"type":"setting.value","key":"onboarding.done"}"#), listed(),
+            event(#"{"type":"setting.value","key":"onboarding.done"}"#), listedAll(),
         ])
         while screens.onboarding.step != .ready { screens.onboarding.next() }
         XCTAssertEqual(installs(sent), [], "nothing sent before the press")
         let catalogue = screens.catalogue
-        XCTAssertEqual(catalogue.firstRunModels.map(\.id), [parakeet, qwen], "smallest first")
-        XCTAssertEqual(catalogue.firstRunModels.map(\.sizeBytes).reduce(0, +), 3_003_849_933, "the total it states")
-        XCTAssertEqual(CatalogueModel.sources(catalogue.firstRunModels), "huggingface.co")
+        XCTAssertEqual(catalogue.firstRunRecommended.map(\.id), [silero, parakeet], "smallest first")
+        XCTAssertEqual(catalogue.firstRunRecommended.map(\.sizeBytes).reduce(0, +), 484_395_248, "the total it states")
+        XCTAssertEqual(catalogue.firstRunExtras.map(\.id), [nemotron, qwen], "the rest, optional, smallest first")
 
-        catalogue.downloadFirstRunModels()
-        XCTAssertEqual(installs(sent), [.modelInstall(parakeet, ref: "model.update:1")], "one at a time")
-        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .downloading(nil))
-        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .waiting)
-        catalogue.downloadFirstRunModels()
+        catalogue.downloadRecommended()
+        XCTAssertEqual(installs(sent), [.modelInstall(silero, ref: "model.update:1")], "one at a time")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, silero)), .downloading(nil))
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .waiting)
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .notInstalled, "not part of the press")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, nemotron)), .notInstalled, "not part of the press")
+        catalogue.downloadRecommended()
         XCTAssertEqual(installs(sent).count, 1, "a second press queues nothing twice")
+
+        // An extra's own Download queues behind the set, and stays listed once it is in.
+        catalogue.download([qwen])
+        catalogue.apply(finished(silero))
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(installs(sent).map { if case .modelInstall(let id, _) = $0 { id } else { "" } }, [silero, parakeet, qwen])
+        XCTAssertEqual(catalogue.firstRunExtras.map(\.id), [nemotron, qwen])
+    }
+
+    /// A recommended model already on this Mac is not offered again; with every one of them in, the
+    /// press has nothing to fetch, and the extras are still offered on their own.
+    func testTheRecommendedSetOffersOnlyWhatIsMissing() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(catalogue.firstRunRecommended.map(\.id), [silero])
+        catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":true,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(catalogue.firstRunRecommended, [])
+        XCTAssertEqual(catalogue.firstRunExtras.map(\.id), [qwen])
+        catalogue.downloadRecommended()
+        XCTAssertEqual(installs(sent), [], "nothing recommended is missing")
+    }
+
+    /// Each extra says what it adds over the recommended set; the set's own models need no pitch.
+    /// The diarizer's line says what the user has without it: the far end is one voice, "Them".
+    func testEachExtraSaysWhatItAdds() throws {
+        let qwenAdds = try XCTUnwrap(CatalogueModel.adds(qwen))
+        XCTAssertTrue(qwenAdds.contains("More accurate"), qwenAdds)
+        XCTAssertTrue(qwenAdds.contains("Parakeet still shows the live words"), qwenAdds)
+        let diarizerAdds = try XCTUnwrap(CatalogueModel.adds(nemotron))
+        XCTAssertTrue(diarizerAdds.contains("Speaker 1, Speaker 2"), diarizerAdds)
+        XCTAssertTrue(diarizerAdds.contains("\u{201C}Them\u{201D}"), diarizerAdds)
+        XCTAssertNil(CatalogueModel.adds(parakeet))
+        XCTAssertNil(CatalogueModel.adds(silero))
+        XCTAssertEqual(CatalogueModel.recommended, [silero, parakeet])
+    }
+
+    /// Qwen3-ASR's line claims about a third fewer words wrong than Parakeet: true of the rates
+    /// measured for both (the core's registry row, and Parakeet's as the Apple engines register
+    /// it), on dictation and on meetings. New measurements that break the claim fail here.
+    func testQwensClaimMatchesTheMeasuredRates() throws {
+        let registry = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appendingPathComponent("core/crates/ink-engines/src/registry.rs"),
+            encoding: .utf8)
+        let start = try XCTUnwrap(registry.range(of: "fn qwen3_asr_1_7b_q8()"))
+        let row = registry[start.upperBound...]
+        XCTAssertTrue(try XCTUnwrap(CatalogueModel.adds(qwen)).contains("about a third fewer words wrong"))
+        for (job, name) in [(Job.dictationFinal, "DictationFinal"), (.meetingFinal, "MeetingFinal")] {
+            let match = try XCTUnwrap(row.firstMatch(of: try Regex("job: Job::\(name),\\s*wer: ([0-9.]+)")), name)
+            let qwenRate = try XCTUnwrap(Double(try XCTUnwrap(match.output[1].substring)))
+            let parakeetRate = try XCTUnwrap(ParakeetOfflineEngine.measured.first { $0.job == job }?.wer)
+            let fewer = 1 - qwenRate / parakeetRate
+            XCTAssertTrue((0.28...0.38).contains(fewer), "\(name): \(fewer) fewer is not about a third")
+        }
     }
 
     /// Each install waits for the one before to end; each end asks again what the catalogue holds

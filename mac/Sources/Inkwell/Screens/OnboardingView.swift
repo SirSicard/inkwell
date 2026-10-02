@@ -1,9 +1,10 @@
 // The first-run state: a sheet over the window until the user finishes or skips it. What Inkwell
 // does (over the orb, playing a short demo), the four permissions (each asked for only when the
-// user presses Allow), the speech models (downloaded only when the user presses Download, and still
-// downloading while the user goes on), Inkwell 0.2's history (only when there is some to import),
-// the appearance, polish (off, and turned on only through its consent step), and how to dictate,
-// with the orb answering the user's voice. Remembered in the core's store (onboarding.done).
+// user presses Allow), the speech models (a recommended set and optional extras, each downloaded
+// only when the user presses Download, and still downloading while the user goes on), Inkwell
+// 0.2's history (only when there is some to import), the appearance, polish (off, and turned on
+// only through its consent step), and how to dictate, with the orb answering the user's voice.
+// Remembered in the core's store (onboarding.done).
 import InkRenderer
 import SwiftUI
 
@@ -156,12 +157,15 @@ struct OnboardingView: View {
         }
     }
 
-    /// What will be downloaded (each model not on this Mac, its licence and size, the total, and
-    /// where from), and the one Download button that is the user's agreement: nothing is fetched
-    /// before it. Continue works at any time; the downloads keep going.
+    /// What will be downloaded (each model not on this Mac, its licence and size, and where from):
+    /// the recommended set with its total and the one Download that is the user's agreement to it,
+    /// then the optional extras, each with what it adds and its own Download. Nothing is fetched
+    /// before a press. Continue works at any time; the downloads keep going.
     private var models: some View {
         let catalogue = screens.catalogue
         let offered = catalogue.firstRunModels
+        let recommended = catalogue.firstRunRecommended
+        let extras = catalogue.firstRunExtras
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 title("Speech models")
@@ -175,18 +179,43 @@ struct OnboardingView: View {
                 } else {
                     Text("Inkwell turns speech into text with models that run on this Mac. They are downloaded once, from \(CatalogueModel.sources(offered)), and only when you press Download.")
                         .fixedSize(horizontal: false, vertical: true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(offered, id: \.id) { model in
-                            ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: false)
+                    Paper.Eyebrow(text: "Recommended")
+                    if recommended.isEmpty {
+                        Text("The recommended models are on this Mac already.")
+                    } else {
+                        Text("Voice detection and Parakeet: enough for dictation, the live words and meeting transcripts.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(recommended, id: \.id) { model in
+                                ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: false)
+                            }
+                        }
+                        let total = ModelDownloadRow.size(recommended.map(\.sizeBytes).reduce(0, +))
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Total: \(total)").font(.system(.body, weight: .semibold))
+                            Spacer()
+                            if recommended.contains(where: { catalogue.download(of: $0) == .notInstalled }) {
+                                Button("Download") { catalogue.downloadRecommended() }
+                                    .accessibilityLabel("Download the recommended models, \(total), from \(CatalogueModel.sources(recommended))")
+                            }
                         }
                     }
-                    let total = ModelDownloadRow.size(offered.map(\.sizeBytes).reduce(0, +))
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("Total: \(total)").font(.system(.body, weight: .semibold))
-                        Spacer()
-                        if offered.contains(where: { catalogue.download(of: $0) == .notInstalled }) {
-                            Button("Download") { catalogue.downloadFirstRunModels() }
-                                .accessibilityLabel("Download \(total) from \(CatalogueModel.sources(offered))")
+                    if !extras.isEmpty {
+                        Paper.Eyebrow(text: "Optional")
+                            .padding(.top, 6)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(extras, id: \.id) { model in
+                                ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: true)
+                                if let adds = CatalogueModel.adds(model.id) {
+                                    Text(adds)
+                                        .font(Typography.caption)
+                                        .foregroundStyle(Theme.secondaryText)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(.bottom, 4)
+                                }
+                            }
                         }
                     }
                     if catalogue.downloading {

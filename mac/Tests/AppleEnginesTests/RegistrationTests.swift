@@ -75,7 +75,8 @@ final class RegistrationTests: XCTestCase {
 
     /// Parakeet also registers for both finals, with the rates measured for it: worse than
     /// Qwen3-ASR's, so the router uses it only while Qwen3-ASR is not installed. With no registry
-    /// model installed here, it serves; `engine.route` is where the shell sees that.
+    /// model installed here, it serves every speech job; `engine.route` is where the shell sees
+    /// that.
     func testParakeetRegistersAsTheFinalsFallback() async throws {
         let core = try TestCore.start()
         defer { core.stop() }
@@ -99,6 +100,14 @@ final class RegistrationTests: XCTestCase {
             XCTAssertEqual(routed.id, ParakeetOfflineEngine.fallbackID)
             XCTAssertEqual(routed.source, .shell)
         }
+        // And the live words: Parakeet alone serves every speech job, which is what lets the first
+        // run recommend it (with voice detection) and leave Qwen3-ASR optional.
+        try core.session.command(["cmd": "engine.route", "job": Job.livePartials.rawValue])
+        let live = try XCTUnwrap(core.events.wait(5) {
+            if case .engineRouted(let r) = $0, r.job == .livePartials { r } else { nil }
+        })
+        XCTAssertEqual(live.id, "fluidaudio-parakeet-tdt-0.6b-v3")
+        XCTAssertEqual(live.source, .shell)
     }
 
     func testMissingModelsAreReportedAndNothingIsRegistered() async throws {
