@@ -113,6 +113,10 @@ public sealed partial class TodayScreen : UserControl
         {
             model.PropertyChanged += OnModelChanged;
         }
+        foreach (var model in LiveModels())
+        {
+            model.PropertyChanged += OnLiveChanged;
+        }
         library.RefreshToday();
         owed.Load();
         // A screen showing permissions: checked now, and again whenever the app comes back to the
@@ -130,12 +134,28 @@ public sealed partial class TodayScreen : UserControl
         {
             model.PropertyChanged -= OnModelChanged;
         }
+        foreach (var model in LiveModels())
+        {
+            model.PropertyChanged -= OnLiveChanged;
+        }
         permissions.ScreenDisappeared();
         minute.Stop();
         second.Stop();
     }
 
-    private INotifyPropertyChanged[] Models() => [library, owed, permissions, upNext, presence, controls, meetings, live];
+    private INotifyPropertyChanged[] Models() => [library, owed, permissions, upNext, presence];
+
+    /// <summary>What only the hero and the live card read: they redraw for it, not the whole screen (a meeting's lines change it often).</summary>
+    private INotifyPropertyChanged[] LiveModels() => [controls, meetings, live];
+
+    private void OnLiveChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (loaded)
+        {
+            RenderHero();
+            RenderLive();
+        }
+    }
 
     private void OnModelChanged(object? sender, PropertyChangedEventArgs e) => Render();
 
