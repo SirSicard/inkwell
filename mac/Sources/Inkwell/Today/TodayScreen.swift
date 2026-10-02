@@ -101,6 +101,10 @@ struct TodayScreen: View {
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .padding(.top, 4)
+                if let line = SpeechModels.todayLine(screens.catalogue.speech) {
+                    SpeechModelLine(line: line)
+                        .padding(.top, 6)
+                }
             }
             Spacer(minLength: 0)
             RecordControls()
@@ -109,11 +113,13 @@ struct TodayScreen: View {
         .frame(minHeight: 240, alignment: .bottom)
     }
 
-    /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now.
+    /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now,
+    /// unless no speech model could type what it hears (the line under it says so).
     private var statusLine: String {
         let key = DictationModel.key(screens.dictation.key)?.name ?? screens.dictation.key
         let listening = RecordControls.listeningText(recording: store.meeting != nil, listening: store.listening)
-        return [listening, "Hold \(key) to dictate"]
+        let hold = screens.catalogue.speech.offersDictation ? "Hold \(key) to dictate" : ""
+        return [listening, hold]
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .joined(separator: " · ")
     }
@@ -432,6 +438,54 @@ struct OwedSoonRow: View {
                 }
                 .font(PaperType.meta)
                 .foregroundStyle(due.isOverdue ? PaperPalette.alertText : Theme.secondaryText)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Under Today's greeting while no speech model is installed: what that means, and the download
+/// of the recommended set (or how far it has got, or why it failed).
+private struct SpeechModelLine: View {
+    let line: String
+    @Environment(ScreenModels.self) private var screens
+
+    var body: some View {
+        let catalogue = screens.catalogue
+        VStack(alignment: .leading, spacing: 8) {
+            Text(line)
+                .font(Typography.caption)
+                .foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            switch catalogue.speechDownload {
+            case .notStarted:
+                HStack(spacing: 10) {
+                    Button(catalogue.speechSetMB.map { "Download speech models (\($0) MB)" } ?? "Download speech models") {
+                        catalogue.downloadSpeechModels()
+                    }
+                    .buttonStyle(PaperButtonStyle())
+                    // Where the files come from, as the first run says it.
+                    let hosts = CatalogueModel.sources(catalogue.models.filter { CatalogueModel.speechSet.contains($0.id) })
+                    if !hosts.isEmpty {
+                        Text("From \(hosts)")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                }
+            case .downloading(let percent):
+                Text(percent.map { "Downloading speech models · \($0) %" } ?? "Downloading speech models…")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .monospacedDigit()
+            case .failed(let why):
+                HStack(spacing: 10) {
+                    Text("The download failed: \(why)")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Try again") { catalogue.downloadSpeechModels() }
+                        .buttonStyle(PaperButtonStyle())
+                }
             }
         }
         .accessibilityElement(children: .contain)

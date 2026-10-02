@@ -56,15 +56,17 @@ public struct InkImage: Sendable {
 /// Offscreen frames.
 public enum InkSnapshot {
     /// Draws `state` at time `t` into a `width` x `height` pixel canvas, in `palette`'s colours, the
-    /// orb at `placement`. `motion` false draws the still frame (the shader's time stopped).
+    /// orb at `placement`. `motion` false draws the still frame (the shader's time stopped);
+    /// `blotDepth` is InkSimulation's.
     public static func render(
         _ state: InkState, t: Double, width: Int, height: Int, palette: OrbPalette = .neutral,
         placement: OrbPlacement = .centred, voice: InkVoice = .synthetic, motion: Bool = true,
-        pipeline: InkPipeline
+        blotDepth: Double = 1, pipeline: InkPipeline
     ) throws -> InkImage {
         guard width >= 2, height >= 2 else { throw InkRendererError.resource("canvas \(width)x\(height)") }
         var simulation = InkSimulation(random: .seeded(1))
         simulation.state = state
+        simulation.blotDepth = blotDepth
         simulation.canvasWidth = Double(width)
         simulation.canvasHeight = Double(height)
         simulation.applyFixed(t: t, voice: voice)

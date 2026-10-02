@@ -95,6 +95,9 @@ final class DictationModel {
     /// Whether a language model can rewrite a selection (Polish's engine), for the words of a
     /// failed edit.
     @ObservationIgnored var hasLanguageModel: @MainActor () -> Bool = { false }
+    /// Whether a speech model is installed (the catalogue's answer), for the words after a take
+    /// nothing could transcribe.
+    @ObservationIgnored var speechModels: @MainActor () -> SpeechModels = { .unknown }
 
     init(send: @escaping SendCommand, timeZone: @escaping @MainActor () -> TimeZone = { .current }) {
         self.send = send
@@ -300,7 +303,7 @@ final class DictationModel {
                 ? "Couldn't save the key. The one before still works."
                 : "Couldn't read your key settings."
         default:
-            show(Self.note(for: event, hasLanguageModel: hasLanguageModel()))
+            show(Self.note(for: event, hasLanguageModel: hasLanguageModel(), speech: speechModels()))
         }
     }
 
@@ -311,8 +314,13 @@ final class DictationModel {
     }
 
     /// What the Drop says for `event`, or nil when it says nothing (the text went in as it should,
-    /// or a screen shows it).
-    static func note(for event: InkEvent, hasLanguageModel: Bool) -> DropText? {
+    /// or a screen shows it). With no speech model, a take that found nothing to type found it
+    /// because nothing could transcribe it (without voice detection either, the gain stage's
+    /// fallback can judge quiet speech silence): that is said, never the microphone.
+    static func note(for event: InkEvent, hasLanguageModel: Bool, speech: SpeechModels = .unknown) -> DropText? {
+        if speech.dictation == .missing, nothingTranscribed(event) {
+            return SpeechModels.dropNote(downloading: speech.downloading)
+        }
         switch event {
         case .dictationDiscarded(let discarded):
             switch discarded.reason {
@@ -385,6 +393,26 @@ final class DictationModel {
             }
         default:
             return nil
+        }
+    }
+
+    /// The Drop's download was pressed: its note gives way to one that says the download is on its
+    /// way, so the button is not left up as if nothing happened.
+    func speechDownloadStarted() {
+        show(SpeechModels.dropNote(downloading: true))
+    }
+
+    /// A take that ended with nothing typed for a reason a missing speech model explains.
+    private static func nothingTranscribed(_ event: InkEvent) -> Bool {
+        switch event {
+        case .dictationDiscarded(let discarded):
+            [.silence, .noSpeech, .nothingHeard, .nothingLeft].contains(discarded.reason)
+        case .dictationFailed(let failed):
+            failed.stage == .transcription
+        case .dictationEditFailed(let failed):
+            failed.reason == .transcription
+        default:
+            false
         }
     }
 

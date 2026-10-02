@@ -198,6 +198,24 @@ final class SimulationTests: XCTestCase {
         XCTAssertEqual(at60.w, SIMD4(1, 0, 0, 0), "a still frame has the state's weights")
     }
 
+    /// A shallower blot (the main window's, behind text) sets only the blotting weight's target;
+    /// every other state, and the default full blot, are the design's.
+    func testABlotDepthSetsOnlyTheBlottingWeight() {
+        var sim = InkSimulation(random: .seeded(1))
+        XCTAssertEqual(sim.blotDepth, 1, "the design's blot by default")
+        sim.state = .blotting
+        sim.settle(voice: .silent)
+        XCTAssertEqual(sim.w, SIMD4(0, 1, 1, 0))
+        sim.blotDepth = 0.55
+        sim.settle(voice: .silent)
+        XCTAssertEqual(sim.w, SIMD4(0, 1, 0.55, 0))
+        for state in InkState.allCases where state != .blotting {
+            sim.state = state
+            sim.settle(voice: .silent)
+            XCTAssertEqual(sim.w, InkSimulation.weights(for: state), "\(state)")
+        }
+    }
+
     func testMulberry32MatchesItsReferenceSequence() {
         // The first draws of mulberry32(1), from its JavaScript definition.
         var rng = InkRandom.seeded(1)

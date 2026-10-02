@@ -81,6 +81,8 @@ final class DropController {
 
     /// How long a note stays up. One delayed call per note, not a timer: nothing ticks.
     static let noteDuration: Duration = .milliseconds(2_500)
+    /// A note with a button (no speech model: download one) stays long enough to be pressed.
+    static let noteWithActionsDuration: Duration = .seconds(8)
 
     /// The state the Drop's ink shows.
     var inkState: InkState { content.inkView.state }
@@ -164,7 +166,7 @@ final class DropController {
     private func showNote(_ note: DictationModel.Note) {
         noteShowing = note
         Task { @MainActor [weak self] in
-            try? await Task.sleep(for: Self.noteDuration)
+            try? await Task.sleep(for: note.text.actions.isEmpty ? Self.noteDuration : Self.noteWithActionsDuration)
             guard let self, self.noteShowing?.serial == note.serial else { return }
             self.noteShowing = nil
             self.update()

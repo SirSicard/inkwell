@@ -77,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         core.screens.theme.start()
         let drop = DropController(ink: ink, notes: core.screens.dictation, theme: core.screens.theme)
         let screens = core.screens
-        drop.onAction = { action in screens.meetings.perform(action, permissions: screens.permissions) }
+        drop.onAction = { action in screens.performDropAction(action) }
         self.drop = drop
         if let interval = DropDemo.interval(from: ProcessInfo.processInfo.environment) {
             dropDemo = DropDemo(ink: ink, interval: interval)

@@ -267,6 +267,7 @@ final class ScreenModels {
         meetingsConsent = ConsentModel(feature: .meetings, switchSettingID: Self.meetingsAISettingID, send: send)
         self.send = send
         dictation.hasLanguageModel = { [polish] in polish.hasWorkingEngine }
+        dictation.speechModels = { [catalogue] in catalogue.speech }
         snippets = SnippetsModel(send: send)
         voiceCommands = VoiceCommandsModel(send: send)
         importNote = ImportNoteModel(send: send)
@@ -394,6 +395,17 @@ final class ScreenModels {
     var summaryOffNote: String? {
         guard meetingsConsent.state != nil, !meetingsConsent.isAllowedOn else { return nil }
         return "Summaries are off until you allow them in Settings > AI. Meetings are still recorded and transcribed."
+    }
+
+    /// A button on the Drop: the speech models' download is the catalogue's, the rest the
+    /// meeting commands'.
+    func performDropAction(_ action: DropText.Action) {
+        switch action {
+        case .downloadSpeechModels:
+            catalogue.downloadSpeechModels()
+            dictation.speechDownloadStarted()
+        case .record, .dismiss, .allowSystemAudio: meetings.perform(action, permissions: permissions)
+        }
     }
 
     /// The app became active again.

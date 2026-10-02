@@ -113,11 +113,13 @@ final class ConsentDropTests: XCTestCase {
 @MainActor
 final class WatchdogWarningTests: XCTestCase {
     /// Revoking system audio mid-call: the core's watchdog reports the far end's zeros within 10 s
-    /// (ink-pipeline's `a_far_end_of_digital_zeros_is_reported_within_ten_seconds`), and the Drop
-    /// says so at once, with the way to fix it.
-    func testTheFarEndGoingSilentTurnsTheDropIntoTheWarning() {
+    /// (ink-pipeline's `a_far_end_of_digital_zeros_is_reported_within_ten_seconds`), and with the
+    /// probe saying the permission is off, the Drop says so at once, with the way to fix it.
+    func testTheFarEndGoingSilentWithSystemAudioOffTurnsTheDropIntoTheWarning() {
         let store = CoreStore()
-        let ink = ShellInk(store: store)
+        let permissions = PermissionsModel(send: { _ in }, calendar: FakeCalendar())
+        let ink = ShellInk(store: store, permissions: permissions)
+        permissions.apply(checked(system: "denied"))
         store.apply([event(#"{"type":"meeting.started","record":"r1","app_name":"Example Call"}"#)])
         store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"zeros"}"#)])
         XCTAssertEqual(ink.state, .problem)
@@ -126,7 +128,44 @@ final class WatchdogWarningTests: XCTestCase {
         XCTAssertEqual(ink.dropText.tone, .alert)
         XCTAssertEqual(ink.dropText.actions, [.allowSystemAudio])
         store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"ok"}"#)])
-        XCTAssertEqual(ink.state, .meeting)
+        XCTAssertEqual(ink.state, .problem, "the probe still says off")
+    }
+
+    /// A call that went quiet: the far end delivers exact zeros (an app holding its output open
+    /// plays them) while the permission is granted. That is silence, said as silence: no claim
+    /// that system audio is off, and no permission button. Found in a recorded-call test, where the
+    /// Them lane had just transcribed system audio.
+    func testAFarEndOfSilenceWithSystemAudioAllowedIsSilenceNotAMissingPermission() {
+        for probe in ["granted", nil] as [String?] {
+            let store = CoreStore()
+            let permissions = PermissionsModel(send: { _ in }, calendar: FakeCalendar())
+            let ink = ShellInk(store: store, permissions: permissions)
+            if let probe { permissions.apply(checked(system: probe)) }
+            store.apply([event(#"{"type":"meeting.started","record":"r1","app_name":"Example Call"}"#)])
+            store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"zeros"}"#)])
+            let label = probe ?? "not checked yet"
+            XCTAssertEqual(ink.state, .problem, label)
+            XCTAssertEqual(ink.dropText.title, "The other side is silent", label)
+            XCTAssertEqual(ink.dropText.detail, "Only silence is arriving from the call.", label)
+            XCTAssertFalse(ink.dropText.detail.contains("System audio is off"), label)
+            XCTAssertEqual(ink.dropText.actions, [], label)
+            store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"ok"}"#)])
+            XCTAssertEqual(ink.state, .meeting, label)
+        }
+    }
+
+    /// A far end that stopped delivering, with the permission granted: said as stopped, without
+    /// offering a permission that is already on.
+    func testAStoppedFarEndWithSystemAudioAllowedOffersNoPermission() {
+        let store = CoreStore()
+        let permissions = PermissionsModel(send: { _ in }, calendar: FakeCalendar())
+        let ink = ShellInk(store: store, permissions: permissions)
+        permissions.apply(checked(system: "granted"))
+        store.apply([event(#"{"type":"meeting.started","record":"r1"}"#)])
+        store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"stopped"}"#)])
+        XCTAssertEqual(ink.dropText.title, "The other side stopped")
+        XCTAssertEqual(ink.dropText.detail, "Nothing is arriving from the call. Only your voice may be recorded.")
+        XCTAssertEqual(ink.dropText.actions, [])
     }
 
     /// The reaction to a probe change: a system-audio check that reads "denied" during a meeting

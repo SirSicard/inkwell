@@ -108,6 +108,12 @@ public struct InkSimulation: Sendable {
     /// The canvas size in pixels (the prototype's `c.width`, `c.height`).
     public var canvasWidth = 360.0
     public var canvasHeight = 720.0
+    /// How far blotting condenses the orb: the blotting weight's target, 0...1. At 1 (the design's
+    /// blot, the default) both orbs condense into one small, hard-edged drop of ink. Behind a
+    /// window's text that drop is a solid disc in the text's own colour (ivory at night), sitting
+    /// wherever the layout puts a rule or a heading; a shallower blot stops on the way: the orbs
+    /// draw together, shrink and take the ink's colour, and keep a soft edge.
+    public var blotDepth = 1.0
 
     // The prototype's `_st`.
     public internal(set) var t = 0.0
@@ -229,7 +235,9 @@ public struct InkSimulation: Sendable {
         prevA = envA
         prevB = envB
         let kw = snap ? 1 : 1 - pow(1 - Self.weightEase, dt * 60)
-        w += (Self.weights(for: state) - w) * kw
+        var target = Self.weights(for: state)
+        if state == .blotting { target.z = min(max(blotDepth, 0), 1) }
+        w += (target - w) * kw
         physics(dt)
     }
 
