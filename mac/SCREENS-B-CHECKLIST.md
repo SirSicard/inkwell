@@ -28,22 +28,41 @@ the real core.
 - [ ] A fresh library opens the first-run sheet over the window: five steps shown as dots.
 - [ ] Permissions step: four cards, "Hear you", "Hear the others", "Type for you", "Know your
       meetings", each with its state. Nothing is asked for until you press Allow.
-- [ ] Models step (it downloads about 3 GB: only with your OK, into the scratch library's own
-      models folder): each model not on this Mac with its licence, size and where it comes from
-      (huggingface.co; Silero VAD from raw.githubusercontent.com), and the total. Nothing is fetched until you
-      press Download (Activity Monitor > Network: Inkwell receives nothing before it). Then one
-      model at a time, smallest first, with its bar, the others "Waiting". Continue works at once,
-      and the downloads keep going through the rest of the first run and after it.
-- [ ] Once Parakeet is in, Settings > Models reads Parakeet TDT v3 for Live words without a
-      restart, and dictating shows live words in the Drop; once Qwen3-ASR is in, Dictation reads
-      Qwen3-ASR 1.7B, and the first dictation after it is as quick as the next (it is loaded when
-      its download ends, not by that take).
+- [ ] Models step (Download fetches about 485 MB: only with your OK, into the scratch library's
+      own models folder): under "Recommended", Silero VAD and Parakeet TDT v3, each with its
+      licence, size and where it comes from (huggingface.co; Silero VAD from
+      raw.githubusercontent.com), and their total; under "Optional", Nemotron-3-Diarization and
+      Qwen3-ASR 1.7B, each with its own Download and a line saying what it adds. Nothing is fetched
+      until you press a Download (Activity Monitor > Network: Inkwell receives nothing before it).
+      The recommended Download fetches only those two, one at a time, smallest first, with its
+      bar, the other "Waiting"; the extras stay "Download". Continue works at once, and the
+      downloads keep going through the rest of the first run and after it.
+- [ ] With only the recommended set in: Settings > Models reads Parakeet TDT v3 for Dictation,
+      Meeting transcript and Live words without a restart, and dictating shows live words in the
+      Drop and types the take. A recorded call's far end is one voice, "Them".
+- [ ] An extra's Download in the first run (or in Settings > Models): once Qwen3-ASR is in,
+      Dictation and Meeting transcript read Qwen3-ASR 1.7B (Live words stays Parakeet), and the
+      first dictation after it is as quick as the next (it is loaded when its download ends, not
+      by that take). Once the diarizer is in, a call with two or more people on the far end reads
+      Speaker 1, Speaker 2 after it ends.
 - [ ] A download that fails (turn Wi-Fi off while one runs): its row says "Couldn't download it"
       and why, in red, with Retry, and nothing tries again by itself. Wi-Fi back on, Retry: it
       downloads.
 - [ ] Polish step: the switch is off and cannot be turned on if Apple Intelligence is off or not
       on this Mac, and the line under it says why. With Apple Intelligence on, switching it on
       asks first ("Turn on polish?", naming Apple's on-device model); Cancel leaves it off.
+- [ ] Polish step, own key (a test key of your own, never committed; Settings > AI's Local only
+      reads On before): "Use your own key" is closed, and Continue and Skip work without opening
+      it. Opened: the line points at Groq's free key with a console.groq.com link, Groq is in the
+      picker, and the rows are Settings > AI's without the Local only switch. Use stays greyed until
+      the key is saved (the field clears; "A key is stored in your keychain"). Use: "Turn on
+      polish?" names Groq, says your words leave this Mac and go to Groq, and that Send to Groq
+      turns Local only off; nothing is sent yet (Settings > AI still reads Local only On). Cancel:
+      nothing changed. Use, Send to Groq: the switch reads on, its line says your words go to the
+      Groq model, Test answers, Settings > AI reads Groq in use with Local only Off, and a dictation
+      comes back polished.
+- [ ] VoiceOver on that step: "Use your own key" reads as a disclosure; inside, the picker, "API
+      key", "Model", Use (its hint is the line above it) and Test read as in Settings > AI.
 - [ ] Start (or Skip) closes it. Quit and start again on the same library: it does not come back.
 - [ ] On a fresh library, with the sheet up, press Command-Q (and, separately, choose Quit Inkwell
       from the menu-bar item): Inkwell quits at once. Start it again on the same library: the

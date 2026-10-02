@@ -16,6 +16,12 @@
 // That is also why engine churn (every engine.registered or engine.unregistered reads the state
 // again) needs no debounce: each read is a short store query, and only the last answer counts.
 //
+// The first run's own key asks before its model is chosen (`ask(_:from:choosing:)`): the step
+// names the provider the user picked, Allow chooses it (which, for a provider off this Mac, is what
+// turns local-only mode off), and the consent is sent once the core names that same destination
+// (`agreed`). A choice the core refuses, or a destination it names that is not the one agreed to,
+// records nothing: the agreement was for that choice only, and is dropped.
+//
 // Summaries and Ask are off until allowed too: the core then sends no transcript, a meeting ends
 // with meeting.warning summary_not_allowed (the state is read again), and Ask answers that it
 // needs the user's OK.
@@ -104,10 +110,18 @@ final class ConsentModel {
     private(set) var host: Host?
     /// For voice edit, the key the step turns it on with.
     private(set) var pendingKey: String?
+    /// The step on screen names a model that is not chosen yet: Allow chooses it first.
+    private(set) var choosing = false
+    /// The destination the user allowed before its model was chosen, waiting for the core to name
+    /// it; the consent is sent then.
+    private(set) var agreed: Destination?
 
     /// The id of the command that turns the feature's switch off (its `command.failed` carries it).
     @ObservationIgnored let switchSettingID: String
     @ObservationIgnored private let send: SendCommand
+    /// What Allow does first when the step names a model not chosen yet (`choosing`): it chooses
+    /// the model, and says whether it sent the choice.
+    @ObservationIgnored private var choose: (@MainActor () -> Bool)?
     /// The state before a switch-off the core has not confirmed, to put back if saving fails.
     @ObservationIgnored private var beforeOff: Snapshot??
     /// Requests sent so far, for their refs.
@@ -204,6 +218,21 @@ final class ConsentModel {
             : "\(what) It uses \(destination.label), a cloud provider: \(words) \(leave) to \(destination.label)."
     }
 
+    /// What a step that also chooses its model adds: that local-only mode goes off, when the
+    /// model is off this Mac (nil when it stays on).
+    static func choosingNote(_ destination: Destination) -> String? {
+        guard !destination.isOnDevice else { return nil }
+        return "Send to \(destination.label) also chooses it as your language model and turns Local only off. Settings > AI can change both."
+    }
+
+    /// What the step on screen says: the feature's message, and for a step that also chooses its
+    /// model, what choosing it changes.
+    func stepMessage(_ destination: Destination) -> String {
+        let message = Self.message(feature, destination)
+        guard choosing, let note = Self.choosingNote(destination) else { return message }
+        return "\(message) \(note)"
+    }
+
     /// The button that agrees.
     static func button(_ feature: LlmFeature, _ destination: Destination) -> String {
         guard destination.isOnDevice else { return "Send to \(destination.label)" }
@@ -227,25 +256,58 @@ final class ConsentModel {
     /// edit's. Does nothing while no model is named.
     func ask(from host: Host, key: String? = nil) {
         guard let destination else { return }
+        cancel()
         failure = nil
+        // An agreement waiting for its choice is not this step's: it is dropped, so it can never
+        // allow anything after this.
+        agreed = nil
         pending = destination
         self.host = host
         pendingKey = key
     }
 
+    /// Shows the consent step for `destination`, the model `choose` will choose: nothing is sent
+    /// until Allow, which runs `choose` and sends the consent once the core names `destination`.
+    /// `choose` returns whether it sent the choice (false: what it would choose is no longer what
+    /// the step named).
+    func ask(_ destination: Destination, from host: Host, choosing choose: @escaping @MainActor () -> Bool) {
+        failure = nil
+        agreed = nil
+        pending = destination
+        self.host = host
+        pendingKey = nil
+        choosing = true
+        self.choose = choose
+    }
+
     /// The consent step's Allow: the user agreed to where the feature sends. The core records it
-    /// only if that is still where the model goes.
+    /// only if that is still where the model goes. A step naming a model not chosen yet chooses it
+    /// first, and the consent waits for the core to name it.
     func allow() {
         guard let destination = pending else { return }
         let key = pendingKey
+        let chooseFirst = choosing ? choose : nil
         cancel()
         failure = nil
+        if let chooseFirst {
+            // Waiting only for a choice that went: one that did not would leave an agreement that
+            // a later state could act on, with no step on screen.
+            if chooseFirst() {
+                agreed = destination
+            } else {
+                failure = .allow
+            }
+            return
+        }
+        send(allowCommand(destination, key: key))
+    }
+
+    private func allowCommand(_ destination: Destination, key: String?) -> CoreCommand {
         let ref = nextRef("allow")
         newestAllow = ref
-        switch destination.kind {
-        case .onDevice: send(.consentAllow(feature: feature, to: .onDevice, endpoint: nil, key: key, ref: ref))
-        case .cloud(let endpoint):
-            send(.consentAllow(feature: feature, to: .cloud, endpoint: endpoint, key: key, ref: ref))
+        return switch destination.kind {
+        case .onDevice: .consentAllow(feature: feature, to: .onDevice, endpoint: nil, key: key, ref: ref)
+        case .cloud(let endpoint): .consentAllow(feature: feature, to: .cloud, endpoint: endpoint, key: key, ref: ref)
         }
     }
 
@@ -254,12 +316,15 @@ final class ConsentModel {
         pending = nil
         host = nil
         pendingKey = nil
+        choosing = false
+        choose = nil
     }
 
     /// The owner sent the command that turns the switch off (which withdraws the consent too):
     /// shown at once, put back if the core refuses it.
     func switchedOff() {
         cancel()
+        agreed = nil
         failure = nil
         if beforeOff == nil {
             beforeOff = .some(state)
@@ -277,6 +342,11 @@ final class ConsentModel {
             load()
         case .coreStopped:
             cancel()
+            agreed = nil
+        case .commandFailed(let failed) where failed.command == "llm.choose" && agreed != nil:
+            // The choice the user allowed was refused: nothing changed, and nothing is allowed.
+            agreed = nil
+            failure = .allow
         case .consentState(let value) where value.feature == feature:
             // The answer to an older request, arriving after a newer one was sent: the newer
             // answer is the one to show. A state with no ref (after a switch-off, or a refused
@@ -287,8 +357,22 @@ final class ConsentModel {
             if failure == .read || failure == .write { failure = nil }
             // The step names a destination that is no longer the model's: close it rather than
             // change its words under the user's finger. Turning the feature on asks about the new one.
-            if let pending, pending != destination {
+            // A step that chooses its model names one the core does not know yet: it stays.
+            if let pending, !choosing, pending != destination {
                 cancel()
+            }
+            // The model the user allowed is chosen: the consent goes, for the destination the core
+            // names, only if it is the one agreed to (the core then records it only if it still is).
+            // The core's own state after the choice (no ref) naming another settles it as refused;
+            // an answer to an older read is not about the choice.
+            if let agreed {
+                if let now = destination, now.kind == agreed.kind {
+                    self.agreed = nil
+                    send(allowCommand(now, key: nil))
+                } else if value.ref == nil {
+                    self.agreed = nil
+                    failure = .allow
+                }
             }
         case .commandFailed(let failed) where failed.id == switchSettingID && failed.command == "setting.set":
             if let before = beforeOff {

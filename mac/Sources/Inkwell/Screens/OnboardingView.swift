@@ -1,8 +1,9 @@
 // The first-run state: a sheet over the window until the user finishes or skips it. What Inkwell
 // does (over the orb, playing a short demo), the four permissions (each asked for only when the
-// user presses Allow), the speech models (downloaded only when the user presses Download, and still
-// downloading while the user goes on), Inkwell 0.2's history (only when there is some to import),
-// the appearance, polish (off, and turned on only through its consent step), and how to dictate,
+// user presses Allow), the speech models (a recommended set and optional extras, each downloaded
+// only when the user presses Download, and still downloading while the user goes on), Inkwell
+// 0.2's history (only when there is some to import), the appearance, polish (off, and turned on
+// only through its consent step, with Apple's model or the user's own key), and how to dictate,
 // with the orb answering the user's voice. Remembered in the core's store (onboarding.done).
 import InkRenderer
 import SwiftUI
@@ -12,6 +13,8 @@ struct OnboardingView: View {
     @Environment(ShellInk.self) private var ink
     /// What the welcome orb shows: a short demo, then still.
     @State private var demo = InkState.idle
+    /// The Polish step's own-key rows are open (closed at first: skipping them costs nothing).
+    @State private var ownKey = false
 
     var body: some View {
         let onboarding = screens.onboarding
@@ -156,12 +159,15 @@ struct OnboardingView: View {
         }
     }
 
-    /// What will be downloaded (each model not on this Mac, its licence and size, the total, and
-    /// where from), and the one Download button that is the user's agreement: nothing is fetched
-    /// before it. Continue works at any time; the downloads keep going.
+    /// What will be downloaded (each model not on this Mac, its licence and size, and where from):
+    /// the recommended set with its total and the one Download that is the user's agreement to it,
+    /// then the optional extras, each with what it adds and its own Download. Nothing is fetched
+    /// before a press. Continue works at any time; the downloads keep going.
     private var models: some View {
         let catalogue = screens.catalogue
         let offered = catalogue.firstRunModels
+        let recommended = catalogue.firstRunRecommended
+        let extras = catalogue.firstRunExtras
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 title("Speech models")
@@ -175,18 +181,43 @@ struct OnboardingView: View {
                 } else {
                     Text("Inkwell turns speech into text with models that run on this Mac. They are downloaded once, from \(CatalogueModel.sources(offered)), and only when you press Download.")
                         .fixedSize(horizontal: false, vertical: true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(offered, id: \.id) { model in
-                            ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: false)
+                    Paper.Eyebrow(text: "Recommended")
+                    if recommended.isEmpty {
+                        Text("The recommended models are on this Mac already.")
+                    } else {
+                        Text("Voice detection and Parakeet: enough for dictation, the live words and meeting transcripts.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(recommended, id: \.id) { model in
+                                ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: false)
+                            }
+                        }
+                        let total = ModelDownloadRow.size(recommended.map(\.sizeBytes).reduce(0, +))
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Total: \(total)").font(.system(.body, weight: .semibold))
+                            Spacer()
+                            if recommended.contains(where: { catalogue.download(of: $0) == .notInstalled }) {
+                                Button("Download") { catalogue.downloadRecommended() }
+                                    .accessibilityLabel("Download the recommended models, \(total), from \(CatalogueModel.sources(recommended))")
+                            }
                         }
                     }
-                    let total = ModelDownloadRow.size(offered.map(\.sizeBytes).reduce(0, +))
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("Total: \(total)").font(.system(.body, weight: .semibold))
-                        Spacer()
-                        if offered.contains(where: { catalogue.download(of: $0) == .notInstalled }) {
-                            Button("Download") { catalogue.downloadFirstRunModels() }
-                                .accessibilityLabel("Download \(total) from \(CatalogueModel.sources(offered))")
+                    if !extras.isEmpty {
+                        Paper.Eyebrow(text: "Optional")
+                            .padding(.top, 6)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(extras, id: \.id) { model in
+                                ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: true)
+                                if let adds = CatalogueModel.adds(model.id) {
+                                    Text(adds)
+                                        .font(Typography.caption)
+                                        .foregroundStyle(Theme.secondaryText)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(.bottom, 4)
+                                }
+                            }
                         }
                     }
                     if catalogue.downloading {
@@ -215,21 +246,46 @@ struct OnboardingView: View {
         .foregroundStyle(Theme.text)
     }
 
+    /// The switch (Apple's on-device model, where there is one), and the user's own key: Settings
+    /// > AI's rows, pointing at Groq's free key, where Use asks polish's consent before choosing
+    /// the provider, so local-only mode goes off only with it.
     private var polish: some View {
         let polish = screens.polish
-        return VStack(alignment: .leading, spacing: 12) {
-            title("Polish")
-            Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
-            Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
-                .toggleStyle(.switch)
-                .disabled(!polish.canToggle)
-                .accessibilityHint(polish.status)
-            Text(polish.status)
-                .font(Typography.caption)
-                .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
-                .accessibilityHidden(true)
+        let cloud = screens.cloud
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                title("Polish")
+                Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
+                    .toggleStyle(.switch)
+                    .disabled(!polish.canToggle)
+                    .accessibilityHint(polish.status)
+                Text(polish.status)
+                    .font(Typography.caption)
+                    .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityHidden(true)
+                DisclosureGroup(isExpanded: $ownKey) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Or bring your own key for a language model online. Groq's free tier covers ordinary personal use and needs no credit card: sign in at [console.groq.com](https://console.groq.com), create a key under API Keys and paste it here.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                        LanguageModelRows(cloud: cloud, firstRun: polish)
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Use your own key")
+                }
+                .onChange(of: ownKey) {
+                    // Groq's free key, unless the user picked or chose another.
+                    if ownKey { cloud.suggest("groq") }
+                }
+            }
+            .foregroundStyle(Theme.text)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .foregroundStyle(Theme.text)
         .polishConsent(polish, host: .onboarding)
     }
 

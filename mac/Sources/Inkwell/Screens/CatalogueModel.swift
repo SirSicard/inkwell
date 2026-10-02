@@ -198,15 +198,45 @@ final class CatalogueModel {
 
     /// What the first run lists: the models not on this Mac, and those asked for since launch (so
     /// one that finished stays listed, as downloaded). Smallest first, the order Download fetches
-    /// them in: the small ones (voice detection, Parakeet's live words and finals) make dictation
-    /// work long before Qwen3-ASR's gigabytes are in.
+    /// them in.
     var firstRunModels: [CatalogueEntry] {
         models.filter { !$0.installed || asked.contains($0.id) }.sorted { $0.sizeBytes < $1.sizeBytes }
     }
 
-    /// The first run's Download: every model it lists that is not here and not asked for yet.
-    func downloadFirstRunModels() {
-        download(firstRunModels.filter { download(of: $0) == .notInstalled }.map(\.id))
+    /// The first run's recommended set, about 485 MB: voice detection and the Mac's Parakeet. They
+    /// serve every job on their own: Parakeet registers for the live words and, while Qwen3-ASR is
+    /// not installed, for the dictation and meeting finals (ParakeetOfflineEngine), and the router
+    /// hands those to Qwen3-ASR once it is in. So Qwen3-ASR's 2.5 GB and the diarizer are offered
+    /// as extras, each with what it adds, never fetched by the set's Download.
+    static let recommended = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml"]
+
+    /// The recommended models the first run lists.
+    var firstRunRecommended: [CatalogueEntry] {
+        firstRunModels.filter { Self.recommended.contains($0.id) }
+    }
+
+    /// The other models the first run lists, each downloaded only from its own row.
+    var firstRunExtras: [CatalogueEntry] {
+        firstRunModels.filter { !Self.recommended.contains($0.id) }
+    }
+
+    /// The first run's Download: every recommended model it lists that is not here and not asked
+    /// for yet.
+    func downloadRecommended() {
+        download(firstRunRecommended.filter { download(of: $0) == .notInstalled }.map(\.id))
+    }
+
+    /// What an extra adds over the recommended set, for the first run's row; nil for the set's own
+    /// models and for ids this build does not know. Qwen3-ASR's "a third fewer" is checked against
+    /// the measured rates (ScreensTests).
+    static func adds(_ id: String) -> String? {
+        switch id {
+        case "qwen3-asr-1.7b-q8":
+            "More accurate dictation and meeting transcripts: about a third fewer words wrong than Parakeet in tests. Parakeet still shows the live words."
+        case "nemotron-3-diarization-q8":
+            "After a call, tells the people on the other end apart: Speaker 1, Speaker 2. Without it, everyone on the other end is \u{201C}Them\u{201D}."
+        default: nil
+        }
     }
 
     /// Where a model's files come from: the host of every URL its row names in the core's registry
