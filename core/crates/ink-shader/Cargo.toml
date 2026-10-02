@@ -1,6 +1,6 @@
 [package]
 name = "ink-shader"
-description = "Translates shaders/ink.wgsl into the shells' shading languages (MSL and HLSL) with naga."
+description = "Translates shaders/ink.wgsl into the shells' shading languages (MSL and HLSL) with naga, and generates the shells' design tokens from design/tokens.json."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,17 @@ publish.workspace = true
 name = "ink-shader"
 path = "src/bin/ink-shader.rs"
 
+[[bin]]
+# Writes the shells' design tokens from design/tokens.json: GlowTokens.swift for the Mac app,
+# GlowTokens.xaml and GlowTokens.g.cs for the Windows shell (tests/tokens.rs checks they are
+# current).
+name = "ink-tokens"
+path = "src/bin/ink-tokens.rs"
+
 [dependencies]
 # naga as a library, not its CLI: the CLI has no binding map, so its MSL leaves every resource on
 # a placeholder slot. Only the WGSL front end and the MSL and HLSL back ends (MIT OR Apache-2.0).
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in", "msl-out", "hlsl-out"] }
+# Reads design/tokens.json, as serde_json::Value without derive, as ink-ffi does (MIT OR
+# Apache-2.0; already in the lockfile).
+serde_json = "1"

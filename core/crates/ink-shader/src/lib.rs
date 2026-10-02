@@ -1,9 +1,13 @@
 //! The ink shader, written once in WGSL (`shaders/ink.wgsl`) and translated with naga into what
 //! each shell compiles: the Metal Shading Language for the Mac, HLSL (shader model 5.0, for
 //! Direct3D 11) for Windows.
+//!
+//! It also generates the shells' design tokens from `design/tokens.json` ([`tokens`]).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+pub mod tokens;
 
 use std::fmt;
 
@@ -26,12 +30,11 @@ pub enum ShaderError {
     Parse(String),
     /// It parses but is not a valid module.
     Invalid(String),
-    /// A binding the shells rely on is missing or has another type.
+    /// A binding the shells rely on is missing, has another type, or another binding is used.
     Layout(String),
     /// The MSL back end refused it.
     Msl(String),
-    /// The HLSL back end refused it, or its output was not the shape the Direct3D 11 fix-up
-    /// expects (see [`hlsl`]).
+    /// The HLSL back end refused it.
     Hlsl(String),
 }
 
@@ -69,9 +72,8 @@ pub fn msl(wgsl: &str) -> Result<String, ShaderError> {
         // A resource without a slot is an error here (check_bindings names it), never a
         // placeholder slot that Metal fills in on its own.
         fake_missing_bindings: false,
-        // Everything else as naga's CLI sets it, which is what the ported shader was checked
-        // against pixel for pixel: unchecked indexing (the only index is a loop over the six
-        // droplets), and loops marked as bounded.
+        // Everything else as naga's CLI sets it: unchecked indexing (the shader indexes no
+        // array), and loops marked as bounded.
         ..naga::back::msl::Options::default()
     };
     let (source, _) = naga::back::msl::write_string(
@@ -85,29 +87,18 @@ pub fn msl(wgsl: &str) -> Result<String, ShaderError> {
 }
 
 /// The HLSL for `wgsl`: shader model 5.0, which Direct3D 11 runs (DXC's shader model 6 output is
-/// for Direct3D 12 only). Each resource sits on register 0 of its kind: the uniform block at
-/// `b0`, the wordmark at `t0`, its sampler at `s0`, all in space 0 (see [`hlsl_binding_map`]).
-///
-/// naga writes every sampler through a sampler heap indexed by a buffer (`nagaSamplerHeap`), a
-/// Direct3D 12 binding model that shader model 5.0 cannot express. The one sampler is rewritten
-/// as a plain `SamplerState` on `s0`; the rewrite checks each line it replaces, so a naga whose
-/// output changes shape fails here instead of compiling into something else.
+/// for Direct3D 12 only). The uniform block, the one resource, sits on register `b0` in space 0
+/// (see [`hlsl_binding_map`]). The shader samples no texture, so naga writes no sampler heap (a
+/// Direct3D 12 binding model that shader model 5.0 cannot express).
 pub fn hlsl(wgsl: &str) -> Result<String, ShaderError> {
     let (module, info) = parse(wgsl)?;
     let map = hlsl_binding_map();
     check_bindings(&module, &info, |_, binding| map.contains_key(binding))?;
-    let mut sampler_buffers = naga::back::hlsl::SamplerIndexBufferBindingMap::new();
-    // Only so naga can write the heap's index buffer, which the rewrite then removes.
-    sampler_buffers.insert(
-        naga::back::hlsl::SamplerIndexBufferKey { group: 0 },
-        target(1),
-    );
     let options = naga::back::hlsl::Options {
         shader_model: naga::back::hlsl::ShaderModel::V5_0,
         binding_map: map,
         // A resource without a register is an error (check_bindings names it), never a guess.
         fake_missing_bindings: false,
-        sampler_buffer_binding_map: sampler_buffers,
         ..naga::back::hlsl::Options::default()
     };
     let mut out = String::new();
@@ -118,62 +109,23 @@ pub fn hlsl(wgsl: &str) -> Result<String, ShaderError> {
     )
     .write(&module, &info, None)
     .map_err(|e| ShaderError::Hlsl(e.to_string()))?;
-    plain_sampler(&out)
-}
-
-/// The registers of bind group 0 for HLSL: the uniform block on `b0`, the wordmark on `t0`, and
-/// its sampler at index 0 of naga's sampler index buffer, which [`plain_sampler`] turns into `s0`.
-pub fn hlsl_binding_map() -> naga::back::hlsl::BindingMap {
-    let at = |binding| naga::ResourceBinding { group: 0, binding };
-    let mut map = naga::back::hlsl::BindingMap::new();
-    map.insert(at(0), target(0));
-    map.insert(at(1), target(0));
-    map.insert(at(2), target(0));
-    map
-}
-
-fn target(register: u32) -> naga::back::hlsl::BindTarget {
-    naga::back::hlsl::BindTarget {
-        register,
-        ..naga::back::hlsl::BindTarget::default()
-    }
-}
-
-/// Replaces naga's sampler heap with one `SamplerState markSamp : register(s0);`.
-fn plain_sampler(hlsl: &str) -> Result<String, ShaderError> {
-    const HEAP: &str = "SamplerState nagaSamplerHeap[2048]: register(s0, space0);";
-    const COMPARISON_HEAP: &str =
-        "SamplerComparisonState nagaComparisonSamplerHeap[2048]: register(s0, space1);";
-    const INDEX_BUFFER: &str =
-        "StructuredBuffer<uint> nagaGroup0SamplerIndexArray : register(t1, space0);";
-    const SAMPLER: &str =
-        "static const SamplerState markSamp = nagaSamplerHeap[nagaGroup0SamplerIndexArray[0]];";
-    const PLAIN: &str = "SamplerState markSamp : register(s0);";
-    let mut out = String::with_capacity(hlsl.len());
-    let mut seen = [0usize; 4];
-    for line in hlsl.lines() {
-        match line.trim_end() {
-            HEAP => seen[0] += 1,
-            COMPARISON_HEAP => seen[1] += 1,
-            INDEX_BUFFER => seen[2] += 1,
-            SAMPLER => {
-                seen[3] += 1;
-                out.push_str(PLAIN);
-                out.push('\n');
-            }
-            _ => {
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-    }
-    if seen != [1, 1, 1, 1] || out.contains("nagaSamplerHeap") || out.contains("nagaGroup") {
-        return Err(ShaderError::Hlsl(format!(
-            "naga's sampler heap is not the expected four lines (found {seen:?}), so the \
-             Direct3D 11 sampler rewrite cannot apply"
-        )));
-    }
     Ok(out)
+}
+
+/// The register of bind group 0's one binding for HLSL: the uniform block on `b0`.
+pub fn hlsl_binding_map() -> naga::back::hlsl::BindingMap {
+    let mut map = naga::back::hlsl::BindingMap::new();
+    map.insert(
+        naga::ResourceBinding {
+            group: 0,
+            binding: 0,
+        },
+        naga::back::hlsl::BindTarget {
+            register: 0,
+            ..naga::back::hlsl::BindTarget::default()
+        },
+    );
+    map
 }
 
 /// The whole generated HLSL file: a header naming its source, then [`hlsl`].
@@ -183,41 +135,73 @@ pub fn hlsl_file(wgsl: &str) -> Result<String, ShaderError> {
         "// Generated from shaders/ink.wgsl by core/crates/ink-shader (naga). Do not edit: change the\n\
          // WGSL, then run `cargo run -p ink-shader --bin ink-shader` in core/.\n\
          //\n\
-         // Shader model 5.0 (Direct3D 11, compiled at run time with D3DCompile). The uniform block U\n\
-         // at b0, the wordmark at t0, its sampler at s0.\n",
+         // Shader model 5.0 (Direct3D 11, compiled at run time with D3DCompile). The uniform block G\n\
+         // at b0, the only resource.\n",
     );
     out.push_str(&body);
     Ok(out)
 }
 
+/// The uniform block `G` as the shells fill it: each field's name and byte offset, in order. The
+/// block is [`UNIFORM_SIZE`] bytes. The header of `shaders/ink.wgsl` says what each field holds.
+pub const UNIFORM_FIELDS: &[(&str, u32)] = &[
+    ("res", 0),
+    ("center", 8),
+    ("time", 16),
+    ("unit", 20),
+    ("you", 24),
+    ("them", 28),
+    ("w", 32),
+    ("dark", 48),
+    ("motion", 52),
+    ("pad", 56),
+    ("yA", 64),
+    ("yB", 80),
+    ("tA", 96),
+    ("tB", 112),
+    ("idle", 128),
+    ("ink", 144),
+];
+
+/// The uniform block's size in bytes.
+pub const UNIFORM_SIZE: u32 = 160;
+
 /// The uniform block's layout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UniformLayout {
     /// Its size in bytes.
     pub size: u32,
-    /// Where `drops` starts.
-    pub drops_offset: u32,
+    /// Each field's name and byte offset, in order.
+    pub fields: Vec<(String, u32)>,
 }
 
-/// The uniform block's layout in `wgsl`: the struct behind `var<uniform> u`, as the WGSL rules lay
-/// it out. The shells fill it by these offsets.
+/// The uniform block's layout in `wgsl`: the struct behind the uniform at group 0, binding 0, as
+/// the WGSL rules lay it out. The shells fill it by these offsets.
 pub fn uniform_layout(wgsl: &str) -> Result<UniformLayout, ShaderError> {
     let (module, _) = parse(wgsl)?;
     let (_, global) = module
         .global_variables
         .iter()
-        .find(|(_, g)| g.name.as_deref() == Some("u") && g.space == naga::AddressSpace::Uniform)
-        .ok_or_else(|| ShaderError::Layout("no `var<uniform> u`".into()))?;
+        .find(|(_, g)| {
+            g.space == naga::AddressSpace::Uniform
+                && g.binding
+                    == Some(naga::ResourceBinding {
+                        group: 0,
+                        binding: 0,
+                    })
+        })
+        .ok_or_else(|| ShaderError::Layout("no uniform at group 0, binding 0".into()))?;
     let naga::TypeInner::Struct { members, span } = &module.types[global.ty].inner else {
-        return Err(ShaderError::Layout("`u` is not a struct".into()));
+        return Err(ShaderError::Layout(
+            "the uniform at group 0, binding 0 is not a struct".into(),
+        ));
     };
-    let drops = members
-        .iter()
-        .find(|m| m.name.as_deref() == Some("drops"))
-        .ok_or_else(|| ShaderError::Layout("`u` has no `drops`".into()))?;
     Ok(UniformLayout {
         size: *span,
-        drops_offset: drops.offset,
+        fields: members
+            .iter()
+            .map(|m| (m.name.clone().unwrap_or_default(), m.offset))
+            .collect(),
     })
 }
 
@@ -228,8 +212,7 @@ pub fn msl_file(wgsl: &str) -> Result<String, ShaderError> {
         "// Generated from shaders/ink.wgsl by core/crates/ink-shader (naga). Do not edit: change the\n\
          // WGSL, then run `cargo run -p ink-shader --bin ink-shader` in core/.\n\
          //\n\
-         // Fragment stage: the uniform block U at buffer 0, the wordmark at texture 0, its sampler\n\
-         // at sampler 0.\n",
+         // Fragment stage: the uniform block G at buffer 0, the only resource.\n",
     );
     out.push_str(&body);
     if !out.ends_with('\n') {
@@ -238,30 +221,18 @@ pub fn msl_file(wgsl: &str) -> Result<String, ShaderError> {
     Ok(out)
 }
 
-/// The slots of bind group 0 (the uniform block, the wordmark texture, its sampler), each on
-/// slot 0 of its kind in the fragment stage. The vertex stage binds nothing.
+/// The slot of bind group 0's one binding, the uniform block: buffer 0 in the fragment stage.
+/// The vertex stage binds nothing.
 pub fn binding_map() -> naga::back::msl::EntryPointResourceMap {
-    use naga::back::msl::{BindSamplerTarget, BindTarget, EntryPointResources};
-    let at = |binding| naga::ResourceBinding { group: 0, binding };
+    use naga::back::msl::{BindTarget, EntryPointResources};
     let mut fragment = EntryPointResources::default();
     fragment.resources.insert(
-        at(0),
+        naga::ResourceBinding {
+            group: 0,
+            binding: 0,
+        },
         BindTarget {
             buffer: Some(0),
-            ..BindTarget::default()
-        },
-    );
-    fragment.resources.insert(
-        at(1),
-        BindTarget {
-            texture: Some(0),
-            ..BindTarget::default()
-        },
-    );
-    fragment.resources.insert(
-        at(2),
-        BindTarget {
-            sampler: Some(BindSamplerTarget::Resource(0)),
             ..BindTarget::default()
         },
     );
@@ -317,20 +288,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_resource_is_bound_to_slot_zero_of_its_kind() {
+    fn the_uniform_block_is_at_buffer_zero_and_nothing_else_is_bound() {
         let out = msl(INK_WGSL).expect("translates");
         assert!(
             out.contains("[[buffer(0)]]"),
             "the uniform buffer is at buffer 0"
         );
-        assert!(
-            out.contains("[[texture(0)]]"),
-            "the wordmark is at texture 0"
-        );
-        assert!(
-            out.contains("[[sampler(0)]]"),
-            "its sampler is at sampler 0"
-        );
+        assert!(!out.contains("[[texture("), "no texture");
+        assert!(!out.contains("[[sampler("), "no sampler");
         // Without a binding map naga marks each resource [[user(fake0)]] and Metal picks a slot.
         assert!(!out.contains("fake"), "no placeholder binding is left");
     }
@@ -349,20 +314,22 @@ mod tests {
     }
 
     #[test]
-    fn the_uniform_block_is_the_documented_144_bytes() {
+    fn the_uniform_block_is_the_documented_160_bytes() {
         let layout = uniform_layout(INK_WGSL).expect("parses");
-        assert_eq!(layout.size, 144);
-        assert_eq!(
-            layout.drops_offset, 48,
-            "the droplets follow the twelve scalars"
-        );
+        assert_eq!(layout.size, UNIFORM_SIZE);
+        assert_eq!(UNIFORM_SIZE, 160);
+        let documented: Vec<(String, u32)> = UNIFORM_FIELDS
+            .iter()
+            .map(|(name, offset)| ((*name).to_owned(), *offset))
+            .collect();
+        assert_eq!(layout.fields, documented);
     }
 
     #[test]
     fn a_resource_without_a_slot_is_refused() {
-        // A fourth binding would have no slot in the map: an error, never a placeholder.
+        // A second binding would have no slot in the map: an error, never a placeholder.
         let extra = format!(
-            "{INK_WGSL}\n@group(0) @binding(3) var<uniform> extra: vec4<f32>;\n@fragment fn extra_main() -> @location(0) vec4<f32> {{ return extra; }}\n"
+            "{INK_WGSL}\n@group(0) @binding(1) var<uniform> extra: vec4<f32>;\n@fragment fn extra_main() -> @location(0) vec4<f32> {{ return extra; }}\n"
         );
         assert!(
             matches!(msl(&extra), Err(ShaderError::Layout(_))),
@@ -374,10 +341,11 @@ mod tests {
     #[test]
     fn a_parse_error_names_its_line() {
         let broken = INK_WGSL.replacen(
-            "let fib = fibres(frag / 180.0);",
-            "let fib = fibres(frag / 180.0)",
+            "let soft = mix(0.24, 0.012, blot);",
+            "let soft = mix(0.24, 0.012, blot)",
             1,
         );
+        assert_ne!(broken, INK_WGSL, "the line to break is in the shader");
         match msl(&broken) {
             Err(ShaderError::Parse(m)) => assert!(m.contains("wgsl:"), "{m}"),
             other => panic!("expected a parse error, got {other:?}"),
@@ -385,20 +353,14 @@ mod tests {
     }
 
     #[test]
-    fn the_hlsl_binds_each_resource_to_register_zero_of_its_kind() {
+    fn the_hlsl_binds_the_uniform_block_to_b0_and_nothing_else() {
         let out = hlsl(INK_WGSL).expect("translates");
         assert!(
-            out.contains("cbuffer u : register(b0)"),
+            out.contains("cbuffer g : register(b0)"),
             "the uniform block"
         );
-        assert!(
-            out.contains("Texture2D<float4> markTex : register(t0);"),
-            "the wordmark"
-        );
-        assert!(
-            out.contains("SamplerState markSamp : register(s0);"),
-            "its sampler, plain"
-        );
+        assert!(!out.contains("Texture2D"), "no texture");
+        assert!(!out.contains("SamplerState"), "no sampler");
         // Direct3D 12's sampler heap cannot compile for shader model 5.0.
         assert!(!out.contains("nagaSamplerHeap"), "no sampler heap");
         assert!(!out.contains("StructuredBuffer"), "no sampler index buffer");
@@ -414,22 +376,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unexpected_sampler_heap_is_refused() {
-        // The rewrite replaces exactly naga's four heap lines; anything else is an error.
-        assert!(matches!(
-            plain_sampler("SamplerState nagaSamplerHeap[4096]: register(s0, space0);\n"),
-            Err(ShaderError::Hlsl(_))
-        ));
-        assert!(matches!(
-            plain_sampler("float4 fs_main() : SV_Target0 { return 0; }\n"),
-            Err(ShaderError::Hlsl(_))
-        ));
-    }
-
-    #[test]
     fn an_hlsl_resource_without_a_register_is_refused() {
         let extra = format!(
-            "{INK_WGSL}\n@group(0) @binding(3) var<uniform> extra: vec4<f32>;\n@fragment fn extra_main() -> @location(0) vec4<f32> {{ return extra; }}\n"
+            "{INK_WGSL}\n@group(0) @binding(1) var<uniform> extra: vec4<f32>;\n@fragment fn extra_main() -> @location(0) vec4<f32> {{ return extra; }}\n"
         );
         assert!(
             matches!(hlsl(&extra), Err(ShaderError::Layout(_))),

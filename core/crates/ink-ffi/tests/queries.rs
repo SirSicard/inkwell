@@ -408,14 +408,39 @@ fn shell_settings_are_whitelisted_and_round_trip() {
         rig.store.setting("dictation.polish").unwrap().as_deref(),
         Some("off")
     );
+    // An appearance setting: unset, its value is left out (the shell reads its default); a colour
+    // of the user's own round-trips as written.
+    let unset = rig.ask(
+        json!({"cmd": "setting.get", "key": "appearance.mode"}),
+        "setting.value",
+        3,
+    );
+    assert_eq!(unset["key"], "appearance.mode");
+    assert!(unset.get("value").is_none());
+    let colour = rig.ask(
+        json!({"cmd": "setting.set", "key": "appearance.you.dark", "value": "#0a1b2c"}),
+        "setting.value",
+        4,
+    );
+    assert_eq!(colour["key"], "appearance.you.dark");
+    assert_eq!(colour["value"], "#0a1b2c");
+    let read = rig.ask(
+        json!({"cmd": "setting.get", "key": "appearance.you.dark"}),
+        "setting.value",
+        5,
+    );
+    assert_eq!(read["value"], "#0a1b2c");
     // The core's own settings are not the shell's to write, and polish turns on only with the
-    // user's consent (consent.allow).
+    // user's consent (consent.allow). An appearance setting takes only its own values.
     for bad in [
         json!({"cmd": "setting.set", "key": SYSTEM_AUDIO_ASKED_KEY, "value": "true"}),
         json!({"cmd": "setting.set", "key": "dictation.polish", "value": "yes"}),
         json!({"cmd": "setting.set", "key": "dictation.polish", "value": "on"}),
         json!({"cmd": "setting.set", "key": "llm.consent.polish", "value": "none"}),
         json!({"cmd": "setting.get", "key": MODES_KEY}),
+        json!({"cmd": "setting.set", "key": "appearance.you.dark", "value": "#0A1B2C"}),
+        json!({"cmd": "setting.set", "key": "appearance.dots.light", "value": "teal"}),
+        json!({"cmd": "setting.set", "key": "appearance.mode", "value": "auto"}),
     ] {
         assert!(rig.core.command(&bad.to_string()).is_err(), "{bad}");
     }

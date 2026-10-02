@@ -75,6 +75,50 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     ),
     // The 0.2 import's note about the dictation key has been read (crate::phrases): said once.
     (crate::phrases::KEY_NOTE_SETTING, &["dismissed"]),
+    // Appearance (Settings > Appearance). The shells read these; the core does nothing with them.
+    // Unset, each is its APPEARANCE_DEFAULTS value. Light or dark, or the system's.
+    ("appearance.mode", &["light", "dark", "system"]),
+    // The dot colours' preset in each mode (design/tokens.json defines each preset's two colours).
+    ("appearance.dots.light", DOT_PRESETS),
+    ("appearance.dots.dark", DOT_PRESETS),
+    // Your colour and the far end's in each mode: the preset's, or a colour of the user's own.
+    ("appearance.you.light", &["preset", HEX_COLOUR]),
+    ("appearance.them.light", &["preset", HEX_COLOUR]),
+    ("appearance.you.dark", &["preset", HEX_COLOUR]),
+    ("appearance.them.dark", &["preset", HEX_COLOUR]),
+    // The glow round the window's edge while dictating or in a meeting.
+    ("appearance.edge_glow", &["on", "off"]),
+    // `still` draws the orb and the edge glow without motion; `system` follows the system's
+    // reduce-motion setting.
+    ("appearance.motion", &["system", "still"]),
+];
+
+/// In a value list of [`SHELL_SETTINGS`]: any colour written `#rrggbb`, in lowercase hex.
+pub const HEX_COLOUR: &str = "#rrggbb";
+
+/// The dot colour presets, by id: the `presets` of design/tokens.json.
+pub const DOT_PRESETS: &[&str] = &[
+    "indigo",
+    "dusk",
+    "lagoon",
+    "aurora",
+    "citrus",
+    "rosewater",
+    "ink_sand",
+];
+
+/// What the shells read each appearance setting as while it is unset. `setting.value` leaves an
+/// unset setting's value out, as for every other setting.
+pub const APPEARANCE_DEFAULTS: &[(&str, &str)] = &[
+    ("appearance.mode", "system"),
+    ("appearance.dots.light", "indigo"),
+    ("appearance.dots.dark", "indigo"),
+    ("appearance.you.light", "preset"),
+    ("appearance.them.light", "preset"),
+    ("appearance.you.dark", "preset"),
+    ("appearance.them.dark", "preset"),
+    ("appearance.edge_glow", "on"),
+    ("appearance.motion", "system"),
 ];
 
 /// The most commitments `commitments.list` returns when the command names no limit.
@@ -312,7 +356,7 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
                 .iter()
                 .find(|(k, _)| *k == key)
                 .map_or(&[][..], |(_, values)| *values);
-            if !accepted.contains(&value.as_str()) {
+            if !accepted.iter().any(|allowed| accepts(allowed, &value)) {
                 return Err(format!(
                     "{name}: \"{key}\" takes one of: {}",
                     accepted.join(", ")
@@ -385,6 +429,20 @@ fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, 
     ink_pipeline::consent::Feature::parse(feature)
         .filter(|f| crate::consent::switch(*f).is_some())
         .ok_or_else(|| format!("{name}: \"feature\" is polish, edit or meetings"))
+}
+
+/// Whether `allowed`, one entry of a value list in [`SHELL_SETTINGS`], accepts `value`.
+fn accepts(allowed: &str, value: &str) -> bool {
+    if allowed == HEX_COLOUR {
+        // `#` and six lowercase hex digits; the pattern itself is not a colour.
+        value.len() == 7
+            && value.starts_with('#')
+            && value[1..]
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    } else {
+        allowed == value
+    }
 }
 
 /// `key` if the shell may use it.
@@ -1071,6 +1129,88 @@ mod tests {
         ] {
             assert!(matches!(p(bad), Some(Err(_))), "{bad} must be refused");
         }
+    }
+
+    #[test]
+    fn appearance_settings_take_their_values_and_default_to_one_of_them() {
+        let set = |key: &str, value: &str| {
+            parse(
+                "setting.set",
+                &json!({"cmd": "setting.set", "key": key, "value": value}),
+            )
+        };
+        for (key, value) in [
+            ("appearance.mode", "dark"),
+            ("appearance.mode", "system"),
+            ("appearance.dots.light", "indigo"),
+            ("appearance.dots.dark", "ink_sand"),
+            ("appearance.you.light", "preset"),
+            ("appearance.them.light", "#ffa34d"),
+            ("appearance.you.dark", "#0a1b2c"),
+            ("appearance.them.dark", "preset"),
+            ("appearance.edge_glow", "off"),
+            ("appearance.motion", "still"),
+        ] {
+            assert_eq!(
+                set(key, value),
+                Some(Ok(Query::SettingSet {
+                    key: key.into(),
+                    value: value.into()
+                })),
+                "{key} = {value}"
+            );
+        }
+        for (key, value) in [
+            ("appearance.mode", "auto"),
+            ("appearance.dots.light", "Indigo"),
+            ("appearance.dots.light", "#6b5cff"),
+            ("appearance.dots.dark", "preset"),
+            // Lowercase hex only, exactly six digits after the #.
+            ("appearance.you.light", "#6B5CFF"),
+            ("appearance.you.light", "#6b5cf"),
+            ("appearance.you.light", "#6b5cff0"),
+            ("appearance.you.light", "6b5cff"),
+            ("appearance.you.light", "#6b5cfg"),
+            ("appearance.them.dark", "#rrggbb"),
+            ("appearance.them.dark", "indigo"),
+            ("appearance.edge_glow", "true"),
+            ("appearance.motion", "reduce"),
+            ("appearance.accent", "preset"),
+        ] {
+            assert!(
+                matches!(set(key, value), Some(Err(_))),
+                "{key} = {value} must be refused"
+            );
+        }
+        // Every appearance setting has a default, and it is one of the setting's values.
+        let appearance: Vec<_> = SHELL_SETTINGS
+            .iter()
+            .filter(|(key, _)| key.starts_with("appearance."))
+            .collect();
+        assert_eq!(appearance.len(), APPEARANCE_DEFAULTS.len());
+        for (key, values) in appearance {
+            let (_, default) = APPEARANCE_DEFAULTS
+                .iter()
+                .find(|(k, _)| k == key)
+                .unwrap_or_else(|| panic!("{key} has no default"));
+            assert!(
+                values.iter().any(|allowed| accepts(allowed, default)),
+                "{key}'s default {default}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dot_presets_are_the_design_tokens_presets() {
+        let tokens: Value =
+            serde_json::from_str(include_str!("../../../../design/tokens.json")).unwrap();
+        let ids: Vec<&str> = tokens["presets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|preset| preset["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, DOT_PRESETS);
     }
 
     /// What Settings lists is what dictation writes in: both read the same document the same way
