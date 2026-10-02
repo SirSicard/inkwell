@@ -3,7 +3,7 @@
 // model is what the row says and does, over any IUpdater, so it tests without one.
 //
 // Nothing happens unless the user asks: a check runs at launch only while "Check for updates
-// automatically" is on (off until the user turns it on; never on a timer, rule 9), and each further
+// automatically" is on (on until the user turns it off; never on a timer, rule 9), and each further
 // step (download, restart) is the user's press. A failure says "Couldn't ..." with its reason, and
 // the row offers the check again. The reasons are the updater's (a network or HTTP error, a
 // checksum that does not match): they name URLs and files, never anything the user said.
@@ -132,7 +132,7 @@ public sealed class UpdatesModel(IUpdater updater, ScreenLog? log = null, IUpdat
     /// <summary>Whether the automatic check's choice can be shown and changed (a preference to keep it, and an installed copy).</summary>
     public bool CanAutoCheck => preference is not null && updater.UpdatesItself;
 
-    /// <summary>Whether a check runs at launch. Off until the user turns it on; off when its choice cannot be read.</summary>
+    /// <summary>Whether a check runs at launch. On until the user turns it off; off when its choice cannot be read.</summary>
     public bool AutoCheck
     {
         get
@@ -141,7 +141,7 @@ public sealed class UpdatesModel(IUpdater updater, ScreenLog? log = null, IUpdat
             {
                 try
                 {
-                    autoCheck = preference?.Read() ?? false;
+                    autoCheck = preference is null ? false : preference.Read() ?? true;
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {

@@ -160,17 +160,17 @@ public class GlowTests
     public async Task TheAutomaticCheckRunsAtLaunchOnlyWhenOn()
     {
         var updater = new Installed();
-        var off = new UpdatesModel(updater, new Logged().Log, new Preference(null));
-        Assert.False(off.AutoCheck); // off until the user turns it on
-        await off.CheckAtLaunch();
-        Assert.Equal(0, updater.Checks);
         var preference = new Preference(null);
         var on = new UpdatesModel(updater, new Logged().Log, preference);
-        on.SetAutoCheck(true);
-        Assert.True(preference.Stored);
+        Assert.True(on.AutoCheck); // on until the user turns it off
         await on.CheckAtLaunch();
         Assert.Equal(1, updater.Checks);
         Assert.Equal(UpdateState.UpToDate, on.State);
+        var off = new UpdatesModel(updater, new Logged().Log, new Preference(null));
+        off.SetAutoCheck(false);
+        Assert.False(off.AutoCheck);
+        await off.CheckAtLaunch();
+        Assert.Equal(1, updater.Checks);
     }
 
     private sealed class Entry(string? unavailable) : IStartupEntry
