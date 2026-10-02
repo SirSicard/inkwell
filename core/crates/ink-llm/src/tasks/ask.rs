@@ -64,10 +64,11 @@ impl AskOptions {
 /// The indices of the most recent segments whose rendered lines fit `max_chars`, in order. At
 /// least the last line, however long.
 fn recent(segments: &[Segment], record: &RecordContext<'_>, max_chars: usize) -> Vec<usize> {
+    let labels = transcript::speaker_labels(segments, record.speaker_names);
     let mut size = 0;
     let mut from = segments.len();
     while from > 0 {
-        let line = transcript::render_line(from - 1, &segments[from - 1], record.speaker_names);
+        let line = transcript::render_line(from - 1, &segments[from - 1], &labels);
         if from < segments.len() && size + line.len() + 1 > max_chars {
             break;
         }
@@ -168,6 +169,44 @@ mod tests {
             },
             speaker_names: &[],
         }
+    }
+
+    /// Ask's transcript calls each far-end speaker what the record shows: the user's name, else
+    /// "Speaker N" by the order they first spoke in the whole meeting, even when only its most
+    /// recent lines fit; never the diarizer's label.
+    #[test]
+    fn asks_transcript_labels_speakers_as_the_record_shows_them() {
+        let far = |start_ms: u64, speaker: &str| Segment {
+            channel: Channel::Far,
+            start_ms,
+            end_ms: start_ms + 1_000,
+            text: format!("words from {speaker} at {start_ms}"),
+            speaker: Some(ink_core::SpeakerId(speaker.into())),
+        };
+        let mut segments = vec![far(0, "spk0"), far(1_000, "spk1")];
+        segments.extend((2..60).map(|i| far(i * 1_000, if i % 2 == 0 { "spk2" } else { "spk1" })));
+        let names = [(ink_core::SpeakerId("spk1".into()), "Robin".to_owned())];
+        let record = RecordContext {
+            speaker_names: &names,
+            ..record()
+        };
+        let options = AskOptions {
+            transcript_chars: 400,
+            ..AskOptions::default()
+        };
+        let request = ask_request("Who owns the budget?", &segments, &record, &options);
+        assert!(!request.user.contains("L0 "), "spk0's line does not fit");
+        assert!(
+            request.user.contains("] Robin: words from spk1"),
+            "{}",
+            request.user
+        );
+        assert!(
+            request.user.contains("] Speaker 3: words from spk2"),
+            "{}",
+            request.user
+        );
+        assert!(!request.user.contains("spk2:") && !request.user.contains("Them ("));
     }
 
     #[test]
