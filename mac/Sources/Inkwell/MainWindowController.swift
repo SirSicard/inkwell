@@ -45,6 +45,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.center()
         // After center(): a saved frame, when there is one, wins.
         window.setFrameAutosaveName("Inkwell.main")
+        // AppKit restores a saved frame as it was saved, even from a larger display: wider than
+        // this screen, an edge sits off it and can't be grabbed. So can the default size on a
+        // small screen.
+        Self.fitToScreen(window)
         super.init(window: window)
         window.delegate = self
     }
@@ -62,11 +66,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// Brings the window up, in front, with the app active.
     func present() {
+        // The displays may have changed since launch. A window already up stays where the user
+        // put it.
+        if let window, !window.isVisible { Self.fitToScreen(window) }
         NSApp.setActivationPolicy(.regular)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
         presence.update(window)
+    }
+
+    /// Fits the window's frame to its screen's visible frame (WindowFrame), never under the
+    /// window's minimum size.
+    private static func fitToScreen(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: window.contentMinSize)).size
+        let fitted = WindowFrame.fitted(window.frame, in: screen.visibleFrame, minSize: minimum)
+        if fitted != window.frame { window.setFrame(fitted, display: false) }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -87,5 +103,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidDeminiaturize(_ notification: Notification) {
         presence.update(window)
+    }
+}
+
+/// A window frame fitted to a screen: no wider or taller than the screen's visible frame (the
+/// minimum size wins on a screen smaller than it), and wholly on it, moved rather than shrunk
+/// where it fits. A frame that is already on screen is left as it is.
+enum WindowFrame {
+    static func fitted(_ frame: NSRect, in visible: NSRect, minSize: NSSize) -> NSRect {
+        let width = max(min(frame.width, visible.width), minSize.width)
+        let height = max(min(frame.height, visible.height), minSize.height)
+        // Too wide even at the minimum: the left edge on screen. Too tall: the top, which holds
+        // the title bar the window is moved by.
+        let x = width > visible.width ? visible.minX : min(max(frame.minX, visible.minX), visible.maxX - width)
+        let y = height > visible.height ? visible.maxY - height : min(max(frame.minY, visible.minY), visible.maxY - height)
+        return NSRect(x: x, y: y, width: width, height: height)
     }
 }

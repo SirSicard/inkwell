@@ -42,6 +42,49 @@ final class RouterTests: XCTestCase {
     }
 }
 
+/// The main window's frame, fitted to its screen at launch: a saved frame from a larger display
+/// (or the default size on a small one) must never leave an edge out of reach.
+final class WindowFrameTests: XCTestCase {
+    /// A 1728 x 1117 pt display's visible frame (under the menu bar).
+    private let screen = NSRect(x: 0, y: 0, width: 1728, height: 1079)
+    private let minimum = NSSize(width: 720, height: 460)
+
+    func testAFrameWiderThanTheScreenIsNarrowedToItAndBroughtOnScreen() {
+        // As observed: 1755 pt wide on a 1728 pt display, its left edge at x = -51.
+        let fitted = WindowFrame.fitted(NSRect(x: -51, y: 120, width: 1755, height: 760), in: screen, minSize: minimum)
+        XCTAssertEqual(fitted, NSRect(x: 0, y: 120, width: 1728, height: 760))
+    }
+
+    func testAFrameOffTheLeftEdgeMovesBackOnScreenAtItsSize() {
+        let fitted = WindowFrame.fitted(NSRect(x: -300, y: 120, width: 1040, height: 700), in: screen, minSize: minimum)
+        XCTAssertEqual(fitted, NSRect(x: 0, y: 120, width: 1040, height: 700))
+        let right = WindowFrame.fitted(NSRect(x: 1500, y: 120, width: 1040, height: 700), in: screen, minSize: minimum)
+        XCTAssertEqual(right, NSRect(x: 688, y: 120, width: 1040, height: 700), "nor off the right edge")
+    }
+
+    func testAFrameTallerThanTheScreenIsShortenedToIt() {
+        let fitted = WindowFrame.fitted(NSRect(x: 100, y: -50, width: 1040, height: 1300), in: screen, minSize: minimum)
+        XCTAssertEqual(fitted, NSRect(x: 100, y: 0, width: 1040, height: 1079))
+    }
+
+    func testAFrameThatFitsIsLeftAlone() {
+        let frame = NSRect(x: 200, y: 150, width: 1040, height: 700)
+        XCTAssertEqual(WindowFrame.fitted(frame, in: screen, minSize: minimum), frame)
+        // A second display to the right of the first: its own coordinates.
+        let second = NSRect(x: 1728, y: -200, width: 1920, height: 1055)
+        let there = NSRect(x: 2000, y: 0, width: 1040, height: 700)
+        XCTAssertEqual(WindowFrame.fitted(there, in: second, minSize: minimum), there)
+    }
+
+    func testTheMinimumSizeWinsOnAScreenSmallerThanIt() {
+        let tiny = NSRect(x: 0, y: 0, width: 700, height: 400)
+        let fitted = WindowFrame.fitted(NSRect(x: -40, y: -40, width: 1040, height: 700), in: tiny, minSize: minimum)
+        XCTAssertEqual(fitted.size, minimum)
+        XCTAssertEqual(fitted.minX, 0, "the left edge stays reachable")
+        XCTAssertEqual(fitted.maxY, 400, "and the title bar")
+    }
+}
+
 final class DataLocationTests: XCTestCase {
     func testTheDefaultIsApplicationSupportInkwell() throws {
         let data = try DataLocation.dataDirectory(environment: [:])
