@@ -103,15 +103,17 @@ struct DropText: Equatable, Sendable {
         case dismiss(app: String)
         /// Ask for system audio (as the Settings card does).
         case allowSystemAudio
-        /// Download the recommended speech models (CatalogueModel.downloadRecommended).
-        case downloadSpeechModels
+        /// Bring the main window to Today, where the recommended speech models' download states
+        /// its size and where the files come from. The Drop never starts a download itself: one
+        /// starts only where those are shown.
+        case showSpeechModels
 
         var title: String {
             switch self {
             case .record: "Record this call"
             case .dismiss: "Not this one"
             case .allowSystemAudio: "Allow system audio"
-            case .downloadSpeechModels: "Download speech models"
+            case .showSpeechModels: "Download speech models\u{2026}"
             }
         }
     }

@@ -396,12 +396,6 @@ final class DictationModel {
         }
     }
 
-    /// The Drop's download was pressed: its note gives way to one that says the download is on its
-    /// way, so the button is not left up as if nothing happened.
-    func speechDownloadStarted() {
-        show(SpeechModels.dropNote(downloading: true))
-    }
-
     /// A take that ended with nothing typed for a reason a missing speech model explains.
     private static func nothingTranscribed(_ event: InkEvent) -> Bool {
         switch event {

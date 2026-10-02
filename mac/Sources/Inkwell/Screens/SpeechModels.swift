@@ -58,14 +58,14 @@ struct SpeechModels: Equatable, Sendable {
         speech.meetings == .missing ? "Nothing can be transcribed without a speech model." : "Waiting for someone to speak."
     }
 
-    /// The Drop's note after a hold that nothing could transcribe: with the download, unless it is
-    /// already on its way.
+    /// The Drop's note after a hold that nothing could transcribe: with a button to Today's
+    /// download, unless it is already on its way.
     static func dropNote(downloading: Bool) -> DropText {
         downloading
             ? DropText(title: "The speech model is downloading", detail: "Dictation works once it is in")
             : DropText(
                 title: "No speech model yet", detail: "Nothing can be typed until one is installed", tone: .alert,
-                actions: [.downloadSpeechModels])
+                actions: [.showSpeechModels])
     }
 }
 

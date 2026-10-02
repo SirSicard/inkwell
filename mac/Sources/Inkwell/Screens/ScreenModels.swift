@@ -397,13 +397,13 @@ final class ScreenModels {
         return "Summaries are off until you allow them in Settings > AI. Meetings are still recorded and transcribed."
     }
 
-    /// A button on the Drop: the speech models' download is the catalogue's, the rest the
-    /// meeting commands'.
-    func performDropAction(_ action: DropText.Action) {
+    /// A button on the Drop. The speech models' button brings the main window to Today (`show`),
+    /// where the download states its size and hosts; the note stays up for the rest of its time.
+    /// The rest are the meeting commands'.
+    func performDropAction(_ action: DropText.Action, show: (Route) -> Void) {
         switch action {
-        case .downloadSpeechModels:
-            catalogue.downloadRecommended()
-            dictation.speechDownloadStarted()
+        case .showSpeechModels:
+            show(.today)
         case .record, .dismiss, .allowSystemAudio: meetings.perform(action, permissions: permissions)
         }
     }

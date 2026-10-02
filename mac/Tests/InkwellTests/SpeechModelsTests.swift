@@ -1,7 +1,7 @@
 // No speech model yet: with nothing installed that writes speech down, Today, the Drop and Live
 // say so (rather than "Hold fn to dictate", "The microphone is silent" and "Waiting for someone to
-// speak"), Today and the Drop offer the download, and the normal lines come back the moment a
-// model is in. The state is the router's answers (engine.routed) and the catalogue's list.
+// speak"), Today offers the download (the Drop a button to it), and the normal lines come back
+// the moment a model is in. The state is the router's answers (engine.routed) and the catalogue's list.
 import Foundation
 import InkBridge
 import XCTest
@@ -159,8 +159,8 @@ final class SpeechModelsTests: XCTestCase {
         XCTAssertTrue(SpeechModels.unknown.offersDictation, "not known: the usual line")
     }
 
-    /// After a hold with no model, the Drop says so, with the download, never that the microphone
-    /// is silent; with a model, the microphone's note is unchanged.
+    /// After a hold with no model, the Drop says so, with a button to the download, never that the
+    /// microphone is silent; with a model, the microphone's note is unchanged.
     func testTheDropAfterAHoldSaysThereIsNoSpeechModel() throws {
         let none = SpeechModels(dictation: .missing, meetings: .missing)
         let takes = [
@@ -173,7 +173,7 @@ final class SpeechModelsTests: XCTestCase {
             let note = try XCTUnwrap(DictationModel.note(for: event(json), hasLanguageModel: false, speech: none), json)
             XCTAssertEqual(note.title, "No speech model yet", json)
             XCTAssertEqual(note.detail, "Nothing can be typed until one is installed", json)
-            XCTAssertEqual(note.actions, [.downloadSpeechModels], json)
+            XCTAssertEqual(note.actions, [.showSpeechModels], json)
         }
         var downloading = none
         downloading.downloading = true
@@ -191,18 +191,33 @@ final class SpeechModelsTests: XCTestCase {
     }
 
     /// The models the screens read: the Drop's note comes through DictationModel with the
-    /// catalogue's state, and its button downloads the set.
-    func testTheDropsNoteAndButtonGoThroughTheScreens() throws {
+    /// catalogue's state. Its button downloads nothing: a download starts only where its size and
+    /// hosts are shown, so it brings the main window to Today, whose line has both. The note is
+    /// left as it is, up for the time a note with a button gets.
+    func testTheDropsButtonOpensTodayAndDownloadsNothing() throws {
         let sent = Sent()
         let screens = ScreenModels(send: sent.send, calendar: NoCalendar(), apps: WorkspaceApps())
         nothingInstalled(screens.catalogue)
         screens.apply([event(#"{"type":"dictation.discarded","reason":"silence"}"#)])
-        XCTAssertEqual(screens.dictation.note?.text.title, "No speech model yet")
+        let note = try XCTUnwrap(screens.dictation.note)
+        XCTAssertEqual(note.text.title, "No speech model yet")
+        XCTAssertEqual(note.text.actions.map(\.title), ["Download speech models\u{2026}"], "the ellipsis: more follows")
         sent.commands = []
-        screens.performDropAction(.downloadSpeechModels)
-        XCTAssertEqual(sent.commands, [.modelInstall(silero, ref: "model.update:1")])
-        XCTAssertEqual(screens.dictation.note?.text.title, "The speech model is downloading", "the press is answered")
-        XCTAssertEqual(screens.dictation.note?.text.actions, [])
+
+        var shown: [Route] = []
+        screens.performDropAction(.showSpeechModels) { shown.append($0) }
+        XCTAssertEqual(shown, [.today])
+        XCTAssertEqual(sent.commands, [], "nothing downloads from the Drop")
+        XCTAssertEqual(screens.catalogue.speechDownload, .notStarted)
+        XCTAssertEqual(screens.dictation.note, note, "the note stays, with its button")
+        XCTAssertEqual(DropController.noteWithActionsDuration, .seconds(8), "long enough to be pressed")
+
+        // What Today shows there: the line, the download with its size, and where it comes from.
+        XCTAssertEqual(SpeechModels.todayLine(screens.catalogue.speech),
+                       "No speech model yet, so nothing you say can be written down.")
+        XCTAssertEqual(screens.catalogue.recommendedMB, 484)
+        XCTAssertEqual(CatalogueModel.sources(screens.catalogue.models.filter { CatalogueModel.recommended.contains($0.id) }),
+                       "huggingface.co and raw.githubusercontent.com")
     }
 
     /// Only what a missing model explains is said as one: typing that failed, or an edit's
