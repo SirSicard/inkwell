@@ -319,6 +319,45 @@ final class RecordPlayerTests: XCTestCase {
         player.stop()
     }
 
+    /// Recorded-call check: right after the final pass the record's player showed Pause. Playback
+    /// starts only from the user: opening a record, the final pass finishing (which opens the shown
+    /// record again) and its later edits never start it, nor start again a record the user paused.
+    /// Every record.open is answered as the core would.
+    func testOpeningARecordAndTheFinalPassNeverStartPlayback() async throws {
+        let core = AnsweringCore(answer: { self.answer(request: $0) })
+        let library = LibraryModel(send: { core.sent.append($0.json) })
+        core.library = library
+        library.makePlayer = { RecordPlayer(document: $0, output: .offline(sampleRate: 48_000, channels: 2)) }
+        func event(_ json: String) throws -> InkEvent { try InkEvent.decode(Data(json.utf8)) }
+        func assertNotPlaying(_ when: String) throws {
+            let player = try XCTUnwrap(library.player, when)
+            XCTAssertNotEqual(player.state, .playing, when)
+            XCTAssertNil(player.engineForTests, "\(when): no engine, so nothing can sound")
+        }
+
+        library.open("r1")  // a click in the list, or Today's Open record
+        try core.answerOpens()
+        try assertNotPlaying("opened")
+        library.apply([try event(#"{"type":"meeting.finished","record":"r1","revision":2}"#)])
+        XCTAssertEqual(try core.answerOpens(), 1, "the final pass opens the shown record again")
+        try assertNotPlaying("the final pass finished")
+        library.apply([try event(#"{"type":"commitment.updated","commitment":"c1","done":true}"#)])
+        try core.answerOpens()
+        try assertNotPlaying("the record changed")
+
+        // Played by the user (Today's Play), then paused: the next refresh leaves it paused.
+        library.open("r1", seekMs: 12_400, play: true)
+        try core.answerOpens()
+        let player = try XCTUnwrap(library.player)
+        XCTAssertEqual(player.state, .playing, "the user's Play plays")
+        _ = try await listen(player)
+        player.pause()
+        library.apply([try event(#"{"type":"meeting.finished","record":"r1","revision":3}"#)])
+        try core.answerOpens()
+        XCTAssertEqual(player.state, .paused, "a refresh never presses Play again")
+        player.stop()
+    }
+
     /// Item 7: when playback cannot start again after an output change, it says so (.failed with
     /// its words), never plays nothing as if all were well.
     func testAnOutputChangeThatCannotRestartFailsVisibly() async throws {
@@ -331,5 +370,32 @@ final class RecordPlayerTests: XCTestCase {
         try FileManager.default.removeItem(at: directory)
         NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: engine)
         XCTAssertEqual(player.state, .failed("This recording can't be played right now."))
+    }
+}
+
+/// The core's side of record.open for a test: each one sent is answered with the record.
+@MainActor
+private final class AnsweringCore {
+    var sent: [String] = []
+    weak var library: LibraryModel?
+    private var answered = 0
+    private let answer: (String) -> String
+
+    init(answer: @escaping (String) -> String) {
+        self.answer = answer
+    }
+
+    /// Answers every record.open sent since the last call; returns how many there were.
+    @discardableResult
+    func answerOpens() throws -> Int {
+        var opens = 0
+        while answered < sent.count {
+            let command = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(sent[answered].utf8)) as? [String: Any])
+            answered += 1
+            guard command["cmd"] as? String == "record.open", let id = command["id"] as? String else { continue }
+            opens += 1
+            library?.apply([try InkEvent.decode(Data(answer(id).utf8))])
+        }
+        return opens
     }
 }
