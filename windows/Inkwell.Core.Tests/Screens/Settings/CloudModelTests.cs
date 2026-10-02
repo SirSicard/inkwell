@@ -128,12 +128,14 @@ public class CloudModelTests
     }
 
     /// <summary>
-    /// The first run's own key (onboarding's Polish step): one press picks the provider, stores the
-    /// key once and chooses the provider with its default model, the commands Settings > AI's
-    /// picker, Save key and Use send. No key, or providers not read yet, sends nothing and says so.
+    /// The first run's own key (onboarding's Polish step): one press picks the provider and stores
+    /// the key once; only once the core has stored it is the provider chosen, with its default
+    /// model (the commands Settings > AI's picker, Save key and Use send). A key the core refuses
+    /// chooses nothing, so local-only mode stays on, and the refusal stays shown. No key, or
+    /// providers not read yet, sends nothing and says so.
     /// </summary>
     [Fact]
-    public void TheFirstRunsOwnKeyPicksStoresAndChoosesInOnePress()
+    public void TheFirstRunsOwnKeyIsChosenOnlyOnceTheCoreHasStoredIt()
     {
         var early = new Sent();
         var unread = new CloudModel(early.Send);
@@ -147,16 +149,31 @@ public class CloudModelTests
         Assert.Equal(before, sent.Commands.Count);
         Assert.Equal("Type or paste the key first.", cloud.Failure);
 
+        // Refused: nothing is chosen, and the refusal survives the providers read after it.
         cloud.UseKey("groq", Key);
-        Assert.Equal(before + 2, sent.Commands.Count);
-        var save = Assert.IsType<CoreCommand.LlmKeySave>(sent.Commands[^2]);
+        var refused = Assert.IsType<CoreCommand.LlmKeySave>(sent.Commands[^1]);
+        Assert.Equal(before + 1, sent.Commands.Count);
+        cloud.Apply(Ev.Of($$"""{"type":"command.failed","command":"llm.key.save","id":"{{refused.Ref}}","message":"couldn't store the key"}"""));
+        cloud.Apply(Providers());
+        Assert.Equal(before + 1, sent.Commands.Count);
+        Assert.Equal("Couldn't store the key.", cloud.Failure);
+
+        // Stored: then chosen.
+        cloud.UseKey("groq", Key);
+        var save = Assert.IsType<CoreCommand.LlmKeySave>(sent.Commands[^1]);
         Assert.Equal("groq", save.Provider);
+        Assert.Null(cloud.Failure);
+        cloud.Apply(Providers(keyed: ["groq"], reference: save.Ref));
         var choose = Assert.IsType<CoreCommand.LlmChoose>(sent.Commands[^1]);
         Assert.Equal("groq", choose.Provider);
         Assert.Null(choose.Model); // the provider's default
         Assert.True(choose.LocalOnlyOff); // the step says so before the press
         Assert.Equal("groq", cloud.Selected);
-        Assert.Null(cloud.Failure);
+        // Chosen once: the providers read after the choice sends nothing more.
+        var after = sent.Commands.Count;
+        cloud.Apply(Providers("groq", "llama-3.3-70b-versatile", "cloud", localOnly: false, ready: true, keyed: ["groq"], reference: choose.Ref));
+        Assert.Equal(after, sent.Commands.Count);
+        Assert.True(cloud.Ready);
     }
 
     /// <summary>A server on this PC keeps local-only mode on: Use says so, and sends no say-so.</summary>

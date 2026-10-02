@@ -45,6 +45,8 @@ public sealed class CloudModel : ObservableModel
 {
     private readonly Action<CoreCommand> send;
     private int requests;
+    /// <summary>The first run's own key, sent to be stored: its provider is chosen once the core answers that save.</summary>
+    private (string Provider, string SaveRef)? pendingUse;
     /// <summary>The newest test's ref: only its answer is shown, and none once the provider, model or key changed.</summary>
     private string? testRef;
 
@@ -319,12 +321,16 @@ public sealed class CloudModel : ObservableModel
 
     /// <summary>
     /// The first run's own key: picks <paramref name="provider"/>, stores <paramref name="key"/>
-    /// and chooses the provider with its default model, as the picker, Save key and Use do one
-    /// after another in Settings > AI. Nothing is sent before the providers are read, or without a key.
+    /// and, once the core has stored it, chooses the provider with its default model, as the
+    /// picker, Save key and Use do one after another in Settings > AI. A key the core refuses
+    /// chooses nothing: the core would choose a provider without a key, turning local-only mode
+    /// off, and the choice's answer would clear the refusal from the line. Nothing is sent before
+    /// the providers are read, or without a key.
     /// </summary>
     public void UseKey(string provider, string key)
     {
         ArgumentNullException.ThrowIfNull(key);
+        pendingUse = null;
         if (!Loaded || Providers.All(p => p.Id != provider))
         {
             Failure = "Inkwell hasn't read its language model settings yet. Try again in a moment.";
@@ -335,7 +341,8 @@ public sealed class CloudModel : ObservableModel
         SaveKey(key);
         if (Failure is null)
         {
-            Use();
+            // SaveKey's command carries the latest ref.
+            pendingUse = (provider, $"{RefPrefix}key.save:{requests}");
         }
     }
 
@@ -428,6 +435,16 @@ public sealed class CloudModel : ObservableModel
                 {
                     Select(Chosen);
                 }
+                // The first run's key is stored: now its provider is chosen.
+                if (pendingUse is var (provider, saveRef) && state.Ref == saveRef)
+                {
+                    pendingUse = null;
+                    if (Providers.Any(p => p.Id == provider && p.HasKey))
+                    {
+                        Select(provider);
+                        Use();
+                    }
+                }
                 return true;
             case LlmTested tested when tested.Ref is not null && tested.Ref == testRef:
                 TestState = tested.Ok ? CloudTestState.Passed : CloudTestState.Failed;
@@ -436,6 +453,11 @@ public sealed class CloudModel : ObservableModel
                     : $"{Sentence(tested.Error ?? "couldn't get an answer")}.";
                 return true;
             case CommandFailed failed when Handles(failed):
+                if (pendingUse is (_, var pendingRef) && failed.Id == pendingRef)
+                {
+                    // The first run's key was refused: nothing is chosen.
+                    pendingUse = null;
+                }
                 if (failed.Command == "llm.test")
                 {
                     if (failed.Id != testRef)
