@@ -44,6 +44,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsScreen: View {
     @Environment(ScreenModels.self) private var screens
     @State private var section: SettingsSection? = .general
+    /// The section list has the keyboard: its selected row is drawn in the accent (`onAccent`).
+    @FocusState private var sectionsFocused: Bool
     /// The section a click scrolled to: it stays selected while any of it is in view, as the last
     /// sections cannot scroll to the top.
     @State private var clicked: SettingsSection?
@@ -52,10 +54,11 @@ struct SettingsScreen: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            List(SettingsSection.allCases, selection: $section) { section in
-                Text(section.title).tag(section)
+            List(SettingsSection.allCases, selection: $section) { item in
+                Text(item.title).tag(item).onAccent(selected: section == item, listFocused: sectionsFocused)
             }
             .listStyle(.sidebar)
+            .focused($sectionsFocused)
             .scrollContentBackground(.hidden)
             .frame(width: 188)
             .accessibilityLabel("Settings sections")

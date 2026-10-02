@@ -84,11 +84,14 @@ struct ShellView: View {
 }
 
 /// The destinations, grouped, under the wordmark, with Settings at the foot. A native List: rows
-/// are VoiceOver elements, arrow keys move the selection, and the system draws the selection.
+/// are VoiceOver elements, arrow keys move the selection, and the system draws the selection, in
+/// the app's accent (the button fill) while the list has the keyboard, with the row's words and
+/// symbol in the button label (`onAccent`).
 struct Sidebar: View {
     @Bindable var router: Router
     let meetingLive: Bool
     @Environment(ScreenModels.self) private var screens
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         List(selection: $router.selection) {
@@ -104,6 +107,7 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .focused($listFocused)
         .accessibilityLabel("Sections")
         .safeAreaInset(edge: .top, spacing: 0) {
             Text("Inkwell")
@@ -138,16 +142,27 @@ struct Sidebar: View {
         switch route {
         case .owed:
             // The overdue count; none shows when nothing is late.
-            Label(route.title, systemImage: route.symbol)
+            label(route)
                 .badge(screens.owed.overdueCount(now: Date()))
         case .live:
             HStack(spacing: 8) {
-                Label(route.title, systemImage: route.symbol)
+                label(route)
                 Spacer(minLength: 0)
                 PulseDot()
             }
         default:
-            Label(route.title, systemImage: route.symbol)
+            label(route)
+        }
+    }
+
+    /// A route's title and symbol. Each takes the selected row's colour itself: a style set on
+    /// the whole Label leaves its symbol white.
+    private func label(_ route: Route) -> some View {
+        let selected = router.current == route
+        return Label {
+            Text(route.title).onAccent(selected: selected, listFocused: listFocused)
+        } icon: {
+            Image(systemName: route.symbol).onAccent(selected: selected, listFocused: listFocused)
         }
     }
 }

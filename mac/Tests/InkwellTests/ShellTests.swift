@@ -203,6 +203,46 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(Glow.preset("nonsense").id, "indigo", "an unknown preset is the default")
     }
 
+    /// The app's accent (Info.plist's NSAccentColorName, compiled from Assets.xcassets into the
+    /// bundle by build-mac.sh) is the button fill of each mode, as Windows' SystemAccentColor is.
+    func testTheAppAccentIsEachModesButtonFill() throws {
+        let mac = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let plist = try XCTUnwrap(NSDictionary(contentsOf: mac.appendingPathComponent("Info.plist")))
+        let name = try XCTUnwrap(plist["NSAccentColorName"] as? String)
+        let colorset = mac.appendingPathComponent("Assets.xcassets/\(name).colorset/Contents.json")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: colorset)) as? [String: Any])
+        let colors = try XCTUnwrap(json["colors"] as? [[String: Any]])
+        func hex(dark: Bool) throws -> UInt32 {
+            let entry = try XCTUnwrap(colors.first { entry in
+                let appearances = entry["appearances"] as? [[String: String]] ?? []
+                return dark ? appearances == [["appearance": "luminosity", "value": "dark"]] : appearances.isEmpty
+            }, dark ? "a dark entry" : "a universal entry")
+            let color = try XCTUnwrap(entry["color"] as? [String: Any])
+            XCTAssertEqual(color["color-space"] as? String, "srgb")
+            let components = try XCTUnwrap(color["components"] as? [String: String])
+            XCTAssertEqual(components["alpha"], "1.000")
+            let channels = try ["red", "green", "blue"].map { key in
+                let text = try XCTUnwrap(components[key]).dropFirst(2)
+                return try XCTUnwrap(UInt32(text, radix: 16), key)
+            }
+            return channels[0] << 16 | channels[1] << 8 | channels[2]
+        }
+        XCTAssertEqual(try hex(dark: false), Glow.day.buttonFill.hex)
+        XCTAssertEqual(try hex(dark: true), Glow.night.buttonFill.hex)
+        XCTAssertEqual(colors.count, 2)
+    }
+
+    /// The words on a selected row, which AppKit fills with the accent: the button label on the
+    /// button fill, and on a user's own accent whichever of the two labels reads.
+    func testWordsOnTheAccentAreTheButtonLabel() {
+        func label(_ swatch: Swatch) -> Swatch { Theme.label(onAccent: GlowColours.rgb(swatch)) }
+        XCTAssertEqual(label(Glow.day.buttonFill), Glow.day.buttonLabel)
+        XCTAssertEqual(label(Glow.night.buttonFill), Glow.night.buttonLabel)
+        XCTAssertEqual(Theme.label(onAccent: .init(0, 0.48, 1)), Glow.day.buttonLabel, "the system's blue: light words")
+        XCTAssertEqual(Theme.label(onAccent: .init(1, 0.78, 0)), Glow.night.buttonLabel, "its yellow: dark words")
+    }
+
     func testASwatchIsItsSRGBValue() {
         let background = Glow.day.background.nsColor.usingColorSpace(.sRGB)
         XCTAssertEqual(background.map { Int(($0.redComponent * 255).rounded()) }, 0xFB)

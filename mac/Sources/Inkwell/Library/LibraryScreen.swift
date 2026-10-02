@@ -122,6 +122,7 @@ struct KindFilter: View {
 /// each row.
 struct RecordList: View {
     @Environment(LibraryModel.self) private var library
+    @FocusState private var listFocused: Bool
 
     private var emptyText: (String, String) {
         switch library.filter {
@@ -154,7 +155,9 @@ struct RecordList: View {
         } else {
             List(selection: Binding(get: { library.selected }, set: { if let id = $0 { library.open(id) } })) {
                 ForEach(library.records, id: \.record) { record in
-                    RecordRowView(record: record, now: now, calendar: library.calendar, selected: library.selected == record.record)
+                    RecordRowView(
+                        record: record, now: now, calendar: library.calendar, selected: library.selected == record.record,
+                        listFocused: listFocused)
                         .tag(record.record)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -171,33 +174,41 @@ struct RecordList: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .focused($listFocused)
             .accessibilityLabel("Records")
         }
     }
 }
 
-/// One record in the list: what it is called, and when and how long.
+/// One record in the list: what it is called, and when and how long. Selected, it is a card; while
+/// the list has the keyboard AppKit fills it with the accent instead, and its words are in the
+/// button label.
 struct RecordRowView: View {
     let record: RecordRow
     let now: Date
     let calendar: Calendar
     let selected: Bool
+    let listFocused: Bool
+    @Environment(\.controlActiveState) private var active
+
+    private var onAccent: Bool { accentFillsRow(selected: selected, listFocused: listFocused, active: active) }
+    private var card: Bool { selected && !onAccent }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(LibraryFormat.title(of: record))
                 .font(.body.weight(.semibold))
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(onAccent ? Theme.onAccent : Theme.text)
                 .lineLimit(2)
             Text(LibraryFormat.listLine(record, now: now, calendar: calendar))
                 .font(PaperType.meta)
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(onAccent ? Theme.onAccent : Theme.secondaryText)
         }
         .padding(.vertical, 9)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(selected ? PaperPalette.card : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? PaperPalette.border : Color.clear, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10).fill(card ? PaperPalette.card : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(card ? PaperPalette.border : Color.clear, lineWidth: 1))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }

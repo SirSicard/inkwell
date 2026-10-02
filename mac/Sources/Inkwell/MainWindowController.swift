@@ -28,6 +28,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let root = ShellView(router: router).environment(store).environment(ink).environment(updates)
             .environment(screens).environment(library).environment(upNext).environment(router)
             .environment(presence).environment(screens.theme)
+            // The accent is the button fill (text-coloured), never the system's: switches,
+            // segmented controls, default and prominent buttons, links, here and in the sheets.
+            // A tint holds whatever accent the user chose; the app's own accent (Info.plist) does
+            // the rest, the lists' selection, while the user's is Multicolor.
+            .tint(Theme.buttonFill)
         let hosting = NSHostingController(rootView: root)
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]
