@@ -54,9 +54,17 @@ internal static class Program
         {
             return true;
         }
-        // Off this STA thread, whose message loop has not started: the redirection is a COM call.
+        // Off this STA thread, whose message loop has not started: the redirection is a COM call
+        // into the other process. One that hangs or is ending must not keep this start alive or
+        // crash it: it waits a while, then exits quietly all the same.
         var args = AppInstance.GetCurrent().GetActivatedEventArgs();
-        Task.Run(() => owner.RedirectActivationToAsync(args).AsTask()).Wait();
+        try
+        {
+            Task.Run(() => owner.RedirectActivationToAsync(args).AsTask()).Wait(TimeSpan.FromSeconds(10));
+        }
+        catch (AggregateException)
+        {
+        }
         return false;
     }
 }
