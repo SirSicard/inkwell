@@ -185,13 +185,13 @@ final class Import02FirstRunTests: XCTestCase {
     func testTheStepIsShownOnlyWhileThereIsSomethingToImport() {
         let screens = ScreenModels(send: { _ in })
         let onboarding = screens.onboarding
-        XCTAssertEqual(onboarding.steps, [.welcome, .permissions, .models, .polish, .ready])
+        XCTAssertEqual(onboarding.steps, [.welcome, .permissions, .models, .appearance, .polish, .ready])
         onboarding.step = .models
         onboarding.next()
-        XCTAssertEqual(onboarding.step, .polish, "no 0.2 data: no step")
+        XCTAssertEqual(onboarding.step, .appearance, "no 0.2 data: no step")
 
         screens.import02.apply(checked("found", counts: counts))
-        XCTAssertEqual(onboarding.steps, [.welcome, .permissions, .models, .importData, .polish, .ready])
+        XCTAssertEqual(onboarding.steps, [.welcome, .permissions, .models, .importData, .appearance, .polish, .ready])
         onboarding.back()
         XCTAssertEqual(onboarding.step, .importData)
         onboarding.back()
@@ -199,7 +199,7 @@ final class Import02FirstRunTests: XCTestCase {
         onboarding.next()
         XCTAssertEqual(onboarding.step, .importData)
         onboarding.next()
-        XCTAssertEqual(onboarding.step, .polish, "Not now moves on")
+        XCTAssertEqual(onboarding.step, .appearance, "Not now moves on")
     }
 
     func testTheFirstRunLooksForTheDataOnceItShows() {

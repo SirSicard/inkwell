@@ -181,7 +181,7 @@ struct AppearanceSection: View {
 }
 
 /// A preset: its two dots, each its colour shading into its lighter partner, and its name.
-private struct PresetButton: View {
+struct PresetButton: View {
     let preset: Glow.Preset
     let selected: Bool
     let pick: () -> Void

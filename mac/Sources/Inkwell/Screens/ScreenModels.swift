@@ -17,6 +17,8 @@ final class OnboardingModel {
         case models
         /// Only while Inkwell 0.2's data is offered (`offersImport`).
         case importData
+        /// Light, dark or the system's, and the dot colours.
+        case appearance
         case polish
         case ready
     }
