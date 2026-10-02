@@ -115,7 +115,7 @@ extension CatalogueModel {
             }
             let done = entries.reduce(Int64(0)) { sum, entry in
                 if entry.id == installing { return sum + min(progress.done, entry.sizeBytes) }
-                return sum + (isIn(entry.id) ? entry.sizeBytes : 0)
+                return sum + (isOnThisMac(entry.id) ? entry.sizeBytes : 0)
             }
             return .downloading(percent: Int((Double(done) / Double(total) * 100).rounded()))
         }

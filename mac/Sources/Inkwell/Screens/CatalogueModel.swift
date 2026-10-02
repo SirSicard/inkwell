@@ -203,7 +203,7 @@ final class CatalogueModel {
         models.filter { !$0.installed || asked.contains($0.id) }.sorted { $0.sizeBytes < $1.sizeBytes }
     }
 
-    /// The recommended set, about 485 MB: voice detection and the Mac's Parakeet, smallest first,
+    /// The recommended set, about 484 MB: voice detection and the Mac's Parakeet, smallest first,
     /// the order they download in. The first run offers it, and so does Today while no speech
     /// model is installed (SpeechModels.swift). They serve every job on their own: Parakeet
     /// registers for the live words and, while Qwen3-ASR is not installed, for the dictation and
@@ -227,14 +227,14 @@ final class CatalogueModel {
     /// any download under way. One whose last download failed is tried again; one downloading or
     /// waiting is not queued twice (`download`).
     func downloadRecommended() {
-        download(Self.recommended.filter { id in models.contains { $0.id == id } && !isIn(id) })
+        download(Self.recommended.filter { id in models.contains { $0.id == id } && !isOnThisMac(id) })
     }
 
     /// On this Mac, by the list or by an install that finished since it was read. The list is
     /// asked for again when an install ends (model.update_finished), but its answer comes later:
     /// until then a model that just finished still reads as not installed, and a press in between
     /// must not fetch it again.
-    func isIn(_ id: String) -> Bool {
+    func isOnThisMac(_ id: String) -> Bool {
         if models.first(where: { $0.id == id })?.installed == true { return true }
         return asked.contains(id) && failures[id] == nil && id != installing && !waiting.contains(id)
     }

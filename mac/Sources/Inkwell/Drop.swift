@@ -81,7 +81,7 @@ final class DropController {
 
     /// How long a note stays up. One delayed call per note, not a timer: nothing ticks.
     static let noteDuration: Duration = .milliseconds(2_500)
-    /// A note with a button (no speech model: download one) stays long enough to be pressed.
+    /// A note with a button (no speech model: Today, for the download) stays long enough to be pressed.
     static let noteWithActionsDuration: Duration = .seconds(8)
 
     /// The state the Drop's ink shows.

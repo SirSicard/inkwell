@@ -84,14 +84,14 @@ final class SpeechModelsTests: XCTestCase {
         XCTAssertEqual(catalogue.speech.meetings, .served)
     }
 
-    /// The download: the recommended set (voice detection and Parakeet, about 485 MB), the models
+    /// The download: the recommended set (voice detection and Parakeet, about 484 MB), the models
     /// of it not on this Mac, smallest first, and nothing more. When it is in and the shell has
     /// registered Parakeet, the state is served again, with no restart.
     func testTheDownloadFetchesTheRecommendedSetAndTheStateComesBackWhenItIsIn() {
         let sent = Sent()
         let catalogue = CatalogueModel(send: sent.send)
         nothingInstalled(catalogue)
-        XCTAssertEqual(catalogue.recommendedMB, 484, "about 485 MB")
+        XCTAssertEqual(catalogue.recommendedMB, 484, "about 484 MB")
         XCTAssertEqual(catalogue.speechDownload, .notStarted)
         sent.commands = []
 
@@ -129,8 +129,9 @@ final class SpeechModelsTests: XCTestCase {
     }
 
     /// A model whose download just finished counts as on this Mac before the list says so (it is
-    /// asked for again at the finish, and answers later): a press in between fetches only the rest.
-    func testAModelThatJustFinishedIsNotFetchedAgainBeforeTheListRefreshes() {
+    /// asked for again at the finish, and answers later): a press in between fetches only the rest,
+    /// and a model whose download failed is tried again.
+    func testAModelThatJustFinishedIsNotFetchedAgainAndAFailedOneIsTriedAgain() {
         let sent = Sent()
         let catalogue = CatalogueModel(send: sent.send)
         nothingInstalled(catalogue)
