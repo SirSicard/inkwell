@@ -264,11 +264,23 @@ private struct ColourRow: View {
 
 // MARK: - The language model you bring (Settings > AI)
 
-/// The provider, its server and key, the model, Use and Test, and the local-only switch.
+/// The provider, its server and key, the model, Use and Test, and the local-only switch. The first
+/// run's Polish step shows the same rows with `firstRun` (polish): there Use asks polish's consent
+/// before choosing, so local-only mode goes off only with it, and the switch is left to Settings.
 struct LanguageModelRows: View {
     let cloud: CloudModel
+    var firstRun: PolishModel?
     /// The key being typed: sent once on Save key, then cleared. Never kept anywhere else.
     @State private var key = ""
+
+    /// Use: in the first run, polish's consent step first; in Settings, the choice itself.
+    private func use() {
+        if let firstRun {
+            firstRun.useOwnKey(cloud)
+        } else {
+            cloud.use()
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -313,15 +325,16 @@ struct LanguageModelRows: View {
                         .frame(maxWidth: 340)
                         .accessibilityLabel("Model")
                 }
-                Text(cloud.useNote)
+                let useNote = firstRun == nil ? cloud.useNote : cloud.firstRunUseNote
+                Text(useNote)
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
-                    Button(cloud.useLabel) { cloud.use() }
+                    Button(cloud.useLabel) { use() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!cloud.canUse)
-                        .accessibilityHint(cloud.useNote)
+                        .disabled(!(firstRun?.canUseOwnKey(cloud) ?? cloud.canUse))
+                        .accessibilityHint(useNote)
                     Button("Test") { cloud.test() }
                         .disabled(!cloud.canTest)
                         .accessibilityLabel("Test the language model")
@@ -337,22 +350,24 @@ struct LanguageModelRows: View {
                     .foregroundStyle(cloud.failure != nil || cloud.readError != nil ? Theme.alert : Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            SettingRow(title: "Local only") {
-                Toggle("Local only", isOn: Binding(get: { cloud.localOnly }, set: { cloud.setLocalOnly($0) }))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .disabled(!cloud.loaded)
-                Text(cloud.localOnly
-                    ? "On: nothing leaves this Mac. No language model off it is called, whatever is chosen above."
-                    : "Off: a language model you chose off this Mac can be called, by each feature you allow below.")
+            if firstRun == nil {
+                SettingRow(title: "Local only") {
+                    Toggle("Local only", isOn: Binding(get: { cloud.localOnly }, set: { cloud.setLocalOnly($0) }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!cloud.loaded)
+                    Text(cloud.localOnly
+                        ? "On: nothing leaves this Mac. No language model off it is called, whatever is chosen above."
+                        : "Off: a language model you chose off this Mac can be called, by each feature you allow below.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
-                .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

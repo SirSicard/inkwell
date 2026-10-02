@@ -386,6 +386,220 @@ final class PolishModelTests: XCTestCase {
     }
 }
 
+// MARK: - The first run's own key
+
+/// Owner decision: the first run's Polish step offers the user's own key (Settings > AI's rows),
+/// and local-only mode goes off only with polish's consent for that provider. Use asks first,
+/// naming where the words go; only Allow chooses the provider (which turns local-only mode off),
+/// and the consent is recorded once the core names that same destination.
+@MainActor
+final class OwnKeyPolishTests: XCTestCase {
+    private let groq = "https://api.groq.com/openai/v1"
+
+    private func providers(groqKey: Bool = true, chosen: String? = nil, ready: Bool = false, localOnly: Bool = true, ref: String = "x") -> InkEvent {
+        let choice = chosen.map { #","chosen":"\#($0)","model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","to":"cloud""# } ?? ""
+        return event(#"{"type":"llm.providers","ref":"\#(ref)","local_only":\#(localOnly),"ready":\#(ready)\#(choice),"providers":[{"id":"openai","default_model":"gpt-4o-mini","endpoint":"https://api.openai.com/v1","custom_url":false,"needs_key":true,"has_key":false},{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":\#(groqKey)},{"id":"custom","default_model":"llama3","endpoint":"http://localhost:11434/v1","custom_url":true,"needs_key":false,"has_key":false}]}"#)
+    }
+
+    /// The core's own state after a choice (no ref), polish naming Groq.
+    private func groqState(on: Bool = false, allowed: Bool = false, endpoint: String? = nil) -> InkEvent {
+        polishState(on: on, allowed: allowed, to: "cloud", name: "llama-3.3-70b-versatile (groq)", endpoint: endpoint ?? groq,
+                    allowedTo: allowed ? "cloud" : nil)
+    }
+
+    private func setUp(_ sent: Sent, groqKey: Bool = true) -> (CloudModel, PolishModel) {
+        let cloud = CloudModel(send: sent.send)
+        let polish = PolishModel(send: sent.send)
+        cloud.apply(providers(groqKey: groqKey))
+        // A Mac without Apple Intelligence: nothing else can polish.
+        polish.appleEnginesReported(.unavailable(code: AppleIntelligence.Reason.deviceNotEligible.rawValue))
+        polish.apply(polishState(on: false, allowed: false, to: nil))
+        return (cloud, polish)
+    }
+
+    private var chooses: (CoreCommand) -> Bool { { if case .llmChoose = $0 { true } else { false } } }
+    private var allows: (CoreCommand) -> Bool { { if case .consentAllow = $0 { true } else { false } } }
+
+    /// The step points at Groq's free key: Groq is in the picker when nothing is chosen or picked.
+    func testGroqIsSuggestedOnlyWhenNothingIsChosenOrPicked() {
+        let cloud = CloudModel(send: { _ in })
+        cloud.suggest("groq")
+        XCTAssertNil(cloud.selected, "nothing listed yet")
+        cloud.apply(providers())
+        cloud.suggest("groq")
+        XCTAssertEqual(cloud.selected, "groq")
+        cloud.select("openai")
+        cloud.suggest("groq")
+        XCTAssertEqual(cloud.selected, "openai", "the user's pick stands")
+        let chosen = CloudModel(send: { _ in })
+        chosen.apply(providers(chosen: "groq"))
+        chosen.select(nil)
+        chosen.suggest("openai")
+        XCTAssertNil(chosen.selected, "a provider is chosen already")
+    }
+
+    /// Use asks first and sends nothing: the step names Groq and says the words leave this Mac
+    /// and that local-only mode goes off. Cancel sends nothing either.
+    func testUseAsksFirstNamingTheProviderAndCancelSendsNothing() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        XCTAssertTrue(polish.canUseOwnKey(cloud))
+        XCTAssertTrue(cloud.firstRunUseNote.contains("Local only"), cloud.firstRunUseNote)
+        sent.commands = []
+        polish.useOwnKey(cloud)
+        let asked = try XCTUnwrap(polish.pendingConsent)
+        XCTAssertEqual(asked, ConsentModel.Destination(kind: .cloud(endpoint: groq), name: "Groq"))
+        XCTAssertEqual(polish.consentHost, .onboarding)
+        XCTAssertTrue(polish.consent.choosing)
+        XCTAssertTrue(PolishModel.consentMessage(asked).contains("your words leave this Mac and go to Groq"))
+        let note = try XCTUnwrap(ConsentModel.choosingNote(asked))
+        XCTAssertTrue(note.contains("Local only"), note)
+        XCTAssertEqual(PolishModel.consentButton(asked), "Send to Groq")
+        XCTAssertEqual(sent.commands, [], "asking sends nothing")
+
+        // A state the core sends meanwhile (the step names a model not chosen yet) leaves it open.
+        polish.apply(polishState(on: false, allowed: false, to: nil))
+        XCTAssertNotNil(polish.pendingConsent)
+
+        polish.cancelConsent()
+        XCTAssertNil(polish.pendingConsent)
+        XCTAssertFalse(polish.consent.choosing)
+        XCTAssertEqual(sent.commands, [], "cancel sends nothing: local-only mode stays on")
+    }
+
+    /// Allow chooses Groq with the user's say-so that local-only mode goes off, and records the
+    /// consent once the core names Groq's endpoint: polish is then on, sending to Groq.
+    func testAllowChoosesTheProviderThenRecordsTheConsentForIt() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        sent.commands = []
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands, [.llmChoose(provider: "groq", model: nil, baseURL: nil, localOnlyOff: true, ref: "llm.choose:1")])
+        XCTAssertNil(polish.pendingConsent)
+
+        // The core's answer to the choice: local-only off, then polish's state naming Groq.
+        polish.apply(event(#"{"type":"setting.value","key":"llm.local_only","value":"off"}"#))
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [.consentAllow(feature: .polish, to: .cloud, endpoint: groq, key: nil, ref: "consent.allow:polish:1")])
+        cloud.apply(providers(chosen: "groq", ready: true, localOnly: false, ref: "llm.choose:1"))
+        polish.apply(providers(chosen: "groq", ready: true, localOnly: false, ref: "llm.choose:1"))
+        polish.apply(groqState(on: true, allowed: true))
+        XCTAssertTrue(polish.isOn)
+        XCTAssertEqual(polish.status, "On. Your words go to llama-3.3-70b-versatile (groq) before they are typed.")
+        // Once recorded, nothing is allowed again on its own.
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows).count, 1)
+    }
+
+    /// The core names somewhere else after the choice: nothing is allowed, polish stays off and
+    /// says so, and a later state naming Groq allows nothing either (the agreement was for that
+    /// choice only).
+    func testADestinationTheUserDidNotAgreeToIsNeverAllowed() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        polish.allowConsent()
+        polish.apply(groqState(endpoint: "https://elsewhere.example.com/v1"))
+        XCTAssertEqual(sent.commands.filter(allows), [])
+        XCTAssertEqual(polish.failure, .allow)
+        XCTAssertEqual(polish.status, "Couldn't turn polish on, so it stays off. Try again.")
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [])
+    }
+
+    /// A choice the core refused changes nothing: polish stays off and says so, and nothing is
+    /// allowed later.
+    func testARefusedChoiceAllowsNothing() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        polish.allowConsent()
+        polish.apply(event(#"{"type":"command.failed","command":"llm.choose","id":"llm.choose:1","message":"llm.choose: couldn't save the choice"}"#))
+        XCTAssertEqual(polish.failure, .allow)
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [])
+    }
+
+    /// Allow chooses what the step named, never what the picker holds by then: a picker changed
+    /// meanwhile (Settings > AI shares it) chooses nothing, and nothing is allowed later.
+    func testAllowChoosesOnlyWhatTheStepNamed() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        cloud.select("openai")
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.filter(chooses), [], "local-only mode stays on")
+        XCTAssertEqual(polish.failure, .allow)
+        XCTAssertNil(polish.consent.agreed)
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [])
+    }
+
+    /// The switch asking while the own-key step was up (the sheet over Settings) asks the ordinary
+    /// way: its Allow sends the consent for the model there now and chooses nothing.
+    func testTheSwitchsStepNeverChooses() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        polish.apply(event(appleLLM))
+        polish.apply(polishState(on: false, allowed: false))
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        polish.setOn(true, from: .settings)
+        XCTAssertFalse(polish.consent.choosing)
+        XCTAssertEqual(polish.consent.stepMessage(try XCTUnwrap(polish.pendingConsent)), PolishModel.consentMessage(try XCTUnwrap(polish.pendingConsent)))
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.filter(chooses), [])
+        XCTAssertEqual(sent.commands.filter(allows).count, 1)
+        XCTAssertNil(polish.consent.agreed)
+    }
+
+    /// A custom server's address is named as the core names it (no trailing slash), so the
+    /// consent matches the choice.
+    func testACustomServerIsNamedAsTheCoreNamesIt() throws {
+        let cloud = CloudModel(send: { _ in })
+        cloud.apply(providers())
+        cloud.select("custom")
+        cloud.draftBaseURL = " https://llm.example.com/v1/ "
+        XCTAssertEqual(cloud.selectedEndpoint, "https://llm.example.com/v1")
+    }
+
+    /// Before a key is stored, Use waits: a provider that needs one could not be called.
+    func testUseWaitsForTheKey() {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent, groqKey: false)
+        cloud.select("groq")
+        XCTAssertFalse(polish.canUseOwnKey(cloud))
+        polish.useOwnKey(cloud)
+        XCTAssertNil(polish.pendingConsent)
+        XCTAssertEqual(sent.commands.filter(chooses), [])
+        cloud.select(nil)
+        XCTAssertFalse(polish.canUseOwnKey(cloud), "no provider picked")
+    }
+
+    /// A server on this Mac: the step says the words stay here, and the choice keeps local-only
+    /// mode on.
+    func testAServerOnThisMacKeepsLocalOnlyOn() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("custom")
+        XCTAssertTrue(polish.canUseOwnKey(cloud), "no key needed")
+        polish.useOwnKey(cloud)
+        let asked = try XCTUnwrap(polish.pendingConsent)
+        XCTAssertTrue(asked.isOnDevice)
+        XCTAssertNil(ConsentModel.choosingNote(asked), "local-only mode stays on: nothing to say")
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.filter(chooses), [.llmChoose(provider: "custom", model: nil, baseURL: "http://localhost:11434/v1", localOnlyOff: false, ref: "llm.choose:1")])
+        polish.apply(polishState(on: false, allowed: false, to: "on_device", name: "llama3 (custom)"))
+        XCTAssertEqual(sent.commands.filter(allows), [.consentAllow(feature: .polish, to: .onDevice, endpoint: nil, key: nil, ref: "consent.allow:polish:1")])
+    }
+}
+
 // MARK: - Voice edit's consent
 
 @MainActor

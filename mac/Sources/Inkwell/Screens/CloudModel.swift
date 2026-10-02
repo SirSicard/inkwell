@@ -118,6 +118,23 @@ final class CloudModel {
         return !p.customURL || !Self.isOnThisMac(baseURL(for: p))
     }
 
+    /// Where the provider in the picker sends, with the address typed (nil: none picked), as the
+    /// core names a destination: without the trailing slashes it drops (ink-llm's EndpointUrl).
+    var selectedEndpoint: String? {
+        selectedProvider.map { p in
+            var url = Substring(baseURL(for: p))
+            while url.hasSuffix("/") { url = url.dropLast() }
+            return String(url)
+        }
+    }
+
+    /// Puts `id` in the picker while nothing is chosen or picked (the first run points at Groq's
+    /// free key). Nothing is sent.
+    func suggest(_ id: String) {
+        guard chosen == nil, selected == nil, providers.contains(where: { $0.id == id }) else { return }
+        select(id)
+    }
+
     /// Whether Use would change anything: another provider, model or address than the chosen one.
     var canUse: Bool {
         guard loaded else { return false }
@@ -146,6 +163,16 @@ final class CloudModel {
         return selectedIsCloud
             ? "Using \(name) turns local-only mode off, so the features below can send to \(name). Each one sends only once you allow it for \(name); one you already allowed for \(name) sends again straight away."
             : "This server is on this Mac, so local-only mode stays on. Each feature below uses it only once you allow it; one you already allowed uses it straight away."
+    }
+
+    /// What Use means in the first run, where it asks polish's consent before choosing.
+    var firstRunUseNote: String {
+        guard let p = selectedProvider else { return "Pick a provider to bring your own key." }
+        let name = Self.name(p.id)
+        if p.needsKey && !p.hasKey { return "Save your \(name) key first." }
+        return selectedIsCloud
+            ? "Use asks first: polish sends your words to \(name) only once you allow it, which also turns Local only off."
+            : "This server is on this Mac, so Local only stays on. Use asks before polish uses it."
     }
 
     /// Whether the core keeps the key back from the server in the picker: a custom server over
@@ -237,19 +264,22 @@ final class CloudModel {
     }
 
     /// Use: chooses the provider in the picker with its model (and address), or none. For a
-    /// provider off this Mac it carries the user's say-so that local-only mode goes off.
-    func use() {
-        guard canUse else { return }
+    /// provider off this Mac it carries the user's say-so that local-only mode goes off. Returns
+    /// whether it sent the choice.
+    @discardableResult
+    func use() -> Bool {
+        guard canUse else { return false }
         failure = nil
         forgetTest()
         guard let p = selectedProvider else {
             send(.llmChoose(provider: "none", model: nil, baseURL: nil, localOnlyOff: false, ref: nextRef("choose")))
-            return
+            return true
         }
         let model = draftModel.trimmingCharacters(in: .whitespaces)
         send(.llmChoose(
             provider: p.id, model: model.isEmpty ? nil : model, baseURL: p.customURL ? baseURL(for: p) : nil,
             localOnlyOff: selectedIsCloud, ref: nextRef("choose")))
+        return true
     }
 
     /// Test: one short fixed request to the chosen provider.

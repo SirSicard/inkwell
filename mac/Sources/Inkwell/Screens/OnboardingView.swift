@@ -3,8 +3,8 @@
 // user presses Allow), the speech models (a recommended set and optional extras, each downloaded
 // only when the user presses Download, and still downloading while the user goes on), Inkwell
 // 0.2's history (only when there is some to import), the appearance, polish (off, and turned on
-// only through its consent step), and how to dictate, with the orb answering the user's voice.
-// Remembered in the core's store (onboarding.done).
+// only through its consent step, with Apple's model or the user's own key), and how to dictate,
+// with the orb answering the user's voice. Remembered in the core's store (onboarding.done).
 import InkRenderer
 import SwiftUI
 
@@ -13,6 +13,8 @@ struct OnboardingView: View {
     @Environment(ShellInk.self) private var ink
     /// What the welcome orb shows: a short demo, then still.
     @State private var demo = InkState.idle
+    /// The Polish step's own-key rows are open (closed at first: skipping them costs nothing).
+    @State private var ownKey = false
 
     var body: some View {
         let onboarding = screens.onboarding
@@ -244,21 +246,46 @@ struct OnboardingView: View {
         .foregroundStyle(Theme.text)
     }
 
+    /// The switch (Apple's on-device model, where there is one), and the user's own key: Settings
+    /// > AI's rows, pointing at Groq's free key, where Use asks polish's consent before choosing
+    /// the provider, so local-only mode goes off only with it.
     private var polish: some View {
         let polish = screens.polish
-        return VStack(alignment: .leading, spacing: 12) {
-            title("Polish")
-            Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
-            Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
-                .toggleStyle(.switch)
-                .disabled(!polish.canToggle)
-                .accessibilityHint(polish.status)
-            Text(polish.status)
-                .font(Typography.caption)
-                .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
-                .accessibilityHidden(true)
+        let cloud = screens.cloud
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                title("Polish")
+                Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
+                    .toggleStyle(.switch)
+                    .disabled(!polish.canToggle)
+                    .accessibilityHint(polish.status)
+                Text(polish.status)
+                    .font(Typography.caption)
+                    .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityHidden(true)
+                DisclosureGroup(isExpanded: $ownKey) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Or bring your own key for a language model online. Groq's free tier covers ordinary personal use and needs no credit card: sign in at [console.groq.com](https://console.groq.com), create a key under API Keys and paste it here.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                        LanguageModelRows(cloud: cloud, firstRun: polish)
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("Use your own key")
+                }
+                .onChange(of: ownKey) {
+                    // Groq's free key, unless the user picked or chose another.
+                    if ownKey { cloud.suggest("groq") }
+                }
+            }
+            .foregroundStyle(Theme.text)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .foregroundStyle(Theme.text)
         .polishConsent(polish, host: .onboarding)
     }
 
