@@ -295,8 +295,12 @@ impl ByokLlm {
         thread::Builder::new()
             .name("ink-llm-request".into())
             .spawn(move || {
+                let response = transport.post(&http);
+                // Let go of the transport before answering, so a caller that has its answer
+                // holds the only references left.
+                drop(transport);
                 // Refused once the call has stopped waiting: the answer goes unread.
-                let _ = answered.send(transport.post(&http));
+                let _ = answered.send(response);
             })
             .map_err(|_| LlmError::Network("the request could not be started".into()))?;
         loop {
