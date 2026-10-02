@@ -1,14 +1,14 @@
-// The ink on screen: a view backed by a CAMetalLayer that draws the shared pipeline.
+// The orb on screen: a view backed by a transparent CAMetalLayer that draws the shared pipeline over
+// whatever is behind it.
 //
 // It draws only while something is live (InkSchedule decides): the display link every live ink
-// shares (InkClock) steps the ink and draws one frame per vsync, reading the live levels at each
-// tick. Idle, covered, or with Reduce
-// Motion on, it draws one still frame at most and then nothing. Every frame it presents is counted
-// in InkRenderer.frames, which the shell budget (scripts/idle-budget.sh) reads.
+// shares (InkClock) steps the simulation and draws one frame per vsync, reading the live levels at
+// each tick. Idle, covered, or with motion stilled (Reduce Motion, or the user's "Always still"),
+// it draws one still frame at most and then nothing. Every frame it presents is counted in
+// InkRenderer.frames, which the shell budget (scripts/idle-budget.sh) reads.
 //
-// The canvas follows the prototype's sizing rule: the backing scale, capped at 1.25 for a large
-// canvas (over 180,000 square points) and at 2 otherwise, so a large ink zone is not drawn at full
-// Retina resolution.
+// The canvas's resolution: the backing scale, capped at 1.25 for a large canvas (over 180,000
+// square points) and at 2 otherwise, so a window-sized orb is not drawn at full Retina resolution.
 import AppKit
 import Metal
 import QuartzCore
@@ -22,24 +22,6 @@ public final class InkView: NSView {
             guard state != oldValue else { return }
             simulation.state = state
             perform(schedule.set(state: state))
-        }
-    }
-
-    /// Whether the INKWELL wordmark is knocked out of the ink (Today's ink zone).
-    public var showsWordmark = false {
-        didSet {
-            guard showsWordmark != oldValue else { return }
-            markTexture = nil
-            perform(schedule.invalidate())
-        }
-    }
-
-    /// The wordmark's face.
-    public var wordmarkFont: WordmarkFont = .system {
-        didSet {
-            guard wordmarkFont != oldValue else { return }
-            markTexture = nil
-            perform(schedule.invalidate())
         }
     }
 
@@ -68,15 +50,6 @@ public final class InkView: NSView {
         }
     }
 
-    /// The ink body's centre height, 0...1 from the bottom.
-    public var inkCentreHeight = 0.5 {
-        didSet {
-            guard inkCentreHeight != oldValue else { return }
-            simulation.cy = inkCentreHeight
-            perform(schedule.invalidate())
-        }
-    }
-
     /// The live levels, read once per frame while live. Nil reads silence. It runs on the main
     /// thread inside the display link's callback, so it must return at once (ink_bands_read does:
     /// a copy, never a wait).
@@ -88,10 +61,10 @@ public final class InkView: NSView {
     /// Whether the view is on the shared display link (live, on screen, motion allowed).
     public var isAnimating: Bool { clock.contains(self) }
 
-    /// Why the ink cannot draw, if it cannot. The view then shows plain paper.
+    /// Why the orb cannot draw, if it cannot. The view then stays transparent.
     public private(set) var failure: InkRendererError?
 
-    /// Whether the pipeline has arrived. Until then the view shows plain paper and never runs a
+    /// Whether the pipeline has arrived. Until then the view stays transparent and never runs a
     /// clock.
     public var isReady: Bool { pipeline != nil }
 
@@ -117,15 +90,11 @@ public final class InkView: NSView {
     private let clock: InkClock
     private var lastTimestamp: CFTimeInterval = 0
     private var firstTick = true
-    private var markTexture: (any MTLTexture)?
     private var canvas = (width: 0, height: 0)
 
-    /// Paper, #F2EEE6: the layer's colour until its first frame, and where the ink cannot draw.
-    private static let paper = CGColor(srgbRed: 0xF2 / 255, green: 0xEE / 255, blue: 0xE6 / 255, alpha: 1)
-
     /// A view that draws with `loader`'s pipeline, driven by `clock` while live. It never waits
-    /// for the compile: made before it finishes, the view shows paper and starts drawing when the
-    /// pipeline arrives.
+    /// for the compile: made before it finishes, the view stays transparent and starts drawing when
+    /// the pipeline arrives.
     public init(frame: NSRect = .zero, loader: InkPipelineLoader = .shared, clock: InkClock = .shared) {
         self.clock = clock
         super.init(frame: frame)
@@ -134,7 +103,6 @@ public final class InkView: NSView {
         layerContentsRedrawPolicy = .never
         // The prototype starts each ink at a random point in its slow motion.
         simulation.t = Double.random(in: 0..<30)
-        simulation.cy = inkCentreHeight
         _ = schedule.set(reduceMotion: reduceMotion)
         updateCanvas()
         if let outcome = loader.outcome {
@@ -144,7 +112,7 @@ public final class InkView: NSView {
         }
     }
 
-    /// The compile finished: draw from now on, or show paper for good.
+    /// The compile finished: draw from now on, or stay transparent for good.
     private func adopt(_ outcome: InkPipelineLoader.Outcome) {
         switch outcome {
         case .success(let ready):
@@ -165,11 +133,12 @@ public final class InkView: NSView {
         let layer = CAMetalLayer()
         layer.device = pipeline?.device
         layer.pixelFormat = InkPipeline.pixelFormat
-        // The shader writes sRGB values directly, as the prototype's WebGL canvas does.
+        // The shader writes sRGB values directly, as the prototype's WebGL canvas does, and
+        // premultiplied: the orb is composited over what is behind it.
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         layer.framebufferOnly = true
-        layer.isOpaque = true
-        layer.backgroundColor = Self.paper
+        layer.isOpaque = false
+        layer.backgroundColor = nil
         return layer
     }
 
@@ -287,7 +256,6 @@ public final class InkView: NSView {
         metalLayer?.drawableSize = CGSize(width: width, height: height)
         simulation.canvasWidth = Double(width)
         simulation.canvasHeight = Double(height)
-        markTexture = nil
         perform(schedule.invalidate())
     }
 
@@ -325,30 +293,23 @@ public final class InkView: NSView {
         firstTick = false
         let live = levels?() ?? .silent
         simulation.step(dt, snap: false, voice: .levels(near: live.near, far: live.far))
-        draw()
+        draw(motion: true)
     }
 
-    /// The settled frame: droplets cleared, springs at their targets. No voice: a still frame
-    /// shows the state at rest, not whatever level happened to be live.
+    /// The settled frame: weights at their targets, no voice, the shader's time stopped. A still
+    /// frame shows the state at rest, not whatever level happened to be live.
     private func drawStill() {
         simulation.settle(voice: .silent)
-        draw()
+        draw(motion: false)
     }
 
-    private func draw() {
+    private func draw(motion: Bool) {
         guard let pipeline, let metalLayer, canvas.width > 0 else { return }
-        if showsWordmark, markTexture == nil {
-            let mark = Wordmark.rasterize(width: canvas.width, height: canvas.height,
-                                          pointWidth: Double(bounds.width), font: wordmarkFont)
-            // A failed wordmark leaves the ink without it; the ink still draws.
-            markTexture = try? pipeline.markTexture(mark)
-        }
         guard let drawable = metalLayer.nextDrawable(),
             let commandBuffer = pipeline.queue.makeCommandBuffer()
         else { return }
-        let mark = showsWordmark ? markTexture : nil
         pipeline.encode(into: drawable.texture, commandBuffer: commandBuffer,
-                        uniforms: simulation.uniforms(hasMark: mark != nil), mark: mark)
+                        uniforms: simulation.uniforms(palette: palette, placement: placement, motion: motion))
         InkRenderer.gpuTimes.observe(commandBuffer)
         commandBuffer.present(drawable)
         commandBuffer.commit()

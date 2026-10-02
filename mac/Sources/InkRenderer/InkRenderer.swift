@@ -1,14 +1,17 @@
-// The ink: one Metal pipeline, drawn only while something is live (architecture rule 9).
+// The Glow orb and the edge glow: one Metal pipeline and a layer of gradient strokes, drawn only
+// while something is live (architecture rule 9).
 //
 // | File | Holds |
 // |---|---|
-// | InkSimulation | the prototype's state machine and droplet physics, and the uniform block |
-// | InkLevels | the core's audio bands as the ink's live levels |
+// | InkSimulation | the state, the levels' envelopes and the state weights, and the uniform block |
+// | InkLevels | the core's audio bands as the live levels |
 // | InkPipeline | the shader (Resources/ink.msl, generated from shaders/ink.wgsl) compiled at run time, off the main thread |
 // | InkSchedule | when a view draws: a display link only while live, else one still frame at most |
-// | InkView | the ink on screen (CAMetalLayer) |
-// | Wordmark | INKWELL, rasterised with CoreText, knocked out of the ink |
-// | InkSnapshot | one frame offscreen, at a fixed time: tests and reference comparisons |
+// | InkClock | the one display link every live view shares |
+// | InkView | the orb on screen (a transparent CAMetalLayer) |
+// | GlowStyle | what the shell passes in: the orb's palette and placement, the edge's strokes, and the edge's frame |
+// | GlowEdgeView | the window's edge glow (gradient strokes) |
+// | InkSnapshot | one frame offscreen, at a fixed time: tests |
 // | FrameCounter, GPUFrameTimes | what the shell budget reads: frames drawn, GPU time per frame |
 import Metal
 

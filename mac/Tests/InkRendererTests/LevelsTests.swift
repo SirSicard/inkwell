@@ -73,7 +73,8 @@ final class LevelsTests: XCTestCase {
         var sim = InkSimulation()
         sim.canvasWidth = 64
         sim.canvasHeight = 64
-        pipeline.encode(into: target, commandBuffer: commandBuffer, uniforms: sim.uniforms(hasMark: false), mark: nil)
+        pipeline.encode(into: target, commandBuffer: commandBuffer,
+                        uniforms: sim.uniforms(palette: .neutral, placement: .centred, motion: true))
         times.observe(commandBuffer)
         let done = expectation(description: "completed")
         commandBuffer.addCompletedHandler { _ in done.fulfill() }

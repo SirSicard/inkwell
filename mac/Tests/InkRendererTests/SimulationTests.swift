@@ -1,4 +1,5 @@
-// The ink's state machine and droplet physics against the design prototype's own JavaScript.
+// The ink's state machine and droplet physics against the design prototype's own JavaScript, and
+// the Glow orb's weights and uniform block.
 //
 // The expected numbers were produced by running the prototype's `_step` (springs, envelope
 // follower, droplet spawn and physics) with Math.random replaced by mulberry32, exactly as
@@ -147,22 +148,54 @@ final class SimulationTests: XCTestCase {
         XCTAssertEqual(sim.t, t, "a still frame does not move time")
     }
 
+    /// The block G, offset by offset as shaders/ink.wgsl lays it out (ink-shader checks the WGSL
+    /// side), and what each state packs into it.
     func testTheUniformBlockMatchesTheShader() {
-        XCTAssertEqual(MemoryLayout<InkUniforms>.size, 144, "shaders/ink.wgsl: U is 144 bytes")
-        XCTAssertEqual(MemoryLayout<InkUniforms>.stride, 144)
-        XCTAssertEqual(MemoryLayout<InkUniforms>.offset(of: \.drops), 48)
+        XCTAssertEqual(MemoryLayout<InkUniforms>.size, 160, "shaders/ink.wgsl: G is 160 bytes")
+        XCTAssertEqual(MemoryLayout<InkUniforms>.stride, 160)
+        let offsets: [(PartialKeyPath<InkUniforms>, Int)] = [
+            (\.res, 0), (\.center, 8), (\.time, 16), (\.unit, 20), (\.you, 24), (\.them, 28), (\.w, 32),
+            (\.dark, 48), (\.motion, 52), (\.pad, 56), (\.yA, 64), (\.yB, 80), (\.tA, 96), (\.tB, 112),
+            (\.idle, 128), (\.ink, 144),
+        ]
+        for (path, offset) in offsets {
+            XCTAssertEqual(MemoryLayout<InkUniforms>.offset(of: path), offset, "\(path)")
+        }
 
-        var sim = run(.meeting, steps: 900, seed: 1)
-        sim.cy = 0.4
-        let u = sim.uniforms(hasMark: true)
+        let sim = run(.meeting, steps: 900, seed: 1)
+        var palette = OrbPalette.neutral
+        palette.tA = SIMD3(1, 0.5, 0)
+        palette.dark = true
+        let u = sim.uniforms(palette: palette, placement: OrbPlacement(x: 0.56, yFromTop: 0.26, unit: 0.72), motion: true)
         XCTAssertEqual(u.res, SIMD2(360, 720))
+        XCTAssertEqual(u.center, SIMD2(Float(360 * 0.56), Float(720 * 0.26)), "pixels from the top left")
+        XCTAssertEqual(u.unit, Float(360 * 0.72), "a share of the shorter side")
         XCTAssertEqual(u.time, Float(sim.t))
-        XCTAssertEqual(u.ampB, Float(sim.envB))
-        XCTAssertEqual(u.cy, 0.4)
-        XCTAssertEqual(u.hasMark, 1)
-        // Only live droplets reach the shader; a dead slot is all zeros (r = 0 is dead there).
-        XCTAssertEqual(u.drops.0, .zero)
-        XCTAssertEqual(u.drops.2, SIMD4(Float(sim.drops[2].x), Float(sim.drops[2].y), Float(sim.drops[2].r), 1))
+        XCTAssertEqual(u.you, Float(sim.envA))
+        XCTAssertEqual(u.them, Float(sim.envB))
+        XCTAssertEqual(u.w, SIMD4<Float>(sim.w))
+        XCTAssertEqual(u.dark, 1)
+        XCTAssertEqual(u.motion, 1)
+        XCTAssertEqual(u.tA, SIMD4(1, 0.5, 0, 0))
+        XCTAssertEqual(sim.uniforms(palette: .neutral, placement: .centred, motion: false).motion, 0, "a still frame")
+    }
+
+    /// Each state's weights, eased by 0.04 per 60 Hz frame on a time basis: the same fade at any
+    /// frame rate, and a still frame at the target.
+    func testTheWeightsEaseTowardTheStateOnATimeBasis() {
+        XCTAssertEqual(InkSimulation.weights(for: .blotting), SIMD4(0, 1, 1, 0))
+        XCTAssertEqual(InkSimulation.weights(for: .problem), SIMD4(0, 1, 0, 1))
+        var at60 = InkSimulation(random: .seeded(1))
+        at60.state = .dictating
+        for _ in 0..<60 { at60.step(1.0 / 60, snap: false, voice: .silent) }
+        var at120 = InkSimulation(random: .seeded(1))
+        at120.state = .dictating
+        for _ in 0..<120 { at120.step(1.0 / 120, snap: false, voice: .silent) }
+        let expected: Double = 1 - pow(0.96, 60.0)
+        XCTAssertEqual(at60.w.x, expected, accuracy: 1e-9)
+        XCTAssertEqual(at120.w.x, expected, accuracy: 1e-9, "one second is one second at any rate")
+        at60.settle(voice: .silent)
+        XCTAssertEqual(at60.w, SIMD4(1, 0, 0, 0), "a still frame has the state's weights")
     }
 
     func testMulberry32MatchesItsReferenceSequence() {
