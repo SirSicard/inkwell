@@ -1,9 +1,13 @@
 //! The ink shader, written once in WGSL (`shaders/ink.wgsl`) and translated with naga into what
 //! each shell compiles: the Metal Shading Language for the Mac, HLSL (shader model 5.0, for
 //! Direct3D 11) for Windows.
+//!
+//! It also generates the shells' design tokens from `design/tokens.json` ([`tokens`]).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+pub mod tokens;
 
 use std::fmt;
 
