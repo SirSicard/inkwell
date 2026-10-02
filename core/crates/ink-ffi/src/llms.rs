@@ -6,8 +6,9 @@
 //! take polished after such a change uses what is registered then. With several registered, the
 //! lowest id wins, so the choice never depends on timing.
 //!
-//! The user's own-key provider ([`cloud`](crate::cloud), chosen in Windows' Settings > AI) is kept
-//! here too, and used only while the shell has registered no model: a shell's model comes first.
+//! The user's own-key provider ([`cloud`](crate::cloud), chosen in Settings > AI) is kept here too.
+//! The user's choice comes first: while a provider is chosen it is used, and a model the shell
+//! registered (the Mac's Foundation Models) is used while none is.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -68,12 +69,12 @@ impl ShellLlms {
         removed.is_some()
     }
 
-    /// The model polish goes to now: a model the shell registered, else the chosen own-key
-    /// provider, if either.
+    /// The model polish goes to now: the chosen own-key provider, else a model the shell
+    /// registered, if either. The user's choice wins over the shell's model.
     pub fn pick(&self) -> Option<Arc<dyn Llm>> {
-        match self.pick_shell() {
-            Some(shell) => Some(shell),
-            None => self.cloud().map(|cloud| cloud as Arc<dyn Llm>),
+        match self.cloud() {
+            Some(cloud) => Some(cloud as Arc<dyn Llm>),
+            None => self.pick_shell().map(|shell| shell as Arc<dyn Llm>),
         }
     }
 

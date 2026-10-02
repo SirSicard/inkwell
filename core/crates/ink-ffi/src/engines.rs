@@ -119,12 +119,13 @@ pub fn llm(shared: &Shared) -> Option<Arc<dyn Llm>> {
     })
 }
 
-/// The context the language model a meeting uses holds, in tokens: the registered model's, else
-/// the chosen own-key provider's, else [`DEFAULT_CONTEXT_TOKENS`].
+/// The context the language model a meeting uses holds, in tokens: the chosen own-key provider's,
+/// else the registered model's (the order [`ShellLlms::pick`](crate::llms::ShellLlms::pick)
+/// follows), else [`DEFAULT_CONTEXT_TOKENS`].
 pub fn context_tokens(shared: &Shared) -> u32 {
-    match shared.llms.pick_shell() {
-        Some(shell) => shell.context_tokens(),
-        None => shared.llms.cloud().and_then(|cloud| cloud.context_tokens()),
+    match shared.llms.cloud() {
+        Some(cloud) => cloud.context_tokens(),
+        None => shared.llms.pick_shell().and_then(|shell| shell.context_tokens()),
     }
     .unwrap_or(DEFAULT_CONTEXT_TOKENS)
 }

@@ -32,9 +32,9 @@
 //!
 //! # Which model a feature uses
 //!
-//! A model the shell registered comes first (the Mac's Foundation Models), then the chosen provider
-//! ([`ShellLlms::pick`](crate::llms::ShellLlms::pick)). The Mac's screens never choose one, so
-//! nothing changes there.
+//! The chosen provider comes first, then a model the shell registered (the Mac's Foundation Models)
+//! while none is chosen ([`ShellLlms::pick`](crate::llms::ShellLlms::pick)). Choosing none on the
+//! Mac goes back to Apple Intelligence.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

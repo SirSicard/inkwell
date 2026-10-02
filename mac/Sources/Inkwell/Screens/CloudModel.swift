@@ -7,9 +7,8 @@
 // ready. The key goes once, in llm.key.save, into the macOS keychain; this model never keeps it,
 // and nothing here logs it.
 //
-// On this Mac, Apple Intelligence comes first while it is available: the core uses a model the
-// shell registered before a chosen provider. A provider chosen here is what polish, voice edit,
-// summaries and Ask use when it is not.
+// A provider chosen here comes first: polish, voice edit, summaries and Ask use it. With none
+// chosen they use Apple Intelligence, while it is available.
 //
 // Choosing a provider that is not on this Mac turns local-only mode off, and the step says so
 // before the user presses Use; the command carries the user's say-so, and the core refuses such a
