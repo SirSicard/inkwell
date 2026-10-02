@@ -45,11 +45,12 @@ public static unsafe class InkSnapshot
     /// <summary>
     /// Draws <paramref name="state"/> at time <paramref name="t"/> into a canvas of the given
     /// pixels, with <paramref name="look"/>'s colours (default: day, Indigo &amp; Coral) and the orb
-    /// at <paramref name="placement"/> (default: the centre). UI thread (or any one thread that
-    /// owns the pipeline).
+    /// at <paramref name="placement"/> (default: the centre), over <paramref name="backdrop"/> as
+    /// a SwapChainPanel draws it (default: transparent, as the Drop does). UI thread (or any one
+    /// thread that owns the pipeline).
     /// </summary>
     public static InkImage Render(InkPipeline pipeline, InkState state, double t, int width, int height,
-        InkVoice? voice = null, GlowLook? look = null, InkPlacement? placement = null)
+        InkVoice? voice = null, GlowLook? look = null, InkPlacement? placement = null, (float R, float G, float B)? backdrop = null)
     {
         ArgumentNullException.ThrowIfNull(pipeline);
         if (width < 2 || height < 2)
@@ -66,7 +67,7 @@ public static unsafe class InkSnapshot
         var uniforms = simulation.Uniforms(placement ?? InkPlacement.Centre, look ?? GlowLook.Default, moving: true);
 
         using var target = new InkTexture(pipeline, width, height);
-        pipeline.Encode(target.View, width, height, uniforms);
+        pipeline.Encode(target.View, width, height, uniforms, backdrop);
         var bgra = Readback.Copy(pipeline, (ID3D11Resource*)target.Texture, width, height, InkPipeline.PixelFormat, 4);
         // BGRA to RGBA; the alpha stays (premultiplied).
         for (var i = 0; i < bgra.Length; i += 4)

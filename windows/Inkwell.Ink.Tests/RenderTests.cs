@@ -73,6 +73,35 @@ public sealed class RenderTests
         }
     }
 
+    /// <summary>
+    /// Over a backdrop (a SwapChainPanel's, which shows nothing behind it): opaque everywhere, the
+    /// backdrop where there is no orb, and the orb blended over it where there is.
+    /// </summary>
+    [Fact]
+    public void OverABackdropTheOrbIsBlendedAndTheRestIsTheBackdrop()
+    {
+        var day = (0xFB / 255f, 0xF8 / 255f, 0xF4 / 255f);
+        InkImage bare, over;
+        lock (TestPipeline.Lock)
+        {
+            bare = InkSnapshot.Render(TestPipeline.Get(), InkState.Dictating, 12, 360, 720);
+            over = InkSnapshot.Render(TestPipeline.Get(), InkState.Dictating, 12, 360, 720, backdrop: day);
+        }
+        Assert.Equal((0xFB, 0xF8, 0xF4), ((int, int, int))over.Pixel(0, 0));
+        Assert.Equal((0xFB, 0xF8, 0xF4), ((int, int, int))over.Pixel(over.Width - 1, over.Height - 1));
+        for (var i = 0; i < over.Rgba.Length; i += 4)
+        {
+            Assert.Equal(255, over.Rgba[i + 3]);
+        }
+        // The centre: the orb's premultiplied colour plus the backdrop's share of what it leaves.
+        var x = bare.Width / 2;
+        var y = bare.Height / 2;
+        var a = bare.Alpha(x, y) / 255.0;
+        Assert.True(a > 0);
+        var (r, _, _) = bare.Pixel(x, y);
+        Assert.InRange(over.Pixel(x, y).R, r + 0xFB * (1 - a) - 2, r + 0xFB * (1 - a) + 2);
+    }
+
     /// <summary>The orb takes the colours it is given: your colour while dictating, the idle colour at rest.</summary>
     [Fact]
     public void TheOrbTakesItsColours()

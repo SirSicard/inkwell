@@ -84,7 +84,7 @@ public sealed partial class MainWindow : Window
         Orb.Look = theme.Look;
         Orb.AlwaysStill = theme.AlwaysStill;
         // High Contrast: the orb dimmed behind the text.
-        Orb.Opacity = theme.HighContrast ? 0.3 : 1;
+        Orb.OrbOpacity = theme.HighContrast ? 0.3f : 1;
         Edge.Set(theme.Colours, theme.EdgeGlow);
         liveDot.Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["GlowThemBrush"];
         UpdatePulse();

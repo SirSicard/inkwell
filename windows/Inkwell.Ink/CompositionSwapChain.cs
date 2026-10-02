@@ -123,11 +123,47 @@ public sealed unsafe class CompositionSwapChain : IDisposable
         }
     }
 
-    /// <summary>Draws the orb over the whole (cleared) back buffer and presents it (a SwapChainPanel's frame). UI thread.</summary>
-    public void DrawInk(in InkUniforms uniforms)
+    /// <summary>
+    /// Draws the orb over the whole back buffer, cleared to <paramref name="backdrop"/> (or to
+    /// transparent when null), and presents it (a SwapChainPanel's frame). Over a backdrop, an
+    /// <paramref name="opacity"/> under 1 fades the orb into it. UI thread.
+    /// </summary>
+    public void DrawInk(in InkUniforms uniforms, (float R, float G, float B)? backdrop = null, float opacity = 1)
     {
-        pipeline.Encode(RenderTargetView, Width, Height, uniforms);
+        pipeline.Encode(RenderTargetView, Width, Height, uniforms, backdrop);
+        if (backdrop is { } colour && opacity < 1)
+        {
+            Fade(colour, opacity);
+        }
         Present();
+    }
+
+    /// <summary>
+    /// The backdrop over the drawn orb at 1 - <paramref name="opacity"/>: the orb at that opacity on
+    /// the backdrop. A SwapChainPanel's own Opacity cannot do it: it fades to what WinUI keeps
+    /// behind the panel (white by day), not to the window.
+    /// </summary>
+    private void Fade((float R, float G, float B) colour, float opacity)
+    {
+        var d2d = pipeline.D2D;
+        d2d->SetTarget((ID2D1Image*)TargetBitmap);
+        d2d->BeginDraw();
+        ID2D1SolidColorBrush* brush = null;
+        HRESULT hr;
+        try
+        {
+            var fill = new DXGI_RGBA { r = colour.R, g = colour.G, b = colour.B, a = 1 - Math.Clamp(opacity, 0, 1) };
+            InkRendererException.Check(d2d->CreateSolidColorBrush(&fill, null, &brush), "make the ink's backdrop brush");
+            var all = new D2D_RECT_F { left = 0, top = 0, right = Width, bottom = Height };
+            d2d->FillRectangle(&all, (ID2D1Brush*)brush);
+        }
+        finally
+        {
+            hr = d2d->EndDraw(null, null);
+            d2d->SetTarget(null);
+            Com.Release(ref brush);
+        }
+        InkRendererException.Check(hr, "fade the ink");
     }
 
     /// <summary>For tests: an HRESULT the next Present returns instead of presenting (a lost device), once.</summary>

@@ -28,8 +28,13 @@
              so Light showed night's background behind day's text. -->
         <Border Background="{ThemeResource InkWindowBrush}" />
         <!-- The orb (S3.4's ink, as Glow draws it). Decorative: the state it shows is spoken by the
-             Drop and the screens. -->
-        <local:InkPanel x:Name="Orb" AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" />
+             Drop and the screens. A SwapChainPanel hides what is under it, so it paints the mode's
+             background too (Backdrop); the layer below shows until its first frame. -->
+        <local:InkPanel
+            x:Name="Orb"
+            AutomationProperties.AccessibilityView="Raw"
+            Backdrop="{ThemeResource InkWindowBrush}"
+            IsHitTestVisible="False" />
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48" />

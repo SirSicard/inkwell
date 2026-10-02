@@ -1,7 +1,11 @@
 // The orb in the app's window: a SwapChainPanel behind all the content, holding a composition
-// swapchain (premultiplied alpha: the window's background shows where the orb is not) that
-// Direct3D 11 draws into, on the shared clock while live and once per change otherwise
-// (InkSurface). Each frame it draws is passed on (Drawn): the edge glow follows it.
+// swapchain that Direct3D 11 draws into, on the shared clock while live and once per change
+// otherwise (InkSurface). Each frame it draws is passed on (Drawn): the edge glow follows it.
+//
+// A SwapChainPanel shows nothing of the XAML behind it: where its swapchain is transparent, WinUI
+// shows black (a 50% red clear showed as #7F0000 over a #121118 window). So the panel paints its
+// own backdrop, the colour of what it sits on (Backdrop, a theme resource that follows the mode),
+// and the orb is blended over it.
 //
 // It counts as on screen while its window is shown (XamlRoot.IsHostVisible), it is visible and it
 // has a size: hidden to the tray, the window's ink draws nothing.
@@ -9,6 +13,7 @@ using Inkwell.Core.Glow;
 using Inkwell.Ink;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 
 namespace Inkwell;
 
@@ -22,10 +27,24 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     private InkState state = InkState.Idle;
     private GlowLook look = GlowLook.Default;
     private bool alwaysStill;
+    private float orbOpacity = 1;
     private (float, float) transform;
 
     /// <summary>The process's clock; the app sets it at launch, before any panel loads.</summary>
     internal static InkClock? Clock { get; set; }
+
+    public static readonly DependencyProperty BackdropProperty = DependencyProperty.Register(
+        nameof(Backdrop), typeof(Brush), typeof(InkPanel), new PropertyMetadata(null, (d, _) => ((InkPanel)d).surface?.Invalidate()));
+
+    /// <summary>
+    /// What the panel sits on (a solid colour brush, as a theme resource so it follows the mode):
+    /// painted where there is no orb. Without one, the panel is transparent, which WinUI shows as black.
+    /// </summary>
+    public Brush? Backdrop
+    {
+        get => (Brush?)GetValue(BackdropProperty);
+        set => SetValue(BackdropProperty, value);
+    }
 
     public InkPanel()
     {
@@ -75,6 +94,20 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
             {
                 surface.AlwaysStill = value;
             }
+        }
+    }
+
+    /// <summary>
+    /// The orb's opacity over its backdrop (High Contrast dims it behind the text). Not the
+    /// element's Opacity: that fades the panel to white by day, not to the window.
+    /// </summary>
+    internal float OrbOpacity
+    {
+        get => orbOpacity;
+        set
+        {
+            orbOpacity = value;
+            surface?.Invalidate();
         }
     }
 
@@ -179,7 +212,18 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
             swapChain.SetMatrixTransform(transform.Item1, transform.Item2);
             this.transform = transform;
         }
-        swapChain.DrawInk(uniforms);
+        swapChain.DrawInk(uniforms, BackdropColour(), orbOpacity);
         return true;
+    }
+
+    private (float, float, float)? BackdropColour()
+    {
+        if (Backdrop is not SolidColorBrush brush)
+        {
+            return null;
+        }
+        // A translucent brush is taken as opaque: the panel cannot show what is behind it.
+        var c = brush.Color;
+        return (c.R / 255f, c.G / 255f, c.B / 255f);
     }
 }
