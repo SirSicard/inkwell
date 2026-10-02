@@ -14,7 +14,7 @@ struct LiveScreen: View {
 
     var body: some View {
         if let meeting = store.meeting {
-            LiveMeetingView(meeting: meeting, live: screens.live, meetings: screens.meetings)
+            LiveMeetingView(meeting: meeting, live: screens.live, meetings: screens.meetings, speech: screens.catalogue.speech)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 Paper.Header(title: "Live", subtitle: nil)
@@ -40,6 +40,8 @@ struct LiveMeetingView: View {
     let meeting: CoreStore.LiveMeeting
     @Bindable var live: LiveModel
     let meetings: MeetingModel
+    /// Whether a speech model can transcribe the meeting (the catalogue's answer).
+    var speech = SpeechModels.unknown
     @Environment(GlowTheme.self) private var theme
 
     var body: some View {
@@ -54,7 +56,7 @@ struct LiveMeetingView: View {
                     .padding(.trailing, 26)
                 Rectangle().fill(PaperPalette.border).frame(width: 1)
                     .accessibilityHidden(true)
-                LedgerView(lines: lines, earlierInRecord: meeting.ledger.dropped > 0)
+                LedgerView(lines: lines, earlierInRecord: meeting.ledger.dropped > 0, empty: SpeechModels.ledgerEmptyLine(speech))
                     .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .layoutPriority(1.25)
                     .padding(.leading, 26)
@@ -107,6 +109,12 @@ struct LiveMeetingView: View {
                     Text(far.text)
                         .font(Typography.caption)
                         .foregroundStyle(far.alert ? Theme.alert : Theme.secondaryText)
+                }
+                if let noModel = SpeechModels.liveLine(speech) {
+                    Text(noModel)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -242,13 +250,15 @@ struct LedgerView: View {
     let lines: [LiveLine]
     /// The oldest lines were let go of in memory (the record keeps every one).
     var earlierInRecord = false
+    /// What it says while nothing has been said.
+    var empty = "Waiting for someone to speak."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Paper.Eyebrow(text: "What's being said")
                 .padding(.bottom, 6)
             if lines.isEmpty {
-                Text("Waiting for someone to speak.")
+                Text(empty)
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
             }

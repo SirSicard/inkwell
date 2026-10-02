@@ -103,12 +103,15 @@ struct DropText: Equatable, Sendable {
         case dismiss(app: String)
         /// Ask for system audio (as the Settings card does).
         case allowSystemAudio
+        /// Download the recommended speech models (CatalogueModel.downloadSpeechModels).
+        case downloadSpeechModels
 
         var title: String {
             switch self {
             case .record: "Record this call"
             case .dismiss: "Not this one"
             case .allowSystemAudio: "Allow system audio"
+            case .downloadSpeechModels: "Download speech models"
             }
         }
     }

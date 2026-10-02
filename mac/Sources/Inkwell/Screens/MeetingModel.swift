@@ -179,6 +179,8 @@ final class MeetingModel {
         case .record(let app): record(app: app)
         case .dismiss(let app): dismiss(app: app)
         case .allowSystemAudio: permissions.request(.hearTheOthers)
+        // Not a meeting's: ScreenModels.performDropAction sends it to the catalogue.
+        case .downloadSpeechModels: break
         }
     }
 
