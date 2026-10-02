@@ -14,8 +14,8 @@ struct LibraryScreen: View {
         HStack(spacing: 0) {
             LibraryColumn()
                 .frame(width: 272)
-                .background(.ultraThinMaterial)
                 .background(PaperPalette.panel)
+                .background(.ultraThinMaterial)
             Rectangle().fill(PaperPalette.border).frame(width: 1)
             Group {
                 if library.selected != nil {
