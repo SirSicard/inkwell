@@ -197,10 +197,13 @@ jobs:
           commit="$(sed -n 's/^NEMO_COMMIT=//p' core/crates/ink-engines/native/build-nemo-speech.sh)"
           src="$(cygpath -u "$RUNNER_TEMP")/nemo-speech-src"
           git init -q "$src"
+          # As committed, without the runner's CRLF conversion: build.rs pins the headers' SHA-256
+          # (diar.h converted to CRLF failed that pin, dry run 36769949392).
+          git -C "$src" config core.autocrlf false
           git -C "$src" remote add origin https://github.com/NVIDIA/NeMo-Speech.cpp.git
           git -C "$src" fetch -q --depth 1 origin "$commit"
           git -C "$src" checkout -q --detach FETCH_HEAD
-          git -C "$src" submodule update -q --init --depth 1 ggml
+          git -C "$src" -c core.autocrlf=false submodule update -q --init --depth 1 ggml
           echo "NeMo-Speech.cpp $(git -C "$src" rev-parse HEAD), ggml $(git -C "$src/ggml" rev-parse HEAD)"
 
       # Upstream's Vulkan preset with GGML_NATIVE=OFF, against the pinned SentencePiece and Abseil
@@ -225,6 +228,15 @@ jobs:
         shell: bash
         working-directory: core
         run: |
+          # In a developer environment rustc links with the first link.exe on PATH, and in bash that
+          # is Git's own /usr/bin/link (coreutils), not MSVC's: name MSVC's (vcvarsall above set
+          # VCToolsInstallDir).
+          linker="${VCToolsInstallDir}bin\\Hostx64\\x64\\link.exe"
+          test -f "$(cygpath -u "$linker")" || { echo "::error::no MSVC linker at $linker"; exit 1; }
+          export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER="$linker"
+          # ink-notices reads cargo's resolution offline: every crate the lock resolves for this
+          # target must be in the local registry, and the release's build fetched only its own.
+          cargo fetch --locked --target x86_64-pc-windows-msvc
           cargo run --locked -p ink-ffi --bin ink-schema -- --check
           cargo run --locked -p ink-ffi --bin ink-notices -- --windows --check
           cargo run --locked -p ink-ffi --bin ink-notices -- --velopack --check
