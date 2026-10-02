@@ -1,6 +1,7 @@
-// Today (the canvas's "Today"): the date and a greeting, what needs the user, the last meeting,
-// what is up next on the calendar, what is owed soon, and today's and this week's counts. The ink
-// zone beside it is the shell's (InkRail); this is the content to its right.
+// Today (the canvas's "Today"): over the orb, the date, a greeting, the status line and Record now;
+// the live meeting's card while one records or blots; then what needs the user, the last meeting,
+// what is up next on the calendar, what is owed soon, and today's and this week's counts, each a
+// translucent card.
 //
 // Everything is read from the library (LibraryModel), the core's events (CoreStore), the
 // permission cards and what is owed (ScreenModels, the Settings and Owed screens' models) and the
@@ -28,36 +29,40 @@ struct TodayScreen: View {
     var body: some View {
         let now = library.now()
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                header(now)
+            VStack(alignment: .leading, spacing: 22) {
+                hero(now)
+                if let meeting = store.meeting {
+                    LiveCard(meeting: meeting)
+                }
                 needsYou(now)
                 if width >= 624 {
-                    let left = (width - 40) * 1.3 / 2.3
-                    HStack(alignment: .top, spacing: 40) {
-                        lastMeeting(now).frame(width: left, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 26) {
-                            upNextSection(now)
-                            owedSoon(now)
+                    let left = (width - 18) * 1.3 / 2.3
+                    HStack(alignment: .top, spacing: 18) {
+                        card(lastMeeting(now)).frame(width: left, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 18) {
+                            card(upNextSection(now))
+                            card(owedSoon(now))
                         }
-                        .frame(width: width - 40 - left, alignment: .leading)
+                        .frame(width: width - 18 - left, alignment: .leading)
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 26) {
-                        lastMeeting(now)
-                        upNextSection(now)
-                        owedSoon(now)
+                    VStack(alignment: .leading, spacing: 18) {
+                        card(lastMeeting(now))
+                        card(upNextSection(now))
+                        card(owedSoon(now))
                     }
                 }
                 Spacer(minLength: 0)
                 stats
             }
-            .padding(.horizontal, 48)
-            .padding(.top, 38)
+            .padding(.horizontal, 36)
+            .padding(.top, 20)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, minHeight: height, alignment: .topLeading)
         }
+        .scrollContentBackground(.hidden)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-            width = max(size.width - 96, 0)
+            width = max(size.width - 72, 0)
             height = size.height
         }
         .searchable(text: searchText, placement: .toolbar, prompt: "Search everything said")
@@ -85,16 +90,50 @@ struct TodayScreen: View {
         })
     }
 
-    // MARK: Header
+    // MARK: Hero
 
-    private func header(_ now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Paper.Eyebrow(text: LibraryFormat.longDay(now, calendar: calendar))
-            Text(LibraryFormat.greeting(now, calendar: calendar))
-                .font(.system(.largeTitle, weight: .semibold))
-                .foregroundStyle(Theme.text)
-                .accessibilityAddTraits(.isHeader)
+    /// Over the orb: the date, the greeting and the status line on the left, Record now on the
+    /// right, at the foot of the orb's space.
+    private func hero(_ now: Date) -> some View {
+        HStack(alignment: .bottom, spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LibraryFormat.longDay(now, calendar: calendar))
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                Text(LibraryFormat.greeting(now, calendar: calendar))
+                    .font(Typography.greeting)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .accessibilityAddTraits(.isHeader)
+                Text(statusLine)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .padding(.top, 4)
+            }
+            Spacer(minLength: 0)
+            RecordControls()
         }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 240, alignment: .bottom)
+    }
+
+    /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now.
+    private var statusLine: String {
+        let key = DictationModel.key(screens.dictation.key)?.name ?? screens.dictation.key
+        let listening = RecordControls.listeningText(recording: store.meeting != nil, listening: store.listening)
+        return [listening, "Hold \(key) to dictate"]
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .joined(separator: " · ")
+    }
+
+    /// A section on its card.
+    private func card(_ content: some View) -> some View {
+        content
+            .padding(.vertical, 20)
+            .padding(.horizontal, 22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .paperCard()
     }
 
     // MARK: Needs you
@@ -136,9 +175,8 @@ struct TodayScreen: View {
                 }
             }
             .padding(.vertical, 16)
-            .padding(.horizontal, 18)
-            .background(RoundedRectangle(cornerRadius: 14).fill(PaperPalette.card))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PaperPalette.sealTint, lineWidth: 1))
+            .padding(.horizontal, 20)
+            .paperCard(alert: true)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Needs you")
         }
@@ -167,7 +205,7 @@ struct TodayScreen: View {
                     openRecord(record.record)
                 } label: {
                     Text(LibraryFormat.title(of: record))
-                        .font(.system(.title, design: .serif, weight: .medium))
+                        .font(.system(size: 30, design: .serif))
                         .foregroundStyle(Theme.text)
                         .multilineTextAlignment(.leading)
                         .lineLimit(3)
@@ -337,8 +375,8 @@ struct TodayScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .font(PaperType.meta)
         .foregroundStyle(Theme.secondaryText)
-        .padding(.top, 16)
-        .overlay(alignment: .top) { Rectangle().fill(PaperPalette.border).frame(height: 1) }
+        .padding(.top, 8)
+        .padding(.horizontal, 14)
         .accessibilityElement(children: .combine)
     }
 }
