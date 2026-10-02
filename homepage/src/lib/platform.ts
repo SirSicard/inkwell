@@ -6,13 +6,12 @@
   says which file it is, and marks that OS in the platform lists.
 */
 
-export type OS = 'macOS' | 'Windows' | 'Linux';
+export type OS = 'macOS' | 'Windows';
 type Choice = { href: string; note: string };
 
 type UAData = {
   platform?: string;
   mobile?: boolean;
-  getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string }>;
 };
 
 export function detectOS(): OS | null {
@@ -23,30 +22,17 @@ export function detectOS(): OS | null {
   if (/android|iphone|ipad|ipod|cros/.test(hint)) return null;
   if (hint.includes('mac')) return navigator.maxTouchPoints > 1 ? null : 'macOS'; // iPadOS reports "Macintosh"
   if (hint.includes('win')) return 'Windows';
-  if (hint.includes('linux') || hint.includes('x11')) return 'Linux';
-  return null;
+  return null; // Linux included: there is no build for it, so the neutral link stays
 }
 
 const isChoice = (c: unknown): c is Choice =>
   !!c && typeof (c as Choice).href === 'string' && /^https:\/\/github\.com\//.test((c as Choice).href) && typeof (c as Choice).note === 'string';
 
-// Chromium on an Intel Mac reports "x86". Safari and Firefox expose no architecture, and every Mac
-// browser says "Intel Mac OS X" in its user agent, so anything but a clear "x86" keeps Apple Silicon.
-async function isIntelMac(): Promise<boolean> {
-  const uaData = (navigator as Navigator & { userAgentData?: UAData }).userAgentData;
-  if (!uaData?.getHighEntropyValues) return false;
-  try {
-    return (await uaData.getHighEntropyValues(['architecture'])).architecture === 'x86';
-  } catch {
-    return false;
-  }
-}
-
-function applyChoice(root: ParentNode, key: string, os: OS) {
+function applyChoice(root: ParentNode, os: OS) {
   root.querySelectorAll<HTMLAnchorElement>('a[data-choices]').forEach((a) => {
     let choice: unknown;
     try {
-      choice = (JSON.parse(a.dataset.choices ?? '{}') as Record<string, unknown>)[key];
+      choice = (JSON.parse(a.dataset.choices ?? '{}') as Record<string, unknown>)[os];
     } catch {
       return; // the release page link stays
     }
@@ -62,7 +48,6 @@ function applyChoice(root: ParentNode, key: string, os: OS) {
 export function enhanceDownloads(root: ParentNode = document) {
   const os = detectOS();
   if (!os) return;
-  applyChoice(root, os, os);
+  applyChoice(root, os);
   root.querySelectorAll<HTMLElement>(`[data-platform="${os}"]`).forEach((el) => el.setAttribute('data-detected', ''));
-  if (os === 'macOS') void isIntelMac().then((intel) => intel && applyChoice(root, 'macOSIntel', os));
 }

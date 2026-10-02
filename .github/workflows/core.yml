@@ -1,6 +1,6 @@
 name: Core
 
-# The Rust core (core/). The legacy Tauri app keeps its own workflow, build.yml.
+# The Rust core (core/).
 on:
   push:
     branches: [main]

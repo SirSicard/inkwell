@@ -253,8 +253,8 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
 
 ### Release day: 1.0.0 (once)
 
-What the first 1.x release needs beyond the chain above, in order. The 0.2 app stays on `main`
-until this day and is not touched before it (invariant I6 in [ARCHITECTURE.md](ARCHITECTURE.md)).
+What the first 1.x release needs beyond the chain above, in order. The 0.2 app has left `main`;
+`legacy/0.2` keeps it.
 
 1.0 is one release on the Mac and on Windows together: the tag waits until the Windows app is
 ready too. Windows ships unsigned at first, with the homepage explaining how to install it past
@@ -273,16 +273,9 @@ Before the tag:
       `Notices.cs`). `mac/scripts/notices-verified.sh` and
       `windows/scripts/release-version.sh tag v1.0.0` (the same check with the Windows list) must
       pass: each platform's tag refuses to build until its check does.
-- [ ] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
-      `src-tauri/`, `public/`, `index.html`, `package.json`, `package-lock.json`,
-      `vite.config.ts`, `eslint.config.js` and the three `tsconfig*.json`. With them, what points
-      at them: `.github/dependabot.yml`'s npm entry for `/` and cargo entry for `/src-tauri`;
-      `.gitignore`'s `src-tauri` lines; `build.yml` (a `v0.*` tag builds from `legacy/0.2`'s own
-      copy); `CLAUDE.md` and `CONTRIBUTING.md`; invariant I6 in `ARCHITECTURE.md`, which ends here;
-      the rows of `THIRD_PARTY.md` that point into `src/` or `src-tauri/`, and the matching
-      exception in `NoticesTests`; the scripts only 0.2 uses (`scripts/download-models.*`,
-      `scripts/gen-model-chart.py`); and `TODO.md`, the 0.2 work list. `docs/legacy/` stays.
-- [ ] The README rewritten for 1.0.
+- [x] The 0.2 app removed from `main`, with what pointed at it (`build.yml` among them: a `v0.*`
+      tag builds from `legacy/0.2`'s own copy). `docs/legacy/` stays.
+- [x] The README rewritten for 1.0.
 - [ ] The Windows app ready for the same release, through its own chain.
 - [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
 
@@ -302,16 +295,17 @@ Then:
 - [ ] Steps 4 and 5 above: published as latest, the feed read back.
 - [ ] 0.2.10 from `legacy/0.2` with an in-app notice pointing to 1.0 (0.2's updater cannot
       install 1.0): the 0.2 chain below, published with `--latest=false` so that 1.0 stays the
-      release the feed follows, then `inkwell-updater/publish-latest.sh` and `bin/update-cask.sh`
-      (the cask moves to 0.2.10, so Homebrew users get the notice too). Skip the 0.2 chain's step
-      8: the homepage shows 1.0. On Linux and Intel Macs the notice says 0.2 is their last version.
+      release the feed follows, then `inkwell-updater/publish-latest.sh v0.2.10` and
+      `bin/update-cask.sh` (the cask moves to 0.2.10, so Homebrew users get the notice too). The
+      homepage keeps showing 1.0. On Linux and Intel Macs the notice says 0.2 is their last version.
 - [ ] `inkwell-updater/` retired once 1.0 has shipped on Windows too and 0.2.10 has gone out
       through it (0.2 installs read the notice from it until then).
 - No Homebrew cask for 1.0: `packaging/homebrew/inkwell.rb` stays on 0.2 (0.2.10 once the notice
   release is out). 1.x gets its cask at 1.0.1 (macOS 26 or later; 1.0's data folder,
   `~/Library/Application Support/Inkwell`, in `zap`; then `bin/update-cask.sh`).
-- [ ] The homepage's `APP_VERSION` and release snapshot, only once 1.0.0 is published (step 8 of
-      the 0.2 chain), in a commit authored as SirSicard: Vercel builds no other author's commits.
+- [ ] The homepage's `MAC_VERSION` and `WINDOWS_VERSION` and its release snapshot, only once
+      1.0.0 is published (`homepage/README.md`, "After a release"), in a commit authored as
+      SirSicard: Vercel builds no other author's commits.
 
 ## Inkwell 1.x on Windows
 
@@ -464,12 +458,20 @@ there is a dedicated step that uploads the bundles as artifacts instead. So this
 builds all four platforms, notarises the macOS dmgs, and publishes nothing:
 
 ```bash
-gh workflow run build.yml --ref main
+gh workflow run build.yml --ref legacy/0.2
 gh run watch "$(gh run list --workflow build.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
 Do this before touching a version number. A failure here costs a re-push; the
 same failure after tagging costs a deleted tag and a burnt version.
+
+**Only while `build.yml` is on `main`.** GitHub dispatches a workflow only when
+its file is on the default branch (as with `mac-release.yml` above), and `main`
+drops `build.yml` with the rest of the 0.2 app. The run itself uses
+`legacy/0.2`'s copy. So run the dry run of every 0.2 release still to come
+(0.2.10) before that removal merges. After it there is no dry run: the
+`v0.*` tag is the first build. Its release is a draft (`releaseDraft`), so a
+failed build is undone by deleting the draft and the tag before anyone sees it.
 
 ### Cut it
 
@@ -479,11 +481,7 @@ same failure after tagging costs a deleted tag and a burnt version.
 #    and the CHANGELOG heading (## [Unreleased] -> ## [X.Y.Z] - date)
 #    (cd src-tauri && cargo check)   regenerates Cargo.lock
 #
-#    NOT homepage/src/lib/constants.ts. That is the fifth place and it waits
-#    for step 7, because the homepage deploys on push and its own rule is
-#    that the site may only advertise a version a release exists for.
-#    Bumping it here puts the new number on a page whose Download button
-#    still hands out the old build for as long as CI takes.
+#    NOT the homepage: it advertises 1.x (step 8).
 #
 #    macOS note: BSD sed has no `0,/re/` address form. It fails silently,
 #    leaving the version untouched, which is easy to miss and then tag.
@@ -507,23 +505,25 @@ git tag -a vX.Y.Z -m "Inkwell X.Y.Z" && git push origin vX.Y.Z
 xattr -w com.apple.quarantine "0081;$(printf %x $(date +%s));Safari;" Inkwell_X.Y.Z_aarch64.dmg
 spctl --assess -vv --type open --context context:primary-signature Inkwell_X.Y.Z_aarch64.dmg
 
-# 5. Publish
-gh release edit vX.Y.Z --draft=false --latest
+# 5. Publish, never as latest: "latest" is 1.x's, and installed 1.x apps
+#    read their update feed from it (see "Publish in order, and only 1.x as
+#    latest" above).
+gh release edit vX.Y.Z --draft=false --latest=false
 
-# 6. Push the updater manifest into Cloudflare KV. Retries once and then reads
-#    the value back, so it cannot report success without having written.
-inkwell-updater/publish-latest.sh
+# 6. Push the updater manifest into Cloudflare KV, naming the release (not
+#    releases/latest, which is 1.x's and has no latest.json). Refuses a
+#    manifest of another version, retries once and then reads the value back,
+#    so it cannot report success without having written.
+inkwell-updater/publish-latest.sh vX.Y.Z
 
-# 7. Point the cask at the release. Refuses on a draft, on a no-op rewrite,
-#    and on a URL that does not return 200.
-bin/update-cask.sh
+# 7. While the cask still installs 0.2, point it at the release, by version:
+#    with no argument the script takes the latest release, which is 1.x's.
+#    Refuses on a draft, on a no-op rewrite, and on a URL that does not
+#    return 200.
+bin/update-cask.sh X.Y.Z
 
-# 8. Now set APP_VERSION in homepage/src/lib/constants.ts to the same
-#    version, run (cd homepage && node scripts/snapshot-release.mjs) to copy
-#    the release's asset list into src/data/release.json, and push. The
-#    release exists, so the site can describe it honestly, and the build
-#    refuses a version the snapshot doesn't match. Pushing this is what
-#    deploys the homepage.
+# 8. Leave the homepage alone: its download buttons offer 1.x, and a 0.2
+#    release is reached from the releases page.
 ```
 
 ### What no longer needs doing

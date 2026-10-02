@@ -1,19 +1,20 @@
 ---
 import {
-  APP_VERSION,
   AUTHOR_NAME,
   AUTHOR_URL,
   BUILD_FROM_SOURCE_URL,
   CONTRIBUTING_URL,
+  FLUIDAUDIO_URL,
   GITHUB_URL,
   HANDY_URL,
   ISSUES_URL,
   LICENSE_URL,
+  LLAMA_CPP_URL,
+  NEMO_SPEECH_URL,
   RELEASES_URL,
   SECURITY_URL,
-  SHERPA_ONNX_URL,
+  SHARED_VERSION,
   SILERO_VAD_URL,
-  TAURI_URL,
 } from '../lib/constants';
 
 interface Props {
@@ -27,15 +28,15 @@ const { base = '' } = Astro.props;
     <div class="colophon-text">
       <h2 id="colophon-title" class="sr-only">Colophon</h2>
       <p>
-        <span translate="no">Inkwell</span> {APP_VERSION} is free and MIT licensed, built by
-        <a href={AUTHOR_URL}>{AUTHOR_NAME}</a>. Originally based on <a href={HANDY_URL}>Handy</a> by CJ Pais.
-        Speech recognition by <a href={SHERPA_ONNX_URL} style="white-space: nowrap">sherpa-onnx</a>, silence detection by
-        <a href={SILERO_VAD_URL}>Silero VAD</a>, desktop shell by <a href={TAURI_URL}>Tauri</a>.
+        <span translate="no">Inkwell</span>{SHARED_VERSION && ` ${SHARED_VERSION}`} is free and MIT licensed, built by
+        <a href={AUTHOR_URL}>{AUTHOR_NAME}</a>. Inkwell 0.2 was originally based on <a href={HANDY_URL}>Handy</a>
+        by CJ Pais. Speech recognition by <a href={LLAMA_CPP_URL}>llama.cpp</a> running Qwen3-ASR, live words by
+        <a href={FLUIDAUDIO_URL}>FluidAudio</a>, speaker labels by <a href={NEMO_SPEECH_URL}>NeMo-Speech.cpp</a>,
+        voice detection by <a href={SILERO_VAD_URL}>Silero VAD</a>.
       </p>
       <p>
-        The app is Rust and Tauri v2, with sherpa-onnx on ONNX Runtime (CPU) for inference, cpal for capture,
-        rubato for resampling and SQLite for history. Its front end is React 19, TypeScript, Tailwind v4,
-        Framer Motion and a WebGL ink shader, which this page borrows.
+        The app is native on each system over one Rust core: SwiftUI and AppKit with a Metal ink on the Mac,
+        WinUI 3 with a Direct3D ink on Windows, and SQLite for the library.
       </p>
       <p>This site sets no cookies and runs no analytics.</p>
     </div>

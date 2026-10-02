@@ -6,11 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
+Inkwell 1.0: the app rebuilt, for the Mac and Windows together. It replaces 0.2 in place on Apple
+silicon Macs, and installs beside it on Windows. 0.2's own changes continue in its changelog on the
+`legacy/0.2` branch.
 
-- **The recording overlay no longer jumps sideways when Live Preview is on.** Turning it on moved the ink blob 231 points to the left, off the spot it had occupied in every previous version, because the wider window was positioned by its own edge. The words now appear in a strip above the blob and the blob itself does not move at all.
-- **Inkwell was writing your dictations into its log file.** One line recorded the sentence before and after filler-word removal as plain text, in a log that survives clearing your history. It records lengths now, like every other line. If you have used Inkwell since 0.2.7, the existing log on your machine still contains that text: Settings, Troubleshooting, Open Log Folder, and delete `Inkwell.log`.
-- **AI Polish now says why it failed.** When the provider rejected a request, the reason was discarded and every dictation silently fell back to unpolished text with no way to find out why. The error is now reported.
+### Added
+
+- **Meeting notes.** When an app has held the microphone for a few seconds, Inkwell offers to record the call; nothing records until you say so. Your microphone and the call's audio are two streams, so "you" is never a guess. A live transcript while the call runs, notes you can add, and at the end a final pass that replaces the live words and labels the other side's speakers when there are two or more.
+- **Summaries, commitments and Ask.** With your OK, a language model writes a meeting's summary with the lines it cites, keeps the promises made in it under Owed, and answers questions about the meeting. On the Mac it is Apple's on-device model, so your words stay on the Mac; on Windows, the provider you set up.
+- **A library of every dictation and meeting**, searchable, with each meeting's audio played back from disk and a retention setting (forever by default, or 7, 30, 90 or 365 days). Anything imported is never removed by it.
+- **Your 0.2 history comes along.** The first run, and Settings > Voice after it, offer to import Inkwell 0.2's dictation history, dictionary, snippets and modes, and its dictation key when 1.0 can listen for it. 0.2's own copy is only read, never changed.
+- **The models download when you say so.** The first run's Models step lists each model with its licence, size and source (about 3.1 GB in all on the Mac, 3.3 GB on Windows); nothing downloads until you press Download, and Settings > Models downloads any you skipped.
+- **The Drop.** A small window that shows your words as you say them and never takes the focus.
+- **Crash recovery.** Meeting audio is written to disk as it arrives; after a crash the meeting is repaired and finished from what was saved.
+- **Native apps.** SwiftUI and AppKit on the Mac, WinUI 3 on Windows, over one Rust core.
+
+### Changed
+
+- **New speech engines, chosen by measurement.** Qwen3-ASR 1.7B writes dictations and meeting transcripts (Metal on the Mac, Vulkan or the CPU on Windows), Parakeet TDT v3 shows the live words (and, on a Windows PC without a GPU, writes the dictations), Nemotron-3-Diarization labels the other side's speakers (Metal on the Mac, Vulkan or the CPU on Windows), and Silero VAD detects voice. Each model downloads from a pinned revision and is checked against its hash.
+- **Dictation is hold to talk,** on a modifier held on its own: Fn (Globe) on the Mac and right Ctrl on Windows until you pick another.
+- **Polish and voice edit ask first.** Each language-model feature (polish, voice edit, summaries and Ask) is off until you allow it for a named destination, and asks again if that destination changes. On the Mac they run on Apple's on-device model. On Windows they run on a provider you set up (OpenAI, Anthropic, Groq, OpenRouter, or an OpenAI-compatible server you name), with your own API key, kept in Windows Credential Manager.
+- **Updates on the Mac come through Sparkle**, from this repository's releases, each signed with the project's key and checked before it is unpacked. On Windows the app checks this repository's releases when you ask it to.
+- **The Mac app needs macOS 26 or later on Apple silicon,** and is signed and notarized. **The Windows app needs Windows 11 24H2 or later on x64.** Its installer is per user, needs no administrator, and brings the Visual C++ runtime its speech engines need beside the app; its first run asks you to agree to Microsoft's terms for the runtimes it includes. It is not code signed yet: SmartScreen warns before it runs, and Smart App Control blocks it. An ARM64 build is planned for 1.0.1.
+
+### Removed
+
+- **Linux and Intel Macs.** Inkwell 0.2 stays the last version for them, on the releases page.
+- **The 0.2 app's features that 1.0 does not carry:** transcribing an audio or video file, the model picker, export to TXT, SRT, JSON or CSV, and, on the Mac, your own API key for a cloud provider (polish and voice edit run on Apple's on-device model there instead).
 
 ## [0.2.9] - 2026-08-27
 

@@ -14,17 +14,17 @@ import Cost from '../components/Cost.astro';
 import CodeSigning from '../components/CodeSigning.astro';
 import Colophon from '../components/Colophon.astro';
 import {
-  APP_VERSION,
   AUTHOR_NAME,
   AUTHOR_URL,
   LICENSE_URL,
   RELEASES_LATEST_URL,
+  SHARED_VERSION,
   SITE_URL,
 } from '../lib/constants';
 
 const title = 'Inkwell: dictation that stays on your desk';
 const description =
-  'Hold a key, speak, let go: the text lands in whatever app you were typing in. Speech recognition runs on your own CPU, so your audio never leaves the machine. Free, MIT licensed, no account.';
+  'Hold a key, speak, let go: the text lands in whatever app you were typing in. Speech recognition runs on your own machine, so your audio never leaves it. Free, MIT licensed, no account.';
 
 // Only fields that are true. No rating or review: SoftwareApplication rich results want ratings, and
 // there are none to give.
@@ -35,8 +35,8 @@ const jsonLd = {
   description,
   url: `${SITE_URL}/`,
   applicationCategory: 'UtilitiesApplication',
-  operatingSystem: 'macOS, Windows 10, Windows 11, Linux',
-  softwareVersion: APP_VERSION,
+  operatingSystem: 'macOS 26, Windows 11',
+  ...(SHARED_VERSION ? { softwareVersion: SHARED_VERSION } : {}), // omitted while the platforms differ
   downloadUrl: RELEASES_LATEST_URL,
   license: LICENSE_URL,
   isAccessibleForFree: true,

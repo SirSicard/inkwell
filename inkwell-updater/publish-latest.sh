@@ -1,16 +1,32 @@
 #!/bin/sh
-# Push the newest GitHub release's latest.json into the updater's KV.
+# Push a 0.2 release's latest.json into the updater's KV.
 #
 # The worker serves updates from KV, not from GitHub, so publishing a release
-# does nothing for installed copies until this runs. Run it after every
-# release. Requires wrangler to be logged in (npx wrangler login).
+# does nothing for installed copies until this runs. Run it after every 0.2
+# release, naming its tag. The tag is not read from releases/latest: 1.x
+# releases carry no latest.json, and 1.x is the release marked latest.
+# Requires wrangler to be logged in (npx wrangler login).
+#
+#   inkwell-updater/publish-latest.sh v0.2.10
 set -e
 cd "$(dirname "$0")"
+
+TAG="${1:-}"
+case "$TAG" in
+  v0.2.[0-9] | v0.2.[0-9][0-9] | v0.2.[0-9][0-9][0-9]) ;;
+  *)
+    echo "usage: $0 v0.2.N   (the 0.2 release whose latest.json to publish)" >&2
+    exit 2
+    ;;
+esac
 
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-curl -sfL "https://github.com/SirSicard/inkwell/releases/latest/download/latest.json" -o "$TMP"
+# A wrong tag, a draft or a release not yet published has no latest.json to
+# fetch: say so, rather than exit silently under set -e.
+curl -sfL "https://github.com/SirSicard/inkwell/releases/download/$TAG/latest.json" -o "$TMP" \
+  || { echo "FAILED: no latest.json at $TAG (is the tag right, and the release published?)" >&2; exit 1; }
 
 # Refuse to push something that is not JSON (a GitHub error page, an empty
 # body): a malformed KV value makes the worker answer 500 to every client.
@@ -22,6 +38,13 @@ python3 -m json.tool "$TMP" > /dev/null
 # pushed. A release whose manifest silently stays on the old version strands
 # every installed copy with no error anywhere.
 WANT=$(python3 -c "import json;print(json.load(open('$TMP'))['version'])")
+# The manifest must be the named release's own: a typo'd or reused tag would
+# otherwise push another version under this one's name. (The worker reads the
+# version with or without a leading v.)
+if [ "${WANT#v}" != "${TAG#v}" ]; then
+  echo "FAILED: $TAG's latest.json names version $WANT" >&2
+  exit 1
+fi
 for attempt in 1 2; do
   if npx wrangler kv key put latest "$(cat "$TMP")" --binding INKWELL_RELEASES --remote; then
     break

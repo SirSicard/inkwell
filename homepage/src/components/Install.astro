@@ -1,19 +1,22 @@
 ---
 // Download and first run, from the README's Install, Quick start and Requirements sections (the default
-// hotkeys were checked against the app's settings at the v0.2.9 tag). The file
-// links are the release's real assets (see ../lib/release.ts). The previous site's "Nothing is code
-// signed yet" was stale: macOS builds are signed and notarised; Windows is not signed yet.
-import { APP_VERSION, BUILD_FROM_SOURCE_URL, RELEASES_URL } from '../lib/constants';
+// keys were checked against ink-ffi's voice.rs, the Windows minimum against windows/Inkwell.csproj, the
+// model totals against ink-engines' rows). The file links are the releases' real assets (see
+// ../lib/release.ts). The Mac build is signed and notarised; the Windows build is not signed yet, and
+// its steps and Microsoft's terms follow windows/HOMEPAGE-INSTALL.md (keep the terms sentence in step
+// with the release notes, the installer's splash and the app's terms step).
+import { BUILD_FROM_SOURCE_URL, RELEASES_URL, SHARED_VERSION } from '../lib/constants';
 import { DOWNLOADS } from '../lib/release';
 ---
 
 <section class="install wrap" id="download" aria-labelledby="download-title">
   <div class="section-head">
-    <h2 id="download-title">Download Inkwell {APP_VERSION}.</h2>
+    <h2 id="download-title">Download Inkwell{SHARED_VERSION && ` ${SHARED_VERSION}`}.</h2>
     <p class="section-intro">
       Free, with no account and no email address asked for. Every build is also on the
       <a href={RELEASES_URL}>GitHub releases page</a>, and you can <a href={BUILD_FROM_SOURCE_URL}>build it from
-      source</a>.
+      source</a>. Linux and Intel Macs aren’t supported: Inkwell 0.2 stays the last version for them, on the
+      same page. Windows on ARM64 isn’t supported by 1.0 either: a build for it is planned for 1.0.1.
     </p>
   </div>
 
@@ -22,10 +25,9 @@ import { DOWNLOADS } from '../lib/release';
       <div class="platform-head">
         <h3>macOS</h3>
         <p class="detected-note" hidden>This computer</p>
-        <p>Apple Silicon, the primary platform, and Intel.</p>
+        <p>Apple silicon, on macOS 26 or later.</p>
         <ul class="files">
-          <li><a href={DOWNLOADS.macOS.url} translate="no">{DOWNLOADS.macOS.name}</a> <span>{DOWNLOADS.macOS.size}, Apple Silicon</span></li>
-          <li><a href={DOWNLOADS.macOSIntel.url} translate="no">{DOWNLOADS.macOSIntel.name}</a> <span>{DOWNLOADS.macOSIntel.size}, Intel</span></li>
+          <li><a href={DOWNLOADS.macOS.url} translate="no">{DOWNLOADS.macOS.name}</a> <span>{DOWNLOADS.macOS.size}</span></li>
         </ul>
       </div>
       <div class="platform-body">
@@ -36,55 +38,68 @@ import { DOWNLOADS } from '../lib/release';
           </li>
           <li>Allow Microphone access when asked.</li>
           <li>
-            Allow Accessibility access in System Settings, under Privacy &amp; Security. Inkwell pastes with a
-            synthetic keystroke, which macOS blocks until you grant this. It is the one people miss: without it,
-            dictation transcribes and nothing appears.
+            Allow Accessibility access in System Settings, under Privacy &amp; Security. Inkwell needs it to hear
+            the dictation key and to type the text; until you grant it, dictation stays off and says why.
           </li>
+          <li>For meetings, allow System Audio Recording when asked: it is how Inkwell hears the other side of a call.</li>
+          <li>Calendars is optional: it lets Inkwell show your next meeting and name each meeting and who was in it.</li>
         </ol>
         <p class="platform-note">
-          Secure Input blocks the paste, so dictating into password fields and some terminals does nothing.
+          Secure Input (a password field, some terminals) blocks typing into that app: nothing is typed, and
+          Inkwell says so.
         </p>
       </div>
     </div>
 
-    <div class="platform" data-platform="Windows">
+    <div class="platform" data-platform="Windows" id="windows-install">
       <div class="platform-head">
         <h3>Windows</h3>
         <p class="detected-note" hidden>This computer</p>
-        <p>Windows 10 and 11. The secondary platform, built by CI on every release.</p>
+        <p>Windows 11 24H2 or later, on x64. It installs for your user account alone: no administrator, nothing system-wide.</p>
         <ul class="files">
-          <li><a href={DOWNLOADS.windows.url} translate="no">{DOWNLOADS.windows.name}</a> <span>{DOWNLOADS.windows.size}, recommended</span></li>
-          <li><a href={DOWNLOADS.windowsMsi.url} translate="no">{DOWNLOADS.windowsMsi.name}</a> <span>{DOWNLOADS.windowsMsi.size}</span></li>
+          <li><a href={DOWNLOADS.windows.url} translate="no">{DOWNLOADS.windows.name}</a> <span>{DOWNLOADS.windows.size}</span></li>
         </ul>
       </div>
       <div class="platform-body">
-        <p class="step-single">
-          Run the installer. It is not code signed yet, so SmartScreen says “Windows protected your PC”: click
-          “More info”, then “Run anyway”. Your browser may also flag the download as uncommon.
+        {/* The README's Install section and the hero link here. */}
+        <ol class="steps">
+          <li>
+            Download the installer. Your browser may say the file isn’t commonly downloaded: in Edge, open the
+            download’s “…” menu, choose “Keep”, then “Show more” and “Keep anyway”; in Chrome, choose “Keep”.
+          </li>
+          <li>
+            Check the download (recommended). The installer is not code signed yet, so this is how you know the
+            file is the one we published: in PowerShell, <code>Get-FileHash</code> followed by the file’s path
+            prints its SHA-256, which must match the one in the release notes. If it does not, delete the file
+            and do not run it.
+          </li>
+          <li>
+            Run it. SmartScreen says “Windows protected your PC”, with an unknown publisher: click “More info”,
+            then “Run anyway”. Inkwell installs in a few seconds, with the Visual C++ runtime its speech engines
+            need beside it, and opens.
+          </li>
+          <li>
+            On its first run, Inkwell shows Microsoft’s terms for the runtimes it includes (below): agree to
+            start, or quit.
+          </li>
+        </ol>
+        <p class="platform-note">
+          If Smart App Control blocked it, there is no “Run anyway”: Smart App Control does not run apps that
+          are not signed. The signed build is on its way; we would rather you wait for it than turn off a
+          protection you chose to keep.
         </p>
         <p class="platform-note">
-          Only macOS is signed today. The source and the workflow that built these files are public, so you
-          can check what you are running.
+          Inkwell includes the runtime of Microsoft’s Windows App SDK, the Windows SDK’s .NET projection and
+          the Visual C++ runtime, which Microsoft licenses separately under the Microsoft Software License
+          Terms (shown in full in Inkwell’s Settings &gt; About). By installing or using Inkwell on Windows,
+          you agree to those terms for those components.
         </p>
-      </div>
-    </div>
-
-    <div class="platform" data-platform="Linux">
-      <div class="platform-head">
-        <h3>Linux</h3>
-        <p class="detected-note" hidden>This computer</p>
-        <p>A recent desktop on x86-64. Best effort: built by CI, not regularly tested.</p>
-        <ul class="files">
-          <li><a href={DOWNLOADS.appImage.url} translate="no">{DOWNLOADS.appImage.name}</a> <span>{DOWNLOADS.appImage.size}</span></li>
-          <li><a href={DOWNLOADS.deb.url} translate="no">{DOWNLOADS.deb.name}</a> <span>{DOWNLOADS.deb.size}</span></li>
-        </ul>
-      </div>
-      <div class="platform-body">
-        <ul class="notes">
-          <li>Expect rough edges. Bug reports that name your distribution and desktop are welcome.</li>
-          <li>The global hotkey and the paste keystroke go through X11, so a Wayland session is untested.</li>
-          <li>Per-app modes stay off, because the foreground app can’t be read.</li>
-        </ul>
+        <p class="platform-note">
+          Updates come when you ask for them, in Settings &gt; About &gt; Check Now, from this project’s
+          releases, each checked against its size and SHA-256. Uninstalling, in Settings &gt; Apps, leaves your
+          library in <span translate="no">%LOCALAPPDATA%\Inkwell</span>. Inkwell 0.2 stays installed beside
+          1.0: import its history before you uninstall it with its application data.
+        </p>
       </div>
     </div>
   </div>
@@ -94,23 +109,27 @@ import { DOWNLOADS } from '../lib/release';
       <h3>First run</h3>
       <ol class="steps">
         <li>
-          Finish the short onboarding: pick a microphone, download a model, test the hotkey. The installer holds
-          no speech models; Parakeet V3 (670&nbsp;MB) is the default.
+          Finish the onboarding. The installer holds no speech models: its Models step lists each with its
+          licence, size and source, about 3.1&nbsp;GB in all on the Mac and 3.3&nbsp;GB on Windows, and nothing
+          downloads until you press Download. You can go on while they download, or get them later in
+          Settings.
         </li>
         <li>
-          The record hotkey starts as <kbd>Cmd+Shift+Space</kbd> on macOS and <kbd>Ctrl+Space</kbd> elsewhere.
-          Change it in Settings, under General; on macOS, pick one that doesn’t collide with Spotlight or
-          input-source switching.
+          If Inkwell 0.2 is on this computer, onboarding offers to import its dictation history, dictionary,
+          snippets and modes. 0.2’s own copy is only read, never changed.
         </li>
-        <li>Hold the hotkey, speak, let go. The text is pasted where your cursor is.</li>
+        <li>
+          The dictation key starts as <kbd>Fn</kbd> on the Mac and right <kbd>Ctrl</kbd> on Windows. Change it in
+          Settings.
+        </li>
+        <li>Hold the key, speak, let go. The text is typed where your cursor is.</li>
       </ol>
     </div>
     <div>
       <h3>Requirements</h3>
       <dl class="reqs">
-        <div><dt>System</dt><dd>macOS on Apple Silicon or Intel, Windows 10 or 11, or a recent Linux desktop</dd></div>
-        <div><dt>Memory</dt><dd>2&nbsp;GB free with Parakeet V3, less with the small models</dd></div>
-        <div><dt>Disk</dt><dd>About 50&nbsp;MB for the app, plus 240 to 940&nbsp;MB for the model you choose</dd></div>
+        <div><dt>System</dt><dd>A Mac with Apple silicon on macOS 26 or later, or a PC with Windows 11 24H2 or later on x64</dd></div>
+        <div><dt>Disk</dt><dd>About 3.1&nbsp;GB for the models on the Mac, 3.3&nbsp;GB on Windows, plus the meetings you keep</dd></div>
         <div><dt>Microphone</dt><dd>Any</dd></div>
       </dl>
     </div>

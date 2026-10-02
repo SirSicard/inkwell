@@ -8,15 +8,6 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: monthly
-    groups:
-      dev-tooling:
-        patterns: ["*"]
-        update-types: [minor, patch]
-
-  - package-ecosystem: npm
     directory: /homepage
     schedule:
       interval: monthly
@@ -31,15 +22,6 @@ updates:
       interval: monthly
     groups:
       worker:
-        patterns: ["*"]
-        update-types: [minor, patch]
-
-  - package-ecosystem: cargo
-    directory: /src-tauri
-    schedule:
-      interval: monthly
-    groups:
-      rust:
         patterns: ["*"]
         update-types: [minor, patch]
 

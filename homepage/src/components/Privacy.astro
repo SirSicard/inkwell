@@ -1,9 +1,13 @@
 ---
-// What stays and every network call, from the README's Privacy section ("Every network call, listed").
-// The update check's contents are the README's words. Checked against the app at the v0.2.9 tag: the
-// check runs five seconds after launch with no setting to turn it off, the Silero model URL is the
-// sherpa-onnx GitHub release, and Save Debug Audio defaults to off.
-import { HUGGING_FACE_URL, UPDATER_HOST } from '../lib/constants';
+// What stays and every network call, from the README's Privacy section ("Every network call, listed")
+// and SECURITY.md. Checked against the 1.0 source: the model rows' download URLs (ink-engines'
+// registry, fetched only when the user presses Download), the Mac's update feed and
+// SUEnableSystemProfiling (mac/Info.plist), a dictation keeping no audio (ink-pipeline), the
+// retention choices (retention.days), the language-model consents
+// (ink_pipeline::consent) and Windows's providers and key store (ink_llm). Windows's update row follows
+// the updater its distribution step builds: nothing is checked until the user asks. This section
+// doubles as the privacy policy the code signing policy links.
+import { GITHUB_URL, HUGGING_FACE_URL, RELEASES_URL } from '../lib/constants';
 ---
 
 <section class="privacy wrap" id="privacy" aria-labelledby="privacy-title">
@@ -11,7 +15,7 @@ import { HUGGING_FACE_URL, UPDATER_HOST } from '../lib/constants';
     <h2 id="privacy-title">What it sends, all of it.</h2>
     <p class="section-intro">
       No account, no telemetry, no analytics, no crash reporting, and no server of this project’s that your
-      text passes through. Here is what stays, and every call that goes out.
+      words pass through. Here is what stays, and every call that goes out.
     </p>
   </div>
 
@@ -21,25 +25,39 @@ import { HUGGING_FACE_URL, UPDATER_HOST } from '../lib/constants';
       <div>
         <dt>Your voice</dt>
         <dd>
-          Captured, resampled and transcribed in memory by a model on your CPU. Never uploaded, and never
-          written to disk unless you switch on Save Debug Audio, a troubleshooting setting that is off by
-          default.
+          Transcribed on this machine, never uploaded. A dictation’s audio is not kept. A meeting’s audio is,
+          on disk beside its record, because the final pass and the playback read it from there, until your
+          Keep records setting removes it.
         </dd>
       </div>
       <div>
         <dt>Your transcripts</dt>
-        <dd>A SQLite file in the app’s data directory. Nothing syncs.</dd>
-      </div>
-      <div>
-        <dt>Your settings</dt>
-        <dd>Modes, snippets, dictionary and voice commands, as plain files on your disk.</dd>
-      </div>
-      <div>
-        <dt>Your API key</dt>
         <dd>
-          If you add one, it lives in the OS keyring (the macOS Keychain, the Windows Credential Manager or the Secret Service on Linux),
-          never in a config file in plain text. A key an older build did write in plain text is stripped the
-          next time settings load.
+          Dictations, meetings, notes and summaries, in a SQLite file in the app’s data folder. Nothing
+          syncs, and no log ever holds your words.
+        </dd>
+      </div>
+      <div>
+        <dt>The microphone</dt>
+        <dd>
+          For dictation it opens when you press the key and is let go of a minute after your last take. For a
+          meeting it is open while you record, and recording starts only when you say so.
+        </dd>
+      </div>
+      <div>
+        <dt>Your calendar</dt>
+        <dd>
+          On the Mac, only if you allow it: read to show your next meeting and to name each meeting and who was
+          in it. It never leaves the Mac.
+        </dd>
+      </div>
+      <div>
+        <dt>Language models</dt>
+        <dd>
+          On the Mac, polish, voice edit, summaries and Ask run on Apple’s on-device model, so your words stay
+          on the Mac. On Windows they need a provider you set up with your own API key, and send it the words
+          they work on (the table below); the key stays in Windows Credential Manager. Each is off until you
+          allow it, and asks again if where your words would go ever changes.
         </dd>
       </div>
     </dl>
@@ -61,40 +79,42 @@ import { HUGGING_FACE_URL, UPDATER_HOST } from '../lib/constants';
           <tr role="row">
             <th scope="row" role="rowheader">Speech model download</th>
             <td role="cell"><span class="m-only">Goes to</span><a href={HUGGING_FACE_URL}>Hugging Face</a></td>
-            <td role="cell"><span class="m-only">When</span>The first time you pick a model</td>
-            <td role="cell"><span class="m-only">What it carries</span>A request for the model’s files</td>
+            <td role="cell"><span class="m-only">When</span>When you press Download, in the first run or in Settings; never before</td>
+            <td role="cell"><span class="m-only">What it carries</span>A request for the model’s files, at a pinned revision; each file is checked against its hash</td>
           </tr>
           <tr role="row">
             <th scope="row" role="rowheader">Voice-detection model download</th>
-            <td role="cell"><span class="m-only">Goes to</span>GitHub, the sherpa-onnx releases</td>
-            <td role="cell"><span class="m-only">When</span>On first run, if the Silero VAD model is missing</td>
-            <td role="cell"><span class="m-only">What it carries</span>A request for that one file</td>
+            <td role="cell"><span class="m-only">Goes to</span>GitHub, the Silero VAD repository</td>
+            <td role="cell"><span class="m-only">When</span>With the speech models, when you press Download</td>
+            <td role="cell"><span class="m-only">What it carries</span>A request for that one file, checked the same way</td>
           </tr>
           <tr role="row">
-            <th scope="row" role="rowheader">Update check</th>
-            <td role="cell"><span class="m-only">Goes to</span>The project’s own worker, <span class="host" translate="no" set:html={UPDATER_HOST.split('.').map((part) => `<span>${part}</span>`).join('.<wbr>')} /></td>
-            <td role="cell"><span class="m-only">When</span>Five seconds after every launch. There is no switch for it yet</td>
+            <th scope="row" role="rowheader">Update check, Mac</th>
+            <td role="cell"><span class="m-only">Goes to</span>This project’s <a href={RELEASES_URL}>GitHub releases</a></td>
+            <td role="cell"><span class="m-only">When</span>Only once you have said yes to the updater’s question, and when you check by hand</td>
             <td role="cell">
-              <span class="m-only">What it carries</span>The app version, OS target and CPU architecture. The worker
-              only reads the latest release record
+              <span class="m-only">What it carries</span>A request for the update feed. Nothing about your Mac: no
+              system profile is sent
             </td>
           </tr>
           <tr role="row">
-            <th scope="row" role="rowheader">AI polish and voice editing</th>
-            <td role="cell">
-              <span class="m-only">Goes to</span>The provider whose key you added: OpenAI, Groq, Anthropic,
-              OpenRouter or your own endpoint
-            </td>
-            <td role="cell"><span class="m-only">When</span>Only while polish is on, or when you use voice editing</td>
-            <td role="cell"><span class="m-only">What it carries</span>Your text, never the audio, sent straight from your machine</td>
+            <th scope="row" role="rowheader">Updates, Windows</th>
+            <td role="cell"><span class="m-only">Goes to</span>This project’s <a href={RELEASES_URL}>GitHub releases</a></td>
+            <td role="cell"><span class="m-only">When</span>Only when you ask the app to check</td>
+            <td role="cell"><span class="m-only">What it carries</span>A request for the release feed, then for the update if you take it. Nothing about your PC</td>
+          </tr>
+          <tr role="row">
+            <th scope="row" role="rowheader">Language model, Windows</th>
+            <td role="cell"><span class="m-only">Goes to</span>The provider you set up: OpenAI, Anthropic, Groq, OpenRouter, or a server you name</td>
+            <td role="cell"><span class="m-only">When</span>Only if you set one up: when a feature you allowed for it runs, or when you test it</td>
+            <td role="cell"><span class="m-only">What it carries</span>The words that feature works on (a dictation, the text you selected, a meeting’s transcript, your question) and your API key. A test carries a fixed question, none of your words</td>
           </tr>
         </tbody>
       </table>
     </div>
     <p class="after-ledger">
-      Without polish or voice editing, and with your models on disk, the update check is the only call left:
-      dictation works with the network unplugged. Earlier builds had a free proxy tier that routed polish through a
-      server the maintainer paid for. It is gone; your own key is the only path.
+      With the models on disk, dictation and meetings work with the network unplugged; what is left is
+      updates and, on Windows, a provider you set up. Everything that decides what is sent is in the <a href={GITHUB_URL}>source</a>.
     </p>
   </div>
 </section>
