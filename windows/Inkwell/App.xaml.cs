@@ -47,6 +47,20 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // A second start of the app on this library hands its activation here (Program), off the
+        // UI thread: what is up shows, the terms or the window.
+        var ui = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Activated += (_, _) => ui.TryEnqueue(() =>
+        {
+            if (terms is not null)
+            {
+                terms.Activate();
+            }
+            else
+            {
+                ShowWindow();
+            }
+        });
         var step = new TermsStep(TermsFile(), Launch, Exit);
         step.Launch();
         if (step.Showing)
