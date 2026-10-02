@@ -131,6 +131,37 @@ public class PermissionsModelTests
     }
 
     /// <summary>
+    /// A request the core could not carry out (Settings did not open) shows on the card that asked,
+    /// instead of only reaching the log; the next request, or the card reading allowed, clears it.
+    /// </summary>
+    [Fact]
+    public void AFailedRequestShowsOnItsCardUntilTheNextRequestOrItIsAllowed()
+    {
+        var sent = new Sent();
+        var model = new PermissionsModel(sent.Send);
+        model.Refresh();
+        model.Apply(PermissionEvents.Checked(mic: "denied"));
+        var changes = 0;
+        model.PropertyChanged += (_, _) => changes++;
+        Assert.Null(model.RequestFailed);
+        model.Request(PermissionCard.HearYou);
+        var failed = Ev.Of<CommandFailed>("""{"type":"command.failed","command":"permission.request","message":"could not open Settings"}""");
+        Assert.True(PermissionsModel.Handles(failed));
+        model.Apply(failed);
+        Assert.Equal(PermissionCard.HearYou, model.RequestFailed);
+        Assert.True(changes > 0);
+        Assert.Contains("Privacy & security > Microphone", PermissionCards.RequestFailedLine, StringComparison.Ordinal);
+        model.Request(PermissionCard.HearYou);
+        Assert.Null(model.RequestFailed);
+        model.Apply(failed);
+        Assert.Equal(PermissionCard.HearYou, model.RequestFailed);
+        model.Refresh();
+        Assert.Equal(PermissionCard.HearYou, model.RequestFailed); // a re-check alone keeps it
+        model.Apply(PermissionEvents.Checked(mic: "granted"));
+        Assert.Null(model.RequestFailed);
+    }
+
+    /// <summary>
     /// Windows: the Mac's system-audio request is gone (Windows has none to ask for), so a press on
     /// that card sends nothing; the microphone's asks the core, which opens Settings.
     /// </summary>

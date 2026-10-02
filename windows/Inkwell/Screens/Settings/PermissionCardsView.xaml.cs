@@ -49,7 +49,7 @@ public sealed partial class PermissionCardsView : UserControl
     {
         foreach (var (card, row) in rows)
         {
-            row.Show(permissions.State(card));
+            row.Show(permissions.State(card), permissions.RequestFailed == card);
         }
     }
 }
