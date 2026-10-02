@@ -152,14 +152,19 @@ final class StorageModel {
         }
     }
 
-    /// Measures again when a model's files have changed: Settings measures as it appears, and a
+    /// Measures again when a model's files, or a record's recording, have changed (a model
+    /// installed, a record deleted): Settings measures as it appears, and a
     /// download it started finishes while it is still showing (it once read "Models 0 bytes" over
     /// 2.9 GB of installed models). Only once Settings has measured: nobody reads the sizes before.
     func apply(_ event: InkEvent) {
         guard sizes != nil || measuring else { return }
-        if case .modelUpdateFinished = event {
-            // Failed too: a failed update may have removed what it had downloaded.
+        switch event {
+        case .modelUpdateFinished, .recordDeleted:
+            // A failed update too: it may have removed what it had downloaded. A deleted record
+            // took its recording with it.
             measure()
+        default:
+            break
         }
     }
 

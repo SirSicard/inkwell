@@ -930,6 +930,14 @@ final class ModesModelTests: XCTestCase {
 
 @MainActor
 final class OwedModelTests: XCTestCase {
+    /// A deleted record took what it owed with it: listed again.
+    func testADeletedRecordListsWhatIsOwedAgain() {
+        let sent = Sent()
+        let owed = OwedModel(send: sent.send)
+        owed.apply(event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"#))
+        XCTAssertEqual(sent.commands, [.commitmentsList])
+    }
+
     private func listed(_ items: String) -> InkEvent {
         event(#"{"type":"commitments.listed","items":[\#(items)]}"#)
     }
@@ -1320,6 +1328,20 @@ final class StorageModelTests: XCTestCase {
         screens.apply([finished("silero-vad-v6-16k")])
         try await waitUntil { (screens.storage.sizes?.models ?? 0) >= 100_000 }
         XCTAssertEqual(screens.storage.sizes?.recordings, 0, "a model is not a recording")
+    }
+
+    /// A record the user deleted took its recording with it: measured again.
+    func testADeletedRecordIsMeasuredAway() async throws {
+        let screens = ScreenModels(
+            send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps(), dataDirectory: data)
+        let meeting = data.appendingPathComponent("meetings/m1", isDirectory: true)
+        try FileManager.default.createDirectory(at: meeting, withIntermediateDirectories: true)
+        try Data(count: 100_000).write(to: meeting.appendingPathComponent("mic-000000-16000x1.pcm"))
+        screens.storage.measure()
+        try await waitUntil { (screens.storage.sizes?.recordings ?? 0) >= 100_000 }
+        try FileManager.default.removeItem(at: meeting)
+        screens.apply([event(#"{"type":"record.deleted","record":"m1","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        try await waitUntil { screens.storage.sizes?.recordings == 0 }
     }
 
     /// Nothing is measured for a Settings screen that never asked: a download alone walks nothing.

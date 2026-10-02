@@ -409,7 +409,8 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertEqual((list["before"] as? [String: Any])?["started_at_unix_ms"] as? Int, 7)
         XCTAssertNil(command(CoreCommand.recordsList(kind: nil, before: nil, limit: 5, ref: "q2").json)["kind"])
         for c in [CoreCommand.recordsSearch(query: "x", limit: 1, ref: "a"), .recordOpen(record: "r", ref: "b"),
-                  .libraryStats(sinceUnixMs: 0, ref: "c"), .speakerName(record: "r", speaker: "spk1", name: "A", ref: "d")] {
+                  .libraryStats(sinceUnixMs: 0, ref: "c"), .speakerName(record: "r", speaker: "spk1", name: "A", ref: "d"),
+                  .recordDelete(record: "r", ref: "e")] {
             XCTAssertNotNil(command(c.json)["id"] as? String, c.name)
         }
     }
@@ -641,6 +642,142 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertEqual(reread["record"] as? String, "r1")
         library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: reread["id"] as! String))])
         XCTAssertEqual(library.lastMeeting?.record.record, "r1", "read into Today's slot")
+    }
+
+    /// Deleting a record: asked for by id, with an id of its own. When the core says it is gone, it
+    /// leaves the list and the matches; the selection moves to the record below it (the one above
+    /// when it was the last), Today is read again (its last meeting may be the one that went), and
+    /// what deleting left behind is said. A failure is said and nothing moves.
+    func testADeletedRecordLeavesTheListAndTheSelectionMovesOn() throws {
+        let (library, sent) = model()
+        library.refreshList()
+        library.apply([event(#"""
+        {"type":"library.records","ref":"\#(requestID(sent().last!))","more":false,"records":[
+          \#(row("r3", start: 3_000, end: 4_000)), \#(row("r1", start: 2_000, end: 3_000)), \#(row("r0", start: 1_000, end: 2_000))]}
+        """#)])
+        library.open("r1")
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        XCTAssertNotNil(library.document)
+
+        library.deleteRecord("r1")
+        let asked = command(sent().last!)
+        XCTAssertEqual(asked["cmd"] as? String, "record.delete")
+        XCTAssertEqual(asked["record"] as? String, "r1")
+        let id = try XCTUnwrap(asked["id"] as? String)
+        XCTAssertEqual(library.records.map(\.record), ["r3", "r1", "r0"], "nothing moves before the core says so")
+
+        // Refused (still live): said, and the record stays.
+        guard case .commandFailed(let refused) = event(
+            #"{"type":"command.failed","command":"record.delete","id":"\#(id)","message":"record r1 is still being finished"}"#)
+        else { return XCTFail("not a failure") }
+        XCTAssertTrue(library.handles(refused))
+        library.apply([.commandFailed(refused)])
+        XCTAssertEqual(library.deleteFailure, "record r1 is still being finished")
+        XCTAssertEqual(library.selected, "r1")
+
+        library.deleteRecord("r1")
+        XCTAssertNil(library.deleteFailure, "a new try clears it")
+        let again = requestID(sent().last!)
+        let before = sent().count
+        library.apply([event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true,"ref":"\#(again)"}"#)])
+        XCTAssertEqual(library.records.map(\.record), ["r3", "r0"])
+        XCTAssertEqual(library.selected, "r0", "the record below it")
+        XCTAssertNil(library.document, "until r0 is read")
+        XCTAssertNil(library.deletionNote, "nothing left behind")
+        let followed = sent()[before...].map(command)
+        XCTAssertEqual(followed.filter { $0["cmd"] as? String == "record.open" }.map { $0["record"] as? String }, ["r0"],
+                       "one read, of the record below")
+        XCTAssertTrue(followed.contains { $0["cmd"] as? String == "library.stats" }, "Today's counts")
+        XCTAssertTrue(followed.contains { $0["cmd"] as? String == "records.list" && $0["kind"] as? String == "meeting" },
+                      "Today's last meeting")
+
+        // The last one: the selection moves up. Left-behind words or audio are said.
+        library.apply([event(#"{"type":"record.deleted","record":"r0","kind":"meeting","audio_left":true,"scrubbed":false}"#)])
+        XCTAssertEqual(library.selected, "r3")
+        let note = try XCTUnwrap(library.deletionNote)
+        XCTAssertTrue(note.contains("words") && note.contains("recording"), note)
+        // The only one: nothing is selected.
+        library.apply([event(#"{"type":"record.deleted","record":"r3","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        XCTAssertTrue(library.records.isEmpty)
+        XCTAssertNil(library.selected)
+        XCTAssertNil(library.document)
+        XCTAssertNil(library.deletionNote, "this one left nothing")
+    }
+
+    /// Deleted from the search: the selection moves among the matches the column shows, never to
+    /// a record of the unsearched list. A failure that arrives once another record is open is not
+    /// that record's to show. What a deletion left behind is said until the next record is opened,
+    /// and Today waits for its next last meeting rather than reading as having none.
+    func testDeletingFromTheSearchMovesAmongTheMatches() throws {
+        let (library, sent) = model()
+        library.refreshList()
+        library.apply([event(#"""
+        {"type":"library.records","ref":"\#(requestID(sent().last!))","more":false,"records":[
+          \#(row("r9", start: 9_000, end: 9_500)), \#(row("r1", start: 5_000, end: 6_000))]}
+        """#)])
+        library.query = "budget"
+        library.apply([event(#"""
+        {"type":"library.search","ref":"\#(requestID(sent().last!))","query":"budget","hits":[
+          {"record":"r2","title":"A","started_at_unix_ms":5000,"start_ms":0,"snippet":"budget"},
+          {"record":"r2","title":"A","started_at_unix_ms":5000,"start_ms":9000,"snippet":"budget again"},
+          {"record":"r4","title":"B","started_at_unix_ms":4000,"start_ms":0,"snippet":"the budget"}]}
+        """#)])
+        library.open("r2")
+        library.apply([event(#"{"type":"record.deleted","record":"r2","kind":"meeting","audio_left":true,"scrubbed":true}"#)])
+        XCTAssertEqual(library.hits.map(\.record), ["r4"])
+        XCTAssertEqual(library.selected, "r4", "the next match, not r9 from the list")
+        XCTAssertNotNil(library.deletionNote)
+
+        library.deleteRecord("r4")
+        let id = requestID(sent().last!)
+        library.open("r1")
+        XCTAssertNil(library.deletionNote, "said until the next record is opened")
+        library.apply([event(#"{"type":"command.failed","command":"record.delete","id":"\#(id)","message":"record r4 is still being finished"}"#)])
+        XCTAssertNil(library.deleteFailure, "r4's failure is not r1's to show")
+    }
+
+    func testTodayWaitsForItsNextLastMeeting() throws {
+        let (library, sent) = model()
+        library.refreshToday()
+        let listID = command(sent()[0])["id"] as! String
+        library.apply([event(#"{"type":"library.records","ref":"\#(listID)","more":false,"kind":"meeting","records":[\#(row("r1", start: 5_000, end: 6_000))]}"#)])
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        library.apply([event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        XCTAssertNil(library.lastMeeting)
+        XCTAssertEqual(library.lastMeetingLoad, .loading, "not \"no meetings yet\" while it is asked for again")
+    }
+
+    /// A record deleted that is not the open one: the open one stays, and a match in it goes from
+    /// the search; Today's last meeting, if it was that one, is gone.
+    func testDeletingAnotherRecordKeepsTheOpenOneAndDropsItsMatches() throws {
+        let (library, sent) = model()
+        library.refreshToday()
+        let listID = command(sent()[0])["id"] as! String
+        library.apply([event(#"{"type":"library.records","ref":"\#(listID)","more":false,"kind":"meeting","records":[\#(row("r1", start: 5_000, end: 6_000))]}"#)])
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        XCTAssertEqual(library.lastMeeting?.record.record, "r1")
+        library.query = "budget"
+        library.apply([event(#"""
+        {"type":"library.search","ref":"\#(requestID(sent().last!))","query":"budget","hits":[
+          {"record":"r1","title":"Plan","started_at_unix_ms":5000,"start_ms":10000,"snippet":"the budget"},
+          {"record":"r2","title":"Other","started_at_unix_ms":4000,"start_ms":0,"snippet":"budget too"}]}
+        """#)])
+        library.open("r2")
+        library.apply([event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        XCTAssertEqual(library.hits.map(\.record), ["r2"])
+        XCTAssertEqual(library.selected, "r2")
+        XCTAssertNil(library.lastMeeting, "Today's last meeting went; it is asked for again")
+    }
+
+    /// What the confirmation says goes, by kind: everything the record holds, and that it can't be
+    /// undone; an imported file stays where the user keeps it.
+    func testTheConfirmationSaysWhatGoes() throws {
+        let rows = rows(#"{"type":"library.records","more":false,"records":[\#(row("m", start: 1)), \#(row("d", "dictation", start: 1)), \#(row("f", "file_import", start: 1))]}"#)
+        let says = rows.map(LibraryModel.deletionWarning(for:))
+        XCTAssertTrue(says[0].contains("audio") && says[0].contains("transcript") && says[0].contains("notes") && says[0].contains("owed"), says[0])
+        XCTAssertTrue(says.allSatisfy { $0.contains("can't be undone") }, "\(says)")
+        XCTAssertTrue(says[2].contains("file you imported stays"), says[2])
+        XCTAssertFalse(says[1].contains("audio"), "a dictation keeps no audio: \(says[1])")
     }
 
     /// Inkwell 0.2's dictations came over: the list and the stats are read again.

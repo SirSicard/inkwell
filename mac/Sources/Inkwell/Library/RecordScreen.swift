@@ -58,6 +58,7 @@ struct RecordHeader: View {
     let document: RecordDocument
     @Binding var tab: RecordScreen.Tab
     @Environment(LibraryModel.self) private var library
+    @State private var confirmingDelete = false
 
     private var people: [String] {
         document.record.kind == .meeting ? ["You"] + document.people : document.people
@@ -76,6 +77,12 @@ struct RecordHeader: View {
                         document.record, people: people, now: library.now(), calendar: library.calendar))
                         .font(PaperType.meta)
                         .foregroundStyle(Theme.secondaryText)
+                    if let failure = library.deleteFailure {
+                        Text("This record wasn't deleted: \(failure)")
+                            .font(PaperType.meta)
+                            .foregroundStyle(Theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 12)
                 HStack(spacing: 6) {
@@ -94,6 +101,8 @@ struct RecordHeader: View {
                         Button("Copy transcript") { copy(transcriptText) }
                         Button("Copy summary") { copy(document.summary?.plainText ?? "") }
                             .disabled(document.summary == nil)
+                        Divider()
+                        Button("Delete Record…", role: .destructive) { confirmingDelete = true }
                     } label: {
                         Image(systemName: "ellipsis").frame(width: 32, height: 32)
                     }
@@ -107,6 +116,16 @@ struct RecordHeader: View {
                 }
             }
             TabRow(tab: $tab, owedCount: document.owed.filter { !$0.done }.count)
+        }
+        .confirmationDialog(
+            "Delete this record?", isPresented: $confirmingDelete, titleVisibility: .visible
+        ) {
+            Button("Delete Record", role: .destructive) {
+                library.deleteRecord(document.record.record)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(LibraryModel.deletionWarning(for: document.record))
         }
         .padding(.top, 22)
         .padding(.horizontal, 32)

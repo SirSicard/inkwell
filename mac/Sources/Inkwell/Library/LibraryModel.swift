@@ -28,6 +28,8 @@ final class LibraryModel {
         case statsWeek
         /// A name given to one of the open record's speakers.
         case speaker
+        /// A record the user deleted.
+        case delete
     }
 
     /// Where an answer is: asked and not answered, answered, or failed.
@@ -78,6 +80,11 @@ final class LibraryModel {
     private(set) var player: RecordPlayer?
     /// Why the last name given to a speaker was not saved (the core's words), until the next try.
     private(set) var namingFailure: String?
+    /// Why the last record the user deleted was not deleted (the core's words), until the next try.
+    private(set) var deleteFailure: String?
+    /// What the last deletion left on this Mac, when it left anything: its words not yet cleared
+    /// from the library's files, or its recording.
+    private(set) var deletionNote: String?
 
     /// Today: the latest finished meeting, whole.
     private(set) var lastMeeting: RecordDocument?
@@ -129,6 +136,8 @@ final class LibraryModel {
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var sequence = 0
     @ObservationIgnored private var latest: [Slot: String] = [:]
+    /// The record the last `record.delete` asked about: its failure is shown only on it.
+    @ObservationIgnored private var deleting: String?
     /// The names sent for the open record's speakers, by label: what the store holds once each is
     /// saved, before the record is read again. Forgotten when one fails, and with the record.
     @ObservationIgnored private var sentNames: [String: String] = [:]
@@ -240,6 +249,8 @@ final class LibraryModel {
         document = nil
         openFailure = nil
         namingFailure = nil
+        deleteFailure = nil
+        deletionNote = nil
         sentNames = [:]
         replacePlayer(nil)
         send(.recordOpen(record: record, ref: ref(for: .open)))
@@ -282,6 +293,28 @@ final class LibraryModel {
         namingFailure = nil
         sentNames[label] = name
         send(.speakerName(record: document.record.record, speaker: label, name: name, ref: ref(for: .speaker)))
+    }
+
+    /// Deletes `record` whole: asked only once the user confirmed (`deletionWarning`). Nothing
+    /// moves until the core says it is gone (`record.deleted`); a refusal (a record still being
+    /// recorded or finished) is said (`deleteFailure`).
+    func deleteRecord(_ record: String) {
+        deleteFailure = nil
+        deleting = record
+        send(.recordDelete(record: record, ref: ref(for: .delete)))
+    }
+
+    /// What the confirmation says goes with `record`, and that it can't be undone.
+    static func deletionWarning(for record: RecordRow) -> String {
+        let what = switch record.kind {
+        case .meeting:
+            "Its audio, transcript, notes and summary, and what's owed from it, are deleted from this Mac."
+        case .dictation:
+            "Its words are deleted from this Mac."
+        case .fileImport:
+            "Its transcript, notes and summary, and what's owed from it, are deleted from this Mac. The file you imported stays where it is."
+        }
+        return what + " This can't be undone."
     }
 
     /// `text` on one line: every run of spaces, line breaks and control characters (the core
@@ -339,6 +372,10 @@ final class LibraryModel {
             case .commitmentUpdated, .noteAdded, .noteUpdated, .noteDeleted:
                 // The open record may hold it: read it again.
                 recordChanged = true
+            case .recordDeleted(let deleted):
+                removed(deleted)
+                // Today's counts and its last meeting may have changed.
+                libraryChanged = true
             case .speakerNamed(let named):
                 // The name shows wherever that record does: the open record, and Today's last
                 // meeting.
@@ -389,6 +426,9 @@ final class LibraryModel {
         case .statsWeek:
             week = nil
             weekLoad = .failed
+        case .delete:
+            // Only on the record it was about: another may be open by now.
+            if selected == deleting { deleteFailure = failed.message }
         case .speaker:
             namingFailure = failed.message
             // What was sent did not stick: the record's names are what stands.
@@ -396,6 +436,47 @@ final class LibraryModel {
         default:
             break
         }
+    }
+
+    /// A record is gone: out of the list and the matches, out of Today, and the selection moves to
+    /// the record below it in what the column shows (the matches while searching, else the list;
+    /// above when it was the last), or to none. What it left behind is said until the next record
+    /// is opened.
+    private func removed(_ deleted: RecordDeleted) {
+        let gone = deleted.record
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        func shown() -> [String] {
+            var seen = Set<String>()
+            return (searching ? hits.map(\.record) : records.map(\.record)).filter { seen.insert($0).inserted }
+        }
+        let index = shown().firstIndex(of: gone)
+        records.removeAll { $0.record == gone }
+        hits.removeAll { $0.record == gone }
+        if lastMeeting?.record.record == gone {
+            lastMeeting = nil
+            // Asked for again (libraryChanged): not "no meetings yet" meanwhile.
+            lastMeetingLoad = .loading
+        }
+        if selected == gone {
+            let rest = shown()
+            if let index, !rest.isEmpty {
+                open(rest[min(index, rest.count - 1)])
+            } else {
+                selected = nil
+                document = nil
+                openFailure = nil
+                pendingSeek = nil
+                replacePlayer(nil)
+            }
+        }
+        var left: [String] = []
+        if !deleted.scrubbed {
+            left.append("its words are still in the library's files while another app reads them, and Inkwell clears them as soon as it can")
+        }
+        if deleted.audioLeft {
+            left.append("its recording couldn't be removed from the library's folder")
+        }
+        deletionNote = left.isEmpty ? nil : "Deleted, but " + left.joined(separator: ", and ") + "."
     }
 
     private func receive(_ answer: LibraryRecords) {

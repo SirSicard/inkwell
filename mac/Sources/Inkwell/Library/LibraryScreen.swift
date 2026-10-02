@@ -71,6 +71,13 @@ struct LibraryColumn: View {
                     .accessibilityLabel(searching ? "\(library.hits.count) matches" : "\(library.records.count) records")
             }
             .padding(.horizontal, 6)
+            if let note = library.deletionNote {
+                Text(note)
+                    .font(PaperType.meta)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 6)
+            }
             if !searching {
                 KindFilter()
                     .padding(.horizontal, 6)
