@@ -47,7 +47,7 @@ foreach ($file in $assetsFiles) {
         $id, $version = $key -split '/', 2
         $packages["$($id.ToLowerInvariant())/$($version.ToLowerInvariant())"] = @{ Id = $id; Version = $version; Folders = $folders }
     }
-    # Packs the SDK downloads for the project (runtime packs, the NativeAOT compiler, the Windows
+    # Packs the SDK downloads for the project (runtime packs, the ReadyToRun compiler, the Windows
     # SDK projection): not libraries, but they ship or build the app all the same.
     foreach ($tfm in $assets['project']['frameworks'].Keys) {
         foreach ($dep in @($assets['project']['frameworks'][$tfm]['downloadDependencies'])) {

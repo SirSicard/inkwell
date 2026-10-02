@@ -775,7 +775,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "MIT", WinUIExText)
         { Composed = true },
         new("dotnet-runtime", ".NET runtime",
-            "Compiled into Inkwell.exe by NativeAOT: .NET 10.0.12.",
+            "Copied beside the app, compiled ahead of time (ReadyToRun): .NET 10.0.12.",
             "MIT, with the notices of the code it includes", DotnetText),
         new("windows-sdk-net", "Windows SDK projection for .NET, by Microsoft",
             "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",

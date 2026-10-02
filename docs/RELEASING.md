@@ -317,7 +317,7 @@ Then:
 
 The same `v1.X.Y` tag starts `win-release.yml` beside `mac-release.yml`. On x64, the one Windows
 architecture 1.0 ships (`win-release-build.yml`, on `windows-2025`; ARM64 waits for 1.0.1), it
-builds the core with the Windows engines and the app with NativeAOT, checks what they need from a
+builds the core with the Windows engines and the app ReadyToRun, checks what they need from a
 PC, packs the installer and the update feed with Velopack, and then adds them to the tag's
 **draft** release (creating it if the Mac's workflow has not yet). A manual run is the dry run:
 everything but the release, the files kept as the run artifact `inkwell-windows` for 14 days.
@@ -355,7 +355,7 @@ past SmartScreen (`windows/HOMEPAGE-INSTALL.md` is its draft). Signing is a late
 
 | Job | Runs on | Holds | Does |
 |---|---|---|---|
-| `build` (`win-release-build.yml`) | tag and dry run | nothing secret; read access | sherpa-onnx's archive, the Vulkan SDK (pinned by LunarG's published SHA-256) and the diarizer's prefix, all pinned; `windows/scripts/build-core.ps1`; the generated-code and notice checks; the locked restore and NuGet licence check; the NativeAOT publish with the tag's version; `windows/scripts/pack.ps1` |
+| `build` (`win-release-build.yml`) | tag and dry run | nothing secret; read access | sherpa-onnx's archive, the Vulkan SDK (pinned by LunarG's published SHA-256) and the diarizer's prefix, all pinned; `windows/scripts/build-core.ps1`; the generated-code and notice checks; the locked restore and NuGet licence check; the ReadyToRun publish with the tag's version; `windows/scripts/pack.ps1` |
 | `publish` | tag only | write access (environment `release`) | the files checked against their SHA-256s, then added to the tag's draft release, with a Windows section in its notes |
 
 What a release carries for Windows:

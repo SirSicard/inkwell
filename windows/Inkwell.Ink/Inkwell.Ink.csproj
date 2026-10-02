@@ -6,7 +6,8 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- Trim and AOT analyzers on: the app publishes with NativeAOT. -->
+    <!-- Trim and AOT analyzers on: the code stays AOT-safe, though the app publishes ReadyToRun
+         (Inkwell.csproj says why). -->
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>

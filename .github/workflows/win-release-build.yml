@@ -1,7 +1,7 @@
 name: Windows release build
 
 # The Windows release's build (docs/RELEASING.md), x64 only (1.0 ships no ARM64 build): the core
-# with its engines, the app (NativeAOT), the checks that neither needs anything a PC may lack, and
+# with its engines, the app (ReadyToRun), the checks that neither needs anything a PC may lack, and
 # the installer and update feed packed with Velopack, with their SHA-256s. Called by
 # win-release.yml (a v1 tag, or its manual dry run). Nothing here publishes: a tag's files become a
 # run artifact, which win-release.yml's publish job adds to the draft release.
@@ -253,10 +253,10 @@ jobs:
         working-directory: windows
         run: scripts/nuget-licences.ps1
 
-      # The app as it ships: NativeAOT, x64, the Windows App SDK's runtime beside the exe, the core,
+      # The app as it ships: ReadyToRun, x64, .NET's and the Windows App SDK's runtimes beside the exe, the core,
       # the engines' DLLs and their Visual C++ runtime beside it (InkCoreDir), and the version from
       # the tag (About and the file version).
-      - name: Publish the app (NativeAOT)
+      - name: Publish the app (ReadyToRun)
         shell: pwsh
         working-directory: windows
         env:

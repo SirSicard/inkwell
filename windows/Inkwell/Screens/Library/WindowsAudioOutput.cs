@@ -6,7 +6,7 @@
 // the playhead follows what is heard, not what was handed out.
 //
 // Why this route: it is all Windows' own WinRT media API through the SDK projection (no package,
-// no raw COM, no reflection), so it publishes with NativeAOT; MediaPlayer follows the default
+// no raw COM, no reflection), so it is trim- and AOT-safe; MediaPlayer follows the default
 // output device and does the resampling to it. The system media controls are turned off: this is
 // a record's audio, not the user's media.
 //

@@ -5,8 +5,8 @@ name: Windows ARM64
 # - core: the Rust core for aarch64-pc-windows-msvc and its tests, and the engines the Windows app
 #   links: Silero, llama.cpp on the CPU (NEON), sherpa-onnx's ARM64 library; NeMo-Speech.cpp is
 #   type-checked only, as in core.yml.
-# - shell: the WinUI shell against the ARM64 core's DLL: its tests, and the app published with
-#   NativeAOT for win-arm64.
+# - shell: the WinUI shell against the ARM64 core's DLL: its tests, and the app published
+#   ReadyToRun for win-arm64.
 # The x64 builds are core.yml's and win.yml's.
 on:
   push:
@@ -165,7 +165,7 @@ jobs:
           fi
 
   shell:
-    name: shell, tests and NativeAOT publish (windows-11-arm)
+    name: shell, tests and ReadyToRun publish (windows-11-arm)
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,7 +186,7 @@ jobs:
           global-json-file: windows/global.json
       # ARM64 is selected project by project with -p:Platform=ARM64 (windows/Directory.Build.props:
       # a solution build cannot switch it). Each project is restored for ARM64, so the packs
-      # restore adds for the runtime identifier (the ARM64 runtime and NativeAOT packs) are the
+      # restore adds for the runtime identifier (the ARM64 runtime packs) are the
       # ones the licence check reads.
       - name: Restore for ARM64 (locked)
         shell: pwsh
@@ -220,10 +220,10 @@ jobs:
             Write-Output "${name}: tests run: $total"
             if ($total -eq 0) { Write-Output "::error::$name ran no tests"; exit 1 }
           }
-      # The app as it ships: NativeAOT, ARM64, with the Windows App SDK's runtime beside the exe.
+      # The app as it ships: ReadyToRun, ARM64, with .NET's and the Windows App SDK's runtimes beside the exe.
       # The restore is locked, so a publish cannot rewrite a lock file. The exe and the core's DLL
       # must both be ARM64 (PE machine 0xAA64): an x64 file would run only under emulation.
-      - name: Publish the app (NativeAOT, ARM64)
+      - name: Publish the app (ReadyToRun, ARM64)
         shell: pwsh
         working-directory: windows
         run: |
