@@ -36,6 +36,26 @@ public static class SettingsFormat
 }
 
 /// <summary>Opens a folder in File Explorer: StorageModel's reveal.</summary>
+/// <summary>
+/// The id of the row a control sits in: the Tag ({x:Bind Id}) on its row's root. An ItemsRepeater
+/// gives an x:Bind template's elements no DataContext (null on a desktop run), so a row's buttons
+/// read their row this way; a lookup through DataContext found nothing and the click did nothing.
+/// </summary>
+public static class RowTag
+{
+    public static string? Of(object sender)
+    {
+        for (var element = sender as DependencyObject; element is not null; element = VisualTreeHelper.GetParent(element))
+        {
+            if (element is FrameworkElement { Tag: string id })
+            {
+                return id;
+            }
+        }
+        return null;
+    }
+}
+
 public static class FileExplorer
 {
     public static void Reveal(string folder)

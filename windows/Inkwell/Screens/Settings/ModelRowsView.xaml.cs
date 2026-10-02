@@ -45,7 +45,8 @@ public sealed partial class ModelRowsView : UserControl
         RowFocus.Restore(Rows, focus, item => ((ModelRowItem)item).Id);
     }
 
-    private static ModelRowItem? RowOf(object sender) => (sender as FrameworkElement)?.DataContext as ModelRowItem;
+    private ModelRowItem? RowOf(object sender) =>
+        RowTag.Of(sender) is string id ? (Rows.ItemsSource as IEnumerable<ModelRowItem>)?.FirstOrDefault(r => r.Id == id) : null;
 
     private void OnDownload(object sender, RoutedEventArgs e)
     {

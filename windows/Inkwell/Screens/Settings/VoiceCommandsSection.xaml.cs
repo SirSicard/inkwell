@@ -77,7 +77,8 @@ public sealed partial class VoiceCommandsSection : UserControl
 
     private void OnSaveWake(object sender, RoutedEventArgs e) => Model.SetWakePrefix(Wake.Text);
 
-    private static VoiceCommandItem? RowOf(object sender) => (sender as FrameworkElement)?.DataContext as VoiceCommandItem;
+    private VoiceCommandItem? RowOf(object sender) =>
+        RowTag.Of(sender) is string id ? (Rows.ItemsSource as IEnumerable<VoiceCommandItem>)?.FirstOrDefault(r => r.Id == id) : null;
 
     private void OnToggled(object sender, RoutedEventArgs e)
     {

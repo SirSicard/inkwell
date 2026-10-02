@@ -48,7 +48,7 @@ public sealed partial class SnippetsSection : UserControl
         RowFocus.Restore(Rows, focus, item => ((SnippetDraft)item).Id);
     }
 
-    private static SnippetDraft? RowOf(object sender) => (sender as FrameworkElement)?.DataContext as SnippetDraft;
+    private SnippetDraft? RowOf(object sender) => RowTag.Of(sender) is string id ? Model.Rows.FirstOrDefault(r => r.Id == id) : null;
 
     private void OnToggled(object sender, RoutedEventArgs e)
     {
