@@ -78,7 +78,7 @@ All crates exist from the first commit, so work in parallel only ever touches it
 | `ink-platform-mac` | objc2 implementations of the platform traits. |
 | `ink-platform-win` | windows-rs and WASAPI implementations of the platform traits. |
 | `ink-ffi` | The C ABI (`include/inkwell.h`), event bridge, bands copy-out. |
-| `ink-shader` | Build-time only: turns `shaders/ink.wgsl` into the Metal source and the HLSL (shader model 5.0, Direct3D 11) the shells compile at runtime (naga as a library); a test fails when either checked-in file is stale. Never linked into the app. |
+| `ink-shader` | Build-time only: turns `shaders/ink.wgsl` into the Metal source and the HLSL (shader model 5.0, Direct3D 11) the shells compile at runtime (naga as a library), and `design/tokens.json` into the shells' design tokens (`ink-tokens`: Swift, XAML and C#); a test fails when any checked-in file is stale. Never linked into the app. |
 | `ink-bench` | Replay plus WER, DER, ERLE and latency. Reads `$INK_BENCH_DIR`. |
 
 Later: `mac/` (Swift package: app, Apple engines, renderer, the core as an XCFramework),
@@ -299,8 +299,19 @@ The screens read and change the library and the permissions through commands too
 ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): permission checks and
 requests, the open commitments ("owed"), a live meeting's notes, the model catalogue, the user's
 modes, each language-model feature's state and consent (`consent.get`, `consent.allow`), and a
-short whitelist of settings the shell owns (`onboarding.done`, `dictation.polish` (only ever set
-to off), `dictation.key`, `dictation.edit_key`).
+whitelist of settings the shell owns (`SHELL_SETTINGS` in
+[`queries.rs`](../core/crates/ink-ffi/src/queries.rs), each with the values it takes):
+`onboarding.done`, `dictation.polish` and `meetings.llm` (only ever set to off: they turn on
+through `consent.allow`), `dictation.key`, `dictation.edit_key`, `dictation.enabled`,
+`meetings.detect`, `meetings.headset_mic`, `llm.local_only`, `retention.days`, `import.key_note`,
+and the appearance settings: `appearance.mode` (`light`, `dark` or `system`),
+`appearance.dots.light` and `appearance.dots.dark` (a preset from
+[`design/tokens.json`](../design/tokens.json)), `appearance.you.light`, `appearance.them.light`,
+`appearance.you.dark` and `appearance.them.dark` (`preset`, or a `#rrggbb` colour in lowercase),
+`appearance.edge_glow` (`on` or `off`) and `appearance.motion` (`system` or `still`). The core
+does nothing with the appearance settings itself. A setting never set answers `setting.value`
+without a value, and the shell reads it as its default (for appearance, `APPEARANCE_DEFAULTS`:
+`system`, `indigo`, `preset`, `on` and `system`).
 
 - They run on their own core thread, `ink-queries`, in order among themselves. The command thread
   can be held for minutes by a model download; a note or a permission card never waits for it.
