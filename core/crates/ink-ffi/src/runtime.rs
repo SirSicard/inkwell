@@ -239,8 +239,15 @@ fn platform_permissions(store: &dyn Store) -> Result<Arc<dyn PermissionProbe>, S
     ))
 }
 
-/// Until ink-platform-win's probe (S3.1): every state unknown, nothing can be asked for.
-#[cfg(not(target_os = "macos"))]
+/// Windows' probe: the microphone's three privacy switches, and Settings' microphone page as its
+/// request. Without it every card read "can't be checked" and "Open Settings" did nothing.
+#[cfg(windows)]
+fn platform_permissions(_: &dyn Store) -> Result<Arc<dyn PermissionProbe>, String> {
+    Ok(Arc::new(ink_platform_win::WinPermissionProbe::new()))
+}
+
+/// No platform crate here: every state unknown, nothing can be asked for.
+#[cfg(not(any(target_os = "macos", windows)))]
 fn platform_permissions(_: &dyn Store) -> Result<Arc<dyn PermissionProbe>, String> {
     Ok(Arc::new(crate::queries::NoPermissionProbe))
 }
@@ -1370,6 +1377,30 @@ mod tests {
         let (a, b, c) = (counter.now_ns(), core.now_ns(), counter.now_ns());
         assert!(a <= b && b <= c, "{a} {b} {c}");
         assert!(c - a < 1_000_000_000, "one read apart: {} ns", c - a);
+    }
+
+    /// Windows: permissions are answered by the platform's probe, not the stand-in that answered
+    /// every check unknown and refused every request (the cards read "can't be checked", and the
+    /// microphone's "Open Settings" did nothing). Nothing here prompts or opens anything.
+    #[cfg(windows)]
+    #[test]
+    fn windows_permissions_have_the_platform_probe() {
+        use ink_core::{Permission, PermissionState, PlatformError};
+        let store = ink_store::SqliteStore::open_in_memory().unwrap();
+        let probe = platform_permissions(&store).expect("the probe");
+        // Nothing gates these for a desktop app: only the platform's probe knows that.
+        assert_eq!(
+            probe.check(Permission::Accessibility),
+            PermissionState::Granted
+        );
+        assert_eq!(
+            probe.check(Permission::SystemAudio),
+            PermissionState::Granted
+        );
+        assert!(matches!(
+            probe.request(Permission::SystemAudio),
+            Err(PlatformError::Unsupported(why)) if why.contains("Windows")
+        ));
     }
 
     /// Windows (S3.5b): meetings have the platform's detector, made without watching anything.
