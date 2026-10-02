@@ -55,12 +55,14 @@ final class RenderTests: XCTestCase {
             for (x, y) in [(0, 0), (image.width - 1, 0), (0, image.height - 1), (image.width - 1, image.height - 1)] {
                 XCTAssertEqual(image.alpha(x, y), 0, "\(state): nothing at the corner (\(x), \(y))")
             }
+            // At rest the orb is drawn at about half strength, by design; live, it is near solid.
+            let solid = state == .idle ? 90 : 200
             var opaque = 0
             for y in stride(from: 0, to: image.height, by: 3) {
                 for x in stride(from: 0, to: image.width, by: 3) {
                     let p = image.pixel(x, y), a = image.alpha(x, y)
                     XCTAssertLessThanOrEqual(max(p.r, p.g, p.b), a, "\(state): premultiplied at (\(x), \(y))")
-                    if a > 200 { opaque += 1 }
+                    if a > solid { opaque += 1 }
                 }
             }
             XCTAssertGreaterThan(opaque, 0, "\(state): an orb is drawn")
