@@ -68,7 +68,7 @@
                     <Button
                         x:Name="UseButton"
                         Click="OnUse"
-                        Style="{StaticResource AccentButtonStyle}" />
+                        Style="{StaticResource InkAccentButtonStyle}" />
                     <Button
                         x:Name="TestButton"
                         AutomationProperties.Name="Test the language model"
@@ -82,6 +82,24 @@
         <TextBlock
             Style="{StaticResource InkCaptionStyle}"
             Text="This PC has no language model of its own, so polish, voice edit, summaries and Ask use one you bring: pick a provider, paste your API key (kept in Windows Credential Manager, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it." />
+
+        <!-- Local only (llm.local_only): on, no model off this PC is called, whatever is chosen. -->
+        <Grid Margin="0,6,0,0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Local only" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <ToggleSwitch
+                    x:Name="LocalOnlySwitch"
+                    AutomationProperties.Name="Local only: nothing leaves this computer"
+                    OffContent=""
+                    OnContent=""
+                    Toggled="OnLocalOnlyToggled" />
+                <TextBlock x:Name="LocalOnlyCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+            </StackPanel>
+        </Grid>
 
         <Grid Margin="0,6,0,0" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
@@ -121,7 +139,7 @@
         </Grid>
         <TextBlock
             Style="{StaticResource InkCaptionStyle}"
-            Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Its key is in Voice." />
+            Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Its key is in Dictation." />
 
         <Grid Margin="0,6,0,0" ColumnSpacing="12">
             <Grid.ColumnDefinitions>

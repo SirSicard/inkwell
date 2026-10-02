@@ -1,11 +1,11 @@
 // Settings > AI. Each switch shows what the model says (on only with the core's consent and a
 // working model), so switching one on reads back off while its consent step is up, and on once the
 // core has recorded the consent. The section owns the Settings screen's ConsentDialog, for all
-// three features (Voice's edit-key picker asks through it too): WinUI shows one dialog at a time.
+// three features (Dictation's edit-key picker asks through it too): WinUI shows one dialog at a time.
 //
 // Above them, the language model (CloudModel): the provider picker, the key (a PasswordBox whose
 // text is sent once, on Save key, and cleared at once: it is never kept or shown), the model, Use
-// and Test. The pickers show what the core holds; a change is sent, and the core's answer is what
+// and Test; then Local only, the explicit switch over llm.local_only. The pickers show what the core holds; a change is sent, and the core's answer is what
 // shows.
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
@@ -56,6 +56,14 @@ public sealed partial class AiSection : UserControl
 
     private void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Render();
 
+    private void OnLocalOnlyToggled(object sender, RoutedEventArgs e)
+    {
+        if (!rendering && LocalOnlySwitch.IsOn != cloud.LocalOnly)
+        {
+            cloud.SetLocalOnly(LocalOnlySwitch.IsOn);
+        }
+    }
+
     private void Render()
     {
         rendering = true;
@@ -83,6 +91,13 @@ public sealed partial class AiSection : UserControl
 
     private void RenderCloud()
     {
+        // Local only: on unless the user turned it off, or chose a provider off this PC.
+        LocalOnlySwitch.IsOn = cloud.LocalOnly;
+        LocalOnlySwitch.IsEnabled = cloud.Loaded;
+        LocalOnlyCaption.Text = cloud.LocalOnly
+            ? $"{CloudModel.LocalOnlyTitle}: no language model off this PC is called, whichever is chosen."
+            : "A language model off this PC may be called, once a feature is on and allowed.";
+
         var items = new List<(string? Id, string Name)> { (null, "None: nothing leaves this PC") };
         items.AddRange(cloud.Providers.Select(p => ((string?)p.Id, p.Name)));
         if (!providerTokens.SequenceEqual(items.Select(i => i.Id)))
