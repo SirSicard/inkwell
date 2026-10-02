@@ -402,7 +402,7 @@ final class ScreenModels {
     func performDropAction(_ action: DropText.Action) {
         switch action {
         case .downloadSpeechModels:
-            catalogue.downloadSpeechModels()
+            catalogue.downloadRecommended()
             dictation.speechDownloadStarted()
         case .record, .dismiss, .allowSystemAudio: meetings.perform(action, permissions: permissions)
         }

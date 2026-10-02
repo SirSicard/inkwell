@@ -460,12 +460,12 @@ private struct SpeechModelLine: View {
             switch catalogue.speechDownload {
             case .notStarted:
                 HStack(spacing: 10) {
-                    Button(catalogue.speechSetMB.map { "Download speech models (\($0) MB)" } ?? "Download speech models") {
-                        catalogue.downloadSpeechModels()
+                    Button(catalogue.recommendedMB.map { "Download speech models (\($0) MB)" } ?? "Download speech models") {
+                        catalogue.downloadRecommended()
                     }
                     .buttonStyle(PaperButtonStyle())
                     // Where the files come from, as the first run says it.
-                    let hosts = CatalogueModel.sources(catalogue.models.filter { CatalogueModel.speechSet.contains($0.id) })
+                    let hosts = CatalogueModel.sources(catalogue.models.filter { CatalogueModel.recommended.contains($0.id) })
                     if !hosts.isEmpty {
                         Text("From \(hosts)")
                             .font(Typography.caption)
@@ -483,7 +483,7 @@ private struct SpeechModelLine: View {
                         .font(Typography.caption)
                         .foregroundStyle(Theme.alert)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Try again") { catalogue.downloadSpeechModels() }
+                    Button("Try again") { catalogue.downloadRecommended() }
                         .buttonStyle(PaperButtonStyle())
                 }
             }

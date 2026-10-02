@@ -91,11 +91,11 @@ final class SpeechModelsTests: XCTestCase {
         let sent = Sent()
         let catalogue = CatalogueModel(send: sent.send)
         nothingInstalled(catalogue)
-        XCTAssertEqual(catalogue.speechSetMB, 484, "about 485 MB")
+        XCTAssertEqual(catalogue.recommendedMB, 484, "about 485 MB")
         XCTAssertEqual(catalogue.speechDownload, .notStarted)
         sent.commands = []
 
-        catalogue.downloadSpeechModels()
+        catalogue.downloadRecommended()
         XCTAssertEqual(sent.commands, [.modelInstall(silero, ref: "model.update:1")], "one at a time, smallest first")
         XCTAssertTrue(catalogue.speech.downloading)
         catalogue.apply(event(#"{"type":"model.update_progress","id":"\#(silero)","next":"\#(silero)","done_bytes":1289603,"total_bytes":1289603}"#))
@@ -120,12 +120,27 @@ final class SpeechModelsTests: XCTestCase {
         let sent = Sent()
         let catalogue = CatalogueModel(send: sent.send)
         nothingInstalled(catalogue)
-        catalogue.downloadSpeechModels()
+        catalogue.downloadRecommended()
         catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(silero)","next":"\#(silero)","ok":false,"no_model_warm":false,"message":"the connection was reset"}"#))
         catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(parakeet)","next":"\#(parakeet)","ok":true,"no_model_warm":false}"#))
         XCTAssertEqual(catalogue.speechDownload, .failed("the connection was reset"))
-        catalogue.downloadSpeechModels()
+        catalogue.downloadRecommended()
         XCTAssertEqual(catalogue.speechDownload, .downloading(percent: nil))
+    }
+
+    /// A model whose download just finished counts as on this Mac before the list says so (it is
+    /// asked for again at the finish, and answers later): a press in between fetches only the rest.
+    func testAModelThatJustFinishedIsNotFetchedAgainBeforeTheListRefreshes() {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        nothingInstalled(catalogue)
+        catalogue.downloadRecommended()
+        catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(silero)","next":"\#(silero)","ok":false,"no_model_warm":false,"message":"the connection was reset"}"#))
+        catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(parakeet)","next":"\#(parakeet)","ok":true,"no_model_warm":false}"#))
+        sent.commands = []
+
+        catalogue.downloadRecommended()
+        XCTAssertEqual(sent.commands, [.modelInstall(silero, ref: "model.update:3")], "the failed one again, not Parakeet")
     }
 
     // MARK: The words

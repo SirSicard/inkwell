@@ -79,18 +79,11 @@ enum SpeechDownload: Equatable, Sendable {
 }
 
 extension CatalogueModel {
-    /// The recommended set: voice detection and the Mac's Parakeet, which registers for the live
-    /// words and for the dictation and meeting finals while Qwen3-ASR is not installed. Smallest
-    /// first, the order they download in.
-    // The first run's recommended set (CatalogueModel.recommended on the onboarding branch) is the
-    // same two ids: at merge, this and downloadSpeechModels() fold into it and downloadRecommended().
-    static let speechSet = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml"]
-
     /// What writes speech down on this Mac, as far as is known.
     var speech: SpeechModels {
         SpeechModels(
             dictation: availability(.dictationFinal), meetings: availability(.meetingFinal),
-            downloading: Self.speechSet.contains { $0 == installing || waiting.contains($0) })
+            downloading: Self.recommended.contains { $0 == installing || waiting.contains($0) })
     }
 
     private func availability(_ job: Job) -> SpeechModels.Availability {
@@ -105,19 +98,19 @@ extension CatalogueModel {
         return couldFill ? .unknown : .missing
     }
 
-    /// The set's size in MB, when the list has it.
-    var speechSetMB: Int? {
-        let sizes = Self.speechSet.compactMap { id in models.first { $0.id == id }?.sizeBytes }
-        guard sizes.count == Self.speechSet.count else { return nil }
+    /// The recommended set's size in MB, when the list has it.
+    var recommendedMB: Int? {
+        let sizes = Self.recommended.compactMap { id in models.first { $0.id == id }?.sizeBytes }
+        guard sizes.count == Self.recommended.count else { return nil }
         return Int((Double(sizes.reduce(0, +)) / 1_000_000).rounded())
     }
 
     /// Where the set's download stands.
     var speechDownload: SpeechDownload {
-        if Self.speechSet.contains(where: { $0 == installing || waiting.contains($0) }) {
-            let entries = Self.speechSet.compactMap { id in models.first { $0.id == id } }
+        if Self.recommended.contains(where: { $0 == installing || waiting.contains($0) }) {
+            let entries = Self.recommended.compactMap { id in models.first { $0.id == id } }
             let total = entries.reduce(Int64(0)) { $0 + $1.sizeBytes }
-            guard let progress, entries.count == Self.speechSet.count, total > 0 else {
+            guard let progress, entries.count == Self.recommended.count, total > 0 else {
                 return .downloading(percent: nil)
             }
             let done = entries.reduce(Int64(0)) { sum, entry in
@@ -126,21 +119,9 @@ extension CatalogueModel {
             }
             return .downloading(percent: Int((Double(done) / Double(total) * 100).rounded()))
         }
-        if let failure = Self.speechSet.lazy.compactMap({ self.failures[$0] }).first {
+        if let failure = Self.recommended.lazy.compactMap({ self.failures[$0] }).first {
             return .failed(failure)
         }
         return .notStarted
-    }
-
-    /// The download Today and the Drop offer (a press): the set's models not on this Mac yet,
-    /// queued behind any download under way.
-    func downloadSpeechModels() {
-        download(Self.speechSet.filter { !isIn($0) })
-    }
-
-    /// On this Mac, by the list or by an install that finished since it was read.
-    private func isIn(_ id: String) -> Bool {
-        if models.first(where: { $0.id == id })?.installed == true { return true }
-        return asked.contains(id) && failures[id] == nil && id != installing && !waiting.contains(id)
     }
 }
