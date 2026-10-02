@@ -116,6 +116,20 @@ final class OwedModel {
     /// The last answer the core refused, in words, until the next answer: the promise is back in
     /// the list as the core has it.
     private(set) var failure: String?
+    /// The promise just marked done, while its Undo is offered.
+    private(set) var undoable: Undoable?
+
+    /// A promise marked done that can be put back.
+    struct Undoable: Equatable {
+        /// Increases with every mark, so a later one replaces the toast.
+        let serial: Int
+        let id: String
+        let text: String
+    }
+
+    @ObservationIgnored private var undoSerial = 0
+    /// What the last commitment.set_done asked: done (true) or open again (an Undo).
+    @ObservationIgnored private var lastSetDone = true
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let calendar: Calendar
@@ -129,12 +143,32 @@ final class OwedModel {
         send(.commitmentsList)
     }
 
-    /// Marks a promise done: it leaves the list at once, and the core's list replaces it.
+    /// Marks a promise done: it leaves the list at once, and the core's list replaces it. Undo is
+    /// offered for it until the next mark or until the toast goes.
     func markDone(_ id: String) {
         failure = nil
+        if let item = items.first(where: { $0.id == id }) {
+            undoSerial += 1
+            undoable = Undoable(serial: undoSerial, id: id, text: item.text)
+        }
         items.removeAll { $0.id == id }
         suggestions.removeAll { $0.commitment == id }
+        lastSetDone = true
         send(.commitmentSetDone(id: id, done: true))
+    }
+
+    /// Undo: the promise is open again (the core's list brings it back).
+    func undoDone() {
+        guard let undoable else { return }
+        self.undoable = nil
+        failure = nil
+        lastSetDone = false
+        send(.commitmentSetDone(id: undoable.id, done: false))
+    }
+
+    /// The toast's time is up.
+    func expireUndo(_ serial: Int) {
+        if undoable?.serial == serial { undoable = nil }
     }
 
     /// The user says a suggestion is wrong: it goes, the promise stays.
@@ -173,6 +207,11 @@ final class OwedModel {
         if week > 0 { parts.append("\(week) due this week") }
         if late > 0 { parts.append("\(late) overdue") }
         return parts.joined(separator: " · ")
+    }
+
+    /// How many promises are late (the sidebar's count).
+    func overdueCount(now: Date) -> Int {
+        items.count { due($0, now: now).isOverdue }
     }
 
     func due(_ item: OwedItem, now: Date) -> DueLabel {
@@ -249,9 +288,9 @@ final class OwedModel {
             load()
         case .commandFailed(let failed) where ["commitment.set_done", "commitment.not_yet"].contains(failed.command):
             // Put it back as the core has it, and say why it came back.
-            failure = failed.command == "commitment.set_done"
-                ? "Couldn't mark it done: \(failed.message)"
-                : "Couldn't keep it open: \(failed.message)"
+            failure = failed.command != "commitment.set_done"
+                ? "Couldn't keep it open: \(failed.message)"
+                : lastSetDone ? "Couldn't mark it done: \(failed.message)" : "Couldn't open it again: \(failed.message)"
             load()
         default:
             break

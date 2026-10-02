@@ -1,5 +1,6 @@
 // Owed: the promises still open, grouped, overdue ones in the alert colour, a promise said twice
-// shown once. Marking one done takes it off the list.
+// shown once. Marking one done takes it off the list, with an Undo for a few seconds; ▸ plays the
+// moment it was said.
 import InkBridge
 import SwiftUI
 
@@ -38,7 +39,47 @@ struct OwedScreen: View {
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollContentBackground(.hidden)
+        .overlay(alignment: .bottom) {
+            if let undoable = owed.undoable {
+                UndoToast(undoable: undoable, owed: owed)
+                    .padding(.bottom, 24)
+            }
+        }
         .onAppear { owed.load() }
+    }
+}
+
+/// "Marked done" with Undo, for a few seconds after a promise is marked done: one wait per toast,
+/// gone with the toast (nothing ticks for it otherwise).
+private struct UndoToast: View {
+    let undoable: OwedModel.Undoable
+    let owed: OwedModel
+
+    /// How long Undo is offered.
+    static let shown: Duration = .seconds(6)
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text(verbatim: "Marked done: \(undoable.text)")
+                .font(Typography.body)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Button("Undo") { owed.undoDone() }
+                .buttonStyle(PaperButtonStyle(prominent: true))
+        }
+        .padding(.leading, 20)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 520)
+        .paperCard()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Marked done")
+        .task(id: undoable.serial) {
+            try? await Task.sleep(for: Self.shown)
+            owed.expireUndo(undoable.serial)
+        }
     }
 }
 
@@ -50,7 +91,7 @@ private struct LooksDoneCard: View {
         HStack(spacing: 14) {
             Image(systemName: "checkmark.circle")
                 .font(.title2)
-                .foregroundStyle(Theme.accent)
+                .foregroundStyle(Theme.text)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 // What was said, verbatim: never read as markdown.
@@ -107,6 +148,8 @@ private struct OwedRowView: View {
     let row: OwedRow
     let owed: OwedModel
     @Environment(\.calendar) private var calendar
+    @Environment(LibraryModel.self) private var library
+    @Environment(Router.self) private var router
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -137,6 +180,15 @@ private struct OwedRowView: View {
                         Text([row.meeting, "at \(liveClock(ms: at))"].compactMap { $0 }.joined(separator: " "))
                             .font(Typography.timestamp)
                             .foregroundStyle(Theme.secondaryText)
+                        // Plays the record from the moment it was said.
+                        Button("▸ \(liveClock(ms: at))") {
+                            library.open(row.record, seekMs: at, play: true)
+                            router.open(.library)
+                        }
+                        .buttonStyle(.plain)
+                        .font(Typography.timestamp)
+                        .foregroundStyle(Theme.text)
+                        .accessibilityLabel("Play where it was said, \(liveClock(ms: at))")
                     }
                 }
             }

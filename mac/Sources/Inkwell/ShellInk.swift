@@ -1,5 +1,5 @@
-// The ink the shell shows: one state for every surface that draws it (the Drop, the window's rail,
-// Today's ink zone), read from the core's events through the store. The core pushes, the ink
+// The ink the shell shows: one state for every surface that draws it (the Drop, the window's orb and
+// its edge glow, the menu-bar dot), read from the core's events through the store. The core pushes, the ink
 // follows: nothing here polls.
 //
 //   dictation listening or transcribing   dictating
@@ -225,19 +225,53 @@ struct DropText: Equatable, Sendable {
     }
 }
 
-/// An ink zone in SwiftUI: the rail beside the content, or Today's zone with the wordmark.
-struct InkZone: NSViewRepresentable {
+/// The orb in SwiftUI: behind the main window's content, or in the first run. Decorative: what it
+/// shows is said by the Drop and the screens, so VoiceOver skips it.
+struct OrbLayer: NSViewRepresentable {
     var state: InkState
-    var showsWordmark: Bool
+    var palette: OrbPalette
+    var placement: OrbPlacement
+    /// "Always still" (Reduce Motion is the view's own check).
+    var still: Bool
+    /// Increase Contrast or Reduce Transparency: the orb dims behind the text.
+    var dimmed: Bool
+    /// The live levels it answers; the app's by default.
+    var levels: @MainActor () -> InkLevels = ShellInk.liveLevels
 
     func makeNSView(context: Context) -> InkView {
         let view = InkView()
-        view.levels = ShellInk.liveLevels
+        view.setAccessibilityElement(false)
         return view
     }
 
     func updateNSView(_ view: InkView, context: Context) {
+        view.levels = levels
+        view.palette = palette
+        view.placement = placement
+        view.motionStill = still
+        view.alphaValue = dimmed ? 0.45 : 1
         view.state = state
-        view.showsWordmark = showsWordmark
+    }
+}
+
+/// The edge glow in SwiftUI, over the main window's content. It takes no clicks.
+struct EdgeGlowLayer: NSViewRepresentable {
+    var state: InkState
+    var palette: OrbPalette
+    /// Settings > Appearance: "Glow the window's edge".
+    var on: Bool
+    var still: Bool
+
+    func makeNSView(context: Context) -> GlowEdgeView {
+        let view = GlowEdgeView(style: Glow.edge)
+        view.levels = ShellInk.liveLevels
+        return view
+    }
+
+    func updateNSView(_ view: GlowEdgeView, context: Context) {
+        view.palette = palette
+        view.isOn = on
+        view.motionStill = still
+        view.state = state
     }
 }
