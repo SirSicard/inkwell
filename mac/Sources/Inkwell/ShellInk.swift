@@ -244,12 +244,29 @@ struct OrbLayer: NSViewRepresentable {
     var still: Bool
     /// Increase Contrast or Reduce Transparency: the orb dims behind the text.
     var dimmed: Bool
+    /// Text sits over it (the main window's screens), not beside it (the first run's demo).
+    var behindText = false
     /// The live levels it answers; the app's by default.
     var levels: @MainActor () -> InkLevels = ShellInk.liveLevels
+
+    /// How strongly a live orb shows behind text. Live, the orb takes the dot colours at full
+    /// strength, and its bright centre sits behind every screen's text: at 30 % its brightest point
+    /// still leaves the mode's text at 4.5:1 or more and its secondary text at 3:1 or more, with
+    /// every preset in both modes (OrbBehindTextTests measures it). At rest it is the mode's quiet
+    /// idle colour, which text already reads over, and stays as designed.
+    nonisolated static let liveBehindText: CGFloat = 0.3
+
+    /// The orb's opacity for `state`.
+    nonisolated static func opacity(state: InkState, behindText: Bool, dimmed: Bool) -> CGFloat {
+        let rest: CGFloat = dimmed ? 0.45 : 1
+        guard behindText, state.isLive else { return rest }
+        return min(rest, liveBehindText)
+    }
 
     func makeNSView(context: Context) -> InkView {
         let view = InkView()
         view.setAccessibilityElement(false)
+        view.alphaValue = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
         return view
     }
 
@@ -258,7 +275,19 @@ struct OrbLayer: NSViewRepresentable {
         view.palette = palette
         view.placement = placement
         view.motionStill = still
-        view.alphaValue = dimmed ? 0.45 : 1
+        let opacity = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
+        if view.alphaValue != opacity {
+            // Faded with the ink's own change of state (its colours ease in over about a second),
+            // so the orb never jumps; still, it is set at once.
+            if still || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                view.alphaValue = opacity
+            } else {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.8
+                    view.animator().alphaValue = opacity
+                }
+            }
+        }
         view.state = state
     }
 }

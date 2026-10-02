@@ -1,8 +1,9 @@
-// Glow on the Mac: the theme engine's settings and what they resolve to, and Settings > AI's
-// language model you bring. The views are checked by hand.
+// Glow on the Mac: the theme engine's settings and what they resolve to, Settings > AI's language
+// model you bring, and text over the orb. The views are checked by hand.
 import AppKit
 import Foundation
 import InkBridge
+import InkRenderer
 import XCTest
 
 @testable import Inkwell
@@ -147,5 +148,70 @@ final class CloudModelTests: XCTestCase {
         XCTAssertFalse(CloudModel.isOnThisMac("localhost:8080"))
         XCTAssertTrue(CloudModel.keyWithheld(from: "http://10.0.0.2/v1"))
         XCTAssertFalse(CloudModel.keyWithheld(from: "https://10.0.0.2/v1"))
+    }
+}
+
+/// Text over the orb (a recorded-call test: "What's being said", the timestamps and the grey
+/// settling lines washed out over Aurora's bright centre in Dark mode). The main window's orb sits
+/// behind every screen's text, so wherever it draws, the mode's text and secondary text must stay
+/// readable over it, with every preset in both modes.
+@MainActor
+final class OrbBehindTextTests: XCTestCase {
+    /// WCAG's relative luminance of an sRGB colour, 0...1.
+    private func luminance(_ c: SIMD3<Double>) -> Double {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(c.x) + 0.7152 * linear(c.y) + 0.0722 * linear(c.z)
+    }
+
+    private func contrast(_ a: Double, _ b: Double) -> Double {
+        (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
+    func testALiveOrbDimsBehindTextAndAnOrbAtRestDoesNot() {
+        XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: false), 1, "at rest, as designed")
+        for state in InkState.allCases where state.isLive {
+            XCTAssertEqual(OrbLayer.opacity(state: state, behindText: true, dimmed: false), OrbLayer.liveBehindText, "\(state)")
+            XCTAssertEqual(OrbLayer.opacity(state: state, behindText: false, dimmed: false), 1, "\(state): the first run's demo has no text over it")
+            XCTAssertEqual(OrbLayer.opacity(state: state, behindText: true, dimmed: true), OrbLayer.liveBehindText, "\(state): never brighter for Increase Contrast")
+        }
+        XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: true), 0.45)
+    }
+
+    /// The orb drawn as the main window places it, loud voices on both sides, at a few moments
+    /// (its noise and highlight move), composited over the mode's background at the opacity the
+    /// window gives it: every pixel keeps text at 4.5:1 and secondary text at 3:1 or more.
+    func testTextStaysReadableOverTheMainWindowsOrbWithEveryPresetInBothModes() throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let pipeline = try InkPipelineLoader.shared.wait().get()
+        for dark in [false, true] {
+            let mode = Glow.mode(dark: dark)
+            let background = GlowColours.rgb(mode.background)
+            let text = luminance(GlowColours.rgb(mode.text))
+            let secondary = luminance(GlowColours.rgb(mode.secondary))
+            for preset in Glow.presets {
+                let palette = GlowColours.palette(preset: preset, you: nil, them: nil, dark: dark)
+                for state in InkState.allCases where state != .blotting {
+                    let opacity = Double(OrbLayer.opacity(state: state, behindText: true, dimmed: false))
+                    var worstText = Double.infinity, worstSecondary = Double.infinity
+                    for t in [3.0, 12, 27] {
+                        // The orb scales with the window, so a small canvas holds the same colours.
+                        let image = try InkSnapshot.render(
+                            state, t: t, width: 208, height: 140, palette: palette, placement: Glow.Orb.main,
+                            voice: .levels(near: 1, far: 1), pipeline: pipeline)
+                        for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] > 0 {
+                            let alpha = Double(image.rgba[i + 3]) / 255
+                            let orb = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / 255
+                            // Premultiplied over the background, as the window composites it.
+                            let shown = luminance(orb * opacity + background * (1 - alpha * opacity))
+                            worstText = min(worstText, contrast(text, shown))
+                            worstSecondary = min(worstSecondary, contrast(secondary, shown))
+                        }
+                    }
+                    let label = "\(dark ? "dark" : "light") \(preset.id) \(state)"
+                    XCTAssertGreaterThanOrEqual(worstText, 4.5, label)
+                    XCTAssertGreaterThanOrEqual(worstSecondary, 3, label)
+                }
+            }
+        }
     }
 }
