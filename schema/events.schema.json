@@ -203,6 +203,9 @@
       "$ref": "#/$defs/NoteDeleted"
     },
     {
+      "$ref": "#/$defs/SpeakerNamed"
+    },
+    {
       "$ref": "#/$defs/ModelsListed"
     },
     {
@@ -2754,6 +2757,38 @@
       "required": [
         "type",
         "note"
+      ],
+      "additionalProperties": false
+    },
+    "SpeakerNamed": {
+      "type": "object",
+      "description": "A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The name stays with the shell that sent it: record.open carries it.",
+      "properties": {
+        "type": {
+          "const": "speaker.named"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record."
+        },
+        "speaker": {
+          "type": "string",
+          "description": "The diarizer's label."
+        },
+        "named": {
+          "type": "boolean",
+          "description": "Whether the speaker has a name now: false when it was cleared, and reads as numbered again."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "speaker",
+        "named"
       ],
       "additionalProperties": false
     },

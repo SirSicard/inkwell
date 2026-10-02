@@ -827,6 +827,10 @@ impl Store for FlakyStore {
         self.check("set_speaker_name")?;
         self.inner.set_speaker_name(id, s, name)
     }
+    fn clear_speaker_name(&self, id: &RecordId, s: &SpeakerId) -> Result<(), StoreError> {
+        self.check("clear_speaker_name")?;
+        self.inner.clear_speaker_name(id, s)
+    }
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
         self.check("speaker_names")?;
         self.inner.speaker_names(id)

@@ -548,6 +548,9 @@ impl Store for FaultyStore {
     fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, n: &str) -> Result<(), StoreError> {
         self.inner.set_speaker_name(id, s, n)
     }
+    fn clear_speaker_name(&self, id: &RecordId, s: &SpeakerId) -> Result<(), StoreError> {
+        self.inner.clear_speaker_name(id, s)
+    }
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
         self.inner.speaker_names(id)
     }

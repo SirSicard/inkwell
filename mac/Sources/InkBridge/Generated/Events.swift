@@ -141,6 +141,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case noteUpdated(NoteUpdated)
     /// `note.deleted`
     case noteDeleted(NoteDeleted)
+    /// `speaker.named`
+    case speakerNamed(SpeakerNamed)
     /// `models.listed`
     case modelsListed(ModelsListed)
     /// `setting.value`
@@ -262,6 +264,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "note.added": self = .noteAdded(try NoteAdded(from: decoder))
             case "note.updated": self = .noteUpdated(try NoteUpdated(from: decoder))
             case "note.deleted": self = .noteDeleted(try NoteDeleted(from: decoder))
+            case "speaker.named": self = .speakerNamed(try SpeakerNamed(from: decoder))
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
@@ -353,6 +356,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .noteAdded(let event): try event.encode(to: encoder)
         case .noteUpdated(let event): try event.encode(to: encoder)
         case .noteDeleted(let event): try event.encode(to: encoder)
+        case .speakerNamed(let event): try event.encode(to: encoder)
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
@@ -2651,6 +2655,22 @@ public struct SpeakerName: Codable, Sendable, Equatable {
     public let name: String
     /// The diarizer's label.
     public let speaker: String
+}
+
+/// A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The
+/// name stays with the shell that sent it: record.open carries it.
+public struct SpeakerNamed: Codable, Sendable, Equatable {
+    /// Whether the speaker has a name now: false when it was cleared, and reads as numbered
+    /// again.
+    public let named: Bool
+    /// The record.
+    public let record: String
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    public let ref: String?
+    /// The diarizer's label.
+    public let speaker: String
+    /// Always `speaker.named`.
+    public let type: String
 }
 
 /// Whether a summary item is a decision or an action.

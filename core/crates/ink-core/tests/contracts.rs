@@ -249,8 +249,11 @@ fn records_segments_search_speakers_and_settings() {
     store.set_speaker_name(&older, &spk, "Guest").unwrap();
     assert_eq!(
         store.speaker_names(&older).unwrap(),
-        vec![(spk, "Guest".to_string())]
+        vec![(spk.clone(), "Guest".to_string())]
     );
+    store.clear_speaker_name(&older, &spk).unwrap();
+    assert!(store.speaker_names(&older).unwrap().is_empty());
+    store.set_speaker_name(&older, &spk, "Guest").unwrap();
 
     let summary = Summary {
         items: Vec::new(),

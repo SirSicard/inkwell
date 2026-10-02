@@ -560,6 +560,7 @@ impl ink_core::Store for FailingStore {
         save_summary(id: &ink_core::RecordId, summary: &ink_core::Summary) -> ();
         summary(id: &ink_core::RecordId) -> Option<ink_core::Summary>;
         set_speaker_name(id: &ink_core::RecordId, speaker: &ink_core::SpeakerId, name: &str) -> ();
+        clear_speaker_name(id: &ink_core::RecordId, speaker: &ink_core::SpeakerId) -> ();
         speaker_names(id: &ink_core::RecordId) -> Vec<(ink_core::SpeakerId, String)>;
         add_commitments(id: &ink_core::RecordId, items: &[ink_core::NewCommitment]) -> Vec<ink_core::CommitmentId>;
         add_commitments_merged(id: &ink_core::RecordId, items: &[ink_core::NewCommitment], merges: &[(usize, usize)]) -> Vec<ink_core::CommitmentId>;

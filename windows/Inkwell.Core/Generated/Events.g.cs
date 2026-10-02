@@ -109,6 +109,7 @@ public abstract record InkEvent
                 "note.added" => root.Deserialize(InkEventsJson.Default.NoteAdded)!,
                 "note.updated" => root.Deserialize(InkEventsJson.Default.NoteUpdated)!,
                 "note.deleted" => root.Deserialize(InkEventsJson.Default.NoteDeleted)!,
+                "speaker.named" => root.Deserialize(InkEventsJson.Default.SpeakerNamed)!,
                 "models.listed" => root.Deserialize(InkEventsJson.Default.ModelsListed)!,
                 "setting.value" => root.Deserialize(InkEventsJson.Default.SettingValue)!,
                 "consent.state" => root.Deserialize(InkEventsJson.Default.ConsentState)!,
@@ -243,6 +244,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(NoteAdded))]
 [JsonSerializable(typeof(NoteUpdated))]
 [JsonSerializable(typeof(NoteDeleted))]
+[JsonSerializable(typeof(SpeakerNamed))]
 [JsonSerializable(typeof(ModelsListed))]
 [JsonSerializable(typeof(SettingValue))]
 [JsonSerializable(typeof(ConsentState))]
@@ -4077,6 +4079,38 @@ public sealed record SpeakerName
     /// </summary>
     [JsonPropertyName("name")]
     public required string Name { get; init; }
+
+    /// <summary>
+    /// The diarizer's label.
+    /// </summary>
+    [JsonPropertyName("speaker")]
+    public required string Speaker { get; init; }
+}
+
+/// <summary>
+/// A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The
+/// name stays with the shell that sent it: record.open carries it.
+/// </summary>
+public sealed record SpeakerNamed : InkEvent
+{
+    /// <summary>
+    /// Whether the speaker has a name now: false when it was cleared, and reads as numbered
+    /// again.
+    /// </summary>
+    [JsonPropertyName("named")]
+    public required bool Named { get; init; }
+
+    /// <summary>
+    /// The record.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 
     /// <summary>
     /// The diarizer's label.
