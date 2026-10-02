@@ -227,6 +227,23 @@ enum ShellSetting: String, Sendable {
     case dictationEnabled = "dictation.enabled"
     /// "dismissed": the note about Inkwell 0.2's dictation key has been read.
     case importKeyNote = "import.key_note"
+    /// "on" (the default) or "off": local-only mode. While on, no language model off this Mac is
+    /// called (Settings > AI).
+    case llmLocalOnly = "llm.local_only"
+    /// The theme (GlowTheme): "light", "dark" or "system" (the default).
+    case appearanceMode = "appearance.mode"
+    /// Each mode's dot preset, by id ("indigo" by default).
+    case appearanceDotsLight = "appearance.dots.light"
+    case appearanceDotsDark = "appearance.dots.dark"
+    /// Each mode's own colours: "#rrggbb", or "preset" (the default) for the preset's.
+    case appearanceYouLight = "appearance.you.light"
+    case appearanceThemLight = "appearance.them.light"
+    case appearanceYouDark = "appearance.you.dark"
+    case appearanceThemDark = "appearance.them.dark"
+    /// "on" (the default) or "off": the window's edge glows while something is live.
+    case appearanceEdgeGlow = "appearance.edge_glow"
+    /// "system" (the default: Reduce Motion decides) or "still".
+    case appearanceMotion = "appearance.motion"
 }
 
 /// Where the screens' commands go.

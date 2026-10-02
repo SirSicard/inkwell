@@ -200,8 +200,10 @@ final class ScreenModels {
     let snippets: SnippetsModel
     let voiceCommands: VoiceCommandsModel
     let importNote: ImportNoteModel
-    /// Inkwell 0.2's data: the first run's step and a row in Settings > Voice.
+    /// Inkwell 0.2's data: the first run's step and a row in Settings > General.
     let import02: Import02Model
+    /// The theme: the appearance settings and what they resolve to.
+    let theme: GlowTheme
 
     /// The id of the meetings switch's command (a `command.failed` carries it).
     static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
@@ -217,6 +219,7 @@ final class ScreenModels {
         modelsDirectory: URL? = nil,
         log: ScreenLog = .system
     ) {
+        theme = GlowTheme(send: send)
         permissions = PermissionsModel(send: send, calendar: calendar)
         polish = PolishModel(send: send)
         catalogue = CatalogueModel(send: send)
@@ -252,6 +255,7 @@ final class ScreenModels {
             live.apply(event)
             meetings.apply(event)
             onboarding.apply(event)
+            theme.apply(event)
             import02.apply(event)
             if onboarding.showing {
                 // The first run offers its import step only when there is something to import.
@@ -279,7 +283,10 @@ final class ScreenModels {
     /// The core started: read what the first screens need. The permission check is the one after
     /// each launch (the Today banner and the sidebar read it too).
     private func coreReady() {
+        theme.load()
         onboarding.load()
+        // The sidebar's overdue count.
+        owed.load()
         polish.load()
         meetings.load()
         permissions.refresh()
@@ -376,10 +383,12 @@ final class ScreenModels {
         case "setting.get":
             failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
+                || GlowTheme.settingIDs.contains(failed.id ?? "")
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
             failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
                 || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
+                || GlowTheme.settingIDs.contains(failed.id ?? "")
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
         case "engine.route":
