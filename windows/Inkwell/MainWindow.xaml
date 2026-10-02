@@ -22,7 +22,11 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Inkwell"
     Title="Inkwell">
-    <Grid x:Name="Root" Background="{ThemeResource InkWindowBrush}" KeyboardAcceleratorPlacementMode="Hidden">
+    <Grid x:Name="Root" KeyboardAcceleratorPlacementMode="Hidden">
+        <!-- The mode's background, on a layer of its own: Root carries the mode (GlowTheme sets its
+             RequestedTheme), and a theme resource on Root's own Background kept the theme it had,
+             so Light showed night's background behind day's text. -->
+        <Border Background="{ThemeResource InkWindowBrush}" />
         <!-- The orb (S3.4's ink, as Glow draws it). Decorative: the state it shows is spoken by the
              Drop and the screens. -->
         <local:InkPanel x:Name="Orb" AutomationProperties.AccessibilityView="Raw" IsHitTestVisible="False" />
@@ -106,6 +110,15 @@
                 OpenPaneLength="220"
                 PaneDisplayMode="Left"
                 SelectionChanged="OnNavigationSelectionChanged">
+                <!-- No fill of its own over the orb, in any mode. On the control itself: its template
+                     takes these brushes from here, not from App.xaml's overrides, and painted the
+                     content in Windows' layer fill (50% white by day). -->
+                <NavigationView.Resources>
+                    <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                </NavigationView.Resources>
                 <!-- The wordmark (the tall rail and its knockout are retired). -->
                 <NavigationView.PaneHeader>
                     <TextBlock
