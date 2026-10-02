@@ -65,10 +65,16 @@ name or a meeting title into this file or a bug: the repository is public.
 - [ ] During a recorded call where the other side is talking, turn Inkwell off in System Settings >
       Privacy & Security > Screen & System Audio Recording (the system-audio list).
 - [ ] **The warning appears within 20 s**: the Drop's border turns seal red, "The other side is
-      silent", "System audio is off, so only your voice is being recorded.", and "Allow system
-      audio". Today's banner says the same. Seconds from the switch to the warning: ______
-- [ ] Click back into Inkwell (it checks the permission when it becomes active): the Drop says
-      "System audio is off" at once, even before the silence is long enough for the watchdog.
+      silent", "Only silence is arriving from the call." (zeros alone do not prove the permission
+      is off: a call that goes quiet delivers them too, so no permission button yet). Today's
+      banner says "Inkwell can't hear the other side of this call" with "Allow system audio".
+      Seconds from the switch to the warning: ______
+- [ ] Click back into Inkwell with Today showing (it checks the permission when it becomes
+      active): the Drop now says "System audio is off, so only your voice is being recorded." with
+      "Allow system audio", even before the silence is long enough for the watchdog.
+- [ ] With the permission on, let the call go quiet for 15 s: the Drop says "The other side is
+      silent" and "Only silence is arriving from the call.", never "System audio is off", and
+      offers no permission button.
 - [ ] Turn it back on: the warning clears once their audio arrives again.
 
 ## 3. Crash recovery (needs you)

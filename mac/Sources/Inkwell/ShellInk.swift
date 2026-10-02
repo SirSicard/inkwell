@@ -159,10 +159,19 @@ struct DropText: Equatable, Sendable {
             case .stopped?: "The other side stopped"
             default: systemAudioOff ? "System audio is off" : "Far end silent"
             }
-            let detail = systemAudioOff || far == .zeros
-                ? "System audio is off, so only your voice is being recorded."
-                : "Nothing is arriving from the call. Only your voice may be recorded."
-            return DropText(title: title, detail: detail, tone: .alert, actions: [.allowSystemAudio])
+            // Only the probe knows the permission. Exact zeros are what a denied capture delivers,
+            // but also what a call that went quiet delivers (an app holding its output open plays
+            // them), so zeros alone are said as silence, and the permission is offered only when
+            // the probe says it is off.
+            let detail = if systemAudioOff {
+                "System audio is off, so only your voice is being recorded."
+            } else if far == .zeros {
+                "Only silence is arriving from the call."
+            } else {
+                "Nothing is arriving from the call. Only your voice may be recorded."
+            }
+            return DropText(
+                title: title, detail: detail, tone: .alert, actions: systemAudioOff ? [.allowSystemAudio] : [])
         case .blotting:
             return DropText(title: "Blotting · final pass", detail: meeting?.title ?? meeting?.appName ?? "The final pass")
         case .dictating:
