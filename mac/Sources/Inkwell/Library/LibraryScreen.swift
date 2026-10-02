@@ -95,7 +95,18 @@ struct KindFilter: View {
     ]
 
     var body: some View {
-        HStack(spacing: 6) {
+        // A chip's label never wraps ("Meetin/gs"): the four fit the 272 pt list column at this
+        // padding (about 228 pt of its 236), and should they not, the row scrolls sideways.
+        ViewThatFits(in: .horizontal) {
+            chips
+            ScrollView(.horizontal, showsIndicators: false) { chips }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Show")
+    }
+
+    private var chips: some View {
+        HStack(spacing: 4) {
             ForEach(Self.kinds, id: \.1) { kind, title in
                 let on = library.filter == kind
                 Button {
@@ -103,7 +114,9 @@ struct KindFilter: View {
                 } label: {
                     Text(title)
                         .font(.system(size: Glow.Size.caption))
-                        .padding(.horizontal, 10)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 7)
                         .frame(minHeight: 28)
                         .foregroundStyle(on ? Theme.buttonLabel : Theme.text)
                         .background(Capsule().fill(on ? Theme.buttonFill : PaperPalette.chip))
@@ -114,8 +127,6 @@ struct KindFilter: View {
                 .accessibilityHint(kind == nil ? "Shows every kind" : "Shows only \(title.lowercased())")
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Show")
     }
 }
 
