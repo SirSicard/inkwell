@@ -70,15 +70,23 @@ internal static class Parts
 {
     public static Style TextStyle(string key) => (Style)Application.Current.Resources[key];
 
-    /// <summary>A token brush in <paramref name="scope"/>'s theme (the views build again when the theme changes).</summary>
+    private static readonly Windows.UI.ViewManagement.AccessibilitySettings Accessibility = new();
+
+    /// <summary>
+    /// A token brush in <paramref name="scope"/>'s theme, High Contrast's while it is on (the views
+    /// build again when the theme changes); a key outside the theme dictionaries is the app's.
+    /// </summary>
     public static Brush Brush(string key, FrameworkElement scope)
     {
         var resources = Application.Current.Resources;
-        var theme = scope.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
-        if (resources.ThemeDictionaries.TryGetValue(theme, out var dictionary)
-            && dictionary is ResourceDictionary themed && themed.TryGetValue(key, out var brush) && brush is Brush found)
+        var theme = Accessibility.HighContrast ? "HighContrast" : scope.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
+        foreach (var name in new[] { theme, "Light" })
         {
-            return found;
+            if (resources.ThemeDictionaries.TryGetValue(name, out var dictionary)
+                && dictionary is ResourceDictionary themed && themed.TryGetValue(key, out var brush) && brush is Brush found)
+            {
+                return found;
+            }
         }
         return (Brush)resources[key];
     }

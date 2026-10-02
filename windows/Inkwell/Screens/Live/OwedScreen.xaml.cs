@@ -71,6 +71,11 @@ public sealed partial class OwedScreen : UserControl
         {
             undoTimer.Stop();
         }
+        else if (!undoTimer.IsRunning)
+        {
+            // Marked done here or from a "Looks done" card: the toast goes after its few seconds.
+            undoTimer.Start();
+        }
     }
 
     private static string? Tagged(object sender) => (sender as FrameworkElement)?.Tag as string;

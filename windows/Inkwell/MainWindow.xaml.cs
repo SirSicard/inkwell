@@ -145,6 +145,11 @@ public sealed partial class MainWindow : Window
     private void BuildItems()
     {
         syncing = true;
+        // The two badges move to the new items: a UI element has one parent.
+        foreach (var old in Nav.MenuItems.Concat(Nav.FooterMenuItems).OfType<NavigationViewItem>())
+        {
+            old.InfoBadge = null;
+        }
         Nav.MenuItems.Clear();
         Nav.FooterMenuItems.Clear();
         foreach (var section in Enum.GetValues<SidebarSection>())

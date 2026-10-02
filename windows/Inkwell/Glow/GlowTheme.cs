@@ -89,7 +89,13 @@ internal sealed class GlowTheme
             {
                 root.RequestedTheme = requested;
             }
-            Dark = root.ActualTheme == ElementTheme.Dark;
+            // An explicit mode is known at once; the system's is the content's theme under Default.
+            Dark = appearance.Mode switch
+            {
+                AppearanceMode.Light => false,
+                AppearanceMode.Dark => true,
+                _ => root.ActualTheme == ElementTheme.Dark,
+            };
         }
         else
         {

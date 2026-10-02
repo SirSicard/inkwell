@@ -273,6 +273,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         try
         {
             fallback = makeFallback();
+            fallback.SetLook(look);
             fallback.ButtonClicked += index => ButtonClicked?.Invoke(index);
             fallbackFailure = null;
         }
@@ -363,6 +364,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         speech.Clear();
         Surface.SetOnScreen(false);
         Surface.State = InkState.Idle;
+        // The next show starts from rest, not from the state it was hidden in.
+        Surface.Settle();
     }
 
     /// <summary>

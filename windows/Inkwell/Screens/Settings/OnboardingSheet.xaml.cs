@@ -96,6 +96,7 @@ public sealed partial class OnboardingSheet : ContentDialog
         demo.Tick += (_, _) => DemoNext();
         theme.Changed += () =>
         {
+            RequestedTheme = host.ActualTheme;
             ShowLook();
             RenderIfOpen();
         };
@@ -203,6 +204,8 @@ public sealed partial class OnboardingSheet : ContentDialog
     {
         isOpen = true;
         XamlRoot = host.XamlRoot;
+        // A dialog does not take the window's theme: it follows the appearance itself.
+        RequestedTheme = host.ActualTheme;
         Render();
         try
         {

@@ -553,6 +553,9 @@ public sealed class InkSurface : IDisposable
         Draw(moving: true);
     }
 
+    /// <summary>The ink at rest in its state, drawing nothing (a host that hid: its next frame starts settled).</summary>
+    public void Settle() => simulation.Settle(InkVoice.Silent);
+
     /// <summary>The settled frame: droplets cleared, springs at their targets, no voice.</summary>
     private void DrawStill()
     {

@@ -73,8 +73,10 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
 
     public AppearanceMotion Motion { get; private set; } = AppearanceMotion.System;
 
-    /// <summary>A read or a save failed (Settings says <see cref="FailedText"/>).</summary>
-    public bool Failed { get; private set; }
+    /// <summary>A read or a save failed and the store has not answered for that setting since (Settings says <see cref="FailedText"/>).</summary>
+    public bool Failed => failedKeys.Count > 0;
+
+    private readonly HashSet<string> failedKeys = new(StringComparer.Ordinal);
 
     /// <summary>Reads every appearance setting.</summary>
     public void Load()
@@ -191,7 +193,8 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
         switch (e)
         {
             case SettingValue value when value.Key.StartsWith("appearance.", StringComparison.Ordinal):
-                if (Take(value.Key, value.Value))
+                var cleared = failedKeys.Remove(value.Key);
+                if (Take(value.Key, value.Value) || cleared)
                 {
                     Changed();
                 }
@@ -199,7 +202,7 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
             case CommandFailed failed when Handles(failed):
                 // The kind only: the core's message names the key, never anything the user said.
                 log.Write($"{failed.Command} of an appearance setting failed");
-                Failed = true;
+                failedKeys.Add(failed.Id!["setting:".Length..]);
                 foreach (var key in Keys.Where(k => failed.Command == "setting.set" && k.CommandId() == failed.Id))
                 {
                     // Show what the store holds, not what was asked for.

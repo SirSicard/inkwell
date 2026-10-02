@@ -126,6 +126,8 @@ public sealed class ConsentDialog
         return new ContentDialog
         {
             XamlRoot = root,
+            // A dialog does not take the window's theme: the window's appearance, as shown now.
+            RequestedTheme = (root?.Content as FrameworkElement)?.ActualTheme ?? ElementTheme.Default,
             Title = ConsentModel.Title(feature),
             Content = new TextBlock
             {
