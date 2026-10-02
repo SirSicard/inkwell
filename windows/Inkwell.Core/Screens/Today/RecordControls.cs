@@ -1,4 +1,4 @@
-// Today's foot of the ink zone, as the Mac's RecordControls (ShellView.swift): whether Inkwell
+// Today's hero, as the Mac's RecordControls (ShellView.swift): whether Inkwell
 // listens for calls, which key dictates, and Record now (the meetings model's command; its failure
 // is that model's to show). The listening line follows the core's state (meeting.detection), never
 // the setting. The Mac's line names the key picked (fn until the core says otherwise); Windows
@@ -8,7 +8,7 @@ using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
 
-/// <summary>What the ink zone's foot says. UI thread only; fed every event through Apply.</summary>
+/// <summary>What Today's hero says. UI thread only; fed every event through Apply.</summary>
 public sealed class RecordControlsModel : ObservableModel
 {
     /// <summary>Record now's accessible hint.</summary>

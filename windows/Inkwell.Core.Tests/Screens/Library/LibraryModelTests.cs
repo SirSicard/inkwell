@@ -181,6 +181,8 @@ public class LibraryModelTests
     public void TheColumnSaysWhatItShows()
     {
         var (library, sent) = Model();
+        Assert.Null(library.Filter); // it opens on All
+        library.ToggleFilter(RecordKind.Meeting);
         Assert.Equal(RecordKind.Meeting, library.Filter);
         library.ToggleFilter(RecordKind.Meeting);
         Assert.Null(library.Filter); // pressing the one shown shows every kind

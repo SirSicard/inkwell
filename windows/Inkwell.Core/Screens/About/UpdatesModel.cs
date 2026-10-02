@@ -1,11 +1,12 @@
-// Settings > About's updates row: the Windows counterpart of the Mac's (Sparkle's "Check Now"). The
+// Settings > General's updates row: the Windows counterpart of the Mac's (Sparkle's "Check Now"). The
 // app's updater is Velopack's, reading the releases on GitHub (the app's VelopackUpdater); this
 // model is what the row says and does, over any IUpdater, so it tests without one.
 //
-// Nothing happens unless the user asks: no check runs at start or on a timer (rule 9), and each
-// step (check, download, restart) is the user's press. A failure says "Couldn't ..." with its
-// reason, and the row offers the check again. The reasons are the updater's (a network or HTTP
-// error, a checksum that does not match): they name URLs and files, never anything the user said.
+// Nothing happens unless the user asks: a check runs at launch only while "Check for updates
+// automatically" is on (off until the user turns it on; never on a timer, rule 9), and each further
+// step (download, restart) is the user's press. A failure says "Couldn't ..." with its reason, and
+// the row offers the check again. The reasons are the updater's (a network or HTTP error, a
+// checksum that does not match): they name URLs and files, never anything the user said.
 
 namespace Inkwell.Core.Screens;
 
@@ -36,6 +37,46 @@ public interface IUpdater
     /// cannot be started; the app then keeps running.
     /// </summary>
     void RestartToUpdate();
+}
+
+/// <summary>Where "Check for updates automatically" is kept (the app: a file in the library's folder).</summary>
+public interface IUpdatePreference
+{
+    /// <summary>The choice, or null when none was made. Throws when it cannot be read.</summary>
+    bool? Read();
+
+    /// <summary>Keeps the choice. Throws when it cannot be written.</summary>
+    void Write(bool enabled);
+}
+
+/// <summary>"Check for updates automatically" in a file: "on" or "off".</summary>
+public sealed class UpdatePreferenceFile(string path) : IUpdatePreference
+{
+    /// <summary>The file's name in the library's folder.</summary>
+    public const string FileName = "updates-auto-check.txt";
+
+    public bool? Read()
+    {
+        try
+        {
+            return File.ReadAllText(path).Trim() switch
+            {
+                "on" => true,
+                "off" => false,
+                _ => null,
+            };
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    public void Write(bool enabled)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        File.WriteAllText(path, (enabled ? "on" : "off") + "\n");
+    }
 }
 
 /// <summary>The updater of a copy that does not update itself (tests, and where none is given).</summary>
@@ -73,16 +114,75 @@ public enum UpdateState
 }
 
 /// <summary>What the updates row shows and does. UI thread only, like every screen model.</summary>
-public sealed class UpdatesModel(IUpdater updater, ScreenLog? log = null) : ObservableModel
+/// <param name="preference">Where the automatic check's choice is kept; null: it stays off and is not shown.</param>
+public sealed class UpdatesModel(IUpdater updater, ScreenLog? log = null, IUpdatePreference? preference = null) : ObservableModel
 {
     public const string OffText = "Updates work only in the installed app.";
     public const string CheckTitle = "Check Now";
     public const string DownloadTitle = "Download and Install";
     public const string RestartTitle = "Restart to Update";
+    public const string AutoCheckTitle = "Check for updates automatically";
+    public const string AutoCheckCaption = "Once each time Inkwell starts, never on a timer";
 
     private readonly ScreenLog log = log ?? ScreenLog.System;
     private int percent;
     private string? failure;
+    private bool? autoCheck;
+
+    /// <summary>Whether the automatic check's choice can be shown and changed (a preference to keep it, and an installed copy).</summary>
+    public bool CanAutoCheck => preference is not null && updater.UpdatesItself;
+
+    /// <summary>Whether a check runs at launch. Off until the user turns it on; off when its choice cannot be read.</summary>
+    public bool AutoCheck
+    {
+        get
+        {
+            if (autoCheck is null)
+            {
+                try
+                {
+                    autoCheck = preference?.Read() ?? false;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    log.Write($"the automatic update check's choice could not be read ({e.GetType().Name})");
+                    AutoCheckFailure = "Couldn't read whether to check automatically, so it is off.";
+                    autoCheck = false;
+                }
+            }
+            return autoCheck.Value;
+        }
+    }
+
+    /// <summary>Why the automatic check's choice could not be read or kept, or null.</summary>
+    public string? AutoCheckFailure { get; private set; }
+
+    /// <summary>The switch: keeps the choice; a choice that cannot be kept is said, and the switch stays as it was.</summary>
+    public void SetAutoCheck(bool on)
+    {
+        if (preference is null || on == AutoCheck)
+        {
+            return;
+        }
+        try
+        {
+            preference.Write(on);
+            autoCheck = on;
+            AutoCheckFailure = null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log.Write($"the automatic update check's choice could not be saved ({e.GetType().Name})");
+            AutoCheckFailure = $"Couldn't keep that choice: {Reason(e)}";
+        }
+        Changed();
+    }
+
+    /// <summary>At launch, once: a check when the automatic check is on and this copy updates itself. Nothing else ever runs one unasked.</summary>
+    public Task CheckAtLaunch() => AutoCheck && State == UpdateState.Idle ? Check() : Task.CompletedTask;
+
+    /// <summary>The tray menu's Check for Updates…: a check, unless one runs or an update is already found.</summary>
+    public Task CheckNow() => State is UpdateState.Idle or UpdateState.UpToDate or UpdateState.Failed ? Check() : Task.CompletedTask;
 
     public UpdateState State { get; private set; } = updater.UpdatesItself ? UpdateState.Idle : UpdateState.Off;
 
