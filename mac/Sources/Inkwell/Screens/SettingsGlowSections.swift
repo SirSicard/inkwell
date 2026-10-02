@@ -116,12 +116,13 @@ struct AppearanceSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             SettingRow(title: "Mode") {
+                // Not fixed in size: at its full width (325 pt on macOS 26) beside the row's title it
+                // would set the Settings screen's minimum width above the window's.
                 Picker("Mode", selection: Binding(get: { theme.settings.mode }, set: { theme.setMode($0) })) {
                     ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .fixedSize()
             }
             SettingRow(title: "Dots") {
                 Text("\(modeName) keeps its own choice")
