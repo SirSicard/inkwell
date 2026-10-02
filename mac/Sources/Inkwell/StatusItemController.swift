@@ -94,6 +94,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func showState() {
         withObservationTracking {
             let state = ink.state
+            // The mode too: the alert colour is resolved per appearance.
+            _ = screens.theme.isDark
             let colour: NSColor? = switch state {
             case .idle: nil
             case .dictating: GlowColours.nsColor(screens.theme.dots.you)

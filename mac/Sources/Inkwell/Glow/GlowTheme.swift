@@ -76,6 +76,10 @@ final class GlowTheme {
     @ObservationIgnored private let applyAppearance: @MainActor (NSAppearance?) -> Void
     @ObservationIgnored private var effectiveObservation: NSKeyValueObservation?
     @ObservationIgnored private var displayOptions: NSObjectProtocol?
+    /// The values written and not yet echoed, per key, oldest first. While a newer write is on
+    /// its way, an older echo (setting.value answers every setting.set) is not applied: dragging
+    /// in the colour panel writes many values, and the control must not jump back through them.
+    @ObservationIgnored private var inFlight: [ShellSetting: [String]] = [:]
 
     /// `applyAppearance` sets the app's appearance (tests leave NSApp alone).
     init(send: @escaping SendCommand, applyAppearance: @escaping @MainActor (NSAppearance?) -> Void = { NSApp?.appearance = $0 }) {
@@ -169,7 +173,7 @@ final class GlowTheme {
         failure = nil
         settings.mode = mode
         applyMode()
-        send(.settingSet(.appearanceMode, mode.rawValue))
+        write(.appearanceMode, mode.rawValue)
     }
 
     /// Picks a preset for the mode shown, and drops that mode's own colours (the preset is the
@@ -180,16 +184,16 @@ final class GlowTheme {
             settings.dotsDark = id
             settings.youDark = nil
             settings.themDark = nil
-            send(.settingSet(.appearanceDotsDark, id))
-            send(.settingSet(.appearanceYouDark, "preset"))
-            send(.settingSet(.appearanceThemDark, "preset"))
+            write(.appearanceDotsDark, id)
+            write(.appearanceYouDark, "preset")
+            write(.appearanceThemDark, "preset")
         } else {
             settings.dotsLight = id
             settings.youLight = nil
             settings.themLight = nil
-            send(.settingSet(.appearanceDotsLight, id))
-            send(.settingSet(.appearanceYouLight, "preset"))
-            send(.settingSet(.appearanceThemLight, "preset"))
+            write(.appearanceDotsLight, id)
+            write(.appearanceYouLight, "preset")
+            write(.appearanceThemLight, "preset")
         }
     }
 
@@ -225,19 +229,24 @@ final class GlowTheme {
             settings.themLight = value
             key = .appearanceThemLight
         }
-        send(.settingSet(key, value ?? "preset"))
+        write(key, value ?? "preset")
     }
 
     func setEdgeGlow(_ on: Bool) {
         failure = nil
         settings.edgeGlow = on
-        send(.settingSet(.appearanceEdgeGlow, on ? "on" : "off"))
+        write(.appearanceEdgeGlow, on ? "on" : "off")
     }
 
     func setMotion(_ motion: Motion) {
         failure = nil
         settings.motion = motion
-        send(.settingSet(.appearanceMotion, motion.rawValue))
+        write(.appearanceMotion, motion.rawValue)
+    }
+
+    private func write(_ key: ShellSetting, _ value: String) {
+        inFlight[key, default: []].append(value)
+        send(.settingSet(key, value))
     }
 
     private func applyMode() {
@@ -254,8 +263,18 @@ final class GlowTheme {
         switch event {
         case .settingValue(let value):
             guard let key = ShellSetting(rawValue: value.key), Self.keys.contains(key) else { return }
+            if var sent = inFlight[key], let echoed = value.value, let index = sent.firstIndex(of: echoed) {
+                sent.removeSubrange(...index)
+                inFlight[key] = sent.isEmpty ? nil : sent
+                // A newer write is still on its way: this echo is out of date.
+                if !sent.isEmpty { return }
+            }
             take(key, value.value)
         case .commandFailed(let failed) where Self.settingIDs.contains(failed.id ?? ""):
+            // What was written is in doubt: the next value the core reports is taken as it is.
+            if let key = ShellSetting(rawValue: String((failed.id ?? "").dropFirst("setting:".count))) {
+                inFlight[key] = nil
+            }
             // The control keeps what it showed; the section says it may not be so.
             failure = failed.command == "setting.get"
                 ? "Couldn't read your appearance settings, so Inkwell shows its defaults."

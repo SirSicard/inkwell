@@ -149,15 +149,18 @@ private struct FootRow: View {
     }
 }
 
-/// Live's dot in the sidebar, in their colour: it pulses while the meeting records (the orb is
-/// drawing then anyway), and holds still under Reduce Motion or "Always still".
+/// Live's dot in the sidebar, in their colour: it pulses while the meeting records and the window
+/// is on screen (the orb is drawing then anyway), and holds still under Reduce Motion or "Always
+/// still".
 struct PulseDot: View {
     @Environment(GlowTheme.self) private var theme
+    @Environment(WindowPresence.self) private var presence
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var bright = false
 
     var body: some View {
-        let still = reduceMotion || theme.motionStill
+        // Still too while the window is covered, minimised or closed: nothing moves unseen.
+        let still = reduceMotion || theme.motionStill || !presence.onScreen
         Circle()
             .fill(theme.them)
             .frame(width: 8, height: 8)

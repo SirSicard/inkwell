@@ -103,7 +103,7 @@ private struct LooksDoneCard: View {
                     .foregroundStyle(Theme.secondaryText)
             }
             Spacer(minLength: 0)
-            Button("Mark done") { owed.markDone(suggestion.commitment) }
+            Button("Mark done") { owed.markDone(suggestion.commitment, offerUndo: true) }
                 .buttonStyle(.borderedProminent)
             Button("Not yet") { owed.notYet(suggestion) }
         }
@@ -154,7 +154,7 @@ private struct OwedRowView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             Button {
-                owed.markDone(row.id)
+                owed.markDone(row.id, offerUndo: true)
             } label: {
                 Circle()
                     .strokeBorder(row.due.isOverdue ? Theme.alert : Theme.text, lineWidth: 1.5)

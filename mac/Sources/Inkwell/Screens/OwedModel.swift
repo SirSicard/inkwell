@@ -143,11 +143,13 @@ final class OwedModel {
         send(.commitmentsList)
     }
 
-    /// Marks a promise done: it leaves the list at once, and the core's list replaces it. Undo is
-    /// offered for it until the next mark or until the toast goes.
-    func markDone(_ id: String) {
+    /// Marks a promise done: it leaves the list at once, and the core's list replaces it.
+    /// `offerUndo`: the screen asking shows the Undo toast (Owed), until the next mark or until the
+    /// toast goes.
+    func markDone(_ id: String, offerUndo: Bool = false) {
         failure = nil
-        if let item = items.first(where: { $0.id == id }) {
+        undoable = nil
+        if offerUndo, let item = items.first(where: { $0.id == id }) {
             undoSerial += 1
             undoable = Undoable(serial: undoSerial, id: id, text: item.text)
         }
@@ -287,6 +289,8 @@ final class OwedModel {
             // list again.
             load()
         case .commandFailed(let failed) where ["commitment.set_done", "commitment.not_yet"].contains(failed.command):
+            // Nothing to undo: the core did not take it.
+            undoable = nil
             // Put it back as the core has it, and say why it came back.
             failure = failed.command != "commitment.set_done"
                 ? "Couldn't keep it open: \(failed.message)"

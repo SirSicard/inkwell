@@ -62,6 +62,19 @@ final class GlowThemeTests: XCTestCase {
         XCTAssertNil(theme.customYou)
     }
 
+    /// Dragging in the colour panel writes value after value; the core's echo of an older one must
+    /// not pull the control back.
+    func testAnOlderEchoDoesNotUndoANewerWrite() {
+        let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
+        theme.setMode(.light)
+        theme.setYou("#111111")
+        theme.setYou("#222222")
+        theme.apply(event(##"{"type":"setting.value","key":"appearance.you.light","value":"#111111"}"##))
+        XCTAssertEqual(theme.customYou, "#222222")
+        theme.apply(event(##"{"type":"setting.value","key":"appearance.you.light","value":"#222222"}"##))
+        XCTAssertEqual(theme.customYou, "#222222")
+    }
+
     func testAFailedReadIsSaidNotHidden() {
         let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
         theme.apply(event(#"{"type":"command.failed","command":"setting.get","id":"setting:appearance.mode","message":"setting.get: unknown key"}"#))

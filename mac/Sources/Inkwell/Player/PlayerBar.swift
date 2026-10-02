@@ -193,7 +193,10 @@ final class SpaceToPlay {
 
     /// A bare Space in a window that is not typing: not in a text field or a text view (the field
     /// editor is one), not on a focused control, and not in a panel (the Drop, a sheet's panel).
+    /// With Full Keyboard Access on, Space presses the focused control, as the user expects: it is
+    /// left alone then.
     static func isPlayKey(_ event: NSEvent) -> Bool {
+        guard !NSApp.isFullKeyboardAccessEnabled else { return false }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
         guard event.keyCode == 49, modifiers.isEmpty, !event.isARepeat,
               let window = event.window, window.isKeyWindow, window.attachedSheet == nil, !(window is NSPanel)
