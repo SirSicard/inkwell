@@ -143,6 +143,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case noteDeleted(NoteDeleted)
     /// `speaker.named`
     case speakerNamed(SpeakerNamed)
+    /// `record.deleted`
+    case recordDeleted(RecordDeleted)
     /// `models.listed`
     case modelsListed(ModelsListed)
     /// `setting.value`
@@ -265,6 +267,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "note.updated": self = .noteUpdated(try NoteUpdated(from: decoder))
             case "note.deleted": self = .noteDeleted(try NoteDeleted(from: decoder))
             case "speaker.named": self = .speakerNamed(try SpeakerNamed(from: decoder))
+            case "record.deleted": self = .recordDeleted(try RecordDeleted(from: decoder))
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
@@ -357,6 +360,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .noteUpdated(let event): try event.encode(to: encoder)
         case .noteDeleted(let event): try event.encode(to: encoder)
         case .speakerNamed(let event): try event.encode(to: encoder)
+        case .recordDeleted(let event): try event.encode(to: encoder)
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
@@ -2411,6 +2415,38 @@ public struct RecordAudio: Codable, Sendable, Equatable {
         case chunks
         case leftOut = "left_out"
         case timeline
+    }
+}
+
+/// A record was deleted whole, in answer to record.delete: its transcript, notes, summary,
+/// commitments, speaker names and search entries, its words overwritten in the library's files
+/// as the retention setting deletes them, then its audio. The screens drop it.
+public struct RecordDeleted: Codable, Sendable, Equatable {
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    public let audioLeft: Bool
+    /// What it was.
+    public let kind: RecordKind
+    /// The record that is gone.
+    public let record: String
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    public let ref: String?
+    /// No copy of its words is left in the library's files. False, as for
+    /// deleted_text_not_scrubbed, while another process reading the database keeps them in its
+    /// log: the deletion is saved, and the library keeps trying; a dictation's or meeting's
+    /// deleted_text_scrubbed says when it has. This answer counts as that change's report: each
+    /// change reaches the shell once.
+    public let scrubbed: Bool
+    /// Always `record.deleted`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case audioLeft = "audio_left"
+        case kind
+        case record
+        case ref
+        case scrubbed
+        case type
     }
 }
 

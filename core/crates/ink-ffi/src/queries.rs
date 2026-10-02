@@ -186,6 +186,11 @@ pub enum Query {
         /// The name, trimmed; `None` clears it.
         name: Option<String>,
     },
+    /// `record.delete`: one record, whole ([`crate::retention::delete_one`]).
+    RecordDelete {
+        /// The record.
+        record: String,
+    },
     /// `models.list`: the catalogue's models for this OS.
     ModelsList,
     /// `engine.route`: what serves a job now. A router read, so it is here, where a model
@@ -246,6 +251,7 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "note.update" => &["note", "text"],
         "note.delete" => &["note"],
         "speaker.name" => &["record", "speaker", "name"],
+        "record.delete" => &["record"],
         "setting.get" => &["key"],
         "setting.set" => &["key", "value"],
         "dictation.enable" => &["utc_offset_minutes"],
@@ -365,6 +371,9 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
                     format!("{name}: \"speaker\" is the diarizer's label, never empty")
                 })?,
             name: speaker_name(name, &text("name")?)?,
+        },
+        "record.delete" => Query::RecordDelete {
+            record: text("record")?,
         },
         "models.list" => Query::ModelsList,
         "engine.route" => Query::EngineRoute(
@@ -763,6 +772,21 @@ impl Ctx<'_> {
                 )),
                 Err(e) => fail(e),
             },
+            Query::RecordDelete { record } => {
+                match crate::retention::delete_one(self.shared, &RecordId(record.clone())) {
+                    Ok(deleted) => emit(event(
+                        "record.deleted",
+                        &[
+                            ("record", Some(record.into())),
+                            ("kind", Some(crate::library::kind_name(deleted.kind).into())),
+                            ("audio_left", Some(deleted.audio_left.into())),
+                            ("scrubbed", Some(deleted.scrubbed.into())),
+                            ("ref", id.clone().map(Into::into)),
+                        ],
+                    )),
+                    Err(e) => fail(e),
+                }
+            }
             Query::ModelsList => emit(self.catalogue()),
             Query::EngineRoute(job) => emit(routed(self.shared, job)),
             Query::SettingGet { key } => match store.setting(&key) {
