@@ -1477,7 +1477,8 @@ final class LiveLayoutTests: XCTestCase {
         live.notesEdited(Array(repeating: "A note line", count: 60).joined(separator: "\n"), caretParagraph: 59)
         let meeting = try XCTUnwrap(store.meeting)
         let hosting = NSHostingController(rootView: LiveMeetingView(
-            meeting: meeting, live: live, meetings: MeetingModel(send: { _ in })))
+            meeting: meeting, live: live, meetings: MeetingModel(send: { _ in }))
+            .environment(GlowTheme(send: { _ in }, applyAppearance: { _ in })))
         let minimum = hosting.sizeThatFits(in: .zero)
         XCTAssertLessThan(minimum.height, 460, "the window's minimum content height is 460")
         XCTAssertLessThan(minimum.width, 720)
@@ -1495,7 +1496,8 @@ final class LiveLayoutTests: XCTestCase {
             AnyView(OwedScreen()), AnyView(SettingsScreen()), AnyView(LiveScreen()),
         ] {
             let hosting = NSHostingController(
-                rootView: view.environment(screens).environment(CoreStore()).environment(Updates(infoDictionary: nil)))
+                rootView: view.environment(screens).environment(CoreStore()).environment(Updates(infoDictionary: nil))
+                    .environment(screens.theme).environment(LibraryModel(send: { _ in })).environment(Router()))
             let minimum = hosting.sizeThatFits(in: .zero)
             XCTAssertLessThan(minimum.height, 460)
             XCTAssertLessThan(minimum.width, 720)
