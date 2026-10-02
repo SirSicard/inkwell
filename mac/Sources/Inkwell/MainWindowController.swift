@@ -16,7 +16,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// Whether the window is on screen, for what redraws on a clock (Up next's minute).
     private let presence = WindowPresence()
 
-    /// `ink` is what the rail draws; `updates` is in the environment for the Settings screen;
+    /// `ink` is what the orb and the edge glow show; `updates` is in the environment for the
+    /// Settings screen;
     /// `screens` holds the Live, Owed and Settings screens' models (Today reads the permissions
     /// and what is owed from them); `library` feeds Today, the Library and a record.
     init(router: Router, store: CoreStore, ink: ShellInk, updates: Updates, screens: ScreenModels, library: LibraryModel) {
@@ -26,7 +27,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.events = events
         let root = ShellView(router: router).environment(store).environment(ink).environment(updates)
             .environment(screens).environment(library).environment(upNext).environment(router)
-            .environment(presence)
+            .environment(presence).environment(screens.theme)
         let hosting = NSHostingController(rootView: root)
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]

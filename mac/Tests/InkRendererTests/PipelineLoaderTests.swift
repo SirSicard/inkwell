@@ -1,5 +1,5 @@
 // The shader compiles once, on a background queue, from the moment the app starts; no ink view
-// ever waits for it on the main thread. Until it is ready a view shows plain paper.
+// ever waits for it on the main thread. Until it is ready a view stays transparent.
 import AppKit
 import Synchronization
 import XCTest
@@ -43,7 +43,7 @@ final class PipelineLoaderTests: XCTestCase {
         view.state = .meeting
         let elapsed = clock.now - start
         XCTAssertLessThan(elapsed, .milliseconds(100), "the view is made at once")
-        XCTAssertFalse(view.isReady, "and shows paper until the compile finishes")
+        XCTAssertFalse(view.isReady, "and stays transparent until the compile finishes")
         XCTAssertFalse(view.isAnimating, "no clock without a pipeline")
         XCTAssertEqual(view.framesDrawn, 0)
 

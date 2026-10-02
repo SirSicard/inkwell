@@ -40,6 +40,7 @@ struct LiveMeetingView: View {
     let meeting: CoreStore.LiveMeeting
     @Bindable var live: LiveModel
     let meetings: MeetingModel
+    @Environment(GlowTheme.self) private var theme
 
     var body: some View {
         let lines = LiveLine.ledger(meeting)
@@ -77,18 +78,26 @@ struct LiveMeetingView: View {
                     .font(.system(.title, design: .serif, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .accessibilityAddTraits(.isHeader)
-                HStack(spacing: 10) {
+                // One line, its parts set apart with the status's own "·".
+                // The status shows while blotting or once the clock started (`status`).
+                let hasStatus = meeting.stopping || live.startedAt != nil
+                let app = meeting.title != nil ? meeting.appName : nil
+                HStack(spacing: 6) {
                     status
-                    if let app = meeting.appName, meeting.title != nil {
+                    if let app {
+                        if hasStatus { separator }
                         Text(app)
                     }
                     if let started = live.startedAt {
+                        separator
                         Text("started \(started.formatted(date: .omitted, time: .shortened))")
                     }
                     if let mic = micLine {
+                        if hasStatus || app != nil { separator }
                         Text(mic)
                     }
-                    ForEach(sideWarnings, id: \.self) { warning in
+                    ForEach(Array(sideWarnings.enumerated()), id: \.element) { index, warning in
+                        if hasStatus || app != nil || micLine != nil || index > 0 { separator }
                         Text(warning).foregroundStyle(Theme.alert)
                     }
                 }
@@ -103,9 +112,20 @@ struct LiveMeetingView: View {
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 8) {
                 if !meeting.stopping {
-                    Button("Stop") { meetings.stop() }
-                        .keyboardShortcut(".", modifiers: .command)
-                        .accessibilityHint("Stops recording; the final pass then writes the record")
+                    // The large Stop (⌘. here and in the File menu).
+                    Button {
+                        meetings.stop()
+                    } label: {
+                        HStack(spacing: 10) {
+                            RoundedRectangle(cornerRadius: 2).fill(Theme.buttonLabel).frame(width: 10, height: 10)
+                                .accessibilityHidden(true)
+                            Text("Stop")
+                        }
+                        .padding(.horizontal, 10)
+                    }
+                    .buttonStyle(PaperButtonStyle(prominent: true, large: true))
+                    .keyboardShortcut(".", modifiers: .command)
+                    .accessibilityHint("Stops recording; the final pass then writes the record")
                 }
                 if let failure = meetings.failure(on: .liveStop) {
                     Text(failure)
@@ -158,6 +178,11 @@ struct LiveMeetingView: View {
         }
     }
 
+    /// Between the header line's parts; VoiceOver reads the parts, not the dots.
+    private var separator: some View {
+        Text(verbatim: "·").accessibilityHidden(true)
+    }
+
     /// A side that stopped or delivers only silence, in words.
     private var sideWarnings: [String] {
         var out: [String] = []
@@ -170,14 +195,14 @@ struct LiveMeetingView: View {
 
     private var legend: some View {
         HStack(spacing: 14) {
-            legendItem(Theme.text, "you")
-            legendItem(PaperPalette.them, "them")
+            legendItem(theme.you, "you")
+            legendItem(theme.them, "them")
             Text("grey = still settling")
         }
         .font(Typography.timestamp)
         .foregroundStyle(Theme.secondaryText)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Your lines are black, the others' are sepia; grey lines are still settling.")
+        .accessibilityLabel("Your lines have your colour's dot, the others' theirs; grey lines are still settling.")
     }
 
     private func legendItem(_ color: Color, _ label: String) -> some View {
@@ -253,9 +278,11 @@ struct LedgerView: View {
 
 private struct LedgerRow: View {
     let line: LiveLine
+    @Environment(GlowTheme.self) private var theme
 
     private var mine: Bool { line.channel == .mic }
-    private var color: Color { mine ? Theme.text : PaperPalette.them }
+    /// The dot's colour; the words stay in the text colour.
+    private var color: Color { mine ? theme.you : theme.them }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -268,7 +295,7 @@ private struct LedgerRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(mine ? "You" : "Them")
                     .font(.system(.caption, weight: .semibold))
-                    .foregroundStyle(mine ? Theme.text : PaperPalette.them)
+                    .foregroundStyle(Theme.text)
                     .opacity(line.wet ? 0.8 : 1)
                 Text(line.text)
                     .font(.system(size: 15.5, design: .serif))
@@ -308,7 +335,7 @@ struct AskPanel: View {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Text("⌘\(slot + 1)")
                                     .font(Typography.timestamp)
-                                    .foregroundStyle(slot == 0 ? Theme.accent : Theme.secondaryText)
+                                    .foregroundStyle(slot == 0 ? Theme.text : Theme.secondaryText)
                                 Text(question.text)
                                     .foregroundStyle(slot == 0 ? Theme.text : Theme.secondaryText)
                                     .lineLimit(2)
@@ -419,11 +446,9 @@ struct NotesEditor: NSViewRepresentable {
         textView.font = NSFont(
             descriptor: NSFont.systemFont(ofSize: 17).fontDescriptor.withDesign(.serif) ?? NSFont.systemFont(ofSize: 17).fontDescriptor,
             size: 17)
-        // Ink on paper, paper on night paper: the text colour of Theme.text, as an NSColor.
-        textView.textColor = NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? Palette.paper.nsColor : Palette.ink.nsColor
-        }
-        textView.insertionPointColor = Palette.sepia.nsColor
+        // The text colour of Theme.text, as an NSColor: it follows the theme's mode.
+        textView.textColor = Theme.dynamic { $0.text.nsColor }
+        textView.insertionPointColor = Theme.dynamic { $0.text.nsColor }
         textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false

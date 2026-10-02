@@ -116,6 +116,20 @@ final class OwedModel {
     /// The last answer the core refused, in words, until the next answer: the promise is back in
     /// the list as the core has it.
     private(set) var failure: String?
+    /// The promise just marked done, while its Undo is offered.
+    private(set) var undoable: Undoable?
+
+    /// A promise marked done that can be put back.
+    struct Undoable: Equatable {
+        /// Increases with every mark, so a later one replaces the toast.
+        let serial: Int
+        let id: String
+        let text: String
+    }
+
+    @ObservationIgnored private var undoSerial = 0
+    /// What the last commitment.set_done asked: done (true) or open again (an Undo).
+    @ObservationIgnored private var lastSetDone = true
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let calendar: Calendar
@@ -130,11 +144,33 @@ final class OwedModel {
     }
 
     /// Marks a promise done: it leaves the list at once, and the core's list replaces it.
-    func markDone(_ id: String) {
+    /// `offerUndo`: the screen asking shows the Undo toast (Owed), until the next mark or until the
+    /// toast goes.
+    func markDone(_ id: String, offerUndo: Bool = false) {
         failure = nil
+        undoable = nil
+        if offerUndo, let item = items.first(where: { $0.id == id }) {
+            undoSerial += 1
+            undoable = Undoable(serial: undoSerial, id: id, text: item.text)
+        }
         items.removeAll { $0.id == id }
         suggestions.removeAll { $0.commitment == id }
+        lastSetDone = true
         send(.commitmentSetDone(id: id, done: true))
+    }
+
+    /// Undo: the promise is open again (the core's list brings it back).
+    func undoDone() {
+        guard let undoable else { return }
+        self.undoable = nil
+        failure = nil
+        lastSetDone = false
+        send(.commitmentSetDone(id: undoable.id, done: false))
+    }
+
+    /// The toast's time is up.
+    func expireUndo(_ serial: Int) {
+        if undoable?.serial == serial { undoable = nil }
     }
 
     /// The user says a suggestion is wrong: it goes, the promise stays.
@@ -175,6 +211,11 @@ final class OwedModel {
         return parts.joined(separator: " · ")
     }
 
+    /// How many promises are late (the sidebar's count).
+    func overdueCount(now: Date) -> Int {
+        items.count { due($0, now: now).isOverdue }
+    }
+
     func due(_ item: OwedItem, now: Date) -> DueLabel {
         DueLabel.of(
             item.dueAtUnixMs.map { Date(timeIntervalSince1970: Double($0) / 1_000) },
@@ -189,13 +230,17 @@ final class OwedModel {
         for item in items {
             let owner = item.owner?.trimmingCharacters(in: .whitespaces)
             let recipient = item.recipient?.trimmingCharacters(in: .whitespaces)
+            // The summary names people as the transcript does: "You", "Them", a name. The user's
+            // own promises are grouped by meeting, like those with no owner; "Them" alone is no
+            // heading.
+            let ownedBySomeoneElse = owner.map { !$0.isEmpty && $0.lowercased() != "you" } ?? false
             let key: String
             if let recipient, !recipient.isEmpty {
                 key = "to:" + recipient.lowercased()
-                titles[key] = titles[key] ?? ("To " + recipient, nil)
-            } else if let owner, !owner.isEmpty {
+                titles[key] = titles[key] ?? (recipient.lowercased() == "you" ? "Owed to you" : "To " + recipient, nil)
+            } else if let owner, ownedBySomeoneElse {
                 key = "owner:" + owner.lowercased()
-                titles[key] = titles[key] ?? (owner, nil)
+                titles[key] = titles[key] ?? (owner.lowercased() == "them" ? "Owed by the others" : owner, nil)
             } else {
                 key = "record:" + item.record
                 // An untitled meeting is already named by its day: no second date beside it.
@@ -244,10 +289,12 @@ final class OwedModel {
             // list again.
             load()
         case .commandFailed(let failed) where ["commitment.set_done", "commitment.not_yet"].contains(failed.command):
+            // Nothing to undo: the core did not take it.
+            undoable = nil
             // Put it back as the core has it, and say why it came back.
-            failure = failed.command == "commitment.set_done"
-                ? "Couldn't mark it done: \(failed.message)"
-                : "Couldn't keep it open: \(failed.message)"
+            failure = failed.command != "commitment.set_done"
+                ? "Couldn't keep it open: \(failed.message)"
+                : lastSetDone ? "Couldn't mark it done: \(failed.message)" : "Couldn't open it again: \(failed.message)"
             load()
         default:
             break

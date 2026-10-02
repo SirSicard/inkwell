@@ -191,7 +191,7 @@ public sealed class VoiceCommandsModel(Action<CoreCommand> send) : ObservableMod
     public const string LoadFailedText = "Couldn’t read your voice commands.";
     public const string SaveFailedText = PhraseLists.SaveFailedText;
     public const string RefPrefix = "voice_commands:";
-    public const string NotCarriedOutText = "Not available in this version: Inkwell hears it and types nothing.";
+    public const string NotCarriedOutText = "Its action comes in a later version. While on, saying it types nothing.";
 
     /// <summary>
     /// The kinds a new command can be: the ones this build carries out, bar polish (which has its
@@ -353,7 +353,7 @@ public sealed class VoiceCommandsModel(Action<CoreCommand> send) : ObservableMod
         ArgumentNullException.ThrowIfNull(row);
         return $"Voice command {string.Join(", ", row.Triggers)}: {Describe(row)}"
             + (row.Enabled ? "" : ", off")
-            + (row.CarriedOut ? "" : ". Not available in this version: it types nothing");
+            + (row.CarriedOut ? "" : ". Its action comes in a later version; while on, saying it types nothing");
     }
 
     /// <summary>Whether this screen shows the failure: every voice_commands.list and voice_commands.save.</summary>

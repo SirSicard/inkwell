@@ -89,7 +89,7 @@ public class OnboardingModelTests
     public void TheSheetsButtonsFollowTheStep()
     {
         var onboarding = new OnboardingModel(_ => { });
-        Assert.Equal("Step 1 of 5", onboarding.StepLabel);
+        Assert.Equal("Step 1 of 6", onboarding.StepLabel);
         Assert.True(onboarding.ShowsSkip);
         Assert.False(onboarding.ShowsBack);
         Assert.Equal("Continue", onboarding.NextTitle);
@@ -98,9 +98,11 @@ public class OnboardingModelTests
         Assert.Equal(OnboardingStep.Models, onboarding.Step); // after the permissions
         Assert.Equal("Continue", onboarding.NextTitle);
         onboarding.Next();
+        Assert.Equal(OnboardingStep.Appearance, onboarding.Step); // after the models
+        onboarding.Next();
         onboarding.Next();
         Assert.Equal(OnboardingStep.Ready, onboarding.Step);
-        Assert.Equal("Step 5 of 5", onboarding.StepLabel);
+        Assert.Equal("Step 6 of 6", onboarding.StepLabel);
         Assert.False(onboarding.ShowsSkip);
         Assert.True(onboarding.ShowsBack);
         Assert.Equal("Start", onboarding.NextTitle);
@@ -126,6 +128,7 @@ public class OnboardingModelTests
             Ev.Of(LocalLlm),
             State(on: false, allowed: false));
         var onboarding = screens.Onboarding;
+        onboarding.Next();
         onboarding.Next();
         onboarding.Next();
         onboarding.Next();
@@ -205,7 +208,8 @@ public class OnboardingModelTests
         Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture)); // nothing left to ask for: the button goes
         Assert.True(catalogue.Downloading); // "You can go on…" shows
         onboarding.Next();
-        Assert.Equal(OnboardingStep.Polish, onboarding.Step); // Continue does not wait
+        Assert.Equal(OnboardingStep.Appearance, onboarding.Step); // Continue does not wait
+        onboarding.Next();
         onboarding.Next();
         onboarding.Next();
         Assert.False(onboarding.Showing);

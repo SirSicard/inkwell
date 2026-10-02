@@ -2,8 +2,9 @@
 // from the Mac renderer (mac/Sources/InkRenderer/InkSimulation.swift, itself a port of the
 // prototype's JavaScript). Doubles throughout; values become float only when packed into the
 // uniform block. InkSimulationTests checks it against the prototype's own numbers, as the Mac's
-// SimulationTests do.
-using System.Runtime.CompilerServices;
+// SimulationTests do. Glow keeps it for the state and the levels (the envelope follower): the orb's
+// uniform block is the state weights, smoothed here, and the envelopes as your level and theirs.
+using System.Numerics;
 using System.Runtime.InteropServices;
 
 namespace Inkwell.Ink;
@@ -104,6 +105,27 @@ public sealed class InkSimulation(InkRandom random)
     /// <summary>Droplets spawned so far (diagnostics and tests).</summary>
     public int Spawns { get; private set; }
 
+    /// <summary>
+    /// Glow's state weights, each 0..1: dictating, meeting, blotting, problem. Each moves towards
+    /// its state's target by 4 % per 60 Hz frame, on a time basis; the snap path sets them.
+    /// </summary>
+    public (double Dictating, double Meeting, double Blotting, double Problem) Weights { get; private set; }
+
+    /// <summary>The weights a state settles at.</summary>
+    public static (double Dictating, double Meeting, double Blotting, double Problem) WeightsFor(InkState state) => state switch
+    {
+        InkState.Dictating => (1, 0, 0, 0),
+        InkState.Meeting => (0, 1, 0, 0),
+        InkState.Blotting => (0, 1, 1, 0),
+        // Still a meeting, whose far end has gone silent.
+        InkState.Problem => (0, 1, 0, 1),
+        _ => (0, 0, 0, 0),
+    };
+
+    /// <summary>What a frame shows: the weights, the envelopes as your level and theirs, and the time.</summary>
+    public GlowFrame Frame(bool moving) =>
+        new(T, Weights.Dictating, Weights.Meeting, Weights.Blotting, Weights.Problem, EnvA, EnvB, moving);
+
     /// <summary><c>blotT</c> for the fixed blotting render: 1.38 s puts the 4.6 s cycle at 0.30, so blot = 0.5.</summary>
     internal const double FixedBlotT = 1.38;
 
@@ -203,6 +225,14 @@ public sealed class InkSimulation(InkRandom random)
             vA = Math.Max(vA, 0.7 + 0.22 * Math.Sin(T * 9));
         }
         var k = snap ? 1 : 1 - Math.Exp(-dt * 3.2);
+        // Glow's weights: 0.04 per 60 Hz frame, whatever the frame rate.
+        var kw = snap ? 1 : 1 - Math.Pow(1 - 0.04, dt * 60);
+        var target = WeightsFor(State);
+        Weights = (
+            Weights.Dictating + (target.Dictating - Weights.Dictating) * kw,
+            Weights.Meeting + (target.Meeting - Weights.Meeting) * kw,
+            Weights.Blotting + (target.Blotting - Weights.Blotting) * kw,
+            Weights.Problem + (target.Problem - Weights.Problem) * kw);
         Wet += (tw - Wet) * k;
         Two += (t2 - Two) * k;
         Dead += (td - Dead) * k;
@@ -248,6 +278,7 @@ public sealed class InkSimulation(InkRandom random)
     {
         T = fixedT;
         Wet = Two = Dead = Blot = EnvA = EnvB = CoolA = CoolB = Breath = 0;
+        Weights = default;
         prevA = prevB = 0;
         BlotT = State == InkState.Blotting ? FixedBlotT : 0;
         Hold = false;
@@ -350,49 +381,54 @@ public sealed class InkSimulation(InkRandom random)
 
     private void ClearDrops() => Array.Clear(drops);
 
-    /// <summary>The uniform block for this state: the prototype's <c>_render</c> packing.</summary>
-    public InkUniforms Uniforms(bool hasMark)
+    /// <summary>
+    /// The orb's uniform block for this frame (C4): the canvas, where the orb sits, the time, your
+    /// level and theirs (the envelopes), the state weights, the mode, and the colours.
+    /// <paramref name="moving"/> false is the still frame: the shader holds its time at 0.
+    /// </summary>
+    public InkUniforms Uniforms(InkPlacement placement, GlowLook look, bool moving)
     {
-        var u = new InkUniforms
+        ArgumentNullException.ThrowIfNull(look);
+        var shorter = Math.Min(CanvasWidth, CanvasHeight);
+        return new InkUniforms
         {
             ResX = (float)CanvasWidth,
             ResY = (float)CanvasHeight,
+            CenterX = (float)(CanvasWidth * placement.X),
+            CenterY = (float)(CanvasHeight * placement.Y),
             Time = (float)T,
-            AmpA = (float)EnvA,
-            AmpB = (float)EnvB,
-            Wet = (float)Wet,
-            Two = (float)Two,
-            Dead = (float)Dead,
-            Blot = (float)Blot,
-            Breath = (float)Breath,
-            Cy = (float)Cy,
-            HasMark = hasMark ? 1 : 0,
+            Unit = (float)(shorter * placement.Unit),
+            You = (float)Math.Clamp(EnvA, 0, 1),
+            Them = (float)Math.Clamp(EnvB, 0, 1),
+            Dictating = (float)Weights.Dictating,
+            Meeting = (float)Weights.Meeting,
+            Blotting = (float)Weights.Blotting,
+            Problem = (float)Weights.Problem,
+            Dark = look.Dark ? 1 : 0,
+            Motion = moving ? 1 : 0,
+            YouA = Vec(look.YouA),
+            YouB = Vec(look.YouB),
+            ThemA = Vec(look.ThemA),
+            ThemB = Vec(look.ThemB),
+            Idle = Vec(look.Idle),
+            Ink = Vec(look.Ink),
         };
-        for (var i = 0; i < drops.Length; i++)
-        {
-            var d = drops[i];
-            if (d.Alive)
-            {
-                u.Drops[i * 4] = (float)d.X;
-                u.Drops[i * 4 + 1] = (float)d.Y;
-                u.Drops[i * 4 + 2] = (float)d.R;
-                u.Drops[i * 4 + 3] = (float)d.Ink;
-            }
-        }
-        return u;
     }
-}
 
-/// <summary>Six vec4 droplets: (x, y, r, ink) each.</summary>
-[InlineArray(24)]
-public struct InkDropArray
-{
-    private float element;
+    private static Vector4 Vec((float R, float G, float B) c) => new(c.R, c.G, c.B, 0);
 }
 
 /// <summary>
-/// The shader's uniform block <c>U</c> (shaders/ink.wgsl), 144 bytes: twelve floats, then six
-/// vec4 droplets at offset 48. The HLSL cbuffer packs the same way.
+/// One frame of Glow: the time, the state weights, your level and theirs (0..1), and whether it
+/// moves (false: the still frame, whose time stands still).
+/// </summary>
+public readonly record struct GlowFrame(double Time, double Dictating, double Meeting, double Blotting, double Problem, double You, double Them, bool Moving);
+
+/// <summary>
+/// The shader's uniform block <c>G</c> (shaders/ink.wgsl), 160 bytes: the canvas and the orb's
+/// centre (pixels, top-left origin), the time, the unit, your level and theirs, the four state
+/// weights, the mode and whether it moves, then six colours as vec4 (rgb, a unused) from offset
+/// 64. The HLSL cbuffer packs the same way.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct InkUniforms
@@ -401,26 +437,38 @@ public struct InkUniforms
     public float ResX;
     /// <summary>Canvas height in pixels.</summary>
     public float ResY;
-    /// <summary>uTime, seconds.</summary>
+    /// <summary>The orb's centre, pixels from the left.</summary>
+    public float CenterX;
+    /// <summary>The orb's centre, pixels from the top.</summary>
+    public float CenterY;
+    /// <summary>Seconds.</summary>
     public float Time;
-    /// <summary>Envelope, near end.</summary>
-    public float AmpA;
-    /// <summary>Envelope, far end.</summary>
-    public float AmpB;
-    /// <summary>0..1.</summary>
-    public float Wet;
-    /// <summary>0..1, second ink present.</summary>
-    public float Two;
-    /// <summary>0..1, far end silent.</summary>
-    public float Dead;
-    /// <summary>0..1, blotting sheet position.</summary>
-    public float Blot;
-    /// <summary>0..1.</summary>
-    public float Breath;
-    /// <summary>Body centre y, p units.</summary>
-    public float Cy;
-    /// <summary>Above 0.5 draws the wordmark.</summary>
-    public float HasMark;
-    /// <summary>Six droplets (x, y, r, ink); r = 0 is dead.</summary>
-    public InkDropArray Drops;
+    /// <summary>Pixels per orb unit.</summary>
+    public float Unit;
+    /// <summary>Your level, 0..1.</summary>
+    public float You;
+    /// <summary>The far end's level, 0..1.</summary>
+    public float Them;
+    /// <summary>The state weights (w), each 0..1.</summary>
+    public float Dictating;
+    public float Meeting;
+    public float Blotting;
+    public float Problem;
+    /// <summary>1 at night, 0 by day.</summary>
+    public float Dark;
+    /// <summary>1 animates; 0 is the still frame.</summary>
+    public float Motion;
+    /// <summary>Unused (pads the colours to offset 64).</summary>
+    public float Pad0;
+    public float Pad1;
+    /// <summary>Your colour and its partner shade.</summary>
+    public Vector4 YouA;
+    public Vector4 YouB;
+    /// <summary>The far end's colour and its partner shade.</summary>
+    public Vector4 ThemA;
+    public Vector4 ThemB;
+    /// <summary>The orb at rest.</summary>
+    public Vector4 Idle;
+    /// <summary>The drop it blots down to.</summary>
+    public Vector4 Ink;
 }

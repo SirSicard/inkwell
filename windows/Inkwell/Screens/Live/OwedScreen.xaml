@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Owed: the promises still open, grouped, overdue ones in the alert colour, a promise said twice
      shown once, as the Mac's OwedScreen. "Looks done" suggestions sit above the list. Marking one
-     done takes it off the list; where it was said opens the record there. -->
+     done takes it off the list, with an Undo toast for a few seconds; ▸ and the time plays the
+     record from where it was said. -->
 <UserControl
     x:Class="Inkwell.Screens.OwedScreen"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -94,15 +95,18 @@
                             Visibility="{x:Bind local:OwedViews.Shown(MergedText)}">
                             <TextBlock FontSize="12" Foreground="{ThemeResource InkTextBrush}" Text="{x:Bind MergedText}" />
                         </Border>
-                        <!-- Where it was said: opens the record there. -->
+                        <!-- Where it was said: ▸ plays the record from there. -->
                         <HyperlinkButton
                             Padding="0"
                             VerticalAlignment="Center"
-                            AutomationProperties.HelpText="Opens the record where it was said"
+                            AutomationProperties.HelpText="Plays the record from where it was said"
                             Click="OnSaidAt"
                             Tag="{x:Bind Id}"
                             Visibility="{x:Bind local:OwedViews.Shown(SaidLine)}">
-                            <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" FontSize="11.5" Text="{x:Bind SaidLine}" />
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <TextBlock AutomationProperties.AccessibilityView="Raw" FontSize="11.5" Text="&#x25B8;" />
+                                <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" FontSize="11.5" Text="{x:Bind SaidLine}" />
+                            </StackPanel>
                         </HyperlinkButton>
                     </StackPanel>
                 </StackPanel>
@@ -161,7 +165,7 @@
                         VerticalAlignment="Center"
                         Click="OnSuggestionDone"
                         Content="Mark done"
-                        Style="{StaticResource AccentButtonStyle}"
+                        Style="{StaticResource InkAccentButtonStyle}"
                         Tag="{x:Bind Id}" />
                     <Button
                         Grid.Column="3"
@@ -174,6 +178,7 @@
         </DataTemplate>
     </UserControl.Resources>
 
+    <Grid>
     <ScrollViewer Background="{ThemeResource InkSurfaceBrush}" VerticalScrollBarVisibility="Auto">
         <StackPanel
             MaxWidth="956"
@@ -209,4 +214,26 @@
             </ItemsRepeater>
         </StackPanel>
     </ScrollViewer>
+    <!-- The Undo toast, after Mark done. -->
+    <Border
+        x:Name="UndoToast"
+        Margin="0,0,0,28"
+        Padding="20,10,12,10"
+        HorizontalAlignment="Center"
+        VerticalAlignment="Bottom"
+        Style="{StaticResource InkCardStyle}"
+        Visibility="Collapsed">
+        <StackPanel Orientation="Horizontal" Spacing="16">
+            <TextBlock
+                x:Name="UndoLine"
+                MaxWidth="420"
+                VerticalAlignment="Center"
+                AutomationProperties.LiveSetting="Polite"
+                Style="{StaticResource InkBodyStyle}"
+                TextTrimming="CharacterEllipsis"
+                TextWrapping="NoWrap" />
+            <Button x:Name="UndoButton" Click="OnUndo" />
+        </StackPanel>
+    </Border>
+    </Grid>
 </UserControl>

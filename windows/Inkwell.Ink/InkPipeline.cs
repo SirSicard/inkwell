@@ -1,6 +1,8 @@
-// The ink's one Direct3D 11 pipeline, shared by every surface that draws it (the Drop, a
+// The orb's one Direct3D 11 pipeline, shared by every surface that draws it (the Drop, a
 // SwapChainPanel in the window) and by offscreen renders: the Mac's InkPipeline
-// (mac/Sources/InkRenderer/InkPipeline.swift) on Windows.
+// (mac/Sources/InkRenderer/InkPipeline.swift) on Windows. Its only resource is the uniform block
+// G (160 bytes, b0); the shader writes premultiplied alpha, transparent wherever there is no orb,
+// so each draw clears its target first.
 //
 // The shader ships as source: Shaders/ink.hlsl, generated from shaders/ink.wgsl by
 // core/crates/ink-shader, compiled here with D3DCompile (the FXC compiler in d3dcompiler_47.dll,
@@ -8,8 +10,8 @@
 // DXIL, which is Direct3D 12's. Building the app needs no shader toolchain, as on the Mac. The
 // compile runs once, off the UI thread (InkPipelineLoader).
 //
-// The device also carries Direct2D and DirectWrite (the wordmark, the Drop's paper and text), so
-// it is created with BGRA support. Direct3D's immediate context and Direct2D's device context are
+// The device also carries Direct2D and DirectWrite (the Drop's pill and text), so it is created
+// with BGRA support. Direct3D's immediate context and Direct2D's device context are
 // single-threaded: everything but the constructor runs on the UI thread.
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -34,7 +36,7 @@ public enum InkAdapter
     Warp,
 }
 
-/// <summary>The compiled shader, its sampler, the device and its Direct2D and DirectWrite factories.</summary>
+/// <summary>The compiled shader, its uniform buffer, the device and its Direct2D and DirectWrite factories.</summary>
 public sealed unsafe class InkPipeline : IDisposable
 {
     /// <summary>Every ink target's pixel format: the swapchains' and the offscreen renders'.</summary>
@@ -50,9 +52,7 @@ public sealed unsafe class InkPipeline : IDisposable
     private ID3D11VertexShader* vertexShader;
     private ID3D11PixelShader* pixelShader;
     private ID3D11Buffer* constants;
-    private ID3D11SamplerState* sampler;
     private ID3D11RasterizerState* rasterizer;
-    private readonly InkMark noMark;
     private bool disposed;
 
     /// <summary>Whether this pipeline draws with WARP (no GPU, or asked for).</summary>
@@ -95,19 +95,6 @@ public sealed unsafe class InkPipeline : IDisposable
             InkRendererException.Check(Device->CreateBuffer(&cb, null, &buffer), "make the ink's uniform buffer");
             constants = buffer;
 
-            var sd = new D3D11_SAMPLER_DESC
-            {
-                Filter = D3D11_FILTER.D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-                AddressU = D3D11_TEXTURE_ADDRESS_MODE.D3D11_TEXTURE_ADDRESS_CLAMP,
-                AddressV = D3D11_TEXTURE_ADDRESS_MODE.D3D11_TEXTURE_ADDRESS_CLAMP,
-                AddressW = D3D11_TEXTURE_ADDRESS_MODE.D3D11_TEXTURE_ADDRESS_CLAMP,
-                ComparisonFunc = D3D11_COMPARISON_FUNC.D3D11_COMPARISON_NEVER,
-                MaxLOD = 0,
-            };
-            ID3D11SamplerState* s;
-            InkRendererException.Check(Device->CreateSamplerState(&sd, &s), "make the wordmark's sampler");
-            sampler = s;
-
             // The full-canvas quad is a triangle strip whose two triangles wind opposite ways:
             // nothing may be culled (Metal culls nothing by default either).
             var rd = new D3D11_RASTERIZER_DESC
@@ -119,9 +106,6 @@ public sealed unsafe class InkPipeline : IDisposable
             ID3D11RasterizerState* r;
             InkRendererException.Check(Device->CreateRasterizerState(&rd, &r), "make the ink's rasterizer state");
             rasterizer = r;
-
-            byte none = 0;
-            noMark = InkMark.FromCoverage(this, new ReadOnlySpan<byte>(&none, 1), 1, 1);
         }
         catch
         {
@@ -246,13 +230,16 @@ public sealed unsafe class InkPipeline : IDisposable
     }
 
     /// <summary>
-    /// Draws the ink over the whole of <paramref name="target"/> (<paramref name="width"/> x
-    /// <paramref name="height"/> pixels). UI thread. Allocation-free.
+    /// Clears <paramref name="target"/> (<paramref name="width"/> x <paramref name="height"/>
+    /// pixels) to transparent and draws the orb over it, premultiplied. UI thread. Allocation-free.
     /// </summary>
-    public void Encode(ID3D11RenderTargetView* target, int width, int height, in InkUniforms uniforms, InkMark? mark)
+    public void Encode(ID3D11RenderTargetView* target, int width, int height, in InkUniforms uniforms)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         var ctx = Context;
+        // Transparent: the orb is drawn over whatever is behind its surface.
+        var clear = stackalloc float[4] { 0, 0, 0, 0 };
+        ctx->ClearRenderTargetView(target, clear);
         fixed (InkUniforms* u = &uniforms)
         {
             ctx->UpdateSubresource((ID3D11Resource*)constants, 0, null, u, 0, 0);
@@ -267,10 +254,6 @@ public sealed unsafe class InkPipeline : IDisposable
         ctx->PSSetShader(pixelShader, null, 0);
         var cb = constants;
         ctx->PSSetConstantBuffers(0, 1, &cb);
-        var srv = (mark ?? noMark).View;
-        ctx->PSSetShaderResources(0, 1, &srv);
-        var s = sampler;
-        ctx->PSSetSamplers(0, 1, &s);
         ctx->Draw(4, 0);
         // Unbind the target: Direct2D or a copy may use the texture next.
         ID3D11RenderTargetView* none = null;
@@ -285,9 +268,7 @@ public sealed unsafe class InkPipeline : IDisposable
             return;
         }
         disposed = true;
-        noMark?.Dispose();
         Com.Release(ref rasterizer);
-        Com.Release(ref sampler);
         Com.Release(ref constants);
         Com.Release(ref pixelShader);
         Com.Release(ref vertexShader);
@@ -302,77 +283,6 @@ public sealed unsafe class InkPipeline : IDisposable
         }
         Com.Release(ref Context);
         Com.Release(ref Device);
-    }
-}
-
-/// <summary>A wordmark texture (A8: one byte of coverage per pixel, read by the shader as alpha).</summary>
-public sealed unsafe class InkMark : IDisposable
-{
-    internal ID3D11Texture2D* Texture;
-    internal ID3D11ShaderResourceView* View;
-
-    /// <summary>Its width in pixels.</summary>
-    public int Width { get; }
-    /// <summary>Its height in pixels.</summary>
-    public int Height { get; }
-
-    internal InkMark(ID3D11Texture2D* texture, ID3D11ShaderResourceView* view, int width, int height)
-    {
-        Texture = texture;
-        View = view;
-        Width = width;
-        Height = height;
-    }
-
-    /// <summary>An A8 texture shaded by the pipeline's sampler: renderable by Direct2D when <paramref name="renderTarget"/>.</summary>
-    internal static InkMark Create(InkPipeline pipeline, int width, int height, bool renderTarget, ReadOnlySpan<byte> coverage)
-    {
-        if (width <= 0 || height <= 0 || (!coverage.IsEmpty && coverage.Length != width * height))
-        {
-            throw new InkRendererException($"couldn't make the wordmark texture ({width}x{height})");
-        }
-        var desc = new D3D11_TEXTURE2D_DESC
-        {
-            Width = (uint)width,
-            Height = (uint)height,
-            MipLevels = 1,
-            ArraySize = 1,
-            Format = DXGI_FORMAT_A8_UNORM,
-            SampleDesc = new DXGI_SAMPLE_DESC { Count = 1, Quality = 0 },
-            Usage = D3D11_USAGE_DEFAULT,
-            BindFlags = (uint)(D3D11_BIND_SHADER_RESOURCE | (renderTarget ? D3D11_BIND_RENDER_TARGET : 0)),
-        };
-        ID3D11Texture2D* texture;
-        fixed (byte* bytes = coverage)
-        {
-            var data = new D3D11_SUBRESOURCE_DATA { pSysMem = bytes, SysMemPitch = (uint)width };
-            InkRendererException.Check(
-                pipeline.Device->CreateTexture2D(&desc, coverage.IsEmpty ? null : &data, &texture),
-                $"make the wordmark texture ({width}x{height})");
-        }
-        ID3D11ShaderResourceView* view;
-        var hr = pipeline.Device->CreateShaderResourceView((ID3D11Resource*)texture, null, &view);
-        if (hr.FAILED)
-        {
-            texture->Release();
-            InkRendererException.Check(hr, "make the wordmark's view");
-        }
-        return new InkMark(texture, view, width, height);
-    }
-
-    /// <summary>A wordmark texture from coverage bytes, row 0 at the top.</summary>
-    public static InkMark FromCoverage(InkPipeline pipeline, ReadOnlySpan<byte> coverage, int width, int height) =>
-        Create(pipeline, width, height, renderTarget: false, coverage);
-
-    /// <summary>Reads the coverage back (tests and reference comparisons). UI thread.</summary>
-    public byte[] ReadCoverage(InkPipeline pipeline) =>
-        Readback.Copy(pipeline, (ID3D11Resource*)Texture, Width, Height, DXGI_FORMAT_A8_UNORM, 1);
-
-    /// <summary>Releases the texture.</summary>
-    public void Dispose()
-    {
-        Com.Release(ref View);
-        Com.Release(ref Texture);
     }
 }
 

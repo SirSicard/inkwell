@@ -1,8 +1,7 @@
 // Settings > About. The notices are static data: their rows are built once, and nothing there
-// changes or ticks while the section is shown. The updates row follows its model (UpdatesModel),
-// which changes only when the user presses its button. A model or component row with a text is an
-// expander (Narrator reads its name and whether it is open); a model whose licence asks for no
-// notice is a plain row.
+// changes or ticks while the section is shown (the updates row is General's). A model or component
+// row with a text is an expander (Narrator reads its name and whether it is open); a model whose
+// licence asks for no notice is a plain row.
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -20,15 +19,11 @@ public sealed partial class AboutSection : UserControl
     {
     }
 
-    /// <param name="updates">The updates row's model; none: this copy does not update itself.</param>
-    public AboutSection(AboutModel about, UpdatesModel? updates = null)
+    public AboutSection(AboutModel about)
     {
         ArgumentNullException.ThrowIfNull(about);
         About = about;
-        Updates = updates ?? new UpdatesModel(NoUpdater.Instance);
         InitializeComponent();
-        Updates.PropertyChanged += (_, _) => RenderUpdates();
-        RenderUpdates();
         RustList.ContainerContentChanging += OnRustRowChanging;
         foreach (var row in about.ModelRows)
         {
@@ -41,30 +36,6 @@ public sealed partial class AboutSection : UserControl
     }
 
     public AboutModel About { get; }
-
-    public UpdatesModel Updates { get; }
-
-    private void RenderUpdates()
-    {
-        UpdatesButton.Visibility = Updates.ActionTitle is null ? Visibility.Collapsed : Visibility.Visible;
-        UpdatesButton.Content = Updates.ActionTitle;
-        UpdatesButton.IsEnabled = Updates.CanAct;
-        UpdatesLine.Text = Updates.Line ?? "";
-        UpdatesLine.Visibility = Updates.Line is null ? Visibility.Collapsed : Visibility.Visible;
-    }
-
-    private async void OnUpdatesAct(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            await Updates.Act().ConfigureAwait(true);
-        }
-        catch (Exception failure)
-        {
-            // Act says its own failures on the row; anything else is logged by kind.
-            ScreenLog.System.Write($"the updates row failed ({failure.GetType().Name})");
-        }
-    }
 
     /// <summary>A row: an expander opening onto its text, or, without a text, its title and line.</summary>
     private UIElement Row(NoticeRow row)

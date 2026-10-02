@@ -141,7 +141,7 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
       that looks like a link (`https://example.com`) reads as plain text: nothing is clickable.
 - [ ] Voice commands: off on a fresh library, with the defaults listed ("scratch that · undo that
       …"). Those Inkwell does not do yet ("Undo the last dictation", "Pause or resume dictation")
-      say "Not available in this version". Turn the switch on: the line reads "Say “inkwell”, then
+      say "Its action comes in a later version". Turn the switch on: the line reads "Say “inkwell”, then
       a command". Change the wake word (Return or Save), add a command (`sign off`, Type text,
       `Best, A. Writer`), switch one off, delete one: each stays after a restart.
 - [ ] On a library made by the 0.2 import (`core/crates/ink-store/IMPORT-CHECKLIST.md`, section

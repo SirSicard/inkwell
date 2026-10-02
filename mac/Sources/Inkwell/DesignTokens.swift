@@ -1,12 +1,14 @@
-// The design tokens. The OS owns the chrome (the Liquid Glass sidebar and toolbar, native
-// controls, the system fonts); the brand owns the content: paper, ink, and the ink zone.
+// The design tokens as the screens paint them. The OS owns the chrome (the Liquid Glass sidebar
+// and toolbar, native controls, the system fonts); Glow owns the content: the background, the
+// translucent cards floating over the orb, the type, and the colours of each mode (Glow.swift).
 //
-// The six colours are the design canvas's. Everything else here derives from them, and each
-// derivation says why.
+// Every colour here is dynamic: it resolves against the appearance it is drawn in, which follows
+// the theme's mode (GlowTheme sets the app's appearance). The dot colours (yours and theirs) are
+// not here: they depend on the user's settings, so GlowTheme resolves them. Text never uses them.
 import AppKit
 import SwiftUI
 
-/// One colour from the canvas, as its sRGB hex value.
+/// One colour, as its sRGB hex value.
 struct Swatch: Equatable, Sendable {
     let hex: UInt32
 
@@ -23,76 +25,62 @@ struct Swatch: Equatable, Sendable {
     }
 }
 
-/// The canvas's palette.
-enum Palette {
-    /// The page: the content background by day, and the ink zone in both themes.
-    static let paper = Swatch(0xF2EEE6)
-    /// Text on paper, and the ink itself.
-    static let ink = Swatch(0x16181F)
-    /// The accent: native controls take it as their tint.
-    static let sepia = Swatch(0x7E5431)
-    /// Alerts: something needs the user.
-    static let seal = Swatch(0xB23A26)
-    /// The content background in dark mode.
-    static let nightPaper = Swatch(0x121419)
-    /// Secondary text on paper.
-    static let muted = Swatch(0x625E57)
-}
-
-/// The palette mapped to what the screens paint.
+/// The mode's tokens mapped to what the screens paint.
 enum Theme {
-    /// Behind a screen's content: paper, or night paper in dark mode.
-    static let surface = dynamic(light: Palette.paper.nsColor, dark: Palette.nightPaper.nsColor)
+    /// Behind a screen's content: the window's background (the orb draws over it).
+    static let surface = color(\.background)
     /// Body text.
-    static let text = dynamic(light: Palette.ink.nsColor, dark: Palette.paper.nsColor)
-    /// Secondary text. Muted on night paper is 2.9:1 (WCAG), under the 4.5:1 text needs, so dark
-    /// mode uses paper at 62 % (6.6:1 on night paper; muted on paper is 5.6:1).
-    static let secondaryText = dynamic(
-        light: Palette.muted.nsColor, dark: Palette.paper.nsColor.withAlphaComponent(0.62))
-    /// The tint of native controls and selections (white on sepia is 6.6:1). Not a text colour in
-    /// dark mode: sepia on night paper is 2.8:1.
-    static let accent = Color(nsColor: Palette.sepia.nsColor)
+    static let text = color(\.text)
+    /// Secondary text.
+    static let secondaryText = color(\.secondary)
+    /// Hairlines and borders.
+    static let border = color(\.border)
+    /// A translucent card over the orb.
+    static let card = Color(nsColor: dynamic { mode in mode.card.nsColor.withAlphaComponent(mode.cardAlpha) })
+    /// A card, solid: Increase Contrast and Reduce Transparency.
+    static let solidCard = color(\.card)
+    /// A prominent button: text-coloured fill, background-coloured label.
+    static let buttonFill = color(\.buttonFill)
+    static let buttonLabel = color(\.buttonLabel)
     /// Something needs the user.
-    static let alert = Color(nsColor: Palette.seal.nsColor)
-    /// The ink zone and the rail are paper in both themes: the ink reads as ink on paper, and a
-    /// dark drop on a dark page would vanish.
-    static let inkZone = Color(nsColor: Palette.paper.nsColor)
+    static let alert = color(\.alert)
+    /// A card that needs the user.
+    static let alertCard = color(\.alertCard)
+    /// The page behind a floating surface (the Drop's shadow side).
+    static let page = color(\.page)
 
     /// The window's own background, behind the SwiftUI content.
-    static let windowBackground = dynamicNSColor(light: Palette.paper.nsColor, dark: Palette.nightPaper.nsColor)
+    static let windowBackground = dynamic { $0.background.nsColor }
 
-    private static func dynamic(light: NSColor, dark: NSColor) -> Color {
-        Color(nsColor: dynamicNSColor(light: light, dark: dark))
+    /// The mode's colour at `path`, following the appearance it is drawn in.
+    static func color(_ path: any KeyPath<Glow.Mode, Swatch> & Sendable) -> Color {
+        Color(nsColor: dynamic { $0[keyPath: path].nsColor })
     }
 
-    private static func dynamicNSColor(light: NSColor, dark: NSColor) -> NSColor {
+    /// An NSColor that resolves per appearance: night tokens in a dark one, day tokens otherwise.
+    static func dynamic(_ make: @escaping @Sendable (Glow.Mode) -> NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            make(Glow.mode(dark: appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua))
         }
     }
 }
 
-/// The three system faces: SF Pro for the interface, New York for what the user reads as a
-/// document (titles, summaries), SF Mono for timestamps. Text styles, so Dynamic Type and the
-/// user's text size apply.
+/// The type roles, platform faces only: New York for display (greetings, titles, what the user
+/// reads as a document), SF Pro for the interface, SF Mono for timestamps. Fixed sizes, the
+/// tokens' own.
 enum Typography {
+    /// Today's greeting (New York).
+    static let greeting = Font.system(size: Glow.Size.greeting, design: .serif)
     /// A screen's title (New York).
-    static let screenTitle = Font.system(.largeTitle, design: .serif, weight: .semibold)
+    static let screenTitle = Font.system(size: Glow.Size.screenTitle, design: .serif)
     /// A section heading inside a screen (New York).
-    static let heading = Font.system(.title3, design: .serif, weight: .semibold)
+    static let heading = Font.system(size: Glow.Size.heading, design: .serif)
     /// Interface text (SF Pro).
-    static let body = Font.system(.body)
+    static let body = Font.system(size: Glow.Size.body)
     /// Secondary interface text (SF Pro).
-    static let caption = Font.system(.callout)
+    static let caption = Font.system(size: Glow.Size.caption)
+    /// A small label over a section (SF Pro).
+    static let eyebrow = Font.system(size: Glow.Size.eyebrow, weight: .medium)
     /// Timestamps and durations (SF Mono).
-    static let timestamp = Font.system(.caption, design: .monospaced)
-}
-
-/// Fixed measures of the layout.
-enum Layout {
-    /// The ink rail beside the content, outside Today (the design's 56 px rail).
-    static let railWidth: CGFloat = 56
-    /// Today's ink zone, with the wordmark: about a third of the default window's content (S2.5
-    /// lays out the rest of Today).
-    static let inkZoneWidth: CGFloat = 300
+    static let timestamp = Font.system(size: Glow.Size.eyebrow, design: .monospaced)
 }

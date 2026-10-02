@@ -526,6 +526,26 @@ public enum ShellSetting
     DictationEnabled,
     /// <summary>"dismissed": the note about Inkwell 0.2's dictation key has been read.</summary>
     ImportKeyNote,
+    /// <summary>"light", "dark" or "system" (the default): Glow's mode.</summary>
+    AppearanceMode,
+    /// <summary>The day mode's dot preset (an id; "indigo" by default).</summary>
+    AppearanceDotsLight,
+    /// <summary>The night mode's dot preset.</summary>
+    AppearanceDotsDark,
+    /// <summary>"preset" (the default) or "#rrggbb": your colour by day.</summary>
+    AppearanceYouLight,
+    /// <summary>Their colour by day.</summary>
+    AppearanceThemLight,
+    /// <summary>Your colour at night.</summary>
+    AppearanceYouDark,
+    /// <summary>Their colour at night.</summary>
+    AppearanceThemDark,
+    /// <summary>"on" (the default) or "off": the window's edge glows while something is live.</summary>
+    AppearanceEdgeGlow,
+    /// <summary>"system" (the default: Windows' Animation effects) or "still".</summary>
+    AppearanceMotion,
+    /// <summary>"on" (the default) or "off": local-only mode (Settings > AI's "Nothing leaves this computer").</summary>
+    LlmLocalOnly,
 }
 
 public static class ShellSettings
@@ -543,6 +563,16 @@ public static class ShellSettings
         ShellSetting.DictationEditKey => "dictation.edit_key",
         ShellSetting.DictationEnabled => "dictation.enabled",
         ShellSetting.ImportKeyNote => "import.key_note",
+        ShellSetting.AppearanceMode => "appearance.mode",
+        ShellSetting.AppearanceDotsLight => "appearance.dots.light",
+        ShellSetting.AppearanceDotsDark => "appearance.dots.dark",
+        ShellSetting.AppearanceYouLight => "appearance.you.light",
+        ShellSetting.AppearanceThemLight => "appearance.them.light",
+        ShellSetting.AppearanceYouDark => "appearance.you.dark",
+        ShellSetting.AppearanceThemDark => "appearance.them.dark",
+        ShellSetting.AppearanceEdgeGlow => "appearance.edge_glow",
+        ShellSetting.AppearanceMotion => "appearance.motion",
+        ShellSetting.LlmLocalOnly => "llm.local_only",
         _ => throw new ArgumentOutOfRangeException(nameof(setting)),
     };
 

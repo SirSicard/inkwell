@@ -35,7 +35,7 @@
                     Margin="0,6,0,0"
                     VerticalAlignment="Top"
                     AutomationProperties.AccessibilityView="Raw"
-                    Fill="{ThemeResource InkTextBrush}"
+                    Fill="{StaticResource GlowYouBrush}"
                     Opacity="{x:Bind local:LiveViews.DotOpacity(Wet)}"
                     Visibility="{x:Bind local:LiveViews.Visible(Mine)}" />
                 <Ellipse
@@ -45,7 +45,7 @@
                     Margin="0,6,0,0"
                     VerticalAlignment="Top"
                     AutomationProperties.AccessibilityView="Raw"
-                    Fill="{ThemeResource InkThemBrush}"
+                    Fill="{StaticResource GlowThemBrush}"
                     Opacity="{x:Bind local:LiveViews.DotOpacity(Wet)}"
                     Visibility="{x:Bind local:LiveViews.Collapsed(Mine)}" />
                 <StackPanel Grid.Column="2" Spacing="2">
@@ -61,7 +61,7 @@
                         AutomationProperties.AccessibilityView="Raw"
                         FontSize="12"
                         FontWeight="SemiBold"
-                        Foreground="{ThemeResource InkThemBrush}"
+                        Foreground="{ThemeResource InkTextBrush}"
                         Opacity="{x:Bind local:LiveViews.SpeakerOpacity(Wet)}"
                         Text="{x:Bind Speaker}"
                         Visibility="{x:Bind local:LiveViews.Collapsed(Mine)}" />
@@ -98,7 +98,7 @@
                 Foreground="{ThemeResource InkSecondaryTextBrush}"
                 Style="{StaticResource InkBodyStyle}"
                 Text="No meeting is being recorded." />
-            <Button x:Name="RecordNowButton" Click="OnRecordNow" Content="Record now" Style="{StaticResource AccentButtonStyle}" />
+            <Button x:Name="RecordNowButton" Click="OnRecordNow" Content="Record now" Style="{StaticResource InkAccentButtonStyle}" />
             <TextBlock x:Name="RecordNowFailure" Style="{StaticResource InkAlertTextStyle}" Visibility="Collapsed" />
         </StackPanel>
 
@@ -123,7 +123,7 @@
                         FontSize="27"
                         FontWeight="Medium"
                         Style="{StaticResource InkScreenTitleStyle}" />
-                    <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <Ellipse
                                 x:Name="RecordingDot"
@@ -137,7 +137,7 @@
                         <TextBlock x:Name="AppLine" Style="{StaticResource InkTimestampStyle}" />
                         <TextBlock x:Name="StartedLine" Style="{StaticResource InkTimestampStyle}" />
                         <TextBlock x:Name="MicLine" Style="{StaticResource InkTimestampStyle}" />
-                        <StackPanel x:Name="SideWarnings" Orientation="Horizontal" Spacing="10" />
+                        <StackPanel x:Name="SideWarnings" Orientation="Horizontal" Spacing="4" />
                     </StackPanel>
                     <TextBlock x:Name="FarEndLine" Style="{StaticResource InkCaptionStyle}" />
                     <TextBlock x:Name="FarEndAlert" Style="{StaticResource InkAlertTextStyle}" />
@@ -147,24 +147,32 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Bottom"
                     Spacing="8">
+                    <!-- The large Stop (Ctrl+.). -->
                     <Button
                         x:Name="StopButton"
+                        MinWidth="132"
+                        Padding="30,12,30,13"
                         HorizontalAlignment="Right"
+                        AutomationProperties.AcceleratorKey="Control+Period"
                         AutomationProperties.HelpText="Stops recording; the final pass then writes the record"
                         Click="OnStop"
-                        Content="Stop" />
+                        Content="Stop"
+                        FontSize="17"
+                        FontWeight="SemiBold"
+                        Style="{StaticResource InkAccentButtonStyle}"
+                        ToolTipService.ToolTip="Stop (Ctrl+.)" />
                     <TextBlock x:Name="StopFailure" HorizontalAlignment="Right" Style="{StaticResource InkAlertTextStyle}" />
                     <!-- The legend, read as one sentence. -->
                     <ContentControl
-                        AutomationProperties.Name="Your lines are in the text colour, the others' are sepia; grey lines are still settling."
+                        AutomationProperties.Name="Your lines carry your colour's dot, the others' carry theirs; grey lines are still settling."
                         IsTabStop="False">
                         <StackPanel Orientation="Horizontal" Spacing="14">
                             <StackPanel AutomationProperties.AccessibilityView="Raw" Orientation="Horizontal" Spacing="6">
-                                <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{ThemeResource InkTextBrush}" />
+                                <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{StaticResource GlowYouBrush}" />
                                 <TextBlock Style="{StaticResource InkTimestampStyle}" Text="you" />
                             </StackPanel>
                             <StackPanel AutomationProperties.AccessibilityView="Raw" Orientation="Horizontal" Spacing="6">
-                                <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{ThemeResource InkThemBrush}" />
+                                <Ellipse Width="8" Height="8" VerticalAlignment="Center" Fill="{StaticResource GlowThemBrush}" />
                                 <TextBlock Style="{StaticResource InkTimestampStyle}" Text="them" />
                             </StackPanel>
                             <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkTimestampStyle}" Text="grey = still settling" />
@@ -190,7 +198,7 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkEyebrowStyle}" Text="YOUR NOTES" />
+                    <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkEyebrowStyle}" Text="Your notes" />
                     <TextBox
                         x:Name="NotesBox"
                         Grid.Row="1"
@@ -251,7 +259,7 @@
             <Border Grid.Row="2" Padding="14,12" Style="{StaticResource InkCardStyle}">
                 <StackPanel Spacing="10">
                     <StackPanel x:Name="StackArea" Spacing="6">
-                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkEyebrowStyle}" Text="ASKED OF YOU" />
+                        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkEyebrowStyle}" Text="Asked of you" />
                         <StackPanel x:Name="StackButtons" Spacing="2" />
                     </StackPanel>
                     <Grid ColumnSpacing="10">

@@ -337,7 +337,7 @@ final class VoiceCommandsModel {
     }
 }
 
-/// What became of Inkwell 0.2's dictation key, said once in Settings > Voice until dismissed.
+/// What became of Inkwell 0.2's dictation key, said once in Settings > Dictation until dismissed.
 @MainActor
 @Observable
 final class ImportNoteModel {

@@ -2,7 +2,9 @@
 // data when the screen is loaded (the library's today, what is owed, the calendar, and the
 // permission check the Settings cards share), listens to its models only while loaded, and
 // redraws "in 42 min" on the minute through a one-shot DispatcherQueueTimer, only while the
-// screen is loaded, the window is on screen and an event is shown (architecture rule 9).
+// screen is loaded, the window is on screen and an event is shown (architecture rule 9). The live
+// card's "Recording · 12:04" ticks each second only while a meeting records and the screen is
+// loaded and on screen, as Live's own clock does.
 using System.ComponentModel;
 using Inkwell.Core;
 using Inkwell.Core.Screens;
@@ -21,8 +23,8 @@ public sealed partial class TodayScreen : UserControl
 {
     /// <summary>The content's width from which Today shows two columns (the Mac's 624 pt).</summary>
     private const double TwoColumns = 624;
-    /// <summary>The horizontal padding (48 each side).</summary>
-    private const double Gutters = 96;
+    /// <summary>The horizontal padding (36 each side).</summary>
+    private const double Gutters = 72;
 
     private readonly CoreStore store;
     private readonly LibraryModel library;
@@ -32,7 +34,11 @@ public sealed partial class TodayScreen : UserControl
     private readonly WindowPresence presence;
     private readonly Action<Route> open;
     private readonly Action<string, long?, bool> openRecord;
+    private readonly RecordControlsModel controls;
+    private readonly MeetingModel meetings;
+    private readonly LiveModel live;
     private readonly DispatcherQueueTimer minute;
+    private readonly DispatcherQueueTimer second;
     private bool showAllNeeds;
     private IReadOnlyList<NeedsYouItem>? shownNeeds;
     private bool loaded;
@@ -40,6 +46,9 @@ public sealed partial class TodayScreen : UserControl
     /// <param name="open">Opens a route (Owed from "All N").</param>
     /// <param name="openRecord">Opens a record in the Library: the record, where to put the playhead, and whether to play.</param>
     /// <param name="presence">Whether the window is on screen: Up next's minute redraws only then.</param>
+    /// <param name="controls">The dictation key the core bound (the hero's status line).</param>
+    /// <param name="meetings">Record now and Stop, and their failures.</param>
+    /// <param name="live">The live meeting's clock (the live card's line).</param>
     public TodayScreen(
         CoreStore store,
         LibraryModel library,
@@ -48,8 +57,17 @@ public sealed partial class TodayScreen : UserControl
         UpNextModel upNext,
         WindowPresence presence,
         Action<Route> open,
-        Action<string, long?, bool> openRecord)
+        Action<string, long?, bool> openRecord,
+        RecordControlsModel controls,
+        MeetingModel meetings,
+        LiveModel live)
     {
+        ArgumentNullException.ThrowIfNull(controls);
+        ArgumentNullException.ThrowIfNull(meetings);
+        ArgumentNullException.ThrowIfNull(live);
+        this.controls = controls;
+        this.meetings = meetings;
+        this.live = live;
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(library);
         ArgumentNullException.ThrowIfNull(owed);
@@ -70,9 +88,19 @@ public sealed partial class TodayScreen : UserControl
         minute = DispatcherQueue.GetForCurrentThread().CreateTimer();
         minute.IsRepeating = false;
         minute.Tick += (_, _) => MinuteTick();
+        second = DispatcherQueue.GetForCurrentThread().CreateTimer();
+        second.Interval = TimeSpan.FromSeconds(1);
+        second.IsRepeating = true;
+        second.Tick += (_, _) => RenderLive();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += (_, _) => Layout();
+        // The rows are built in code with brushes of the theme they were built in: build them again.
+        ActualThemeChanged += (_, _) =>
+        {
+            shownNeeds = null;
+            Render();
+        };
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -84,6 +112,10 @@ public sealed partial class TodayScreen : UserControl
         foreach (var model in Models())
         {
             model.PropertyChanged += OnModelChanged;
+        }
+        foreach (var model in LiveModels())
+        {
+            model.PropertyChanged += OnLiveChanged;
         }
         library.RefreshToday();
         owed.Load();
@@ -102,11 +134,28 @@ public sealed partial class TodayScreen : UserControl
         {
             model.PropertyChanged -= OnModelChanged;
         }
+        foreach (var model in LiveModels())
+        {
+            model.PropertyChanged -= OnLiveChanged;
+        }
         permissions.ScreenDisappeared();
         minute.Stop();
+        second.Stop();
     }
 
     private INotifyPropertyChanged[] Models() => [library, owed, permissions, upNext, presence];
+
+    /// <summary>What only the hero and the live card read: they redraw for it, not the whole screen (a meeting's lines change it often).</summary>
+    private INotifyPropertyChanged[] LiveModels() => [controls, meetings, live];
+
+    private void OnLiveChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (loaded)
+        {
+            RenderHero();
+            RenderLive();
+        }
+    }
 
     private void OnModelChanged(object? sender, PropertyChangedEventArgs e) => Render();
 
@@ -115,6 +164,8 @@ public sealed partial class TodayScreen : UserControl
         if (loaded)
         {
             RenderNeedsYou();
+            RenderHero();
+            RenderLive();
         }
     }
 
@@ -126,9 +177,10 @@ public sealed partial class TodayScreen : UserControl
         }
         var now = library.Now();
         var calendar = library.Calendar;
-        DateLine.Text = TodayText.LongDay(now, calendar).ToUpper(calendar.Culture);
-        AutomationProperties.SetName(DateLine, TodayText.LongDay(now, calendar));
-        Greeting.Text = LibraryFormat.Greeting(now, calendar);
+        DateLine.Text = TodayText.LongDay(now, calendar);
+        RenderGreeting(LibraryFormat.Greeting(now, calendar));
+        RenderHero();
+        RenderLive();
         RenderNeedsYou();
         RenderLastMeeting(now, calendar);
         RenderUpNext(now, calendar);
@@ -136,6 +188,62 @@ public sealed partial class TodayScreen : UserControl
         RenderStats(calendar);
         Layout();
     }
+
+    // The hero and the live card
+
+    /// <summary>"Good evening", its last word in italic as the canvas sets it.</summary>
+    private void RenderGreeting(string greeting)
+    {
+        Greeting.Inlines.Clear();
+        var space = greeting.LastIndexOf(' ');
+        Greeting.Inlines.Add(new Run { Text = space < 0 ? greeting : greeting[..(space + 1)] });
+        if (space >= 0)
+        {
+            Greeting.Inlines.Add(new Run { Text = greeting[(space + 1)..], FontStyle = Windows.UI.Text.FontStyle.Italic });
+        }
+        AutomationProperties.SetName(Greeting, greeting);
+    }
+
+    private void RenderHero()
+    {
+        var recording = store.Meeting is not null;
+        StatusLine.Text = TodayText.HeroStatus(recording, store.Listening, controls.DictateText);
+        RecordNow.Visibility = Show(!recording);
+        AutomationProperties.SetHelpText(RecordNow, RecordControlsModel.RecordNowHint);
+        var failure = recording ? null : meetings.FailureOn(MeetingPlace.RecordNow);
+        RecordNowFailure.Text = failure ?? "";
+        RecordNowFailure.Visibility = Show(failure is not null);
+    }
+
+    /// <summary>The live card, and its clock: each second only while the meeting records and Today is seen.</summary>
+    private void RenderLive()
+    {
+        var meeting = store.Meeting;
+        LiveCard.Visibility = Show(meeting is not null);
+        if (meeting is null || !loaded)
+        {
+            second.Stop();
+            return;
+        }
+        LiveTitle.Text = LiveHeader.Title(meeting);
+        LiveLine.Text = TodayText.LiveCardLine(meeting, live.StatusText(meeting));
+        LiveStop.Visibility = Show(!meeting.Stopping);
+        var ticks = ScreenClock.Runs(loaded, presence, moving: !meeting.Stopping && live.StartedAt is not null);
+        if (ticks && !second.IsRunning)
+        {
+            second.Start();
+        }
+        else if (!ticks)
+        {
+            second.Stop();
+        }
+    }
+
+    private void OnRecordNow(object sender, RoutedEventArgs e) => meetings.RecordNow();
+
+    private void OnOpenLive(object sender, RoutedEventArgs e) => open(Route.Live);
+
+    private void OnStop(object sender, RoutedEventArgs e) => meetings.Stop();
 
     // Needs you
 
@@ -180,7 +288,7 @@ public sealed partial class TodayScreen : UserControl
         var button = new Button
         {
             Content = item.ActionTitle,
-            Style = StyleOf("AccentButtonStyle"),
+            Style = StyleOf("InkAccentButtonStyle"),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(12, 0, 0, 0),
         };
@@ -437,7 +545,8 @@ public sealed partial class TodayScreen : UserControl
 
     private static Visibility Show(bool visible) => visible ? Visibility.Visible : Visibility.Collapsed;
 
-    private static Brush BrushOf(string key) => (Brush)Application.Current.Resources[key];
+    /// <summary>A token brush in this screen's theme, not the app's (Parts.Brush).</summary>
+    private Brush BrushOf(string key) => Parts.Brush(key, this);
 
     private static Style StyleOf(string key) => (Style)Application.Current.Resources[key];
 

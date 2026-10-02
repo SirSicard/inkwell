@@ -115,6 +115,10 @@ public struct InkSimulation: Sendable {
     public private(set) var envA = 0.0, envB = 0.0, prevA = 0.0, prevB = 0.0
     public private(set) var coolA = 0.0, coolB = 0.0, breath = 0.0
     public private(set) var drops = [InkDroplet](repeating: InkDroplet(), count: 6)
+    /// The Glow orb's and edge glow's weights: dictating, meeting, blotting and problem, each
+    /// 0...1, eased toward the state's (`weights(for:)`) by 0.04 per 60 Hz frame on a time basis,
+    /// so a state change fades in at any frame rate. A still frame has them at their targets.
+    public private(set) var w = SIMD4<Double>(0, 0, 0, 0)
     /// Droplets spawned so far (diagnostics and tests).
     public private(set) var spawns = 0
 
@@ -224,7 +228,24 @@ public struct InkSimulation: Sendable {
         }
         prevA = envA
         prevB = envB
+        let kw = snap ? 1 : 1 - pow(1 - Self.weightEase, dt * 60)
+        w += (Self.weights(for: state) - w) * kw
         physics(dt)
+    }
+
+    /// How far each weight moves toward its target per 60 Hz frame.
+    static let weightEase = 0.04
+
+    /// Each state's weights: dictating, meeting, blotting, problem. Blotting is a meeting being
+    /// blotted, and a problem a meeting whose far end went quiet.
+    public static func weights(for state: InkState) -> SIMD4<Double> {
+        switch state {
+        case .idle: SIMD4(0, 0, 0, 0)
+        case .dictating: SIMD4(1, 0, 0, 0)
+        case .meeting: SIMD4(0, 1, 0, 0)
+        case .blotting: SIMD4(0, 1, 1, 0)
+        case .problem: SIMD4(0, 1, 0, 1)
+        }
     }
 
     /// The still frame: droplets cleared and every spring settled at its target, time unchanged.
@@ -250,6 +271,7 @@ public struct InkSimulation: Sendable {
         coolA = 0
         coolB = 0
         breath = 0
+        w = .zero
         blotT = state == .blotting ? Self.fixedBlotT : 0
         hold = false
         echo = false
@@ -331,48 +353,53 @@ public struct InkSimulation: Sendable {
         }
     }
 
-    /// The uniform block for this state: the prototype's `_render` packing.
-    public func uniforms(hasMark: Bool) -> InkUniforms {
+    /// The orb's uniform block for this state (shaders/ink.wgsl, `G`): the canvas, where the orb
+    /// sits and how large a unit is, the time, your level and theirs (the envelopes), the state
+    /// weights, and the theme's colours. `motion` false draws a still frame: the shader stops its
+    /// time.
+    public func uniforms(palette: OrbPalette, placement: OrbPlacement, motion: Bool) -> InkUniforms {
         var u = InkUniforms()
         u.res = SIMD2(Float(canvasWidth), Float(canvasHeight))
+        u.center = SIMD2(Float(canvasWidth * placement.x), Float(canvasHeight * placement.yFromTop))
         u.time = Float(t)
-        u.ampA = Float(envA)
-        u.ampB = Float(envB)
-        u.wet = Float(wet)
-        u.two = Float(two)
-        u.dead = Float(dead)
-        u.blot = Float(blot)
-        u.breath = Float(breath)
-        u.cy = Float(cy)
-        u.hasMark = hasMark ? 1 : 0
-        func pack(_ d: InkDroplet) -> SIMD4<Float> {
-            d.alive ? SIMD4(Float(d.x), Float(d.y), Float(d.r), Float(d.ink)) : .zero
-        }
-        u.drops = (pack(drops[0]), pack(drops[1]), pack(drops[2]), pack(drops[3]), pack(drops[4]), pack(drops[5]))
+        u.unit = Float(min(canvasWidth, canvasHeight) * placement.unit)
+        u.you = Float(envA)
+        u.them = Float(envB)
+        u.w = SIMD4<Float>(w)
+        u.dark = palette.dark ? 1 : 0
+        u.motion = motion ? 1 : 0
+        u.yA = SIMD4(palette.yA, 0)
+        u.yB = SIMD4(palette.yB, 0)
+        u.tA = SIMD4(palette.tA, 0)
+        u.tB = SIMD4(palette.tB, 0)
+        u.idle = SIMD4(palette.idle, 0)
+        u.ink = SIMD4(palette.ink, 0)
         return u
     }
 }
 
-/// The shader's uniform block `U` (shaders/ink.wgsl), 144 bytes: twelve floats, then six vec4
-/// droplets at offset 48. A plain value, so a frame hands it to Metal without allocating.
+/// The shader's uniform block `G` (shaders/ink.wgsl), 160 bytes: the canvas and the orb's centre
+/// in pixels (top-left origin), the time, the unit, your level and theirs, the four state weights,
+/// dark and motion, then six colours (rgb, the fourth unused). A plain value, so a frame hands it
+/// to Metal without allocating; Swift lays it out at the shader's offsets (SimulationTests checks).
 public struct InkUniforms: Equatable, Sendable {
     public var res = SIMD2<Float>(0, 0)
+    public var center = SIMD2<Float>(0, 0)
     public var time: Float = 0
-    public var ampA: Float = 0
-    public var ampB: Float = 0
-    public var wet: Float = 0
-    public var two: Float = 0
-    public var dead: Float = 0
-    public var blot: Float = 0
-    public var breath: Float = 0
-    public var cy: Float = 0
-    public var hasMark: Float = 0
-    public var drops: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) =
-        (.zero, .zero, .zero, .zero, .zero, .zero)
+    public var unit: Float = 0
+    public var you: Float = 0
+    public var them: Float = 0
+    /// Dictating, meeting, blotting, problem.
+    public var w = SIMD4<Float>(0, 0, 0, 0)
+    public var dark: Float = 0
+    public var motion: Float = 0
+    public var pad = SIMD2<Float>(0, 0)
+    public var yA = SIMD4<Float>(0, 0, 0, 0)
+    public var yB = SIMD4<Float>(0, 0, 0, 0)
+    public var tA = SIMD4<Float>(0, 0, 0, 0)
+    public var tB = SIMD4<Float>(0, 0, 0, 0)
+    public var idle = SIMD4<Float>(0, 0, 0, 0)
+    public var ink = SIMD4<Float>(0, 0, 0, 0)
 
     public init() {}
-
-    public static func == (a: InkUniforms, b: InkUniforms) -> Bool {
-        withUnsafeBytes(of: a) { x in withUnsafeBytes(of: b) { y in x.elementsEqual(y) } }
-    }
 }

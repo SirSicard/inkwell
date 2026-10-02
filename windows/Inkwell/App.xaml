@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The design tokens. The OS owns the chrome (Mica, native controls, the system fonts); the accent
-     is Inkwell's sepia, so no control renders in the system's accent colour. -->
+<!-- The design tokens: Glow's, from the generated token dictionary (Generated/GlowTokens.xaml,
+     from design/tokens.json), named here for the screens. The window's mode (light, dark or the system's: GlowTheme) picks the theme
+     dictionary; the you and them colours are two brushes GlowTheme keeps up to date
+     (GlowYouBrush, GlowThemBrush), for dots and lanes only: text never uses them. High Contrast
+     gets solid cards, no translucency and stronger borders, in the system's colours. -->
 <Application
     x:Class="Inkwell.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -9,90 +12,145 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <ResourceDictionary Source="ms-appx:///Generated/GlowTokens.xaml" />
             </ResourceDictionary.MergedDictionaries>
-            <!-- The screens' palette (the canvas's; the Mac's DesignTokens.swift and ScreenStyle.swift
-                 say why each derived tone is what it is). Paper by day, night paper by night; the ink
-                 zone is paper in both themes. Secondary text on night paper is paper at 62 % (muted
-                 would be 2.9:1). -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Light">
-                    <SolidColorBrush x:Key="InkSurfaceBrush" Color="#FFF2EEE6" />
-                    <SolidColorBrush x:Key="InkTextBrush" Color="#FF16181F" />
-                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="#FF625E57" />
-                    <SolidColorBrush x:Key="InkCardBrush" Color="#FFFBF9F4" />
-                    <SolidColorBrush x:Key="InkBorderBrush" Color="#FFD9D1C3" />
-                    <SolidColorBrush x:Key="InkSeparatorBrush" Color="#FFE4DDD0" />
-                    <SolidColorBrush x:Key="InkChipBrush" Color="#FFE9E3D8" />
-                    <SolidColorBrush x:Key="InkDueChipBrush" Color="#FFEFE3D6" />
-                    <SolidColorBrush x:Key="InkDueTextBrush" Color="#FF6B4424" />
-                    <SolidColorBrush x:Key="InkAlertChipBrush" Color="#FFF3DDD7" />
-                    <SolidColorBrush x:Key="InkAlertTextBrush" Color="#FF8E2A1A" />
-                    <SolidColorBrush x:Key="InkAlertCardBrush" Color="#FFFBF3EF" />
-                    <SolidColorBrush x:Key="InkAlertBrush" Color="#FFB23A26" />
-                    <SolidColorBrush x:Key="InkThemBrush" Color="#FF7E5431" />
-                    <SolidColorBrush x:Key="InkRecordingBrush" Color="#FFB23A26" />
-                    <SolidColorBrush x:Key="InkZoneBrush" Color="#FFF2EEE6" />
+                    <SolidColorBrush x:Key="InkWindowBrush" Color="{ThemeResource GlowBackgroundColor}" />
+                    <SolidColorBrush x:Key="InkSurfaceBrush" Color="Transparent" />
+                    <SolidColorBrush x:Key="InkTextBrush" Color="{ThemeResource GlowTextColor}" />
+                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="{ThemeResource GlowSecondaryColor}" />
+                    <SolidColorBrush x:Key="InkCardBrush" Color="{ThemeResource GlowCardColor}" />
+                    <AcrylicBrush
+                        x:Key="InkCardAcrylicBrush"
+                        FallbackColor="{ThemeResource GlowCardColor}"
+                        TintColor="{ThemeResource GlowCardColor}"
+                        TintLuminosityOpacity="0.4"
+                        TintOpacity="1" />
+                    <SolidColorBrush x:Key="InkCardBorderBrush" Color="{ThemeResource GlowBorderColor}" Opacity="0.6" />
+                    <SolidColorBrush x:Key="InkBorderBrush" Color="{ThemeResource GlowBorderColor}" />
+                    <SolidColorBrush x:Key="InkSeparatorBrush" Color="{ThemeResource GlowBorderColor}" Opacity="0.7" />
+                    <SolidColorBrush x:Key="InkChipBrush" Color="{ThemeResource GlowTextColor}" Opacity="0.07" />
+                    <SolidColorBrush x:Key="InkDueChipBrush" Color="{ThemeResource GlowTextColor}" Opacity="0.1" />
+                    <SolidColorBrush x:Key="InkDueTextBrush" Color="{ThemeResource GlowTextColor}" />
+                    <SolidColorBrush x:Key="InkAlertChipBrush" Color="{ThemeResource GlowAlertColor}" Opacity="0.14" />
+                    <SolidColorBrush x:Key="InkAlertTextBrush" Color="{ThemeResource GlowAlertColor}" />
+                    <SolidColorBrush x:Key="InkAlertCardBrush" Color="{ThemeResource GlowAlertCardColor}" />
+                    <SolidColorBrush x:Key="InkAlertBrush" Color="{ThemeResource GlowAlertColor}" />
+                    <SolidColorBrush x:Key="InkRecordingBrush" Color="{ThemeResource GlowAlertColor}" />
+                    <SolidColorBrush x:Key="InkButtonFillBrush" Color="{ThemeResource GlowButtonFillColor}" />
+                    <SolidColorBrush x:Key="InkButtonLabelBrush" Color="{ThemeResource GlowButtonLabelColor}" />
+                    <!-- The navigation sits on the orb: no pane or content fill of its own. -->
+                    <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="InkSurfaceBrush" Color="#FF121419" />
-                    <SolidColorBrush x:Key="InkTextBrush" Color="#FFF2EEE6" />
-                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="#9EF2EEE6" />
-                    <SolidColorBrush x:Key="InkCardBrush" Color="#FF181B21" />
-                    <SolidColorBrush x:Key="InkBorderBrush" Color="#FF2A2D35" />
-                    <SolidColorBrush x:Key="InkSeparatorBrush" Color="#FF22252C" />
-                    <SolidColorBrush x:Key="InkChipBrush" Color="#FF22252C" />
-                    <SolidColorBrush x:Key="InkDueChipBrush" Color="#FF2E241C" />
-                    <SolidColorBrush x:Key="InkDueTextBrush" Color="#FFE2C3A5" />
-                    <SolidColorBrush x:Key="InkAlertChipBrush" Color="#FF3A1D18" />
-                    <SolidColorBrush x:Key="InkAlertTextBrush" Color="#FFF2B4A6" />
-                    <SolidColorBrush x:Key="InkAlertCardBrush" Color="#FF2A1714" />
-                    <SolidColorBrush x:Key="InkAlertBrush" Color="#FFE0644E" />
-                    <SolidColorBrush x:Key="InkThemBrush" Color="#FFC8956C" />
-                    <SolidColorBrush x:Key="InkRecordingBrush" Color="#FFE0644E" />
-                    <SolidColorBrush x:Key="InkZoneBrush" Color="#FFF2EEE6" />
+                    <SolidColorBrush x:Key="InkWindowBrush" Color="{ThemeResource GlowBackgroundColor}" />
+                    <SolidColorBrush x:Key="InkSurfaceBrush" Color="Transparent" />
+                    <SolidColorBrush x:Key="InkTextBrush" Color="{ThemeResource GlowTextColor}" />
+                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="{ThemeResource GlowSecondaryColor}" />
+                    <SolidColorBrush x:Key="InkCardBrush" Color="{ThemeResource GlowCardColor}" />
+                    <AcrylicBrush
+                        x:Key="InkCardAcrylicBrush"
+                        FallbackColor="{ThemeResource GlowCardColor}"
+                        TintColor="{ThemeResource GlowCardColor}"
+                        TintLuminosityOpacity="0.4"
+                        TintOpacity="1" />
+                    <SolidColorBrush x:Key="InkCardBorderBrush" Color="#FFFFFFFF" Opacity="0.06" />
+                    <SolidColorBrush x:Key="InkBorderBrush" Color="{ThemeResource GlowBorderColor}" />
+                    <SolidColorBrush x:Key="InkSeparatorBrush" Color="{ThemeResource GlowBorderColor}" Opacity="0.8" />
+                    <SolidColorBrush x:Key="InkChipBrush" Color="{ThemeResource GlowTextColor}" Opacity="0.08" />
+                    <SolidColorBrush x:Key="InkDueChipBrush" Color="{ThemeResource GlowTextColor}" Opacity="0.1" />
+                    <SolidColorBrush x:Key="InkDueTextBrush" Color="{ThemeResource GlowTextColor}" />
+                    <SolidColorBrush x:Key="InkAlertChipBrush" Color="{ThemeResource GlowAlertColor}" Opacity="0.14" />
+                    <SolidColorBrush x:Key="InkAlertTextBrush" Color="{ThemeResource GlowAlertColor}" />
+                    <SolidColorBrush x:Key="InkAlertCardBrush" Color="{ThemeResource GlowAlertCardColor}" />
+                    <SolidColorBrush x:Key="InkAlertBrush" Color="{ThemeResource GlowAlertColor}" />
+                    <SolidColorBrush x:Key="InkRecordingBrush" Color="{ThemeResource GlowAlertColor}" />
+                    <SolidColorBrush x:Key="InkButtonFillBrush" Color="{ThemeResource GlowButtonFillColor}" />
+                    <SolidColorBrush x:Key="InkButtonLabelBrush" Color="{ThemeResource GlowButtonLabelColor}" />
+                    <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
+                </ResourceDictionary>
+                <!-- High Contrast: the user's own colours, solid cards, borders in the text colour. -->
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="InkWindowBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="InkSurfaceBrush" Color="Transparent" />
+                    <SolidColorBrush x:Key="InkTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="InkCardBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="InkCardAcrylicBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="InkCardBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="InkBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="InkSeparatorBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="InkChipBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="InkDueChipBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="InkDueTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="InkAlertChipBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="InkAlertTextBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="InkAlertCardBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="InkAlertBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="InkRecordingBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="InkButtonFillBrush" Color="{ThemeResource SystemColorButtonTextColor}" />
+                    <SolidColorBrush x:Key="InkButtonLabelBrush" Color="{ThemeResource SystemColorButtonFaceColor}" />
+                    <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="NavigationViewContentGridBorderBrush" Color="Transparent" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
-            <!-- The accent: sepia #7E5431, as on the Mac. WinUI paints accent fills with Dark1 in
-                 the light theme (white on it: 8.2:1) and Light2 in the dark theme (on night paper
-                 #121419: 6.8:1). The lighter steps mix sepia with white by 20, 40 and 60 %, the
-                 darker ones with black by 15, 30 and 45 %. Defined here, above the merged
-                 XamlControlsResources, so every control's theme resources resolve to them. -->
-            <Color x:Key="SystemAccentColor">#FF7E5431</Color>
-            <Color x:Key="SystemAccentColorLight1">#FF98765A</Color>
-            <Color x:Key="SystemAccentColorLight2">#FFB29883</Color>
-            <Color x:Key="SystemAccentColorLight3">#FFCBBBAD</Color>
-            <Color x:Key="SystemAccentColorDark1">#FF6B472A</Color>
-            <Color x:Key="SystemAccentColorDark2">#FF583B22</Color>
-            <Color x:Key="SystemAccentColorDark3">#FF452E1B</Color>
+            <!-- The you and them colours of the mode shown (GlowTheme sets them): dots and lanes only. -->
+            <SolidColorBrush x:Key="GlowYouBrush" Color="#FF6B5CFF" />
+            <SolidColorBrush x:Key="GlowThemBrush" Color="#FFFFA34D" />
 
-            <!-- The three system faces: Segoe UI Variable for the interface, Sitka Text for what
-                 the user reads as a document, Cascadia Mono for timestamps and versions. -->
+            <!-- The accent is the button fill (text-coloured, so no control renders in the system's
+                 accent or in a dot colour): WinUI fills accent controls with Dark1 in the light
+                 theme (Glow's day button, #1D1B2E) and Light2 in the dark theme (its night button,
+                 #EDEAF2), with white or black words, as Glow's labels. The other steps sit between. -->
+            <Color x:Key="SystemAccentColor">#FF4A4760</Color>
+            <Color x:Key="SystemAccentColorLight1">#FF8D8A9E</Color>
+            <Color x:Key="SystemAccentColorLight2">#FFEDEAF2</Color>
+            <Color x:Key="SystemAccentColorLight3">#FFF6F4F9</Color>
+            <Color x:Key="SystemAccentColorDark1">#FF1D1B2E</Color>
+            <Color x:Key="SystemAccentColorDark2">#FF151421</Color>
+            <Color x:Key="SystemAccentColorDark3">#FF0E0D16</Color>
+
+            <!-- The three system faces: Segoe UI Variable for the interface, Sitka for display and
+                 what the user reads as a document, Cascadia Mono for timestamps and versions. -->
             <FontFamily x:Key="ContentControlThemeFontFamily">Segoe UI Variable</FontFamily>
             <FontFamily x:Key="InkInterfaceFontFamily">Segoe UI Variable</FontFamily>
+            <FontFamily x:Key="InkDisplayFontFamily">Sitka Display</FontFamily>
             <FontFamily x:Key="InkReadingFontFamily">Sitka Text</FontFamily>
             <FontFamily x:Key="InkMonoFontFamily">Cascadia Mono</FontFamily>
 
-
-            <!-- The screens' type: Sitka for titles and what the user reads as a document, Segoe UI
-                 Variable for the interface, Cascadia Mono for times and counts. -->
+            <!-- The screens' type, at Glow's sizes. -->
+            <Style x:Key="InkGreetingStyle" TargetType="TextBlock">
+                <Setter Property="FontFamily" Value="{StaticResource InkDisplayFontFamily}" />
+                <Setter Property="FontSize" Value="{StaticResource GlowGreetingFontSize}" />
+                <Setter Property="LineHeight" Value="{StaticResource GlowGreetingFontSize}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
+            </Style>
             <Style x:Key="InkScreenTitleStyle" TargetType="TextBlock">
-                <Setter Property="FontFamily" Value="{StaticResource InkReadingFontFamily}" />
-                <Setter Property="FontSize" Value="30" />
-                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="FontFamily" Value="{StaticResource InkDisplayFontFamily}" />
+                <Setter Property="FontSize" Value="{StaticResource GlowScreenTitleFontSize}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
             </Style>
             <Style x:Key="InkHeadingStyle" TargetType="TextBlock">
-                <Setter Property="FontFamily" Value="{StaticResource InkReadingFontFamily}" />
-                <Setter Property="FontSize" Value="20" />
-                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="FontFamily" Value="{StaticResource InkDisplayFontFamily}" />
+                <Setter Property="FontSize" Value="{StaticResource GlowHeadingFontSize}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
             </Style>
             <Style x:Key="InkBodyStyle" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource InkInterfaceFontFamily}" />
-                <Setter Property="FontSize" Value="14" />
+                <Setter Property="FontSize" Value="{StaticResource GlowBodyFontSize}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
             </Style>
@@ -104,7 +162,7 @@
             </Style>
             <Style x:Key="InkCaptionStyle" TargetType="TextBlock">
                 <Setter Property="FontFamily" Value="{StaticResource InkInterfaceFontFamily}" />
-                <Setter Property="FontSize" Value="13" />
+                <Setter Property="FontSize" Value="{StaticResource GlowCaptionFontSize}" />
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
             </Style>
@@ -113,22 +171,33 @@
                 <Setter Property="FontSize" Value="12" />
                 <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
             </Style>
+            <!-- A section's small label, in sentence case, as the canvas's "Last meeting". -->
             <Style x:Key="InkEyebrowStyle" TargetType="TextBlock">
-                <Setter Property="FontFamily" Value="{StaticResource InkMonoFontFamily}" />
-                <Setter Property="FontSize" Value="11" />
-                <Setter Property="CharacterSpacing" Value="80" />
+                <Setter Property="FontFamily" Value="{StaticResource InkInterfaceFontFamily}" />
+                <Setter Property="FontSize" Value="{StaticResource GlowEyebrowFontSize}" />
+                <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
             </Style>
             <Style x:Key="InkAlertTextStyle" TargetType="TextBlock" BasedOn="{StaticResource InkCaptionStyle}">
                 <Setter Property="Foreground" Value="{ThemeResource InkAlertBrush}" />
             </Style>
-            <!-- The canvas's card: raised paper, a hairline border, 14 px corners. -->
+            <!-- Glow's card: translucent over the orb (in-app acrylic; solid where Windows' transparency
+                 effects are off, and in High Contrast), a hairline, 22 px corners. -->
             <Style x:Key="InkCardStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource InkCardBrush}" />
-                <Setter Property="BorderBrush" Value="{ThemeResource InkBorderBrush}" />
+                <Setter Property="Background" Value="{ThemeResource InkCardAcrylicBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource InkCardBorderBrush}" />
                 <Setter Property="BorderThickness" Value="1" />
-                <Setter Property="CornerRadius" Value="14" />
-                <Setter Property="Padding" Value="16,13" />
+                <Setter Property="CornerRadius" Value="{StaticResource GlowCardCornerRadius}" />
+                <Setter Property="Padding" Value="22,18" />
+            </Style>
+            <!-- Pill buttons: the answer in the button fill, every other button on a light wash. -->
+            <Style x:Key="InkAccentButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+                <Setter Property="CornerRadius" Value="{StaticResource GlowPillCornerRadius}" />
+                <Setter Property="Padding" Value="18,8,18,9" />
+            </Style>
+            <Style TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="CornerRadius" Value="{StaticResource GlowPillCornerRadius}" />
+                <Setter Property="Padding" Value="16,7,16,8" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

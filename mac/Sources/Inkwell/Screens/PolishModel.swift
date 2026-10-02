@@ -33,6 +33,8 @@ final class PolishModel {
     private(set) var appleState: AppleEngineState?
     /// Language models the core confirmed and still holds, by id.
     private(set) var models: Set<String> = []
+    /// A language model of the user's own is chosen and can be called (llm.providers' ready).
+    private(set) var cloudReady = false
     /// Polish timeouts in a row, across takes; a take that polished resets it.
     private(set) var timeoutsInARow = 0
 
@@ -50,8 +52,9 @@ final class PolishModel {
         consent = ConsentModel(feature: .polish, switchSettingID: Self.settingID, send: send)
     }
 
-    /// Whether a language model can polish now.
-    var hasWorkingEngine: Bool { !models.isEmpty }
+    /// Whether a language model can polish now: one registered on this Mac, or the user's own
+    /// (summaries, Ask and voice edit use the same test).
+    var hasWorkingEngine: Bool { !models.isEmpty || cloudReady }
 
     /// The core's state (nil until read).
     var state: ConsentModel.Snapshot? { consent.state }
@@ -168,8 +171,11 @@ final class PolishModel {
             models.insert(engine.id)
         case .engineUnregistered(let engine):
             models.remove(engine.id)
+        case .llmProviders(let providers):
+            cloudReady = providers.ready
         case .coreStopped:
             models = []
+            cloudReady = false
         case .dictationStarted:
             takeTimedOut = false
         case .dictationWarningEvent(let warning) where warning.kind == .polishTimedOut:

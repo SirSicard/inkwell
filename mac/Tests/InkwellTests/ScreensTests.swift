@@ -1477,7 +1477,8 @@ final class LiveLayoutTests: XCTestCase {
         live.notesEdited(Array(repeating: "A note line", count: 60).joined(separator: "\n"), caretParagraph: 59)
         let meeting = try XCTUnwrap(store.meeting)
         let hosting = NSHostingController(rootView: LiveMeetingView(
-            meeting: meeting, live: live, meetings: MeetingModel(send: { _ in })))
+            meeting: meeting, live: live, meetings: MeetingModel(send: { _ in }))
+            .environment(GlowTheme(send: { _ in }, applyAppearance: { _ in })))
         let minimum = hosting.sizeThatFits(in: .zero)
         XCTAssertLessThan(minimum.height, 460, "the window's minimum content height is 460")
         XCTAssertLessThan(minimum.width, 720)
@@ -1491,14 +1492,15 @@ final class LiveLayoutTests: XCTestCase {
         screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
         screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
         screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
-        for view in [
-            AnyView(OwedScreen()), AnyView(SettingsScreen()), AnyView(LiveScreen()),
+        for (name, view) in [
+            ("Owed", AnyView(OwedScreen())), ("Settings", AnyView(SettingsScreen())), ("Live", AnyView(LiveScreen())),
         ] {
             let hosting = NSHostingController(
-                rootView: view.environment(screens).environment(CoreStore()).environment(Updates(infoDictionary: nil)))
+                rootView: view.environment(screens).environment(CoreStore()).environment(Updates(infoDictionary: nil))
+                    .environment(screens.theme).environment(LibraryModel(send: { _ in })).environment(Router()))
             let minimum = hosting.sizeThatFits(in: .zero)
-            XCTAssertLessThan(minimum.height, 460)
-            XCTAssertLessThan(minimum.width, 720)
+            XCTAssertLessThan(minimum.height, 460, name)
+            XCTAssertLessThan(minimum.width, 720, name)
         }
     }
 }

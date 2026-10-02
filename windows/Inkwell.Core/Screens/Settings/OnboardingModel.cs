@@ -3,7 +3,8 @@
 // for until the user presses a card's button), the models not on this PC yet (nothing downloads
 // until the user presses the step's Download, which says what, how much and from where; the
 // downloads are the CatalogueModel's and go on after the sheet), Inkwell 0.2's history (only while
-// there is some to import: Import02Model.Offered), polish (off, and turned on only through its
+// there is some to import: Import02Model.Offered), the appearance (the mode and the dots, which
+// Settings > Appearance holds too), polish (off, and turned on only through its
 // consent step: the sheet's switch calls PolishModel.SetOn(on, ConsentHost.Onboarding), which only
 // asks), and how to dictate. A port of the Mac's OnboardingModel and OnboardingView's words.
 using Inkwell.Core.Events;
@@ -18,6 +19,8 @@ public enum OnboardingStep
     Models,
     /// <summary>Only while Inkwell 0.2's data is offered.</summary>
     ImportData,
+    /// <summary>Light, dark or the system's, and the dots (AppearanceModel).</summary>
+    Appearance,
     Polish,
     Ready,
 }
@@ -238,6 +241,10 @@ public sealed class OnboardingModel : ObservableModel
         var list = items.ToList();
         return list.Count < 2 ? string.Concat(list) : $"{string.Join(", ", list.Take(list.Count - 1))} and {list[^1]}";
     }
+
+    public const string AppearanceTitle = "Appearance";
+
+    public const string AppearanceNote = "You can change this and pick your own colours in Settings > Appearance.";
 
     public const string PolishTitle = "Polish";
 

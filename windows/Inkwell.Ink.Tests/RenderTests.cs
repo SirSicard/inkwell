@@ -1,4 +1,4 @@
-// The ink drawn offscreen through the real pipeline: the embedded HLSL compiled at run time with
+// The orb drawn offscreen through the real pipeline: the embedded HLSL compiled at run time with
 // D3DCompile, as the app does, drawn by Direct3D 11 (WARP unless INK_TEST_ADAPTER=hardware). The
 // Mac's RenderTests, for Windows.
 using Inkwell.Ink;
@@ -8,11 +8,11 @@ namespace Inkwell.Ink.Tests;
 
 public sealed class RenderTests
 {
-    private static InkImage Render(InkState state, bool wordmark = true, double cy = 0.5)
+    private static InkImage Render(InkState state, GlowLook? look = null)
     {
         lock (TestPipeline.Lock)
         {
-            return InkSnapshot.Render(TestPipeline.Get(), state, 12, 360, 720, wordmark: wordmark, cy: cy);
+            return InkSnapshot.Render(TestPipeline.Get(), state, 12, 360, 720, look: look);
         }
     }
 
@@ -52,145 +52,39 @@ public sealed class RenderTests
         }
     }
 
+    /// <summary>
+    /// Premultiplied, and transparent wherever there is no orb: the window's background and the
+    /// Drop's pill show round it.
+    /// </summary>
     [Fact]
-    public void TheFarEndsInkAppearsOnlyWithTwoStreams()
+    public void TheOrbIsPremultipliedAndTransparentAroundIt()
     {
-        Assert.Equal(0, SepiaPixels(Render(InkState.Dictating)));
-        Assert.Equal(0, SepiaPixels(Render(InkState.Idle)));
-        Assert.True(SepiaPixels(Render(InkState.Meeting)) > 500);
-    }
-
-    [Fact]
-    public void ASilentFarEndIsAGhostWithASealRedOutline()
-    {
-        var problem = Render(InkState.Problem);
-        Assert.True(SepiaPixels(problem) < SepiaPixels(Render(InkState.Meeting)) / 4);
-        var seal = 0;
-        for (var y = 0; y < problem.Height; y++)
+        foreach (var state in InkStates.All)
         {
-            for (var x = 0; x < problem.Width; x++)
+            var image = Render(state);
+            Assert.Equal(0, image.Alpha(0, 0));
+            Assert.Equal(0, image.Alpha(image.Width - 1, image.Height - 1));
+            Assert.True(image.Alpha(image.Width / 2, image.Height / 2) > 0, $"{state}: the orb at the centre");
+            for (var i = 0; i < image.Rgba.Length; i += 4)
             {
-                var (r, g, b) = problem.Pixel(x, y);
-                if (r > 150 && g < 120 && b < 110)
-                {
-                    seal++;
-                }
+                var a = image.Rgba[i + 3];
+                Assert.True(image.Rgba[i] <= a + 1 && image.Rgba[i + 1] <= a + 1 && image.Rgba[i + 2] <= a + 1, $"{state}: premultiplied at {i / 4}");
             }
         }
-        Assert.True(seal > 50, $"the dashed outline ({seal} px)");
     }
 
-    /// <summary>The wordmark is knocked out of whatever sits under it: dark on paper, light on ink.</summary>
+    /// <summary>The orb takes the colours it is given: your colour while dictating, the idle colour at rest.</summary>
     [Fact]
-    public void TheWordmarkIsDarkOnPaperAndLightOnInk()
+    public void TheOrbTakesItsColours()
     {
-        byte[] coverage;
-        InkRect box;
-        lock (TestPipeline.Lock)
-        {
-            using var mark = Wordmark.Rasterize(TestPipeline.Get(), 360, 720, 360);
-            coverage = mark.Mark.ReadCoverage(TestPipeline.Get());
-            box = mark.Box;
-            Assert.False(mark.Simulated, $"{mark.FontName} is a real face, not a synthesised bold");
-        }
-        var image = Render(InkState.Dictating, cy: 0.9);
-        var plain = Render(InkState.Dictating, wordmark: false, cy: 0.9);
-        int onPaper = 0, onInk = 0, full = 0;
-        for (var y = 0; y < image.Height; y++)
-        {
-            for (var x = 0; x < image.Width; x++)
-            {
-                if (coverage[y * image.Width + x] != 255)
-                {
-                    continue;
-                }
-                full++;
-                Assert.True(box.Outset(1).Contains(x + 0.5, y + 0.5), $"a letter pixel ({x}, {y}) inside the box {box}");
-                var under = plain.Pixel(x, y);
-                var letter = image.Pixel(x, y);
-                Assert.InRange(255 - under.R - letter.R, -1, 1);
-                Assert.InRange(255 - under.G - letter.G, -1, 1);
-                Assert.InRange(255 - under.B - letter.B, -1, 1);
-                var lum = plain.Luminance(x, y);
-                if (lum > 180)
-                {
-                    onPaper++;
-                }
-                else if (lum < 60)
-                {
-                    onInk++;
-                }
-            }
-        }
-        Assert.True(full > 1000, $"the letters cover {full} px");
-        Assert.True(onPaper > 100, $"letters on paper: {onPaper}");
-        Assert.True(onInk > 100, $"letters on ink: {onInk}");
-    }
-
-    [Fact]
-    public void TheWordmarkSitsWhereThePrototypePutsIt()
-    {
-        lock (TestPipeline.Lock)
-        {
-            using var mark = Wordmark.Rasterize(TestPipeline.Get(), 360, 720, 360);
-            // round(360 * 0.158) = 57 px, x = round(57 * 0.62) = 35, top = round(57 * 0.7) = 40.
-            Assert.Equal(57, mark.FontSize);
-            Assert.Equal(35, mark.X);
-            Assert.InRange(mark.BaselineFromTop, 80, 100);
-            Assert.InRange(mark.TextWidth, 150, 300);
-        }
-    }
-
-    /// <summary>The ink stays inside its zone (the rail, a Drop-sized zone): never nearer the edge than half the fence band.</summary>
-    [Fact]
-    public void TheInkStaysInsideItsZone()
-    {
-        foreach (var (w, h) in new[] { (112, 1400), (168, 168) })
-        {
-            var keepOut = (int)(0.05 * Math.Min(w, h)) - 1;
-            var nearest = int.MaxValue;
-            foreach (var state in new[] { InkState.Dictating, InkState.Meeting, InkState.Problem })
-            {
-                for (var t = 3.0; t <= 60; t += 3)
-                {
-                    InkImage image;
-                    lock (TestPipeline.Lock)
-                    {
-                        image = InkSnapshot.Render(TestPipeline.Get(), state, t, w, h, wordmark: false, voice: InkVoice.Levels(1, 1));
-                    }
-                    for (var y = 0; y < h; y++)
-                    {
-                        for (var x = 0; x < w; x++)
-                        {
-                            if (image.Luminance(x, y) >= 170)
-                            {
-                                continue;
-                            }
-                            var d = Math.Min(Math.Min(x, w - 1 - x), Math.Min(y, h - 1 - y));
-                            nearest = Math.Min(nearest, d);
-                            Assert.True(d >= keepOut, $"{state} t={t} {w}x{h}: ink at ({x}, {y})");
-                        }
-                    }
-                }
-            }
-            Assert.True(nearest < keepOut + (int)(0.05 * Math.Min(w, h)) + 2, $"{w}x{h}: nearest ink {nearest} px");
-        }
-    }
-
-    private static int SepiaPixels(InkImage image)
-    {
-        var n = 0;
-        for (var y = 0; y < image.Height; y++)
-        {
-            for (var x = 0; x < image.Width; x++)
-            {
-                var (r, g, b) = image.Pixel(x, y);
-                if (r > 80 && r < 180 && r - g > 25 && g - b > 20)
-                {
-                    n++;
-                }
-            }
-        }
-        return n;
+        var red = (1f, 0f, 0f);
+        var green = (0f, 1f, 0f);
+        var look = GlowLook.Default with { YouA = red, YouB = red, Idle = green };
+        var dictating = Render(InkState.Dictating, look);
+        var idle = Render(InkState.Idle, look);
+        var (r, g, _) = dictating.Pixel(dictating.Width / 2, dictating.Height / 2);
+        Assert.True(r > g, $"dictating is yours ({r}, {g})");
+        (r, g, _) = idle.Pixel(idle.Width / 2, idle.Height / 2);
+        Assert.True(g > r, $"at rest the idle colour ({r}, {g})");
     }
 }

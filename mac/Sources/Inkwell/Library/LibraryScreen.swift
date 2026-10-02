@@ -6,6 +6,8 @@ import SwiftUI
 
 struct LibraryScreen: View {
     @Environment(LibraryModel.self) private var library
+    @Environment(Router.self) private var router
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         @Bindable var library = library
@@ -13,6 +15,7 @@ struct LibraryScreen: View {
             LibraryColumn()
                 .frame(width: 272)
                 .background(PaperPalette.panel)
+                .background(.ultraThinMaterial)
             Rectangle().fill(PaperPalette.border).frame(width: 1)
             Group {
                 if library.selected != nil {
@@ -32,6 +35,14 @@ struct LibraryScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .searchable(text: $library.query, placement: .toolbar, prompt: "Search everything said")
+        .searchFocused($searchFocused)
+        .onChange(of: router.searchPending, initial: true) { _, pending in
+            // Find (⌘F) chose this field.
+            if pending {
+                searchFocused = true
+                router.searchPending = false
+            }
+        }
         .onAppear {
             library.refreshList()
         }
@@ -75,34 +86,32 @@ struct LibraryColumn: View {
     }
 }
 
-/// Meetings, Dictations, Files: one at a time, or none for everything.
+/// All, Meetings, Dictations, Files: one at a time. All is where the Library opens.
 struct KindFilter: View {
     @Environment(LibraryModel.self) private var library
 
-    private static let kinds: [(RecordKind, String)] = [
-        (.meeting, "Meetings"), (.dictation, "Dictations"), (.fileImport, "Files"),
+    private static let kinds: [(RecordKind?, String)] = [
+        (nil, "All"), (.meeting, "Meetings"), (.dictation, "Dictations"), (.fileImport, "Files"),
     ]
 
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(Self.kinds, id: \.0) { kind, title in
+            ForEach(Self.kinds, id: \.1) { kind, title in
                 let on = library.filter == kind
                 Button {
-                    // Pressing the one shown shows every kind.
-                    library.filter = on ? nil : kind
+                    library.filter = kind
                 } label: {
                     Text(title)
-                        .font(.callout)
+                        .font(.system(size: Glow.Size.caption))
                         .padding(.horizontal, 10)
                         .frame(minHeight: 28)
-                        .foregroundStyle(on ? PaperPalette.card : Theme.text)
-                        .background(Capsule().fill(on ? PaperPalette.you : Color.clear))
-                        .overlay(Capsule().strokeBorder(on ? PaperPalette.you : PaperPalette.border, lineWidth: 1))
+                        .foregroundStyle(on ? Theme.buttonLabel : Theme.text)
+                        .background(Capsule().fill(on ? Theme.buttonFill : PaperPalette.chip))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
-                .accessibilityHint(on ? "Shows every kind" : "Shows only \(title.lowercased())")
+                .accessibilityHint(kind == nil ? "Shows every kind" : "Shows only \(title.lowercased())")
             }
         }
         .accessibilityElement(children: .contain)

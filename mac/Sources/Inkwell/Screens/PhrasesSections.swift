@@ -1,5 +1,5 @@
 // Settings > Snippets and Settings > Voice commands (PhrasesModel), and the one-time note about
-// Inkwell 0.2's dictation key in Settings > Voice. The user's own words are shown as plain text:
+// Inkwell 0.2's dictation key in Settings > Dictation. The user's own words are shown as plain text:
 // nothing here is a link.
 import InkBridge
 import SwiftUI
@@ -231,7 +231,7 @@ private struct CommandRow: View {
                     .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
                     .lineLimit(2)
                 if !row.carriedOut {
-                    Text("Not available in this version: Inkwell hears it and types nothing.")
+                    Text("Its action comes in a later version. While on, saying it types nothing.")
                         .font(Typography.caption)
                         .foregroundStyle(Theme.secondaryText)
                 }
@@ -249,7 +249,7 @@ private struct CommandRow: View {
         .accessibilityLabel(
             "Voice command \(row.triggers.joined(separator: ", ")): \(VoiceCommandsModel.describe(row))"
                 + (row.enabled ? "" : ", off")
-                + (row.carriedOut ? "" : ". Not available in this version: it types nothing"))
+                + (row.carriedOut ? "" : ". Its action comes in a later version; while on, saying it types nothing"))
     }
 }
 
@@ -270,7 +270,7 @@ private struct FailureLine: View {
     }
 }
 
-// MARK: - The 0.2 key note (Settings > Voice)
+// MARK: - The 0.2 key note (Settings > Dictation)
 
 struct ImportKeyNoteView: View {
     let model: ImportNoteModel

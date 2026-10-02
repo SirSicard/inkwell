@@ -156,27 +156,50 @@ public sealed class SimulationTests
     [Fact]
     public unsafe void TheUniformBlockMatchesTheShader()
     {
-        Assert.Equal(144, sizeof(InkUniforms));
+        // G in shaders/ink.wgsl: 160 bytes, the colours from offset 64.
+        Assert.Equal(160, sizeof(InkUniforms));
         var u0 = default(InkUniforms);
-        Assert.Equal(48, (int)((byte*)&u0.Drops - (byte*)&u0));
+        var at = (byte*)&u0;
+        Assert.Equal(8, (int)((byte*)&u0.CenterX - at));
+        Assert.Equal(16, (int)((byte*)&u0.Time - at));
+        Assert.Equal(32, (int)((byte*)&u0.Dictating - at));
+        Assert.Equal(48, (int)((byte*)&u0.Dark - at));
+        Assert.Equal(52, (int)((byte*)&u0.Motion - at));
+        Assert.Equal(64, (int)((byte*)&u0.YouA - at));
+        Assert.Equal(144, (int)((byte*)&u0.Ink - at));
 
         var sim = Run(InkState.Meeting, 900);
-        sim.Cy = 0.4;
-        var u = sim.Uniforms(hasMark: true);
+        var u = sim.Uniforms(new InkPlacement(0.56, 0.26, 0.72), GlowLook.Default, moving: true);
         Assert.Equal(360f, u.ResX);
         Assert.Equal(720f, u.ResY);
+        Assert.Equal((float)(360 * 0.56), u.CenterX);
+        Assert.Equal((float)(720 * 0.26), u.CenterY);
+        Assert.Equal((float)(360 * 0.72), u.Unit); // the shorter side
         Assert.Equal((float)sim.T, u.Time);
-        Assert.Equal((float)sim.EnvB, u.AmpB);
-        Assert.Equal(0.4f, u.Cy);
-        Assert.Equal(1f, u.HasMark);
-        // Only live droplets reach the shader; a dead slot is all zeros (r = 0 is dead there).
-        for (var i = 0; i < 4; i++)
-        {
-            Assert.Equal(0f, u.Drops[i]);
-        }
-        Assert.Equal((float)sim.Drops[2].X, u.Drops[8]);
-        Assert.Equal((float)sim.Drops[2].R, u.Drops[10]);
-        Assert.Equal(1f, u.Drops[11]);
+        Assert.Equal((float)sim.EnvB, u.Them);
+        Assert.Equal(1f, u.Motion);
+        Assert.Equal(0f, u.Dark);
+        Assert.Equal(GlowLook.Default.YouA.R, u.YouA.X);
+        // After 900 frames of a meeting the weights have settled at the meeting's.
+        Assert.Equal(1f, u.Meeting, 3);
+        Assert.Equal(0f, u.Dictating, 3);
+        Assert.Equal(0f, sim.Uniforms(InkPlacement.Centre, GlowLook.Default, moving: false).Motion);
+    }
+
+    [Fact]
+    public void TheWeightsFollowTheStateAtFourPercentPerFrame()
+    {
+        var sim = new InkSimulation(InkRandom.Seeded(1)) { State = InkState.Dictating };
+        sim.Step(1 / 60.0, snap: false, InkVoice.Silent);
+        Assert.Equal(0.04, sim.Weights.Dictating, 9);
+        // Twice as long a frame moves it as two frames would.
+        var slow = new InkSimulation(InkRandom.Seeded(1)) { State = InkState.Dictating };
+        slow.Step(2 / 60.0, snap: false, InkVoice.Silent);
+        Assert.Equal(1 - 0.96 * 0.96, slow.Weights.Dictating, 9);
+        sim.State = InkState.Blotting;
+        sim.Settle(InkVoice.Silent);
+        Assert.Equal((0.0, 1.0, 1.0, 0.0), sim.Weights);
+        Assert.Equal((0.0, 1.0, 0.0, 1.0), InkSimulation.WeightsFor(InkState.Problem));
     }
 
     [Fact]

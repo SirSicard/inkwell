@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > About (the Mac's AboutSection): the version, updates, the terms for Microsoft's
+<!-- Settings > About (the Mac's AboutSection): the version (updates are in General), the terms for Microsoft's
      components, the model credits, every component's notice, and the Rust crates under one
      disclosure. Each notice is an expander opening onto its
      full text, selectable; the Rust list scrolls in its own bounded, virtualized view, so an open
@@ -27,27 +27,16 @@
         <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" IsTextSelectionEnabled="True" Text="{x:Bind About.VersionLine}" />
         <!-- Inkwell's copyright notice, which the Windows SDK's licence asks an app shipping its code to display. -->
         <TextBlock IsTextSelectionEnabled="True" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:AboutModel.CopyrightLine}" />
-        <!-- Updates (the Mac's updates row): a button when this copy updates itself, and where
-             things are. The line is a live region: Narrator reads each change. -->
-        <StackPanel Orientation="Horizontal" Spacing="12">
-            <Button x:Name="UpdatesButton" Click="OnUpdatesAct" />
-            <TextBlock
-                x:Name="UpdatesLine"
-                VerticalAlignment="Center"
-                AutomationProperties.LiveSetting="Polite"
-                Style="{StaticResource InkCaptionStyle}"
-                TextWrapping="Wrap" />
-        </StackPanel>
 
         <!-- The end-user terms Microsoft's licences require, for the Windows App SDK, the Windows
              SDK's .NET projection and the Visual C++ runtime (Notices.WindowsAppSdkTerms). -->
-        <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Terms" Style="{StaticResource InkEyebrowStyle}" Text="TERMS" />
+        <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Terms" Style="{StaticResource InkEyebrowStyle}" Text="Terms" />
         <TextBlock IsTextSelectionEnabled="True" Style="{StaticResource InkBodyStyle}" Text="{x:Bind core:AboutModel.Terms}" TextWrapping="Wrap" />
 
-        <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Models" Style="{StaticResource InkEyebrowStyle}" Text="MODELS" />
+        <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Models" Style="{StaticResource InkEyebrowStyle}" Text="Models" />
         <StackPanel x:Name="ModelRows" Spacing="8" />
 
-        <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Code that ships inside Inkwell" Style="{StaticResource InkEyebrowStyle}" Text="CODE THAT SHIPS INSIDE INKWELL" />
+        <TextBlock Margin="0,8,0,0" AutomationProperties.HeadingLevel="Level3" AutomationProperties.Name="Code that ships inside Inkwell" Style="{StaticResource InkEyebrowStyle}" Text="Code that ships inside Inkwell" />
         <StackPanel x:Name="ComponentRows" Spacing="8" />
 
         <Expander

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > Voice (the canvas's Voice section; the Mac's VoiceSection): dictation on or off, the
-     dictation key, the voice-edit key, and what dictation says about itself and its failures. -->
+<!-- Settings > Dictation (the canvas's Voice section, renamed; the Mac's VoiceSection): dictation on
+     or off, the dictation key, the voice-edit key, what dictation says about itself and its
+     failures, and the note about Inkwell 0.2's key. -->
 <UserControl
     x:Class="Inkwell.Screens.VoiceSection"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -20,7 +21,7 @@
         </Style>
     </UserControl.Resources>
     <StackPanel Spacing="10">
-        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Voice" />
+        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Dictation" />
 
         <StackPanel Orientation="Horizontal" Padding="0,5" Spacing="12">
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Dictation" />

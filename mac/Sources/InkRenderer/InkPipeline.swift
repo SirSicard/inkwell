@@ -1,5 +1,5 @@
-// The ink's one Metal pipeline, shared by every surface that draws it (the Drop, the rail,
-// Today's ink zone) and by offscreen renders.
+// The orb's one Metal pipeline, shared by every surface that draws it (the Drop, the main window,
+// the first run) and by offscreen renders. One uniform block, `G`, at buffer 0; no textures.
 //
 // The shader ships as source: Resources/ink.msl, generated from shaders/ink.wgsl by
 // core/crates/ink-shader, compiled here with makeLibrary(source:). Building the app needs no Metal
@@ -9,7 +9,7 @@ import Foundation
 import Metal
 import Synchronization
 
-/// Why the ink cannot draw. The app then shows plain paper where the ink would be.
+/// Why the orb cannot draw. The app then shows its background where the orb would be.
 public enum InkRendererError: Error, Equatable, CustomStringConvertible {
     /// This Mac has no Metal device.
     case noDevice
@@ -30,19 +30,15 @@ public enum InkRendererError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// The compiled shader, its sampler, and a queue. Thread-safe: Metal's device, queue, pipeline and
-/// sampler objects may be used from any thread, and nothing here changes after `init`.
+/// The compiled shader and a queue. Thread-safe: Metal's device, queue and pipeline objects may be
+/// used from any thread, and nothing here changes after `init`.
 public final class InkPipeline: @unchecked Sendable {
     // @unchecked: every stored property is an immutable reference to a Metal object that Metal
-    // documents as thread-safe (device, command queue, render pipeline state, sampler state), or
-    // a texture only ever read after it was filled in `init`.
+    // documents as thread-safe (device, command queue, render pipeline state).
 
     public let device: any MTLDevice
     let queue: any MTLCommandQueue
     let pipeline: any MTLRenderPipelineState
-    let sampler: any MTLSamplerState
-    /// Bound while there is no wordmark: the shader always declares the texture.
-    let noMark: any MTLTexture
 
     /// The pixel format every ink target uses: the drawable's, and the offscreen render's.
     public static let pixelFormat = MTLPixelFormat.bgra8Unorm
@@ -70,70 +66,28 @@ public final class InkPipeline: @unchecked Sendable {
         } catch {
             throw InkRendererError.shaderFailed(error.localizedDescription)
         }
-        let samplerDescriptor = MTLSamplerDescriptor()
-        samplerDescriptor.minFilter = .linear
-        samplerDescriptor.magFilter = .linear
-        samplerDescriptor.mipFilter = .notMipmapped
-        samplerDescriptor.sAddressMode = .clampToEdge
-        samplerDescriptor.tAddressMode = .clampToEdge
-        guard let sampler = device.makeSamplerState(descriptor: samplerDescriptor) else {
-            throw InkRendererError.resource("sampler")
-        }
         self.device = device
         self.queue = queue
-        self.sampler = sampler
-        noMark = try Self.markTexture(device: device, coverage: [0], width: 1, height: 1)
     }
 
-    /// A wordmark texture: one byte of coverage per pixel, which the shader reads as alpha.
-    public func markTexture(_ mark: Wordmark) throws -> any MTLTexture {
-        try Self.markTexture(device: device, coverage: mark.coverage, width: mark.width, height: mark.height)
-    }
-
-    private static func markTexture(device: any MTLDevice, coverage: [UInt8], width: Int, height: Int) throws
-        -> any MTLTexture
-    {
-        guard width > 0, height > 0, coverage.count == width * height else {
-            throw InkRendererError.resource("wordmark texture (\(width)x\(height))")
-        }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .a8Unorm, width: width, height: height, mipmapped: false)
-        descriptor.usage = [.shaderRead]
-        descriptor.storageMode = .shared
-        guard let texture = device.makeTexture(descriptor: descriptor) else {
-            throw InkRendererError.resource("wordmark texture (\(width)x\(height))")
-        }
-        coverage.withUnsafeBytes { bytes in
-            // Non-nil: coverage holds width * height > 0 bytes (checked above).
-            if let base = bytes.baseAddress {
-                texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
-                                withBytes: base, bytesPerRow: width)
-            }
-        }
-        return texture
-    }
-
-    /// Encodes one full-canvas draw into `target`. Allocation-free apart from Metal's own encoder.
-    public func encode(
-        into target: any MTLTexture, commandBuffer: any MTLCommandBuffer, uniforms: InkUniforms,
-        mark: (any MTLTexture)?
-    ) {
+    /// Encodes one full-canvas draw into `target`: the orb, premultiplied, transparent wherever
+    /// there is none. Allocation-free apart from Metal's own encoder.
+    public func encode(into target: any MTLTexture, commandBuffer: any MTLCommandBuffer, uniforms: InkUniforms) {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
-        // Every pixel is written: nothing to load.
-        pass.colorAttachments[0].loadAction = .dontCare
+        // Every pixel is written, transparent outside the orb; cleared first all the same.
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         pass.colorAttachments[0].storeAction = .store
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
         encoder.label = "ink"
         encoder.setRenderPipelineState(pipeline)
         withUnsafeBytes(of: uniforms) { bytes in
-            // Non-nil: InkUniforms is 144 bytes.
+            // Non-nil: InkUniforms is 160 bytes.
             if let base = bytes.baseAddress {
                 encoder.setFragmentBytes(base, length: bytes.count, index: 0)
             }
         }
-        encoder.setFragmentTexture(mark ?? noMark, index: 0)
-        encoder.setFragmentSamplerState(sampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
     }

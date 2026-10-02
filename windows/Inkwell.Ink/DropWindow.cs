@@ -1,6 +1,6 @@
 // The Drop: the surface for everything live, as on the Mac (mac/Sources/Inkwell/Drop.swift). A
-// small paper panel near the bottom of the screen, the ink on its left and two lines beside it,
-// shown while something is live and hidden when idle.
+// pill near the bottom of the screen in the app's mode (night or day: DropLook), the orb in a
+// circle on its left and two lines beside it, shown while something is live and hidden when idle.
 //
 // It never takes focus. It is a raw Win32 popup: WS_EX_NOACTIVATE (clicks and showing never
 // activate it), WS_EX_TOPMOST (above other apps' windows), WS_EX_TOOLWINDOW (no taskbar button,
@@ -13,15 +13,14 @@
 // state only.
 //
 // Its pixels: WS_EX_NOREDIRECTIONBITMAP (no GDI surface at all), a DirectComposition visual
-// holding a composition swapchain. Each frame Direct3D draws the ink into an offscreen texture,
-// then Direct2D paints the panel on the swapchain: paper with a 16 DIP corner, the ink fading into
-// the panel's paper over its right edge, a hairline border, and the two lines in Segoe UI Variable.
-// Frames follow the ink's schedule (InkSurface): live, on the shared clock; with Animation effects
-// off, one still frame per change; hidden, none.
+// holding a composition swapchain. Each frame Direct3D draws the orb into an offscreen texture
+// (transparent where there is no orb), then Direct2D paints the pill on the swapchain: the mode's
+// background with fully round ends, the orb clipped to its circle, a hairline border, the state in
+// Segoe UI Variable and the line in Sitka. Frames follow the ink's schedule (InkSurface): live, on
+// the shared clock; with Animation effects off or Always still, one still frame per change;
+// hidden, none.
 //
-// Paper in both themes, like the Mac's: ink on a dark page would vanish.
-//
-// The consent offer's buttons ("Record this call", "Not this one") widen and deepen the panel, as
+// The consent offer's buttons ("Record this call", "Not this one") widen and deepen the pill, as
 // on the Mac. A click on one (down and up on the same button) raises ButtonClicked; the click
 // still never activates the Drop or Inkwell (MA_NOACTIVATE).
 //
@@ -29,7 +28,7 @@
 // a lost composition device (DWM restarted) or a failed present releases every Direct3D,
 // Direct2D and DirectComposition object here; the surface makes the pipeline again and retries
 // with backoff (InkSurface). Until it draws again, or when the shader does not compile at all,
-// DropFallback, a plain GDI window, shows the panel and the state's lines in its place.
+// DropFallback, a plain GDI window in the same mode, shows the pill and the state's lines in its place.
 using System.Runtime.InteropServices;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
@@ -37,31 +36,38 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace Inkwell.Ink;
 
-/// <summary>The Drop's measures, in DIPs (the Mac's DropLayout).</summary>
+/// <summary>The Drop's measures, in DIPs (the canvas's pill).</summary>
 internal static class DropLayout
 {
-    public const double Width = 320;
-    public const double Height = 84;
-    public const double InkWidth = 96;
-    public const double CornerRadius = 16;
+    public const double Width = 440;
+    public const double Height = 76;
+    /// <summary>The orb's circle, and its inset from the pill's left and top edges.</summary>
+    public const double OrbSize = 58;
+    public const double OrbInset = (Height - OrbSize) / 2;
+    /// <summary>The orb's zone, left of the lines: as wide as the pill is high.</summary>
+    public const double InkWidth = Height;
+    /// <summary>Fully round ends.</summary>
+    public const double CornerRadius = Height / 2;
     /// <summary>Above the bottom of the work area (the taskbar's top when it shows).</summary>
     public const double BottomMargin = 28;
-    public const double TextLeft = InkWidth + 6;
-    public const double TextRight = 14;
-    public const double LineSpacing = 3;
+    public const double TextLeft = OrbInset + OrbSize + 14;
+    public const double TextRight = 24;
+    public const double LineSpacing = 2;
     public const float TitleSize = 12;
-    public const float DetailSize = 14;
+    public const float DetailSize = 17;
     public const string Face = "Segoe UI Variable Text";
+    /// <summary>The line's face: the display serif.</summary>
+    public const string DetailFace = "Sitka Text";
 
     /// <summary>With buttons (the consent offer): wider and taller, as the Mac's sizeWithActions.</summary>
-    public const double WidthWithButtons = 380;
-    public const double HeightWithButtons = 112;
-    public const double ButtonWidth = 128;
-    public const double ButtonHeight = 26;
+    public const double WidthWithButtons = 480;
+    public const double HeightWithButtons = 132;
+    public const double ButtonWidth = 150;
+    public const double ButtonHeight = 30;
     public const double ButtonGap = 8;
     /// <summary>From the panel's bottom edge to the buttons'.</summary>
-    public const double ButtonBottom = 12;
-    public const float ButtonTextSize = 12;
+    public const double ButtonBottom = 14;
+    public const float ButtonTextSize = 12.5f;
 
     /// <summary>The panel's size for <paramref name="text"/>, in DIPs.</summary>
     public static (double W, double H) Size(DropText text) =>
@@ -147,6 +153,29 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
 
     /// <summary>The window's handle (tests: its styles, the foreground window).</summary>
     public nint Handle => (nint)hwnd.Value;
+
+    /// <summary>The pill's colours: the app's mode (the plain fallback follows it too).</summary>
+    public DropLook Look
+    {
+        get => look;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (look == value)
+            {
+                return;
+            }
+            look = value;
+            fallback?.SetLook(value);
+            if (ShowsFallback)
+            {
+                ShowFallback();
+            }
+            Surface.Invalidate();
+        }
+    }
+
+    private DropLook look = DropLook.Default;
 
     /// <summary>
     /// Creates the (hidden) window on this thread, which must run a message loop: the app's UI
@@ -244,6 +273,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         try
         {
             fallback = makeFallback();
+            fallback.SetLook(look);
             fallback.ButtonClicked += index => ButtonClicked?.Invoke(index);
             fallbackFailure = null;
         }
@@ -334,6 +364,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         speech.Clear();
         Surface.SetOnScreen(false);
         Surface.State = InkState.Idle;
+        // The next show starts from rest, not from the state it was hidden in.
+        Surface.Settle();
     }
 
     /// <summary>
@@ -395,14 +427,14 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             Surface.DeviceFailed(e.Message);
             return;
         }
-        var (inkW, inkH) = InkSurface.CanvasPixels(DropLayout.InkWidth, DropLayout.Height, scale);
+        var (inkW, inkH) = InkSurface.CanvasPixels(DropLayout.OrbSize, DropLayout.OrbSize, scale);
         if (inkTexture is null || inkTexture.Width != inkW || inkTexture.Height != inkH)
         {
             Com.Release(ref inkBitmap);
             inkTexture?.Dispose();
             inkTexture = null;
         }
-        Surface.SetCanvas(inkW, inkH, DropLayout.InkWidth);
+        Surface.SetCanvas(inkW, inkH);
     }
 
     void IInkTarget.SetFallback(bool shown)
@@ -506,9 +538,9 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         }
         if (titleFormat is null)
         {
-            titleFormat = Format(pipeline, DropLayout.TitleSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_MEDIUM, wrap: false);
-            detailFormat = Format(pipeline, DropLayout.DetailSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL, wrap: true);
-            buttonFormat = Format(pipeline, DropLayout.ButtonTextSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_MEDIUM, wrap: false);
+            titleFormat = Format(pipeline, DropLayout.Face, DropLayout.TitleSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
+            detailFormat = Format(pipeline, DropLayout.DetailFace, DropLayout.DetailSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL, wrap: true);
+            buttonFormat = Format(pipeline, DropLayout.Face, DropLayout.ButtonTextSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
         }
         if (titleLayout is null)
         {
@@ -550,10 +582,10 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         return metrics.widthIncludingTrailingWhitespace;
     }
 
-    private static IDWriteTextFormat* Format(InkPipeline pipeline, float size, DWRITE_FONT_WEIGHT weight, bool wrap)
+    private static IDWriteTextFormat* Format(InkPipeline pipeline, string face, float size, DWRITE_FONT_WEIGHT weight, bool wrap)
     {
         IDWriteTextFormat* format;
-        fixed (char* family = DropLayout.Face)
+        fixed (char* family = face)
         fixed (char* locale = "en-us")
         {
             InkRendererException.Check(pipeline.DWrite->CreateTextFormat(family, null, weight,
@@ -594,8 +626,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         Com.Release(ref detailLayout);
     }
 
-    /// <summary>One frame: the ink offscreen, then the panel on the swapchain, then present.</summary>
-    bool IInkTarget.Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark)
+    /// <summary>One frame: the orb offscreen, then the pill on the swapchain, then present.</summary>
+    bool IInkTarget.Render(InkPipeline pipeline, in InkUniforms uniforms)
     {
         if (!IsShown)
         {
@@ -606,7 +638,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             throw new InkRendererException(lostComposition);
         }
-        pipeline.Encode(inkTexture!.View, inkTexture.Width, inkTexture.Height, uniforms, mark);
+        pipeline.Encode(inkTexture!.View, inkTexture.Width, inkTexture.Height, uniforms);
 
         var d2d = pipeline.D2D;
         d2d->SetTarget((ID2D1Image*)swapChain!.TargetBitmap);
@@ -614,10 +646,9 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         d2d->SetDpi(dpi, dpi);
         d2d->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE.D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         d2d->BeginDraw();
-        ID2D1SolidColorBrush* paper = null, border = null, title = null, detail = null, wet = null, ink = null;
-        ID2D1GradientStopCollection* stops = null;
-        ID2D1LinearGradientBrush* fade = null;
+        ID2D1SolidColorBrush* fill = null, border = null, title = null, detail = null, wet = null, button = null, label = null;
         ID2D1RoundedRectangleGeometry* panel = null;
+        ID2D1EllipseGeometry* circle = null;
         HRESULT hr;
         try
         {
@@ -631,50 +662,42 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 radiusY = (float)DropLayout.CornerRadius,
             };
             InkRendererException.Check(pipeline.D2DFactory->CreateRoundedRectangleGeometry(&bounds, &panel), "shape the Drop");
-            paper = Brush(d2d, Palette.Paper, 1);
-            d2d->FillGeometry((ID2D1Geometry*)panel, (ID2D1Brush*)paper, null);
+            fill = Brush(d2d, look.Background, 1);
+            d2d->FillGeometry((ID2D1Geometry*)panel, (ID2D1Brush*)fill, null);
 
-            // The ink zone's own paper (grain, fibres, a vignette) fades into the panel's flat
-            // paper over its right edge, so no seam shows where the zone ends; the panel's corner
-            // clips it. The ink itself stays clear of that edge (the shader's fence).
-            var inkRect = new D2D_RECT_F
+            // The orb in its circle, which keeps its size, centred on the pill's first height
+            // (the offer's pill grows below it).
+            var orbRect = new D2D_RECT_F
             {
-                left = 0,
-                // The ink keeps its size, centred on the panel's height, whichever size the panel takes.
-                top = (float)((panelH - DropLayout.Height) / 2),
-                right = (float)DropLayout.InkWidth,
-                bottom = (float)((panelH + DropLayout.Height) / 2),
+                left = (float)DropLayout.OrbInset,
+                top = (float)DropLayout.OrbInset,
+                right = (float)(DropLayout.OrbInset + DropLayout.OrbSize),
+                bottom = (float)(DropLayout.OrbInset + DropLayout.OrbSize),
             };
-            var gradient = stackalloc D2D1_GRADIENT_STOP[3];
-            gradient[0] = new D2D1_GRADIENT_STOP { position = 0, color = new DXGI_RGBA { a = 1 } };
-            gradient[1] = new D2D1_GRADIENT_STOP { position = 0.82f, color = new DXGI_RGBA { a = 1 } };
-            gradient[2] = new D2D1_GRADIENT_STOP { position = 1, color = new DXGI_RGBA { a = 0 } };
-            InkRendererException.Check(d2d->CreateGradientStopCollection(gradient, 3, D2D1_GAMMA.D2D1_GAMMA_2_2,
-                D2D1_EXTEND_MODE.D2D1_EXTEND_MODE_CLAMP, &stops), "make the Drop's fade");
-            var line = new D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES
+            var ellipse = new D2D1_ELLIPSE
             {
-                startPoint = new D2D_POINT_2F(0, 0),
-                endPoint = new D2D_POINT_2F((float)DropLayout.InkWidth, 0),
+                point = new D2D_POINT_2F((orbRect.left + orbRect.right) / 2, (orbRect.top + orbRect.bottom) / 2),
+                radiusX = (float)DropLayout.OrbSize / 2,
+                radiusY = (float)DropLayout.OrbSize / 2,
             };
-            InkRendererException.Check(d2d->CreateLinearGradientBrush(&line, null, stops, &fade), "make the Drop's fade");
+            InkRendererException.Check(pipeline.D2DFactory->CreateEllipseGeometry(&ellipse, &circle), "shape the Drop's orb");
             var layer = new D2D1_LAYER_PARAMETERS1
             {
-                contentBounds = inkRect,
-                geometricMask = (ID2D1Geometry*)panel,
+                contentBounds = orbRect,
+                geometricMask = (ID2D1Geometry*)circle,
                 maskAntialiasMode = D2D1_ANTIALIAS_MODE.D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
                 maskTransform = new D2D_MATRIX_3X2_F { _11 = 1, _22 = 1 },
                 opacity = 1,
-                opacityBrush = (ID2D1Brush*)fade,
                 layerOptions = D2D1_LAYER_OPTIONS1.D2D1_LAYER_OPTIONS1_NONE,
             };
             d2d->PushLayer(&layer, null);
-            d2d->DrawBitmap((ID2D1Bitmap*)inkBitmap, &inkRect, 1, D2D1_INTERPOLATION_MODE.D2D1_INTERPOLATION_MODE_LINEAR, null, null);
+            d2d->DrawBitmap((ID2D1Bitmap*)inkBitmap, &orbRect, 1, D2D1_INTERPOLATION_MODE.D2D1_INTERPOLATION_MODE_LINEAR, null, null);
             d2d->PopLayer();
 
-            // The hairline, inside the panel's edge; seal red and heavier for an alert.
+            // The hairline, inside the pill's edge; the alert colour and heavier for an alert.
             var alert = text.Tone == DropTone.Alert;
             var width = alert ? 1.5f : 1f;
-            border = alert ? Brush(d2d, Palette.Seal, 1) : Brush(d2d, Palette.Ink, 0.12f);
+            border = Brush(d2d, alert ? look.Alert : look.Border, 1);
             var inset = new D2D1_ROUNDED_RECT
             {
                 rect = new D2D_RECT_F { left = width / 2, top = width / 2, right = (float)panelW - width / 2, bottom = (float)panelH - width / 2 },
@@ -683,21 +706,21 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             };
             d2d->DrawRoundedRectangle(&inset, (ID2D1Brush*)border, width, null);
 
-            // The two lines, stacked and centred on the panel's height.
-            title = Brush(d2d, text.Tone == DropTone.Plain ? Palette.Muted : Palette.Seal, 1);
-            detail = Brush(d2d, Palette.Ink, 1);
+            // The two lines, stacked and centred on the pill's height; text never takes a dot colour.
+            title = Brush(d2d, text.Tone == DropTone.Plain ? look.Secondary : look.Alert, 1);
+            detail = Brush(d2d, look.Text, 1);
             if (wetWords.length > 0)
             {
-                // The newest live words in the muted colour (a brush lives on the device, so it
+                // The newest live words in the secondary colour (a brush lives on the device, so it
                 // is set per frame).
-                wet = Brush(d2d, Palette.Muted, 1);
+                wet = Brush(d2d, look.Secondary, 1);
                 detailLayout->SetDrawingEffect((IUnknown*)wet, wetWords);
             }
             DWRITE_TEXT_METRICS tm, dm;
             titleLayout->GetMetrics(&tm);
             detailLayout->GetMetrics(&dm);
             var total = tm.height + DropLayout.LineSpacing + dm.height;
-            // Above the buttons when there are some, else centred on the panel.
+            // Above the buttons when there are some, else centred on the pill.
             var linesHeight = text.Buttons is null ? panelH : DropLayout.Button(0).Top - 4;
             var top = (linesHeight - total) / 2;
             d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)top), titleLayout, (ID2D1Brush*)title,
@@ -707,31 +730,33 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
 
             if (text.Buttons is { } buttons)
             {
-                // The first in ink with paper words (the answer), the second outlined.
-                ink = Brush(d2d, Palette.Ink, 1);
+                // Pills: the first in the button fill (the answer), the second outlined in the text colour.
+                button = Brush(d2d, look.ButtonFill, 1);
+                label = Brush(d2d, look.ButtonLabel, 1);
                 for (var i = 0; i < buttons.Count; i++)
                 {
                     var (left, btop, right, bottom) = DropLayout.Button(i);
+                    var radius = (float)DropLayout.ButtonHeight / 2;
                     var shape = new D2D1_ROUNDED_RECT
                     {
                         rect = new D2D_RECT_F { left = (float)left + 0.5f, top = (float)btop + 0.5f, right = (float)right - 0.5f, bottom = (float)bottom - 0.5f },
-                        radiusX = 6,
-                        radiusY = 6,
+                        radiusX = radius,
+                        radiusY = radius,
                     };
                     if (i == 0)
                     {
-                        d2d->FillRoundedRectangle(&shape, (ID2D1Brush*)ink);
+                        d2d->FillRoundedRectangle(&shape, (ID2D1Brush*)button);
                     }
                     else
                     {
-                        d2d->DrawRoundedRectangle(&shape, (ID2D1Brush*)ink, 1, null);
+                        d2d->DrawRoundedRectangle(&shape, (ID2D1Brush*)detail, 1, null);
                     }
                     var words = buttonFormat is null ? null : Layout(pipeline, buttons[i], buttonFormat, (float)(right - left), (float)(bottom - btop));
                     if (words != null)
                     {
                         words->SetTextAlignment(DWRITE_TEXT_ALIGNMENT.DWRITE_TEXT_ALIGNMENT_CENTER);
                         words->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT.DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                        d2d->DrawTextLayout(new D2D_POINT_2F((float)left, (float)btop), words, (ID2D1Brush*)(i == 0 ? paper : ink),
+                        d2d->DrawTextLayout(new D2D_POINT_2F((float)left, (float)btop), words, (ID2D1Brush*)(i == 0 ? label : detail),
                             D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
                         words->Release();
                     }
@@ -748,13 +773,13 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 detailLayout->SetDrawingEffect(null, wetWords);
             }
             Com.Release(ref wet);
-            Com.Release(ref ink);
+            Com.Release(ref label);
+            Com.Release(ref button);
             Com.Release(ref detail);
             Com.Release(ref title);
             Com.Release(ref border);
-            Com.Release(ref fade);
-            Com.Release(ref stops);
-            Com.Release(ref paper);
+            Com.Release(ref fill);
+            Com.Release(ref circle);
             Com.Release(ref panel);
         }
         InkRendererException.Check(hr, "draw the Drop");

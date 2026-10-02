@@ -1,12 +1,17 @@
 // The first-run state: a sheet over the window until the user finishes or skips it. What Inkwell
-// does, the four permissions (each asked for only when the user presses Allow), the speech models
-// (downloaded only when the user presses Download, and still downloading while the user goes on),
-// Inkwell 0.2's history (only when there is some to import), polish (off, and turned on only
-// through its consent step), and how to dictate. Remembered in the core's store (onboarding.done).
+// does (over the orb, playing a short demo), the four permissions (each asked for only when the
+// user presses Allow), the speech models (downloaded only when the user presses Download, and still
+// downloading while the user goes on), Inkwell 0.2's history (only when there is some to import),
+// the appearance, polish (off, and turned on only through its consent step), and how to dictate,
+// with the orb answering the user's voice. Remembered in the core's store (onboarding.done).
+import InkRenderer
 import SwiftUI
 
 struct OnboardingView: View {
     @Environment(ScreenModels.self) private var screens
+    @Environment(ShellInk.self) private var ink
+    /// What the welcome orb shows: a short demo, then still.
+    @State private var demo = InkState.idle
 
     var body: some View {
         let onboarding = screens.onboarding
@@ -18,6 +23,7 @@ struct OnboardingView: View {
                 case .permissions: permissions
                 case .models: models
                 case .importData: importData
+                case .appearance: appearance
                 case .polish: polish
                 case .ready: ready
                 }
@@ -66,24 +72,83 @@ struct OnboardingView: View {
         .accessibilityLabel("Step \((steps.firstIndex(of: step) ?? 0) + 1) of \(steps.count)")
     }
 
-    /// Names the key dictation uses now (after Back, the import step may have changed it).
+    /// Every step's title, the welcome's too: one scale.
+    private func title(_ text: String) -> some View {
+        Text(text).font(Typography.heading).accessibilityAddTraits(.isHeader)
+    }
+
+    /// The orb in the theme's colours: the welcome's demo, the ready step's try-it.
+    private func orb(_ state: InkState, height: CGFloat, live: Bool) -> some View {
+        let theme = screens.theme
+        let levels: @MainActor @Sendable () -> InkLevels
+        if live {
+            levels = { ShellInk.liveLevels() }
+        } else {
+            levels = { .silent }
+        }
+        return OrbLayer(
+            state: state, palette: theme.palette, placement: .centred, still: theme.motionStill,
+            dimmed: theme.solidSurfaces, levels: levels)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .accessibilityHidden(true)
+    }
+
+    /// Names the key dictation uses now (after Back, the import step may have changed it). The orb
+    /// plays a short demo, a dictation then a call, and settles: nothing moves after it.
     private var welcome: some View {
         let dictation = screens.dictation
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("Inkwell").font(Typography.screenTitle).accessibilityAddTraits(.isHeader)
+        return VStack(alignment: .leading, spacing: 12) {
+            orb(demo, height: 150, live: false)
+            title("Inkwell")
             Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key) and speak: your words are typed where your cursor is.")
             Text("In a meeting, Inkwell writes down both sides as they talk, then blots the transcript and lists what you promised.")
             Text("It all happens on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
                 .foregroundStyle(Theme.secondaryText)
         }
-        .font(.system(.title3))
+        .font(Typography.body)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
+        .task {
+            demo = .idle
+            for (state, seconds) in [(InkState.dictating, 0.6), (.meeting, 3.5), (.idle, 4.5)] {
+                try? await Task.sleep(for: .seconds(seconds))
+                if Task.isCancelled { return }
+                demo = state
+            }
+        }
+    }
+
+    /// Light, dark or the system's, and a row of dot presets for the mode shown.
+    private var appearance: some View {
+        let theme = screens.theme
+        return VStack(alignment: .leading, spacing: 12) {
+            title("Appearance")
+            Picker("Mode", selection: Binding(get: { theme.settings.mode }, set: { theme.setMode($0) })) {
+                ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(Glow.presets) { preset in
+                    PresetButton(preset: preset, selected: preset.id == theme.preset.id) {
+                        theme.setPreset(preset.id)
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Dot colours")
+            Text("You can change this and pick your own colours in Settings > Appearance.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+        }
+        .foregroundStyle(Theme.text)
     }
 
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("What Inkwell needs").font(Typography.heading).accessibilityAddTraits(.isHeader)
+            title("What Inkwell needs")
             Text("Each is asked for only when you press Allow, and each can be changed later in Settings.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
@@ -99,7 +164,7 @@ struct OnboardingView: View {
         let offered = catalogue.firstRunModels
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Speech models").font(Typography.heading).accessibilityAddTraits(.isHeader)
+                title("Speech models")
                 if catalogue.failed {
                     Text(CatalogueModel.failedText).foregroundStyle(Theme.alert)
                     Button("Try again") { catalogue.requery() }
@@ -141,7 +206,7 @@ struct OnboardingView: View {
     private var importData: some View {
         let dictation = screens.dictation
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Your Inkwell 0.2 history").font(Typography.heading).accessibilityAddTraits(.isHeader)
+            title("Your Inkwell 0.2 history")
             Import02Card(model: screens.import02)
             if screens.import02.imported != nil {
                 ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
@@ -153,7 +218,7 @@ struct OnboardingView: View {
     private var polish: some View {
         let polish = screens.polish
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Polish").font(Typography.heading).accessibilityAddTraits(.isHeader)
+            title("Polish")
             Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
             Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
                 .toggleStyle(.switch)
@@ -168,18 +233,24 @@ struct OnboardingView: View {
         .polishConsent(polish, host: .onboarding)
     }
 
-    /// Names the key dictation uses now: the import step can change it from fn.
+    /// Names the key dictation uses now: the import step can change it from fn. The try-it: the
+    /// orb shows what is live (the Drop does too), answering the voice while the key is held.
     private var ready: some View {
         let dictation = screens.dictation
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("Ready").font(Typography.heading).accessibilityAddTraits(.isHeader)
+        return VStack(alignment: .leading, spacing: 12) {
+            title("Ready")
             Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key), say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
+            orb(ink.state, height: 150, live: true)
+            Text(ink.state == .dictating ? "Listening…" : "Try it now: the orb answers your voice.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .frame(maxWidth: .infinity)
             if !screens.permissions.offCards.isEmpty {
                 Text("Still off: \(screens.permissions.offCards.map(\.title).joined(separator: ", ")). Settings can turn them on.")
                     .foregroundStyle(Theme.alert)
             }
         }
-        .font(.system(.title3))
+        .font(Typography.body)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
     }

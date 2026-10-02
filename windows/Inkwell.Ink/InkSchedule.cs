@@ -62,7 +62,7 @@ public struct InkSchedule
         return Update();
     }
 
-    /// <summary>The size, the wordmark or the screen changed: the frame on screen is out of date.</summary>
+    /// <summary>The size, the look or the screen changed: the frame on screen is out of date.</summary>
     public InkAction Invalidate()
     {
         stillIsCurrent = false;

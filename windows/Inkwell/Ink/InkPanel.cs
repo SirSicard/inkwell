@@ -1,9 +1,11 @@
-// The ink in the app's window: a SwapChainPanel holding a composition swapchain that Direct3D 11
-// draws the ink into, on the shared clock while live and once per change otherwise (InkSurface).
-// The Mac's InkZone. The screens place it (the rail, Today's zone with the wordmark).
+// The orb in the app's window: a SwapChainPanel behind all the content, holding a composition
+// swapchain (premultiplied alpha: the window's background shows where the orb is not) that
+// Direct3D 11 draws into, on the shared clock while live and once per change otherwise
+// (InkSurface). Each frame it draws is passed on (Drawn): the edge glow follows it.
 //
 // It counts as on screen while its window is shown (XamlRoot.IsHostVisible), it is visible and it
 // has a size: hidden to the tray, the window's ink draws nothing.
+using Inkwell.Core.Glow;
 using Inkwell.Ink;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -18,7 +20,8 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     private CompositionSwapChain? swapChain;
     private XamlRoot? root;
     private InkState state = InkState.Idle;
-    private bool wordmark;
+    private GlowLook look = GlowLook.Default;
+    private bool alwaysStill;
     private (float, float) transform;
 
     /// <summary>The process's clock; the app sets it at launch, before any panel loads.</summary>
@@ -47,19 +50,42 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
         }
     }
 
-    /// <summary>Whether INKWELL is knocked out of the ink (Today's zone).</summary>
-    public bool ShowsWordmark
+    /// <summary>The orb's colours.</summary>
+    internal GlowLook Look
     {
-        get => wordmark;
+        get => look;
         set
         {
-            wordmark = value;
+            look = value;
             if (surface is not null)
             {
-                surface.ShowsWordmark = value;
+                surface.Look = value;
             }
         }
     }
+
+    /// <summary>The user's Always still.</summary>
+    internal bool AlwaysStill
+    {
+        get => alwaysStill;
+        set
+        {
+            alwaysStill = value;
+            if (surface is not null)
+            {
+                surface.AlwaysStill = value;
+            }
+        }
+    }
+
+    /// <summary>A frame was drawn (live, or the still frame). UI thread.</summary>
+    internal event Action<GlowFrame>? Drawn;
+
+    /// <summary>Where the orb sits: the window's place unless set (the first run's orbs sit in the middle).</summary>
+    internal InkPlacement Placement { get; set; } = new(GlowTokens.Orb.Main.X, GlowTokens.Orb.Main.Y, GlowTokens.Orb.Main.Unit);
+
+    /// <summary>The prototype's stand-in voice instead of the live levels (the first run's demo). Set before it loads.</summary>
+    internal bool Demo { get; set; }
 
     /// <summary>Frames this panel has presented (0 before it loads).</summary>
     public int FramesDrawn => surface?.FramesDrawn ?? 0;
@@ -70,7 +96,16 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
         {
             return;
         }
-        surface = new InkSurface(this, ShellInk.Loader, Clock) { State = state, ShowsWordmark = wordmark, Levels = ShellInk.LiveLevels };
+        surface = new InkSurface(this, ShellInk.Loader, Clock)
+        {
+            State = state,
+            Placement = Placement,
+            Demo = Demo,
+            Look = look,
+            AlwaysStill = alwaysStill,
+            Levels = ShellInk.LiveLevels,
+        };
+        surface.Drawn += frame => Drawn?.Invoke(frame);
         root = XamlRoot;
         if (root is not null)
         {
@@ -108,7 +143,7 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
             return;
         }
         var (w, h) = InkSurface.CanvasPixels(ActualWidth, ActualHeight, CompositionScaleX);
-        surface.SetCanvas(w, h, ActualWidth);
+        surface.SetCanvas(w, h);
         UpdateVisibility();
     }
 
@@ -128,7 +163,7 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     {
     }
 
-    bool IInkTarget.Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark)
+    bool IInkTarget.Render(InkPipeline pipeline, in InkUniforms uniforms)
     {
         var (w, h) = surface!.Canvas;
         if (swapChain is null)
@@ -144,7 +179,7 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
             swapChain.SetMatrixTransform(transform.Item1, transform.Item2);
             this.transform = transform;
         }
-        swapChain.DrawInk(uniforms, mark);
+        swapChain.DrawInk(uniforms);
         return true;
     }
 }

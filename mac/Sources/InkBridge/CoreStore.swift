@@ -83,6 +83,12 @@ public final class CoreStore {
         public var farEndFallback = false
         /// `meeting.stopped` arrived: capture ended and the final pass is running.
         public var stopping = false
+        /// The final pass's progress: the sides it has transcribed (`meeting.transcribed`), and
+        /// whether it has told the far end's speakers apart (`meeting.diarized`) and written the
+        /// summary (`meeting.summarized`). Only what the core said: a step it skips never shows.
+        public var transcribed: Set<Channel> = []
+        public var diarized = false
+        public var summarized = false
         /// The latest state of each side's capture.
         public var sides: [Channel: SideState] = [:]
         /// Each channel's current partial: replaced by the next one, cleared by its final.
@@ -382,6 +388,12 @@ public final class CoreStore {
             if !vad.available {
                 notice(.voiceDetectionUnavailable(vad.reason))
             }
+        case .meetingTranscribed(let done):
+            updateMeeting(done.record) { $0.transcribed.insert(done.pass.channel) }
+        case .meetingDiarized(let done):
+            updateMeeting(done.record) { $0.diarized = true }
+        case .meetingSummarized(let done):
+            updateMeeting(done.record) { $0.summarized = true }
         case .meetingWarningEvent(let warning):
             notice(.meetingWarning(warning.kind), warning.message)
         case .meetingFinished(let finished):
@@ -402,9 +414,8 @@ public final class CoreStore {
             notice(.mismatchedBuild(type: type))
         case .undecodable(let type, _):
             notice(.mismatchedBuild(type: type))
-        // Nothing to keep: the final pass's progress (transcribed, diarized, superseded, kept
-        // live, summarized, commitments), whose screens read the record from the store, and
-        // voice commands. An event added to the schema later lands here too until the store
+        // Nothing to keep: the rest of the final pass (superseded, kept live, commitments), whose
+        // screens read the record from the store, and voice commands. An event added to the schema later lands here too until the store
         // learns it, so a new event never breaks the shell's build.
         default:
             break

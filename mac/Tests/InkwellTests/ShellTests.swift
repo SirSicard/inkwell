@@ -112,31 +112,56 @@ final class InstanceLockTests: XCTestCase {
 }
 
 final class DesignTokenTests: XCTestCase {
-    /// The canvas's table, value for value.
-    func testThePaletteIsTheCanvas() {
-        XCTAssertEqual(Palette.paper.hex, 0xF2EEE6)
-        XCTAssertEqual(Palette.ink.hex, 0x16181F)
-        XCTAssertEqual(Palette.sepia.hex, 0x7E5431)
-        XCTAssertEqual(Palette.seal.hex, 0xB23A26)
-        XCTAssertEqual(Palette.nightPaper.hex, 0x121419)
-        XCTAssertEqual(Palette.muted.hex, 0x625E57)
+    /// The tokens' table, value for value.
+    func testTheModesAreTheTokens() {
+        XCTAssertEqual(Glow.day.background.hex, 0xFBF8F4)
+        XCTAssertEqual(Glow.night.background.hex, 0x121118)
+        XCTAssertEqual(Glow.day.text.hex, 0x1D1B2E)
+        XCTAssertEqual(Glow.night.text.hex, 0xEDEAF2)
+        XCTAssertEqual(Glow.day.alert.hex, 0xB23A26)
+        XCTAssertEqual(Glow.night.alert.hex, 0xFF9A80)
+        XCTAssertEqual(Glow.day.cardAlpha, 0.72)
+        XCTAssertEqual(Glow.night.cardAlpha, 0.62)
+        XCTAssertEqual(Glow.night.ink.hex, 0xF0EBE3)
+        XCTAssertEqual(Glow.presets.map(\.id), ["indigo", "dusk", "lagoon", "aurora", "citrus", "rosewater", "ink_sand"])
+        XCTAssertEqual(Glow.preset("nonsense").id, "indigo", "an unknown preset is the default")
     }
 
     func testASwatchIsItsSRGBValue() {
-        let paper = Palette.paper.nsColor.usingColorSpace(.sRGB)
-        XCTAssertEqual(paper.map { Int(($0.redComponent * 255).rounded()) }, 0xF2)
-        XCTAssertEqual(paper.map { Int(($0.greenComponent * 255).rounded()) }, 0xEE)
-        XCTAssertEqual(paper.map { Int(($0.blueComponent * 255).rounded()) }, 0xE6)
+        let background = Glow.day.background.nsColor.usingColorSpace(.sRGB)
+        XCTAssertEqual(background.map { Int(($0.redComponent * 255).rounded()) }, 0xFB)
+        XCTAssertEqual(background.map { Int(($0.greenComponent * 255).rounded()) }, 0xF8)
+        XCTAssertEqual(background.map { Int(($0.blueComponent * 255).rounded()) }, 0xF4)
     }
 
-    func testTheRailIsPaperInBothThemes() {
-        for name in [NSAppearance.Name.aqua, .darkAqua] {
-            var rail: NSColor?
+    func testTheSurfaceFollowsTheAppearance() {
+        for (name, hex) in [(NSAppearance.Name.aqua, 0xFB), (.darkAqua, 0x12)] {
+            var surface: NSColor?
             NSAppearance(named: name)?.performAsCurrentDrawingAppearance {
-                rail = NSColor(Theme.inkZone).usingColorSpace(.sRGB)
+                surface = NSColor(Theme.surface).usingColorSpace(.sRGB)
             }
-            XCTAssertEqual(rail.map { Int(($0.redComponent * 255).rounded()) }, 0xF2, "\(name)")
+            XCTAssertEqual(surface.map { Int(($0.redComponent * 255).rounded()) }, hex, "\(name)")
         }
+    }
+
+    /// The resolve both shells share: a colour too dark for night is lifted, one too pale for day
+    /// deepened, and the orb's partner is lighter.
+    func testColoursResolveAsTheContractSays() throws {
+        let navy = try XCTUnwrap(GlowColours.parse("#101030"))
+        let lifted = GlowColours.fit(navy, dark: true)
+        XCTAssertEqual(lifted.x, navy.x + (1 - navy.x) * 0.45, accuracy: 1e-9)
+        XCTAssertEqual(GlowColours.fit(navy, dark: false), navy, "dark enough for day")
+        let pale = try XCTUnwrap(GlowColours.parse("#fafaf0"))
+        XCTAssertEqual(GlowColours.fit(pale, dark: false).x, pale.x * 0.7, accuracy: 1e-9)
+        XCTAssertEqual(GlowColours.fit(pale, dark: true), pale)
+        XCTAssertEqual(GlowColours.partner(navy).y, navy.y + (1 - navy.y) * 0.4, accuracy: 1e-9)
+
+        let indigo = Glow.preset("indigo")
+        let own = GlowColours.dots(preset: indigo, you: "#336699", them: nil, dark: false)
+        XCTAssertEqual(GlowColours.hex(own.you), "#336699", "the user's own colour replaces the preset's")
+        XCTAssertEqual(GlowColours.hex(own.them), "#ffa34d")
+        XCTAssertNil(GlowColours.parse("#FFA34D"), "settings hold lowercase only")
+        XCTAssertNil(GlowColours.parse("preset"))
     }
 }
 

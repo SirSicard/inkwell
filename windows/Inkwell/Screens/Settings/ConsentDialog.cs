@@ -121,11 +121,13 @@ public sealed class ConsentDialog
         var resources = Application.Current.Resources;
         var cancel = new Style(typeof(Button)) { BasedOn = (Style)resources["DefaultButtonStyle"] };
         cancel.Setters.Add(new Setter(AutomationProperties.NameProperty, ConsentModel.CancelName(feature)));
-        var allow = new Style(typeof(Button)) { BasedOn = (Style)resources["AccentButtonStyle"] };
+        var allow = new Style(typeof(Button)) { BasedOn = (Style)resources["InkAccentButtonStyle"] };
         allow.Setters.Add(new Setter(AutomationProperties.NameProperty, ConsentModel.AllowName(feature, destination)));
         return new ContentDialog
         {
             XamlRoot = root,
+            // A dialog does not take the window's theme: the window's appearance, as shown now.
+            RequestedTheme = (root?.Content as FrameworkElement)?.ActualTheme ?? ElementTheme.Default,
             Title = ConsentModel.Title(feature),
             Content = new TextBlock
             {

@@ -87,9 +87,22 @@ final class Router {
     /// The route whose screen is shown.
     var current: Route { selection ?? .today }
 
+    /// Find was chosen: the search field (Today's or the Library's) takes the keyboard once it
+    /// shows, and clears this.
+    var searchPending = false
+
     /// Shows `route`.
     func open(_ route: Route) {
         selection = route
+    }
+
+    /// Find (⌘F): the search field, on Today or in the Library (from any other screen, the
+    /// Library's).
+    func focusSearch() {
+        if current != .today && current != .library {
+            open(.library)
+        }
+        searchPending = true
     }
 
     /// Keeps the selection on a listed row: when the meeting ends, Live leaves the sidebar, and a

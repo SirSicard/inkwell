@@ -460,10 +460,10 @@ final class DetectionStateTests: XCTestCase {
         XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), " ")
         store.apply([event(#"{"type":"meeting.detection","listening":false,"message":"couldn't read the detection setting: database is locked"}"#)])
         XCTAssertEqual(store.listening, false)
-        XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), "Not listening for meetings")
+        XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), "Not listening for calls")
         XCTAssertEqual(store.notices.last?.kind, .detectionUnavailable)
         store.apply([event(#"{"type":"meeting.detection","listening":true}"#)])
-        XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), "Listening for meetings")
+        XCTAssertEqual(RecordControls.listeningText(recording: false, listening: store.listening), "Listening for calls")
         XCTAssertEqual(RecordControls.listeningText(recording: true, listening: true), "Recording")
     }
 }

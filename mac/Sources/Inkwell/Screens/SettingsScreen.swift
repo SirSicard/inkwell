@@ -1,13 +1,17 @@
-// Settings: permissions with their live state, the voice key, modes, snippets and voice commands
-// (PhrasesSections), AI (polish, summaries and Ask), meetings, models (with measured accuracy, and
-// Download for those not on this Mac), storage, and About with every notice the app ships.
+// Settings: General (open at login, updates, Inkwell 0.2's history), Appearance, permissions with
+// their live state, dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
+// language model you bring, local-only mode, polish, summaries and Ask), meetings, models (with
+// measured accuracy, and Download for those not on this Mac), storage, and About with every notice
+// the app ships.
 import AppleEngines
 import InkBridge
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
+    case appearance
     case permissions
-    case voice
+    case dictation
     case modes
     case snippets
     case voiceCommands
@@ -21,8 +25,10 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .general: "General"
+        case .appearance: "Appearance"
         case .permissions: "Permissions"
-        case .voice: "Voice"
+        case .dictation: "Dictation"
         case .modes: "Modes"
         case .snippets: "Snippets"
         case .voiceCommands: "Voice commands"
@@ -37,7 +43,12 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
 struct SettingsScreen: View {
     @Environment(ScreenModels.self) private var screens
-    @State private var section: SettingsSection? = .permissions
+    @State private var section: SettingsSection? = .general
+    /// The section a click scrolled to: it stays selected while any of it is in view, as the last
+    /// sections cannot scroll to the top.
+    @State private var clicked: SettingsSection?
+    /// The selection the scrolling made, which must not scroll the page again.
+    @State private var followed: SettingsSection?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -52,13 +63,15 @@ struct SettingsScreen: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 30) {
+                        GeneralSection(screens: screens).id(SettingsSection.general)
+                        AppearanceSection(theme: screens.theme).id(SettingsSection.appearance)
                         PermissionsSection(permissions: screens.permissions).id(SettingsSection.permissions)
-                        VoiceSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
-                            .id(SettingsSection.voice)
+                        DictationSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
+                            .id(SettingsSection.dictation)
                         ModesSection(modes: screens.modes).id(SettingsSection.modes)
                         SnippetsSection(snippets: screens.snippets).id(SettingsSection.snippets)
                         VoiceCommandsSection(commands: screens.voiceCommands).id(SettingsSection.voiceCommands)
-                        AISection(polish: screens.polish, screens: screens).id(SettingsSection.ai)
+                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).id(SettingsSection.ai)
                         MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
                             .id(SettingsSection.meetings)
                         ModelsSection(catalogue: screens.catalogue).id(SettingsSection.models)
@@ -66,13 +79,34 @@ struct SettingsScreen: View {
                             .id(SettingsSection.storage)
                         AboutSection().id(SettingsSection.about)
                     }
+                    // The sections are the scroll's targets, for the list to follow (below).
+                    .scrollTargetLayout()
                     .frame(maxWidth: 760, alignment: .leading)
                     .padding(.horizontal, 40)
                     .padding(.vertical, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .scrollContentBackground(.hidden)
                 .onChange(of: section) { _, section in
-                    if let section { proxy.scrollTo(section, anchor: .top) }
+                    guard let section else { return }
+                    if section == followed {
+                        followed = nil
+                        return
+                    }
+                    clicked = section
+                    proxy.scrollTo(section, anchor: .top)
+                }
+                // The list follows the scrolling: the topmost section in view, and at the end of
+                // the page the last one.
+                .onScrollTargetVisibilityChange(idType: SettingsSection.self, threshold: 0.01) { visible in
+                    if let clicked, visible.contains(clicked) { return }
+                    clicked = nil
+                    follow(SettingsSection.allCases.first(where: visible.contains))
+                }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 1
+                } action: { _, atEnd in
+                    if atEnd, clicked == nil { follow(SettingsSection.allCases.last) }
                 }
             }
         }
@@ -86,10 +120,18 @@ struct SettingsScreen: View {
             screens.voiceCommands.load()
             screens.importNote.load()
             screens.import02.check()
+            screens.cloud.load()
             screens.catalogue.requery()
             screens.storage.measure()
         }
         .onDisappear { screens.permissions.screenDisappeared() }
+    }
+
+    /// Selects `next` for the scrolling, without scrolling.
+    private func follow(_ next: SettingsSection?) {
+        guard let next, next != section else { return }
+        followed = next
+        section = next
     }
 }
 
@@ -101,7 +143,7 @@ struct SectionTitle: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(text)
-                .font(.system(.title2, weight: .semibold))
+                .font(Typography.heading)
                 .foregroundStyle(Theme.text)
                 .accessibilityAddTraits(.isHeader)
             if let note {
@@ -137,7 +179,7 @@ struct PermissionCards: View {
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: Glow.Radius.card, style: .continuous))
         .paperCard()
     }
 }
@@ -215,17 +257,17 @@ private struct PermissionRow: View {
     }
 }
 
-// MARK: - Voice
+// MARK: - Dictation
 
 /// The dictation key and the voice-edit key, each held by the core: a change rebinds it at once.
-private struct VoiceSection: View {
+private struct DictationSection: View {
     let screens: ScreenModels
     let dictation: DictationModel
     let permissions: PermissionsModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(text: "Voice")
+            SectionTitle(text: "Dictation")
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Dictation").frame(width: 150, alignment: .leading)
                 Toggle("Dictation", isOn: Binding(get: { dictation.isOn }, set: { dictation.setOn($0) }))
@@ -295,12 +337,6 @@ private struct VoiceSection: View {
             .font(Typography.caption)
             .fixedSize(horizontal: false, vertical: true)
             ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
-            // Inkwell 0.2's history, while there is some to import (or the look for it failed).
-            if screens.import02.offered || screens.import02.checkFailed {
-                Import02Card(model: screens.import02)
-                    .padding(12)
-                    .paperCard()
-            }
             Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
@@ -345,7 +381,7 @@ private struct ModesSection: View {
                             ForEach(row.traits, id: \.self) { Paper.Chip(text: $0) }
                         }
                         if row.apps.isEmpty {
-                            Text(row.isDefault ? "Every app no other mode names" : "No apps")
+                            Text(row.isDefault ? "Every app without a mode of its own" : "No apps")
                                 .font(Typography.caption).foregroundStyle(Theme.secondaryText)
                         } else {
                             HStack(spacing: 6) {
@@ -399,10 +435,13 @@ private struct AppIcon: View {
 private struct AISection: View {
     let polish: PolishModel
     let screens: ScreenModels
+    let cloud: CloudModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "AI")
+            LanguageModelRows(cloud: cloud)
+                .padding(.bottom, 6)
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Polish my words").frame(width: 150, alignment: .leading)
                 VStack(alignment: .leading, spacing: 4) {
@@ -568,9 +607,12 @@ private struct ModelsSection: View {
                 }
                 .padding(.top, 6)
             }
-            Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
-                .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
+            // Where the accuracy comes from, only when a row shows one.
+            if CatalogueModel.jobs.contains(where: { catalogue.line($0).accuracy != nil }) {
+                Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+            }
         }
     }
 }
@@ -725,7 +767,6 @@ private struct StorageSection: View {
 
 private struct AboutSection: View {
     @Environment(CoreStore.self) private var store
-    @Environment(Updates.self) private var updates
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -739,7 +780,6 @@ private struct AboutSection: View {
             Text(version).font(.system(.body, weight: .semibold))
             Text(CoreStatusText.line(for: store.status))
                 .font(Typography.caption).foregroundStyle(Theme.secondaryText)
-            updatesRow
             Paper.Eyebrow(text: "Models").padding(.top, 8)
             ForEach(Notices.models) { model in
                 NoticeRow(
@@ -751,19 +791,6 @@ private struct AboutSection: View {
                 NoticeRow(title: "\(notice.name) (\(notice.licence))", detail: notice.role, text: notice.text)
             }
             RustLibrariesRow()
-        }
-    }
-
-    @ViewBuilder private var updatesRow: some View {
-        switch updates.availability {
-        case .on:
-            HStack(spacing: 12) {
-                Toggle("Check for updates automatically", isOn: Binding(
-                    get: { updates.checksAutomatically }, set: { updates.checksAutomatically = $0 }))
-                Button("Check Now") { updates.checkForUpdates() }.disabled(!updates.canCheck)
-            }
-        case .off(let reason):
-            Text(reason.explanation).font(Typography.caption).foregroundStyle(Theme.secondaryText)
         }
     }
 }

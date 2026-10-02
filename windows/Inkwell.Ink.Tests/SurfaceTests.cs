@@ -11,7 +11,7 @@ internal sealed unsafe class OffscreenTarget : IInkTarget, IDisposable
 {
     private InkTexture? texture;
 
-    public bool Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark)
+    public bool Render(InkPipeline pipeline, in InkUniforms uniforms)
     {
         var w = (int)uniforms.ResX;
         var h = (int)uniforms.ResY;
@@ -20,7 +20,7 @@ internal sealed unsafe class OffscreenTarget : IInkTarget, IDisposable
             texture?.Dispose();
             texture = new InkTexture(pipeline, w, h);
         }
-        pipeline.Encode(texture.View, w, h, uniforms, mark);
+        pipeline.Encode(texture.View, w, h, uniforms);
         pipeline.Context->Flush();
         return true;
     }
@@ -50,7 +50,7 @@ public sealed class SurfaceTests(ITestOutputHelper output)
         var target = new OffscreenTarget();
         var surface = new InkSurface(target, Loader, clock) { AssumeReduceMotion = false };
         var (w, h) = InkSurface.CanvasPixels(width, height, 2);
-        surface.SetCanvas(w, h, width);
+        surface.SetCanvas(w, h);
         return (surface, target);
     }
 
@@ -167,7 +167,7 @@ public sealed class SurfaceTests(ITestOutputHelper output)
         });
         using var target = new OffscreenTarget();
         using var surface = new InkSurface(target, loader, clock) { AssumeReduceMotion = false };
-        surface.SetCanvas(96, 84, 96);
+        surface.SetCanvas(96, 84);
         surface.SetOnScreen(true);
         Assert.False(surface.IsReady);
         Assert.Equal(0, surface.FramesDrawn);
@@ -191,7 +191,7 @@ public sealed class SurfaceTests(ITestOutputHelper output)
         Assert.StartsWith("couldn't compile the ink shader", loader.Wait().Failure, StringComparison.Ordinal);
         using var target = new OffscreenTarget();
         using var surface = new InkSurface(target, loader, clock);
-        surface.SetCanvas(96, 84, 96);
+        surface.SetCanvas(96, 84);
         surface.SetOnScreen(true);
         surface.State = InkState.Dictating;
         ui.Pump(0.2);
@@ -207,7 +207,7 @@ public sealed class SurfaceTests(ITestOutputHelper output)
     /// </summary>
     private sealed class SlowTarget : IInkTarget
     {
-        public bool Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark)
+        public bool Render(InkPipeline pipeline, in InkUniforms uniforms)
         {
             Thread.Sleep(100);
             return true;
@@ -242,7 +242,7 @@ public sealed class SurfaceTests(ITestOutputHelper output)
                 return true;
             });
             using var surface = new InkSurface(new SlowTarget(), Loader, clock) { AssumeReduceMotion = false };
-            surface.SetCanvas(96, 84, 96);
+            surface.SetCanvas(96, 84);
             surface.SetOnScreen(true);
             surface.State = InkState.Meeting;
             Assert.True(surface.IsAnimating);

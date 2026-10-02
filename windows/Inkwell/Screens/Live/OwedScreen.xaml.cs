@@ -1,8 +1,10 @@
 // The Owed screen's view: lists again when shown (owed.Load on Loaded), and renders the OwedModel on
 // its change signal. The groups, rows and words are the model's; the summary and due labels are
 // computed for now when the model changes (nothing ticks: a label that crosses midnight updates
-// with the next change or the next visit).
+// with the next change or the next visit). Marking one done shows the Undo toast, which a one-shot
+// timer takes away after OwedModel.UndoShown.
 using Inkwell.Core.Screens;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -14,6 +16,7 @@ public sealed partial class OwedScreen : UserControl
     private readonly Action<string, long> openRecordAt;
     /// <summary>The rows shown, by id: what a row's buttons act on.</summary>
     private Dictionary<string, OwedRow> rows = [];
+    private readonly DispatcherQueueTimer undoTimer;
 
     /// <param name="openRecordAt">Opens a record at a time into it, ms (the Library's record screen).</param>
     public OwedScreen(OwedModel owed, Action<string, long> openRecordAt)
@@ -23,6 +26,17 @@ public sealed partial class OwedScreen : UserControl
         this.owed = owed;
         this.openRecordAt = openRecordAt;
         InitializeComponent();
+        UndoButton.Content = OwedModel.UndoTitle;
+        undoTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+        undoTimer.IsRepeating = false;
+        undoTimer.Interval = OwedModel.UndoShown;
+        undoTimer.Tick += (_, _) => owed.UndoExpired();
+        // The screen goes: so does the toast.
+        Unloaded += (_, _) =>
+        {
+            undoTimer.Stop();
+            owed.UndoExpired();
+        };
         owed.PropertyChanged += (_, _) => Render();
         Loaded += (_, _) =>
         {
@@ -51,6 +65,17 @@ public sealed partial class OwedScreen : UserControl
         var groups = owed.Groups(now);
         rows = groups.SelectMany(g => g.Rows).ToDictionary(r => r.Id);
         GroupRows.ItemsSource = groups;
+        UndoLine.Text = owed.JustDoneLine ?? "";
+        UndoToast.Visibility = owed.JustDone is null ? Visibility.Collapsed : Visibility.Visible;
+        if (owed.JustDone is null)
+        {
+            undoTimer.Stop();
+        }
+        else if (!undoTimer.IsRunning)
+        {
+            // Marked done here or from a "Looks done" card: the toast goes after its few seconds.
+            undoTimer.Start();
+        }
     }
 
     private static string? Tagged(object sender) => (sender as FrameworkElement)?.Tag as string;
@@ -60,7 +85,16 @@ public sealed partial class OwedScreen : UserControl
         if (Tagged(sender) is string id)
         {
             owed.MarkDone(id);
+            // A fresh few seconds for each one marked.
+            undoTimer.Stop();
+            undoTimer.Start();
         }
+    }
+
+    private void OnUndo(object sender, RoutedEventArgs e)
+    {
+        undoTimer.Stop();
+        owed.UndoDone();
     }
 
     private void OnSaidAt(object sender, RoutedEventArgs e)

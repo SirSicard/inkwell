@@ -1,4 +1,4 @@
-// Dictation as the shell shows it: whether it is live and on which keys (Settings > Voice), the
+// Dictation as the shell shows it: whether it is live and on which keys (Settings > Dictation), the
 // choice of keys, and what the Drop says about a take that ended without its text going in.
 //
 // The core holds the keys and the mic (architecture rule 1). Once the core is ready the shell reads
@@ -127,7 +127,7 @@ final class DictationModel {
         send(.settingGet(.dictationEditKey))
     }
 
-    /// Whether the switch in Settings > Voice reads on.
+    /// Whether the switch in Settings > Dictation reads on.
     var isOn: Bool { wantsOn != false }
 
     /// The user turned dictation on or off: kept for the next launch, and done now.
@@ -186,7 +186,7 @@ final class DictationModel {
         return edit
     }
 
-    /// Whether dictation is off for a reason turning it on again may fix (the Voice section offers
+    /// Whether dictation is off for a reason turning it on again may fix (the Dictation section offers
     /// that): not for Accessibility, which has its own Allow, nor for an unsupported build.
     var canRetry: Bool {
         if commandFailure != nil { return true }
