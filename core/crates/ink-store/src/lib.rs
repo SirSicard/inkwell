@@ -73,9 +73,9 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// page SQLite writes next, but with WAL that page goes to the log, and the log still holds the
 /// earlier frames with the text; the database file keeps its old page until a checkpoint. So
 /// every call that deletes or replaces user text (deleting a record or a note; a supersede;
-/// replacing a title, a note, a summary, a speaker's name, the removed lines or a setting) ends,
-/// after its commit, with `PRAGMA wal_checkpoint(TRUNCATE)`: the file gets the zeroed pages, and
-/// the log is cut to nothing. Another process reading the database (a backup tool, a second copy
+/// replacing a title, a note, a summary, a speaker's name, the removed lines or a setting;
+/// clearing a speaker's name) ends, after its commit, with `PRAGMA wal_checkpoint(TRUNCATE)`: the
+/// file gets the zeroed pages, and the log is cut to nothing. Another process reading the database (a backup tool, a second copy
 /// of the app) keeps the log from being cut: the checkpoint is tried [`SCRUB_ATTEMPTS`] times,
 /// waiting up to [`SCRUB_WAIT`] for readers each time, and if it still cannot finish the call
 /// succeeds anyway (its change is committed), [`Store::unscrubbed`] says so, a warning is logged
@@ -1070,6 +1070,18 @@ impl Store for SqliteStore {
         self.write_scrubbed("set_speaker_name", |tx| {
             revision(tx, id)?;
             upsert_speaker(tx, id, speaker, name)
+        })
+    }
+
+    fn clear_speaker_name(&self, id: &RecordId, speaker: &SpeakerId) -> Result<(), StoreError> {
+        // Scrubbed: the name the user cleared leaves the log too.
+        self.write_scrubbed("clear_speaker_name", |tx| {
+            revision(tx, id)?;
+            tx.execute(
+                "DELETE FROM speaker WHERE record_id = ?1 AND speaker = ?2",
+                params![id.0, speaker.0],
+            )?;
+            Ok(())
         })
     }
 

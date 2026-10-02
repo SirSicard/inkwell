@@ -328,12 +328,34 @@ private func document(_ request: String = "REQ") -> RecordDocument? {
 final class RecordDocumentTests: XCTestCase {
     func testTheLedgerNamesEachSpeakerByStreamAndName() throws {
         let doc = try XCTUnwrap(document())
-        XCTAssertEqual(doc.ledger.map(\.speaker.label), ["Alex", "You", "You", "Speaker 1", "Speaker 2", "Them"])
-        XCTAssertEqual(doc.people, ["Alex", "Speaker 1", "Speaker 2", "Them"])
+        XCTAssertEqual(doc.ledger.map(\.speaker.label), ["Alex", "You", "You", "Speaker 2", "Speaker 3", "Them"])
+        XCTAssertEqual(doc.people, ["Alex", "Speaker 2", "Speaker 3", "Them"])
         XCTAssertTrue(doc.isFinal)
         XCTAssertEqual(doc.durationMs, 30_003, "the audio's end")
         XCTAssertEqual(doc.line(atPlayhead: 11_000)?.text, "Can you share the budget?")
         XCTAssertNil(doc.line(atPlayhead: -1))
+    }
+
+    /// The far end's speakers the diarizer told apart, by label, in the order they first speak:
+    /// each numbered by that order whether it has a name or not, so naming one never renumbers the
+    /// others, and clearing a name brings back the same "Speaker N". The mic (You) and far-end lines
+    /// without a label ("Them") carry no label: they cannot be named.
+    func testEachDiarizedSpeakerKeepsItsNumberAndCarriesItsLabel() throws {
+        let doc = try XCTUnwrap(document())
+        XCTAssertEqual(doc.speakers.map(\.label), ["spk0", "spk1", "spk2"])
+        XCTAssertEqual(doc.speakers.map(\.name), ["Alex", nil, nil])
+        XCTAssertEqual(doc.speakers.map(\.number), [1, 2, 3])
+        XCTAssertEqual(doc.speakers.map(\.display), ["Alex", "Speaker 2", "Speaker 3"])
+        XCTAssertEqual(doc.ledger.map(\.label), ["spk0", nil, nil, "spk1", "spk2", nil])
+        XCTAssertEqual(doc.speaker(labelled: "spk1")?.display, "Speaker 2")
+        XCTAssertNil(doc.speaker(labelled: "spk9"))
+
+        // Alex's name cleared: Speaker 1 again, and the others keep theirs.
+        let unnamed = recordAnswer.replacingOccurrences(of: #"[{"speaker":"spk0","name":"Alex"}]"#, with: "[]")
+        guard case .libraryRecord(let answer) = event(unnamed) else { return XCTFail("not a record") }
+        let cleared = RecordDocument(answer)
+        XCTAssertEqual(cleared.ledger.map(\.speaker.label), ["Speaker 1", "You", "You", "Speaker 2", "Speaker 3", "Them"])
+        XCTAssertEqual(cleared.people, ["Speaker 1", "Speaker 2", "Speaker 3", "Them"])
     }
 
     func testNotesComeFirstEachFilledInWithWhatWasSaidAndPromisedThen() throws {
@@ -350,7 +372,7 @@ final class RecordDocumentTests: XCTestCase {
             "said Alex @0", "said You @486",
             "owed Send the revised plan @2822", "owed Share the budget @10000",
             "note Beta: small group @15000",
-            "said Speaker 1 @10000", "said Speaker 2 @18278",
+            "said Speaker 2 @10000", "said Speaker 3 @18278",
         ])
     }
 
@@ -358,7 +380,7 @@ final class RecordDocumentTests: XCTestCase {
         let doc = try XCTUnwrap(document())
         XCTAssertEqual(doc.owed.map(\.id), ["c2", "c3"], "the merged duplicate is folded away")
         XCTAssertEqual(doc.owed[0].citedLine?.text, "I'll send the revised plan by Friday.")
-        XCTAssertEqual(doc.owed[1].citedLine?.speaker, .them("Speaker 1"))
+        XCTAssertEqual(doc.owed[1].citedLine?.speaker, .them("Speaker 2"))
         XCTAssertTrue(doc.owed[1].done)
         XCTAssertEqual(doc.summary?.headline.map { String($0.characters) }, "Launch moves to the 14th")
         XCTAssertEqual(doc.chunks.count, 2)
@@ -387,7 +409,8 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertEqual((list["before"] as? [String: Any])?["started_at_unix_ms"] as? Int, 7)
         XCTAssertNil(command(CoreCommand.recordsList(kind: nil, before: nil, limit: 5, ref: "q2").json)["kind"])
         for c in [CoreCommand.recordsSearch(query: "x", limit: 1, ref: "a"), .recordOpen(record: "r", ref: "b"),
-                  .libraryStats(sinceUnixMs: 0, ref: "c")] {
+                  .libraryStats(sinceUnixMs: 0, ref: "c"), .speakerName(record: "r", speaker: "spk1", name: "A", ref: "d"),
+                  .recordDelete(record: "r", ref: "e")] {
             XCTAssertNotNil(command(c.json)["id"] as? String, c.name)
         }
     }
@@ -510,6 +533,251 @@ final class LibraryModelTests: XCTestCase {
         library.apply([event(#"{"type":"commitment.updated","commitment":"c2","done":true}"#)])
         XCTAssertEqual(sent().count, reads + 1)
         XCTAssertEqual(command(sent().last!)["cmd"] as? String, "record.open")
+    }
+
+    /// Naming a far-end speaker sends what the user typed, trimmed (empty clears the name), for the
+    /// open record and that speaker's label; nothing when it did not change. The answer reads the
+    /// record again (and Today's last meeting, when it is that one), so the name shows in the
+    /// transcript and the header; a failure is said, never dropped.
+    func testNamingASpeakerSendsTheNameAndTheRecordIsReadAgain() throws {
+        let (library, sent) = model()
+        library.nameSpeaker("spk1", "Robin")
+        XCTAssertTrue(sent().isEmpty, "no record open: nothing to name")
+        library.open("r1")
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+
+        let before = sent().count
+        library.nameSpeaker("spk1", "  Robin Example \n")
+        let named = command(sent().last!)
+        XCTAssertEqual(sent().count, before + 1)
+        XCTAssertEqual(named["cmd"] as? String, "speaker.name")
+        XCTAssertEqual(named["record"] as? String, "r1")
+        XCTAssertEqual(named["speaker"] as? String, "spk1")
+        XCTAssertEqual(named["name"] as? String, "Robin Example")
+        let id = try XCTUnwrap(named["id"] as? String)
+
+        // Unchanged: the same name, an unnamed speaker left empty, a label the record lacks, You.
+        library.nameSpeaker("spk0", " Alex ")
+        library.nameSpeaker("spk2", "   ")
+        library.nameSpeaker("spk9", "Sam")
+        library.nameSpeaker("", "Sam")
+        XCTAssertEqual(sent().count, before + 1, "\(sent()[before...])")
+
+        // On one line: a pasted line break or tab is a space.
+        library.nameSpeaker("spk2", "Sam\n\tExample\u{0}")
+        XCTAssertEqual(command(sent().last!)["name"] as? String, "Sam Example")
+        XCTAssertEqual(LibraryModel.oneLine(" 👨‍👩‍👧 Ana  María "), "👨‍👩‍👧 Ana María", "emoji and accents stay")
+        // Counted as the core counts: Unicode scalars, not what reads as one character.
+        XCTAssertEqual(LibraryModel.nameLength(" 👨‍👩‍👧 Ana "), 9)
+        XCTAssertEqual(LibraryModel.nameLength("e\u{301}"), 2)
+
+        // Cleared: an empty name.
+        library.nameSpeaker("spk0", "")
+        let cleared = command(sent().last!)
+        XCTAssertEqual(cleared["speaker"] as? String, "spk0")
+        XCTAssertEqual(cleared["name"] as? String, "")
+
+        let reads = sent().count
+        library.apply([event(#"{"type":"speaker.named","record":"r1","speaker":"spk1","named":true,"ref":"\#(id)"}"#)])
+        XCTAssertEqual(command(sent().last!)["cmd"] as? String, "record.open")
+        XCTAssertEqual(sent().count, reads + 1)
+
+        // Another record's speaker: the open one stays as it is.
+        library.apply([event(#"{"type":"speaker.named","record":"r7","speaker":"spk1","named":true}"#)])
+        XCTAssertEqual(sent().count, reads + 1)
+
+        // A failure is said, and the next try clears it.
+        library.nameSpeaker("spk2", "Zebra")
+        let failedID = requestID(sent().last!)
+        guard case .commandFailed(let failure) = event(
+            #"{"type":"command.failed","command":"speaker.name","id":"\#(failedID)","message":"the library: disk I/O error"}"#)
+        else { return XCTFail("not a failure") }
+        XCTAssertTrue(library.handles(failure))
+        library.apply([.commandFailed(failure)])
+        XCTAssertEqual(library.namingFailure, "the library: disk I/O error")
+        library.nameSpeaker("spk2", "Zebra Quartz")
+        XCTAssertNil(library.namingFailure)
+    }
+
+    /// A rename sent before the record was read again is what an unchanged name is compared with:
+    /// renaming straight back is sent, not taken for "unchanged" against the stale record. A
+    /// failure forgets what was sent, and another record starts clean.
+    func testNamingComparesWithWhatWasLastSentAndAFailureIsForgottenWithTheRecord() throws {
+        let (library, sent) = model()
+        library.open("r1")
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        let names = { sent().map(command).filter { $0["cmd"] as? String == "speaker.name" }.map { $0["name"] as? String } }
+
+        library.nameSpeaker("spk0", "Alexandra")
+        library.nameSpeaker("spk0", "Alex")
+        XCTAssertEqual(names(), ["Alexandra", "Alex"], "back to the record's name, which is stale by now")
+        library.nameSpeaker("spk0", "Alex")
+        XCTAssertEqual(names().count, 2, "unchanged from what was last sent")
+
+        library.nameSpeaker("spk1", "Robin")
+        library.apply([event(#"{"type":"command.failed","command":"speaker.name","id":"\#(requestID(sent().last!))","message":"not found"}"#)])
+        XCTAssertEqual(library.namingFailure, "not found")
+        library.nameSpeaker("spk1", "Robin")
+        XCTAssertEqual(names().last, "Robin", "a failed name is tried again")
+        XCTAssertNil(library.namingFailure)
+
+        library.apply([event(#"{"type":"command.failed","command":"speaker.name","id":"\#(requestID(sent().last!))","message":"not found"}"#)])
+        library.open("r2")
+        XCTAssertNil(library.namingFailure, "another record's failure is not this one's")
+    }
+
+    /// Today shows the last meeting whole: a speaker named in it is read again there too.
+    func testNamingASpeakerOfTodaysLastMeetingReadsItAgain() throws {
+        let (library, sent) = model()
+        library.refreshToday()
+        let listID = command(sent()[0])["id"] as! String
+        library.apply([event(#"{"type":"library.records","ref":"\#(listID)","more":false,"kind":"meeting","records":[\#(row("r1", start: 5_000, end: 6_000))]}"#)])
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        XCTAssertEqual(library.lastMeeting?.record.record, "r1")
+        let before = sent().count
+        library.apply([event(#"{"type":"speaker.named","record":"r1","speaker":"spk1","named":true}"#)])
+        let reread = command(sent().last!)
+        XCTAssertEqual(sent().count, before + 1)
+        XCTAssertEqual(reread["cmd"] as? String, "record.open")
+        XCTAssertEqual(reread["record"] as? String, "r1")
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: reread["id"] as! String))])
+        XCTAssertEqual(library.lastMeeting?.record.record, "r1", "read into Today's slot")
+    }
+
+    /// Deleting a record: asked for by id, with an id of its own. When the core says it is gone, it
+    /// leaves the list and the matches; the selection moves to the record below it (the one above
+    /// when it was the last), Today is read again (its last meeting may be the one that went), and
+    /// what deleting left behind is said. A failure is said and nothing moves.
+    func testADeletedRecordLeavesTheListAndTheSelectionMovesOn() throws {
+        let (library, sent) = model()
+        library.refreshList()
+        library.apply([event(#"""
+        {"type":"library.records","ref":"\#(requestID(sent().last!))","more":false,"records":[
+          \#(row("r3", start: 3_000, end: 4_000)), \#(row("r1", start: 2_000, end: 3_000)), \#(row("r0", start: 1_000, end: 2_000))]}
+        """#)])
+        library.open("r1")
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        XCTAssertNotNil(library.document)
+
+        library.deleteRecord("r1")
+        let asked = command(sent().last!)
+        XCTAssertEqual(asked["cmd"] as? String, "record.delete")
+        XCTAssertEqual(asked["record"] as? String, "r1")
+        let id = try XCTUnwrap(asked["id"] as? String)
+        XCTAssertEqual(library.records.map(\.record), ["r3", "r1", "r0"], "nothing moves before the core says so")
+
+        // Refused (still live): said, and the record stays.
+        guard case .commandFailed(let refused) = event(
+            #"{"type":"command.failed","command":"record.delete","id":"\#(id)","message":"record r1 is still being finished"}"#)
+        else { return XCTFail("not a failure") }
+        XCTAssertTrue(library.handles(refused))
+        library.apply([.commandFailed(refused)])
+        XCTAssertEqual(library.deleteFailure, "record r1 is still being finished")
+        XCTAssertEqual(library.selected, "r1")
+
+        library.deleteRecord("r1")
+        XCTAssertNil(library.deleteFailure, "a new try clears it")
+        let again = requestID(sent().last!)
+        let before = sent().count
+        library.apply([event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true,"ref":"\#(again)"}"#)])
+        XCTAssertEqual(library.records.map(\.record), ["r3", "r0"])
+        XCTAssertEqual(library.selected, "r0", "the record below it")
+        XCTAssertNil(library.document, "until r0 is read")
+        XCTAssertNil(library.deletionNote, "nothing left behind")
+        let followed = sent()[before...].map(command)
+        XCTAssertEqual(followed.filter { $0["cmd"] as? String == "record.open" }.map { $0["record"] as? String }, ["r0"],
+                       "one read, of the record below")
+        XCTAssertTrue(followed.contains { $0["cmd"] as? String == "library.stats" }, "Today's counts")
+        XCTAssertTrue(followed.contains { $0["cmd"] as? String == "records.list" && $0["kind"] as? String == "meeting" },
+                      "Today's last meeting")
+
+        // The last one: the selection moves up. Left-behind words or audio are said.
+        library.apply([event(#"{"type":"record.deleted","record":"r0","kind":"meeting","audio_left":true,"scrubbed":false}"#)])
+        XCTAssertEqual(library.selected, "r3")
+        let note = try XCTUnwrap(library.deletionNote)
+        XCTAssertTrue(note.contains("words") && note.contains("recording"), note)
+        // The only one: nothing is selected.
+        library.apply([event(#"{"type":"record.deleted","record":"r3","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        XCTAssertTrue(library.records.isEmpty)
+        XCTAssertNil(library.selected)
+        XCTAssertNil(library.document)
+        XCTAssertNil(library.deletionNote, "this one left nothing")
+    }
+
+    /// Deleted from the search: the selection moves among the matches the column shows, never to
+    /// a record of the unsearched list. A failure that arrives once another record is open is not
+    /// that record's to show. What a deletion left behind is said until the next record is opened,
+    /// and Today waits for its next last meeting rather than reading as having none.
+    func testDeletingFromTheSearchMovesAmongTheMatches() throws {
+        let (library, sent) = model()
+        library.refreshList()
+        library.apply([event(#"""
+        {"type":"library.records","ref":"\#(requestID(sent().last!))","more":false,"records":[
+          \#(row("r9", start: 9_000, end: 9_500)), \#(row("r1", start: 5_000, end: 6_000))]}
+        """#)])
+        library.query = "budget"
+        library.apply([event(#"""
+        {"type":"library.search","ref":"\#(requestID(sent().last!))","query":"budget","hits":[
+          {"record":"r2","title":"A","started_at_unix_ms":5000,"start_ms":0,"snippet":"budget"},
+          {"record":"r2","title":"A","started_at_unix_ms":5000,"start_ms":9000,"snippet":"budget again"},
+          {"record":"r4","title":"B","started_at_unix_ms":4000,"start_ms":0,"snippet":"the budget"}]}
+        """#)])
+        library.open("r2")
+        library.apply([event(#"{"type":"record.deleted","record":"r2","kind":"meeting","audio_left":true,"scrubbed":true}"#)])
+        XCTAssertEqual(library.hits.map(\.record), ["r4"])
+        XCTAssertEqual(library.selected, "r4", "the next match, not r9 from the list")
+        XCTAssertNotNil(library.deletionNote)
+
+        library.deleteRecord("r4")
+        let id = requestID(sent().last!)
+        library.open("r1")
+        XCTAssertNil(library.deletionNote, "said until the next record is opened")
+        library.apply([event(#"{"type":"command.failed","command":"record.delete","id":"\#(id)","message":"record r4 is still being finished"}"#)])
+        XCTAssertNil(library.deleteFailure, "r4's failure is not r1's to show")
+    }
+
+    func testTodayWaitsForItsNextLastMeeting() throws {
+        let (library, sent) = model()
+        library.refreshToday()
+        let listID = command(sent()[0])["id"] as! String
+        library.apply([event(#"{"type":"library.records","ref":"\#(listID)","more":false,"kind":"meeting","records":[\#(row("r1", start: 5_000, end: 6_000))]}"#)])
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        library.apply([event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        XCTAssertNil(library.lastMeeting)
+        XCTAssertEqual(library.lastMeetingLoad, .loading, "not \"no meetings yet\" while it is asked for again")
+    }
+
+    /// A record deleted that is not the open one: the open one stays, and a match in it goes from
+    /// the search; Today's last meeting, if it was that one, is gone.
+    func testDeletingAnotherRecordKeepsTheOpenOneAndDropsItsMatches() throws {
+        let (library, sent) = model()
+        library.refreshToday()
+        let listID = command(sent()[0])["id"] as! String
+        library.apply([event(#"{"type":"library.records","ref":"\#(listID)","more":false,"kind":"meeting","records":[\#(row("r1", start: 5_000, end: 6_000))]}"#)])
+        library.apply([event(recordAnswer.replacingOccurrences(of: "REQ", with: requestID(sent().last!)))])
+        XCTAssertEqual(library.lastMeeting?.record.record, "r1")
+        library.query = "budget"
+        library.apply([event(#"""
+        {"type":"library.search","ref":"\#(requestID(sent().last!))","query":"budget","hits":[
+          {"record":"r1","title":"Plan","started_at_unix_ms":5000,"start_ms":10000,"snippet":"the budget"},
+          {"record":"r2","title":"Other","started_at_unix_ms":4000,"start_ms":0,"snippet":"budget too"}]}
+        """#)])
+        library.open("r2")
+        library.apply([event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        XCTAssertEqual(library.hits.map(\.record), ["r2"])
+        XCTAssertEqual(library.selected, "r2")
+        XCTAssertNil(library.lastMeeting, "Today's last meeting went; it is asked for again")
+    }
+
+    /// What the confirmation says goes, by kind: everything the record holds, and that it can't be
+    /// undone; an imported file stays where the user keeps it.
+    func testTheConfirmationSaysWhatGoes() throws {
+        let rows = rows(#"{"type":"library.records","more":false,"records":[\#(row("m", start: 1)), \#(row("d", "dictation", start: 1)), \#(row("f", "file_import", start: 1))]}"#)
+        let says = rows.map(LibraryModel.deletionWarning(for:))
+        XCTAssertTrue(says[0].contains("audio") && says[0].contains("transcript") && says[0].contains("notes") && says[0].contains("owed"), says[0])
+        XCTAssertTrue(says.allSatisfy { $0.contains("can't be undone") }, "\(says)")
+        XCTAssertTrue(says[2].contains("file you imported stays"), says[2])
+        XCTAssertFalse(says[1].contains("audio"), "a dictation keeps no audio: \(says[1])")
     }
 
     /// Inkwell 0.2's dictations came over: the list and the stats are read again.

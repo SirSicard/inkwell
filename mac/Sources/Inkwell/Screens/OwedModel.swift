@@ -284,9 +284,9 @@ final class OwedModel {
             items = listed.items
             suggestions = Self.suggestions(listed.items)
             loaded = true
-        case .commitmentUpdated, .meetingCommitments, .meetingLooksDone, .librarySwept:
-            // A promise changed, a meeting filed new ones or found some done, or old ones went:
-            // list again.
+        case .commitmentUpdated, .meetingCommitments, .meetingLooksDone, .librarySwept, .recordDeleted:
+            // A promise changed, a meeting filed new ones or found some done, or old ones (or a
+            // record the user deleted) went: list again.
             load()
         case .commandFailed(let failed) where ["commitment.set_done", "commitment.not_yet"].contains(failed.command):
             // Nothing to undo: the core did not take it.

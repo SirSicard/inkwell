@@ -35,6 +35,8 @@ struct LedgerLine: Identifiable, Equatable, Sendable {
     /// Its index in the transcript.
     let id: Int
     let speaker: Speaker
+    /// The diarizer's label, on a far-end line that has one: the speaker the user can name.
+    let label: String?
     let startMs: Int64
     let endMs: Int64
     let text: String
@@ -100,6 +102,21 @@ struct SummaryCitation: Equatable, Sendable, Identifiable {
     let citedLine: LedgerLine?
 }
 
+/// A far-end speaker the diarizer told apart, which the user can name.
+struct FarSpeaker: Identifiable, Equatable, Sendable {
+    /// The diarizer's label (`speaker.name` names it by this).
+    let label: String
+    /// The name the user gave, if any.
+    let name: String?
+    /// Its place in the order the far end's speakers first speak, from 1: "Speaker N" while it
+    /// has no name, kept when it has one.
+    let number: Int
+
+    var id: String { label }
+
+    var display: String { name ?? "Speaker \(number)" }
+}
+
 struct RecordDocument: Equatable, Sendable {
     let record: RecordRow
     let ledger: [LedgerLine]
@@ -112,6 +129,8 @@ struct RecordDocument: Equatable, Sendable {
     let owed: [OwedEntry]
     /// The people on the far end, as named or numbered.
     let people: [String]
+    /// The far end's diarized speakers, in the order they first speak.
+    let speakers: [FarSpeaker]
     let chunks: [TimelineChunk]
     /// What the player cannot vouch for: the screen shows each (beside the ledger's status and in
     /// the player bar), so an estimated or partial recording never plays with a precise one's
@@ -147,22 +166,25 @@ struct RecordDocument: Equatable, Sendable {
         record = answer.record
         isFinal = answer.record.revision >= 2
         let names = Dictionary(answer.speakers.map { ($0.speaker, $0.name) }, uniquingKeysWith: { a, _ in a })
-        // Unnamed diarized speakers are numbered in the order they first speak.
-        var numbered: [String: Int] = [:]
+        // Diarized speakers are numbered in the order they first speak, named or not: naming one
+        // never renumbers the others, and clearing a name brings back the same "Speaker N".
+        var speakers: [FarSpeaker] = []
         for segment in answer.segments where segment.channel == .far {
-            if let label = segment.speaker, names[label] == nil, numbered[label] == nil {
-                numbered[label] = numbered.count + 1
+            if let label = segment.speaker, !speakers.contains(where: { $0.label == label }) {
+                speakers.append(FarSpeaker(label: label, name: names[label], number: speakers.count + 1))
             }
         }
+        self.speakers = speakers
         func speaker(_ segment: RecordSegment) -> Speaker {
             guard segment.channel == .far else { return answer.record.kind == .fileImport ? .recording : .you }
             guard let label = segment.speaker else { return .them("Them") }
-            if let name = names[label] { return .them(name) }
-            return .them("Speaker \(numbered[label] ?? 1)")
+            return .them(speakers.first { $0.label == label }?.display ?? "Them")
         }
         let ledger = answer.segments.enumerated().map { index, segment in
             LedgerLine(
-                id: index, speaker: speaker(segment), startMs: segment.startMs, endMs: segment.endMs,
+                id: index, speaker: speaker(segment),
+                label: segment.channel == .far ? segment.speaker : nil,
+                startMs: segment.startMs, endMs: segment.endMs,
                 text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         self.ledger = ledger
@@ -215,6 +237,11 @@ struct RecordDocument: Equatable, Sendable {
         }
         if playbackCaveats.timelineEstimated { parts.append("timing estimated") }
         return parts.joined(separator: " · ")
+    }
+
+    /// The far-end speaker with the diarizer's label `label`, if the transcript has one.
+    func speaker(labelled label: String) -> FarSpeaker? {
+        speakers.first { $0.label == label }
     }
 
     /// The ledger line to highlight while the playhead is at `ms`: the last line that has started.

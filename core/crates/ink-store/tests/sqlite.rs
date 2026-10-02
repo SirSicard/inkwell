@@ -990,6 +990,14 @@ fn superseded_and_replaced_text_leaves_no_trace_on_disk() {
             }),
         ),
         (
+            "zqxclearedspeakermarker",
+            Box::new(|s, id| {
+                s.set_speaker_name(id, &SpeakerId("spk1".into()), "zqxclearedspeakermarker")
+                    .unwrap()
+            }),
+            Box::new(|s, id| s.clear_speaker_name(id, &SpeakerId("spk1".into())).unwrap()),
+        ),
+        (
             "zqxoldremovedmarker",
             Box::new(|s, id| {
                 s.save_removed(id, &[seg(Channel::Mic, 0, "zqxoldremovedmarker")])

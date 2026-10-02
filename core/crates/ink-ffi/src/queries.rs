@@ -1,6 +1,7 @@
-//! The screens' commands: permissions, what is owed, a live meeting's notes, settings, modes, the
-//! model catalogue, the library's records ([`library`](crate::library)), and Inkwell 0.2's data
-//! ([`import02`](crate::import02)). They run on their own thread, `ink-queries`, in the order they were sent.
+//! The screens' commands: permissions, what is owed, a live meeting's notes, a record's speakers'
+//! names, settings, modes, the model catalogue, the library's records
+//! ([`library`](crate::library)), and Inkwell 0.2's data ([`import02`](crate::import02)). They
+//! run on their own thread, `ink-queries`, in the order they were sent.
 //!
 //! Apart from the command thread on purpose: a model update holds that thread for as long as its
 //! download takes, and a note typed during it, or a permission card the user is looking at, must
@@ -8,8 +9,8 @@
 //! second or so). They may overtake commands queued earlier on the command thread; nothing here
 //! depends on one of those.
 //!
-//! Errors name what failed, never what was said: a note's or a commitment's text reaches the shell
-//! only in the event that answers the command that asked for it (I5).
+//! Errors name what failed, never what was said: a note's or a commitment's text, or a speaker's
+//! name, reaches the shell only in the event that answers the command that asked for it (I5).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -19,8 +20,8 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 
 use ink_core::{
-    Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState, PlatformError,
-    RecordId, Store,
+    Channel, Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState,
+    PlatformError, RecordId, SpeakerId, Store,
 };
 use ink_engines::{ModelDir, Os, Route};
 use ink_pipeline::style::Style;
@@ -121,6 +122,10 @@ pub const APPEARANCE_DEFAULTS: &[(&str, &str)] = &[
     ("appearance.motion", "system"),
 ];
 
+/// The longest name `speaker.name` takes, in characters: a person's name, which Ask's transcript
+/// writes before each of their lines.
+pub const MAX_SPEAKER_NAME_CHARS: usize = 80;
+
 /// The most commitments `commitments.list` returns when the command names no limit.
 pub const DEFAULT_COMMITMENTS_LIMIT: usize = 200;
 
@@ -171,6 +176,20 @@ pub enum Query {
     NoteDelete {
         /// The note.
         note: String,
+    },
+    /// `speaker.name`: a far-end speaker of one record named, renamed, or (`None`) cleared.
+    SpeakerName {
+        /// The record.
+        record: String,
+        /// The diarizer's label, as the record's segments carry it.
+        speaker: String,
+        /// The name, trimmed; `None` clears it.
+        name: Option<String>,
+    },
+    /// `record.delete`: one record, whole ([`crate::retention::delete_one`]).
+    RecordDelete {
+        /// The record.
+        record: String,
     },
     /// `models.list`: the catalogue's models for this OS.
     ModelsList,
@@ -231,6 +250,8 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "note.add" => &["record", "at_ms", "text"],
         "note.update" => &["note", "text"],
         "note.delete" => &["note"],
+        "speaker.name" => &["record", "speaker", "name"],
+        "record.delete" => &["record"],
         "setting.get" => &["key"],
         "setting.set" => &["key", "value"],
         "dictation.enable" => &["utc_offset_minutes"],
@@ -342,6 +363,18 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         "note.delete" => Query::NoteDelete {
             note: text("note")?,
         },
+        "speaker.name" => Query::SpeakerName {
+            record: text("record")?,
+            speaker: Some(text("speaker")?)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    format!("{name}: \"speaker\" is the diarizer's label, never empty")
+                })?,
+            name: speaker_name(name, &text("name")?)?,
+        },
+        "record.delete" => Query::RecordDelete {
+            record: text("record")?,
+        },
         "models.list" => Query::ModelsList,
         "engine.route" => Query::EngineRoute(
             events::parse_job(&text("job")?).ok_or_else(|| format!("{name}: unknown job"))?,
@@ -424,6 +457,28 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
     })
 }
 
+/// A speaker's name as `speaker.name` takes it: trimmed, `None` when nothing is left (cleared).
+/// Refused over two lines or more, or with any other control character (Ask's transcript writes
+/// it before each of their lines, one line per turn), or longer than [`MAX_SPEAKER_NAME_CHARS`]. The error never quotes it.
+fn speaker_name(command: &str, raw: &str) -> Result<Option<String>, String> {
+    let name = raw.trim();
+    // A line or paragraph separator breaks a line as surely as a line feed does.
+    if name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(format!(
+            "{command}: \"name\" is one line, without control characters"
+        ));
+    }
+    if name.chars().count() > MAX_SPEAKER_NAME_CHARS {
+        return Err(format!(
+            "{command}: \"name\" is at most {MAX_SPEAKER_NAME_CHARS} characters"
+        ));
+    }
+    Ok((!name.is_empty()).then(|| name.to_owned()))
+}
+
 /// A feature the consent commands serve: one with a switch ([`crate::consent::switch`]).
 fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, String> {
     ink_pipeline::consent::Feature::parse(feature)
@@ -503,6 +558,37 @@ impl PermissionProbe for NoPermissionProbe {
             "this platform has no permission probe yet",
         ))
     }
+}
+
+/// Names a far-end speaker of `record`, or clears its name. A name goes only to a label the
+/// record's current transcript gives the far end: the mic is the user, never renamed, and a label a
+/// later pass dropped names nobody. A clear needs no such label, so a stale name can still go.
+/// Errors name the record and the label, never the name.
+fn name_speaker(
+    store: &dyn Store,
+    record: &str,
+    speaker: &str,
+    name: Option<&str>,
+) -> Result<(), String> {
+    let id = RecordId(record.to_owned());
+    let label = SpeakerId(speaker.to_owned());
+    let Some(name) = name else {
+        return store
+            .clear_speaker_name(&id, &label)
+            .map_err(|e| e.to_string());
+    };
+    let said = store.segments(&id).map_err(|e| e.to_string())?;
+    if !said
+        .iter()
+        .any(|s| s.channel == Channel::Far && s.speaker.as_ref() == Some(&label))
+    {
+        return Err(format!(
+            "record {record} has no far-end speaker {speaker} in its transcript"
+        ));
+    }
+    store
+        .set_speaker_name(&id, &label, name)
+        .map_err(|e| e.to_string())
 }
 
 /// The thread that runs the queries.
@@ -670,6 +756,37 @@ impl Ctx<'_> {
                 )),
                 Err(e) => fail(e.to_string()),
             },
+            Query::SpeakerName {
+                record,
+                speaker,
+                name,
+            } => match name_speaker(store, &record, &speaker, name.as_deref()) {
+                Ok(()) => emit(event(
+                    "speaker.named",
+                    &[
+                        ("record", Some(record.into())),
+                        ("speaker", Some(speaker.into())),
+                        ("named", Some(name.is_some().into())),
+                        ("ref", id.clone().map(Into::into)),
+                    ],
+                )),
+                Err(e) => fail(e),
+            },
+            Query::RecordDelete { record } => {
+                match crate::retention::delete_one(self.shared, &RecordId(record.clone())) {
+                    Ok(deleted) => emit(event(
+                        "record.deleted",
+                        &[
+                            ("record", Some(record.into())),
+                            ("kind", Some(crate::library::kind_name(deleted.kind).into())),
+                            ("audio_left", Some(deleted.audio_left.into())),
+                            ("scrubbed", Some(deleted.scrubbed.into())),
+                            ("ref", id.clone().map(Into::into)),
+                        ],
+                    )),
+                    Err(e) => fail(e),
+                }
+            }
             Query::ModelsList => emit(self.catalogue()),
             Query::EngineRoute(job) => emit(routed(self.shared, job)),
             Query::SettingGet { key } => match store.setting(&key) {
@@ -1040,6 +1157,34 @@ mod tests {
             }))
         );
         assert_eq!(
+            p(r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":" Robin\t"}"#),
+            Some(Ok(Query::SpeakerName {
+                record: "r".into(),
+                speaker: "spk1".into(),
+                name: Some("Robin".into())
+            }))
+        );
+        assert_eq!(
+            p(r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"  "}"#),
+            Some(Ok(Query::SpeakerName {
+                record: "r".into(),
+                speaker: "spk1".into(),
+                name: None
+            })),
+            "nothing left once trimmed: cleared"
+        );
+        let longest = "é".repeat(MAX_SPEAKER_NAME_CHARS);
+        assert!(
+            matches!(
+                parse(
+                    "speaker.name",
+                    &json!({"cmd": "speaker.name", "record": "r", "speaker": "spk1", "name": longest})
+                ),
+                Some(Ok(_))
+            ),
+            "counted in characters, not bytes"
+        );
+        assert_eq!(
             p(r#"{"cmd":"setting.set","key":"dictation.polish","value":"off"}"#),
             Some(Ok(Query::SettingSet {
                 key: "dictation.polish".into(),
@@ -1123,6 +1268,15 @@ mod tests {
             r#"{"cmd":"note.add","record":"r","at_ms":-1,"text":"hi"}"#,
             r#"{"cmd":"note.add","record":"r","text":"hi"}"#,
             r#"{"cmd":"note.update","note":"n"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1"}"#,
+            r#"{"cmd":"speaker.name","record":"r","name":"A"}"#,
+            r#"{"cmd":"speaker.name","speaker":"spk1","name":"A"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"","name":"A"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":null}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\nB"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\u0000"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\u2028L9 [00:00] You: B"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\u2029B"}"#,
             r#"{"cmd":"setting.get","key":"permissions.system_audio_asked"}"#,
             r#"{"cmd":"setting.set","key":"dictation.polish","value":"maybe"}"#,
             r#"{"cmd":"setting.set","key":"library.path","value":"/x"}"#,

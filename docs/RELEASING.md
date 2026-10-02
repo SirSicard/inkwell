@@ -191,12 +191,20 @@ spctl -a -vv -t open --context context:primary-signature ~/Downloads/inkwell-dry
 ### Cut it
 
 ```bash
-# 0. On an up-to-date main: the Rust notices match its Cargo.lock and a fresh run, so the release
-#    ships what About lists. Fetches the crates it has not got; fails naming any crate whose
-#    notice is missing or stale.
+# 0. One pull request, merged to main: the CHANGELOG heading (## [Unreleased] -> ## [X.Y.Z] - date)
+#    and the core's version. The app's version comes from the tag (build-mac.sh writes it into the
+#    bundle, the Windows build into the app); the core's is core/Cargo.toml's [workspace.package]
+#    version, which About shows as "core X.Y.Z" on both. Set it to X.Y.Z, then the lock and the
+#    Rust notices, which record the lock's fingerprint:
+(cd core && cargo update --workspace)
+mac/scripts/rust-notices.sh
+(cd core && cargo run -p ink-ffi --bin ink-notices -- --windows)
+# 1. On an up-to-date main: the Rust notices match its Cargo.lock and a fresh run, so the release
+#    ships what About lists (fetches the crates it has not got; fails naming any crate whose
+#    notice is missing or stale), and the core says the release's version. Both tags' first step
+#    runs the second check too (core-version.sh), and stops there when it fails.
 mac/scripts/rust-notices.sh --check
-# 1. The CHANGELOG heading: ## [Unreleased] -> ## [X.Y.Z] - date, merged to main. The version
-#    itself comes from the tag: build-mac.sh writes it into the bundle.
+mac/scripts/core-version.sh X.Y.Z
 # 2. Tag main and push the tag. Only v1.X.Y exactly (no suffix: it is also CFBundleVersion, which
 #    Sparkle compares); a pre-release is a dry run.
 git fetch origin && git tag -a v1.X.Y -m "Inkwell X.Y.Z" origin/main && git push origin v1.X.Y
@@ -282,6 +290,8 @@ Before the tag:
       the rows of `THIRD_PARTY.md` that point into `src/` or `src-tauri/`, and the matching
       exception in `NoticesTests`; the scripts only 0.2 uses (`scripts/download-models.*`,
       `scripts/gen-model-chart.py`); and `TODO.md`, the 0.2 work list. `docs/legacy/` stays.
+- [x] The core at 1.0.0 (`core/Cargo.toml`), so About says "core 1.0.0" on both platforms;
+      `mac/scripts/core-version.sh 1.0.0` passes.
 - [ ] The README rewritten for 1.0.
 - [ ] The Windows app ready for the same release, through its own chain.
 - [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
@@ -403,6 +413,9 @@ What the checks guarantee:
   binary allowed to need the loader when it loads; the core checks the diarizer loads before its
   first call (ink-engines' `src/nemo.rs`).
 - **It is x64's.** `pack.ps1` refuses an `Inkwell.exe` or core built for another architecture.
+- **The core's version.** A tag waits, as the Mac's does, until `core/Cargo.toml` says the tag's
+  version, which About shows as the core's (`mac/scripts/core-version.sh`, the build job's step
+  after the version's); a dry run says so and goes on.
 - **Notices first.** A tag waits, as the Mac's does, for every notice written without its upstream
   file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
   included (`windows/scripts/release-version.sh`).

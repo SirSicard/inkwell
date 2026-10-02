@@ -6,8 +6,9 @@
 #   mac/scripts/release-version.sh dry-run 1.2.3   the dry run: X.Y.Z
 #
 # A release tag also waits until every licence notice written without its upstream file on hand
-# has been compared with it (notices-verified.sh); a dry run lists those still open, on stderr, and
-# goes on.
+# has been compared with it (notices-verified.sh), and until the core says the same version
+# (core-version.sh: About shows it); a dry run reports either, on stderr, and goes on.
+# INK_CORE_MANIFEST replaces core/Cargo.toml, for the tests.
 #
 # Only plain X.Y.Z, no suffix: the version is also the bundle's CFBundleVersion, which macOS
 # requires to be at most three integers, and which Sparkle compares to decide what is newer. A
@@ -34,8 +35,11 @@ esac
 if [ "$1" = tag ]; then
   /bin/bash "$here/notices-verified.sh" \
     || fail "a release tag needs every licence notice compared with its upstream file first (above)"
+  /bin/bash "$here/core-version.sh" "$version" \
+    || fail "a release tag needs the core at the release's version first (above)"
 else
   /bin/bash "$here/notices-verified.sh" --warn
+  /bin/bash "$here/core-version.sh" --warn "$version"
 fi
 echo "version=$version"
 # Apple silicon only: the core and the app are built for the runner's arm64.

@@ -388,6 +388,137 @@ fn a_live_meetings_notes_are_added_updated_and_deleted_and_matched_to_their_comm
     rig.finish();
 }
 
+/// The failed command after the first `before` failures.
+fn failure(rig: &Rig, before: usize) -> Value {
+    assert!(rig.events.wait_count("command.failed", before + 1, WAIT));
+    rig.events
+        .all()
+        .into_iter()
+        .filter(|e| e["type"] == "command.failed")
+        .nth(before)
+        .unwrap()
+}
+
+#[test]
+fn a_far_end_speaker_is_named_renamed_and_cleared_and_the_record_reads_the_name() {
+    let rig = rig("speakers");
+    let record = meeting(rig.store.as_ref(), None, 1_790_000_000_000);
+    let line = |channel, start_ms, speaker: Option<&str>| ink_core::Segment {
+        channel,
+        start_ms,
+        end_ms: start_ms + 900,
+        text: "one two three".into(),
+        speaker: speaker.map(|s| ink_core::SpeakerId(s.into())),
+    };
+    rig.store
+        .append_segments(
+            &record,
+            &[
+                line(Channel::Mic, 0, None),
+                line(Channel::Far, 1_000, Some("spk0")),
+                line(Channel::Far, 2_000, Some("spk1")),
+            ],
+        )
+        .unwrap();
+    let speakers = |n: usize| -> Value {
+        rig.ask(
+            json!({"cmd": "record.open", "record": record.0, "id": format!("open-{n}")}),
+            "library.record",
+            n,
+        )["speakers"]
+            .clone()
+    };
+
+    // Named: trimmed, and the name is not echoed (the record carries it, to whoever opens it).
+    let named = rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk1", "name": "  Robin Example ", "id": "name-1"}),
+        "speaker.named",
+        1,
+    );
+    assert_eq!(named["ref"], "name-1");
+    assert_eq!(named["record"], record.0.as_str());
+    assert_eq!(named["speaker"], "spk1");
+    assert_eq!(named["named"], true);
+    assert!(named.get("name").is_none(), "the name stays with the shell");
+    assert_eq!(
+        speakers(1),
+        json!([{"speaker": "spk1", "name": "Robin Example"}])
+    );
+
+    // Renamed.
+    rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk1", "name": "Sam Example", "id": "name-2"}),
+        "speaker.named",
+        2,
+    );
+    assert_eq!(
+        speakers(2),
+        json!([{"speaker": "spk1", "name": "Sam Example"}])
+    );
+
+    // Cleared, by an empty name (or one of spaces): numbered again.
+    let cleared = rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk1", "name": "   ", "id": "name-3"}),
+        "speaker.named",
+        3,
+    );
+    assert_eq!(cleared["named"], false);
+    assert_eq!(speakers(3), json!([]));
+    // Clearing a speaker who has no name is no error.
+    let again = rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": "", "id": "name-4"}),
+        "speaker.named",
+        4,
+    );
+    assert_eq!(again["named"], false);
+
+    // Refused when it runs, naming the command's id, never the name: a label the transcript's far
+    // end does not have (the mic is the user, and has none), or a record that is not there.
+    for (label, command) in [
+        (
+            "an unknown label",
+            json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk9", "name": "Zebra Quartz", "id": "bad-1"}),
+        ),
+        (
+            "no record",
+            json!({"cmd": "speaker.name", "record": "no-such-record", "speaker": "spk0", "name": "Zebra Quartz", "id": "bad-2"}),
+        ),
+    ] {
+        let before = rig.events.count("command.failed");
+        rig.core.command(&command.to_string()).unwrap();
+        let failed = failure(&rig, before);
+        assert_eq!(failed["command"], "speaker.name", "{label}");
+        assert_eq!(failed["id"], command["id"], "{label}");
+        let message = failed["message"].as_str().unwrap();
+        assert!(
+            !message.contains("Zebra"),
+            "{label}: an error never quotes the name: {message}"
+        );
+    }
+
+    // Refused as it is read, as every command whose fields are wrong: a name over two lines (it is
+    // written into Ask's transcript, one line per turn), one too long, a missing field, or one it
+    // does not take.
+    let long = "Zebra".repeat(ink_ffi::queries::MAX_SPEAKER_NAME_CHARS);
+    for command in [
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": "Zebra\nQuartz: hi"}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": long}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0"}),
+        json!({"cmd": "speaker.name", "record": record.0, "name": "Zebra"}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "", "name": "Zebra"}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": "Zebra", "colour": "red"}),
+    ] {
+        let refused = rig.core.command(&command.to_string()).unwrap_err();
+        assert!(refused.starts_with("speaker.name: "), "{refused}");
+        assert!(
+            !refused.contains("Zebra"),
+            "never quotes the name: {refused}"
+        );
+    }
+    assert!(rig.store.speaker_names(&record).unwrap().is_empty());
+    rig.finish();
+}
+
 #[test]
 fn shell_settings_are_whitelisted_and_round_trip() {
     let rig = rig("settings");

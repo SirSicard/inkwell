@@ -22,7 +22,7 @@ public static partial class RustNotices
     public const string Target = "x86_64-pc-windows-msvc";
     /// <summary>FNV-1a (64-bit) of the features, a line feed, the target, a line feed and
     /// core/Cargo.lock (line ends normalised) this was generated from.</summary>
-    public const string LockFingerprint = "1cfb57f209ff1f06";
+    public const string LockFingerprint = "55b222f5ed9dbcdc";
 
     /// <summary>Every crate, in name order.</summary>
     public static IReadOnlyList<RustCrateNotice> Crates { get; } =

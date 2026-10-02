@@ -198,6 +198,21 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       each with the command's "id" as "ref"; a failure is "command.failed" with that "id". So
  *       every answer can be matched to the line that sent it. The note's words are never echoed
  *       back.
+ *   {"cmd":"speaker.name","record":"<record id>","speaker":"spk1","name":"...","id":"<ref>"}
+ *       Names (or renames) a far-end speaker of a record: "speaker" is the diarizer's label, as
+ *       the record's segments carry it, and only a label its far end has (the mic is the user,
+ *       never renamed). The name is trimmed; an empty one clears it, and the speaker reads as
+ *       numbered again. One line, at most 80 characters. "speaker.named" (with the "id" as "ref",
+ *       and "named": false once cleared), or "command.failed"; the name is never echoed back.
+ *       record.open's "speakers" carries it, and Ask's transcript names that speaker by it.
+ *   {"cmd":"record.delete","record":"<record id>","id":"<ref>"}
+ *       Deletes one record whole, of any kind, as the retention setting deletes one: its
+ *       transcript, notes, summary, commitments, speaker names and search entries, its words
+ *       overwritten in the library's files, then its audio. "record.deleted" (with the "id" as
+ *       "ref"; "audio_left" when its audio stayed on disk, "scrubbed": false while another
+ *       process keeps the words in the database's log), or "command.failed": a record that is
+ *       not there, or one still live (a meeting being recorded, or whose final pass has not
+ *       finished). Only when the user asks, after a confirmation that it cannot be undone.
  *   {"cmd":"models.list"}
  *       "models.listed": the catalogue's models for this OS, their measured error rates and
  *       whether each is installed. Send engine.route for what serves a job now. A model the

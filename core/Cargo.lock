@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "ink-audio"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "assert_no_alloc",
  "hound",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "ink-bench"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "hound",
  "ink-audio",
@@ -660,14 +660,14 @@ dependencies = [
 
 [[package]]
 name = "ink-core"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "ink-core",
 ]
 
 [[package]]
 name = "ink-echo"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "aec3",
  "assert_no_alloc",
@@ -680,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "ink-engines"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "hound",
  "ink-audio",
@@ -696,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "ink-ffi"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "csbindgen",
  "hound",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "ink-llm"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "apple-native-keyring-store",
  "http",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "ink-pipeline"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "aho-corasick",
  "hound",
@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "ink-platform-mac"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "assert_no_alloc",
  "block2",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "ink-platform-win"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "assert_no_alloc",
  "ink-audio",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "ink-shader"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "naga",
  "serde_json",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "ink-store"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "getrandom",
  "ink-core",

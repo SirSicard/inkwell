@@ -306,10 +306,11 @@ pub fn summarize(
         );
         (parse_summary(&ask(llm, &request, cancel)?, true)?, 1)
     } else {
+        let labels = transcript::speaker_labels(segments, record.speaker_names);
         let line_len = |i: usize| {
-            segments.get(i).map_or(0, |s| {
-                transcript::render_line(i, s, record.speaker_names).len() + 1
-            })
+            segments
+                .get(i)
+                .map_or(0, |s| transcript::render_line(i, s, &labels).len() + 1)
         };
         let windows = cut_by_size(windows(segments, options), &line_len, options.window_chars);
         let total = windows.len();

@@ -364,6 +364,11 @@ impl Store for MemStore {
         Ok(())
     }
 
+    fn clear_speaker_name(&self, id: &RecordId, speaker: &SpeakerId) -> Result<(), StoreError> {
+        lock(&self.inner).data(id)?.speakers.remove(speaker);
+        Ok(())
+    }
+
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
         let mut inner = lock(&self.inner);
         Ok(inner

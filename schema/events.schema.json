@@ -203,6 +203,12 @@
       "$ref": "#/$defs/NoteDeleted"
     },
     {
+      "$ref": "#/$defs/SpeakerNamed"
+    },
+    {
+      "$ref": "#/$defs/RecordDeleted"
+    },
+    {
       "$ref": "#/$defs/ModelsListed"
     },
     {
@@ -2754,6 +2760,75 @@
       "required": [
         "type",
         "note"
+      ],
+      "additionalProperties": false
+    },
+    "SpeakerNamed": {
+      "type": "object",
+      "description": "A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The name stays with the shell that sent it: record.open carries it.",
+      "properties": {
+        "type": {
+          "const": "speaker.named"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record."
+        },
+        "speaker": {
+          "type": "string",
+          "description": "The diarizer's label."
+        },
+        "named": {
+          "type": "boolean",
+          "description": "Whether the speaker has a name now: false when it was cleared, and reads as numbered again."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "speaker",
+        "named"
+      ],
+      "additionalProperties": false
+    },
+    "RecordDeleted": {
+      "type": "object",
+      "description": "A record was deleted whole, in answer to record.delete: its transcript, notes, summary, commitments, speaker names and search entries, its words overwritten in the library's files as the retention setting deletes them, then its audio. The screens drop it.",
+      "properties": {
+        "type": {
+          "const": "record.deleted"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record that is gone."
+        },
+        "kind": {
+          "$ref": "#/$defs/RecordKind",
+          "description": "What it was."
+        },
+        "audio_left": {
+          "type": "boolean",
+          "description": "Its recorded audio is still on disk: it could not be removed, or its folder is outside the library and was left alone. The record itself is gone."
+        },
+        "scrubbed": {
+          "type": "boolean",
+          "description": "No copy of its words is left in the library's files. False, as for deleted_text_not_scrubbed, while another process reading the database keeps them in its log: the deletion is saved, and the library keeps trying; a dictation's or meeting's deleted_text_scrubbed says when it has. This answer counts as that change's report: each change reaches the shell once."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "kind",
+        "audio_left",
+        "scrubbed"
       ],
       "additionalProperties": false
     },

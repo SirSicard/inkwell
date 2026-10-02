@@ -627,6 +627,10 @@ fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store)
         nf
     );
     assert_eq!(store.speaker_names(&ghost), Err(StoreError::NotFound));
+    assert_eq!(
+        store.clear_speaker_name(&ghost, &SpeakerId("spk0".into())),
+        nf
+    );
     assert_eq!(store.save_removed(&ghost, &[seg(Channel::Mic, 0, "x")]), nf);
     assert_eq!(store.save_removed(&ghost, &[]), nf);
     assert_eq!(store.removed(&ghost), Err(StoreError::NotFound));
@@ -797,6 +801,41 @@ fn several_settings_are_written_together(store: &dyn Store) {
     assert_eq!(store.setting("b").unwrap().as_deref(), Some("set"));
     store.set_settings(&[]).unwrap();
     assert_eq!(store.setting("a").unwrap().as_deref(), Some("new"));
+}
+
+/// A cleared name goes, and only that speaker's: the speaker reads as unnamed again. Clearing a
+/// speaker that has no name changes nothing and is no error (the user cleared an empty field).
+fn a_cleared_speaker_name_goes_and_only_that_one(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let other = meeting(store, 2);
+    let s0 = SpeakerId("spk0".into());
+    let s1 = SpeakerId("spk1".into());
+    store.set_speaker_name(&id, &s0, "Guest").unwrap();
+    store.set_speaker_name(&id, &s1, "Host").unwrap();
+    store.set_speaker_name(&other, &s0, "Chair").unwrap();
+
+    store.clear_speaker_name(&id, &s0).unwrap();
+    assert_eq!(
+        store.speaker_names(&id).unwrap(),
+        vec![(s1.clone(), "Host".to_string())]
+    );
+    assert_eq!(
+        store.speaker_names(&other).unwrap(),
+        vec![(s0.clone(), "Chair".to_string())],
+        "the same label in another record keeps its name"
+    );
+
+    store.clear_speaker_name(&id, &s0).unwrap();
+    store
+        .clear_speaker_name(&id, &SpeakerId("spk7".into()))
+        .unwrap();
+    assert_eq!(store.speaker_names(&id).unwrap().len(), 1);
+
+    store.set_speaker_name(&id, &s0, "Guest again").unwrap();
+    assert_eq!(
+        store.speaker_names(&id).unwrap(),
+        vec![(s0, "Guest again".to_string()), (s1, "Host".to_string())]
+    );
 }
 
 /// Setting a value twice keeps the second; so do speaker names and summaries.
@@ -1350,6 +1389,7 @@ contract!(
     open_commitment_ties_keep_the_order_they_were_added,
     same_time_segments_and_notes_keep_a_stable_order,
     upserts_replace_the_previous_value,
+    a_cleared_speaker_name_goes_and_only_that_one,
     several_settings_are_written_together,
     search_follows_supersede_and_delete,
     removed_lines_are_kept_apart_from_the_transcript,

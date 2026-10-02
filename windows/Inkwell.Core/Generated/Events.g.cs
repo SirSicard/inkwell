@@ -109,6 +109,8 @@ public abstract record InkEvent
                 "note.added" => root.Deserialize(InkEventsJson.Default.NoteAdded)!,
                 "note.updated" => root.Deserialize(InkEventsJson.Default.NoteUpdated)!,
                 "note.deleted" => root.Deserialize(InkEventsJson.Default.NoteDeleted)!,
+                "speaker.named" => root.Deserialize(InkEventsJson.Default.SpeakerNamed)!,
+                "record.deleted" => root.Deserialize(InkEventsJson.Default.RecordDeleted)!,
                 "models.listed" => root.Deserialize(InkEventsJson.Default.ModelsListed)!,
                 "setting.value" => root.Deserialize(InkEventsJson.Default.SettingValue)!,
                 "consent.state" => root.Deserialize(InkEventsJson.Default.ConsentState)!,
@@ -243,6 +245,8 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(NoteAdded))]
 [JsonSerializable(typeof(NoteUpdated))]
 [JsonSerializable(typeof(NoteDeleted))]
+[JsonSerializable(typeof(SpeakerNamed))]
+[JsonSerializable(typeof(RecordDeleted))]
 [JsonSerializable(typeof(ModelsListed))]
 [JsonSerializable(typeof(SettingValue))]
 [JsonSerializable(typeof(ConsentState))]
@@ -3673,6 +3677,49 @@ public sealed record RecordAudio
 }
 
 /// <summary>
+/// A record was deleted whole, in answer to record.delete: its transcript, notes, summary,
+/// commitments, speaker names and search entries, its words overwritten in the library's files
+/// as the retention setting deletes them, then its audio. The screens drop it.
+/// </summary>
+public sealed record RecordDeleted : InkEvent
+{
+    /// <summary>
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    /// </summary>
+    [JsonPropertyName("audio_left")]
+    public required bool AudioLeft { get; init; }
+
+    /// <summary>
+    /// What it was.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public required RecordKind Kind { get; init; }
+
+    /// <summary>
+    /// The record that is gone.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// No copy of its words is left in the library's files. False, as for
+    /// deleted_text_not_scrubbed, while another process reading the database keeps them in its
+    /// log: the deletion is saved, and the library keeps trying; a dictation's or meeting's
+    /// deleted_text_scrubbed says when it has. This answer counts as that change's report: each
+    /// change reaches the shell once.
+    /// </summary>
+    [JsonPropertyName("scrubbed")]
+    public required bool Scrubbed { get; init; }
+}
+
+/// <summary>
 /// What produced a record: one dictation, a meeting (mic and far end), or an imported audio or
 /// video file.
 /// </summary>
@@ -4077,6 +4124,38 @@ public sealed record SpeakerName
     /// </summary>
     [JsonPropertyName("name")]
     public required string Name { get; init; }
+
+    /// <summary>
+    /// The diarizer's label.
+    /// </summary>
+    [JsonPropertyName("speaker")]
+    public required string Speaker { get; init; }
+}
+
+/// <summary>
+/// A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The
+/// name stays with the shell that sent it: record.open carries it.
+/// </summary>
+public sealed record SpeakerNamed : InkEvent
+{
+    /// <summary>
+    /// Whether the speaker has a name now: false when it was cleared, and reads as numbered
+    /// again.
+    /// </summary>
+    [JsonPropertyName("named")]
+    public required bool Named { get; init; }
+
+    /// <summary>
+    /// The record.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 
     /// <summary>
     /// The diarizer's label.

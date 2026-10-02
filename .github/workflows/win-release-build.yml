@@ -81,6 +81,21 @@ jobs:
             windows/scripts/release-version.sh "$KIND" "$INPUT_VERSION" | tee -a "$GITHUB_OUTPUT"
           fi
 
+      # The core says the version it is built as (About's "core X.Y.Z"): a tag waits until
+      # core/Cargo.toml has the tag's version, as the Mac's tag does (mac/scripts/release-version.sh
+      # runs the same check); a dry run says so and goes on.
+      - name: The core's version
+        shell: bash
+        env:
+          KIND: ${{ inputs.kind }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$KIND" = tag ]; then
+            mac/scripts/core-version.sh "$VERSION"
+          else
+            mac/scripts/core-version.sh --warn "$VERSION"
+          fi
+
       # A release is cut from main: a tag on a commit main does not contain stops here.
       - name: The tag is on main
         if: inputs.kind == 'tag'

@@ -388,6 +388,10 @@ pub trait Store: Send + Sync {
         name: &str,
     ) -> Result<(), StoreError>;
 
+    /// Clears a speaker's name in one record: it reads as unnamed again. A speaker without a name
+    /// is no error.
+    fn clear_speaker_name(&self, id: &RecordId, speaker: &SpeakerId) -> Result<(), StoreError>;
+
     /// A record's named speakers, ordered by id.
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError>;
 

@@ -120,6 +120,9 @@ final class StorageModel {
     let modelsDirectory: URL?
     private(set) var sizes: Sizes?
     @ObservationIgnored private var measuring = false
+    /// A measure was asked while one ran: that one may have walked past what changed, so another
+    /// follows it.
+    @ObservationIgnored private var again = false
 
     init(dataDirectory: URL?, modelsDirectory: URL?) {
         self.dataDirectory = dataDirectory
@@ -128,15 +131,40 @@ final class StorageModel {
 
     /// Measures off the main thread.
     func measure() {
-        guard !measuring, let data = dataDirectory else { return }
+        guard let data = dataDirectory else { return }
+        if measuring {
+            again = true
+            return
+        }
         measuring = true
         let models = modelsDirectory ?? data.appendingPathComponent("models", isDirectory: true)
         Task.detached(priority: .utility) {
             let sizes = Self.sizes(data: data, models: models)
             await MainActor.run { [weak self] in
-                self?.sizes = sizes
-                self?.measuring = false
+                guard let self else { return }
+                self.sizes = sizes
+                self.measuring = false
+                if self.again {
+                    self.again = false
+                    self.measure()
+                }
             }
+        }
+    }
+
+    /// Measures again when a model's files, or a record's recording, have changed (a model
+    /// installed, a record deleted): Settings measures as it appears, and a
+    /// download it started finishes while it is still showing (it once read "Models 0 bytes" over
+    /// 2.9 GB of installed models). Only once Settings has measured: nobody reads the sizes before.
+    func apply(_ event: InkEvent) {
+        guard sizes != nil || measuring else { return }
+        switch event {
+        case .modelUpdateFinished, .recordDeleted:
+            // A failed update too: it may have removed what it had downloaded. A deleted record
+            // took its recording with it.
+            measure()
+        default:
+            break
         }
     }
 
@@ -263,6 +291,7 @@ final class ScreenModels {
             theme.apply(event)
             cloud.apply(event)
             import02.apply(event)
+            storage.apply(event)
             if onboarding.showing {
                 // The first run offers its import step only when there is something to import.
                 import02.checkOnce()
