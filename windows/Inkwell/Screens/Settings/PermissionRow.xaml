@@ -27,7 +27,7 @@
                     x:Name="AllowedCheck"
                     FontFamily="{ThemeResource SymbolThemeFontFamily}"
                     FontSize="10"
-                    Foreground="{ThemeResource InkSurfaceBrush}"
+                    Foreground="{ThemeResource InkWindowBrush}"
                     Glyph="&#xE73E;" />
                 <Ellipse
                     x:Name="OffRing"

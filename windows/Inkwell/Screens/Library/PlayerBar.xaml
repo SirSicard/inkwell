@@ -34,7 +34,7 @@
                     BorderThickness="0"
                     Click="OnPlayClick"
                     CornerRadius="19">
-                    <FontIcon x:Name="PlayIcon" FontSize="14" Foreground="{ThemeResource InkSurfaceBrush}" Glyph="&#xE768;" />
+                    <FontIcon x:Name="PlayIcon" FontSize="14" Foreground="{ThemeResource InkWindowBrush}" Glyph="&#xE768;" />
                 </Button>
                 <Border x:Name="WaveHost" Grid.Column="1" VerticalAlignment="Center" />
                 <TextBlock
