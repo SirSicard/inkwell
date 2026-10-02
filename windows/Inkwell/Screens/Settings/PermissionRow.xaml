@@ -55,7 +55,7 @@
                 Grid.Column="2"
                 VerticalAlignment="Center"
                 FontSize="11"
-                Style="{StaticResource InkTimestampStyle}" />
+                Style="{StaticResource InkCaptionStyle}" />
         </Grid>
     </Grid>
 </UserControl>

@@ -523,7 +523,8 @@ public sealed partial class TodayScreen : UserControl
             library.Today, library.TodayLoad == LibraryLoad.Failed, library.Week, library.WeekLoad == LibraryLoad.Failed, calendar.Culture);
         foreach (var line in lines)
         {
-            Stats.Children.Add(new TextBlock { Text = line, Style = StyleOf("InkTimestampStyle"), FontSize = 11.5 });
+            // The interface's face: mono is for timestamps and versions (App.xaml).
+            Stats.Children.Add(new TextBlock { Text = line, Style = StyleOf("InkCaptionStyle"), FontSize = 11.5 });
         }
     }
 
