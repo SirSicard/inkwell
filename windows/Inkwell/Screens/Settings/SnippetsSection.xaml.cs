@@ -79,6 +79,8 @@ public sealed partial class SnippetsSection : UserControl
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
+            // A dialog does not take the window's theme: the appearance shown now (as ConsentDialog).
+            RequestedTheme = ActualTheme,
             Title = "Edit snippet",
             Content = new StackPanel { Spacing = 10, MinWidth = 360, Children = { trigger, expansion, category } },
             PrimaryButtonText = "Save",
