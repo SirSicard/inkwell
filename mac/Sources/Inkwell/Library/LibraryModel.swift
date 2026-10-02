@@ -26,6 +26,8 @@ final class LibraryModel {
         case todayOpen
         case statsDay
         case statsWeek
+        /// A name given to one of the open record's speakers.
+        case speaker
     }
 
     /// Where an answer is: asked and not answered, answered, or failed.
@@ -74,6 +76,8 @@ final class LibraryModel {
     private(set) var openFailure: String?
     /// Plays the open record's audio.
     private(set) var player: RecordPlayer?
+    /// Why the last name given to a speaker was not saved (the core's words), until the next try.
+    private(set) var namingFailure: String?
 
     /// Today: the latest finished meeting, whole.
     private(set) var lastMeeting: RecordDocument?
@@ -125,6 +129,9 @@ final class LibraryModel {
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var sequence = 0
     @ObservationIgnored private var latest: [Slot: String] = [:]
+    /// The names sent for the open record's speakers, by label: what the store holds once each is
+    /// saved, before the record is read again. Forgotten when one fails, and with the record.
+    @ObservationIgnored private var sentNames: [String: String] = [:]
     /// Where to put the playhead once the record being opened arrives.
     @ObservationIgnored private var pendingSeek: Int64?
     @ObservationIgnored private var pendingPlay = false
@@ -232,6 +239,8 @@ final class LibraryModel {
         selected = record
         document = nil
         openFailure = nil
+        namingFailure = nil
+        sentNames = [:]
         replacePlayer(nil)
         send(.recordOpen(record: record, ref: ref(for: .open)))
     }
@@ -247,6 +256,42 @@ final class LibraryModel {
     /// shows a failure (it lists again); the record is read again when the core says it changed.
     func setDone(_ commitment: String, _ done: Bool) {
         send(.commitmentSetDone(id: commitment, done: done))
+    }
+
+    /// The longest name a speaker takes, in Unicode scalars, as the core counts it
+    /// (MAX_SPEAKER_NAME_CHARS): an emoji or an accent written as two scalars counts two.
+    static let maxSpeakerName = 80
+
+    /// A name's length as the core counts it, once on one line.
+    static func nameLength(_ name: String) -> Int {
+        oneLine(name).unicodeScalars.count
+    }
+
+    /// Names one of the open record's far-end speakers, by the diarizer's label, as the user typed
+    /// it: on one line (a pasted line break is a space), trimmed, and empty clears the name (the
+    /// speaker reads as "Speaker N" again). Nothing is sent when nothing changed, or for a label
+    /// the record's far end does not have (the mic is the user, never renamed). The record is read
+    /// again when the core says it is saved; a name the core refuses (too long) is said, as any
+    /// failure (`namingFailure`).
+    func nameSpeaker(_ label: String, _ name: String) {
+        guard let document, let speaker = document.speaker(labelled: label) else { return }
+        let name = Self.oneLine(name)
+        // Unchanged from what was last sent, or else from what the record says: a rename sent
+        // since the record was read makes the record's name stale.
+        guard name != (sentNames[label] ?? speaker.name ?? "") else { return }
+        namingFailure = nil
+        sentNames[label] = name
+        send(.speakerName(record: document.record.record, speaker: label, name: name, ref: ref(for: .speaker)))
+    }
+
+    /// `text` on one line: every run of spaces, line breaks and control characters (the core
+    /// refuses those) is one space, and none at either end.
+    static func oneLine(_ text: String) -> String {
+        text.split(whereSeparator: { character in
+            character.isWhitespace
+                || character.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        })
+        .joined(separator: " ")
     }
 
     /// Puts the playhead at `ms` (a chip, a line, a search hit) and plays from there.
@@ -294,6 +339,16 @@ final class LibraryModel {
             case .commitmentUpdated, .noteAdded, .noteUpdated, .noteDeleted:
                 // The open record may hold it: read it again.
                 recordChanged = true
+            case .speakerNamed(let named):
+                // The name shows wherever that record does: the open record, and Today's last
+                // meeting.
+                if document?.record.record == named.record {
+                    recordChanged = true
+                    if current(named.ref) == .speaker { namingFailure = nil }
+                }
+                if lastMeeting?.record.record == named.record {
+                    send(.recordOpen(record: named.record, ref: ref(for: .todayOpen)))
+                }
             case .meetingFinished, .dictationInserted, .coreReady, .importFinished:
                 // A record was written or finished, or 0.2's came over: what the screens list has
                 // changed.
@@ -334,6 +389,10 @@ final class LibraryModel {
         case .statsWeek:
             week = nil
             weekLoad = .failed
+        case .speaker:
+            namingFailure = failed.message
+            // What was sent did not stick: the record's names are what stands.
+            sentNames = [:]
         default:
             break
         }

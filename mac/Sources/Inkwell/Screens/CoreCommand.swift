@@ -34,6 +34,9 @@ enum CoreCommand: Equatable, Sendable {
     case recordsSearch(query: String, limit: Int, ref: String)
     case recordOpen(record: String, ref: String)
     case libraryStats(sinceUnixMs: Int64, ref: String)
+    /// Names a far-end speaker of a record by its diarizer label; an empty name clears it.
+    /// Answered by `speaker.named` with `ref`, or a `command.failed` with it as the id.
+    case speakerName(record: String, speaker: String, name: String, ref: String)
     /// Meetings (S2.8). A start names the app when it answers the Drop's offer, and a title when
     /// the calendar has the call.
     case meetingStart(app: String?, title: String?)
@@ -116,6 +119,8 @@ enum CoreCommand: Equatable, Sendable {
         case .recordsSearch(let query, let limit, let ref): ["cmd": "records.search", "query": query, "limit": limit, "id": ref]
         case .recordOpen(let record, let ref): ["cmd": "record.open", "record": record, "id": ref]
         case .libraryStats(let since, let ref): ["cmd": "library.stats", "since_unix_ms": since, "id": ref]
+        case .speakerName(let record, let speaker, let name, let ref):
+            ["cmd": "speaker.name", "record": record, "speaker": speaker, "name": name, "id": ref]
         case .meetingStart(let app, let title):
             ["cmd": "meeting.start", "id": "meeting.start"]
                 .merging(app.map { ["app": $0] } ?? [:]) { a, _ in a }
@@ -181,6 +186,7 @@ enum CoreCommand: Equatable, Sendable {
         case .recordsSearch: "records.search"
         case .recordOpen: "record.open"
         case .libraryStats: "library.stats"
+        case .speakerName: "speaker.name"
         case .meetingStart: "meeting.start"
         case .meetingStop: "meeting.stop"
         case .meetingDismiss: "meeting.dismiss"

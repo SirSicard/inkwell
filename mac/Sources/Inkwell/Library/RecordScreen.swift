@@ -288,7 +288,7 @@ struct MergedNotesView: View {
 }
 
 /// The ledger: every line with its time, who said it and what; the line under the playhead is
-/// marked. Clicking a line plays from it.
+/// marked. Clicking a line plays from it; clicking a far-end speaker's name names them.
 struct RecordLedgerView: View {
     let document: RecordDocument
     let current: Int?
@@ -313,6 +313,14 @@ struct RecordLedgerView: View {
                 }
                 .padding(.leading, 80)
                 .padding(.bottom, 10)
+                if let failure = library.namingFailure {
+                    Text("The speaker's name wasn't saved: \(failure)")
+                        .font(PaperType.meta)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 80)
+                        .padding(.bottom, 6)
+                }
                 if document.ledger.isEmpty {
                     Text("Nothing was transcribed.")
                         .font(.callout)
@@ -320,9 +328,11 @@ struct RecordLedgerView: View {
                         .padding(.leading, 80)
                 }
                 ForEach(document.ledger) { line in
-                    RecordLedgerRow(line: line, current: line.id == current) {
-                        library.playFrom(line.startMs)
-                    }
+                    RecordLedgerRow(
+                        line: line, speaker: line.label.flatMap(document.speaker(labelled:)),
+                        current: line.id == current,
+                        play: { library.playFrom(line.startMs) },
+                        rename: { label, name in library.nameSpeaker(label, name) })
                 }
             }
             .padding(.vertical, 16)
@@ -334,45 +344,137 @@ struct RecordLedgerView: View {
 
 struct RecordLedgerRow: View {
     let line: LedgerLine
+    /// The far-end speaker who said it, when the diarizer told them apart: the user can name them.
+    let speaker: FarSpeaker?
     let current: Bool
     let play: () -> Void
+    /// Names a speaker by their label (LibraryModel.nameSpeaker).
+    let rename: (_ label: String, _ name: String) -> Void
     @Environment(GlowTheme.self) private var theme
+    @State private var naming = false
+
+    /// The columns before the words: the stamp, then the dot, `spacing` apart.
+    private static let stampWidth: CGFloat = 64
+    private static let dotWidth: CGFloat = 18
+    private static let spacing: CGFloat = 8
+    private static let verticalPadding: CGFloat = 7
 
     var body: some View {
-        Button(action: play) {
-            HStack(alignment: .top, spacing: 8) {
-                Text(LibraryFormat.stamp(ms: line.startMs))
-                    .font(PaperType.meta)
-                    .foregroundStyle(current ? Theme.text : Theme.secondaryText)
-                    .frame(width: 64, alignment: .trailing)
-                    .padding(.top, 3)
-                Circle()
-                    .fill(line.speaker.isYou ? theme.you : theme.them)
-                    .frame(width: 8, height: 8)
-                    .padding(.top, 7)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(line.speaker.label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.text)
-                    Text(line.text)
-                        .font(PaperType.reading)
-                        .lineSpacing(2)
-                        .foregroundStyle(Theme.text)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+        // The row is the button that plays from its line. A button inside its label would never
+        // get the click, so a nameable speaker's name is a button of its own, laid over the row in
+        // the name's place (the same columns), and the row draws that name hidden.
+        ZStack(alignment: .topLeading) {
+            Button(action: play) {
+                HStack(alignment: .top, spacing: Self.spacing) {
+                    Text(LibraryFormat.stamp(ms: line.startMs))
+                        .font(PaperType.meta)
+                        .foregroundStyle(current ? Theme.text : Theme.secondaryText)
+                        .frame(width: Self.stampWidth, alignment: .trailing)
+                        .padding(.top, 3)
+                    Circle()
+                        .fill(line.speaker.isYou ? theme.you : theme.them)
+                        .frame(width: 8, height: 8)
+                        .padding(.top, 7)
+                        .frame(width: Self.dotWidth)
+                    VStack(alignment: .leading, spacing: 2) {
+                        who.opacity(speaker == nil ? 1 : 0)
+                        Text(line.text)
+                            .font(PaperType.reading)
+                            .lineSpacing(2)
+                            .foregroundStyle(Theme.text)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .padding(.vertical, Self.verticalPadding)
+                .background(RoundedRectangle(cornerRadius: 8).fill(current ? PaperPalette.chip : Color.clear))
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(current ? PaperPalette.chip : Color.clear))
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(LibraryFormat.stamp(ms: line.startMs)), \(line.speaker.label): \(line.text)")
+            .accessibilityHint("Plays from here")
+            .accessibilityAddTraits(current ? .isSelected : [])
+            if let speaker {
+                Button { naming = true } label: { who }
+                    .buttonStyle(.plain)
+                    .help("Name this speaker")
+                    .accessibilityLabel("Name \(speaker.display)")
+                    .popover(isPresented: $naming, arrowEdge: .bottom) {
+                        SpeakerNameEditor(speaker: speaker, done: { naming = false }) { name in
+                            rename(speaker.label, name)
+                        }
+                    }
+                    .padding(.leading, Self.stampWidth + Self.dotWidth + 2 * Self.spacing)
+                    .padding(.top, Self.verticalPadding)
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(LibraryFormat.stamp(ms: line.startMs)), \(line.speaker.label): \(line.text)")
-        .accessibilityHint("Plays from here")
-        .accessibilityAddTraits(current ? .isSelected : [])
+    }
+
+    /// Who said it.
+    private var who: some View {
+        Text(line.speaker.label)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Theme.text)
+    }
+}
+
+/// What to call a far-end speaker in this record. Empty goes back to "Speaker N"; the mic is the
+/// user and is never named here.
+struct SpeakerNameEditor: View {
+    let speaker: FarSpeaker
+    let done: () -> Void
+    let save: (String) -> Void
+    @State private var name: String
+    @FocusState private var focused: Bool
+
+    init(speaker: FarSpeaker, done: @escaping () -> Void, save: @escaping (String) -> Void) {
+        self.speaker = speaker
+        self.done = done
+        self.save = save
+        _name = State(initialValue: speaker.name ?? "")
+    }
+
+    private var tooLong: Bool { LibraryModel.nameLength(name) > LibraryModel.maxSpeakerName }
+    /// Return in the field and the default button can both fire: one save.
+    @State private var saved = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Name this speaker")
+                .font(.headline)
+                .foregroundStyle(Theme.text)
+            TextField("Speaker \(speaker.number)", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .onSubmit(commit)
+                .accessibilityLabel("Name")
+            Text(tooLong
+                ? "At most \(LibraryModel.maxSpeakerName) characters."
+                : "In this record. Leave it empty to go back to Speaker \(speaker.number).")
+                .font(.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel", action: done)
+                    .keyboardShortcut(.cancelAction)
+                Button("Save", action: commit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(tooLong)
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
+        .onAppear { focused = true }
+    }
+
+    private func commit() {
+        guard !tooLong, !saved else { return }
+        saved = true
+        save(name)
+        done()
     }
 }
 
