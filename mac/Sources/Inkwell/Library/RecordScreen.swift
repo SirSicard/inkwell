@@ -268,7 +268,7 @@ struct MergedNotesView: View {
             .padding(.top, 4)
         case .said(let speaker):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(Text("\(speaker.label): ").foregroundStyle(speaker.isYou ? PaperPalette.you : PaperPalette.them).bold())\(entry.text)")
+                Text("\(Text("\(speaker.label): ").foregroundStyle(Theme.text).bold())\(entry.text)")
                     .font(.system(.callout, design: .serif))
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -276,7 +276,7 @@ struct MergedNotesView: View {
             }
         case .owed:
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "checkmark.circle").foregroundStyle(PaperPalette.them).accessibilityLabel("Owed")
+                Image(systemName: "checkmark.circle").foregroundStyle(Theme.text).accessibilityLabel("Owed")
                 Text(entry.text)
                     .font(.system(.callout, design: .serif))
                     .foregroundStyle(Theme.text)
@@ -336,6 +336,7 @@ struct RecordLedgerRow: View {
     let line: LedgerLine
     let current: Bool
     let play: () -> Void
+    @Environment(GlowTheme.self) private var theme
 
     var body: some View {
         Button(action: play) {
@@ -346,14 +347,14 @@ struct RecordLedgerRow: View {
                     .frame(width: 64, alignment: .trailing)
                     .padding(.top, 3)
                 Circle()
-                    .fill(line.speaker.isYou ? PaperPalette.you : PaperPalette.them)
+                    .fill(line.speaker.isYou ? theme.you : theme.them)
                     .frame(width: 8, height: 8)
                     .padding(.top, 7)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(line.speaker.label)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(line.speaker.isYou ? PaperPalette.you : PaperPalette.them)
+                        .foregroundStyle(Theme.text)
                     Text(line.text)
                         .font(PaperType.reading)
                         .lineSpacing(2)

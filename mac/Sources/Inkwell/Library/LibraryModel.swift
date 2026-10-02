@@ -36,8 +36,9 @@ final class LibraryModel {
         case failed
     }
 
-    /// The list's filter: one kind (the canvas's chips), or nil for every kind.
-    var filter: RecordKind? = .meeting {
+    /// The list's filter: one kind (the canvas's chips), or nil for every kind (All, where the
+    /// Library opens).
+    var filter: RecordKind? = nil {
         didSet {
             if filter != oldValue { refreshList() }
         }
