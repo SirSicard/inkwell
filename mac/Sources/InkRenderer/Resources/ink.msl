@@ -1,37 +1,30 @@
 // Generated from shaders/ink.wgsl by core/crates/ink-shader (naga). Do not edit: change the
 // WGSL, then run `cargo run -p ink-shader --bin ink-shader` in core/.
 //
-// Fragment stage: the uniform block U at buffer 0, the wordmark at texture 0, its sampler
-// at sampler 0.
+// Fragment stage: the uniform block G at buffer 0, the only resource.
 // language: metal2.4
 #include <metal_stdlib>
 #include <simd/simd.h>
 
 using metal::uint;
 
-struct type_3 {
-    metal::float4 inner[6];
-};
-struct U {
+struct G {
     metal::float2 res;
+    metal::float2 center;
     float time;
-    float ampA;
-    float ampB;
-    float wet;
-    float two;
-    float dead;
-    float blot;
-    float breath;
-    float cy;
-    float hasMark;
-    type_3 drops;
-};
-struct Ctx {
-    float T;
-    char _pad1[4];
-    metal::float2 CC;
-    float SS;
-    char _pad3[4];
+    float unit;
+    float you;
+    float them;
+    metal::float4 w;
+    float dark;
+    float motion;
+    metal::float2 pad;
+    metal::float4 yA;
+    metal::float4 yB;
+    metal::float4 tA;
+    metal::float4 tB;
+    metal::float4 idle;
+    metal::float4 ink;
 };
 
 metal::float2 mod289_2_(
@@ -95,231 +88,89 @@ float snoise(
     m = _e102 * (metal::float3(1.7928429) - (0.85373473 * ((a0_ * a0_) + (h * h))));
     metal::float4 _e120 = x12_;
     metal::float4 _e124 = x12_;
-    metal::float3 g = metal::float3((a0_.x * x0_.x) + (h.x * x0_.y), (a0_.yz * _e120.xz) + (h.yz * _e124.yw));
+    metal::float3 g_1 = metal::float3((a0_.x * x0_.x) + (h.x * x0_.y), (a0_.yz * _e120.xz) + (h.yz * _e124.yw));
     metal::float3 _e129 = m;
-    return 130.0 * metal::dot(_e129, g);
-}
-
-float fbmSoft(
-    metal::float2 p
-) {
-    float _e1 = snoise(p);
-    float _e9 = snoise((p * 2.0) + metal::float2(5.2));
-    return (_e1 * 0.68) + (_e9 * 0.32);
+    return 130.0 * metal::dot(_e129, g_1);
 }
 
 float fbm(
     metal::float2 p_in
 ) {
-    metal::float2 p_1 = {};
+    metal::float2 p = {};
     float v_1 = 0.0;
     float a = 0.5;
     int i_1 = 0;
-    p_1 = p_in;
+    p = p_in;
     uint2 loop_bound = uint2(4294967295u);
     bool loop_init = true;
     while(true) {
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
         if (!loop_init) {
-            int _e24 = i_1;
-            i_1 = as_type<int>(as_type<uint>(_e24) + as_type<uint>(1));
+            int _e28 = i_1;
+            i_1 = as_type<int>(as_type<uint>(_e28) + as_type<uint>(1));
         }
         loop_init = false;
         int _e8 = i_1;
-        if (_e8 < 4) {
+        if (_e8 < 5) {
         } else {
             break;
         }
         {
             float _e11 = v_1;
             float _e12 = a;
-            metal::float2 _e13 = p_1;
+            metal::float2 _e13 = p;
             float _e14 = snoise(_e13);
             v_1 = _e11 + (_e12 * _e14);
-            metal::float2 _e17 = p_1;
-            p_1 = _e17 * 2.03;
-            float _e20 = a;
-            a = _e20 * 0.5;
+            metal::float2 _e17 = p;
+            p = (_e17 * 2.03) + metal::float2(1.7, 9.2);
+            float _e24 = a;
+            a = _e24 * 0.5;
         }
     }
-    float _e26 = v_1;
-    return _e26;
+    float _e30 = v_1;
+    return 0.48 + (0.455 * _e30);
 }
 
 float hash(
-    metal::float2 p_2
+    metal::float2 p_1
 ) {
-    return metal::fract(metal::sin(metal::dot(p_2, metal::float2(12.9898, 78.233))) * 43758.547);
+    return metal::fract(metal::sin(metal::dot(p_1, metal::float2(12.9898, 78.233))) * 43758.547);
 }
 
-float drop(
-    metal::float2 p_3,
-    metal::float2 c,
-    float r
-) {
-    metal::float2 d = p_3 - c;
-    return (r * r) / metal::max(metal::dot(d, d), 0.00001);
-}
-
-float fibres(
-    metal::float2 p_4
-) {
-    float _e3 = snoise(p_4 * 1.7);
-    float a_1 = _e3 * 1.4;
-    metal::float2 d_1 = metal::float2(metal::cos(a_1), metal::sin(a_1));
-    metal::float2 q_2 = metal::float2(metal::dot(p_4, d_1), metal::dot(p_4, metal::float2(-(d_1.y), d_1.x)));
-    float _e23 = snoise(metal::float2(q_2.x * 7.0, q_2.y * 110.0));
-    return (_e23 * 0.5) + 0.5;
-}
-
-metal::float2 centreA(
-    Ctx k_1,
-    constant U& u
-) {
-    float _e5 = u.two;
-    float _e10 = u.two;
-    return k_1.CC + (k_1.SS * metal::float2(-0.1 * _e5, 0.05 * _e10));
-}
-
-metal::float2 centreB(
-    Ctx k_2
-) {
-    return k_2.CC + (k_2.SS * metal::float2(0.19, -0.19));
-}
-
-float fieldA(
+metal::float4 orb(
     metal::float2 q,
-    Ctx k_3,
-    constant U& u
+    float R,
+    float soft,
+    metal::float3 A,
+    metal::float3 B,
+    float seed,
+    float tt,
+    constant G& g
 ) {
-    float f = {};
-    int i_2 = 0;
-    bool local = {};
-    metal::float2 _e2 = centreA(k_3, u);
-    float _e5 = u.ampA;
-    float _e10 = u.breath;
-    float pulse = (_e5 * 0.07) + (_e10 * 0.012);
-    float _e16 = u.two;
-    float shrink = 1.0 - (0.3 * _e16);
-    float _e43 = u.two;
-    float _e49 = drop(q, _e2 + (k_3.SS * metal::float2(0.03 * metal::sin(k_3.T * 0.9), 0.03 * metal::cos(k_3.T * 0.7))), (k_3.SS * (0.205 + pulse)) * (1.0 - (0.12 * _e43)));
-    f = _e49;
-    float _e51 = f;
-    float _e81 = drop(q, _e2 + (k_3.SS * metal::float2(-0.2 + (0.05 * metal::sin((k_3.T * 1.1) + 1.0)), -0.17 + (0.04 * metal::cos(k_3.T * 0.95)))), (k_3.SS * (0.085 + (pulse * 0.5))) * shrink);
-    f = _e51 + _e81;
-    float _e83 = f;
-    float _e115 = drop(q, _e2 + (k_3.SS * metal::float2(0.16 + (0.04 * metal::cos((k_3.T * 0.85) + 2.0)), 0.2 + (0.05 * metal::sin((k_3.T * 1.05) + 0.7)))), (k_3.SS * (0.07 + (pulse * 0.4))) * shrink);
-    f = _e83 + _e115;
-    uint2 loop_bound_1 = uint2(4294967295u);
-    bool loop_init_1 = true;
-    while(true) {
-        if (metal::all(loop_bound_1 == uint2(0u))) { break; }
-        loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
-        if (!loop_init_1) {
-            int _e143 = i_2;
-            i_2 = as_type<int>(as_type<uint>(_e143) + as_type<uint>(1));
-        }
-        loop_init_1 = false;
-        int _e119 = i_2;
-        if (_e119 < 6) {
-        } else {
-            break;
-        }
-        {
-            int _e124 = i_2;
-            metal::float4 d_2 = u.drops.inner[_e124];
-            if (d_2.z > 0.0) {
-                local = d_2.w < 0.5;
-            } else {
-                local = false;
-            }
-            bool _e136 = local;
-            if (_e136) {
-                float _e137 = f;
-                float _e140 = drop(q, d_2.xy, d_2.z);
-                f = _e137 + _e140;
-            }
-        }
+    metal::float3 c = {};
+    float l = metal::length(q);
+    if (l > ((R + soft) + 0.03)) {
+        return metal::float4(0.0);
     }
-    float _e145 = f;
-    return _e145;
+    float _e26 = fbm(((q * 3.0) + metal::float2(seed)) + metal::float2(tt * 0.2));
+    float a_1 = 1.0 - metal::smoothstep(R - (soft * 0.5), R + soft, l + (0.05 * (_e26 - 0.5)));
+    float _e41 = fbm((q * 2.2) + metal::float2(tt * 0.15, seed));
+    c = metal::mix(A, B, metal::smoothstep(0.3, 0.7, _e41));
+    float d = metal::length(q - (metal::float2(-0.25, 0.3) * R));
+    float shine = (R > 0.0) ? (1.0 - metal::smoothstep(0.0, R, d)) : 1.0;
+    metal::float3 _e61 = c;
+    float _e64 = g.dark;
+    c = _e61 + metal::float3((0.22 * (1.0 - (0.4 * _e64))) * shine);
+    metal::float3 _e74 = c;
+    return metal::float4(_e74, a_1);
 }
 
-float fieldB(
-    metal::float2 q_1,
-    Ctx k_4,
-    constant U& u
+metal::float3 greyed(
+    metal::float3 c_1,
+    float k
 ) {
-    float f_1 = {};
-    int i_3 = 0;
-    bool local_1 = {};
-    float _e4 = u.two;
-    if (_e4 < 0.01) {
-        return 0.0;
-    }
-    metal::float2 _e8 = centreB(k_4);
-    float _e11 = u.ampB;
-    float _e16 = u.breath;
-    float pulse_1 = (_e11 * 0.07) + (_e16 * 0.01);
-    float _e44 = u.two;
-    float _e46 = drop(q_1, _e8 + (k_4.SS * metal::float2(0.03 * metal::cos((k_4.T * 0.8) + 1.3), 0.03 * metal::sin(k_4.T * 0.6))), (k_4.SS * (0.14 + pulse_1)) * _e44);
-    f_1 = _e46;
-    float _e48 = f_1;
-    float _e77 = u.two;
-    float _e79 = drop(q_1, _e8 + (k_4.SS * metal::float2(0.11 + (0.04 * metal::sin(k_4.T * 1.2)), -0.1 + (0.03 * metal::cos(k_4.T * 0.9)))), (k_4.SS * (0.055 + (pulse_1 * 0.4))) * _e77);
-    f_1 = _e48 + _e79;
-    uint2 loop_bound_2 = uint2(4294967295u);
-    bool loop_init_2 = true;
-    while(true) {
-        if (metal::all(loop_bound_2 == uint2(0u))) { break; }
-        loop_bound_2 -= uint2(loop_bound_2.y == 0u, 1u);
-        if (!loop_init_2) {
-            int _e111 = i_3;
-            i_3 = as_type<int>(as_type<uint>(_e111) + as_type<uint>(1));
-        }
-        loop_init_2 = false;
-        int _e83 = i_3;
-        if (_e83 < 6) {
-        } else {
-            break;
-        }
-        {
-            int _e88 = i_3;
-            metal::float4 d_3 = u.drops.inner[_e88];
-            if (d_3.z > 0.0) {
-                local_1 = d_3.w >= 0.5;
-            } else {
-                local_1 = false;
-            }
-            bool _e100 = local_1;
-            if (_e100) {
-                float _e101 = f_1;
-                float _e106 = u.two;
-                float _e108 = drop(q_1, d_3.xy, d_3.z * _e106);
-                f_1 = _e101 + _e108;
-            }
-        }
-    }
-    float _e113 = f_1;
-    return _e113;
-}
-
-float zoneFade(
-    metal::float2 p_5,
-    float aspect,
-    Ctx k_5
-) {
-    float d_4 = metal::min(metal::min(p_5.x, aspect - p_5.x), metal::min(p_5.y, 1.0 - p_5.y));
-    return metal::smoothstep(0.0, k_5.SS * 0.1, d_4);
-}
-
-float fence(
-    float f_2,
-    float fade
-) {
-    float g_1 = (f_2 / (1.0 + f_2)) * fade;
-    return (fade >= 1.0) ? f_2 : (g_1 / (1.0 - g_1));
+    return metal::mix(c_1, metal::float3(metal::dot(c_1, metal::float3(0.299, 0.587, 0.114))), k);
 }
 
 struct vs_mainInput {
@@ -343,155 +194,64 @@ struct fs_mainOutput {
 };
 fragment fs_mainOutput fs_main(
   metal::float4 pos [[position]]
-, constant U& u [[buffer(0)]]
-, metal::texture2d<float, metal::access::sample> markTex [[texture(0)]]
-, metal::sampler markSamp [[sampler(0)]]
+, constant G& g [[buffer(0)]]
 ) {
-    Ctx k = {};
-    metal::float3 paper = {};
-    metal::float3 colA = {};
-    metal::float3 colB = {};
+    metal::float4 o2_ = metal::float4(0.0);
     metal::float3 col = {};
-    float mk = 0.0;
-    float _e5 = u.res.y;
-    metal::float2 frag = metal::float2(pos.x, _e5 - pos.y);
-    metal::float2 _e11 = u.res;
-    metal::float2 uv = frag / _e11;
-    float _e16 = u.res.y;
-    metal::float2 p_6 = frag / metal::float2(_e16);
-    float _e22 = u.res.x;
-    float _e26 = u.res.y;
-    float aspect_1 = _e22 / _e26;
-    k.SS = metal::min(aspect_1, 1.0);
-    float _e37 = u.cy;
-    k.CC = metal::float2(0.5 * aspect_1, _e37);
-    float _e41 = u.ampA;
-    float _e44 = u.ampB;
-    float act = metal::max(_e41, _e44);
-    float _e49 = u.time;
-    float _e52 = u.wet;
-    k.T = _e49 * ((0.12 + (0.3 * _e52)) + (0.35 * act));
-    float _e62 = k.SS;
-    float _e68 = k.T;
-    float _e72 = k.T;
-    float _e77 = fbmSoft(((p_6 / metal::float2(_e62)) * 1.6) + metal::float2(_e68 * 0.17, _e72 * 0.1));
-    float _e79 = k.SS;
-    float _e85 = k.T;
-    float _e90 = k.T;
-    float _e98 = fbmSoft((((p_6 / metal::float2(_e79)) * 1.6) + metal::float2(-(_e85) * 0.12, _e90 * 0.15)) + metal::float2(19.7));
-    metal::float2 w = metal::float2(_e77, _e98);
-    float _e101 = k.SS;
-    float _e105 = u.wet;
-    metal::float2 wp = p_6 + ((w * _e101) * ((0.07 + (0.07 * _e105)) + (0.14 * act)));
-    float _e118 = fibres(frag / metal::float2(180.0));
-    float _e119 = hash(frag);
-    Ctx _e120 = k;
-    float _e121 = zoneFade(p_6, aspect_1, _e120);
-    Ctx _e122 = k;
-    float _e123 = fieldA(wp, _e122, u);
-    float _e124 = fence(_e123, _e121);
-    Ctx _e125 = k;
-    float _e126 = fieldB(wp, _e125, u);
-    float _e127 = fence(_e126, _e121);
-    float _e132 = u.blot;
-    float feather = (_e118 - 0.5) * (0.1 + (0.22 * _e132));
-    float eA = _e124 + ((feather * metal::smoothstep(0.55, 1.0, _e124)) * (1.0 - metal::smoothstep(1.0, 1.25, _e124)));
-    float eB = _e127 + ((feather * metal::smoothstep(0.55, 1.0, _e127)) * (1.0 - metal::smoothstep(1.0, 1.25, _e127)));
-    float _e162 = u.blot;
-    float edge = 0.045 + (0.06 * _e162);
-    float mA = metal::smoothstep(1.0 - edge, 1.0 + edge, eA);
-    float mB = metal::smoothstep(1.0 - edge, 1.0 + edge, eB);
-    float bleedA = metal::smoothstep(1.0 - (edge * 5.0), 1.0 - edge, eA) * (1.0 - mA);
-    float bleedB = metal::smoothstep(1.0 - (edge * 5.0), 1.0 - edge, eB) * (1.0 - mB);
-    paper = (metal::float3(0.949, 0.933, 0.902) * (0.986 + (0.028 * _e118))) - metal::float3(0.016 * _e119);
-    metal::float3 _e211 = paper;
-    paper = _e211 * (1.0 - (0.06 * metal::pow(metal::length(uv - metal::float2(0.5)) * 1.15, 2.0)));
-    float _e226 = k.SS;
-    float _e232 = k.T;
-    float _e236 = k.T;
-    float _e242 = fbm(((wp / metal::float2(_e226)) * 3.2) + metal::float2(_e232 * 0.2, -(_e236) * 0.13));
-    metal::float3 inkA = metal::float3(0.086, 0.094, 0.122);
-    float rimA = 1.0 - metal::smoothstep(1.0, 1.9, _e124);
-    colA = metal::mix((inkA * 1.9) + metal::float3(_e242 * 0.035), inkA * 0.72, rimA) * (0.9 + (0.1 * _e118));
-    metal::float3 inkB = metal::float3(0.494, 0.329, 0.192);
-    float rimB = 1.0 - metal::smoothstep(1.0, 1.9, _e127);
-    colB = metal::mix((inkB * 1.16) + metal::float3(_e242 * 0.03), inkB * 0.7, rimB) * (0.92 + (0.08 * _e118));
-    float _e292 = k.SS;
-    float e = 0.0025 * _e292;
-    float hA = metal::clamp(_e124 - 1.0, 0.0, 1.2);
-    Ctx _e303 = k;
-    float _e304 = fieldA(wp + metal::float2(e, 0.0), _e303, u);
-    float _e305 = fence(_e304, _e121);
-    float hx = metal::clamp(_e305 - 1.0, 0.0, 1.2) - hA;
-    Ctx _e315 = k;
-    float _e316 = fieldA(wp + metal::float2(0.0, e), _e315, u);
-    float _e317 = fence(_e316, _e121);
-    float hy = metal::clamp(_e317 - 1.0, 0.0, 1.2) - hA;
-    float _e329 = k.SS;
-    float _e336 = k.SS;
-    metal::float3 nrm = metal::normalize(metal::float3(((-(hx) / e) * 0.035) * _e329, ((-(hy) / e) * 0.035) * _e336, 1.0));
-    metal::float3 L = metal::float3(-0.45112923, 0.5513802, 0.7017566);
-    float spec = metal::pow(metal::max(metal::dot(metal::reflect(-(L), nrm), metal::float3(0.0, 0.0, 1.0)), 0.0), 26.0);
-    float _e358 = u.blot;
-    float sheet = metal::step(0.001, _e358);
-    float _e364 = u.blot;
-    float bx = uv.x - ((_e364 * 1.5) - 0.25);
-    float band = (sheet * metal::smoothstep(-0.2, 0.0, bx)) * (1.0 - metal::smoothstep(0.0, 0.12, bx));
-    float ahead = metal::mix(1.0, metal::smoothstep(-0.02, 0.1, bx), sheet);
-    metal::float3 _e385 = colA;
-    float _e390 = u.wet;
-    colA = _e385 + metal::float3((((spec * 0.5) * _e390) * ahead) * mA);
-    metal::float3 _e396 = colA;
-    metal::float3 _e397 = colA;
-    metal::float3 _e400 = colA;
-    colA = metal::mix(_e396, _e397 + (((metal::float3(0.75) - _e400) * 0.28) * _e118), band);
-    metal::float3 _e407 = colB;
-    metal::float3 _e408 = colB;
-    metal::float3 _e411 = colB;
-    colB = metal::mix(_e407, _e408 + (((metal::float3(0.8) - _e411) * 0.28) * _e118), band);
-    metal::float3 _e418 = paper;
-    paper = _e418 * (1.0 - (0.035 * band));
-    metal::float3 seal = metal::float3(0.698, 0.227, 0.149);
-    Ctx _e428 = k;
-    metal::float2 _e429 = centreB(_e428);
-    metal::float2 dB = p_6 - _e429;
-    float ang = metal::atan2(dB.y, dB.x);
-    float _e437 = k.T;
-    float dash = metal::step(0.5, metal::fract((ang * 1.9099) + (_e437 * 0.1)));
-    float ring = metal::smoothstep(0.8, 0.97, _e127) - metal::smoothstep(1.03, 1.2, _e127);
-    metal::float3 _e451 = paper;
-    col = _e451;
-    metal::float3 _e453 = col;
-    metal::float3 _e454 = colB;
-    float _e459 = u.dead;
-    col = metal::mix(_e453, _e454, (bleedB * 0.26) * (1.0 - _e459));
-    metal::float3 _e464 = col;
-    metal::float3 _e465 = colB;
-    float _e468 = u.dead;
-    col = metal::mix(_e464, _e465, mB * (1.0 - (0.9 * _e468)));
-    metal::float3 _e475 = col;
-    float _e479 = u.dead;
-    col = metal::mix(_e475, seal, ((ring * dash) * _e479) * 0.8);
-    float _e485 = k.SS;
-    float _e491 = k.T;
-    float _e496 = fbm(((wp / metal::float2(_e485)) * 5.0) + metal::float2(_e491 * 0.3));
-    float marble = metal::smoothstep(0.35, 0.65, (_e496 * 0.5) + 0.5);
-    metal::float3 _e504 = col;
-    metal::float3 _e505 = colA;
-    col = metal::mix(_e504, _e505, bleedA * 0.26);
-    metal::float3 _e509 = col;
-    metal::float3 _e510 = colA;
-    float _e516 = u.dead;
-    col = metal::mix(_e509, _e510, mA * (1.0 - (((0.45 * mB) * marble) * (1.0 - _e516))));
-    float _e528 = u.hasMark;
-    if (_e528 > 0.5) {
-        metal::float4 _e538 = markTex.sample(markSamp, metal::float2(uv.x, 1.0 - uv.y));
-        mk = _e538.w;
+    float _e5 = g.center.x;
+    float _e10 = g.center.y;
+    float _e16 = g.unit;
+    metal::float2 p_2 = metal::float2(pos.x - _e5, _e10 - pos.y) / metal::float2(_e16);
+    float dictating = g.w.x;
+    float meeting = g.w.y;
+    float blot = g.w.z;
+    float problem = g.w.w;
+    float live = metal::max(dictating, meeting);
+    float _e38 = g.time;
+    float _e41 = g.motion;
+    float t = _e38 * _e41;
+    float tt_1 = t * (0.12 + (0.88 * live));
+    float apart = meeting * (1.0 - blot);
+    metal::float2 swirl = 0.09 * metal::float2(metal::cos(tt_1 * 0.5), metal::sin(tt_1 * 0.5));
+    metal::float2 c1_ = (metal::float2(-0.15, 0.02) + swirl) * apart;
+    metal::float2 c2_ = (metal::float2(0.15, -0.02) - swirl) * apart;
+    float pulse = 0.5 + (0.5 * metal::sin(t * 2.0));
+    float _e83 = g.you;
+    float r1_ = metal::mix(((0.19 + (0.05 * dictating)) + ((0.09 * _e83) * live)) * metal::mix(0.8, 1.0, live), 0.06, blot);
+    float _e96 = g.them;
+    float r2_ = metal::mix((0.16 + (0.08 * _e96)) * meeting, 0.0, blot) * (1.0 + ((0.06 * problem) * (pulse - 0.5)));
+    float soft_1 = metal::mix(0.24, 0.012, blot);
+    metal::float4 _e118 = g.idle;
+    metal::float4 _e122 = g.yA;
+    metal::float4 _e127 = g.ink;
+    metal::float4 _e132 = g.idle;
+    metal::float4 _e136 = g.yB;
+    metal::float4 _e141 = g.ink;
+    metal::float4 _e145 = orb(p_2 - c1_, r1_, soft_1, metal::mix(metal::mix(_e118.xyz, _e122.xyz, live), _e127.xyz, blot), metal::mix(metal::mix(_e132.xyz, _e136.xyz, live), _e141.xyz, blot), 0.0, tt_1, g);
+    if (meeting > 0.0) {
+        metal::float4 _e154 = g.tA;
+        metal::float3 _e158 = greyed(_e154.xyz, 0.85 * problem);
+        metal::float4 _e161 = g.ink;
+        metal::float4 _e166 = g.tB;
+        metal::float3 _e170 = greyed(_e166.xyz, 0.85 * problem);
+        metal::float4 _e173 = g.ink;
+        metal::float4 _e177 = orb(p_2 - c2_, r2_, soft_1, metal::mix(_e158, _e161.xyz, blot), metal::mix(_e170, _e173.xyz, blot), 3.0, tt_1, g);
+        o2_ = _e177;
     }
-    metal::float3 _e540 = col;
-    metal::float3 _e543 = col;
-    float _e545 = mk;
-    col = metal::mix(_e540, metal::float3(1.0) - _e543, _e545);
-    metal::float3 _e547 = col;
-    return fs_mainOutput { metal::float4(_e547, 1.0) };
+    float _e179 = o2_.w;
+    float a2_ = ((_e179 * 0.9) * meeting) * (1.0 - (problem * (0.45 - (0.3 * pulse))));
+    float a1_ = ((_e145.w * 0.9) * metal::mix(0.55, 1.0, metal::max(live, blot))) * (1.0 - ((0.35 * a2_) * (1.0 - blot)));
+    float alpha = a1_ + (a2_ * (1.0 - a1_));
+    if (alpha <= 0.0) {
+        return fs_mainOutput { metal::float4(0.0) };
+    }
+    metal::float4 _e217 = o2_;
+    col = ((_e145.xyz * a1_) + ((_e217.xyz * a2_) * (1.0 - a1_))) / metal::float3(metal::max(alpha, 0.0001));
+    metal::float3 _e229 = col;
+    float _e234 = hash(pos.xy + metal::float2(metal::fract(t)));
+    col = _e229 + metal::float3((_e234 - 0.5) * 0.05);
+    metal::float3 _e241 = col;
+    col = metal::clamp(_e241, metal::float3(0.0), metal::float3(1.0));
+    metal::float3 _e247 = col;
+    return fs_mainOutput { metal::float4(_e247 * alpha, alpha) };
 }
