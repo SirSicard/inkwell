@@ -6,7 +6,8 @@
 // ink still, or nothing (the Drop hides). The offer's buttons go to the app's callback as the
 // model's actions (DropAction). Held pins a state for the Drop's focus check
 // (INK_DROP_DEMO). Every ink reads the live levels (your mic's bands, and the far end's during a
-// meeting) once per frame while it moves. Nothing here polls.
+// meeting) once per frame while it moves. The Drop follows the app's appearance (SetLook): its pill
+// in the mode, its orb in the user's colours, still when the user wants it still. Nothing here polls.
 //
 // When the Drop cannot draw its ink (a lost device it is recovering from, a shader that does not
 // compile, no plain panel either, no window at all) the problem goes to the callback the app
@@ -14,6 +15,7 @@
 // as well as to the log; null says it is fine again. A Drop window that could not be made is
 // tried again at every change of state.
 using Inkwell.Core;
+using Inkwell.Core.Glow;
 using Inkwell.Core.Screens;
 using Inkwell.Ink;
 using Microsoft.UI.Dispatching;
@@ -33,6 +35,9 @@ internal sealed class ShellInk : IDisposable
     private InkState? held;
     /// <summary>Quitting: a note's end or a last batch arriving after it changes nothing (no new Drop is made).</summary>
     private bool disposed;
+    private GlowLook orbLook = GlowLook.Default;
+    private DropLook pillLook = DropLook.Default;
+    private bool alwaysStill;
 
     /// <summary>The frame clock every ink in the process shares.</summary>
     public InkClock Clock { get; }
@@ -131,6 +136,25 @@ internal sealed class ShellInk : IDisposable
         return new InkLevels(InkLevels.Level(near.Low, near.Mid, near.High), InkLevels.Level(far.Low, far.Mid, far.High));
     }
 
+    /// <summary>UI thread. The app's appearance: the Drop's pill and orb follow it.</summary>
+    public void SetLook(GlowLook orb, DropLook pill, bool still)
+    {
+        orbLook = orb;
+        pillLook = pill;
+        alwaysStill = still;
+        if (drop is not null)
+        {
+            ApplyLook(drop);
+        }
+    }
+
+    private void ApplyLook(DropWindow window)
+    {
+        window.Look = pillLook;
+        window.Surface.Look = orbLook;
+        window.Surface.AlwaysStill = alwaysStill;
+    }
+
     /// <summary>A state held whatever the core says (the Drop's focus check). Null in ordinary use.</summary>
     public InkState? Held
     {
@@ -153,6 +177,8 @@ internal sealed class ShellInk : IDisposable
         {
             drop = new DropWindow(Loader, Clock);
             drop.Surface.Levels = LiveLevels;
+            drop.Surface.Placement = new InkPlacement(GlowTokens.Orb.Drop.X, GlowTokens.Orb.Drop.Y, GlowTokens.Orb.Drop.Unit);
+            ApplyLook(drop);
             drop.ButtonClicked += Clicked;
             drop.ProblemChanged += report;
             report(drop.Problem);
