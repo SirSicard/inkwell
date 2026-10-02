@@ -30,7 +30,7 @@ public interface IInkTarget
     /// False when nothing could be presented (the host is not ready). Throws
     /// <see cref="InkRendererException"/> when the device fails.
     /// </summary>
-    bool Render(InkPipeline pipeline, in InkUniforms uniforms, InkMark? mark);
+    bool Render(InkPipeline pipeline, in InkUniforms uniforms);
 
     /// <summary>The pipeline is lost or replaced: release every object made on its device.</summary>
     void ReleaseDeviceResources();
@@ -71,15 +71,12 @@ public sealed class InkSurface : IDisposable
     private readonly InkSimulation simulation = new();
     private InkSchedule schedule;
     private InkPipeline? pipeline;
-    private Wordmark? wordmark;
-    /// <summary>The wordmark could not be made for this canvas: drawn without it until the canvas or the setting changes.</summary>
-    private bool wordmarkFailed;
     private bool hostOnScreen;
     private bool followsSystem = true;
     private bool disposed;
     private double lastTick;
     private bool firstTick = true;
-    private (int Width, int Height, double PointWidth) canvas;
+    private (int Width, int Height) canvas;
 
     /// <summary>A surface drawing into <paramref name="target"/> with the loader's pipeline, driven by <paramref name="clock"/> while live. UI thread.</summary>
     public InkSurface(IInkTarget target, InkPipelineLoader loader, InkClock clock)
@@ -91,7 +88,7 @@ public sealed class InkSurface : IDisposable
         this.loader = loader;
         // The prototype starts each ink at a random point in its slow motion.
         simulation.T = Random.Shared.NextDouble() * 30;
-        schedule.SetReduceMotion(!SystemMotion.AnimationsEnabled);
+        schedule.SetReduceMotion(SystemReducesMotion);
         SystemMotion.Changed += MotionChanged;
         // A pipeline already made is used at once; this and every later outcome also arrive
         // through the subscription (Adopt ignores the one it already has).
@@ -117,22 +114,6 @@ public sealed class InkSurface : IDisposable
         }
     }
 
-    /// <summary>Whether the INKWELL wordmark is knocked out of the ink.</summary>
-    public bool ShowsWordmark
-    {
-        get;
-        set
-        {
-            if (field == value)
-            {
-                return;
-            }
-            field = value;
-            DropWordmark();
-            Perform(schedule.Invalidate());
-        }
-    }
-
     /// <summary>The ink body's centre height, 0..1 from the bottom.</summary>
     public double InkCentreHeight
     {
@@ -151,20 +132,81 @@ public sealed class InkSurface : IDisposable
     /// <summary>The live levels, read once per frame while live; null reads silence. Must return at once.</summary>
     public Func<InkLevels>? Levels { get; set; }
 
+    /// <summary>Where the orb sits on the canvas: the window's place, or the Drop's.</summary>
+    public InkPlacement Placement
+    {
+        get;
+        set
+        {
+            if (field == value)
+            {
+                return;
+            }
+            field = value;
+            Perform(schedule.Invalidate());
+        }
+    } = InkPlacement.Centre;
+
+    /// <summary>The orb's colours (the shell's appearance).</summary>
+    public GlowLook Look
+    {
+        get;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (field == value)
+            {
+                return;
+            }
+            field = value;
+            Perform(schedule.Invalidate());
+        }
+    } = GlowLook.Default;
+
+    /// <summary>
+    /// The user's "Always still" (Settings > Appearance): one still frame per change, whatever
+    /// Windows' Animation effects say.
+    /// </summary>
+    public bool AlwaysStill
+    {
+        get;
+        set
+        {
+            if (field == value)
+            {
+                return;
+            }
+            field = value;
+            if (followsSystem)
+            {
+                Perform(schedule.SetReduceMotion(SystemReducesMotion));
+            }
+        }
+    }
+
+    /// <summary>The prototype's stand-in voice instead of the live levels (the first run's demo).</summary>
+    public bool Demo { get; set; }
+
+    /// <summary>
+    /// Each frame's state, as it is drawn (live on the clock, or the still frame): the window's edge
+    /// glow follows it, so it moves exactly when the orb does and never on its own. UI thread.
+    /// </summary>
+    public event Action<GlowFrame>? Drawn;
+
     /// <summary>Frames this surface has presented.</summary>
     public int FramesDrawn { get; private set; }
 
     /// <summary>Whether the surface is on the clock (live, on screen, motion allowed).</summary>
     public bool IsAnimating => clock.Contains(this);
 
-    /// <summary>Whether the pipeline has arrived. Until then the host shows its paper and no clock runs.</summary>
+    /// <summary>Whether the pipeline has arrived. Until then the host shows its fallback and no clock runs.</summary>
     public bool IsReady => pipeline is not null;
 
     /// <summary>Why the ink cannot draw, if it cannot.</summary>
     public string? Failure { get; private set; }
 
     /// <summary>The canvas in pixels.</summary>
-    public (int Width, int Height) Canvas => (canvas.Width, canvas.Height);
+    public (int Width, int Height) Canvas => canvas;
 
     /// <summary>The pipeline, once it has arrived (hosts make their swapchains on its device).</summary>
     public InkPipeline? Pipeline => pipeline;
@@ -210,7 +252,7 @@ public sealed class InkSurface : IDisposable
         set
         {
             followsSystem = value is null;
-            Perform(schedule.SetReduceMotion(value ?? !SystemMotion.AnimationsEnabled));
+            Perform(schedule.SetReduceMotion(value ?? SystemReducesMotion));
         }
     }
 
@@ -222,17 +264,16 @@ public sealed class InkSurface : IDisposable
             Math.Max(2, (int)Math.Round(height * s, MidpointRounding.AwayFromZero)));
     }
 
-    /// <summary>The host's pixels changed: the canvas is <paramref name="width"/> x <paramref name="height"/>, <paramref name="pointWidth"/> DIPs wide (it sizes the wordmark).</summary>
-    public void SetCanvas(int width, int height, double pointWidth)
+    /// <summary>The host's pixels changed: the canvas is <paramref name="width"/> x <paramref name="height"/>.</summary>
+    public void SetCanvas(int width, int height)
     {
-        if (canvas == (width, height, pointWidth))
+        if (canvas == (width, height))
         {
             return;
         }
-        canvas = (width, height, pointWidth);
+        canvas = (width, height);
         simulation.CanvasWidth = width;
         simulation.CanvasHeight = height;
-        DropWordmark();
         UpdateVisibility();
         Perform(schedule.Invalidate());
     }
@@ -252,11 +293,14 @@ public sealed class InkSurface : IDisposable
     /// <summary>Something else in the host's frame changed (the Drop's text): the frame on screen is out of date.</summary>
     public void Invalidate() => Perform(schedule.Invalidate());
 
+    /// <summary>Whether the ink holds still: Animation effects off, or the user's Always still.</summary>
+    private bool SystemReducesMotion => AlwaysStill || !SystemMotion.AnimationsEnabled;
+
     private void MotionChanged()
     {
         if (followsSystem)
         {
-            Perform(schedule.SetReduceMotion(!SystemMotion.AnimationsEnabled));
+            Perform(schedule.SetReduceMotion(SystemReducesMotion));
         }
     }
 
@@ -349,7 +393,6 @@ public sealed class InkSurface : IDisposable
         {
             // Replaced after another surface lost the device: this one's objects are on it too.
             target.ReleaseDeviceResources();
-            DropWordmark();
             pipeline = null;
             // Off the clock through the schedule, so it knows; no fallback flashes in between.
             Perform(schedule.SetOnScreen(false));
@@ -383,7 +426,6 @@ public sealed class InkSurface : IDisposable
         SetFailure(message);
         clock.Remove(this);
         target.ReleaseDeviceResources();
-        DropWordmark();
         if (deviceLost || pipeline?.DeviceRemoved() == true)
         {
             lost = pipeline;
@@ -506,40 +548,31 @@ public sealed class InkSurface : IDisposable
         lastTick = now;
         firstTick = false;
         var live = Levels?.Invoke() ?? InkLevels.Silent;
-        simulation.Step(dt, snap: false, InkVoice.Levels(live.Near, live.Far));
-        Draw();
+        simulation.Step(dt, snap: false, Demo ? InkVoice.Synthetic : InkVoice.Levels(live.Near, live.Far));
+        Drawn?.Invoke(simulation.Frame(moving: true));
+        Draw(moving: true);
     }
 
     /// <summary>The settled frame: droplets cleared, springs at their targets, no voice.</summary>
     private void DrawStill()
     {
         simulation.Settle(InkVoice.Silent);
-        Draw();
+        Drawn?.Invoke(simulation.Frame(moving: false));
+        Draw(moving: false);
     }
 
-    private void Draw()
+
+    /// <summary>One frame: live (<paramref name="moving"/>) on the clock, or the still frame, whose time stands still.</summary>
+    private void Draw(bool moving)
     {
         if (pipeline is null || canvas.Width <= 0 || disposed)
         {
             return;
         }
-        if (ShowsWordmark && wordmark is null && !wordmarkFailed)
-        {
-            try
-            {
-                wordmark = Wordmark.Rasterize(pipeline, canvas.Width, canvas.Height, canvas.PointWidth);
-            }
-            catch (InkRendererException e)
-            {
-                // A failed wordmark leaves the ink without it; the ink still draws.
-                InkLog.Write(e.Message);
-                wordmarkFailed = true;
-            }
-        }
         bool presented;
         try
         {
-            presented = target.Render(pipeline, simulation.Uniforms(hasMark: wordmark is not null), wordmark?.Mark);
+            presented = target.Render(pipeline, simulation.Uniforms(Placement, Look, moving));
         }
         catch (InkRendererException e)
         {
@@ -567,14 +600,7 @@ public sealed class InkSurface : IDisposable
         }
     }
 
-    private void DropWordmark()
-    {
-        wordmark?.Dispose();
-        wordmark = null;
-        wordmarkFailed = false;
-    }
-
-    /// <summary>Leaves the clock and releases the wordmark. UI thread.</summary>
+    /// <summary>Leaves the clock. UI thread.</summary>
     public void Dispose()
     {
         if (disposed)
@@ -589,6 +615,5 @@ public sealed class InkSurface : IDisposable
         healthTimer = null;
         SystemMotion.Changed -= MotionChanged;
         clock.Remove(this);
-        DropWordmark();
     }
 }

@@ -1,4 +1,4 @@
-// The ink on Windows: one Direct3D 11 pipeline, drawn only while something is live
+// The ink on Windows (Glow's orb): one Direct3D 11 pipeline, drawn only while something is live
 // (architecture rule 9). The Mac's InkRenderer target, file for file where it can be:
 //
 // | File | Holds |
@@ -9,7 +9,7 @@
 // | InkClock | the one frame clock every live surface shares: the compositor's clock, on a thread that exists only while something is live |
 // | InkSurface | one ink on screen: state, schedule and simulation, drawing into a host (IInkTarget) |
 // | DropWindow | the Drop: a raw Win32 window on DirectComposition that never takes focus |
-// | Wordmark | INKWELL, rasterised with DirectWrite, knocked out of the ink |
+// | GlowLook | the orb's colours and the Drop's pill, as the shell resolves them |
 // | InkSnapshot | one frame offscreen, at a fixed time: tests and reference comparisons |
 // | SystemMotion | Windows' Animation effects setting, the Reduce Motion of this shell |
 using System.Diagnostics;

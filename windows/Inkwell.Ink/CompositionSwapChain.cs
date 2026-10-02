@@ -123,10 +123,10 @@ public sealed unsafe class CompositionSwapChain : IDisposable
         }
     }
 
-    /// <summary>Draws the ink over the whole back buffer and presents it (a SwapChainPanel's frame). UI thread.</summary>
-    public void DrawInk(in InkUniforms uniforms, InkMark? mark)
+    /// <summary>Draws the orb over the whole (cleared) back buffer and presents it (a SwapChainPanel's frame). UI thread.</summary>
+    public void DrawInk(in InkUniforms uniforms)
     {
-        pipeline.Encode(RenderTargetView, Width, Height, uniforms, mark);
+        pipeline.Encode(RenderTargetView, Width, Height, uniforms);
         Present();
     }
 

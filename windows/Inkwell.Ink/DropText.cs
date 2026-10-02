@@ -146,15 +146,3 @@ public sealed record DropButtons(string First, string? Second = null)
         _ => throw new ArgumentOutOfRangeException(nameof(index)),
     };
 }
-
-/// <summary>The design tokens the Drop paints with (the Mac's Palette).</summary>
-internal static class Palette
-{
-    public static readonly (float R, float G, float B) Paper = Rgb(0xF2EEE6);
-    public static readonly (float R, float G, float B) Ink = Rgb(0x16181F);
-    public static readonly (float R, float G, float B) Muted = Rgb(0x625E57);
-    public static readonly (float R, float G, float B) Seal = Rgb(0xB23A26);
-
-    private static (float, float, float) Rgb(int hex) =>
-        (((hex >> 16) & 0xFF) / 255f, ((hex >> 8) & 0xFF) / 255f, (hex & 0xFF) / 255f);
-}
