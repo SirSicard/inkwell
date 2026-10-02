@@ -19,6 +19,7 @@ struct TodayScreen: View {
     @Environment(ScreenModels.self) private var screens
     @Environment(WindowPresence.self) private var presence
     @State private var showAllNeeds = false
+    @FocusState private var searchFocused: Bool
     /// The content's width: two columns (the canvas's 1.3 : 1) from 624 pt, else one.
     @State private var width: CGFloat = 0
     /// The visible height: the counts sit at the foot of the screen, as the canvas has them.
@@ -66,6 +67,14 @@ struct TodayScreen: View {
             height = size.height
         }
         .searchable(text: searchText, placement: .toolbar, prompt: "Search everything said")
+        .searchFocused($searchFocused)
+        .onChange(of: router.searchPending, initial: true) { _, pending in
+            // Find (⌘F) chose this field.
+            if pending {
+                searchFocused = true
+                router.searchPending = false
+            }
+        }
         .onAppear {
             library.refreshToday()
             screens.owed.load()

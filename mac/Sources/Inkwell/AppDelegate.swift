@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// never starts an updater.
     private lazy var updates = Updates()
     private var statusItem: StatusItemController?
+    /// The main menu's own items' target.
+    private var menuActions: MenuActions?
     private var mainWindow: MainWindowController?
     /// The ink every surface shows, and the Drop that shows it while something is live.
     private lazy var ink = ShellInk(
@@ -42,7 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // With updates off (no release key in this build) there is no updater and no menu item.
-        NSApp.mainMenu = MainMenu.make(checkForUpdates: updates.makeMenuItem())
+        menuActions = MenuActions(router: router, store: core.store, screens: core.screens) { [weak self] in
+            self?.showMainWindow()
+        }
+        if let menuActions {
+            NSApp.mainMenu = MainMenu.make(checkForUpdates: updates.makeMenuItem(), actions: menuActions)
+        }
         turnSignalsIntoQuit()
 
         if let measurement {
@@ -76,9 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dropDemo = DropDemo(ink: ink, interval: interval)
         }
 
-        statusItem = StatusItemController(store: core.store, checkForUpdates: updates.makeMenuItem()) { [weak self] in
-            self?.showMainWindow()
-        }
+        statusItem = StatusItemController(
+            store: core.store, ink: ink, screens: core.screens, checkForUpdates: updates.makeMenuItem(),
+            openWindow: { [weak self] in self?.showMainWindow() },
+            openSettings: { [weak self] in
+                self?.showMainWindow()
+                self?.router.open(.settings)
+            })
         // Opened by the user: show the window. Opened at login: stay in the menu bar, unless a
         // second copy asked for the window while this one was starting (served by attach).
         if !LoginItem.launchedAtLogin() {

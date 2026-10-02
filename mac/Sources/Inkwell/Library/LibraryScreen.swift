@@ -6,6 +6,8 @@ import SwiftUI
 
 struct LibraryScreen: View {
     @Environment(LibraryModel.self) private var library
+    @Environment(Router.self) private var router
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         @Bindable var library = library
@@ -33,6 +35,14 @@ struct LibraryScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .searchable(text: $library.query, placement: .toolbar, prompt: "Search everything said")
+        .searchFocused($searchFocused)
+        .onChange(of: router.searchPending, initial: true) { _, pending in
+            // Find (⌘F) chose this field.
+            if pending {
+                searchFocused = true
+                router.searchPending = false
+            }
+        }
         .onAppear {
             library.refreshList()
         }
