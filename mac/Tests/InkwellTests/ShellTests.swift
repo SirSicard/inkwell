@@ -1,7 +1,9 @@
 // The shell's own logic: the routes the sidebar lists, where the data lives, the single-instance
-// lock and the design tokens. (The window itself is checked by hand: mac/VOICEOVER-CHECKLIST.md.)
+// lock and the design tokens; the main window's frame and the height of its toolbar. (The rest of
+// the window is checked by hand: mac/VOICEOVER-CHECKLIST.md.)
 import AppKit
 import Foundation
+import InkBridge
 import XCTest
 
 @testable import Inkwell
@@ -39,6 +41,80 @@ final class RouterTests: XCTestCase {
 
         router.selection = nil
         XCTAssertEqual(router.current, .today, "a cleared selection shows Today")
+    }
+}
+
+/// The main window's frame, fitted to its screen at launch: a saved frame from a larger display
+/// (or the default size on a small one) must never leave an edge out of reach.
+final class WindowFrameTests: XCTestCase {
+    /// A 1728 x 1117 pt display's visible frame (under the menu bar).
+    private let screen = NSRect(x: 0, y: 0, width: 1728, height: 1079)
+    private let minimum = NSSize(width: 720, height: 460)
+
+    func testAFrameWiderThanTheScreenIsNarrowedToItAndBroughtOnScreen() {
+        // As observed: 1755 pt wide on a 1728 pt display, its left edge at x = -51.
+        let fitted = WindowFrame.fitted(NSRect(x: -51, y: 120, width: 1755, height: 760), in: screen, minSize: minimum)
+        XCTAssertEqual(fitted, NSRect(x: 0, y: 120, width: 1728, height: 760))
+    }
+
+    func testAFrameOffTheLeftEdgeMovesBackOnScreenAtItsSize() {
+        let fitted = WindowFrame.fitted(NSRect(x: -300, y: 120, width: 1040, height: 700), in: screen, minSize: minimum)
+        XCTAssertEqual(fitted, NSRect(x: 0, y: 120, width: 1040, height: 700))
+        let right = WindowFrame.fitted(NSRect(x: 1500, y: 120, width: 1040, height: 700), in: screen, minSize: minimum)
+        XCTAssertEqual(right, NSRect(x: 688, y: 120, width: 1040, height: 700), "nor off the right edge")
+    }
+
+    func testAFrameTallerThanTheScreenIsShortenedToIt() {
+        let fitted = WindowFrame.fitted(NSRect(x: 100, y: -50, width: 1040, height: 1300), in: screen, minSize: minimum)
+        XCTAssertEqual(fitted, NSRect(x: 100, y: 0, width: 1040, height: 1079))
+    }
+
+    func testAFrameThatFitsIsLeftAlone() {
+        let frame = NSRect(x: 200, y: 150, width: 1040, height: 700)
+        XCTAssertEqual(WindowFrame.fitted(frame, in: screen, minSize: minimum), frame)
+        // A second display to the right of the first: its own coordinates.
+        let second = NSRect(x: 1728, y: -200, width: 1920, height: 1055)
+        let there = NSRect(x: 2000, y: 0, width: 1040, height: 700)
+        XCTAssertEqual(WindowFrame.fitted(there, in: second, minSize: minimum), there)
+    }
+
+    func testTheMinimumSizeWinsOnAScreenSmallerThanIt() {
+        let tiny = NSRect(x: 0, y: 0, width: 700, height: 400)
+        let fitted = WindowFrame.fitted(NSRect(x: -40, y: -40, width: 1040, height: 700), in: tiny, minSize: minimum)
+        XCTAssertEqual(fitted.size, minimum)
+        XCTAssertEqual(fitted.minX, 0, "the left edge stays reachable")
+        XCTAssertEqual(fitted.maxY, 400, "and the title bar")
+    }
+}
+
+/// The main window's chrome (title bar and toolbar) is as tall on every screen: a screen with no
+/// toolbar item of its own once dropped the toolbar, and the title and window buttons moved up.
+@MainActor
+final class WindowChromeTests: XCTestCase {
+    private struct NoCalendar: CalendarAccess {
+        func state() -> CardState { .notAsked }
+        func request(done: @escaping @MainActor @Sendable () -> Void) {}
+    }
+
+    func testTheToolbarIsAsTallOnEveryScreen() throws {
+        _ = NSApplication.shared
+        let store = CoreStore()
+        let router = Router()
+        let controller = MainWindowController(
+            router: router, store: store, ink: ShellInk(store: store), updates: Updates(infoDictionary: nil),
+            screens: ScreenModels(send: { _ in }, calendar: NoCalendar(), apps: WorkspaceApps()),
+            library: LibraryModel(send: { _ in }))
+        let window = try XCTUnwrap(controller.window)
+        // Never shown: SwiftUI bridges the toolbar as it lays the window out.
+        var heights: [Route: CGFloat] = [:]
+        for route in Route.allCases {
+            router.open(route)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+            window.contentView?.layoutSubtreeIfNeeded()
+            heights[route] = window.frame.height - window.contentLayoutRect.height
+        }
+        XCTAssertEqual(Set(heights.values).count, 1, "the chrome's height per screen: \(heights)")
+        XCTAssertNotNil(window.toolbar)
     }
 }
 
@@ -125,6 +201,46 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(Glow.night.ink.hex, 0xF0EBE3)
         XCTAssertEqual(Glow.presets.map(\.id), ["indigo", "dusk", "lagoon", "aurora", "citrus", "rosewater", "ink_sand"])
         XCTAssertEqual(Glow.preset("nonsense").id, "indigo", "an unknown preset is the default")
+    }
+
+    /// The app's accent (Info.plist's NSAccentColorName, compiled from Assets.xcassets into the
+    /// bundle by build-mac.sh) is the button fill of each mode, as Windows' SystemAccentColor is.
+    func testTheAppAccentIsEachModesButtonFill() throws {
+        let mac = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let plist = try XCTUnwrap(NSDictionary(contentsOf: mac.appendingPathComponent("Info.plist")))
+        let name = try XCTUnwrap(plist["NSAccentColorName"] as? String)
+        let colorset = mac.appendingPathComponent("Assets.xcassets/\(name).colorset/Contents.json")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: colorset)) as? [String: Any])
+        let colors = try XCTUnwrap(json["colors"] as? [[String: Any]])
+        func hex(dark: Bool) throws -> UInt32 {
+            let entry = try XCTUnwrap(colors.first { entry in
+                let appearances = entry["appearances"] as? [[String: String]] ?? []
+                return dark ? appearances == [["appearance": "luminosity", "value": "dark"]] : appearances.isEmpty
+            }, dark ? "a dark entry" : "a universal entry")
+            let color = try XCTUnwrap(entry["color"] as? [String: Any])
+            XCTAssertEqual(color["color-space"] as? String, "srgb")
+            let components = try XCTUnwrap(color["components"] as? [String: String])
+            XCTAssertEqual(components["alpha"], "1.000")
+            let channels = try ["red", "green", "blue"].map { key in
+                let text = try XCTUnwrap(components[key]).dropFirst(2)
+                return try XCTUnwrap(UInt32(text, radix: 16), key)
+            }
+            return channels[0] << 16 | channels[1] << 8 | channels[2]
+        }
+        XCTAssertEqual(try hex(dark: false), Glow.day.buttonFill.hex)
+        XCTAssertEqual(try hex(dark: true), Glow.night.buttonFill.hex)
+        XCTAssertEqual(colors.count, 2)
+    }
+
+    /// The words on a selected row, which AppKit fills with the accent: the button label on the
+    /// button fill, and on a user's own accent whichever of the two labels reads.
+    func testWordsOnTheAccentAreTheButtonLabel() {
+        func label(_ swatch: Swatch) -> Swatch { Theme.label(onAccent: GlowColours.rgb(swatch)) }
+        XCTAssertEqual(label(Glow.day.buttonFill), Glow.day.buttonLabel)
+        XCTAssertEqual(label(Glow.night.buttonFill), Glow.night.buttonLabel)
+        XCTAssertEqual(Theme.label(onAccent: .init(0, 0.48, 1)), Glow.day.buttonLabel, "the system's blue: light words")
+        XCTAssertEqual(Theme.label(onAccent: .init(1, 0.78, 0)), Glow.night.buttonLabel, "its yellow: dark words")
     }
 
     func testASwatchIsItsSRGBValue() {

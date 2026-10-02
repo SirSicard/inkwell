@@ -19,11 +19,23 @@ import SwiftUI
 struct ShellView: View {
     @Bindable var router: Router
     @Environment(CoreStore.self) private var store
+    @Environment(LibraryModel.self) private var library
     @Environment(ScreenModels.self) private var screens
     @Environment(GlowTheme.self) private var theme
     @Environment(ShellInk.self) private var ink
+    @FocusState private var searchFocused: Bool
 
     private var meetingLive: Bool { store.meeting != nil }
+
+    /// The search is the Library's: typing anywhere else opens the Library's matches.
+    private var searchText: Binding<String> {
+        Binding(get: { library.query }, set: { words in
+            library.query = words
+            if !words.trimmingCharacters(in: .whitespaces).isEmpty, router.current != .library {
+                router.open(.library)
+            }
+        })
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -33,6 +45,18 @@ struct ShellView: View {
             RouteScreen(route: router.current)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle(router.current.title)
+                // "Search everything said" on every screen, as Windows has it in the navigation
+                // pane. A screen without a toolbar item of its own would drop the toolbar, and the
+                // title and the window buttons would move up.
+                .searchable(text: searchText, placement: .toolbar, prompt: "Search everything said")
+                .searchFocused($searchFocused)
+                .onChange(of: router.searchPending, initial: true) { _, pending in
+                    // Find (⌘F) chose this field.
+                    if pending {
+                        searchFocused = true
+                        router.searchPending = false
+                    }
+                }
         }
         .background {
             OrbLayer(
@@ -60,11 +84,14 @@ struct ShellView: View {
 }
 
 /// The destinations, grouped, under the wordmark, with Settings at the foot. A native List: rows
-/// are VoiceOver elements, arrow keys move the selection, and the system draws the selection.
+/// are VoiceOver elements, arrow keys move the selection, and the system draws the selection, in
+/// the app's accent (the button fill) while the list has the keyboard, with the row's words and
+/// symbol in the button label (`onAccent`).
 struct Sidebar: View {
     @Bindable var router: Router
     let meetingLive: Bool
     @Environment(ScreenModels.self) private var screens
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         List(selection: $router.selection) {
@@ -80,6 +107,7 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .focused($listFocused)
         .accessibilityLabel("Sections")
         .safeAreaInset(edge: .top, spacing: 0) {
             Text("Inkwell")
@@ -114,16 +142,27 @@ struct Sidebar: View {
         switch route {
         case .owed:
             // The overdue count; none shows when nothing is late.
-            Label(route.title, systemImage: route.symbol)
+            label(route)
                 .badge(screens.owed.overdueCount(now: Date()))
         case .live:
             HStack(spacing: 8) {
-                Label(route.title, systemImage: route.symbol)
+                label(route)
                 Spacer(minLength: 0)
                 PulseDot()
             }
         default:
-            Label(route.title, systemImage: route.symbol)
+            label(route)
+        }
+    }
+
+    /// A route's title and symbol. Each takes the selected row's colour itself: a style set on
+    /// the whole Label leaves its symbol white.
+    private func label(_ route: Route) -> some View {
+        let selected = router.current == route
+        return Label {
+            Text(route.title).onAccent(selected: selected, listFocused: listFocused)
+        } icon: {
+            Image(systemName: route.symbol).onAccent(selected: selected, listFocused: listFocused)
         }
     }
 }

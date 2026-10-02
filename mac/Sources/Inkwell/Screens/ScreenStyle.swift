@@ -90,8 +90,9 @@ enum Paper {
                         .foregroundStyle(Theme.text)
                         .accessibilityAddTraits(.isHeader)
                     if let subtitle {
+                        // Counts in words ("5 open · 1 overdue"), not a time: the caption's face.
                         Text(subtitle)
-                            .font(Typography.timestamp)
+                            .font(Typography.caption)
                             .foregroundStyle(Theme.secondaryText)
                     }
                 }
@@ -113,6 +114,34 @@ extension View {
     /// border, under Increase Contrast or Reduce Transparency.
     func paperCard(alert: Bool = false) -> some View {
         modifier(GlowCard(alert: alert))
+    }
+
+    /// A row of a native List with a selection: in Theme.onAccent while AppKit fills it with the
+    /// accent, which is while it is selected, its list has the keyboard (`listFocused`, the list's
+    /// FocusState) and its window is key. Otherwise the row keeps its own colours: the selection
+    /// is then the system's quiet grey.
+    func onAccent(selected: Bool, listFocused: Bool) -> some View {
+        modifier(OnAccentRow(selected: selected, listFocused: listFocused))
+    }
+}
+
+/// Whether AppKit fills a List row with the accent: selected, in a list with the keyboard, in the
+/// key window.
+func accentFillsRow(selected: Bool, listFocused: Bool, active: ControlActiveState) -> Bool {
+    selected && listFocused && active == .key
+}
+
+private struct OnAccentRow: ViewModifier {
+    let selected: Bool
+    let listFocused: Bool
+    @Environment(\.controlActiveState) private var active
+
+    func body(content: Content) -> some View {
+        if accentFillsRow(selected: selected, listFocused: listFocused, active: active) {
+            content.foregroundStyle(Theme.onAccent)
+        } else {
+            content
+        }
     }
 }
 

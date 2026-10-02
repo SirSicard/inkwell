@@ -183,6 +183,22 @@ cp "$mac/Info.plist" "$app/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "${INK_VERSION:-1.0.0}" "$app/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${INK_BUILD_NUMBER:-1}" "$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
+# The asset catalog: the app's accent (Info.plist's NSAccentColorName), Glow's button fill per
+# mode. Without it macOS draws selections and default buttons in the system's blue, silently, so
+# a catalog that did not compile, or lacks the colour Info.plist names, stops the build.
+assets_plist="$(mktemp -t inkwell-assets)"
+xcrun actool "$mac/Assets.xcassets" --compile "$app/Contents/Resources" --platform macosx \
+  --minimum-deployment-target "$target" --output-partial-info-plist "$assets_plist" \
+  --errors --warnings --output-format human-readable-text >/dev/null \
+  || fail "actool could not compile mac/Assets.xcassets"
+rm -f "$assets_plist"
+accent="$(plutil -extract NSAccentColorName raw "$app/Contents/Info.plist")" \
+  || fail "Info.plist names no NSAccentColorName"
+[ -f "$app/Contents/Resources/Assets.car" ] || fail "the bundle has no Assets.car"
+# Read whole before matching: grep -q closing the pipe early could fail assetutil under pipefail.
+car_info="$(xcrun assetutil --info "$app/Contents/Resources/Assets.car")"
+grep -qF "\"Name\" : \"$accent\"" <<<"$car_info" \
+  || fail "Assets.car holds no colour named $accent (Info.plist's NSAccentColorName)"
 # SwiftPM resource bundles (a dependency's data files). Bundle.module looks in
 # Bundle.main.resourceURL first, which is Contents/Resources in an app.
 find "$bin" -maxdepth 1 -name '*.bundle' -type d -exec cp -R {} "$app/Contents/Resources/" \;

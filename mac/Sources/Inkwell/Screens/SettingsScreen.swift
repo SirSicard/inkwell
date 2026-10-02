@@ -44,6 +44,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsScreen: View {
     @Environment(ScreenModels.self) private var screens
     @State private var section: SettingsSection? = .general
+    /// The section list has the keyboard: its selected row is drawn in the accent (`onAccent`).
+    @FocusState private var sectionsFocused: Bool
     /// The section a click scrolled to: it stays selected while any of it is in view, as the last
     /// sections cannot scroll to the top.
     @State private var clicked: SettingsSection?
@@ -52,32 +54,37 @@ struct SettingsScreen: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            List(SettingsSection.allCases, selection: $section) { section in
-                Text(section.title).tag(section)
+            List(SettingsSection.allCases, selection: $section) { item in
+                Text(item.title).tag(item).onAccent(selected: section == item, listFocused: sectionsFocused)
             }
             .listStyle(.sidebar)
+            .focused($sectionsFocused)
             .scrollContentBackground(.hidden)
             .frame(width: 188)
             .accessibilityLabel("Settings sections")
             Rectangle().fill(PaperPalette.border).frame(width: 1).accessibilityHidden(true)
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 30) {
+                    // Each section after the first starts at a hairline, with room above it: where
+                    // one ends and the next begins reads at a glance.
+                    VStack(alignment: .leading, spacing: 40) {
                         GeneralSection(screens: screens).id(SettingsSection.general)
-                        AppearanceSection(theme: screens.theme).id(SettingsSection.appearance)
-                        PermissionsSection(permissions: screens.permissions).id(SettingsSection.permissions)
+                        AppearanceSection(theme: screens.theme).sectionStart().id(SettingsSection.appearance)
+                        PermissionsSection(permissions: screens.permissions).sectionStart().id(SettingsSection.permissions)
                         DictationSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
-                            .id(SettingsSection.dictation)
-                        ModesSection(modes: screens.modes).id(SettingsSection.modes)
-                        SnippetsSection(snippets: screens.snippets).id(SettingsSection.snippets)
-                        VoiceCommandsSection(commands: screens.voiceCommands).id(SettingsSection.voiceCommands)
-                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).id(SettingsSection.ai)
+                            .sectionStart().id(SettingsSection.dictation)
+                        ModesSection(modes: screens.modes).sectionStart().id(SettingsSection.modes)
+                        SnippetsSection(snippets: screens.snippets).sectionStart().id(SettingsSection.snippets)
+                        VoiceCommandsSection(commands: screens.voiceCommands).sectionStart()
+                            .id(SettingsSection.voiceCommands)
+                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).sectionStart()
+                            .id(SettingsSection.ai)
                         MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
-                            .id(SettingsSection.meetings)
-                        ModelsSection(catalogue: screens.catalogue).id(SettingsSection.models)
+                            .sectionStart().id(SettingsSection.meetings)
+                        ModelsSection(catalogue: screens.catalogue).sectionStart().id(SettingsSection.models)
                         StorageSection(storage: screens.storage, meetings: screens.meetings)
-                            .id(SettingsSection.storage)
-                        AboutSection().id(SettingsSection.about)
+                            .sectionStart().id(SettingsSection.storage)
+                        AboutSection().sectionStart().id(SettingsSection.about)
                     }
                     // The sections are the scroll's targets, for the list to follow (below).
                     .scrollTargetLayout()
@@ -132,6 +139,17 @@ struct SettingsScreen: View {
         guard let next, next != section else { return }
         followed = next
         section = next
+    }
+}
+
+extension View {
+    /// A Settings section's start: a hairline across the column, and room under it before the
+    /// heading. Inside the section, so the list's scroll to it lands on the hairline.
+    func sectionStart() -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            Rectangle().fill(PaperPalette.border).frame(height: 1).accessibilityHidden(true)
+            self
+        }
     }
 }
 
@@ -240,8 +258,9 @@ private struct PermissionRow: View {
                 Button(actionTitle, action: request)
             }
         } else {
+            // A state in words, in the caption's face: mono is for timestamps and versions.
             Text(state == .allowed ? "Allowed" : "Checking…")
-                .font(Typography.timestamp)
+                .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
         }
     }

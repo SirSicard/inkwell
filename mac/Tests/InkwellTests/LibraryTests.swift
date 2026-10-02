@@ -1,8 +1,10 @@
 // The Library and Record screens' logic: the one record order, how records read, the rendered
 // summary (no markdown token survives), the record document (ledger, notes-first merge, what is
 // owed and where it was said), and the view model's questions and answers.
+import AppKit
 import Foundation
 import InkBridge
+import SwiftUI
 import XCTest
 
 @testable import Inkwell
@@ -824,5 +826,23 @@ final class LibraryModelTests: XCTestCase {
         XCTAssertTrue(library.handles(listFailure))
         XCTAssertTrue(library.handles(stats), "Today says the counts could not be read")
         XCTAssertFalse(library.handles(other))
+    }
+}
+
+// MARK: - Layout
+
+@MainActor
+final class LibraryLayoutTests: XCTestCase {
+    /// The kind filters in the list column (272 pt, less its padding): every chip's label on one
+    /// line, so the row is one chip high. A label squeezed into two lines ("Meetin/gs") is taller.
+    func testTheKindFiltersStayOnOneLineInTheListColumn() {
+        let hosting = NSHostingController(rootView: KindFilter().environment(LibraryModel(send: { _ in })))
+        let fitted = hosting.sizeThatFits(in: CGSize(width: 272 - 2 * 12 - 2 * 6, height: 400))
+        XCTAssertLessThanOrEqual(fitted.height, 28.5, "one line of chips, 28 pt high")
+        XCTAssertLessThanOrEqual(fitted.width, 236.5, "within the column")
+        // Narrower than the chips: still one line, scrolling sideways.
+        let narrow = hosting.sizeThatFits(in: CGSize(width: 150, height: 400))
+        XCTAssertLessThanOrEqual(narrow.height, 28.5)
+        XCTAssertLessThanOrEqual(narrow.width, 150.5)
     }
 }

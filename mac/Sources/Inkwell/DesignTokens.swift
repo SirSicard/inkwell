@@ -52,6 +52,27 @@ enum Theme {
     /// The window's own background, behind the SwiftUI content.
     static let windowBackground = dynamic { $0.background.nsColor }
 
+    /// Words on the accent: a list's selected row, which AppKit fills with the accent while the
+    /// list has the keyboard. The app's accent is the button fill (Info.plist), so these are the
+    /// button label; a user's own accent wins over the app's, so the label is chosen against the
+    /// accent actually drawn. (SwiftUI's own selected-row words are white, unreadable on the night
+    /// fill.)
+    static let onAccent = Color(nsColor: NSColor(name: nil) { appearance in
+        var accent = GlowColours.rgb(Glow.mode(dark: appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua).buttonFill)
+        appearance.performAsCurrentDrawingAppearance {
+            if let c = NSColor.controlAccentColor.usingColorSpace(.sRGB) {
+                accent = GlowColours.RGB(c.redComponent, c.greenComponent, c.blueComponent)
+            }
+        }
+        return label(onAccent: accent).nsColor
+    })
+
+    /// The button label that reads on `accent`: night's (dark) on a light accent, day's (light)
+    /// on a dark one.
+    static func label(onAccent accent: GlowColours.RGB) -> Swatch {
+        GlowColours.luminance(accent) > 0.5 ? Glow.night.buttonLabel : Glow.day.buttonLabel
+    }
+
     /// The mode's colour at `path`, following the appearance it is drawn in.
     static func color(_ path: any KeyPath<Glow.Mode, Swatch> & Sendable) -> Color {
         Color(nsColor: dynamic { $0[keyPath: path].nsColor })
