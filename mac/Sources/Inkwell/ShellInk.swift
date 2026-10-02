@@ -255,7 +255,8 @@ struct OrbLayer: NSViewRepresentable {
     /// How strongly a live orb shows behind text. Live, the orb takes the dot colours at full
     /// strength, and its bright centre sits behind every screen's text: at 30 % its brightest point
     /// still leaves the mode's text at 4.5:1 or more and its secondary text at 3:1 or more, with
-    /// every preset in both modes (OrbBehindTextTests measures it). At rest it is the mode's quiet
+    /// every preset in both modes (OrbBehindTextTests measures it; a colour of the user's own is
+    /// not measured). At rest it is the mode's quiet
     /// idle colour, which text already reads over, and stays as designed.
     nonisolated static let liveBehindText: CGFloat = 0.3
 
@@ -292,7 +293,9 @@ struct OrbLayer: NSViewRepresentable {
         view.motionStill = still
         view.blotDepth = Self.blotDepth(behindText: behindText)
         let opacity = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
-        if view.alphaValue != opacity {
+        // Compared with a margin, not exactly: if the opacity ever reads back rounded (a layer
+        // keeps it as a Float), every update would start the fade again.
+        if abs(view.alphaValue - opacity) > 0.001 {
             // Faded with the ink's own change of state (its colours ease in over about a second),
             // so the orb never jumps; still, it is set at once.
             if still || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
