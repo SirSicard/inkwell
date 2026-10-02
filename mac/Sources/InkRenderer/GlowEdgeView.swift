@@ -43,7 +43,8 @@ public final class GlowEdgeView: NSView {
     public var isOn = true {
         didSet {
             guard isOn != oldValue else { return }
-            strokeHolder.isHidden = !isOn
+            // Off hides it now; on shows whatever the next frame draws (never a stale one).
+            if !isOn { strokeHolder.isHidden = true }
             visibilityChanged()
         }
     }
