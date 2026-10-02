@@ -1278,6 +1278,81 @@ final class CoreCommandTests: XCTestCase {
     }
 }
 
+// MARK: - Storage
+
+/// Settings > Storage: how much room each part of the library takes, measured again when it changes.
+@MainActor
+final class StorageModelTests: XCTestCase {
+    private var data: URL!
+
+    override func setUp() async throws {
+        data = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ink-storage-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: data.appendingPathComponent("models", isDirectory: true), withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: data)
+    }
+
+    /// A model as the core installs it: `<models>/<id>/<revision>/<file>`.
+    private func install(_ id: String, bytes: Int) throws {
+        let dir = data.appendingPathComponent("models/\(id)/0123456789ab", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(count: bytes).write(to: dir.appendingPathComponent("\(id).gguf"))
+    }
+
+    private func finished(_ id: String, ok: Bool = true) -> InkEvent {
+        event(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":\#(ok),"no_model_warm":false}"#)
+    }
+
+    /// The desktop pass's "Models 0 bytes" with 2.9 GB installed: Settings measured once, when it
+    /// appeared, and the downloads finished after that.
+    func testAModelThatFinishesInstallingIsCountedWithoutReopeningSettings() async throws {
+        let screens = ScreenModels(
+            send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps(), dataDirectory: data)
+        screens.storage.measure()
+        try await waitUntil { screens.storage.sizes != nil }
+        XCTAssertEqual(screens.storage.sizes?.models, 0)
+
+        try install("silero-vad-v6-16k", bytes: 100_000)
+        screens.apply([finished("silero-vad-v6-16k")])
+        try await waitUntil { (screens.storage.sizes?.models ?? 0) >= 100_000 }
+        XCTAssertEqual(screens.storage.sizes?.recordings, 0, "a model is not a recording")
+    }
+
+    /// Nothing is measured for a Settings screen that never asked: a download alone walks nothing.
+    func testADownloadBeforeSettingsWasShownMeasuresNothing() async throws {
+        let screens = ScreenModels(
+            send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps(), dataDirectory: data)
+        try install("silero-vad-v6-16k", bytes: 100_000)
+        screens.apply([finished("silero-vad-v6-16k")])
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(screens.storage.sizes)
+    }
+
+    /// A measure asked while one is running is run after it, never dropped: the running one may
+    /// have walked past the new files already.
+    func testAMeasureAskedDuringOneRunsAfterIt() async throws {
+        let storage = StorageModel(dataDirectory: data, modelsDirectory: nil)
+        storage.measure()
+        try install("qwen3-asr-1.7b-q8", bytes: 200_000)
+        storage.measure()
+        try await waitUntil { (storage.sizes?.models ?? 0) >= 200_000 }
+    }
+
+    private func waitUntil(_ timeout: Duration = .seconds(5), _ done: () -> Bool) async throws {
+        let start = ContinuousClock.now
+        while !done() {
+            if ContinuousClock.now - start > timeout {
+                return XCTFail("not within \(timeout)")
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+}
+
 // MARK: - About
 
 final class NoticesTests: XCTestCase {
