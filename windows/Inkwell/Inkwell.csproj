@@ -7,6 +7,11 @@
     <TargetPlatformMinVersion>10.0.26100.0</TargetPlatformMinVersion>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
+    <!-- The app's own resources (Inkwell.pri, with every page's compiled XAML) are published beside
+         the exe only with the MSIX tooling on, though nothing is packaged as MSIX: without it a
+         dotnet publish has none, and the first window fails with "Cannot locate resource from
+         'ms-appx:///TermsWindow.xaml'". dotnet build copies it either way. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
     <ApplicationIcon>Assets\Inkwell.ico</ApplicationIcon>
