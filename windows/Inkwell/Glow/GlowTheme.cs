@@ -20,6 +20,8 @@ internal sealed class GlowTheme
 {
     private readonly AppearanceModel appearance;
     private readonly AccessibilitySettings accessibility = new();
+    /// <summary>Held, so its event stays subscribed.</summary>
+    private readonly UISettings uiSettings = new();
     private FrameworkElement? root;
     private AppWindow? window;
 
@@ -30,8 +32,10 @@ internal sealed class GlowTheme
         ArgumentNullException.ThrowIfNull(ui);
         this.appearance = appearance;
         appearance.PropertyChanged += (_, _) => Update();
-        // Raised off the UI thread.
-        accessibility.HighContrastChanged += (_, _) => ui.TryEnqueue(Update);
+        // High Contrast turned on or off changes Windows' colours. AccessibilitySettings'
+        // HighContrastChanged is not this event: it needs a CoreWindow, and subscribing to it in a
+        // desktop app throws (0x80070490), so the app crashed on launch. Raised off the UI thread.
+        uiSettings.ColorValuesChanged += (_, _) => ui.TryEnqueue(Update);
         Update();
     }
 
