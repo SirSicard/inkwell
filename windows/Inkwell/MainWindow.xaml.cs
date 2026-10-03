@@ -62,7 +62,11 @@ public sealed partial class MainWindow : Window
     internal void ShowInk(ShellInk ink)
     {
         Orb.State = ink.State;
-        ink.Changed += () => Orb.State = ink.State;
+        ink.Changed += () =>
+        {
+            Orb.State = ink.State;
+            DimOrb();
+        };
         Orb.Drawn += Edge.Show;
     }
 
@@ -83,12 +87,17 @@ public sealed partial class MainWindow : Window
         }
         Orb.Look = theme.Look;
         Orb.AlwaysStill = theme.AlwaysStill;
-        // High Contrast: the orb dimmed behind the text.
-        Orb.OrbOpacity = theme.HighContrast ? 0.3f : 1;
+        DimOrb();
         Edge.Set(theme.Colours, theme.EdgeGlow);
         liveDot.Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["GlowThemBrush"];
         UpdatePulse();
     }
+
+    /// <summary>
+    /// The orb at 30% behind the text while anything is live (dictating, a meeting, the final
+    /// pass) and under High Contrast, so what is written over it reads; whole at rest.
+    /// </summary>
+    private void DimOrb() => Orb.OrbOpacity = theme?.HighContrast == true || Orb.State.IsLive() ? 0.3f : 1;
 
     /// <summary>UI thread. Why the Drop cannot draw its ink (it shows a plain panel meanwhile), or null once it draws again.</summary>
     internal void ShowInkFailure(string? failure)
