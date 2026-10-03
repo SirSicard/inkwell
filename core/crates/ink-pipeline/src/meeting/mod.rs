@@ -55,7 +55,7 @@ use ink_core::{
 use ink_llm::tasks::commitments::{RecordContext, harvest, looks_done};
 use ink_llm::tasks::dedup::dedup;
 use ink_llm::tasks::due::RecordTime;
-use ink_llm::tasks::summary::{SummaryOptions, summarize};
+use ink_llm::tasks::summary::{SummaryOptions, has_citable_line, summarize};
 
 use ink_echo::{DedupConfig, EchoError, PathReport, echo_duplicates};
 
@@ -1122,7 +1122,8 @@ impl EndedMeeting {
     /// The summary, then commitments, on the current transcript. It runs after the supersede, so
     /// it never fails the pass: each failure (a cancellation included) is a warning, and what
     /// depends on it is skipped. `record` is the record as read before the supersede; when that
-    /// read failed, the title is left alone, since whether it had one is unknown.
+    /// read failed, the title is left alone, since whether it had one is unknown. Skipped, with no
+    /// call, when no line has the words a citation needs (`has_citable_line`).
     fn wrap_up(
         &self,
         segments: &[Segment],
@@ -1131,8 +1132,12 @@ impl EndedMeeting {
         cancel: &CancelToken,
     ) {
         let core = &self.core;
-        if ink_core::store::word_count(segments) == 0 {
-            // Nothing was said: there is nothing to summarise, and no call is made.
+        if !has_citable_line(segments) {
+            // Nothing said, or only a stray word or two on each line (a noise heard as "Oh."): no
+            // decision or action could cite a line, and a model asked anyway invents a headline.
+            // So no call is made for the summary or for commitments (a transcript this thin holds
+            // no promise worth a call), and the record keeps no title and no summary. A floor, not
+            // a proof: a noise heard as three words still reaches the model.
             return;
         }
         let Some(llm) = &core.services.llm else {

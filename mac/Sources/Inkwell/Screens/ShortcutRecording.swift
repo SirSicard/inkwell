@@ -13,6 +13,21 @@ extension View {
     }
 }
 
+/// The local monitor's filter: the recorder hears a key event only from the window its view is in.
+/// Another window's keys (the Drop, an alert, the main window behind Settings), and keys before the
+/// view has a window, go on as they were.
+@MainActor
+enum ShortcutRecordingFilter {
+    /// Whether the recorder took the event. `eventWindow` is the event's window, `host` the view's.
+    static func feed(
+        _ input: ShortcutCapture.Input, from eventWindow: ObjectIdentifier?, host: NSWindow?,
+        to recorder: ShortcutRecorderModel
+    ) -> Bool {
+        guard let host, eventWindow == ObjectIdentifier(host) else { return false }
+        return recorder.feed(input)
+    }
+}
+
 /// The window a view is in, held weakly: the view does not keep it alive.
 @MainActor
 private final class HostWindow {
@@ -54,8 +69,7 @@ private struct ShortcutRecording: ViewModifier {
             let eventWindow = event.window.map(ObjectIdentifier.init)
             // A local monitor runs on the main thread, as the app's events are dispatched.
             let taken = MainActor.assumeIsolated {
-                guard let window = host.window, eventWindow == ObjectIdentifier(window) else { return false }
-                return recorder.feed(input)
+                ShortcutRecordingFilter.feed(input, from: eventWindow, host: host.window, to: recorder)
             }
             return taken ? nil : event
         }

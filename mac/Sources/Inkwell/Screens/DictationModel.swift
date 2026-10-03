@@ -55,6 +55,14 @@ final class DictationModel {
         token.map { KeyNotation.display($0) }
     }
 
+    /// How a key is written wherever the app names it in a line (Today, Settings' status) and on
+    /// its key cap: one formatter, so they never name the same key two ways (⌃⇧Space, never
+    /// Control-Shift-Space beside it). Where VoiceOver reads the line, it hears the name from
+    /// `key(_:)` (Today's status line does).
+    static func cap(_ token: String) -> String {
+        key(token)?.cap ?? token
+    }
+
     private(set) var state: State = .starting
     /// The dictation key the user chose (nil until read; the core's default is fn).
     private(set) var keySetting: String?
@@ -243,8 +251,7 @@ final class DictationModel {
         case .starting:
             return "Starting…"
         case .live(let key, _):
-            let cap = Self.key(key)?.cap ?? key
-            return "Hold \(cap), speak, let go."
+            return "Hold \(Self.cap(key)), speak, let go."
         case .off(let reason, let message):
             switch reason {
             case .needsAccessibility:
