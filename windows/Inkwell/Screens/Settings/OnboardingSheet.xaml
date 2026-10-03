@@ -20,7 +20,7 @@
              orbs paint it as their backdrop, since a SwapChainPanel hides what is under it. -->
         <SolidColorBrush x:Key="ContentDialogTopOverlay" Color="Transparent" />
     </ContentDialog.Resources>
-    <Grid Width="620" MinHeight="460" RowSpacing="20">
+    <Grid Width="620" RowSpacing="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -37,7 +37,12 @@
             <Ellipse x:Name="Dot6" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
         </StackPanel>
 
-        <Grid Grid.Row="1">
+        <!-- The steps scroll when the window is too short for them, the dots and buttons staying put;
+             the right padding keeps the step's buttons and lines clear of the scroll bar. The
+             height a step keeps (so the sheet doesn't jump between steps) is inside it, so the
+             sheet itself can shrink to the window. -->
+        <ScrollViewer x:Name="StepScroller" Grid.Row="1" Padding="0,0,16,0" VerticalScrollBarVisibility="Auto">
+        <Grid MinHeight="375">
             <StackPanel x:Name="WelcomeStep" Spacing="14">
                 <!-- The orb as the hero: a short demo, dictating then a call. Decorative. -->
                 <local:InkPanel
@@ -170,6 +175,7 @@
                 <TextBlock x:Name="StillOffLine" Foreground="{ThemeResource InkAlertBrush}" Style="{StaticResource InkReadingStyle}" />
             </StackPanel>
         </Grid>
+        </ScrollViewer>
 
         <Grid Grid.Row="2" ColumnSpacing="8">
             <Grid.ColumnDefinitions>

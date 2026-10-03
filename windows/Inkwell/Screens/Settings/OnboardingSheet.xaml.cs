@@ -48,6 +48,7 @@ public sealed partial class OnboardingSheet : ContentDialog
     private bool closingByModel;
     private bool rendering;
     private readonly List<ChoiceRow> choiceRows = [];
+    private OnboardingStep? shownStep;
 
     private OnboardingSheet(
         FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
@@ -256,6 +257,12 @@ public sealed partial class OnboardingSheet : ContentDialog
         try
         {
             var step = onboarding.Step;
+            if (step != shownStep)
+            {
+                // Each step starts at its top.
+                StepScroller.ChangeView(null, 0, null, disableAnimation: true);
+                shownStep = step;
+            }
             WelcomeStep.Visibility = Visible(step == OnboardingStep.Welcome);
             PermissionsStep.Visibility = Visible(step == OnboardingStep.Permissions);
             ModelsStep.Visibility = Visible(step == OnboardingStep.Models);
