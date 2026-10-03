@@ -192,20 +192,34 @@ public sealed partial class LocalLog
     /// <summary>inkwell.log becomes inkwell.1.log, each older one moves up one, and the oldest past <c>keep</c> goes.</summary>
     private void Rotate()
     {
+        // The current log moves aside first: held open, the rotation stops here, before any older
+        // log is deleted or moved (else every line would delete one, and the history go).
+        var moving = System.IO.Path.Combine(Directory, "inkwell.rotating.log");
+        File.Move(Path, moving, overwrite: true);
         if (keep == 0)
         {
-            File.Delete(Path);
+            File.Delete(moving);
             return;
         }
-        File.Delete(Older(keep));
-        for (var i = keep - 1; i >= 1; i--)
+        try
         {
-            if (File.Exists(Older(i)))
+            File.Delete(Older(keep));
+            for (var i = keep - 1; i >= 1; i--)
             {
-                File.Move(Older(i), Older(i + 1));
+                if (File.Exists(Older(i)))
+                {
+                    File.Move(Older(i), Older(i + 1));
+                }
             }
+            File.Move(moving, Older(1));
         }
-        File.Move(Path, Older(1));
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // An older log held open: the current one goes back and grows past the cap until the
+            // rotation can be done.
+            File.Move(moving, Path);
+            throw;
+        }
     }
 
     private string Older(int n) => System.IO.Path.Combine(Directory, $"inkwell.{n}.log");

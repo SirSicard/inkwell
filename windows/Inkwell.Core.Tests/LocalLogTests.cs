@@ -89,6 +89,29 @@ public sealed class LocalLogTests : IDisposable
         Assert.Contains("shell: 4 ", File.ReadAllText(Path.Combine(folder, "inkwell.1.log")), StringComparison.Ordinal);
     }
 
+    /// <summary>The current log held open: it grows, and the older logs stay as they were.</summary>
+    [Fact]
+    public void ACurrentLogHeldOpenLeavesTheOlderLogsAlone()
+    {
+        var log = new LocalLog(folder, maxBytes: 100, keep: 2, now: () => At);
+        var line = new string('x', 40);
+        for (var i = 1; i <= 3; i++)
+        {
+            log.Write("shell", $"{i} {line}"); // 1 in inkwell.2.log, 2 in inkwell.1.log, 3 current
+        }
+        var older1 = File.ReadAllText(Path.Combine(folder, "inkwell.1.log"));
+        var older2 = File.ReadAllText(Path.Combine(folder, "inkwell.2.log"));
+        using (new FileStream(log.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            log.Write("shell", "4 " + line);
+            log.Write("shell", "5 " + line);
+        }
+        Assert.Equal(older1, File.ReadAllText(Path.Combine(folder, "inkwell.1.log")));
+        Assert.Equal(older2, File.ReadAllText(Path.Combine(folder, "inkwell.2.log")));
+        Assert.Contains("shell: 5 ", File.ReadAllText(log.Path), StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(folder, "inkwell.rotating.log")));
+    }
+
     /// <summary>A crash note names the exception and the ones inside it by type, with stacks and the version; never a message.</summary>
     [Fact]
     public void ACrashNoteHoldsTypesStacksAndTheVersionButNoMessage()
