@@ -325,6 +325,7 @@ public class LiveIconTests
         Assert.Equal("Inkwell, recording; the other side is quiet", LiveIcon.Spoken(DropInk.Problem));
         Assert.Null(LiveIcon.OverlayText(DropInk.Idle));
         Assert.Equal("Recording", LiveIcon.OverlayText(DropInk.Meeting));
+        Assert.Equal(("Record", "Stop"), (LiveIcon.RecordButton, LiveIcon.StopButton));
     }
 
     [Fact]

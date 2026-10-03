@@ -224,6 +224,10 @@ public sealed class LiveIcon(ILiveIconTicker ticker)
         return BreathLow + (1 - BreathLow) * (0.5 + 0.5 * Math.Cos(2 * Math.PI * phase));
     }
 
+    /// <summary>The taskbar thumbnail toolbar's button, while nothing records and while something does.</summary>
+    public const string RecordButton = "Record";
+    public const string StopButton = "Stop";
+
     /// <summary>What Narrator hears for the tray icon in <paramref name="state"/> (the Mac's menu-bar label).</summary>
     public static string Spoken(DropInk state) => state switch
     {
