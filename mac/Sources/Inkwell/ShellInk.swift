@@ -259,7 +259,8 @@ struct OrbLayer: NSViewRepresentable {
     /// still leaves the mode's text at 4.5:1 or more and its secondary text at 3:1 or more, with
     /// every preset in both modes (OrbBehindTextTests measures it; a colour of the user's own is
     /// not measured). At rest it is the mode's quiet
-    /// idle colour, which text already reads over, and stays as designed.
+    /// idle colour leaning a little toward the preset (Glow.restTint, measured by the same test),
+    /// which text reads over at full strength.
     nonisolated static let liveBehindText: CGFloat = 0.3
 
     /// How far blotting condenses an orb behind text (InkSimulation.blotDepth). The design's full

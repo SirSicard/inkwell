@@ -159,8 +159,14 @@ enum GlowColours {
         func f(_ c: RGB) -> SIMD3<Float> { SIMD3<Float>(c) }
         return OrbPalette(
             yA: f(dots.you), yB: f(partner(dots.you)), tA: f(dots.them), tB: f(partner(dots.them)),
-            idle: f(rgb(mode.idleOrb)), ink: f(rgb(mode.ink)), dark: dark)
+            idle: f(rgb(mode.idleOrb)), ink: f(rgb(mode.ink)), dark: dark, restTint: Float(restTint))
     }
+
+    /// How far the orb at rest leans from the mode's idle colour toward the dots, so each preset
+    /// shows at rest, softer than live. Text sits over the main window's resting orb undimmed, so
+    /// OrbBehindTextTests sets the ceiling: with every preset in both modes, text at 4.5:1 and
+    /// secondary text at 3:1 or more. Dark's secondary text has the least room.
+    static let restTint = 0.2
 
     static func color(_ c: RGB) -> Color {
         Color(nsColor: nsColor(c))

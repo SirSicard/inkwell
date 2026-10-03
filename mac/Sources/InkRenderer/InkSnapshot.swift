@@ -71,7 +71,13 @@ public enum InkSnapshot {
         simulation.canvasHeight = Double(height)
         simulation.applyFixed(t: t, voice: voice)
         let uniforms = simulation.uniforms(palette: palette, placement: placement, motion: motion)
+        return try render(uniforms, width: width, height: height, pipeline: pipeline)
+    }
 
+    /// Draws one frame from `uniforms` as they are into a `width` x `height` pixel canvas: a
+    /// simulation the caller stepped itself.
+    public static func render(_ uniforms: InkUniforms, width: Int, height: Int, pipeline: InkPipeline) throws -> InkImage {
+        guard width >= 2, height >= 2 else { throw InkRendererError.resource("canvas \(width)x\(height)") }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: InkPipeline.pixelFormat, width: width, height: height, mipmapped: false)
         descriptor.usage = [.renderTarget]

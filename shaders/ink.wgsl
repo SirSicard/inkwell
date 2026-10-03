@@ -58,11 +58,12 @@
 //     48     4    dark    1 in dark mode, 0 in light
 //     52     4    motion  1 animates; 0 draws one still frame, whatever `time` is
 //     56     8    pad     unused (vec2)
-//     64     16   yA      your colour (vec4: rgb, a unused; so are the five below)
+//     64     16   yA      your colour (vec4: rgb, a unused; so are the others but idle)
 //     80     16   yB      your partner shade
 //     96     16   tA      the far end's colour
 //     112    16   tB      its partner shade
-//     128    16   idle    the orb at rest
+//     128    16   idle    the orb at rest (rgb), and how far it leans toward the dots (a, 0..1:
+//                         its first shade toward yA, its second toward tA; 0 keeps it as rgb)
 //     144    16   ink     the drop it blots down to
 // Colours are sRGB, 0..1, written as they are: render into a UNORM target, not an sRGB one.
 //
@@ -189,10 +190,16 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let r1 = mix((0.19 + 0.05 * dictating + 0.09 * g.you * live) * mix(0.8, 1.0, live), 0.06, blot);
     let r2 = mix((0.16 + 0.08 * g.them) * meeting, 0.0, blot) * (1.0 + 0.06 * problem * (pulse - 0.5));
     let soft = mix(0.24, 0.012, blot);
+    // At rest the idle colour leans toward the dots by idle.a, so each preset shows at rest: the
+    // first shade toward yours, the second toward theirs. Live, both go on to yours from there,
+    // so nothing jumps.
+    let restTint = clamp(g.idle.a, 0.0, 1.0);
+    let restA = mix(g.idle.rgb, g.yA.rgb, restTint);
+    let restB = mix(g.idle.rgb, g.tA.rgb, restTint);
     let o1 = orb(
         p - c1, r1, soft,
-        mix(mix(g.idle.rgb, g.yA.rgb, live), g.ink.rgb, blot),
-        mix(mix(g.idle.rgb, g.yB.rgb, live), g.ink.rgb, blot),
+        mix(mix(restA, g.yA.rgb, live), g.ink.rgb, blot),
+        mix(mix(restB, g.yB.rgb, live), g.ink.rgb, blot),
         0.0, tt,
     );
     var o2 = vec4<f32>(0.0);

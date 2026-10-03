@@ -178,6 +178,74 @@ final class CloudModelTests: XCTestCase {
     }
 }
 
+/// The orb at rest in the dot preset's colours (the owner's report: "no matter which theme I have,
+/// it's still grey in the background always"). The resting orb was the mode's idle colour in both
+/// of its shades, whatever the preset; it now leans, softer than live, its first shade toward
+/// yours and its second toward theirs.
+@MainActor
+final class OrbAtRestTests: XCTestCase {
+    /// A colour's chroma: what is left once its grey (the mean of its channels) is taken away. The
+    /// orb's highlight and grain add the same amount to every channel, so they drop out.
+    private func chroma(_ c: SIMD3<Double>) -> SIMD3<Double> {
+        c - SIMD3(repeating: (c.x + c.y + c.z) / 3)
+    }
+
+    private func cosine(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double {
+        let la = (a * a).sum().squareRoot(), lb = (b * b).sum().squareRoot()
+        return la > 0 && lb > 0 ? (a * b).sum() / (la * lb) : 0
+    }
+
+    /// The still frame the main window shows at rest, for one preset in one mode: how many of its
+    /// solid pixels lean from the idle colour toward yours, how many toward theirs, out of how
+    /// many, and their mean colour.
+    private func rest(_ id: String, dark: Bool, pipeline: InkPipeline) throws
+        -> (you: Int, them: Int, solid: Int, mean: SIMD3<Double>)
+    {
+        let palette = GlowColours.palette(preset: Glow.preset(id), you: nil, them: nil, dark: dark)
+        let image = try InkSnapshot.render(
+            .idle, t: 12, width: 208, height: 140, palette: palette, placement: Glow.Orb.main, voice: .silent,
+            motion: false, pipeline: pipeline)
+        let idle = chroma(SIMD3<Double>(palette.idle))
+        let towardYou = chroma(SIMD3<Double>(palette.yA)) - idle
+        let towardThem = chroma(SIMD3<Double>(palette.tA)) - idle
+        var you = 0, them = 0, solid = 0, sum = SIMD3<Double>(0, 0, 0)
+        for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] >= 96 {
+            let alpha = Double(image.rgba[i + 3])
+            let c = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / alpha
+            solid += 1
+            sum += c
+            let lean = chroma(c) - idle
+            // Past the rounding of an 8-bit premultiplied pixel at this alpha.
+            guard (lean * lean).sum().squareRoot() >= 0.03 else { continue }
+            if cosine(lean, towardYou) >= 0.8 { you += 1 }
+            if cosine(lean, towardThem) >= 0.8 { them += 1 }
+        }
+        return (you, them, solid, solid > 0 ? sum / Double(solid) : sum)
+    }
+
+    /// Aurora rests green and violet, Lagoon teal and amber, in Light and in Dark: a fifth or more
+    /// of the resting orb's pixels leans toward each of the preset's colours (a quarter to a half
+    /// at the rest tint of 0.2; untinted, none but a few highlight pixels in Light), and the two
+    /// presets' resting orbs differ.
+    func testTheRestingOrbLeansTowardThePresetsColoursInBothModes() throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let pipeline = try InkPipelineLoader.shared.wait().get()
+        for dark in [false, true] {
+            var means: [SIMD3<Double>] = []
+            for id in ["aurora", "lagoon"] {
+                let r = try rest(id, dark: dark, pipeline: pipeline)
+                let label = "\(dark ? "dark" : "light") \(id): \(r.you) toward yours, \(r.them) toward theirs of \(r.solid)"
+                XCTAssertGreaterThan(r.solid, 500, label)
+                XCTAssertGreaterThanOrEqual(r.you * 5, r.solid, label)
+                XCTAssertGreaterThanOrEqual(r.them * 5, r.solid, label)
+                means.append(r.mean)
+            }
+            let apart = ((means[0] - means[1]) * (means[0] - means[1])).sum().squareRoot()
+            XCTAssertGreaterThan(apart, 0.03, "\(dark ? "dark" : "light"): Aurora and Lagoon rest in different colours")
+        }
+    }
+}
+
 /// Text over the orb (a recorded-call test: "What's being said", the timestamps and the grey
 /// settling lines washed out over Aurora's bright centre in Dark mode). The main window's orb sits
 /// behind every screen's text, so wherever it draws, the mode's text and secondary text must stay
@@ -243,7 +311,9 @@ final class OrbBehindTextTests: XCTestCase {
 
     /// The orb drawn as the main window places it, loud voices on both sides, at a few moments
     /// (its noise and highlight move), composited over the mode's background at the opacity the
-    /// window gives it: every pixel keeps text at 4.5:1 and secondary text at 3:1 or more.
+    /// window gives it: every pixel keeps text at 4.5:1 and secondary text at 3:1 or more. At rest
+    /// that is the orb leaning toward the preset at Glow.restTint, undimmed: the worst is Dark's
+    /// secondary text over Lagoon, 3.10:1 at 0.2 (2.96:1 at 0.25; 3.62:1 untinted).
     func testTextStaysReadableOverTheMainWindowsOrbWithEveryPresetInBothModes() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
         let pipeline = try InkPipelineLoader.shared.wait().get()
