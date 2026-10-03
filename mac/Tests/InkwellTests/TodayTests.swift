@@ -250,3 +250,20 @@ final class UpNextTests: XCTestCase {
         XCTAssertEqual(MeetingApp.startsIn(now.addingTimeInterval(-10), now: now), "now")
     }
 }
+
+/// Review fix: Today said "Hold Control-Shift-Space to dictate" while Settings' key cap showed
+/// ⌃⇧Space. Both now come from one formatter (DictationModel.cap).
+@MainActor
+final class TodayStatusLineTests: XCTestCase {
+    func testTodayNamesTheDictationKeyAsSettingsShowsIt() {
+        let dictation = DictationModel(send: { _ in })
+        dictation.apply(event(#"{"type":"dictation.ready","key":"ctrl+shift+space"}"#))
+        XCTAssertEqual(dictation.status, "Hold \u{2303}\u{21E7}Space, speak, let go.")
+        let line = TodayScreen.statusLine(listening: "Listening for calls", key: dictation.key, offersDictation: true)
+        XCTAssertEqual(line, "Listening for calls · Hold \u{2303}\u{21E7}Space to dictate")
+        XCTAssertEqual(DictationModel.cap(dictation.key), "\u{2303}\u{21E7}Space", "Settings' key cap")
+        XCTAssertFalse(line.contains("Control"), line)
+        XCTAssertEqual(TodayScreen.statusLine(listening: "", key: "fn", offersDictation: true), "Hold fn to dictate")
+        XCTAssertEqual(TodayScreen.statusLine(listening: "Listening for calls", key: "fn", offersDictation: false), "Listening for calls")
+    }
+}

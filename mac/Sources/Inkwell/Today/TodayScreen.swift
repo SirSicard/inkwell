@@ -113,12 +113,18 @@ struct TodayScreen: View {
         .frame(minHeight: 240, alignment: .bottom)
     }
 
-    /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now,
-    /// unless no speech model could type what it hears (the line under it says so).
     private var statusLine: String {
-        let key = DictationModel.key(screens.dictation.key)?.name ?? screens.dictation.key
-        let listening = RecordControls.listeningText(recording: store.meeting != nil, listening: store.listening)
-        let hold = screens.catalogue.speech.offersDictation ? "Hold \(key) to dictate" : ""
+        Self.statusLine(
+            listening: RecordControls.listeningText(recording: store.meeting != nil, listening: store.listening),
+            key: screens.dictation.key,
+            offersDictation: screens.catalogue.speech.offersDictation)
+    }
+
+    /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now,
+    /// unless no speech model could type what it hears (the line under it says so). The key as its
+    /// cap reads in Settings (DictationModel.cap).
+    static func statusLine(listening: String, key: String, offersDictation: Bool) -> String {
+        let hold = offersDictation ? "Hold \(DictationModel.cap(key)) to dictate" : ""
         return [listening, hold]
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .joined(separator: " · ")

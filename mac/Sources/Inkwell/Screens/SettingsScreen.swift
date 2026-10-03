@@ -318,7 +318,7 @@ private struct DictationSection: View {
                 .labelsHidden()
                 .fixedSize()
                 .disabled(shortcuts.recording != nil)
-                Key(text: DictationModel.key(dictation.key)?.cap ?? dictation.key)
+                Key(text: DictationModel.cap(dictation.key))
                     .accessibilityLabel(DictationModel.key(dictation.key)?.name ?? dictation.key)
                 RecordShortcutButton(recorder: shortcuts, target: .dictation, what: "the dictation key")
                 Text("hold, speak, let go").foregroundStyle(Theme.secondaryText)
@@ -346,7 +346,7 @@ private struct DictationSection: View {
                 .fixedSize()
                 .disabled(shortcuts.recording != nil)
                 if let edit = dictation.editKey, dictation.editKeyProblem == nil {
-                    Key(text: DictationModel.key(edit)?.cap ?? edit)
+                    Key(text: DictationModel.cap(edit))
                         .accessibilityLabel(DictationModel.key(edit)?.name ?? edit)
                 }
                 RecordShortcutButton(recorder: shortcuts, target: .edit, what: "the edit key")
