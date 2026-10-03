@@ -177,7 +177,8 @@ impl Calendar {
     }
 
     /// One fixed offset all year, weeks from Monday: for tests.
-    pub fn fixed(minutes: i32) -> Self {
+    #[cfg(test)]
+    fn fixed(minutes: i32) -> Self {
         Self {
             offsets: vec![(i64::MIN, minutes)],
             week_start: 1,
@@ -555,12 +556,16 @@ pub fn celebrations(
     celebrate: bool,
     afresh: bool,
 ) -> (Vec<&'static str>, Option<String>) {
+    // An array keeps every id it holds that reads as one (an odd element is skipped, never the
+    // whole note); anything else is no note at all.
     let previous: Option<BTreeSet<String>> = noted.and_then(|n| {
         let ids = serde_json::from_str::<Value>(n).ok()?;
-        ids.as_array()?
-            .iter()
-            .map(|id| id.as_str().map(str::to_owned))
-            .collect()
+        Some(
+            ids.as_array()?
+                .iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect(),
+        )
     });
     if noted.is_some() && previous.is_none() {
         log::warn!("stats: the note of milestones celebrated could not be read; noted afresh");
@@ -1171,6 +1176,19 @@ mod tests {
             (
                 vec![],
                 Some(r#"["streak_7","words_1000","words_10000"]"#.to_string())
+            )
+        );
+        // A note with an odd element keeps the ids it can read.
+        assert_eq!(
+            celebrations(
+                &ids(&["words_1000", "streak_7"]),
+                Some(r#"["words_1000", 7]"#),
+                true,
+                false
+            ),
+            (
+                vec!["streak_7"],
+                Some(r#"["streak_7","words_1000"]"#.to_string())
             )
         );
         // An unreadable note is a first check, rather than a flood of old milestones.

@@ -931,18 +931,29 @@ impl Ctx<'_> {
                 let import = self.shared.import02.get();
                 match crate::import02::answer(import, query, id.as_deref()) {
                     Ok(e) => {
+                        // Dictations are all that milestones count of an import.
+                        let dictations = e
+                            .get("counts")
+                            .and_then(|c| c.get("dictations"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        // The imported words are history: the next milestone check notes what
+                        // they reach without celebrating it. Set before the answer goes out, so a
+                        // check the shell sends on it finds the flag; only when words came over,
+                        // so an empty import never swallows a milestone reached since. Not in the
+                        // import's transaction: a failure here (logged) only costs a celebration
+                        // the import did not earn.
+                        if query.imports()
+                            && dictations > 0
+                            && let Err(err) =
+                                store.set_setting(crate::stats::MILESTONES_AFRESH_KEY, "yes")
+                        {
+                            log::warn!("import: milestones could not be noted afresh: {err}");
+                        }
                         emit(e);
                         if query.imports() {
                             // A running dictation takes the imported key and lists at once.
                             crate::voice::settings_changed(self.shared);
-                            // The imported words are history: the next milestone check notes
-                            // what they reach without celebrating it. A failure here only costs
-                            // a celebration the import did not earn, so it is logged.
-                            if let Err(err) =
-                                store.set_setting(crate::stats::MILESTONES_AFRESH_KEY, "yes")
-                            {
-                                log::warn!("import: milestones could not be noted afresh: {err}");
-                            }
                         }
                     }
                     Err(e) => fail(e),

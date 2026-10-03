@@ -498,3 +498,23 @@ fn an_imports_milestones_are_noted_not_celebrated() {
     rig.events.assert_valid();
     rig.core.shutdown();
 }
+
+/// An import that brought no dictations leaves milestones alone: the next one reached is still
+/// celebrated.
+#[test]
+fn an_import_without_dictations_leaves_milestones_alone() {
+    let source = legacy(
+        "no-words",
+        &[("dictionary.json", DICTIONARY_0_2.as_bytes())],
+    );
+    let rig = Rig::new("no-words", Some(Some(source.path().to_owned())));
+    let finished = rig.ask("import.run");
+    assert_eq!(finished["type"], "import.finished", "{finished}");
+    assert_eq!(finished["counts"]["dictations"], 0);
+    assert_eq!(
+        Store::setting(rig.store.as_ref(), ink_ffi::stats::MILESTONES_AFRESH_KEY).unwrap(),
+        None
+    );
+    rig.events.assert_valid();
+    rig.core.shutdown();
+}
