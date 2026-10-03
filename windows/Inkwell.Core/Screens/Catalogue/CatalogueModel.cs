@@ -208,13 +208,21 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     /// <summary>The recommended models not installed and not asked for yet.</summary>
     public IReadOnlyList<CatalogueEntry> RecommendedNotAskedFor => NotAskedFor.Where(m => IsRecommended(m.Id)).ToList();
 
-    /// <summary>Downloads the recommended set's missing models, smallest first (the first run's Download, Today's).</summary>
-    public void DownloadRecommended()
+    /// <summary>Downloads the recommended set's missing models, smallest first (Today's Download).</summary>
+    public void DownloadRecommended() => Download(RecommendedIds);
+
+    /// <summary>
+    /// Downloads these models, smallest first, after the downloads asked for before them (the first
+    /// run's Download: ModelChoices). A model installed, already asked for or not listed is passed
+    /// over; one that failed is retried.
+    /// </summary>
+    public void Download(IEnumerable<string> ids)
     {
+        ArgumentNullException.ThrowIfNull(ids);
         var asked = false;
-        foreach (var entry in RecommendedNotAskedFor.OrderBy(m => m.SizeBytes))
+        foreach (var row in Rows.Where(r => ids.Contains(r.Id)).OrderBy(r => r.Entry.SizeBytes))
         {
-            asked |= Ask(entry.Id);
+            asked |= Ask(row.Id);
         }
         if (asked)
         {

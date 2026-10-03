@@ -1,7 +1,7 @@
 // The first-run state: a sheet over the window until the user finishes or skips it, remembered in
 // the core's store (onboarding.done). What Inkwell does, the four permission cards (nothing asked
-// for until the user presses a card's button), the models not on this PC yet (nothing downloads
-// until the user presses the step's Download, which says what, how much and from where; the
+// for until the user presses a card's button), the models as choices by outcome (ModelChoices:
+// nothing downloads until the user presses the step's Download, which carries the total; the
 // downloads are the CatalogueModel's and go on after the sheet), Inkwell 0.2's history (only while
 // there is some to import: Import02Model.Offered), the appearance (the mode and the dots, which
 // Settings > Appearance holds too), polish (off, and turned on only through its
@@ -15,7 +15,7 @@ public enum OnboardingStep
 {
     Welcome,
     Permissions,
-    /// <summary>The models not on this PC yet, and one Download for them.</summary>
+    /// <summary>What Inkwell should be able to do, as choices, and one Download for them (ModelChoices).</summary>
     Models,
     /// <summary>Only while Inkwell 0.2's data is offered.</summary>
     ImportData,
@@ -182,8 +182,8 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string ModelsTitle = "Models";
 
-    /// <summary>The step's one Download: the recommended set its line names (CatalogueModel.DownloadRecommended).</summary>
-    public const string DownloadTitle = "Download";
+    /// <summary>The step's choices: which are ticked (the first is always).</summary>
+    public ModelChoices Choices { get; } = new();
 
     /// <summary>Shown while a download runs: Continue does not wait for it.</summary>
     public const string ModelsGoOn = "You can go on: the downloads continue, and Settings > Models shows them.";
@@ -191,20 +191,7 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>Asks for the model list again when it could not be read.</summary>
     public const string ModelsTryAgain = "Try again";
 
-    /// <summary>
-    /// The models step's rows: every model not installed, and any downloaded this run (it stays, as
-    /// installed); the recommended set first, the optional models after it.
-    /// </summary>
-    public static IReadOnlyList<ModelRow> ModelRows(CatalogueModel catalogue)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        return catalogue.Rows
-            .Where(r => !r.Entry.Installed || r.Download is not null)
-            .OrderBy(r => CatalogueModel.IsRecommended(r.Id) ? 0 : 1)
-            .ToList();
-    }
-
-    /// <summary>The line over the models step's rows: what they are, or where the list is.</summary>
+    /// <summary>The line over the models step's choices: what they are for, or where the list is.</summary>
     public static string ModelsNote(CatalogueModel catalogue)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
@@ -216,48 +203,9 @@ public sealed class OnboardingModel : ObservableModel
         {
             return "Checking which models are on this PC…";
         }
-        return ModelRows(catalogue).Any(r => !r.Installed)
-            ? "Inkwell turns speech into text with models that run on this PC. The recommended two are small: Silero VAD hears when you speak, and Parakeet TDT v3 types your dictation and writes a meeting's transcript as it happens."
+        return ModelChoices.Shown(catalogue).Any(c => !ModelChoices.Installed(c, catalogue))
+            ? "Inkwell turns speech into text with models that run on this PC. Choose what it should do; you can add the rest later in Settings > Models."
             : "Every model Inkwell uses is on this PC.";
-    }
-
-    /// <summary>
-    /// What the meeting model adds, said plainly while it is not installed: Windows' Parakeet does
-    /// no meeting final pass, so a meeting keeps its live transcript until Qwen3-ASR is added.
-    /// </summary>
-    public static string? MeetingModelNote(CatalogueModel catalogue)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        return catalogue.Rows.FirstOrDefault(r => r.Id == "qwen3-asr-1.7b-q8") is { Installed: false }
-            ? "On Windows, a meeting keeps that live transcript until you add the meeting model, Qwen3-ASR (about 2.5 GB): Parakeet has no final pass for meetings here. You can add it below, or later in Settings > Models."
-            : null;
-    }
-
-    /// <summary>The line by the step's Download: how much in all, and from where; null when there is nothing left to ask for.</summary>
-    public static string? DownloadLine(CatalogueModel catalogue, IFormatProvider? format = null)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.RecommendedNotAskedFor;
-        return models.Count == 0
-            ? null
-            : $"{StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}. Nothing downloads until you press Download.";
-    }
-
-    /// <summary>The step's Download for screen readers: which models, how much in all, from where.</summary>
-    public static string DownloadName(CatalogueModel catalogue, IFormatProvider? format = null)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.RecommendedNotAskedFor;
-        return $"Download {And(models.Select(m => CatalogueModel.Name(m.Id)))}: {StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}";
-    }
-
-    private static string Sources(IEnumerable<CatalogueEntry> models) => And(models.Select(m => CatalogueModel.Source(m.Id)).Distinct());
-
-    /// <summary>"a", "a and b", "a, b and c".</summary>
-    private static string And(IEnumerable<string> items)
-    {
-        var list = items.ToList();
-        return list.Count < 2 ? string.Concat(list) : $"{string.Join(", ", list.Take(list.Count - 1))} and {list[^1]}";
     }
 
     public const string AppearanceTitle = "Appearance";

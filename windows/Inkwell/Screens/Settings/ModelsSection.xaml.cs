@@ -13,7 +13,7 @@ public sealed partial class ModelsSection : UserControl
     {
         Model = catalogue ?? throw new ArgumentNullException(nameof(catalogue));
         InitializeComponent();
-        DownloadableHost.Content = new ModelRowsView(Model, firstRun: false);
+        DownloadableHost.Content = new ModelRowsView(Model);
         Model.PropertyChanged += (_, _) => Render();
         Render();
     }

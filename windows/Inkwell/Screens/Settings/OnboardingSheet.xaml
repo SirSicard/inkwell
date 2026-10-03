@@ -59,19 +59,18 @@
                 <ContentPresenter x:Name="CardsHost" />
             </StackPanel>
 
-            <!-- The models not on this PC yet. Nothing downloads before the step's Download, which
-                 names them, how much in all and from where; Continue never waits for it. -->
+            <!-- What Inkwell should be able to do, as choices (ModelChoices): the first always, the
+                 others when ticked, each with the models it takes in a small line. Download carries
+                 the total; nothing downloads before it, and Continue never waits for it. -->
             <StackPanel x:Name="ModelsStep" Spacing="12">
                 <TextBlock x:Name="ModelsTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <TextBlock x:Name="ModelsNote" Style="{StaticResource InkBodyStyle}" />
-                <!-- While Qwen3-ASR is not in: what a meeting keeps without it, plainly. -->
-                <TextBlock x:Name="MeetingModelNote" Style="{StaticResource InkCaptionStyle}" />
-                <ContentPresenter x:Name="ModelRowsHost" />
-                <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
+                <StackPanel x:Name="ChoiceList" Spacing="12" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button x:Name="DownloadButton" Click="OnDownload" Style="{StaticResource InkAccentButtonStyle}" />
                     <Button x:Name="ModelsTryAgain" Click="OnModelsTryAgain" />
                 </StackPanel>
+                <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
                 <TextBlock x:Name="ModelsGoOn" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
 

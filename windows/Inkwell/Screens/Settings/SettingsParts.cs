@@ -246,15 +246,14 @@ public sealed record VoiceCommandItem(VoiceCommandDraft Row)
     public string Name => VoiceCommandsModel.AccessibilityLabel(Row);
 }
 
-/// <summary>A model's row where it can be downloaded (ModelRowsView).</summary>
-/// <param name="OwnDownload">The row has a Download of its own (Settings; the first run has one for all).</param>
-public sealed record ModelRowItem(ModelRow Row, bool OwnDownload)
+/// <summary>A model's row where it can be downloaded, with a Download of its own (ModelRowsView).</summary>
+public sealed record ModelRowItem(ModelRow Row)
 {
     public string Id => Row.Id;
     public string Text => Row.Text(System.Globalization.CultureInfo.CurrentCulture);
-    /// <summary>Where it would come from, beside its own Download (the first run's line says it for all).</summary>
-    public string? From => OwnDownload ? Row.From : null;
-    public bool ShowsDownload => OwnDownload && Row.CanDownload;
+    /// <summary>Where it would come from, beside its Download.</summary>
+    public string? From => Row.From;
+    public bool ShowsDownload => Row.CanDownload;
     public string DownloadName => Row.DownloadName(System.Globalization.CultureInfo.CurrentCulture);
     public bool Downloading => Row.Progress is not null;
     public double Progress => Row.Progress ?? 0;

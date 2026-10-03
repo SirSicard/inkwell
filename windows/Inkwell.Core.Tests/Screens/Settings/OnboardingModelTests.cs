@@ -157,48 +157,8 @@ public class OnboardingModelTests
     }
 
     /// <summary>
-    /// Windows' recommended set (the Mac's 28e5107, Windows' version): the step's one Download
-    /// fetches only Silero VAD and Parakeet TDT v3, smallest first, saying how much and from where;
-    /// Qwen3-ASR and the diarizer are optional, each with a Download of its own. It says plainly
-    /// that a meeting keeps its live transcript until the meeting model is added, because Windows'
-    /// Parakeet has no final pass for meetings.
-    /// </summary>
-    [Fact]
-    public void TheStepsDownloadIsTheRecommendedSetAndTheMeetingModelIsOptional()
-    {
-        var sent = new Sent();
-        var catalogue = new CatalogueModel(sent.Send);
-        catalogue.Apply(CatalogueDownloadTests.ListedWindows());
-        Assert.Equal(
-            "Inkwell turns speech into text with models that run on this PC. The recommended two are small: Silero VAD hears when you speak, and Parakeet TDT v3 types your dictation and writes a meeting's transcript as it happens.",
-            OnboardingModel.ModelsNote(catalogue));
-        Assert.Equal(
-            "640 MB in all, from huggingface.co and raw.githubusercontent.com. Nothing downloads until you press Download.",
-            OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
-        Assert.Equal(
-            "Download Parakeet TDT v3 and Silero VAD: 640 MB in all, from huggingface.co and raw.githubusercontent.com",
-            OnboardingModel.DownloadName(catalogue, CultureInfo.InvariantCulture));
-        Assert.Equal(
-            "On Windows, a meeting keeps that live transcript until you add the meeting model, Qwen3-ASR (about 2.5 GB): Parakeet has no final pass for meetings here. You can add it below, or later in Settings > Models.",
-            OnboardingModel.MeetingModelNote(catalogue));
-        Assert.True(CatalogueModel.IsRecommended("parakeet-tdt-0.6b-v3-int8"));
-        Assert.False(CatalogueModel.IsRecommended("qwen3-asr-1.7b-q8"));
-
-        catalogue.DownloadRecommended();
-        Assert.Equal(["silero-vad-v6-16k"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next)); // the smallest first
-        catalogue.Apply(CatalogueDownloadTests.Finished("silero-vad-v6-16k", ok: true));
-        Assert.Equal(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-int8"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
-        catalogue.Apply(CatalogueDownloadTests.Finished("parakeet-tdt-0.6b-v3-int8", ok: true));
-        Assert.Equal(2, sent.Commands.OfType<CoreCommand.ModelUpdate>().Count()); // Qwen3-ASR and the diarizer only on their own Download
-        Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
-
-        catalogue.Apply(CatalogueDownloadTests.ListedWindows(qwen: true, parakeet: true, silero: true));
-        Assert.Null(OnboardingModel.MeetingModelNote(catalogue)); // the meeting model is in
-    }
-
-    /// <summary>
-    /// The models step names each model not installed (size, licence), how much in all and from
-    /// where; going through the whole first run without pressing its Download downloads nothing.
+    /// The models step offers its choices with the total on Download; going through the whole
+    /// first run without pressing it downloads nothing.
     /// </summary>
     [Fact]
     public void TheModelsStepNamesWhatIsMissingAndNothingDownloadsWithoutItsButton()
@@ -209,21 +169,19 @@ public class OnboardingModelTests
         var onboarding = screens.Onboarding;
         var catalogue = screens.Catalogue;
         Assert.Equal("Checking which models are on this PC…", OnboardingModel.ModelsNote(catalogue));
-        Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture)); // no Download before the list
+        Assert.Null(onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture)); // no Download before the list
         screens.Apply([CatalogueDownloadTests.Listed()]);
         onboarding.Next();
         onboarding.Next();
         Assert.Equal(OnboardingStep.Models, onboarding.Step);
-        var rows = OnboardingModel.ModelRows(catalogue);
-        Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], rows.Select(r => r.Id)); // not the installed one; the recommended first
-        Assert.Equal("Qwen3-ASR 1.7B · Apache-2.0 · 2.32 GB · not installed", rows[1].Text(CultureInfo.InvariantCulture));
+        // This catalogue lists Silero VAD, Qwen3-ASR and the diarizer (installed), no Parakeet.
+        Assert.Equal(["speech", "accuracy", "speakers"], ModelChoices.Shown(catalogue).Select(c => c.Id));
+        Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speakers, catalogue, CultureInfo.InvariantCulture));
         Assert.StartsWith("Inkwell turns speech into text with models that run on this PC.", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
-        Assert.Equal(
-            "1.22 MB in all, from raw.githubusercontent.com. Nothing downloads until you press Download.",
-            OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
+        Assert.Equal("Download 1.22 MB", onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture));
         Assert.Equal(
             "Download Silero VAD: 1.22 MB in all, from raw.githubusercontent.com",
-            OnboardingModel.DownloadName(catalogue, CultureInfo.InvariantCulture));
+            onboarding.Choices.DownloadName(catalogue, CultureInfo.InvariantCulture));
         foreach (var _ in Enum.GetValues<OnboardingStep>())
         {
             onboarding.Next();
@@ -243,10 +201,10 @@ public class OnboardingModelTests
         var catalogue = screens.Catalogue;
         onboarding.Next();
         onboarding.Next();
-        catalogue.DownloadRecommended(); // the step's Download
-        catalogue.Download("qwen3-asr-1.7b-q8"); // and the meeting model's own
+        onboarding.Choices.Tick(ModelChoices.Accuracy, on: true); // Fewer mistakes
+        onboarding.Choices.Download(catalogue); // the step's Download
         Assert.Equal(["silero-vad-v6-16k"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next)); // the smallest first
-        Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture)); // nothing left to ask for: the button goes
+        Assert.Null(onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture)); // nothing left to ask for: the button goes
         Assert.True(catalogue.Downloading); // "You can go on…" shows
         onboarding.Next();
         Assert.Equal(OnboardingStep.Appearance, onboarding.Step); // Continue does not wait
@@ -261,8 +219,8 @@ public class OnboardingModelTests
         ]);
         // The next one went after the sheet had gone.
         Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
-        // A model installed this run stays on the step, as installed.
-        Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], OnboardingModel.ModelRows(catalogue).Select(r => r.Id));
+        // A choice installed this run says so.
+        Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speech, catalogue, CultureInfo.InvariantCulture));
         Assert.StartsWith("Inkwell turns speech into text", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
         screens.Apply([CatalogueDownloadTests.Finished("qwen3-asr-1.7b-q8", ok: true)]);
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
@@ -277,7 +235,6 @@ public class OnboardingModelTests
         Assert.Equal(CatalogueModel.FailedText, OnboardingModel.ModelsNote(catalogue)); // with Try again
         catalogue.Apply(CatalogueDownloadTests.Listed(qwenInstalled: true, sileroInstalled: true));
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
-        Assert.Empty(OnboardingModel.ModelRows(catalogue));
-        Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
+        Assert.Null(new ModelChoices().DownloadTitle(catalogue, CultureInfo.InvariantCulture));
     }
 }

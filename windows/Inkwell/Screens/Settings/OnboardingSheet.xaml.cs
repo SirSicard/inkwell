@@ -4,7 +4,7 @@
 // nothing while the app quits), except while polish's consent step is up in it: then Escape
 // cancels the step and the sheet stays. The polish switch only asks (PolishModel.SetOn with
 // ConsentHost.Onboarding); only the step's agreeing button sends anything. The models step's
-// Download is the only thing in the sheet that downloads (CatalogueModel.DownloadMissing). The
+// Download is the only thing in the sheet that downloads (ModelChoices.Download: what is ticked). The
 // import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps). While
 // this PC has no language model, the Polish step offers Groq's free key through Settings > AI's
 // flow (CloudModel.UseKey); its box is sent once and cleared, as there.
@@ -47,6 +47,7 @@ public sealed partial class OnboardingSheet : ContentDialog
     /// <summary>The sheet is closing because the model says so (or the host went): Escape's rule does not apply.</summary>
     private bool closingByModel;
     private bool rendering;
+    private readonly List<ChoiceRow> choiceRows = [];
 
     private OnboardingSheet(
         FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
@@ -71,9 +72,8 @@ public sealed partial class OnboardingSheet : ContentDialog
         ImportNoteHost.Content = new ImportKeyNoteView(importNote, KeyName);
         PermissionsTitle.Text = OnboardingModel.PermissionsTitle;
         PermissionsNote.Text = OnboardingModel.PermissionsNote;
-        ModelRowsHost.Content = new ModelRowsView(catalogue, firstRun: true);
         ModelsTitle.Text = OnboardingModel.ModelsTitle;
-        DownloadButton.Content = OnboardingModel.DownloadTitle;
+        DownloadLine.Text = ModelChoices.NothingUntilPressed;
         ModelsTryAgain.Content = OnboardingModel.ModelsTryAgain;
         ModelsGoOn.Text = OnboardingModel.ModelsGoOn;
         PolishTitle.Text = OnboardingModel.PolishTitle;
@@ -186,6 +186,7 @@ public sealed partial class OnboardingSheet : ContentDialog
         var sheet = new OnboardingSheet(
             host, onboarding, permissions, polish, cloud, dictation, catalogue, import02, importNote, theme, ink, log ?? ScreenLog.System);
         onboarding.PropertyChanged += (_, _) => sheet.Update();
+        onboarding.Choices.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         polish.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         // The own key's answer: stored and chosen (polish then has a model), or why not.
         cloud.PropertyChanged += (_, _) => sheet.RenderIfOpen();
@@ -303,16 +304,14 @@ public sealed partial class OnboardingSheet : ContentDialog
             WelcomeLine2.Text = welcome[2];
 
             ModelsNote.Text = OnboardingModel.ModelsNote(catalogue);
-            var meetingNote = OnboardingModel.MeetingModelNote(catalogue);
-            MeetingModelNote.Text = meetingNote ?? "";
-            MeetingModelNote.Visibility = Visible(meetingNote is not null);
-            var downloadLine = OnboardingModel.DownloadLine(catalogue, CultureInfo.CurrentCulture);
-            DownloadLine.Text = downloadLine ?? "";
-            DownloadLine.Visibility = Visible(downloadLine is not null);
-            DownloadButton.Visibility = Visible(downloadLine is not null);
-            if (downloadLine is not null)
+            ShowChoices();
+            var downloadTitle = onboarding.Choices.DownloadTitle(catalogue, CultureInfo.CurrentCulture);
+            DownloadButton.Content = downloadTitle;
+            DownloadButton.Visibility = Visible(downloadTitle is not null);
+            DownloadLine.Visibility = Visible(downloadTitle is not null);
+            if (downloadTitle is not null)
             {
-                AutomationProperties.SetName(DownloadButton, OnboardingModel.DownloadName(catalogue, CultureInfo.CurrentCulture));
+                AutomationProperties.SetName(DownloadButton, onboarding.Choices.DownloadName(catalogue, CultureInfo.CurrentCulture));
             }
             ModelsTryAgain.Visibility = Visible(catalogue.Failed);
             ModelsGoOn.Visibility = Visible(catalogue.Downloading);
@@ -362,7 +361,86 @@ public sealed partial class OnboardingSheet : ContentDialog
     private void OnSkip(object sender, RoutedEventArgs e) => onboarding.Finish();
 
     /// <summary>The user's agreement to the models the step names: the only download the sheet starts.</summary>
-    private void OnDownload(object sender, RoutedEventArgs e) => catalogue.DownloadRecommended();
+    private void OnDownload(object sender, RoutedEventArgs e) => onboarding.Choices.Download(catalogue);
+
+    /// <summary>
+    /// The models step's choices: made again only when the catalogue offers others, so focus and
+    /// the boxes stay put while a download's progress redraws them; otherwise their state and lines.
+    /// </summary>
+    private void ShowChoices()
+    {
+        var shown = ModelChoices.Shown(catalogue);
+        if (!shown.Select(c => c.Id).SequenceEqual(choiceRows.Select(r => r.Choice.Id)))
+        {
+            ChoiceList.Children.Clear();
+            choiceRows.Clear();
+            foreach (var choice in shown)
+            {
+                var row = new ChoiceRow(choice);
+                row.Box.Click += (_, _) => onboarding.Choices.Tick(choice, row.Box.IsChecked == true);
+                choiceRows.Add(row);
+                ChoiceList.Children.Add(row.Root);
+            }
+        }
+        foreach (var row in choiceRows)
+        {
+            row.Show(onboarding.Choices, catalogue);
+        }
+    }
+
+    /// <summary>
+    /// One choice: its box, its title beside it (in the text colour: a required box is disabled,
+    /// its words are not), and under the title the models line, Windows' note and the download's
+    /// state. Every line wraps; nothing is cut.
+    /// </summary>
+    private sealed class ChoiceRow
+    {
+        private readonly TextBlock line = Caption();
+        private readonly TextBlock note = Caption();
+        private readonly TextBlock status = Caption();
+
+        public ChoiceRow(ModelChoice choice)
+        {
+            Choice = choice;
+            Box = new CheckBox { MinWidth = 0, Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Top };
+            AutomationProperties.SetName(Box, choice.Title);
+            var title = new TextBlock { Text = choice.Title, TextWrapping = TextWrapping.Wrap, Style = (Style)Application.Current.Resources["InkBodyStyle"] };
+            AutomationProperties.SetAccessibilityView(title, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+            var words = new StackPanel { Spacing = 2, Margin = new Thickness(0, 5, 0, 0) };
+            words.Children.Add(title);
+            words.Children.Add(line);
+            words.Children.Add(note);
+            words.Children.Add(status);
+            var root = new Grid { ColumnSpacing = 4 };
+            root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            root.Children.Add(Box);
+            Grid.SetColumn(words, 1);
+            root.Children.Add(words);
+            Root = root;
+        }
+
+        public ModelChoice Choice { get; }
+        public CheckBox Box { get; }
+        public UIElement Root { get; }
+
+        public void Show(ModelChoices choices, CatalogueModel catalogue)
+        {
+            Box.IsChecked = choices.IsTicked(Choice, catalogue);
+            Box.IsEnabled = ModelChoices.CanTick(Choice, catalogue);
+            line.Text = ModelChoices.Line(Choice, catalogue, CultureInfo.CurrentCulture);
+            var noteText = ModelChoices.Note(Choice, catalogue);
+            note.Text = noteText ?? "";
+            note.Visibility = noteText is null ? Visibility.Collapsed : Visibility.Visible;
+            var statusText = ModelChoices.Status(Choice, catalogue, CultureInfo.CurrentCulture);
+            status.Text = statusText ?? "";
+            status.Visibility = statusText is null ? Visibility.Collapsed : Visibility.Visible;
+            AutomationProperties.SetHelpText(Box, string.Join(" ", new[] { line.Text, noteText, statusText }.Where(t => !string.IsNullOrEmpty(t))));
+        }
+
+        private static TextBlock Caption() =>
+            new() { TextWrapping = TextWrapping.Wrap, Style = (Style)Application.Current.Resources["InkCaptionStyle"] };
+    }
 
     private void OnModelsTryAgain(object sender, RoutedEventArgs e) => catalogue.Requery();
 
