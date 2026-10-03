@@ -92,14 +92,21 @@ struct OnboardingView: View {
         Text(text).font(Typography.heading).accessibilityAddTraits(.isHeader)
     }
 
-    /// The first run's orb colours: the theme's, except at rest in Light, where it takes the dark
-    /// mode's idle colour, a deeper shade of the same violet. Light's own is made to sit quietly
-    /// behind text; beside it, on the sheet's paper, the resting orb was all but invisible (about
-    /// 1.3:1, "its orb didn't show"). Dark's already stands out from its paper.
+    /// How the first run draws its orb: in `orbPalette`'s colours, and never dimmed. The main
+    /// window dims its orb for Increase Contrast or Reduce Transparency because text sits over it;
+    /// here it sits beside the text, and dimmed to 0.45 it disappeared again.
+    static func orbStyle(_ palette: OrbPalette, dark: Bool, solidSurfaces: Bool) -> (palette: OrbPalette, dimmed: Bool) {
+        (orbPalette(palette, dark: dark), false)
+    }
+
+    /// The first run's orb colours: the theme's, at rest in the other mode's idle colour (the same
+    /// violet, a shade made for the other paper). Each mode's own is made to sit quietly behind
+    /// text; beside it on the sheet the resting orb was all but invisible: about 1.3:1 at best in
+    /// Light ("its orb didn't show"), and in Dark one bright speck with the disc around it under
+    /// 2:1.
     static func orbPalette(_ palette: OrbPalette, dark: Bool) -> OrbPalette {
-        guard !dark else { return palette }
         var palette = palette
-        palette.idle = SIMD3<Float>(GlowColours.rgb(Glow.mode(dark: true).idleOrb))
+        palette.idle = SIMD3<Float>(GlowColours.rgb(Glow.mode(dark: !dark).idleOrb))
         return palette
     }
 
@@ -112,10 +119,10 @@ struct OnboardingView: View {
         } else {
             levels = { .silent }
         }
+        let style = Self.orbStyle(theme.palette, dark: theme.isDark, solidSurfaces: theme.solidSurfaces)
         return OrbLayer(
-            state: state, palette: Self.orbPalette(theme.palette, dark: theme.isDark), placement: .centred,
-            still: theme.motionStill,
-            dimmed: theme.solidSurfaces, levels: levels)
+            state: state, palette: style.palette, placement: .centred, still: theme.motionStill,
+            dimmed: style.dimmed, levels: levels)
             .frame(maxWidth: .infinity)
             .frame(height: height)
             .accessibilityHidden(true)
