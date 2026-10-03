@@ -23,16 +23,23 @@ public class ModelChoicesTests
         Assert.Equal("Dictation, live words and meeting transcripts", ModelChoices.Speech.Title);
         Assert.Equal("Fewer mistakes", ModelChoices.Accuracy.Title);
         Assert.Equal("Tell the people on the call apart", ModelChoices.Speakers.Title);
+        // One line per model, smallest first, in the Mac's words; sizes in Windows' units.
         Assert.Equal(
-            "Silero VAD (MIT) and Parakeet TDT v3 (CC-BY-4.0) · 640 MB from raw.githubusercontent.com and huggingface.co",
-            ModelChoices.Line(ModelChoices.Speech, catalogue, Invariant));
-        Assert.Equal("Qwen3-ASR 1.7B (Apache-2.0) · 2.32 GB from huggingface.co", ModelChoices.Line(ModelChoices.Accuracy, catalogue, Invariant));
-        Assert.Equal("Nemotron-3-Diarization (OpenMDW-1.1) · 102 MB from huggingface.co", ModelChoices.Line(ModelChoices.Speakers, catalogue, Invariant));
-        // Windows' honest lines: the live transcript is what a meeting keeps until the meeting model is in.
+            ["Silero VAD · MIT · 1.22 MB · from raw.githubusercontent.com", "Parakeet TDT v3 · CC-BY-4.0 · 638 MB · from huggingface.co"],
+            ModelChoices.Lines(ModelChoices.Speech, catalogue, Invariant));
+        Assert.Equal(["Qwen3-ASR 1.7B · Apache-2.0 · 2.32 GB · from huggingface.co"], ModelChoices.Lines(ModelChoices.Accuracy, catalogue, Invariant));
+        Assert.Equal(["Nemotron-3-Diarization · OpenMDW-1.1 · 102 MB · from huggingface.co"], ModelChoices.Lines(ModelChoices.Speakers, catalogue, Invariant));
+        // What each adds (the Mac's words; on Windows the meeting model's final pass too).
+        Assert.Null(ModelChoices.Detail(ModelChoices.Speech));
+        Assert.Equal(
+            "About a third fewer wrong words in dictation and meetings, and it gives meetings their final pass.",
+            ModelChoices.Detail(ModelChoices.Accuracy));
+        Assert.Equal("Speaker 1, Speaker 2 instead of “Them”.", ModelChoices.Detail(ModelChoices.Speakers));
+        // Windows' honest line under the set, while the meeting model is not in.
         Assert.Equal(
             "On Windows, a meeting keeps this live transcript until the meeting model, under Fewer mistakes, is added.",
             ModelChoices.Note(ModelChoices.Speech, catalogue));
-        Assert.Equal("On Windows this is also the meeting model: it gives a meeting its final pass.", ModelChoices.Note(ModelChoices.Accuracy, catalogue));
+        Assert.Null(ModelChoices.Note(ModelChoices.Accuracy, catalogue));
         Assert.Null(ModelChoices.Note(ModelChoices.Speakers, catalogue));
 
         // The recommended set is always taken; the others start off.
@@ -107,7 +114,7 @@ public class ModelChoicesTests
         Assert.True(choices.IsTicked(ModelChoices.Accuracy, catalogue));
         Assert.False(ModelChoices.CanTick(ModelChoices.Accuracy, catalogue));
         Assert.Null(choices.DownloadTitle(catalogue, Invariant)); // the diarizer is not ticked
-        Assert.StartsWith("Inkwell turns speech into text with models that run on this PC. Choose what it should do", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
+        Assert.Equal("Inkwell writes down speech with models that run on this PC. Each is downloaded once, and only when you press Download.", OnboardingModel.ModelsNote(catalogue));
         catalogue.Apply(CatalogueDownloadTests.ListedWindows(qwen: true, nemotron: true, parakeet: true, silero: true));
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
     }

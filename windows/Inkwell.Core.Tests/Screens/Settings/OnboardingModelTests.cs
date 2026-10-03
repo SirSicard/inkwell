@@ -177,7 +177,7 @@ public class OnboardingModelTests
         // This catalogue lists Silero VAD, Qwen3-ASR and the diarizer (installed), no Parakeet.
         Assert.Equal(["speech", "accuracy", "speakers"], ModelChoices.Shown(catalogue).Select(c => c.Id));
         Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speakers, catalogue, CultureInfo.InvariantCulture));
-        Assert.StartsWith("Inkwell turns speech into text with models that run on this PC.", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
+        Assert.StartsWith("Inkwell writes down speech with models that run on this PC.", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
         Assert.Equal("Download 1.22 MB", onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture));
         Assert.Equal(
             "Download Silero VAD: 1.22 MB in all, from raw.githubusercontent.com",
@@ -221,7 +221,7 @@ public class OnboardingModelTests
         Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
         // A choice installed this run says so.
         Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speech, catalogue, CultureInfo.InvariantCulture));
-        Assert.StartsWith("Inkwell turns speech into text", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
+        Assert.StartsWith("Inkwell writes down speech", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
         screens.Apply([CatalogueDownloadTests.Finished("qwen3-asr-1.7b-q8", ok: true)]);
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
         Assert.False(catalogue.Downloading);

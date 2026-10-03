@@ -204,7 +204,7 @@ public sealed class OnboardingModel : ObservableModel
             return "Checking which models are on this PC…";
         }
         return ModelChoices.Shown(catalogue).Any(c => !ModelChoices.Installed(c, catalogue))
-            ? "Inkwell turns speech into text with models that run on this PC. Choose what it should do; you can add the rest later in Settings > Models."
+            ? "Inkwell writes down speech with models that run on this PC. Each is downloaded once, and only when you press Download."
             : "Every model Inkwell uses is on this PC.";
     }
 

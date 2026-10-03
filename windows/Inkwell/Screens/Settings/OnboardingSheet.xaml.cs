@@ -409,12 +409,13 @@ public sealed partial class OnboardingSheet : ContentDialog
 
     /// <summary>
     /// One choice: its box, its title beside it (in the text colour: a required box is disabled,
-    /// its words are not), and under the title the models line, Windows' note and the download's
-    /// state. Every line wraps; nothing is cut.
+    /// its words are not), and under the title what it adds, a line per model, Windows' note and
+    /// the download's state. Every line wraps; nothing is cut.
     /// </summary>
     private sealed class ChoiceRow
     {
-        private readonly TextBlock line = Caption();
+        private readonly TextBlock detail = Caption();
+        private readonly StackPanel lines = new() { Spacing = 0 };
         private readonly TextBlock note = Caption();
         private readonly TextBlock status = Caption();
 
@@ -427,7 +428,8 @@ public sealed partial class OnboardingSheet : ContentDialog
             AutomationProperties.SetAccessibilityView(title, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
             var words = new StackPanel { Spacing = 2, Margin = new Thickness(0, 5, 0, 0) };
             words.Children.Add(title);
-            words.Children.Add(line);
+            words.Children.Add(detail);
+            words.Children.Add(lines);
             words.Children.Add(note);
             words.Children.Add(status);
             var root = new Grid { ColumnSpacing = 4 };
@@ -447,14 +449,28 @@ public sealed partial class OnboardingSheet : ContentDialog
         {
             Box.IsChecked = choices.IsTicked(Choice, catalogue);
             Box.IsEnabled = ModelChoices.CanTick(Choice, catalogue);
-            line.Text = ModelChoices.Line(Choice, catalogue, CultureInfo.CurrentCulture);
+            var detailText = ModelChoices.Detail(Choice);
+            detail.Text = detailText ?? "";
+            detail.Visibility = detailText is null ? Visibility.Collapsed : Visibility.Visible;
+            var modelLines = ModelChoices.Lines(Choice, catalogue, CultureInfo.CurrentCulture);
+            if (!modelLines.SequenceEqual(lines.Children.OfType<TextBlock>().Select(t => t.Text)))
+            {
+                lines.Children.Clear();
+                foreach (var text in modelLines)
+                {
+                    var line = Caption();
+                    line.Text = text;
+                    line.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["InkSecondaryTextBrush"];
+                    lines.Children.Add(line);
+                }
+            }
             var noteText = ModelChoices.Note(Choice, catalogue);
             note.Text = noteText ?? "";
             note.Visibility = noteText is null ? Visibility.Collapsed : Visibility.Visible;
             var statusText = ModelChoices.Status(Choice, catalogue, CultureInfo.CurrentCulture);
             status.Text = statusText ?? "";
             status.Visibility = statusText is null ? Visibility.Collapsed : Visibility.Visible;
-            AutomationProperties.SetHelpText(Box, string.Join(" ", new[] { line.Text, noteText, statusText }.Where(t => !string.IsNullOrEmpty(t))));
+            AutomationProperties.SetHelpText(Box, string.Join(" ", new[] { detailText, string.Join(". ", modelLines), noteText, statusText }.Where(t => !string.IsNullOrEmpty(t))));
         }
 
         private static TextBlock Caption() =>
