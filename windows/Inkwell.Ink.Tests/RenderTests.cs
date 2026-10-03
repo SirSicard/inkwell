@@ -114,10 +114,11 @@ public sealed class RenderTests
         {
             using var swapChain = new CompositionSwapChain(TestPipeline.Get(), 64, 64);
             swapChain.InjectedPresentResult = CompositionSwapChain.WasStillDrawing;
-            swapChain.Present();
+            Assert.False(swapChain.Present()); // dropped: the host draws it again
             Assert.Equal(1, swapChain.DroppedFrames);
+            Assert.True(swapChain.Present());
             swapChain.InjectedPresentResult = FlakyTarget.DeviceRemoved;
-            Assert.Throws<InkRendererException>(swapChain.Present); // a lost device still is
+            Assert.Throws<InkRendererException>(() => swapChain.Present()); // a lost device still is
         }
     }
 

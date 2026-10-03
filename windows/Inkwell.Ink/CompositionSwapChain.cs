@@ -126,16 +126,17 @@ public sealed unsafe class CompositionSwapChain : IDisposable
     /// <summary>
     /// Draws the orb over the whole back buffer, cleared to <paramref name="backdrop"/> (or to
     /// transparent when null), and presents it (a SwapChainPanel's frame). Over a backdrop, an
-    /// <paramref name="opacity"/> under 1 fades the orb into it. UI thread.
+    /// <paramref name="opacity"/> under 1 fades the orb into it. False when the present was
+    /// dropped (Present). UI thread.
     /// </summary>
-    public void DrawInk(in InkUniforms uniforms, (float R, float G, float B)? backdrop = null, float opacity = 1)
+    public bool DrawInk(in InkUniforms uniforms, (float R, float G, float B)? backdrop = null, float opacity = 1)
     {
         pipeline.Encode(RenderTargetView, Width, Height, uniforms, backdrop);
         if (backdrop is { } colour && opacity < 1)
         {
             Fade(colour, opacity);
         }
-        Present();
+        return Present();
     }
 
     /// <summary>
@@ -185,10 +186,11 @@ public sealed unsafe class CompositionSwapChain : IDisposable
     /// A present that waited (sync interval 1) blocked the UI thread a whole frame, and on a 60 Hz
     /// display the ink's 60 presents a second left it nothing else: the window stopped answering
     /// while the orb moved. Not waiting with sync interval 1 instead dropped nearly every frame of
-    /// the window's orb. A frame the compositor still has no room for is dropped (the next tick
-    /// draws again). A removed or reset device throws.
+    /// the window's orb. A frame the compositor still has no room for is dropped: false, and the
+    /// host draws it again (a live one on the next tick; a still one is the host's to redraw). A
+    /// removed or reset device throws.
     /// </summary>
-    public void Present()
+    public bool Present()
     {
         HRESULT hr;
         if (InjectedPresentResult != 0)
@@ -203,9 +205,10 @@ public sealed unsafe class CompositionSwapChain : IDisposable
         if (hr == WasStillDrawing)
         {
             DroppedFrames++;
-            return;
+            return false;
         }
         InkRendererException.Check(hr, "present the ink");
+        return true;
     }
 
     /// <summary>
