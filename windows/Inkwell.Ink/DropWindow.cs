@@ -785,7 +785,11 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         InkRendererException.Check(hr, "draw the Drop");
         swapChain.InjectedPresentResult = FailNextPresent;
         FailNextPresent = 0;
-        swapChain.Present();
+        if (!swapChain.Present())
+        {
+            // The compositor had no room: a still frame (motion off) is drawn again a frame later.
+            Surface.PresentDropped();
+        }
         return true;
     }
 

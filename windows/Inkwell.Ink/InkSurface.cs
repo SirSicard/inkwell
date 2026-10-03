@@ -63,6 +63,8 @@ public sealed class InkSurface : IDisposable
     /// <summary>Recovery attempts since the last frame that drew.</summary>
     private int attempts;
     private bool retryScheduled;
+    private bool redrawScheduled;
+    private Timer? redrawTimer;
     private bool retryWhenShown;
     private Timer? retryTimer;
     private bool fallbackShown;
@@ -462,6 +464,42 @@ public sealed class InkSurface : IDisposable
         FailureChanged?.Invoke(message);
     }
 
+    /// <summary>About a frame: how long a dropped still frame waits to be drawn again.</summary>
+    internal static readonly TimeSpan RedrawDelay = TimeSpan.FromMilliseconds(16);
+
+    /// <summary>
+    /// The host's present was dropped: the compositor had no room for it
+    /// (CompositionSwapChain.Present). On the clock nothing is needed, the next tick draws; a still
+    /// frame (a fade's end, a theme, a change with motion off) is drawn again a frame later, else
+    /// it would stay undrawn until something else changed. UI thread.
+    /// </summary>
+    public void PresentDropped()
+    {
+        if (redrawScheduled || disposed || IsAnimating)
+        {
+            return;
+        }
+        redrawScheduled = true;
+        if (Scheduler is { } scheduler)
+        {
+            scheduler(RedrawDelay, Redraw);
+            return;
+        }
+        redrawTimer?.Dispose();
+        redrawTimer = new Timer(_ => clock.Post(Redraw), null, RedrawDelay, Timeout.InfiniteTimeSpan);
+    }
+
+    private void Redraw()
+    {
+        redrawScheduled = false;
+        redrawTimer?.Dispose();
+        redrawTimer = null;
+        if (!disposed)
+        {
+            Invalidate();
+        }
+    }
+
     private void ScheduleRetry()
     {
         if (retryScheduled || disposed)
@@ -625,6 +663,8 @@ public sealed class InkSurface : IDisposable
         subscription.Dispose();
         retryTimer?.Dispose();
         retryTimer = null;
+        redrawTimer?.Dispose();
+        redrawTimer = null;
         healthTimer?.Dispose();
         healthTimer = null;
         SystemMotion.Changed -= MotionChanged;

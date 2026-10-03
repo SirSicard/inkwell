@@ -31,7 +31,6 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     private readonly OrbFade fade = new();
     /// <summary>Draws the fade's end once it is reached, when no frame of the ink would (a still orb).</summary>
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? fadeEnd;
-    private Microsoft.UI.Dispatching.DispatcherQueueTimer? redraw;
     private (float, float) transform;
 
     /// <summary>The process's clock; the app sets it at launch, before any panel loads.</summary>
@@ -135,26 +134,6 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
 
     private void OnFadeEnd(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args) => surface?.Invalidate();
 
-    /// <summary>
-    /// A still frame the compositor had no room for (the fade's last, a theme's, a resize's) would
-    /// stay undrawn until something else changed: drawn again a frame later. A live one needs
-    /// nothing: the clock draws the next.
-    /// </summary>
-    private void RedrawSoon()
-    {
-        if (surface is null || surface.IsAnimating)
-        {
-            return;
-        }
-        redraw ??= DispatcherQueue.CreateTimer();
-        redraw.IsRepeating = false;
-        redraw.Interval = TimeSpan.FromMilliseconds(16);
-        redraw.Tick -= OnRedraw;
-        redraw.Tick += OnRedraw;
-        redraw.Start();
-    }
-
-    private void OnRedraw(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args) => surface?.Invalidate();
 
     /// <summary>A frame was drawn (live, or the still frame). UI thread.</summary>
     internal event Action<GlowFrame>? Drawn;
@@ -263,7 +242,8 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
         }
         if (!swapChain.DrawInk(uniforms, BackdropColour(), fade.ValueAt(Now)))
         {
-            RedrawSoon();
+            // The compositor had no room: a still frame is drawn again a frame later.
+            surface!.PresentDropped();
         }
         return true;
     }

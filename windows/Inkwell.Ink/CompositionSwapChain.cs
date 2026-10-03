@@ -187,8 +187,8 @@ public sealed unsafe class CompositionSwapChain : IDisposable
     /// display the ink's 60 presents a second left it nothing else: the window stopped answering
     /// while the orb moved. Not waiting with sync interval 1 instead dropped nearly every frame of
     /// the window's orb. A frame the compositor still has no room for is dropped: false, and the
-    /// host draws it again (a live one on the next tick; a still one is the host's to redraw). A
-    /// removed or reset device throws.
+    /// host tells its surface (InkSurface.PresentDropped), which draws it again. A removed or reset
+    /// device throws.
     /// </summary>
     public bool Present()
     {

@@ -28,8 +28,21 @@ internal sealed class FlakyTarget : IInkTarget, IDisposable
     public List<bool> Fallbacks { get; } = [];
     public bool Fallback => Fallbacks.Count > 0 && Fallbacks[^1];
 
+    /// <summary>The next frame is drawn, then its present dropped, as a host reports it.</summary>
+    public bool DropNext { get; set; }
+
+    /// <summary>What the host calls when its present was dropped (the surface's PresentDropped).</summary>
+    public Action? Dropped { get; set; }
+
     public bool Render(InkPipeline pipeline, in InkUniforms uniforms)
     {
+        if (DropNext)
+        {
+            DropNext = false;
+            var drawn = inner.Render(pipeline, uniforms);
+            Dropped?.Invoke();
+            return drawn;
+        }
         if (FailNext)
         {
             FailNext = false;
@@ -134,6 +147,29 @@ public sealed class RecoveryTests
             Target.Dispose();
             Loader.Outcome?.Pipeline?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// A still frame whose present the compositor dropped is drawn again a frame later, once; no
+    /// failure, no fallback.
+    /// </summary>
+    [Fact]
+    public void AStillFrameWhosePresentWasDroppedIsDrawnAgain()
+    {
+        using var rig = new Rig(() => new InkPipeline(InkAdapter.Warp));
+        rig.Target.Dropped = rig.Surface.PresentDropped;
+        rig.PumpUntil(() => rig.Surface.FramesDrawn == 1);
+        rig.Target.DropNext = true;
+        rig.Surface.State = InkState.Meeting; // a still frame (motion off): drawn, then dropped
+        Assert.Equal([InkSurface.RedrawDelay], rig.Delays);
+        rig.Surface.PresentDropped(); // asked twice: one redraw
+        Assert.Equal(1, rig.PendingRetries);
+        var before = rig.Surface.FramesDrawn;
+        rig.RunRetry();
+        Assert.Equal(before + 1, rig.Surface.FramesDrawn);
+        Assert.Null(rig.Surface.Failure);
+        Assert.False(rig.Target.Fallback);
+        Assert.Equal(0, rig.PendingRetries);
     }
 
     [Fact]
