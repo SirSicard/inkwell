@@ -374,12 +374,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "stats.counted": the Stats screen's numbers, counted on this computer from the library:
  *       words dictated, speed against the user's own past, time saved against stats.typing_wpm,
  *       the streak and a heatmap of words per day; meetings' hours, talk time (mic is the user,
- *       far end the others), longest monologue and the user's lines ending in "?"; promises kept,
- *       open and overdue; and which milestones are reached. Days are the user's: "utc_offsets" is
- *       the zone's UTC offset over time, oldest first, each from the moment it took effect (the
- *       first also covers everything before it; 1 to 400 of them, minutes -840 to 840), and
- *       "week_start" the ISO weekday weeks start on (1 Monday to 7 Sunday). It answers with the
- *       "id" as "ref"; a failure is "command.failed" with that "id".
+ *       far end the others), longest monologue and the user's lines ending in a question mark
+ *       (?, ？ or ؟); promises kept, open and overdue; and which milestones are reached. Days are
+ *       the user's: "utc_offsets" is the zone's UTC offset over time, oldest first, each from the
+ *       moment it took effect (the first also covers everything before it; 1 to 400 of them,
+ *       minutes -840 to 840), and "week_start" the ISO weekday weeks start on (1 Monday to 7
+ *       Sunday). It answers with the "id" as "ref"; a failure is "command.failed" with that "id".
  *   {"cmd":"milestones.check","utc_offsets":[...],"week_start":1,"id":"<ref>"}
  *       "milestones.reached": the milestones (words dictated 1,000 to 100,000, streaks of 7 to
  *       100 days) reached since the last check, to celebrate; usually none. Each is reported

@@ -14,6 +14,9 @@
 use crate::audio::Channel;
 use crate::store::{CommitmentId, RecordId, RecordKind, Segment};
 
+/// What ends a question: the question mark, its full-width form, and the Arabic one (U+061F).
+pub const QUESTION_MARKS: [char; 3] = ['?', '？', '؟'];
+
 /// The longest pause that still leaves the user's speech one monologue. A longer silence, or any
 /// speech from the far end, ends it.
 pub const MONOLOGUE_PAUSE_MS: u64 = 3_000;
@@ -41,8 +44,8 @@ pub struct TranscriptDigest {
     /// The longest stretch of the user speaking with no one else speaking and no pause longer than
     /// [`MONOLOGUE_PAUSE_MS`], ms: from the start of its first line to the end of its last.
     pub longest_monologue_ms: u64,
-    /// The user's lines whose text ends in a question mark (`?` or the full-width `？`), trailing
-    /// space aside. A plain count, labelled as such: no judgement of what a question is.
+    /// The user's lines whose text ends in a question mark (`?`, the full-width `？` or the Arabic
+    /// `؟`), trailing space aside. A plain count, labelled as such: no judgement of what a question is.
     pub mic_questions: u64,
 }
 
@@ -84,7 +87,8 @@ pub struct CommitmentState {
 /// recounts any kept under another, so changing what a digest counts (the word split, the pause
 /// that ends a monologue, the question rule) must raise it: the pinned test below fails until it
 /// is raised.
-pub const DIGEST_VERSION: u32 = 1;
+/// Version 2 counts the Arabic question mark as a question.
+pub const DIGEST_VERSION: u32 = 2;
 
 /// Counts `segments` (one record's current transcript).
 pub fn digest(segments: &[Segment]) -> TranscriptDigest {
@@ -111,7 +115,7 @@ pub fn digest(segments: &[Segment]) -> TranscriptDigest {
         mic_questions: segments
             .iter()
             .filter(|s| s.channel == Channel::Mic)
-            .filter(|s| s.text.trim_end().ends_with(['?', '？']))
+            .filter(|s| s.text.trim_end().ends_with(QUESTION_MARKS))
             .count() as u64,
     }
 }
@@ -199,11 +203,12 @@ mod tests {
         seg(Channel::Far, start_ms, end_ms, text)
     }
 
-    /// Pins what version 1 of the rules counts for one transcript. If this fails, the rules
+    /// Pins what version 2 of the rules counts for one transcript. If this fails, the rules
     /// changed: raise [`DIGEST_VERSION`] (so kept digests are recounted), then update the numbers.
+    /// Version 2 counts the Arabic question mark `؟` as a question.
     #[test]
-    fn digest_version_1_counts_this_transcript_so() {
-        assert_eq!(DIGEST_VERSION, 1);
+    fn digest_version_2_counts_this_transcript_so() {
+        assert_eq!(DIGEST_VERSION, 2);
         let d = digest(&[
             mic(0, 4_000, "shall we start?"),
             mic(6_500, 9_000, "one two  three"),
@@ -213,14 +218,15 @@ mod tests {
             mic(30_000, 31_000, "a"),
             mic(34_000, 40_000, "b"),
             mic(43_001, 45_000, "c"),
+            mic(50_000, 51_000, "هل نبدأ؟"),
         ]);
         assert_eq!(
             d,
             TranscriptDigest {
                 mic: ChannelDigest {
-                    words: 10,
-                    speech_ms: 16_499,
-                    lines: 6
+                    words: 12,
+                    speech_ms: 17_499,
+                    lines: 7
                 },
                 far: ChannelDigest {
                     words: 3,
@@ -229,7 +235,7 @@ mod tests {
                 },
                 // 30..40 s joined across 3 s; 43.001 s split off.
                 longest_monologue_ms: 10_000,
-                mic_questions: 2,
+                mic_questions: 3,
             }
         );
     }
@@ -282,8 +288,10 @@ mod tests {
             mic(3, 4, "Why? Because."),
             mic(4, 5, "?!"),
             far(5, 6, "What about you?"),
+            mic(6, 7, "هل انتهينا؟ "),
+            mic(7, 8, "؟ لا"),
         ]);
-        assert_eq!(d.mic_questions, 3);
+        assert_eq!(d.mic_questions, 4);
     }
 
     /// A monologue: the user's lines joined across pauses of up to three seconds, ended by a

@@ -250,7 +250,7 @@ private struct MeetingsCard: View {
                     ])
                     TalkTime(you: month.youMs, them: month.themMs)
                     Line(text: "Your longest monologue: \(StatsFormat.span(ms: month.longestMonologueMs))")
-                    Line(text: "Questions are your own lines that end in \u{201C}?\u{201D}.", secondary: true)
+                    Line(text: "Questions are your own lines that end in a question mark.", secondary: true)
                 }
                 Line(
                     text: "All time: \(all.meetings) \(all.meetings == 1 ? "meeting" : "meetings") · \(LibraryFormat.duration(ms: all.recordedMs)) recorded",
