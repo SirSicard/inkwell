@@ -2,9 +2,10 @@
 // the app's own icon (Assets/Inkwell.ico, Halo rim: the orb on night inside a glowing rim):
 //
 //   the tray icon   at rest the icon as it is; a live state keeps its plate and rim and puts one
-//                   dot in the orb's place, in the state's colour (the pulse breathes its
-//                   strength); the final pass fills the rim clockwise from the top, dashed while
-//                   it has no number yet
+//                   dot in the orb's place, in the state's colour (the pulse breathes it toward
+//                   its lighter tint, never toward the night plate, which turned coral brown, as
+//                   the Mac's menu bar found); the final pass fills the rim clockwise from the
+//                   top, dashed while it has no number yet
 //   the badge       the taskbar button's overlay: the dot alone, ringed in night so it reads on a
 //                   light or dark taskbar
 //   the thumbnail   the taskbar preview's Record (a dot) and Stop (a square) buttons
@@ -32,6 +33,13 @@ public static unsafe class TrayGlyph
 {
     /// <summary>The icon's night plate (design/icon/make_icon.py's NIGHT).</summary>
     internal static readonly (float R, float G, float B) Night = Rgb.Of(0x121118);
+
+    /// <summary>How far toward white the breath's faintest is (the colour's lighter tint).</summary>
+    internal const float TintLift = 0.5f;
+
+    /// <summary>The dot's colour at <paramref name="strength"/>: the colour itself at 1, toward its lighter tint as the pulse breathes out.</summary>
+    internal static (float R, float G, float B) Breathed((float R, float G, float B) colour, double strength) =>
+        Rgb.Mix(Rgb.Lift(colour, TintLift), colour, (float)Math.Clamp(strength, 0, 1));
 
     /// <summary>
     /// The orb's place in the icon, as shares of its side: the small art's discs (centre 50, 51 of
@@ -64,9 +72,9 @@ public static unsafe class TrayGlyph
         switch (look)
         {
             case GlyphLook.Dot:
-                // The orb's place painted over with the plate, then the dot, its alpha the strength.
+                // The orb's place painted over with the plate, then the dot, breathed.
                 Disc(bgra, size, OrbX, OrbY, OrbCover, Night, 1);
-                Disc(bgra, size, OrbX, OrbY, DotRadius, colour, Math.Clamp(strength, 0, 1));
+                Disc(bgra, size, OrbX, OrbY, DotRadius, Breathed(colour, strength), 1);
                 break;
             case GlyphLook.Ring:
                 PaintRing(bgra, size, colour, progress);
@@ -82,7 +90,7 @@ public static unsafe class TrayGlyph
         var size = GetSystemMetrics(SM.SM_CXSMICON);
         var pixels = new byte[size * size * 4];
         Disc(pixels, size, 0.5, 0.5, 0.5, Night, 1);
-        Disc(pixels, size, 0.5, 0.5, 0.36, Rgb.Mix(Night, colour, (float)Math.Clamp(strength, 0, 1)), 1);
+        Disc(pixels, size, 0.5, 0.5, 0.36, Breathed(colour, strength), 1);
         return ToIcon(pixels, size);
     }
 
@@ -113,9 +121,9 @@ public static unsafe class TrayGlyph
 
     /// <summary>
     /// The rim, at least a pixel and a half wide: a faint track all the way round, then
-    /// <paramref name="colour"/> clockwise from the top to <paramref name="progress"/>, or in 32
-    /// even dashes with no number (still: an indeterminate ring that spun would be motion the icon
-    /// never has).
+    /// <paramref name="colour"/> clockwise from the top to <paramref name="progress"/>, or in even
+    /// dashes with no number, a dash for every two pixels of the side so each stays a pixel or more
+    /// at the tray's 16 (still: an indeterminate ring that spun would be motion the icon never has).
     /// </summary>
     private static void PaintRing(byte[] bgra, int size, (float R, float G, float B) colour, double? progress)
     {
@@ -129,7 +137,7 @@ public static unsafe class TrayGlyph
             }
             // Clockwise from the top, as a clock's hand: 0 at twelve, 1 all the way round.
             var turn = (Math.Atan2(x - 0.5, 0.5 - y) / (2 * Math.PI) + 1) % 1;
-            return progress is double p ? turn < Math.Clamp(p, 0, 1) : (int)(turn * 64) % 2 == 0;
+            return progress is double p ? turn < Math.Clamp(p, 0, 1) : (int)(turn * size) % 2 == 0;
         });
     }
 
