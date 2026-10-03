@@ -611,8 +611,18 @@ public sealed class ScreenLog(Action<string> write)
 {
     public void Write(string message) => write(message);
 
-    /// <summary>The debug trace (the core logs its own side). Built from command names and fixed words only.</summary>
-    public static ScreenLog System { get; } = new(message => global::System.Diagnostics.Trace.WriteLine($"Inkwell screens: {message}"));
+    /// <summary>
+    /// The debug trace, and <see cref="Also"/> once the app has set it (the local log). Built from
+    /// command names and fixed words only.
+    /// </summary>
+    public static ScreenLog System { get; } = new(message =>
+    {
+        global::System.Diagnostics.Trace.WriteLine($"Inkwell screens: {message}");
+        Also?.Invoke(message);
+    });
+
+    /// <summary>Where <see cref="System"/>'s lines also go: the local log, set once at launch (App).</summary>
+    public static Action<string>? Also { get; set; }
 }
 
 /// <summary>An enum value's JSON name (its JsonStringEnumMemberName), through the source-generated serializer.</summary>

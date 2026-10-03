@@ -420,6 +420,19 @@ What the checks guarantee:
   file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
   included (`windows/scripts/release-version.sh`).
 
+**When a PC reports a problem.** The app keeps a log of its own on the PC and never sends it
+anywhere: `logs\inkwell.log` in the library folder (`%LOCALAPPDATA%\Inkwell\logs`, or under
+`INK_DATA_DIR`), up to 1 MB, with the two before it as `inkwell.1.log` and `inkwell.2.log`
+(`windows/Inkwell.Core/LocalLog.cs`). It holds the shell's diagnostics (`ScreenLog`: what failed,
+by command name and fixed words, never a command's fields) and what the core writes to stderr at
+its default level, info. The core keeps what was said out of its lines; they can name files in
+the library and models folders, and quote an online provider's error. Anything else in the
+process that writes to stderr is marked `stderr`. When an exception ends the app, it first writes
+`crash-YYYYMMDD-HHMMSS.txt` beside the log: the time, the app's and Windows' versions, and each
+exception's type and stack, without its message (the newest ten are kept). A crash inside native
+code (the core, an engine, a GPU driver) ends the process without a note. Ask the user for the
+files; uninstalling leaves them, with the library.
+
 The same build on a PC (Visual Studio's C++ build tools, CMake, Ninja, LLVM, Git Bash, the Vulkan
 SDK with `VULKAN_SDK` set, the .NET SDK `windows/global.json` pins), x64:
 
