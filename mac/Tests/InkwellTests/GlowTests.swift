@@ -224,9 +224,10 @@ final class OrbAtRestTests: XCTestCase {
     }
 
     /// Aurora rests green and violet, Lagoon teal and amber, in Light and in Dark: a sixth or more
-    /// of the resting orb's pixels leans toward each of the preset's colours (a quarter to a half
-    /// at the rest tint of 0.2; untinted, none but a twelfth in Light's highlight), and the two
-    /// presets' resting orbs differ.
+    /// of the resting orb's pixels leans toward each of the preset's colours, and the two presets'
+    /// resting orbs differ. A floor: the first rest tint, 0.2, already passed it (a quarter to a
+    /// half); untinted, none but a twelfth in Light's highlight. The test below carries the
+    /// strength.
     func testTheRestingOrbLeansTowardThePresetsColoursInBothModes() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
         let pipeline = try InkPipelineLoader.shared.wait().get()
@@ -242,6 +243,38 @@ final class OrbAtRestTests: XCTestCase {
             }
             let apart = ((means[0] - means[1]) * (means[0] - means[1])).sum().squareRoot()
             XCTAssertGreaterThan(apart, 0.03, "\(dark ? "dark" : "light"): Aurora and Lagoon rest in different colours")
+        }
+    }
+
+    /// The preset shows behind Today, as the window composites the resting orb (at the opacity it
+    /// gives a resting orb behind text, over the mode's background): the orb's core in Aurora and
+    /// in Lagoon are apart in colour by about 0.055 (Light) and 0.06 (Dark) at the rest tint of 0.6
+    /// and 70 %. At the first rest tint (0.2, undimmed) they were 0.025 and 0.029 apart, which read
+    /// as the same grey; the floor of 0.045 keeps it from sliding back. Whether it reads clearly is
+    /// for the eye (the before-and-after renders), not this number.
+    func testThePresetShowsBehindTodayAtRest() throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let pipeline = try InkPipelineLoader.shared.wait().get()
+        let opacity = Double(OrbLayer.opacity(state: .idle, behindText: true, dimmed: false))
+        for dark in [false, true] {
+            let background = GlowColours.rgb(Glow.mode(dark: dark).background)
+            var means: [SIMD3<Double>] = []
+            for id in ["aurora", "lagoon"] {
+                let palette = GlowColours.palette(preset: Glow.preset(id), you: nil, them: nil, dark: dark)
+                let image = try InkSnapshot.render(
+                    .idle, t: 12, width: 208, height: 140, palette: palette, placement: Glow.Orb.main, voice: .silent,
+                    motion: false, pipeline: pipeline)
+                var sum = SIMD3<Double>(0, 0, 0), n = 0.0
+                for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] >= 96 {
+                    let alpha = Double(image.rgba[i + 3]) / 255
+                    let orb = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / 255
+                    sum += orb * opacity + background * (1 - alpha * opacity)
+                    n += 1
+                }
+                means.append(sum / max(n, 1))
+            }
+            let apart = ((means[0] - means[1]) * (means[0] - means[1])).sum().squareRoot()
+            XCTAssertGreaterThan(apart, 0.045, "\(dark ? "dark" : "light"): Aurora and Lagoon, as shown behind Today")
         }
     }
 }
@@ -271,8 +304,12 @@ final class OrbBehindTextTests: XCTestCase {
         XCTAssertTrue(Glow.Orb.wander.contains(home))
     }
 
-    func testALiveOrbDimsBehindTextAndAnOrbAtRestDoesNot() {
-        XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: false), 1, "at rest, as designed")
+    func testAnOrbBehindTextDimsALittleAtRestAndMoreLive() {
+        XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: false), OrbLayer.restBehindText,
+                       "at rest behind text: dimmed a little, so its tint can be strong")
+        XCTAssertLessThan(OrbLayer.restBehindText, 1)
+        XCTAssertGreaterThan(OrbLayer.restBehindText, OrbLayer.liveBehindText)
+        XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: false, dimmed: false), 1, "the first run's orb: full strength")
         for state in InkState.allCases where state.isLive {
             XCTAssertEqual(OrbLayer.opacity(state: state, behindText: true, dimmed: false), OrbLayer.liveBehindText, "\(state)")
             XCTAssertEqual(OrbLayer.opacity(state: state, behindText: false, dimmed: false), 1, "\(state): the first run's demo has no text over it")
@@ -322,8 +359,8 @@ final class OrbBehindTextTests: XCTestCase {
     /// wanders in), loud voices on both sides, at a few moments (its noise and highlight move),
     /// composited over the mode's background at the opacity the window gives it: every pixel keeps
     /// text at 4.5:1 and secondary text at 3:1 or more. At rest that is the orb leaning toward the
-    /// preset at GlowColours.restTint, undimmed: the worst is Dark's secondary text over Lagoon,
-    /// 3.10:1 at 0.2 (2.96:1 at 0.25; 3.62:1 untinted).
+    /// preset at GlowColours.restTint (0.6), at OrbLayer.restBehindText (70 %): the worst is Dark's
+    /// secondary text over Lagoon, 3.27:1, and text keeps 7.03:1 or more.
     func testTextStaysReadableOverTheMainWindowsOrbWithEveryPresetInBothModes() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
         let pipeline = try InkPipelineLoader.shared.wait().get()

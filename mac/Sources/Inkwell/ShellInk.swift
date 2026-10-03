@@ -262,10 +262,14 @@ struct OrbLayer: NSViewRepresentable {
     /// strength, and its bright centre sits behind every screen's text: at 30 % its brightest point
     /// still leaves the mode's text at 4.5:1 or more and its secondary text at 3:1 or more, with
     /// every preset in both modes (OrbBehindTextTests measures it; a colour of the user's own is
-    /// not measured). At rest it is the mode's quiet
-    /// idle colour leaning a little toward the preset (GlowColours.restTint, measured by the same test),
-    /// which text reads over at full strength.
+    /// not measured).
     nonisolated static let liveBehindText: CGFloat = 0.3
+
+    /// How strongly an orb at rest shows behind text. At rest it is the mode's idle colour leaning
+    /// well toward the preset (GlowColours.restTint), so each preset shows; dimmed this little, text
+    /// keeps 4.5:1 and secondary text 3:1 or more over it, with every preset in both modes, wherever
+    /// it wanders (OrbBehindTextTests). The pair is chosen together: see GlowColours.restTint.
+    nonisolated static let restBehindText: CGFloat = 0.7
 
     /// How far blotting condenses an orb behind text (InkSimulation.blotDepth). The design's full
     /// blot ends in a small hard-edged drop of ink: in the Drop's pill it reads as that drop, but
@@ -282,8 +286,8 @@ struct OrbLayer: NSViewRepresentable {
     /// The orb's opacity for `state`.
     nonisolated static func opacity(state: InkState, behindText: Bool, dimmed: Bool) -> CGFloat {
         let rest: CGFloat = dimmed ? 0.45 : 1
-        guard behindText, state.isLive else { return rest }
-        return min(rest, liveBehindText)
+        guard behindText else { return rest }
+        return min(rest, state.isLive ? liveBehindText : restBehindText)
     }
 
     func makeNSView(context: Context) -> InkView {

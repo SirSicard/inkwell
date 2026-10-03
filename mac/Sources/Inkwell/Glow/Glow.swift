@@ -168,10 +168,12 @@ enum GlowColours {
     }
 
     /// How far the orb at rest leans from the mode's idle colour toward the dots, so each preset
-    /// shows at rest, softer than live. Text sits over the main window's resting orb undimmed, so
-    /// OrbBehindTextTests sets the ceiling: with every preset in both modes, text at 4.5:1 and
-    /// secondary text at 3:1 or more. Dark's secondary text has the least room.
-    static let restTint = 0.2
+    /// clearly shows at rest. Chosen with OrbLayer.restBehindText (0.7) by OrbBehindTextTests:
+    /// with every preset in both modes, text keeps 4.5:1 and secondary text 3:1 or more. Dark's
+    /// secondary text has the least room: 3.27:1 at 0.6 and 0.7. When chosen (a sweep, not kept as
+    /// a test): 3.05:1 at 0.6 and 0.75, and 2.19:1 at 0.6 undimmed, where text alone is still
+    /// 4.72:1. Increase Contrast dims the resting orb to 0.45, so its tint shows less there.
+    static let restTint = 0.6
 
     static func color(_ c: RGB) -> Color {
         Color(nsColor: nsColor(c))
