@@ -67,10 +67,15 @@ struct ShellView: View {
                 OrbLayer(
                     state: ink.state, palette: theme.palette, placement: Glow.Orb.main, still: theme.motionStill,
                     dimmed: theme.solidSurfaces, behindText: true)
-                // A milestone reached: a quiet glow over the orb, once (MilestoneCelebration).
-                MilestoneGlow(
-                    serial: celebration?.serial, you: theme.you, them: theme.them, placement: Glow.Orb.main,
-                    glows: MilestoneCelebration.glows(still: theme.motionStill, reduceMotion: reduceMotion))
+                // A milestone reached: a quiet glow over the orb, once (MilestoneCelebration). Not
+                // in the window otherwise, so nothing is laid out or drawn for it at rest.
+                if let celebration,
+                    MilestoneCelebration.glows(still: theme.motionStill, reduceMotion: reduceMotion)
+                {
+                    MilestoneGlow(
+                        serial: celebration.serial, you: theme.you, them: theme.them, placement: Glow.Orb.main,
+                        stats: screens.stats)
+                }
             }
             .ignoresSafeArea()
         }

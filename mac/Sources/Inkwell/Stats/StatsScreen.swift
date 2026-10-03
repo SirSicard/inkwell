@@ -10,6 +10,7 @@ import SwiftUI
 
 struct StatsScreen: View {
     @Environment(ScreenModels.self) private var screens
+    @Environment(WindowPresence.self) private var presence
     @State private var sharing = false
 
     var body: some View {
@@ -52,6 +53,18 @@ struct StatsScreen: View {
         .scrollContentBackground(.hidden)
         .onAppear { stats.screenAppeared() }
         .onDisappear { stats.screenDisappeared() }
+        // Off screen it waits; back on screen it counts again.
+        .onChange(of: presence.onScreen, initial: true) { _, onScreen in stats.windowPresence(onScreen: onScreen) }
+        // An answer that never comes is said, not spun for ever: one wait per question.
+        .task(id: stats.pendingLoad) {
+            guard let ref = stats.pendingLoad else { return }
+            do {
+                try await Task.sleep(for: StatsModel.loadLimit)
+            } catch {
+                return
+            }
+            stats.loadTimedOut(ref)
+        }
         .sheet(isPresented: $sharing) {
             if let counted = stats.counted {
                 // The sheet follows the app's appearance, as the first run's does.
@@ -167,6 +180,7 @@ private struct DictationCard: View {
                 }
                 if let streak = StatsFormat.streak(current: d.streakDays, longest: d.longestStreakDays) {
                     Line(text: streak)
+                    Line(text: StatsFormat.streakRule, secondary: true)
                 }
             }
             Heatmap(cells: StatsFormat.heatmap(d, calendar: calendar), calendar: calendar)
@@ -191,7 +205,8 @@ struct Heatmap: View {
                 ForEach(0..<weeks, id: \.self) { week in
                     VStack(spacing: Self.gap) {
                         ForEach(0..<7, id: \.self) { weekday in
-                            let cell = cells.first { $0.week == week && $0.weekday == weekday }
+                            let index = week * 7 + weekday
+                            let cell = index < cells.count ? cells[index] : nil
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(fill(cell))
                                 .frame(width: Self.cell, height: Self.cell)
@@ -254,7 +269,6 @@ struct TalkTime: View {
 
     var body: some View {
         if let share = StatsFormat.talkShare(you: you, them: them) {
-            let words = "You \(share.you) % · \(StatsFormat.span(ms: you))   Them \(share.them) % · \(StatsFormat.span(ms: them))"
             VStack(alignment: .leading, spacing: 6) {
                 GeometryReader { geometry in
                     HStack(spacing: 2) {
@@ -264,15 +278,26 @@ struct TalkTime: View {
                     }
                 }
                 .frame(height: 8)
-                Text(words)
-                    .font(Typography.caption)
-                    .foregroundStyle(Theme.secondaryText)
-                    .monospacedDigit()
+                // The key: a dot in each colour before its words (no words in the dot colours).
+                HStack(spacing: 14) {
+                    key(theme.you, "You \(share.you) % · \(StatsFormat.span(ms: you))")
+                    key(theme.them, "Them \(share.them) % · \(StatsFormat.span(ms: them))")
+                }
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .monospacedDigit()
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Talk time: you \(share.you) percent, \(StatsFormat.span(ms: you)); them \(share.them) percent, \(StatsFormat.span(ms: them))")
         } else {
             Line(text: "No talk time recorded this month.", secondary: true)
+        }
+    }
+
+    private func key(_ colour: Color, _ words: String) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(colour).frame(width: 8, height: 8)
+            Text(words)
         }
     }
 }

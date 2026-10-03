@@ -8,7 +8,7 @@ struct StatsSettingsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Stats")
-            row("Celebrate milestones", detail: "A quiet glow on the orb and one line, once for each milestone: 1,000 to 100,000 words, and streaks of 7, 30 and 100 days. With Always still or Reduce Motion, only the line.") {
+            row("Celebrate milestones", detail: "A quiet glow on the orb and one line, once for each milestone: 1,000 to 100,000 words, and streaks of 7, 30 and 100 active days. With Always still or Reduce Motion, only the line.") {
                 // A closure literal, not a method reference: see MeetingsSection's toggle.
                 Toggle("Celebrate milestones", isOn: Binding(get: { stats.celebrate }, set: { stats.setCelebrate($0) }))
                     .toggleStyle(.switch)

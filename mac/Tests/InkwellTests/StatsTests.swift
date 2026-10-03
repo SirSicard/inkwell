@@ -114,6 +114,14 @@ final class StatsModelTests: XCTestCase {
         XCTAssertLessThan(madrid.count, 400)
         XCTAssertEqual(StatsModel.utcOffsets(timeZone: TimeZone(identifier: "Asia/Tokyo")!, now: now).map(\.minutes), [540])
 
+        // Not only daylight saving: Pyongyang moved its standard time from UTC+8:30 to UTC+9 on
+        // 2018-05-04 at 23:30 local (15:00 UTC).
+        let pyongyang = StatsModel.utcOffsets(timeZone: TimeZone(identifier: "Asia/Pyongyang")!, now: now)
+        XCTAssertEqual(pyongyang.map(\.minutes), [510, 540])
+        XCTAssertEqual(pyongyang.last?.fromUnixMs, 1_525_446_000_000)
+        // A daylight-saving change lands on its second too: Madrid's on 2026-03-29 01:00 UTC.
+        XCTAssertTrue(madrid.contains { $0.fromUnixMs == 1_774_746_000_000 && $0.minutes == 120 })
+
         var us = Calendar(identifier: .gregorian)
         us.locale = Locale(identifier: "en_US")
         XCTAssertEqual(StatsModel.isoWeekStart(us), 7, "Sunday")
@@ -168,13 +176,97 @@ final class StatsModelTests: XCTestCase {
         XCTAssertNil(stats.celebration, "nothing new")
         stats.apply(event(#"{"type":"milestones.reached","ref":"\#(ref)","milestones":[{"id":"words_1000","kind":"words","threshold":1000,"reached":true},{"id":"streak_7","kind":"streak","threshold":7,"reached":true}]}"#))
         let shown = try XCTUnwrap(stats.celebration)
-        XCTAssertEqual(shown.note, "Milestone · a 7-day streak", "the last one, said once")
+        XCTAssertEqual(shown.note, "Milestone · 7 active days in a row", "the biggest one, said once")
         stats.dismissCelebration(shown.serial + 1)
         XCTAssertNotNil(stats.celebration, "a later serial is not this one")
         stats.dismissCelebration(shown.serial)
         XCTAssertNil(stats.celebration)
         XCTAssertEqual(StatsFormat.milestoneNote(kind: .words, threshold: 100_000, locale: Locale(identifier: "en_GB")),
                        "Milestone · 100,000 words dictated")
+    }
+
+    /// Review fix: the core reports each milestone once ever, so an answer to an earlier check
+    /// counts as much as the newest. Two checks in flight, the first finding a milestone and the
+    /// second nothing, still celebrate it; a smaller one arriving later does not replace it.
+    func testOverlappingChecksNeverLoseAMilestone() throws {
+        let stats = model()
+        stats.checkMilestones()
+        let first = try XCTUnwrap(lastRef("milestones.check"))
+        stats.checkMilestones()
+        let second = try XCTUnwrap(lastRef("milestones.check"))
+        XCTAssertNotEqual(first, second)
+        stats.apply(event(#"{"type":"milestones.reached","ref":"\#(first)","milestones":[{"id":"words_10000","kind":"words","threshold":10000,"reached":true}]}"#))
+        stats.apply(event(#"{"type":"milestones.reached","ref":"\#(second)","milestones":[]}"#))
+        XCTAssertEqual(stats.celebration?.id, "words_10000")
+        stats.checkMilestones()
+        let third = try XCTUnwrap(lastRef("milestones.check"))
+        stats.apply(event(#"{"type":"milestones.reached","ref":"\#(third)","milestones":[{"id":"words_1000","kind":"words","threshold":1000,"reached":true}]}"#))
+        XCTAssertEqual(stats.celebration?.id, "words_10000", "the biggest stays")
+        stats.apply(event(#"{"type":"milestones.reached","ref":"elsewhere-1","milestones":[{"id":"streak_100","kind":"streak","threshold":100,"reached":true}]}"#))
+        XCTAssertEqual(stats.celebration?.id, "words_10000", "not this model's question")
+    }
+
+    /// Review fix: quick Stepper clicks send 45, 50, 55; the core's echoes of 45 and 50 arrive
+    /// after the third click and are not taken over it. The last echo is.
+    func testEchoesOfEarlierWritesDoNotStepBack() {
+        let stats = model()
+        stats.setTypingWpm(45)
+        stats.setTypingWpm(50)
+        stats.setTypingWpm(55)
+        stats.apply(event(#"{"type":"setting.value","key":"stats.typing_wpm","value":"45"}"#))
+        XCTAssertEqual(stats.typingWpm, 55)
+        stats.apply(event(#"{"type":"setting.value","key":"stats.typing_wpm","value":"50"}"#))
+        XCTAssertEqual(stats.typingWpm, 55)
+        stats.apply(event(#"{"type":"setting.value","key":"stats.typing_wpm","value":"55"}"#))
+        XCTAssertEqual(stats.typingWpm, 55)
+        // Nothing of its own in flight: a value from elsewhere is taken.
+        stats.apply(event(#"{"type":"setting.value","key":"stats.typing_wpm","value":"70"}"#))
+        XCTAssertEqual(stats.typingWpm, 70)
+        // A failed write is no longer awaited, and the warning clears with the next value.
+        stats.setTypingWpm(75)
+        stats.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:stats.typing_wpm","message":"x"}"#))
+        XCTAssertTrue(stats.settingsFailed)
+        stats.apply(event(#"{"type":"setting.value","key":"stats.typing_wpm","value":"70"}"#))
+        XCTAssertEqual(stats.typingWpm, 70)
+        XCTAssertFalse(stats.settingsFailed)
+    }
+
+    /// The window off screen: nothing is counted for it; back on screen, Stats counts again.
+    func testAnOffScreenWindowWaitsAndCountsWhenBack() {
+        let stats = model()
+        stats.screenAppeared()
+        stats.windowPresence(onScreen: false)
+        sent.removeAll()
+        stats.apply(event(#"{"type":"dictation.inserted","outcome":"pasted","record":"r1","text":"x"}"#))
+        XCTAssertEqual(fields(sent).compactMap { $0["cmd"] as? String }, ["milestones.check"])
+        stats.windowPresence(onScreen: true)
+        XCTAssertEqual(fields(sent).compactMap { $0["cmd"] as? String }, ["milestones.check", "stats.get"])
+    }
+
+    /// An answer that never comes ends in "couldn't count", not a spinner for ever; a late limit
+    /// for an earlier question changes nothing.
+    func testALoadThatIsNeverAnsweredFails() throws {
+        let stats = model()
+        stats.load()
+        let first = try XCTUnwrap(stats.pendingLoad)
+        stats.load()
+        let second = try XCTUnwrap(stats.pendingLoad)
+        stats.loadTimedOut(first)
+        XCTAssertEqual(stats.loadState, .loading)
+        stats.loadTimedOut(second)
+        XCTAssertEqual(stats.loadState, .failed)
+        XCTAssertNil(stats.pendingLoad)
+    }
+
+    /// The glow and the line read aloud play once per celebration, even when the window leaves
+    /// the screen and comes back while the line waits.
+    func testTheGlowAndTheAnnouncementPlayOnce() {
+        let stats = model()
+        XCTAssertTrue(stats.beginGlow(1))
+        XCTAssertFalse(stats.beginGlow(1))
+        XCTAssertTrue(stats.beginGlow(2))
+        XCTAssertTrue(stats.beginAnnouncement(1))
+        XCTAssertFalse(stats.beginAnnouncement(1))
     }
 
     func testTheSettingsAreReadAndSetAndTheSpeedRecountsTimeSaved() throws {
@@ -204,8 +296,15 @@ final class StatsModelTests: XCTestCase {
         stats.apply(.commandFailed(failed))
         XCTAssertTrue(stats.settingsFailed)
 
-        // With the screen loaded, a new speed recounts.
-        stats.load()
+        // Its own writes' echoes, taken as the core's word.
+        for value in ["on", "200", "10"] {
+            let key = value == "on" ? "stats.celebrate" : "stats.typing_wpm"
+            stats.apply(event(#"{"type":"setting.value","key":"\#(key)","value":"\#(value)"}"#))
+        }
+        XCTAssertEqual(stats.typingWpm, 10)
+
+        // With the screen showing, a new speed recounts.
+        stats.screenAppeared()
         let ref = try XCTUnwrap(lastRef("stats.get"))
         stats.apply(event(statsCounted(ref: ref)))
         sent.removeAll()
@@ -236,9 +335,10 @@ final class StatsFormatTests: XCTestCase {
     func testTheStreakShowsFromDayTwo() {
         XCTAssertNil(StatsFormat.streak(current: 0, longest: 0))
         XCTAssertNil(StatsFormat.streak(current: 1, longest: 1))
-        XCTAssertEqual(StatsFormat.streak(current: 1, longest: 9), "Longest streak 9 days")
-        XCTAssertEqual(StatsFormat.streak(current: 2, longest: 2), "2-day streak")
-        XCTAssertEqual(StatsFormat.streak(current: 5, longest: 12), "5-day streak · longest 12 days")
+        XCTAssertEqual(StatsFormat.streak(current: 1, longest: 9), "Longest streak: 9 active days")
+        XCTAssertEqual(StatsFormat.streak(current: 2, longest: 2), "Streak: 2 active days")
+        XCTAssertEqual(StatsFormat.streak(current: 5, longest: 12), "Streak: 5 active days · longest 12")
+        XCTAssertEqual(StatsFormat.milestoneTitle(kind: .streak, threshold: 7), "7 active days in a row")
     }
 
     func testShortSpansReadInSecondsAndMinutes() {
@@ -302,7 +402,7 @@ final class StatsLayoutTests: XCTestCase {
     private func minimum(_ screens: ScreenModels) -> CGSize {
         let hosting = NSHostingController(
             rootView: StatsScreen().environment(screens).environment(CoreStore()).environment(screens.theme)
-                .environment(LibraryModel(send: { _ in })).environment(Router()))
+                .environment(LibraryModel(send: { _ in })).environment(Router()).environment(WindowPresence()))
         return hosting.sizeThatFits(in: .zero)
     }
 
@@ -388,7 +488,7 @@ final class MilestoneCelebrationTests: XCTestCase {
         let note = NSHostingController(rootView: MilestoneNote(celebration: celebration, stats: stats))
         XCTAssertLessThanOrEqual(note.sizeThatFits(in: CGSize(width: 720, height: 200)).width, 520.5)
         let glow = NSHostingController(rootView: MilestoneGlow(
-            serial: celebration.serial, you: .blue, them: .orange, placement: Glow.Orb.main, glows: true))
+            serial: celebration.serial, you: .blue, them: .orange, placement: Glow.Orb.main, stats: stats))
         XCTAssertEqual(glow.sizeThatFits(in: .zero), .zero, "it takes whatever room the window has, and asks for none")
     }
 }
@@ -414,7 +514,7 @@ final class ShareCardTests: XCTestCase {
             ShareLine(value: "1,234", label: "words this week"),
             ShareLine(value: "142 wpm", label: "speaking speed this week"),
             ShareLine(value: "3 h 20 min", label: "saved vs typing at 40 wpm"),
-            ShareLine(value: "12 days", label: "dictation streak"),
+            ShareLine(value: "12 active days", label: "dictation streak"),
             ShareLine(value: "1 h 30 min", label: "in meetings this month"),
             ShareLine(value: "25 % / 75 %", label: "talk time this month, you / them"),
             ShareLine(value: "12 of 14", label: "promises kept this month"),
@@ -439,12 +539,13 @@ final class ShareCardTests: XCTestCase {
     }
 
     func testTheCardRendersAsAPNGOnThisMac() throws {
-        let lines = [ShareLine(value: "56,789", label: "words dictated"), ShareLine(value: "12 days", label: "dictation streak")]
+        let lines = [ShareLine(value: "56,789", label: "words dictated"), ShareLine(value: "12 active days", label: "dictation streak")]
         for dark in [false, true] {
             let png = try XCTUnwrap(StatsShare.png(lines: lines, dark: dark, you: .blue, them: .orange))
             XCTAssertEqual(Array(png.prefix(4)), [0x89, 0x50, 0x4E, 0x47], "a PNG")
             let image = try XCTUnwrap(NSBitmapImageRep(data: png))
             XCTAssertEqual(image.pixelsWide, Int(ShareCard.width * StatsShare.scale))
+            XCTAssertEqual(image.size.width, ShareCard.width, "144 dpi: it pastes at the card's size")
             XCTAssertGreaterThan(image.pixelsHigh, 200)
         }
         XCTAssertNil(StatsShare.png(lines: [], dark: false, you: .blue, them: .orange), "nothing ticked, no card")
@@ -455,7 +556,7 @@ final class ShareCardTests: XCTestCase {
         defer { board.releaseGlobally() }
         let png = try XCTUnwrap(StatsShare.png(
             lines: [ShareLine(value: "1", label: "words dictated")], dark: false, you: .blue, them: .orange))
-        StatsShare.copy(png, to: board)
+        XCTAssertTrue(StatsShare.copy(png, to: board))
         XCTAssertEqual(board.data(forType: .png), png)
         XCTAssertNil(board.string(forType: .string), "no text: an image only")
     }

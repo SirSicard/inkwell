@@ -27,15 +27,16 @@ enum MilestoneCelebration {
 }
 
 /// The glow, centred on the orb (its placement's centre and unit), in your colour fading to theirs.
-/// Draws nothing until a celebration starts it, and nothing after.
+/// In the window only while a celebration shows and motion is allowed; it plays once per
+/// celebration (StatsModel.beginGlow), even if the window leaves the screen and comes back.
 struct MilestoneGlow: View {
-    /// The celebration showing, by serial; nil for none.
-    let serial: Int?
+    let serial: Int
     let you: Color
     let them: Color
     let placement: OrbPlacement
-    let glows: Bool
-    @State private var lit = false
+    let stats: StatsModel
+    /// The celebration lit now: a replaced one's task never dims its successor.
+    @State private var litSerial: Int?
 
     var body: some View {
         GeometryReader { geometry in
@@ -46,21 +47,25 @@ struct MilestoneGlow: View {
                     startRadius: 0, endRadius: unit * 0.55))
                 .frame(width: unit * 1.1, height: unit * 1.1)
                 .position(x: geometry.size.width * placement.x, y: geometry.size.height * placement.yFromTop)
-                .opacity(lit ? MilestoneCelebration.glowPeak : 0)
+                .opacity(litSerial == serial ? MilestoneCelebration.glowPeak : 0)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .task(id: serial) {
-            guard serial != nil, glows else { return }
-            withAnimation(.easeOut(duration: MilestoneCelebration.glowIn)) { lit = true }
-            // Cancelled (the window left the screen): out at once, never left lit.
+            let mine = serial
+            guard stats.beginGlow(mine) else { return }
+            withAnimation(.easeOut(duration: MilestoneCelebration.glowIn)) { litSerial = mine }
+            // Cancelled (the window left the screen, the line was dismissed): out at once.
             let held = (try? await Task.sleep(for: .seconds(MilestoneCelebration.glowIn) + MilestoneCelebration.glowHeld)) != nil
-            withAnimation(held ? .easeIn(duration: MilestoneCelebration.glowOut) : nil) { lit = false }
+            withAnimation(held ? .easeIn(duration: MilestoneCelebration.glowOut) : nil) {
+                if litSerial == mine { litSerial = nil }
+            }
         }
     }
 }
 
-/// The milestone's one line, for a few seconds, with a way to dismiss it at once.
+/// The milestone's one line, for a few seconds, with a way to dismiss it at once. VoiceOver hears
+/// it once (StatsModel.beginAnnouncement).
 struct MilestoneNote: View {
     let celebration: StatsModel.Celebration
     let stats: StatsModel
@@ -78,18 +83,23 @@ struct MilestoneNote: View {
                 stats.dismissCelebration(celebration.serial)
             } label: {
                 Image(systemName: "xmark")
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.secondaryText)
             .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
+        .padding(.leading, 18)
+        .padding(.trailing, 10)
+        .padding(.vertical, 8)
         .frame(maxWidth: 520)
         .paperCard()
         .accessibilityElement(children: .contain)
         .task(id: celebration.serial) {
-            AccessibilityNotification.Announcement(celebration.note).post()
+            if stats.beginAnnouncement(celebration.serial) {
+                AccessibilityNotification.Announcement(celebration.note).post()
+            }
             // Cancelled (the window left the screen before its time): it stays pending, and shows
             // again when the window is back.
             do {

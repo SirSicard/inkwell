@@ -382,7 +382,9 @@ struct TodayScreen: View {
         .foregroundStyle(Theme.secondaryText)
         .padding(.top, 8)
         .padding(.horizontal, 14)
-        .accessibilityElement(children: .combine)
+        .pointerStyle(.link)
+        // Its words without the arrow, which VoiceOver would read out.
+        .accessibilityLabel(lines.isEmpty ? "Stats" : lines.joined(separator: ". "))
         .accessibilityHint("Opens Stats")
     }
 }

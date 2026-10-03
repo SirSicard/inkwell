@@ -50,8 +50,9 @@ enum ShareStat: String, CaseIterable, Identifiable, Sendable {
             return d.savedMsAll > 0
                 ? ShareLine(value: LibraryFormat.duration(ms: d.savedMsAll), label: "saved vs typing at \(c.typingWpm) wpm") : nil
         case .streak:
-            if d.streakDays >= 2 { return ShareLine(value: "\(d.streakDays) days", label: "dictation streak") }
-            return d.longestStreakDays >= 2 ? ShareLine(value: "\(d.longestStreakDays) days", label: "longest dictation streak") : nil
+            if d.streakDays >= 2 { return ShareLine(value: "\(d.streakDays) active days", label: "dictation streak") }
+            return d.longestStreakDays >= 2
+                ? ShareLine(value: "\(d.longestStreakDays) active days", label: "longest dictation streak") : nil
         case .meetingHours:
             let m = c.meetingsMonth
             return m.meetings > 0 ? ShareLine(value: LibraryFormat.duration(ms: m.recordedMs), label: "in meetings this month") : nil
@@ -143,16 +144,20 @@ enum StatsShare {
         let renderer = ImageRenderer(content: ShareCard(lines: lines, dark: dark, you: you, them: them))
         renderer.scale = scale
         guard let image = renderer.cgImage else { return nil }
-        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        let rep = NSBitmapImageRep(cgImage: image)
+        // Its size in points, so the PNG says 144 dpi and pastes at the card's size, not double.
+        rep.size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
+        return rep.representation(using: .png, properties: [:])
     }
 
-    /// Puts the card on `board` as an image (PNG, and TIFF for apps that only take that).
-    static func copy(_ png: Data, to board: NSPasteboard = .general) {
+    /// Puts the card on `board` as an image (PNG, and TIFF for apps that only take that); whether
+    /// it is there.
+    @discardableResult
+    static func copy(_ png: Data, to board: NSPasteboard = .general) -> Bool {
+        guard let image = NSImage(data: png) else { return false }
         board.clearContents()
-        if let image = NSImage(data: png) {
-            board.writeObjects([image])
-        }
-        board.setData(png, forType: .png)
+        let written = board.writeObjects([image])
+        return board.setData(png, forType: .png) || written
     }
 
     /// Asks where to save the card, then writes it there. `done` gets nil when saved, or what went
@@ -188,6 +193,11 @@ struct ShareCardSheet: View {
     @State private var selected = ShareStat.defaults
     @State private var status: String?
     @State private var failed = false
+    /// The image as Copy and Save make it, made again only when the ticks or the mode change.
+    @State private var png: Data?
+    @State private var preview: NSImage?
+    /// The sheet's own window, which the save panel attaches to.
+    @State private var window: NSWindow?
 
     private var locale: Locale { stats.calendar.locale ?? .current }
     private var lines: [ShareLine] { ShareStat.lines(counted, selected: selected, locale: locale) }
@@ -204,8 +214,7 @@ struct ShareCardSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 24) {
                 Group {
-                    // The image itself, as Copy and Save make it.
-                    if let preview = image().flatMap(NSImage.init(data:)) {
+                    if let preview {
                         Image(nsImage: preview)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
@@ -249,36 +258,37 @@ struct ShareCardSheet: View {
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save\u{2026}") { save() }
-                    .disabled(lines.isEmpty)
+                    .disabled(png == nil)
                 Button("Copy") { copy() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(lines.isEmpty)
+                    .disabled(png == nil)
             }
         }
         .padding(24)
         .frame(width: 640)
+        .background(WindowReader(window: $window))
+        .onAppear(perform: render)
+        .onChange(of: selected) { render() }
+        .onChange(of: theme.isDark) { render() }
     }
 
-    private func image() -> Data? {
-        StatsShare.png(lines: lines, dark: theme.isDark, you: theme.you, them: theme.them)
+    private func render() {
+        png = StatsShare.png(lines: lines, dark: theme.isDark, you: theme.you, them: theme.them)
+        preview = png.flatMap(NSImage.init(data:))
     }
 
     private func copy() {
-        guard let png = image() else {
-            report("Couldn't make the image.", failed: true)
+        guard let png, StatsShare.copy(png) else {
+            report("Couldn't copy the image.", failed: true)
             return
         }
-        StatsShare.copy(png)
         report("Copied. Paste it wherever you like.", failed: false)
     }
 
     private func save() {
-        guard let png = image() else {
-            report("Couldn't make the image.", failed: true)
-            return
-        }
-        StatsShare.save(png, from: NSApp.keyWindow) { problem in
+        guard let png else { return }
+        StatsShare.save(png, from: window) { problem in
             if let problem {
                 report("Couldn't save it: \(problem)", failed: true)
             } else {
@@ -292,4 +302,28 @@ struct ShareCardSheet: View {
         self.failed = failed
         AccessibilityNotification.Announcement(text).post()
     }
+}
+
+/// The window a view is in, once it is in one.
+private struct WindowReader: NSViewRepresentable {
+    @Binding var window: NSWindow?
+
+    final class Reporter: NSView {
+        var report: (@MainActor (NSWindow?) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let window = window
+            // After the update that moved it: SwiftUI state is not set during one.
+            Task { @MainActor [report] in report?(window) }
+        }
+    }
+
+    func makeNSView(context: Context) -> Reporter {
+        let view = Reporter()
+        view.report = { window = $0 }
+        return view
+    }
+
+    func updateNSView(_ view: Reporter, context: Context) {}
 }

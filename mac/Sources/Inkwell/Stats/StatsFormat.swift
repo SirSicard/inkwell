@@ -28,13 +28,18 @@ enum StatsFormat {
         }
     }
 
-    /// The streak, from its second day; before that the longest, when there was one.
+    /// The streak, from its second day; before that the longest, when there was one. Always in
+    /// active days: one missed day between two doesn't end a streak, so it is not calendar days.
     static func streak(current: Int64, longest: Int64) -> String? {
         if current >= 2 {
-            return current == longest ? "\(current)-day streak" : "\(current)-day streak · longest \(longest) days"
+            return current == longest
+                ? "Streak: \(current) active days" : "Streak: \(current) active days · longest \(longest)"
         }
-        return longest >= 2 ? "Longest streak \(longest) days" : nil
+        return longest >= 2 ? "Longest streak: \(longest) active days" : nil
     }
+
+    /// What a streak counts, said beside it.
+    static let streakRule = "Active days are days you dictated. One missed day between them doesn't end a streak."
 
     /// A short span with its seconds: `45 s`, `4 min 10 s`, `1 h 5 min`.
     static func span(ms: Int64) -> String {
@@ -66,11 +71,11 @@ enum StatsFormat {
         "\(p.open) open · \(p.overdue) overdue"
     }
 
-    /// A milestone's name: `1,000 words`, `7-day streak`.
+    /// A milestone's name: `1,000 words`, `7 active days in a row`.
     static func milestoneTitle(kind: MilestoneKind, threshold: Int64, locale: Locale = .current) -> String {
         switch kind {
         case .words: "\(count(threshold, locale: locale)) words"
-        case .streak: "\(threshold)-day streak"
+        case .streak: "\(threshold) active days in a row"
         }
     }
 
@@ -78,7 +83,7 @@ enum StatsFormat {
     static func milestoneNote(kind: MilestoneKind, threshold: Int64, locale: Locale = .current) -> String {
         switch kind {
         case .words: "Milestone · \(count(threshold, locale: locale)) words dictated"
-        case .streak: "Milestone · a \(threshold)-day streak"
+        case .streak: "Milestone · \(threshold) active days in a row"
         }
     }
 
