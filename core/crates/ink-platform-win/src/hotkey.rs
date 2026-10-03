@@ -64,6 +64,18 @@ use machine::{Edge, HoldMachine, HookInput};
 
 pub use binding::{DEFAULT_BINDING, KEYS};
 
+/// Whether the hook can watch `token` (a dictation or edit key the user chose): its canonical
+/// spelling ([`Binding::canonical`]), to store and compare, or why not, in the parser's own words.
+/// A [`WinHotkeySource`] binds exactly the tokens this accepts.
+pub fn check(token: &str) -> Result<String, &'static str> {
+    match Binding::parse(token) {
+        Ok(binding) => Ok(binding.canonical()),
+        Err(PlatformError::Unsupported(why)) => Err(why),
+        // The parser refuses only as Unsupported; anything else is still a refusal.
+        Err(_) => Err("Windows cannot watch that key"),
+    }
+}
+
 /// The marker in `dwExtraInfo` on every key event this crate injects, so its own hook lets them
 /// through. Arbitrary; ASCII for "inkw".
 pub(crate) const SYNTHETIC_EVENT_MARK: usize = 0x696E_6B77;

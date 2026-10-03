@@ -26,6 +26,10 @@ enum CoreCommand: Equatable, Sendable {
     case engineRoute(Job)
     case settingGet(ShellSetting)
     case settingSet(ShellSetting, String)
+    /// Whether the core can watch a recorded shortcut as a dictation or edit key:
+    /// `hotkey.checked` with `ref` (its one spelling, or why not), or `command.failed` with it as
+    /// the id. Nothing is stored.
+    case hotkeyCheck(binding: String, ref: String)
     case modesList
     /// The library (Today, Library, a record). `ref` comes back as the answer's `ref`, or as the id
     /// of a `command.failed`, so a model matches each answer to its question and can tell "could not
@@ -114,6 +118,7 @@ enum CoreCommand: Equatable, Sendable {
         case .settingGet(let key): ["cmd": "setting.get", "key": key.rawValue, "id": "setting:\(key.rawValue)"]
         case .settingSet(let key, let value):
             ["cmd": "setting.set", "key": key.rawValue, "value": value, "id": "setting:\(key.rawValue)"]
+        case .hotkeyCheck(let binding, let ref): ["cmd": "hotkey.check", "binding": binding, "id": ref]
         case .modesList: ["cmd": "modes.list"]
         case .recordsList(let kind, let before, let limit, let ref):
             ["cmd": "records.list", "limit": limit, "id": ref]
@@ -185,6 +190,7 @@ enum CoreCommand: Equatable, Sendable {
         case .engineRoute: "engine.route"
         case .settingGet: "setting.get"
         case .settingSet: "setting.set"
+        case .hotkeyCheck: "hotkey.check"
         case .modesList: "modes.list"
         case .recordsList: "records.list"
         case .recordsSearch: "records.search"

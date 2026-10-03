@@ -149,6 +149,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case modelsListed(ModelsListed)
     /// `setting.value`
     case settingValue(SettingValue)
+    /// `hotkey.checked`
+    case hotkeyChecked(HotkeyChecked)
     /// `consent.state`
     case consentState(ConsentState)
     /// `llm.providers`
@@ -270,6 +272,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "record.deleted": self = .recordDeleted(try RecordDeleted(from: decoder))
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
+            case "hotkey.checked": self = .hotkeyChecked(try HotkeyChecked(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
             case "llm.providers": self = .llmProviders(try LlmProviders(from: decoder))
             case "llm.tested": self = .llmTested(try LlmTested(from: decoder))
@@ -363,6 +366,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .recordDeleted(let event): try event.encode(to: encoder)
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
+        case .hotkeyChecked(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
         case .llmProviders(let event): try event.encode(to: encoder)
         case .llmTested(let event): try event.encode(to: encoder)
@@ -1124,6 +1128,27 @@ public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
 public enum FarEnd: String, Codable, Sendable, Equatable, CaseIterable {
     case app
     case everything
+}
+
+/// Whether this computer can watch a key binding as the dictation key or the edit key, in
+/// answer to hotkey.check. A shell checks a shortcut the user recorded before it stores it with
+/// setting.set; nothing is stored here.
+public struct HotkeyChecked: Codable, Sendable, Equatable {
+    /// The binding as the command spelled it.
+    public let binding: String
+    /// When ok: its one spelling, to store with setting.set and to compare keys by (two
+    /// spellings of one chord are one key). For example ctrl+shift+space, right_option or f13.
+    public let canonical: String?
+    /// Whether this computer can watch it.
+    public let ok: Bool
+    /// When not ok: why not, in plain words starting in lower case and without a full stop, to
+    /// show after "can't use that:". For example "that key on its own would stop working
+    /// everywhere else; add Control, Option or Command".
+    public let reason: String?
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Always `hotkey.checked`.
+    public let type: String
 }
 
 /// What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer

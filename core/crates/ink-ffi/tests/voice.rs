@@ -33,6 +33,12 @@ const BLOCK: usize = 480;
 /// its grace, 550 ms after the release on the mock clock). See [`VoiceRig::release_take`].
 const TAIL_ROOM: f64 = 0.4;
 
+/// Right Option in this platform's one spelling: `right_option` on the Mac, the same key's
+/// `right_alt` on Windows (`ink_ffi::hotkey`).
+fn right_option() -> String {
+    ink_ffi::hotkey::spelling("right_option")
+}
+
 struct VoiceRig {
     core: Option<Core>,
     events: Arc<Recorder>,
@@ -410,13 +416,13 @@ fn changing_the_key_setting_rebinds_it_at_once() {
     let ready = rig
         .events
         .wait_for(WAIT, |v| {
-            v["type"] == "dictation.ready" && v["key"] == "right_option"
+            v["type"] == "dictation.ready" && v["key"] == right_option()
         })
         .expect("rebound");
     assert!(ready.get("ref").is_none());
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     // A key the platform cannot hold is refused before it is stored.
     assert!(
@@ -483,6 +489,118 @@ fn the_edit_key_is_held_on_its_own_and_never_the_dictation_key() {
     rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"off"}"#);
     assert!(rig.events.wait_count("dictation.ready", 4, WAIT));
     assert!(rig.edit.hotkey_binding().is_none());
+}
+
+/// Any key the Mac can watch is a dictation key: a chord is stored in its one spelling, bound,
+/// and named so in dictation.ready. One it cannot watch is refused with the reason, and the key
+/// before stays.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_chord_is_a_dictation_key_stored_in_its_one_spelling() {
+    let rig = VoiceRig::new("chord-key");
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"Shift+Ctrl+Space"}"#);
+    let value = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "dictation.key"
+        })
+        .expect("stored");
+    assert_eq!(value["value"], "ctrl+shift+space");
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["key"] == "ctrl+shift+space"
+        })
+        .expect("rebound");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("ctrl+shift+space")
+    );
+    let refused = rig
+        .core()
+        .command(r#"{"cmd":"setting.set","key":"dictation.key","value":"shift+a"}"#)
+        .expect_err("a capital is typing");
+    assert!(refused.contains("capital"), "{refused}");
+    assert_eq!(
+        rig.setting("dictation.key").as_deref(),
+        Some("ctrl+shift+space")
+    );
+    // A take on the chord, as on any key: the hold machinery past the tap does not care.
+    let inserted = rig.dictate(1.0, 5);
+    assert_eq!(inserted["type"], "dictation.inserted", "{inserted}");
+}
+
+/// The edit key takes the same shapes; the dictation key under another spelling is still the
+/// dictation key.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_edit_key_may_be_a_chord_but_never_the_dictation_key_respelt() {
+    let rig = VoiceRig::new("chord-edit-key");
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"ctrl+shift+space"}"#);
+    rig.events
+        .wait_for(WAIT, |v| v["key"] == "ctrl+shift+space")
+        .expect("rebound");
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"cmd+option+e"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["edit_key"] == "option+cmd+e"
+        })
+        .expect("edit chord bound");
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("option+cmd+e")
+    );
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"shift+ctrl+space"}"#);
+    let same = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v.get("edit_key_error").is_some()
+        })
+        .expect("refused as the dictation key");
+    assert!(same.get("edit_key").is_none(), "{same}");
+    assert!(rig.edit.hotkey_binding().is_none());
+}
+
+/// consent.allow turns voice edit on with a chord, stored in its one spelling.
+#[cfg(target_os = "macos")]
+#[test]
+fn edit_consent_takes_a_chord_for_its_key() {
+    let rig = VoiceRig::new("chord-edit-consent");
+    rig.register_local();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"Option+Cmd+E","id":"c1"}"#,
+        "c1",
+    );
+    assert_eq!(state["on"], true, "{state}");
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("option+cmd+e")
+    );
+    assert!(
+        rig.core()
+            .command(r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"e"}"#)
+            .is_err(),
+        "a key the Mac cannot watch"
+    );
+}
+
+/// A key stored outside setting.set (an older build, an import) reaches the platform as it is,
+/// never quietly swapped for the default: the platform holds it, or refuses it by name.
+#[test]
+fn a_stored_key_reaches_the_platform_as_it_is() {
+    let rig = VoiceRig::new("stored-key");
+    rig.core()
+        .shared()
+        .store
+        .set_setting("dictation.key", "f13")
+        .unwrap();
+    let ready = rig.enable();
+    assert_eq!(ready["key"], "f13", "{ready}");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("f13")
+    );
 }
 
 /// Taking the edit key as the dictation key lets go of the edit key first: one key, one tap.
@@ -1404,7 +1522,7 @@ fn turning_voice_edit_off_withdraws_its_consent_or_changes_nothing() {
     );
     assert_eq!(
         rig.setting("dictation.edit_key").as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     assert_eq!(
         rig.setting("llm.consent.edit").as_deref(),
@@ -1482,11 +1600,11 @@ fn an_imported_modifier_hotkey_is_the_key_held_and_imported_snippets_expand() {
         ],
     );
     let ready = rig.enable();
-    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(ready["key"], right_option(), "{ready}");
     assert!(ready.get("settings_error").is_none(), "{ready}");
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     // The mock engine hears "hello world"; the imported snippet expands "hello".
     let inserted = rig.dictate(1.2, 1);
@@ -1605,10 +1723,10 @@ fn an_import_from_the_screens_reaches_a_running_dictation_at_once() {
         .into_iter()
         .rfind(|v| v["type"] == "dictation.ready")
         .unwrap();
-    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(ready["key"], right_option(), "{ready}");
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     assert_eq!(rig.dictate(1.2, 1)["text"], "Greetings world.");
     rig.events.assert_valid();

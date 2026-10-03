@@ -329,9 +329,14 @@ without a value, and the shell reads it as its default (for appearance, `APPEARA
 `dictation.off`) and then lives in the core ([`voice.rs`](../core/crates/ink-ffi/src/voice.rs)):
 
 - **Keys.** The core holds the dictation key and, when one is set, the voice-edit key (two event
-  taps under Accessibility). The shell only stores the choice (`dictation.key`,
-  `dictation.edit_key`); a change rebinds at once. Without Accessibility the answer is
-  `dictation.off` with `needs_accessibility`, never a prompt.
+  taps under Accessibility). Either may be any key the platform can watch: a right-hand modifier
+  (or Fn on the Mac) held on its own, a function key, or modifiers and one key; a chord's hold ends
+  when any part of it is let go of. The platform's parser is the one judge
+  ([`hotkey.rs`](../core/crates/ink-ffi/src/hotkey.rs)): `hotkey.check` asks it about a shortcut
+  the user recorded and answers with its one spelling or why not, and the settings store a key on
+  the same rule. The shell only stores the choice (`dictation.key`, `dictation.edit_key`); a
+  change rebinds at once. Without Accessibility the answer is `dictation.off` with
+  `needs_accessibility`, never a prompt.
 - **The mic.** It opens at the first press, not at launch, and stays open so each take keeps the
   300 ms said before its press; after 1 minute without a take it is let go of (an open input keeps
   the Mac awake and the microphone indicator on). The first take after that starts when the device

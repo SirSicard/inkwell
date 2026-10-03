@@ -49,6 +49,7 @@ pub mod events;
 #[allow(unsafe_code)]
 pub mod external;
 pub mod gate;
+pub mod hotkey;
 pub mod hub;
 pub mod import02;
 pub mod library;

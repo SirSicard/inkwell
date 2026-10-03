@@ -215,6 +215,9 @@
       "$ref": "#/$defs/SettingValue"
     },
     {
+      "$ref": "#/$defs/HotkeyChecked"
+    },
+    {
       "$ref": "#/$defs/ConsentState"
     },
     {
@@ -2873,6 +2876,41 @@
       "required": [
         "type",
         "key"
+      ],
+      "additionalProperties": false
+    },
+    "HotkeyChecked": {
+      "type": "object",
+      "description": "Whether this computer can watch a key binding as the dictation key or the edit key, in answer to hotkey.check. A shell checks a shortcut the user recorded before it stores it with setting.set; nothing is stored here.",
+      "properties": {
+        "type": {
+          "const": "hotkey.checked"
+        },
+        "binding": {
+          "type": "string",
+          "description": "The binding as the command spelled it."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "Whether this computer can watch it."
+        },
+        "canonical": {
+          "type": "string",
+          "description": "When ok: its one spelling, to store with setting.set and to compare keys by (two spellings of one chord are one key). For example ctrl+shift+space, right_option or f13."
+        },
+        "reason": {
+          "type": "string",
+          "description": "When not ok: why not, in plain words starting in lower case and without a full stop, to show after \"can't use that:\". For example \"that key on its own would stop working everywhere else; add Control, Option or Command\"."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "binding",
+        "ok"
       ],
       "additionalProperties": false
     },

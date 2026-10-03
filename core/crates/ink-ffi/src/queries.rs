@@ -49,11 +49,12 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // model; the shell shows the two apart. `setting.set` takes only `off` (which withdraws the
     // consent too): polish turns on through `consent.allow` (crate::consent).
     (crate::voice::POLISH_SETTING, &["on", "off"]),
-    // The dictation key and the voice-edit key (S2.7). A change rebinds them at once. The edit key
-    // turns on with its consent through `consent.allow`; `off` withdraws that consent too, and a
-    // key set without one edits nothing (crate::consent).
-    (crate::voice::KEY_SETTING, crate::voice::KEYS),
-    (crate::voice::EDIT_KEY_SETTING, crate::voice::EDIT_KEYS),
+    // The dictation key and the voice-edit key (S2.7): any key this computer can watch, stored in
+    // its one spelling (crate::hotkey). A change rebinds them at once. The edit key turns on with
+    // its consent through `consent.allow`; `off` withdraws that consent too, and a key set without
+    // one edits nothing (crate::consent).
+    (crate::voice::KEY_SETTING, &[ANY_KEY]),
+    (crate::voice::EDIT_KEY_SETTING, &["off", ANY_KEY]),
     // Whether the shell turns dictation on at launch (Settings > Voice). The shell reads it and
     // sends dictation.enable or not; the core does nothing with it itself.
     ("dictation.enabled", &["on", "off"]),
@@ -96,6 +97,10 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
 
 /// In a value list of [`SHELL_SETTINGS`]: any colour written `#rrggbb`, in lowercase hex.
 pub const HEX_COLOUR: &str = "#rrggbb";
+
+/// In a value list of [`SHELL_SETTINGS`]: any key [`crate::hotkey::stored_value`] takes, which is
+/// stored in its one spelling.
+pub const ANY_KEY: &str = "<key>";
 
 /// The dot colour presets, by id: the `presets` of design/tokens.json.
 pub const DOT_PRESETS: &[&str] = &[
@@ -210,6 +215,11 @@ pub enum Query {
     },
     /// `modes.list`: the user's modes.
     ModesList,
+    /// `hotkey.check`: whether this computer can watch a key binding ([`crate::hotkey`]).
+    HotkeyCheck {
+        /// The binding, as the shell spelled it.
+        binding: String,
+    },
     /// `dictation.enable`: dictation live, or its settings read and its keys bound again.
     DictationEnable {
         /// The user's UTC offset, for `{date}` and `{time}` in snippets.
@@ -254,6 +264,7 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "record.delete" => &["record"],
         "setting.get" => &["key"],
         "setting.set" => &["key", "value"],
+        "hotkey.check" => &["binding"],
         "dictation.enable" => &["utc_offset_minutes"],
         "dictation.disable" => &[],
         "consent.get" => &["feature"],
@@ -384,7 +395,15 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         },
         "setting.set" => {
             let key = shell_setting(name, &text("key")?)?;
-            let value = text("value")?;
+            let mut value = text("value")?;
+            if key == crate::voice::KEY_SETTING
+                || (key == crate::voice::EDIT_KEY_SETTING && value != "off")
+            {
+                // A key is judged by the platform's own parser and stored in its one spelling;
+                // the refusal says why, in its words.
+                value = crate::hotkey::stored_value(&value)
+                    .map_err(|why| format!("{name}: \"{key}\" can't be \"{value}\": {why}"))?;
+            }
             let accepted = SHELL_SETTINGS
                 .iter()
                 .find(|(k, _)| *k == key)
@@ -410,6 +429,9 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             Query::SettingSet { key, value }
         }
         "modes.list" => Query::ModesList,
+        "hotkey.check" => Query::HotkeyCheck {
+            binding: text("binding")?,
+        },
         "dictation.enable" => Query::DictationEnable {
             utc_offset_minutes: match obj.get("utc_offset_minutes") {
                 None => None,
@@ -488,7 +510,9 @@ fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, 
 
 /// Whether `allowed`, one entry of a value list in [`SHELL_SETTINGS`], accepts `value`.
 fn accepts(allowed: &str, value: &str) -> bool {
-    if allowed == HEX_COLOUR {
+    if allowed == ANY_KEY {
+        crate::hotkey::stored_value(value).is_ok()
+    } else if allowed == HEX_COLOUR {
         // `#` and six lowercase hex digits; the pattern itself is not a colour.
         value.len() == 7
             && value.starts_with('#')
@@ -828,6 +852,11 @@ impl Ctx<'_> {
                     Err(e) => fail(e),
                 }
             }
+            Query::HotkeyCheck { binding } => emit(crate::hotkey::checked(
+                &binding,
+                crate::hotkey::check(&binding),
+                id.as_deref(),
+            )),
             Query::ModesList => match modes(store) {
                 Ok(e) => emit(e),
                 Err(e) => fail(e),

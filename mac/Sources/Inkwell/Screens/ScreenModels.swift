@@ -230,6 +230,8 @@ final class ScreenModels {
     let snippets: SnippetsModel
     let voiceCommands: VoiceCommandsModel
     let importNote: ImportNoteModel
+    /// "Record a shortcut…" for the dictation key and the edit key.
+    let shortcuts: ShortcutRecorderModel
     /// Inkwell 0.2's data: the first run's step and a row in Settings > General.
     let import02: Import02Model
     /// The theme: the appearance settings and what they resolve to.
@@ -272,6 +274,10 @@ final class ScreenModels {
         voiceCommands = VoiceCommandsModel(send: send)
         importNote = ImportNoteModel(send: send)
         import02 = Import02Model(send: send, log: log)
+        // A recorded edit key is chosen as a picked one is: consent first when voice edit is not on.
+        // Weak: the recorder is the screens' own, and must not keep them alive.
+        shortcuts = ShortcutRecorderModel(send: send, dictation: dictation, saveEditKey: { _ in })
+        shortcuts.saveEditKey = { [weak self] token in self?.chooseEditKey(token) }
         onboarding.offersImport = { [import02] in import02.offered }
     }
 
@@ -308,6 +314,7 @@ final class ScreenModels {
                 modes.load()
             }
             dictation.apply(event)
+            shortcuts.apply(event)
             editConsent.apply(event)
             meetingsConsent.apply(event)
             snippets.apply(event)
@@ -440,6 +447,9 @@ final class ScreenModels {
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
+        case "hotkey.check":
+            // Said under the key's row.
+            shortcuts.handles(failed)
         case "engine.route":
             // Settings > Models says so on the job's line.
             CatalogueModel.routeJob(failed) != nil

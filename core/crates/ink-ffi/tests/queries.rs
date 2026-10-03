@@ -578,6 +578,83 @@ fn shell_settings_are_whitelisted_and_round_trip() {
     rig.finish();
 }
 
+/// hotkey.check answers whether this computer can watch a binding, before the shell stores it:
+/// its one spelling when it can, why not when it cannot. Nothing is stored.
+#[test]
+fn a_key_is_checked_before_it_is_stored() {
+    let rig = rig("hotkey-check");
+    let ok = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": "f13", "id": "k1"}),
+        "hotkey.checked",
+        1,
+    );
+    assert_eq!(ok["binding"], "f13");
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(ok["canonical"], "f13");
+    assert!(ok.get("reason").is_none(), "{ok}");
+    assert_eq!(ok["ref"], "k1");
+    let refused = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": "a", "id": "k2"}),
+        "hotkey.checked",
+        2,
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(refused.get("canonical").is_none(), "{refused}");
+    let reason = refused["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with(|c: char| c.is_lowercase()) && !reason.ends_with('.'),
+        "words to show after \"can't use that:\": {reason:?}"
+    );
+    assert_eq!(rig.store.setting("dictation.key").unwrap(), None);
+    // A key setting's refusal gives the reason, never the settings table's placeholder.
+    for value in ["off", "a"] {
+        let refused = rig
+            .core
+            .command(
+                &json!({"cmd": "setting.set", "key": "dictation.key", "value": value}).to_string(),
+            )
+            .expect_err("not a key this computer watches");
+        assert!(!refused.contains("<key>"), "{refused}");
+        assert!(refused.contains("can't be"), "{refused}");
+    }
+    for bad in [
+        json!({"cmd": "hotkey.check"}),
+        json!({"cmd": "hotkey.check", "binding": 13}),
+        json!({"cmd": "hotkey.check", "binding": "f13", "key": "dictation.key"}),
+    ] {
+        assert!(rig.core.command(&bad.to_string()).is_err(), "{bad}");
+    }
+    rig.finish();
+}
+
+/// The Mac's answers: the canonical spelling, and the parser's own words.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_mac_check_spells_a_chord_one_way_and_says_why_it_refuses() {
+    let rig = rig("hotkey-check-mac");
+    let chord = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": " Shift+Ctrl+Space "}),
+        "hotkey.checked",
+        1,
+    );
+    assert_eq!(chord["binding"], " Shift+Ctrl+Space ");
+    assert_eq!(chord["canonical"], "ctrl+shift+space");
+    let left = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": "left_option"}),
+        "hotkey.checked",
+        2,
+    );
+    assert_eq!(left["ok"], false);
+    assert!(
+        left["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("left-hand modifier"),
+        "{left}"
+    );
+    rig.finish();
+}
+
 #[test]
 fn modes_come_from_the_store_then_the_import_then_the_default() {
     let rig = rig("modes");
