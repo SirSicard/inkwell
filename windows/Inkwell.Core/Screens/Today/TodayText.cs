@@ -59,6 +59,9 @@ public static class TodayText
         return string.Join(" · ", parts);
     }
 
+    /// <summary>The counts' last word: they lead to Stats (Narrator hears the counts without it).</summary>
+    public const string StatsLink = "Stats ›";
+
     /// <summary>The counts at the foot: today's dictation and this week's meetings. A count that could not be read says so; it is never shown as zero. A count not answered yet is left out.</summary>
     /// <param name="today">library.stats since the start of today, when answered.</param>
     /// <param name="todayFailed">That question failed.</param>

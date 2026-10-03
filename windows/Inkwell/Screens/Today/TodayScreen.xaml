@@ -229,13 +229,22 @@
                 </StackPanel>
             </Grid>
 
-            <!-- The counts: side by side when they fit, one under the other when not. -->
+            <!-- The counts: side by side when they fit, one under the other when not. They lead to
+                 Stats, where the rest of them are. -->
             <Border
                 Grid.Row="5"
                 Padding="0,16,0,0"
                 BorderBrush="{ThemeResource InkBorderBrush}"
                 BorderThickness="0,1,0,0">
-                <StackPanel x:Name="Stats" Orientation="Horizontal" Spacing="28" />
+                <HyperlinkButton
+                    x:Name="StatsLink"
+                    Padding="0"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Left"
+                    AutomationProperties.HelpText="Opens Stats"
+                    Click="OnOpenStats">
+                    <StackPanel x:Name="Stats" Orientation="Horizontal" Spacing="28" />
+                </HyperlinkButton>
             </Border>
         </Grid>
     </ScrollViewer>
