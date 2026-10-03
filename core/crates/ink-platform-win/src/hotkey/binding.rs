@@ -227,7 +227,17 @@ fn parse_token(token: &str) -> Result<Binding, &'static str> {
         }
         bits |= bit;
     }
-    if is_modifier_name(key) || matches!(modifier_key(key), Ok(Some(_))) || is_command(key) {
+    // Keys that are never a chord's key say why, as they do alone.
+    if *key == "fn" {
+        return Err(refusal::FN);
+    }
+    if *key == "caps_lock" || *key == "capslock" {
+        return Err(refusal::CAPS_LOCK);
+    }
+    if is_command(key) {
+        return Err(refusal::NO_COMMAND);
+    }
+    if is_modifier_name(key) || matches!(modifier_key(key), Ok(Some(_))) {
         return Err(refusal::MODIFIERS_ONLY);
     }
     let Some(code) = key_code(key) else {
@@ -277,10 +287,11 @@ fn modifier_key(token: &str) -> Result<Option<RightModifier>, &'static str> {
 
 /// The Mac's Command, by any of its names and sides.
 fn is_command(name: &str) -> bool {
-    matches!(
-        name.strip_prefix("left_").unwrap_or(name),
-        "cmd" | "command"
-    )
+    let unsided = name
+        .strip_prefix("left_")
+        .or_else(|| name.strip_prefix("right_"))
+        .unwrap_or(name);
+    matches!(unsided, "cmd" | "command")
 }
 
 /// A modifier named without a side, or by its left-hand key: never watched on its own, and never
@@ -465,6 +476,12 @@ mod tests {
             ("cmd", refusal::NO_COMMAND),
             ("left_command", refusal::NO_COMMAND),
             ("cmd+space", refusal::NO_COMMAND),
+            ("right_command+space", refusal::NO_COMMAND),
+            ("right_cmd+space", refusal::NO_COMMAND),
+            ("ctrl+right_cmd", refusal::NO_COMMAND),
+            ("ctrl+cmd", refusal::NO_COMMAND),
+            ("ctrl+fn", refusal::FN),
+            ("ctrl+caps_lock", refusal::CAPS_LOCK),
             ("ctrl+nosuchkey", refusal::UNKNOWN_KEY),
             ("nosuchkey", refusal::UNKNOWN_KEY),
             ("f25", refusal::UNKNOWN_KEY),
