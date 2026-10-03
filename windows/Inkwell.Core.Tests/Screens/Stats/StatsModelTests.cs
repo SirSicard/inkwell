@@ -374,6 +374,26 @@ public class StatsModelTests
         Assert.DoesNotContain("Mac", StatsModel.CelebrateDetail + StatsModel.WhereText, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A celebration waits for the window to be on screen; Always still or animations off mean the
+    /// line alone, no glow; the glow is about two and a half seconds (the Mac's MilestoneCelebration).
+    /// </summary>
+    [Fact]
+    public void TheCelebrationWaitsForTheWindowAndStillMeansNoGlow()
+    {
+        var pending = new StatsModel.Celebration(1, "words_1000", "Milestone · 1,000 words dictated");
+        Assert.Null(MilestoneCelebration.Showing(pending, onScreen: false));
+        Assert.Equal(pending, MilestoneCelebration.Showing(pending, onScreen: true));
+        Assert.Null(MilestoneCelebration.Showing(null, onScreen: true));
+        Assert.True(MilestoneCelebration.Glows(still: false, reduceMotion: false));
+        Assert.False(MilestoneCelebration.Glows(still: true, reduceMotion: false));
+        Assert.False(MilestoneCelebration.Glows(still: false, reduceMotion: true));
+        var glow = MilestoneCelebration.GlowIn + MilestoneCelebration.GlowHeld + MilestoneCelebration.GlowOut;
+        Assert.Equal(2.6, glow.TotalSeconds, 3);
+        Assert.Equal(TimeSpan.FromSeconds(6), MilestoneCelebration.Shown);
+        Assert.Equal(0.45, MilestoneCelebration.GlowPeak);
+    }
+
     /// <summary>The hub routes the events to the model and lets it show its own failures.</summary>
     [Fact]
     public void TheScreensCarryStats()

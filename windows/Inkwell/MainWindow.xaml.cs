@@ -145,6 +145,18 @@ public sealed partial class MainWindow : Window
     /// <summary>UI thread. The window was activated: a resting orb that has held its spot for a while moves (OrbWander.RestInterval).</summary>
     internal void WindowActivated() => Orb.Activated();
 
+    /// <summary>UI thread, once. A milestone reached glows over the orb and says its line at the foot (MilestoneView).</summary>
+    internal void ShowMilestones(StatsModel stats, WindowPresence presence)
+    {
+        if (theme is not null)
+        {
+            milestones = new MilestoneView(stats, presence, theme, Orb, GlowLayer, Root);
+        }
+    }
+
+    /// <summary>Held for the window's life: it follows the stats model.</summary>
+    private MilestoneView? milestones;
+
     /// <summary>UI thread. Other windows hid all of it, and now do not (WindowCover): a resting orb moves.</summary>
     internal void WindowUncovered() => Orb.Uncovered();
 

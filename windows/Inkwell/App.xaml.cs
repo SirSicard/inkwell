@@ -215,6 +215,7 @@ public partial class App : Application
         };
         window.Attach(core.Store, router, made.Screen, made.Search, models.Meetings, models.Owed);
         made.AttachFirstRun(window.Content as FrameworkElement);
+        window.ShowMilestones(models.Stats, made.Presence);
         // Up next's minute redraws only while the window is on screen (rule 9): shown, not
         // minimised, and not hidden behind other windows (WindowCover).
         var cover = new WindowCover((nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(window.AppWindow.Id));
