@@ -476,6 +476,7 @@ struct GroqKeyRows: View {
             HStack(spacing: 8) {
                 Button(cloud.useLabel) { polish.useOwnKey(cloud) }
                     .buttonStyle(.borderedProminent)
+                    .fixedSize()
                     .disabled(!polish.canUseOwnKey(cloud))
                     .accessibilityHint(cloud.firstRunUseNote)
                 // The note takes the row's width beside the button and wraps in it, its full

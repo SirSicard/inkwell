@@ -2098,9 +2098,9 @@ final class OnboardingLayoutTests: XCTestCase {
 
     private let longFailure = "the new files could not be installed: downloading parakeet_tdt_0.6b_v3.mlmodelc: the connection was reset by the server before the file was complete"
 
-    /// The Polish step's own-key rows with Groq picked and its key saved (the longest Use note)
-    /// fit the step's width, and at a narrower one still: the note beside Use Groq wraps to its
-    /// full height rather than being cut off (found by hand on the RC).
+    /// A guard, not a reproduction (the RC's clip beside Use Groq did not show offscreen): the
+    /// Polish step's own-key rows with Groq picked and its key saved (the longest Use note) fit
+    /// the step's width and height, and at a narrower width still.
     func testThePolishStepsGroqRowsWrapInsideTheStep() {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
         screens.cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":true}]}"#))
