@@ -421,6 +421,8 @@ public partial class App : Application
             ink = null;
             liveIcon?.Dispose();
             liveIcon = null;
+            windowCover?.Dispose();
+            windowCover = null;
             tray?.Dispose();
             tray = null;
             window.Close();

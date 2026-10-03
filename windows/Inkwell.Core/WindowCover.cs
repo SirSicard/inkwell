@@ -17,6 +17,8 @@ namespace Inkwell.Core;
 public sealed partial class WindowCover : IDisposable
 {
     private const uint EventSystemForeground = 0x0003;
+    private const uint EventSystemMoveSizeEnd = 0x000B;
+    private const uint EventSystemMinimizeStart = 0x0016;
     private const uint EventSystemMinimizeEnd = 0x0017;
     private const uint WinEventOutOfContext = 0;
     private const int ObjIdWindow = 0;
@@ -27,7 +29,8 @@ public sealed partial class WindowCover : IDisposable
     private const uint DwmwaCloaked = 14;
 
     private readonly nint window;
-    private readonly nint hook;
+    /// <summary>The hooks: the front window, a move or resize ended, a window minimised or restored.</summary>
+    private readonly nint[] hooks;
     /// <summary>Held, so the hook's delegate is never collected while Windows calls it.</summary>
     private readonly WinEventProc proc;
 
@@ -45,13 +48,24 @@ public sealed partial class WindowCover : IDisposable
     }
 
     /// <summary>UI thread: the hook's events arrive on it.</summary>
-    public WindowCover(nint window)
+    /// <param name="log">Where a hook that could not be made is said (the window then counts as uncovered).</param>
+    public WindowCover(nint window, ScreenLog? log = null)
     {
         this.window = window;
         proc = OnEvent;
-        // EVENT_SYSTEM_FOREGROUND to EVENT_SYSTEM_MINIMIZEEND: the front window changes, a window
-        // is moved or resized (MOVESIZEEND), minimised or restored.
-        hook = SetWinEventHook(EventSystemForeground, EventSystemMinimizeEnd, 0, Marshal.GetFunctionPointerForDelegate(proc), 0, 0, WinEventOutOfContext);
+        var callback = Marshal.GetFunctionPointerForDelegate(proc);
+        // Only these events, not the range between them: it holds every mouse press anywhere
+        // (capture start and end), and an app in the tray would wake for each.
+        hooks =
+        [
+            SetWinEventHook(EventSystemForeground, EventSystemForeground, 0, callback, 0, 0, WinEventOutOfContext),
+            SetWinEventHook(EventSystemMoveSizeEnd, EventSystemMoveSizeEnd, 0, callback, 0, 0, WinEventOutOfContext),
+            SetWinEventHook(EventSystemMinimizeStart, EventSystemMinimizeEnd, 0, callback, 0, 0, WinEventOutOfContext),
+        ];
+        if (hooks.Contains(0))
+        {
+            (log ?? ScreenLog.System).Write("couldn't follow what covers the window; it counts as uncovered");
+        }
         Covered = Measure();
     }
 
@@ -71,16 +85,24 @@ public sealed partial class WindowCover : IDisposable
         {
             return;
         }
-        var now = Measure();
-        if (now == Covered)
+        try
         {
-            return;
+            var now = Measure();
+            if (now == Covered)
+            {
+                return;
+            }
+            Covered = now;
+            Changed?.Invoke(now);
+            if (!now)
+            {
+                Uncovered?.Invoke();
+            }
         }
-        Covered = now;
-        Changed?.Invoke(now);
-        if (!now)
+        catch (Exception e)
         {
-            Uncovered?.Invoke();
+            // Never into Windows' callback: named in the log, and the next event measures again.
+            ScreenLog.System.Write($"couldn't measure what covers the window: {e.GetType().Name}");
         }
     }
 
@@ -136,9 +158,12 @@ public sealed partial class WindowCover : IDisposable
 
     public void Dispose()
     {
-        if (hook != 0)
+        foreach (var hook in hooks)
         {
-            _ = UnhookWinEvent(hook);
+            if (hook != 0)
+            {
+                _ = UnhookWinEvent(hook);
+            }
         }
     }
 
