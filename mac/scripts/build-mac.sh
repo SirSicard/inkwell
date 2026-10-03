@@ -199,6 +199,12 @@ accent="$(plutil -extract NSAccentColorName raw "$app/Contents/Info.plist")" \
 car_info="$(xcrun assetutil --info "$app/Contents/Resources/Assets.car")"
 grep -qF "\"Name\" : \"$accent\"" <<<"$car_info" \
   || fail "Assets.car holds no colour named $accent (Info.plist's NSAccentColorName)"
+# The app icon (Info.plist's CFBundleIconFile): design/icon/make_icon.py renders it. Without it
+# the Dock, Finder, About and the updater show a blank placeholder, so a missing icon stops the build.
+icon="$(plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist")" \
+  || fail "Info.plist names no CFBundleIconFile"
+[ -f "$mac/$icon.icns" ] || fail "mac/$icon.icns is missing (design/icon/make_icon.py writes it)"
+cp "$mac/$icon.icns" "$app/Contents/Resources/$icon.icns"
 # SwiftPM resource bundles (a dependency's data files). Bundle.module looks in
 # Bundle.main.resourceURL first, which is Contents/Resources in an app.
 find "$bin" -maxdepth 1 -name '*.bundle' -type d -exec cp -R {} "$app/Contents/Resources/" \;
