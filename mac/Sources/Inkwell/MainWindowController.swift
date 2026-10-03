@@ -37,20 +37,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // A tint holds whatever accent the user chose; the app's own accent (Info.plist) does
             // the rest, the lists' selection, while the user's is Multicolor.
             .tint(Theme.buttonFill)
-        let hosting = NSHostingController(rootView: root)
-        // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
-        hosting.sceneBridgingOptions = [.title, .toolbars]
-        // SwiftUI sets the minimum size; the user sets the rest.
-        hosting.sizingOptions = [.minSize]
-
-        let window = NSWindow(contentViewController: hosting)
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        window.toolbarStyle = .unified
-        window.title = "Inkwell"
-        window.backgroundColor = Theme.windowBackground
-        window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 1040, height: 700))
-        window.contentMinSize = NSSize(width: 720, height: 460)
+        let window = Self.makeWindow(root: root)
         window.center()
         // After center(): a saved frame, when there is one, wins.
         window.setFrameAutosaveName("Inkwell.main")
@@ -60,6 +47,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         Self.fitToScreen(window)
         super.init(window: window)
         window.delegate = self
+    }
+
+    /// The window's smallest content size.
+    static let minimumContentSize = NSSize(width: 720, height: 460)
+
+    /// The window around `root`, at its default size. SwiftUI sets the minimum size, and the user
+    /// the rest; the hosting controller writes SwiftUI's minimum over the window's own, so the root
+    /// holds the minimum width too (without it the window's minimum fell to the screen's, 413 pt
+    /// wide on Today, measured offscreen). Not the height: SwiftUI's minimum counts the toolbar
+    /// over the content, so 460 there would be 512 here. Tests lay the screens out in this window.
+    static func makeWindow<Root: View>(root: Root) -> NSWindow {
+        let hosting = NSHostingController(rootView: root.frame(minWidth: minimumContentSize.width))
+        // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
+        hosting.sceneBridgingOptions = [.title, .toolbars]
+        hosting.sizingOptions = [.minSize]
+
+        let window = NSWindow(contentViewController: hosting)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.toolbarStyle = .unified
+        window.title = "Inkwell"
+        window.backgroundColor = Theme.windowBackground
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 1040, height: 700))
+        window.contentMinSize = minimumContentSize
+        return window
     }
 
     @available(*, unavailable)

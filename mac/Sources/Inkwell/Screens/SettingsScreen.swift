@@ -146,7 +146,9 @@ struct SettingsScreen: View {
 }
 
 /// The page's margins either side: 40 pt, and 24 in a column too narrow to spare them (the window
-/// at its smallest), so the sections keep the room their controls need there.
+/// at its smallest), so the sections keep the room their controls need there. Between the two the
+/// margin grows with the column, so the sections' width only ever grows as the window widens (a
+/// step would narrow them for a moment, and flip a picker from segments to a menu and back).
 private struct SettingsMargins: ViewModifier {
     func body(content: Content) -> some View {
         SettingsMarginsLayout { content }
@@ -156,16 +158,21 @@ private struct SettingsMargins: ViewModifier {
 struct SettingsMarginsLayout: Layout {
     static let wide: CGFloat = 40
     static let narrow: CGFloat = 24
-    /// The column's width, margins included, under which the margins are narrow.
-    static let narrowBelow: CGFloat = 400
+    /// The column's width, margins included, up to which the margins are narrow, and from which
+    /// they are wide.
+    static let narrowUpTo: CGFloat = 400
+    static let wideFrom: CGFloat = 440
 
     static func margin(_ width: CGFloat?) -> CGFloat {
-        width.map { $0 < narrowBelow } ?? false ? narrow : wide
+        guard let width, width.isFinite else { return wide }
+        let progress = min(max((width - narrowUpTo) / (wideFrom - narrowUpTo), 0), 1)
+        return narrow + (wide - narrow) * progress
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let margin = Self.margin(proposal.width)
-        let inner = ProposedViewSize(width: proposal.width.map { max(0, $0 - 2 * margin) }, height: proposal.height)
+        let inner = ProposedViewSize(
+            width: proposal.width.map { $0.isFinite ? max(0, $0 - 2 * margin) : $0 }, height: proposal.height)
         let size = subviews.reduce(CGSize.zero) { size, subview in
             let fitted = subview.sizeThatFits(inner)
             return CGSize(width: max(size.width, fitted.width), height: max(size.height, fitted.height))
@@ -174,8 +181,10 @@ struct SettingsMarginsLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let margin = Self.margin(bounds.width)
-        let inner = ProposedViewSize(width: max(0, bounds.width - 2 * margin), height: bounds.height)
+        // The margin for the width proposed, as measured; the bounds only place it.
+        let margin = Self.margin(proposal.width)
+        let inner = ProposedViewSize(
+            width: proposal.width.map { $0.isFinite ? max(0, $0 - 2 * margin) : $0 }, height: proposal.height)
         for subview in subviews {
             subview.place(at: CGPoint(x: bounds.minX + margin, y: bounds.minY), anchor: .topLeading, proposal: inner)
         }

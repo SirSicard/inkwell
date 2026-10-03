@@ -123,9 +123,11 @@ struct SettingColumns<Title: View, Controls: View>: View {
 struct SettingColumnsLayout: Layout {
     static let titleWidth: CGFloat = 150
     static let spacing: CGFloat = 12
-    /// The least room the controls get beside the name: as much as the dictation keys' controls
-    /// need with their button stacked (KeyControls).
-    static let controlsMinimum: CGFloat = 240
+    /// The least room the controls get beside the name: the widest segmented picker's (Mode, 325.5
+    /// pt on macOS 26), so a picker that shows segments in the stacked row still has room for them
+    /// beside the name, and as the window widens each picker turns from a menu to segments once
+    /// (SegmentsOrMenu). The dictation keys' controls fit in it with their button stacked.
+    static let controlsMinimum: CGFloat = 330
     /// Between the name and the controls under it.
     static let stackedSpacing: CGFloat = 4
 
@@ -138,10 +140,13 @@ struct SettingColumnsLayout: Layout {
         var controls: (origin: CGPoint, proposal: ProposedViewSize)
     }
 
-    private func arrange(_ width: CGFloat?, _ subviews: Subviews) -> Arrangement? {
+    /// Measuring and placing both arrange for the width proposed, so they always agree.
+    private func arrange(_ proposed: CGFloat?, _ subviews: Subviews) -> Arrangement? {
         guard subviews.count == 2 else { return nil }
         let (title, controls) = (subviews[0], subviews[1])
-        // No width proposed (the ideal size): side by side, as on a wide window.
+        // An unbounded width is the ideal size, as no width is.
+        let width = proposed.flatMap { $0.isFinite ? $0 : nil }
+        // No width proposed: side by side, as on a wide window.
         if width.map({ $0 >= sideBySideWidth }) ?? true {
             let titleProposal = ProposedViewSize(width: titleWidth, height: nil)
             let room = width.map { $0 - titleWidth - Self.spacing }
@@ -156,7 +161,8 @@ struct SettingColumnsLayout: Layout {
             let natural = titleWidth + Self.spacing + controlsSize.width
             return Arrangement(
                 size: CGSize(
-                    width: max(width ?? natural, natural),
+                    // Ideally at least wide enough to stay side by side.
+                    width: max(width ?? sideBySideWidth, natural),
                     height: max(titleY + titleSize.height, controlsY + controlsSize.height)),
                 title: (CGPoint(x: 0, y: titleY), titleProposal),
                 controls: (CGPoint(x: titleWidth + Self.spacing, y: controlsY), controlsProposal))
@@ -178,7 +184,7 @@ struct SettingColumnsLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard let arrangement = arrange(bounds.width, subviews) else { return }
+        guard let arrangement = arrange(proposal.width, subviews) else { return }
         for (subview, place) in zip(subviews, [arrangement.title, arrangement.controls]) {
             subview.place(
                 at: CGPoint(x: bounds.minX + place.origin.x, y: bounds.minY + place.origin.y),
@@ -274,18 +280,95 @@ struct AppearanceSection: View {
     }
 }
 
-/// A row of fields and buttons on one line from `minWidth`, and narrower, one under another.
-/// Crossing the width rebuilds them, so a field being typed in loses the keyboard; what was typed
-/// is kept (it is the caller's state).
+/// A row of fields and buttons on one line from `minWidth`, and narrower, one under another. One
+/// set of views either way, so a field being typed in keeps the keyboard as the window is resized.
 struct LineOrStack<Content: View>: View {
     let minWidth: CGFloat
     @ViewBuilder var content: Content
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) { content }
-                .frame(minWidth: minWidth, idealWidth: minWidth, maxWidth: .infinity, alignment: .leading)
-            VStack(alignment: .leading, spacing: 6) { content }
+        LineOrStackLayout(minWidth: minWidth) { content }
+    }
+}
+
+/// LineOrStack's arithmetic, chosen from the width proposed when measuring and placing alike. On
+/// one line (from `minWidth`, or with no width proposed): left to right, first text baselines
+/// level, the fixed-width views at their width and the flexible ones (the text fields without a
+/// width) sharing the rest. Stacked: one under another, each offered the whole width.
+struct LineOrStackLayout: Layout {
+    let minWidth: CGFloat
+    static let lineSpacing: CGFloat = 8
+    static let stackSpacing: CGFloat = 6
+
+    private struct Arrangement {
+        var size: CGSize
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)]
+    }
+
+    private func arrange(_ proposed: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        let width = proposed.flatMap { $0.isFinite ? $0 : nil }
+        guard let width, width < minWidth else { return line(width, subviews) }
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)] = []
+        var y: CGFloat = 0
+        var widest: CGFloat = 0
+        let proposal = ProposedViewSize(width: width, height: nil)
+        for subview in subviews {
+            let size = subview.sizeThatFits(proposal)
+            places.append((CGPoint(x: 0, y: y), proposal))
+            y += size.height + Self.stackSpacing
+            widest = max(widest, size.width)
+        }
+        return Arrangement(
+            size: CGSize(width: max(width, widest), height: max(0, y - Self.stackSpacing)), places: places)
+    }
+
+    private func line(_ width: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        // Each view's width: its ideal with no width proposed; else the fixed ones' own, and the
+        // flexible ones an equal share of what is left (never under their minimum).
+        var widths: [CGFloat?] = Array(repeating: nil, count: subviews.count)
+        if let width {
+            let least = subviews.map { $0.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width }
+            let most = subviews.map { $0.sizeThatFits(ProposedViewSize(width: .infinity, height: nil)).width }
+            let flexible = subviews.indices.filter { most[$0] > least[$0] + 0.5 }
+            var left = width - Self.lineSpacing * CGFloat(max(0, subviews.count - 1))
+            for index in subviews.indices where !flexible.contains(index) {
+                widths[index] = least[index]
+                left -= least[index]
+            }
+            var sharing = flexible.count
+            for index in flexible.sorted(by: { most[$0] < most[$1] }) {
+                let share = min(max(least[index], left / CGFloat(sharing)), most[index])
+                widths[index] = share
+                left -= share
+                sharing -= 1
+            }
+        }
+        let proposals = widths.map { ProposedViewSize(width: $0, height: nil) }
+        let sizes = zip(subviews, proposals).map { $0.sizeThatFits($1) }
+        let baselines = zip(subviews, proposals).map { $0.dimensions(in: $1)[VerticalAlignment.firstTextBaseline] }
+        let baseline = baselines.max() ?? 0
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)] = []
+        var x: CGFloat = 0
+        var height: CGFloat = 0
+        for index in subviews.indices {
+            let y = baseline - baselines[index]
+            places.append((CGPoint(x: x, y: y), proposals[index]))
+            x += sizes[index].width + Self.lineSpacing
+            height = max(height, y + sizes[index].height)
+        }
+        return Arrangement(size: CGSize(width: max(0, x - Self.lineSpacing), height: height), places: places)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(proposal.width, subviews)
+        for (subview, place) in zip(subviews, arrangement.places) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + place.origin.x, y: bounds.minY + place.origin.y),
+                anchor: .topLeading, proposal: place.proposal)
         }
     }
 }

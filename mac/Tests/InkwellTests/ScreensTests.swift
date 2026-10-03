@@ -2064,20 +2064,25 @@ final class LiveLayoutTests: XCTestCase {
     }
 }
 
-/// The whole window at its 720-pt minimum, laid out as MainWindowController makes it: the hosting
+/// The whole window at its 720-pt minimum, as MainWindowController makes it: the hosting
 /// controller sets the window's minimum size from SwiftUI's, so a screen that needs more than its
 /// share of 720 beside the sidebar widens the window as it opens. Settings did, to 996 pt, while
 /// Settings measured on its own, outside a window and the split view, stayed under 720 (there a
-/// segmented control or a fixed-size picker compresses; in a window it does not).
+/// segmented control or a fixed-size picker compresses; in a window it does not). And SwiftUI's
+/// minimum replaced the window's 720 with less (413 on Today): the root holds 720 now.
 @MainActor
 final class MainWindowWidthTests: XCTestCase {
     private final class NoEvents: UpcomingEvents {
         func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? { nil }
     }
 
-    /// The width `route` lays out at in a window asked for 720 by 700, and the window content's
-    /// minimum width.
-    private func widths(_ route: Route, screens: ScreenModels) -> (laidOut: CGFloat, minimum: CGFloat) {
+    /// Not a size the window would choose: the minimum SwiftUI writes replaces it.
+    private let sentinel = NSSize(width: 100, height: 100)
+
+    /// The width `route` lays out at in the app's window asked for 720 by 700, and the window's
+    /// minimum content size once SwiftUI has set it over the sentinel (nil if it never did, within
+    /// two seconds).
+    private func widths(_ route: Route, screens: ScreenModels) -> (laidOut: CGFloat, minimum: NSSize?) {
         let store = CoreStore()
         let router = Router()
         router.open(route)
@@ -2085,25 +2090,23 @@ final class MainWindowWidthTests: XCTestCase {
             .environment(Updates(infoDictionary: nil)).environment(screens).environment(LibraryModel(send: { _ in }))
             .environment(UpNextModel(access: FakeCalendar(), events: NoEvents())).environment(router)
             .environment(WindowPresence()).environment(screens.theme).tint(Theme.buttonFill)
-        // MainWindowController's hosting controller and window.
-        let hosting = NSHostingController(rootView: root)
-        hosting.sceneBridgingOptions = [.title, .toolbars]
-        hosting.sizingOptions = [.minSize]
-        let window = NSWindow(contentViewController: hosting)
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        window.toolbarStyle = .unified
-        window.isReleasedWhenClosed = false
+        let window = MainWindowController.makeWindow(root: root)
         defer { window.close() }
-        window.contentMinSize = NSSize(width: 720, height: 460)
+        window.contentMinSize = sentinel
         window.setContentSize(NSSize(width: 720, height: 700))
-        // The minimum size reaches the window after a layout pass and a turn of the run loop.
-        hosting.view.layoutSubtreeIfNeeded()
+        let content = window.contentViewController?.view
+        let deadline = Date().addingTimeInterval(2)
+        repeat {
+            content?.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        } while window.contentMinSize == sentinel && Date() < deadline
+        // Settled, not a first pass's.
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
-        hosting.view.layoutSubtreeIfNeeded()
-        return (hosting.view.frame.width, window.contentMinSize.width)
+        content?.layoutSubtreeIfNeeded()
+        return (content?.frame.width ?? 0, window.contentMinSize == sentinel ? nil : window.contentMinSize)
     }
 
-    func testEveryScreenWithSettingsOpenLaysOutInA720PointWindow() {
+    func testEveryScreenLaysOutInA720PointWindowWhoseMinimumIs720() throws {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
         // The widest key rows: a recorded dictation key, and the edit key with the longest name.
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
@@ -2115,11 +2118,25 @@ final class MainWindowWidthTests: XCTestCase {
         screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
         screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
         screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
-        for route in [Route.today, .library, .settings] {
+        XCTAssertTrue(Route.allCases.contains(.settings))
+        for route in Route.allCases {
             let (laidOut, minimum) = widths(route, screens: screens)
             XCTAssertEqual(laidOut, 720, accuracy: 0.5, "\(route)")
-            XCTAssertLessThanOrEqual(minimum, 720, "\(route)")
+            let set = try XCTUnwrap(minimum, "\(route): SwiftUI never set the window's minimum")
+            XCTAssertEqual(set.width, 720, accuracy: 0.5, "\(route)")
         }
+    }
+
+    /// Each picker that shows segments in a stacked row keeps them beside the row's name, so as
+    /// the window widens it turns from a menu to segments once (SettingColumnsLayout).
+    func testTheWidestSegmentedPickerFitsBesideARowsName() {
+        let mode = Picker("Mode", selection: .constant(GlowTheme.Mode.light)) {
+            ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented).labelsHidden().fixedSize()
+        let width = NSHostingController(rootView: mode).sizeThatFits(in: .zero).width
+        XCTAssertGreaterThan(width, 200, "a segmented picker, measured")
+        XCTAssertLessThanOrEqual(width, SettingColumnsLayout.controlsMinimum)
     }
 }
 
