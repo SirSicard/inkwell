@@ -1518,6 +1518,10 @@ fn a_silent_meeting_keeps_its_empty_live_transcript_and_asks_no_model() {
 /// (`MIN_QUOTE_WORDS`) has nothing to summarise: no model call, no summary, no title.
 #[test]
 fn a_meeting_too_short_to_cite_gets_no_summary_or_title() {
+    // Two words on a line are still too few; three are a line a summary can cite.
+    assert_eq!(short_meeting_model_calls("Oh, okay."), 0);
+    assert!(short_meeting_model_calls("Send it today.") > 0);
+
     let llm = Arc::new(Scripted {
         calls: AtomicUsize::new(0),
     });
@@ -1558,6 +1562,29 @@ fn a_meeting_too_short_to_cite_gets_no_summary_or_title() {
         "{:?}",
         rig.events()
     );
+}
+
+/// The model calls an untitled meeting whose final pass hears `line` once on the mic makes.
+fn short_meeting_model_calls(line: &'static str) -> usize {
+    let llm = Arc::new(Scripted {
+        calls: AtomicUsize::new(0),
+    });
+    let mut rig = RigBuilder {
+        answer: Arc::new(move |channel, _, audio| match channel {
+            Channel::Mic => Ok(words(line, audio.len())),
+            Channel::Far => Ok(words("", audio.len())),
+        }),
+        meetings_consent: Some(LlmConsent::OnDevice),
+        llm: Some(llm.clone()),
+        title: None,
+        no_live_engine: true,
+        ..RigBuilder::default()
+    }
+    .build();
+    let mic = join(&[silence(1.0), speech(1.0, -30.0, 81), silence(1.0)]);
+    rig.feed(&mic, &silence(3.0));
+    rig.finish().unwrap();
+    llm.calls.load(Ordering::SeqCst)
 }
 
 /// The chain moves to its worker thread, and an ended meeting to wherever the final pass runs.

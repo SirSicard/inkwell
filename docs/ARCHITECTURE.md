@@ -423,7 +423,9 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   removed (a record without an end is never swept).
 - **Summaries keep their citations.** Each decision and action is saved with the span of the line
   it cites, so a record shows it; a promise names who it is owed to; a later meeting in which the
-  user says an open promise is already done marks it "looks done" for the user to confirm.
+  user says an open promise is already done marks it "looks done" for the user to confirm. A
+  meeting with no line of at least three words (nothing said, or a noise heard as "Oh.") asks no
+  model: it gets no summary, title or commitments.
 
 ## Testing
 

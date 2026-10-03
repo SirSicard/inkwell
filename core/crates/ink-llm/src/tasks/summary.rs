@@ -261,6 +261,15 @@ pub fn quote_cites(quote: &str, line: &str) -> bool {
     quote_found(quote, line) && quote.split_whitespace().count() >= MIN_QUOTE_WORDS
 }
 
+/// Whether any line of `segments` is long enough for a citation to quote ([`MIN_QUOTE_WORDS`]
+/// words). Without one, no decision or action can stand, and a headline would stand on nothing:
+/// the meeting chain asks no model then.
+pub fn has_citable_line(segments: &[Segment]) -> bool {
+    segments
+        .iter()
+        .any(|s| s.text.split_whitespace().count() >= MIN_QUOTE_WORDS)
+}
+
 /// A finished summary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SummaryOutcome {
