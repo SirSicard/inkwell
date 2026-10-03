@@ -28,6 +28,7 @@ pub mod engine;
 pub mod error;
 pub mod llm;
 pub mod platform;
+pub mod stats;
 pub mod store;
 pub mod threading;
 
