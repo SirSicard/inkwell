@@ -471,6 +471,34 @@ final class OwnKeyPolishTests: XCTestCase {
         XCTAssertFalse(groqChosen.firstRunStartsOnOthers)
     }
 
+    /// Keys are in the keychain of the Mac account, shared by every Inkwell on it, not in the
+    /// library: the line says whose key it is, and Delete names what it deletes and asks first
+    /// (a scratch library offered to delete the user's real key as "Delete key"). The delete is
+    /// of the provider pressed for, whatever the picker holds by the time it is confirmed.
+    func testTheKeyLineSaysWhoseKeyItIsAndDeleteNamesWhatItDeletes() throws {
+        let sent = Sent()
+        let cloud = CloudModel(send: sent.send)
+        cloud.apply(providers(groqKey: true))
+        cloud.select("groq")
+        XCTAssertEqual(cloud.keyStatus, "A Groq key is already saved in your keychain for this Mac account.")
+        XCTAssertEqual(cloud.deleteKeyLabel, "Delete Groq key\u{2026}")
+        XCTAssertEqual(cloud.deleteKeyTitle("groq"), "Delete the Groq key from your keychain?")
+        XCTAssertTrue(CloudModel.deleteKeyMessage.contains("for this Mac account"), CloudModel.deleteKeyMessage)
+        XCTAssertTrue(CloudModel.deleteKeyMessage.contains("every Inkwell"), CloudModel.deleteKeyMessage)
+        cloud.select("openai")
+        XCTAssertEqual(cloud.keyStatus, "No OpenAI key is saved yet.")
+        XCTAssertEqual(cloud.deleteKeyLabel, "Delete OpenAI key\u{2026}")
+        cloud.select("custom")
+        cloud.draftBaseURL = "http://192.168.1.20:8080/v1"
+        XCTAssertEqual(cloud.keyStatus, "No key is sent to this server: keys go only over https or to a server on this Mac.")
+
+        sent.commands = []
+        cloud.deleteKey("groq")
+        XCTAssertEqual(sent.commands, [.llmKeyDelete(provider: "groq", ref: "llm.key.delete:1")], "Groq's, though the picker holds another")
+        cloud.deleteKey("not-a-provider")
+        XCTAssertEqual(sent.commands.count, 1, "nothing for a provider the core did not list")
+    }
+
     /// Use asks first and sends nothing: the step names Groq and says the words leave this Mac
     /// and that local-only mode goes off. Cancel sends nothing either.
     func testUseAsksFirstNamingTheProviderAndCancelSendsNothing() throws {

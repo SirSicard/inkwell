@@ -272,6 +272,8 @@ struct LanguageModelRows: View {
     var firstRun: PolishModel?
     /// The key being typed: sent once on Save key, then cleared. Never kept anywhere else.
     @State private var key = ""
+    /// The provider whose key Delete asks about, while it asks.
+    @State private var deleting: String?
 
     /// Use: in the first run, polish's consent step first; in Settings, the choice itself.
     private func use() {
@@ -314,7 +316,7 @@ struct LanguageModelRows: View {
                             key = ""
                             cloud.saveKey(typed)
                         }
-                        Button("Delete key") { cloud.deleteKey() }
+                        Button(cloud.deleteKeyLabel) { deleting = provider.id }
                             .disabled(!provider.hasKey)
                     }
                     Text(cloud.keyStatus)
@@ -364,11 +366,25 @@ struct LanguageModelRows: View {
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
+                Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain for this Mac account, shared by every Inkwell on it, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        // The key is the Mac account's, not the library's: Delete says so and asks first.
+        .confirmationDialog(
+            cloud.deleteKeyTitle(deleting),
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Key", role: .destructive) {
+                if let deleting { cloud.deleteKey(deleting) }
+                deleting = nil
+            }
+            Button("Cancel", role: .cancel) { deleting = nil }
+        } message: {
+            Text(CloudModel.deleteKeyMessage)
         }
     }
 }

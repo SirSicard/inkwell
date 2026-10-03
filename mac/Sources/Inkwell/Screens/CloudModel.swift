@@ -194,16 +194,44 @@ final class CloudModel {
         return Self.keyWithheld(from: baseURL(for: p))
     }
 
-    /// The line about the key of the provider in the picker.
+    /// The key's name for people: "Groq key"; a server of the user's own has a "server key".
+    static func keyName(_ p: Provider) -> String {
+        p.customURL ? "server key" : "\(name(p.id)) key"
+    }
+
+    /// "A Groq key", "An OpenAI key".
+    private static func aKey(_ p: Provider) -> String {
+        let key = keyName(p)
+        return ("AEIOU".contains(key.prefix(1)) ? "An " : "A ") + key
+    }
+
+    /// The line about the key of the provider in the picker. Keys are in the keychain of the Mac
+    /// account, shared by every Inkwell on it and never in a library: a scratch library sees the
+    /// user's own key, so the line says whose it is.
     var keyStatus: String {
         guard let p = selectedProvider else { return "" }
         if p.hasKey && keyWithheld {
-            return "A key is stored in your keychain, but it is not sent to this server: keys go only over https or to a server on this Mac."
+            return "\(Self.aKey(p)) is already saved in your keychain for this Mac account, but it is not sent to this server: keys go only over https or to a server on this Mac."
         }
         if keyWithheld { return "No key is sent to this server: keys go only over https or to a server on this Mac." }
         if !p.needsKey && !p.hasKey { return "No key is needed unless your server asks for one." }
-        return p.hasKey ? "A key is stored in your keychain." : "No key is stored yet."
+        return p.hasKey
+            ? "\(Self.aKey(p)) is already saved in your keychain for this Mac account."
+            : "No \(Self.keyName(p)) is saved yet."
     }
+
+    /// The Delete button of the provider in the picker: what it deletes, and that it asks first.
+    var deleteKeyLabel: String {
+        selectedProvider.map { "Delete \(Self.keyName($0))\u{2026}" } ?? "Delete key\u{2026}"
+    }
+
+    /// The question Delete asks about `id`'s key (the provider it was pressed for).
+    func deleteKeyTitle(_ id: String?) -> String {
+        providers.first { $0.id == id }.map { "Delete the \(Self.keyName($0)) from your keychain?" }
+            ?? "Delete the key from your keychain?"
+    }
+
+    static let deleteKeyMessage = "It is saved in your keychain for this Mac account, not in this library: every Inkwell on this account stops using it. You can paste it again later."
 
     /// The line about what is in use now.
     var status: String {
@@ -267,12 +295,13 @@ final class CloudModel {
         send(.llmKeySave(provider: p.id, key: key, ref: nextRef("key.save")))
     }
 
-    /// Deletes the stored key of the provider in the picker.
-    func deleteKey() {
-        guard let p = selectedProvider else { return }
+    /// Deletes the stored key of `id`: the provider Delete was pressed for, so a confirmation
+    /// answered after the picker moved (Settings > AI shares it) deletes what it named.
+    func deleteKey(_ id: String) {
+        guard providers.contains(where: { $0.id == id }) else { return }
         failure = nil
         forgetTest()
-        send(.llmKeyDelete(provider: p.id, ref: nextRef("key.delete")))
+        send(.llmKeyDelete(provider: id, ref: nextRef("key.delete")))
     }
 
     /// Use: chooses the provider in the picker with its model (and address), or none. For a

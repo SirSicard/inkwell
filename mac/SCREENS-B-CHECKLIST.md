@@ -182,6 +182,11 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
       which names where the transcript goes (see MEETINGS-CHECKLIST, Setup). Turning Polish on
       leaves it off, and the reverse. Turn it off: the switch reads off at once and stays off after
       a restart; turning it on again asks again.
+- [ ] AI, your own key, in a scratch library on a Mac account that already has a Groq key saved:
+      with Groq picked, the line reads "A Groq key is already saved in your keychain for this Mac
+      account." (the key is the account's, not the library's). "Delete Groq key…" asks "Delete the
+      Groq key from your keychain?", saying every Inkwell on this account stops using it; Cancel
+      keeps it (check with a provider whose key you can lose, never your real one).
 - [ ] Models: Dictation, Meeting transcript and Live words, each with the engine that serves it now
       and its measured accuracy. After a model finishes installing, the line changes to it without
       a restart. Each model not on this Mac has Download (downloads: only with your OK); a second
