@@ -31,13 +31,19 @@ internal sealed class LiveIconHost : IDisposable
     private readonly GlowTheme theme;
     private readonly TrayIcon tray;
     private readonly string iconPath;
-    private readonly WindowHook hook;
+    /// <summary>The window's messages (null if the window could not be watched: no thumbnail clicks, and the pulse cannot hear the lock).</summary>
+    private readonly WindowHook? hook;
     private readonly TaskbarButton taskbar;
     private readonly TraySurface traySurface;
     private readonly TaskbarSurface taskbarSurface;
     private bool locked;
     private bool displayOff;
     private string? inkProblem;
+    private string? tooltipShown;
+    private bool disposed;
+    private readonly System.ComponentModel.PropertyChangedEventHandler storeChanged;
+    /// <summary>Failures logged, by what failed: each once, however often a frame retries it (the pulse, 7 a second).</summary>
+    private readonly HashSet<string> logged = [];
 
     public LiveIconHost(nint window, DropModel drop, CoreStore store, GlowTheme theme, TrayIcon tray, string iconPath, DispatcherQueue ui, Action<bool> record)
     {
@@ -47,10 +53,43 @@ internal sealed class LiveIconHost : IDisposable
         this.tray = tray;
         this.iconPath = iconPath;
         icon = new LiveIcon(new DispatcherTicker(ui));
-        hook = new WindowHook(window);
+        try
+        {
+            hook = new WindowHook(window);
+        }
+        catch (InkRendererException e)
+        {
+            // The icons still follow the state: only the thumbnail's clicks and the lock are lost.
+            InkLog.Write(e.Message);
+        }
         taskbar = new TaskbarButton(window);
         traySurface = new TraySurface(this);
         taskbarSurface = new TaskbarSurface(this);
+        storeChanged = (_, _) =>
+        {
+            Follow();
+            ShowButton();
+        };
+        if (hook is not null)
+        {
+            Listen(hook, record);
+        }
+        // The button may already exist: connect now too (the message comes again if not).
+        if (taskbar.Connect())
+        {
+            ShowButton();
+        }
+        icon.Attach(traySurface);
+        icon.Attach(taskbarSurface);
+        drop.Changed += Follow;
+        store.PropertyChanged += storeChanged;
+        theme.Changed += Follow;
+        SystemMotion.Changed += Follow;
+        Follow();
+    }
+
+    private void Listen(WindowHook hook, Action<bool> record)
+    {
         hook.TaskbarButtonCreated += () =>
         {
             // Made again (Explorer restarted): the badge, progress and buttons are put back.
@@ -78,22 +117,6 @@ internal sealed class LiveIconHost : IDisposable
             displayOff = !on;
             Awake();
         };
-        // The button may already exist: connect now too (the message comes again if not).
-        if (taskbar.Connect())
-        {
-            ShowButton();
-        }
-        icon.Attach(traySurface);
-        icon.Attach(taskbarSurface);
-        drop.Changed += Follow;
-        store.PropertyChanged += (_, _) =>
-        {
-            Follow();
-            ShowButton();
-        };
-        theme.Changed += Follow;
-        SystemMotion.Changed += Follow;
-        Follow();
     }
 
     /// <summary>Frames drawn since launch (the energy budget's count).</summary>
@@ -111,7 +134,26 @@ internal sealed class LiveIconHost : IDisposable
     public void InkProblem(string? problem)
     {
         inkProblem = problem;
-        tray.Tooltip = App.TrayTooltip(problem, drop.Ink);
+        Tooltip(App.TrayTooltip(problem, drop.Ink));
+    }
+
+    /// <summary>The tray's tooltip, told to the shell only when it changes (the store changes many times a second while recording).</summary>
+    private void Tooltip(string text)
+    {
+        if (text != tooltipShown)
+        {
+            tooltipShown = text;
+            tray.Tooltip = text;
+        }
+    }
+
+    /// <summary>A surface's failure: logged once for each kind, never into the pulse's timer or the core's batch.</summary>
+    private void Failed(string what, Exception e)
+    {
+        if (logged.Add($"{what}:{e.GetType().Name}"))
+        {
+            InkLog.Write($"the live icon couldn't {what}: {e.GetType().Name}: {e.Message}");
+        }
     }
 
     private void Awake() => icon.SetAwake(!locked && !displayOff);
@@ -119,6 +161,10 @@ internal sealed class LiveIconHost : IDisposable
     /// <summary>The look for the state now, in the colours shown: drawing only what changed (LiveIcon.Update).</summary>
     private void Follow()
     {
+        if (disposed)
+        {
+            return;
+        }
         var state = drop.Ink;
         // The store lets the meeting go a moment before the Drop leaves the final pass: its last
         // progress stays, rather than one frame of a dashed ring before rest.
@@ -127,7 +173,7 @@ internal sealed class LiveIconHost : IDisposable
             : LiveIcon.FinalPassProgress(store.Meeting);
         var still = theme.AlwaysStill || !SystemMotion.AnimationsEnabled;
         icon.Update(LiveIconLook.For(state, progress, still), Colours());
-        tray.Tooltip = App.TrayTooltip(inkProblem, state);
+        Tooltip(App.TrayTooltip(inkProblem, state));
     }
 
     /// <summary>The night mode's colours: the icon's plate is night in either mode.</summary>
@@ -140,6 +186,10 @@ internal sealed class LiveIconHost : IDisposable
     /// <summary>The thumbnail toolbar's one button: Record while nothing records, Stop while something does.</summary>
     private void ShowButton()
     {
+        if (disposed)
+        {
+            return;
+        }
         var (_, enabled) = TrayMenu.RecordItem(store);
         var stop = store.Meeting is not null;
         taskbarSurface.Button(stop, enabled);
@@ -149,12 +199,17 @@ internal sealed class LiveIconHost : IDisposable
 
     public void Dispose()
     {
+        disposed = true;
+        drop.Changed -= Follow;
+        store.PropertyChanged -= storeChanged;
+        theme.Changed -= Follow;
+        SystemMotion.Changed -= Follow;
         icon.Detach(traySurface);
         icon.Detach(taskbarSurface);
         traySurface.Dispose();
         taskbarSurface.Dispose();
         taskbar.Dispose();
-        hook.Dispose();
+        hook?.Dispose();
     }
 
     /// <summary>Icons kept by what they show; let go of when their colours change.</summary>
@@ -211,10 +266,10 @@ internal sealed class LiveIconHost : IDisposable
                 var made = cache.Get(frame.Colours, key, () => TrayGlyph.Tray(host.iconPath, look, Tuple(colour), strength, progress));
                 host.tray.SetIcon(Win32Interop.GetIconIdFromIcon(made));
             }
-            catch (InkRendererException e)
+            catch (Exception e)
             {
                 // The icon keeps what it showed; the tooltip and the Drop still say the state.
-                InkLog.Write(e.Message);
+                host.Failed("draw the tray icon", e);
             }
         }
 
@@ -227,12 +282,14 @@ internal sealed class LiveIconHost : IDisposable
         private readonly IconCache buttons = new();
         private string? badgeKey;
         private (TaskbarProgress State, double Done)? progressShown;
+        private (bool Stop, bool Enabled, LiveIconColours Colours)? buttonShown;
 
         /// <summary>The button was made again: everything is shown afresh.</summary>
         public void Reset()
         {
             badgeKey = null;
             progressShown = null;
+            buttonShown = null;
         }
 
         public void Show(LiveIconFrame frame)
@@ -245,20 +302,27 @@ internal sealed class LiveIconHost : IDisposable
                 LiveIconLook.Ring => (LiveIconTone.Them, 1.0),
                 _ => ((LiveIconTone?)null, 1.0),
             };
-            var key = tone is LiveIconTone k ? $"{k}:{frame.Colours.Colour(k)}:{StrengthKey(strength)}" : "none";
+            // The description is part of what is shown: a recording held still and the final pass
+            // have the same badge, but not the same words for Narrator.
+            var description = LiveIcon.OverlayText(state);
+            var picture = tone is LiveIconTone k ? $"{k}:{frame.Colours.Colour(k)}:{StrengthKey(strength)}" : "none";
+            var key = $"{picture}|{description}";
             if (key != badgeKey)
             {
-                badgeKey = key;
                 try
                 {
                     var made = tone is LiveIconTone t
-                        ? cache.Get(frame.Colours, key, () => TrayGlyph.Badge(Tuple(frame.Colours.Colour(t)), strength))
+                        ? cache.Get(frame.Colours, picture, () => TrayGlyph.Badge(Tuple(frame.Colours.Colour(t)), strength))
                         : 0;
-                    host.taskbar.Overlay(made, LiveIcon.OverlayText(state));
+                    // Shown only once the shell took it: a failure is tried again with the next frame.
+                    if (host.taskbar.Overlay(made, description))
+                    {
+                        badgeKey = key;
+                    }
                 }
-                catch (InkRendererException e)
+                catch (Exception e)
                 {
-                    InkLog.Write(e.Message);
+                    host.Failed("draw the taskbar badge", e);
                 }
             }
             // The final pass's progress; a problem's error state; nothing otherwise.
@@ -269,10 +333,9 @@ internal sealed class LiveIconHost : IDisposable
                 LiveIconLook.Glow { Tone: LiveIconTone.Alert } => (TaskbarProgress.Error, 1),
                 _ => (TaskbarProgress.None, 0),
             };
-            if (progress != progressShown)
+            if (progress != progressShown && host.taskbar.Progress(progress.Item1, progress.Item2))
             {
                 progressShown = progress;
-                host.taskbar.Progress(progress.Item1, progress.Item2);
             }
         }
 
@@ -280,14 +343,22 @@ internal sealed class LiveIconHost : IDisposable
         public void Button(bool stop, bool enabled)
         {
             var colours = host.Colours();
+            // Told to the shell only when it changes: the store changes many times a second while recording.
+            if (buttonShown == (stop, enabled, colours))
+            {
+                return;
+            }
             try
             {
                 var made = buttons.Get(colours, stop ? "stop" : "record", () => TrayGlyph.Thumb(stop, Tuple(colours.Them)));
-                host.taskbar.Button(made, stop ? LiveIcon.StopButton : LiveIcon.RecordButton, enabled);
+                if (host.taskbar.Button(made, stop ? LiveIcon.StopButton : LiveIcon.RecordButton, enabled))
+                {
+                    buttonShown = (stop, enabled, colours);
+                }
             }
-            catch (InkRendererException e)
+            catch (Exception e)
             {
-                InkLog.Write(e.Message);
+                host.Failed("show the thumbnail button", e);
             }
         }
 
