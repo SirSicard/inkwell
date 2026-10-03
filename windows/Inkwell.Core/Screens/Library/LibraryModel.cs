@@ -561,6 +561,10 @@ public sealed class LibraryModel : ObservableModel
                     changed |= Fail(failed);
                     break;
                 case RecordDeleted deleted:
+                    if (deleted.Ref is string deletedRef)
+                    {
+                        _deletingFor.Remove(deletedRef);
+                    }
                     Removed(deleted);
                     // Today's counts and its last meeting may have changed.
                     libraryChanged = true;
