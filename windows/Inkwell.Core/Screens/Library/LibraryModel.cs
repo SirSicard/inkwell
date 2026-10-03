@@ -798,10 +798,13 @@ public sealed class LibraryModel : ObservableModel
         ? Hits.Count.ToString(CultureInfo.InvariantCulture)
         : string.Create(CultureInfo.InvariantCulture, $"{Records.Count}{(HasMore ? "+" : "")}");
 
-    /// <summary>The count as a screen reader reads it.</summary>
+    /// <summary>The count as a screen reader reads it: "1 record", "7 records", "1 match".</summary>
     public string CountLabel => IsSearching
-        ? string.Create(CultureInfo.InvariantCulture, $"{Hits.Count} matches")
-        : string.Create(CultureInfo.InvariantCulture, $"{Records.Count} records");
+        ? Counted(Hits.Count, "match", "matches")
+        : Counted(Records.Count, "record", "records");
+
+    private static string Counted(int count, string one, string many) =>
+        string.Create(CultureInfo.InvariantCulture, $"{count} {(count == 1 ? one : many)}");
 
     /// <summary>What an empty list says, for the filter shown.</summary>
     public (string Title, string Detail) EmptyText => Filter switch

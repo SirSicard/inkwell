@@ -99,6 +99,26 @@ public class LibraryModelTests
         Assert.Equal("there is no record gone", library.OpenFailure);
     }
 
+    /// <summary>The count a screen reader reads: singular for one.</summary>
+    [Fact]
+    public void TheCountReadsOneRecordNotOneRecords()
+    {
+        var (library, sent) = Model();
+        library.RefreshList();
+        Assert.Equal("0 records", library.CountLabel);
+        library.Apply(Ev.Of($$"""
+            {"type":"library.records","ref":"{{RequestId(sent.Commands[^1])}}","more":false,"records":[{{Row("r1", start: 1_000, end: 1_500)}}]}
+            """));
+        Assert.Equal("1 record", library.CountLabel);
+        Assert.Equal("1", library.CountText);
+        library.RefreshList();
+        library.Apply(Ev.Of($$"""
+            {"type":"library.records","ref":"{{RequestId(sent.Commands[^1])}}","more":false,"records":[
+              {{Row("r2", start: 2_000, end: 2_500)}}, {{Row("r1", start: 1_000, end: 1_500)}}]}
+            """));
+        Assert.Equal("2 records", library.CountLabel);
+    }
+
     [Fact]
     public void TodayAsksForTheLatestFinishedMeetingThenOpensIt()
     {
