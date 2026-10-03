@@ -92,7 +92,7 @@ struct SettingsScreen: View {
                     // The sections are the scroll's targets, for the list to follow (below).
                     .scrollTargetLayout()
                     .frame(maxWidth: 760, alignment: .leading)
-                    .padding(.horizontal, 40)
+                    .modifier(SettingsMargins())
                     .padding(.vertical, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -142,6 +142,52 @@ struct SettingsScreen: View {
         guard let next, next != section else { return }
         followed = next
         section = next
+    }
+}
+
+/// The page's margins either side: 40 pt, and 24 in a column too narrow to spare them (the window
+/// at its smallest), so the sections keep the room their controls need there. Between the two the
+/// margin grows with the column, so the sections' width only ever grows as the window widens (a
+/// step would narrow them for a moment, and flip a picker from segments to a menu and back).
+private struct SettingsMargins: ViewModifier {
+    func body(content: Content) -> some View {
+        SettingsMarginsLayout { content }
+    }
+}
+
+struct SettingsMarginsLayout: Layout {
+    static let wide: CGFloat = 40
+    static let narrow: CGFloat = 24
+    /// The column's width, margins included, up to which the margins are narrow, and from which
+    /// they are wide.
+    static let narrowUpTo: CGFloat = 400
+    static let wideFrom: CGFloat = 440
+
+    static func margin(_ width: CGFloat?) -> CGFloat {
+        guard let width, width.isFinite else { return wide }
+        let progress = min(max((width - narrowUpTo) / (wideFrom - narrowUpTo), 0), 1)
+        return narrow + (wide - narrow) * progress
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let margin = Self.margin(proposal.width)
+        let inner = ProposedViewSize(
+            width: proposal.width.map { $0.isFinite ? max(0, $0 - 2 * margin) : $0 }, height: proposal.height)
+        let size = subviews.reduce(CGSize.zero) { size, subview in
+            let fitted = subview.sizeThatFits(inner)
+            return CGSize(width: max(size.width, fitted.width), height: max(size.height, fitted.height))
+        }
+        return CGSize(width: size.width + 2 * margin, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        // The margin for the width proposed, as measured; the bounds only place it.
+        let margin = Self.margin(proposal.width)
+        let inner = ProposedViewSize(
+            width: proposal.width.map { $0.isFinite ? max(0, $0 - 2 * margin) : $0 }, height: proposal.height)
+        for subview in subviews {
+            subview.place(at: CGPoint(x: bounds.minX + margin, y: bounds.minY), anchor: .topLeading, proposal: inner)
+        }
     }
 }
 
@@ -294,15 +340,18 @@ private struct DictationSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Dictation")
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Dictation").frame(width: 150, alignment: .leading)
-                Toggle("Dictation", isOn: Binding(get: { dictation.isOn }, set: { dictation.setOn($0) }))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    // Turned on mid-recording, the core would hold the keys the recorder listens for.
-                    .disabled(shortcuts.recording != nil)
-                Text(dictation.isOn ? "The keys below are Inkwell's" : "Off: the keys do what they did before")
-                    .foregroundStyle(Theme.secondaryText)
+            SettingColumns {
+                Text("Dictation")
+            } controls: {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Toggle("Dictation", isOn: Binding(get: { dictation.isOn }, set: { dictation.setOn($0) }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        // Turned on mid-recording, the core would hold the keys the recorder listens for.
+                        .disabled(shortcuts.recording != nil)
+                    Text(dictation.isOn ? "The keys below are Inkwell's" : "Off: the keys do what they did before")
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
             .font(Typography.body)
             .padding(.vertical, 5)
@@ -333,8 +382,8 @@ private struct DictationSection: View {
                     RecordShortcutButton(recorder: shortcuts, target: .dictation, what: "the dictation key")
                 }
                 KeyHint(text: "hold, speak, let go")
+                ShortcutMessage(recorder: shortcuts, target: .dictation)
             }
-            ShortcutMessage(recorder: shortcuts, target: .dictation)
             SettingRow(title: "Edit a selection") {
                 KeyControls {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -366,8 +415,8 @@ private struct DictationSection: View {
                     RecordShortcutButton(recorder: shortcuts, target: .edit, what: "the edit key")
                 }
                 KeyHint(text: "select text, hold, say what to change")
+                ShortcutMessage(recorder: shortcuts, target: .edit)
             }
-            ShortcutMessage(recorder: shortcuts, target: .edit)
             VStack(alignment: .leading, spacing: 4) {
                 Text(dictation.keyFailure ?? dictation.status)
                     .foregroundStyle(dictation.isProblem ? Theme.alert : Theme.secondaryText)
@@ -474,7 +523,8 @@ struct RecordShortcutButton: View {
 }
 
 /// What became of the last recording of a key: why it was refused, or a clash with a shortcut the
-/// app knows. VoiceOver hears it from the recorder when it happens, not each time this appears.
+/// app knows, under the key's hint. VoiceOver hears it from the recorder when it happens, not each
+/// time this appears.
 private struct ShortcutMessage: View {
     let recorder: ShortcutRecorderModel
     let target: ShortcutRecorderModel.Target
@@ -485,7 +535,6 @@ private struct ShortcutMessage: View {
                 .font(Typography.caption)
                 .foregroundStyle(message.isProblem ? Theme.alert : Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 162)
         }
     }
 }
@@ -516,10 +565,10 @@ private struct ModesSection: View {
                 Text("Your modes could not be read.").foregroundStyle(Theme.alert)
             }
             ForEach(modes.rows) { row in
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                SettingColumns {
                     Text(row.isDefault && modes.rows.count > 1 ? "Everywhere else" : row.name)
                         .font(.system(.body, weight: .semibold))
-                        .frame(width: 150, alignment: .leading)
+                } controls: {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
                             ForEach(row.traits, id: \.self) { Paper.Chip(text: $0) }
@@ -538,7 +587,6 @@ private struct ModesSection: View {
                             }
                         }
                     }
-                    Spacer(minLength: 0)
                 }
                 .padding(.vertical, 10)
                 .accessibilityElement(children: .combine)
@@ -586,8 +634,9 @@ private struct AISection: View {
             SectionTitle(text: "AI")
             LanguageModelRows(cloud: cloud)
                 .padding(.bottom, 6)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Polish my words").frame(width: 150, alignment: .leading)
+            SettingColumns {
+                Text("Polish my words")
+            } controls: {
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle(
                         "Polish my words",
@@ -608,8 +657,9 @@ private struct AISection: View {
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Summaries and Ask").frame(width: 150, alignment: .leading)
+            SettingColumns {
+                Text("Summaries and Ask")
+            } controls: {
                 VStack(alignment: .leading, spacing: 4) {
                     // Plain closures (the CI runner's Swift 6.3 crashes on some closure forms here).
                     Toggle(
@@ -679,8 +729,9 @@ private struct MeetingsSection: View {
     private func toggle(
         _ title: String, detail: String, isOn: Bool, set: @escaping @MainActor @Sendable (Bool) -> Void
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(title).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(title)
+        } controls: {
             VStack(alignment: .leading, spacing: 4) {
                 // A closure literal, not `set` itself: handing the main-actor closure straight to
                 // Binding's generic setter makes Swift 6.3 (the CI runner's Xcode 26.6) crash
@@ -700,8 +751,9 @@ private struct MeetingsSection: View {
     }
 
     private func fact(_ label: String, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label).font(.system(.body, weight: .semibold)).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(label).font(.system(.body, weight: .semibold))
+        } controls: {
             Text(text).font(Typography.body).foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -722,10 +774,10 @@ private struct ModelsSection: View {
             }
             ForEach(CatalogueModel.jobs, id: \.self) { job in
                 let line = catalogue.line(job)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                SettingColumns {
                     Text(CatalogueModel.title(job))
                         .font(.system(.body, weight: .semibold))
-                        .frame(width: 150, alignment: .leading)
+                } controls: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(line.engineText)
                             .foregroundStyle(line.engine == nil ? Theme.secondaryText : Theme.text)
@@ -848,8 +900,9 @@ private struct StorageSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Storage")
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Keep records").frame(width: 150, alignment: .leading)
+            SettingColumns {
+                Text("Keep records")
+            } controls: {
                 VStack(alignment: .leading, spacing: 4) {
                     Picker("Keep records", selection: Binding(
                         get: { meetings.retention ?? .forever }, set: { meetings.setRetention($0) }
@@ -894,8 +947,9 @@ private struct StorageSection: View {
     }
 
     private func row(_ label: String, _ bytes: Int64) -> some View {
-        HStack(spacing: 12) {
-            Text(label).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(label)
+        } controls: {
             Text(Self.size(bytes))
                 .foregroundStyle(Theme.secondaryText)
         }

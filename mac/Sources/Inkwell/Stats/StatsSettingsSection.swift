@@ -27,8 +27,9 @@ struct StatsSettingsSection: View {
                     .font(Typography.caption)
                     .foregroundStyle(Theme.alert)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Where").font(.system(.body, weight: .semibold)).frame(width: 150, alignment: .leading)
+            SettingColumns {
+                Text("Where").font(.system(.body, weight: .semibold))
+            } controls: {
                 Text("Counted on this Mac from your library. Nothing is sent, and nothing is compared with anyone.")
                     .font(Typography.body)
                     .foregroundStyle(Theme.secondaryText)
@@ -39,9 +40,10 @@ struct StatsSettingsSection: View {
     }
 
     private func row(_ title: String, detail: String, @ViewBuilder control: () -> some View) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(title).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(title)
                 .accessibilityHidden(true)
+        } controls: {
             VStack(alignment: .leading, spacing: 4) {
                 control()
                     .accessibilityHint(detail)
