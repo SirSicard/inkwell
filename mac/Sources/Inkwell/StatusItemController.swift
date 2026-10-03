@@ -1,5 +1,5 @@
-// The menu-bar item: Inkwell's one always-present surface. Its icon shows the state: a template
-// symbol, with a dot in your colour while you dictate, in theirs while a meeting records or blots,
+// The menu-bar item: Inkwell's one always-present surface. Its icon shows the state: the app's
+// mark as a template (StatusGlyph), with a dot in your colour while you dictate, in theirs while a meeting records or blots,
 // and in the alert colour when the far end has gone quiet. Its menu is rebuilt from the store each
 // time it opens (menuNeedsUpdate), and the dot follows the ink's state through observation: nothing
 // watches or polls while nothing changes.
@@ -38,9 +38,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
 
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "Inkwell")
-            image?.isTemplate = true
-            button.image = image
+            button.image = StatusGlyph.image()
             button.toolTip = "Inkwell"
             dot.wantsLayer = true
             dot.layer?.cornerRadius = 3.5
