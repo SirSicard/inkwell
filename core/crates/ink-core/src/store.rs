@@ -457,8 +457,7 @@ pub trait Store: Send + Sync {
     fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), StoreError>;
 
     /// Every record with its current transcript counted ([`RecordDigest`]): counts and times,
-    /// never text, newest first as [`records`](Self::records) lists them. What the Stats screen
-    /// counts from.
+    /// never text, in no promised order. What the Stats screen counts from.
     ///
     /// The numbers are always [`digest`](crate::stats::digest)'s. This default reads every
     /// transcript in the library, which grows with it; a store that can keep the digests (the

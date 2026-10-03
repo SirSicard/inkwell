@@ -1384,11 +1384,12 @@ fn digests_follow_every_record_and_its_current_transcript(store: &dyn Store) {
         )
         .unwrap();
 
-    let all = store.digests().unwrap();
+    let mut all = store.digests().unwrap();
+    // No order is promised.
+    all.sort_by_key(|d| std::cmp::Reverse(d.started_at_unix_ms));
     assert_eq!(
         all.iter().map(|d| &d.record).collect::<Vec<_>>(),
-        [&call, &dictation],
-        "newest first"
+        [&call, &dictation]
     );
     assert_eq!(all[1].kind, RecordKind::Dictation);
     assert_eq!(all[1].started_at_unix_ms, 10);
@@ -1404,7 +1405,10 @@ fn digests_follow_every_record_and_its_current_transcript(store: &dyn Store) {
     store
         .append_segments(&call, &[seg(Channel::Far, 2_000, "four more words here")])
         .unwrap();
-    assert_eq!(store.digests().unwrap()[0].transcript.far.words, 7);
+    let of_call = |all: Vec<ink_core::stats::RecordDigest>| {
+        all.into_iter().find(|d| d.record == call).unwrap()
+    };
+    assert_eq!(of_call(store.digests().unwrap()).transcript.far.words, 7);
     // So is the offline pass that replaces the transcript.
     store
         .supersede(
@@ -1415,11 +1419,11 @@ fn digests_follow_every_record_and_its_current_transcript(store: &dyn Store) {
             ],
         )
         .unwrap();
-    let after = store.digests().unwrap();
-    assert_eq!(after[0].transcript.mic_questions, 0);
-    assert_eq!(after[0].transcript.far.words, 6);
+    let after = of_call(store.digests().unwrap());
+    assert_eq!(after.transcript.mic_questions, 0);
+    assert_eq!(after.transcript.far.words, 6);
     assert_eq!(
-        after[0].transcript,
+        after.transcript,
         ink_core::stats::digest(&store.segments(&call).unwrap())
     );
     // And the delete.

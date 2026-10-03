@@ -22,6 +22,7 @@
 #![warn(missing_docs)]
 
 mod codec;
+mod digest;
 mod fts;
 pub mod import;
 mod schema;
@@ -44,6 +45,7 @@ use rusqlite::{
 
 use codec::{Fail, channel_at, channel_text, kind_at, kind_text, ms, ms_at, stretch};
 
+pub use digest::DIGEST_BATCH;
 pub use schema::SCHEMA_VERSION;
 
 /// How long a call waits for another process holding the write lock (a backup tool, a second
@@ -1271,6 +1273,14 @@ impl Store for SqliteStore {
                 .iter()
                 .try_for_each(|(key, value)| put_setting(conn, key, value))
         })
+    }
+
+    fn digests(&self) -> Result<Vec<ink_core::stats::RecordDigest>, StoreError> {
+        self.digests_kept()
+    }
+
+    fn commitment_states(&self) -> Result<Vec<ink_core::stats::CommitmentState>, StoreError> {
+        self.commitment_states_read()
     }
 
     fn unscrubbed(&self) -> bool {
