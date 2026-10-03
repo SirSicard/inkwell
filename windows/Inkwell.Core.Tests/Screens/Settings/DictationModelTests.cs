@@ -42,6 +42,20 @@ public class DictationModelTests
         Assert.Equal(before, sent.Commands.Count);
     }
 
+    /// <summary>Paused for a recording, dictation's line is not a problem, whatever it was before (the Mac's isProblem).</summary>
+    [Fact]
+    public void PausedForARecordingIsNotAProblem()
+    {
+        var sent = new Sent();
+        var dictation = new DictationModel(sent.Send, () => TwoHours);
+        dictation.Enable();
+        dictation.Apply(Ev.Of("""{"type":"dictation.off","reason":"needs_accessibility","message":"permission not granted: Accessibility","ref":"dictation:1"}"""));
+        Assert.True(dictation.IsProblem);
+        dictation.SuspendForRecording();
+        Assert.Equal("Dictation is paused while you record a shortcut.", dictation.Status);
+        Assert.False(dictation.IsProblem);
+    }
+
     [Fact]
     public void PickingAKeySavesItAndTheCoresAnswerIsWhatShows()
     {

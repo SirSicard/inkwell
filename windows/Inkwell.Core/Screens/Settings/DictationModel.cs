@@ -379,6 +379,11 @@ public sealed class DictationModel : ObservableModel
     {
         get
         {
+            // Paused for a recording: the line says so, and it is not a problem.
+            if (SuspendedForRecording)
+            {
+                return false;
+            }
             if (State is DictationState.Off off)
             {
                 return off.Reason != DictationOffReason.Disabled;
