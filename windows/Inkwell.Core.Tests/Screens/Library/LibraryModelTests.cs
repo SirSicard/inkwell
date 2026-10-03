@@ -169,6 +169,45 @@ public class LibraryModelTests
     }
 
     /// <summary>
+    /// A refusal still counts after a newer naming or deletion was sent: said on its own record
+    /// only, and a refused name can be sent again.
+    /// </summary>
+    [Fact]
+    public void AnEarlierRefusalStillCountsForNamingAndDeleting()
+    {
+        var (library, sent) = Model();
+        library.RefreshList();
+        library.Apply(Ev.Of($$"""
+            {"type":"library.records","ref":"{{RequestId(sent.Commands[^1])}}","more":false,"records":[
+              {{Row("r3", start: 3_000, end: 3_500)}}, {{Row("r2", start: 2_000, end: 2_500)}}, {{Row("r1", start: 1_000, end: 1_500)}}]}
+            """));
+        library.Open("r1");
+        library.Apply(RecordEvent(RequestId(sent.Commands[^1])));
+
+        library.NameSpeaker("spk1", "Robin Lee");
+        var first = RequestId(sent.Commands[^1]);
+        library.NameSpeaker("spk2", "Sam");
+        library.Apply(Ev.Of($$"""{"type":"command.failed","command":"speaker.name","id":"{{first}}","message":"the library is read-only"}"""));
+        Assert.Equal("the library is read-only", library.NamingFailure);
+        var before = sent.Commands.Count;
+        library.NameSpeaker("spk1", "Robin Lee"); // refused, so not taken as sent
+        Assert.Equal(before + 1, sent.Commands.Count);
+        Assert.Equal("Robin Lee", Fields(sent.Commands[^1]).GetProperty("name").GetString());
+
+        // Two deletions: the earlier one's refusal is said only on its own record.
+        library.DeleteRecord("r1");
+        var deleteR1 = RequestId(sent.Commands[^1]);
+        library.Open("r3");
+        library.Apply(RecordEvent(RequestId(sent.Commands[^1])));
+        library.DeleteRecord("r3");
+        var deleteR3 = RequestId(sent.Commands[^1]);
+        library.Apply(Ev.Of($$"""{"type":"command.failed","command":"record.delete","id":"{{deleteR1}}","message":"record r1 is still being recorded"}"""));
+        Assert.Null(library.DeleteFailure); // r3 is open
+        library.Apply(Ev.Of($$"""{"type":"command.failed","command":"record.delete","id":"{{deleteR3}}","message":"record r3 is still being finished"}"""));
+        Assert.Equal("record r3 is still being finished", library.DeleteFailure);
+    }
+
+    /// <summary>
     /// Deleting a record (the Mac's a4ebc89): record.delete once confirmed, and nothing moves until
     /// the core answers record.deleted. Then it leaves the list and the matches; the selection moves
     /// to the record below it in what the column shows (above when it was the last, or none); the

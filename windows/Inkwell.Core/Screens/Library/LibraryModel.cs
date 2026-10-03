@@ -119,7 +119,10 @@ public sealed class LibraryModel : ObservableModel
     /// </summary>
     private readonly Dictionary<string, string> _sentNames = new(StringComparer.Ordinal);
     /// <summary>The record the last record.delete asked about: its refusal is shown only on it.</summary>
-    private string? _deleting;
+    // The record each naming and deletion was about, by its command's id: a refusal counts even
+    // after a newer one was sent, and only on its own record.
+    private readonly Dictionary<string, string> _namingFor = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _deletingFor = new(StringComparer.Ordinal);
     // Every kind until a chip narrows it (the All chip).
     private RecordKind? _filter;
     private string _query = "";
@@ -458,7 +461,9 @@ public sealed class LibraryModel : ObservableModel
         }
         NamingFailure = null;
         _sentNames[label] = oneLine;
-        _send(new CoreCommand.SpeakerName(document.Record.Record, label, oneLine, RefFor(Slot.Speaker)));
+        var id = RefFor(Slot.Speaker);
+        _namingFor[id] = document.Record.Record;
+        _send(new CoreCommand.SpeakerName(document.Record.Record, label, oneLine, id));
         Changed();
     }
 
@@ -471,8 +476,9 @@ public sealed class LibraryModel : ObservableModel
     {
         ArgumentNullException.ThrowIfNull(record);
         DeleteFailure = null;
-        _deleting = record;
-        _send(new CoreCommand.RecordDelete(record, RefFor(Slot.Delete)));
+        var id = RefFor(Slot.Delete);
+        _deletingFor[id] = record;
+        _send(new CoreCommand.RecordDelete(record, id));
         Changed();
     }
 
@@ -561,6 +567,10 @@ public sealed class LibraryModel : ObservableModel
                     changed = true;
                     break;
                 case SpeakerNamed named:
+                    if (named.Ref is string namedRef)
+                    {
+                        _namingFor.Remove(namedRef);
+                    }
                     // The name shows wherever that record does: the open record, and Today's last
                     // meeting.
                     if (Document?.Record.Record == named.Record)
@@ -605,6 +615,26 @@ public sealed class LibraryModel : ObservableModel
 
     private bool Fail(CommandFailed failed)
     {
+        // Naming and deleting are not questions a newer one replaces: each refusal counts, stale
+        // or not, said only while its own record is open.
+        switch (SlotOf(failed.Id))
+        {
+            case Slot.Speaker:
+                if (_namingFor.Remove(failed.Id!, out var named) && Document?.Record.Record == named)
+                {
+                    NamingFailure = failed.Message;
+                }
+                // What was sent did not stick: the record's names are what stands, so the same
+                // name can be sent again.
+                _sentNames.Clear();
+                return true;
+            case Slot.Delete:
+                if (_deletingFor.Remove(failed.Id!, out var deleting) && Selected == deleting)
+                {
+                    DeleteFailure = failed.Message;
+                }
+                return true;
+        }
         switch (Current(failed.Id))
         {
             case Slot.List:
@@ -635,18 +665,6 @@ public sealed class LibraryModel : ObservableModel
             case Slot.StatsWeek:
                 Week = null;
                 WeekLoad = LibraryLoad.Failed;
-                return true;
-            case Slot.Delete:
-                // Only on the record it was about: another may be open by now.
-                if (Selected == _deleting)
-                {
-                    DeleteFailure = failed.Message;
-                }
-                return true;
-            case Slot.Speaker:
-                NamingFailure = failed.Message;
-                // What was sent did not stick: the record's names are what stands.
-                _sentNames.Clear();
                 return true;
             default:
                 return false;
