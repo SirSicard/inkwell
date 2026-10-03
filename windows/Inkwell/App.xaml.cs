@@ -237,6 +237,17 @@ public partial class App : Application
     private MenuFlyout TrayMenuFlyout()
     {
         var menu = new MenuFlyout();
+        // It opens in the icon's own window, outside the main window's tree: without this it takes
+        // Windows' mode, not the one Inkwell shows (Light while Windows is Dark, say). That window's
+        // backdrop follows Windows, so the menu gets the mode's own opaque background too.
+        if (theme is not null)
+        {
+            var style = new Style(typeof(MenuFlyoutPresenter));
+            style.Setters.Add(new Setter(FrameworkElement.RequestedThemeProperty, theme.Dark ? ElementTheme.Dark : ElementTheme.Light));
+            var background = GlowTheme.ColorOf(Inkwell.Core.Glow.GlowRgb.From(Inkwell.Core.Glow.GlowScheme.Palette(theme.Dark).Background));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, new Microsoft.UI.Xaml.Media.SolidColorBrush(background)));
+            menu.MenuFlyoutPresenterStyle = style;
+        }
         if (core is null || screens is null)
         {
             return menu;
