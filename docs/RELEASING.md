@@ -425,8 +425,8 @@ What the checks guarantee:
 anywhere: `logs\inkwell.log` in the library folder (`%LOCALAPPDATA%\Inkwell\logs`, or under
 `INK_DATA_DIR`), up to 1 MB, with the two before it as `inkwell.1.log` and `inkwell.2.log`
 (`windows/Inkwell.Core/LocalLog.cs`). It holds the shell's diagnostics (`ScreenLog`: what failed,
-by command name and fixed words, never a command's fields) and what the core writes to stderr at
-its default level, info. The core keeps what was said out of its lines; they can name files in
+by command name and fixed words, never a command's fields), the ink's (`InkLog`: the GPU it draws
+on, why it could not) and what the core writes to stderr at its default level, info. The core keeps what was said out of its lines; they can name files in
 the library and models folders, and quote an online provider's error. Of anything else written
 to stderr only the length is kept, and of a Rust panic only its first line (where, never the
 message). When an exception ends the app, it first writes

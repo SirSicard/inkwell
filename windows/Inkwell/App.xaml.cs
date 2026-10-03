@@ -78,6 +78,13 @@ public partial class App : Application
             return null;
         }
         ScreenLog.Also = message => log.Write("shell", message);
+        // The ink's lines (its GPU, its failures) too, still to the trace as before.
+        var trace = InkLog.Write;
+        InkLog.Write = line =>
+        {
+            trace(line);
+            log.Write("ink", line);
+        };
         if (!CoreLogCapture.Start(line =>
             {
                 var (source, text) = LocalLog.FromStderr(line);
