@@ -155,9 +155,9 @@ final class LiveIcon {
         if isAwake {
             surface.show(frame)
         } else {
-            // Shown on waking, with the rest.
+            // Shown on waking, with the rest (a surface starts at rest, so rest needs no drawing).
             surface.setAwake(false)
-            unshown = true
+            if frame.look != .rest { unshown = true }
         }
         reconcileTicker()
     }
@@ -334,11 +334,13 @@ final class DisplayWatch {
     /// that takes a suspension behaviour).
     private var lockRelay: LockRelay?
 
-    /// `distributed`: nil for the system's distributed centre; tests pass their own.
+    /// `distributed`: nil for the system's distributed centre; tests pass their own, or names of
+    /// their own (`lockNames`) to hear on the system's.
     init(
         workspace: NotificationCenter = NSWorkspace.shared.notificationCenter,
         app: NotificationCenter = NotificationCenter.default,
         distributed: NotificationCenter? = nil,
+        lockNames: (locked: Notification.Name, unlocked: Notification.Name) = (screenLocked, screenUnlocked),
         onChange: @escaping @MainActor (Bool) -> Void
     ) {
         self.onChange = onChange
@@ -355,7 +357,7 @@ final class DisplayWatch {
             watch(distributed, Self.screenLocked) { $0.locked = true }
             watch(distributed, Self.screenUnlocked) { $0.locked = false }
         } else {
-            lockRelay = LockRelay { [weak self] locked in
+            lockRelay = LockRelay(names: lockNames) { [weak self] locked in
                 guard let self else { return }
                 self.locked = locked
                 self.settle()
@@ -374,15 +376,14 @@ final class DisplayWatch {
     private final class LockRelay: NSObject {
         private let changed: @MainActor (Bool) -> Void
 
-        init(_ changed: @escaping @MainActor (Bool) -> Void) {
+        init(names: (locked: Notification.Name, unlocked: Notification.Name), _ changed: @escaping @MainActor (Bool) -> Void) {
             self.changed = changed
             super.init()
             let center = DistributedNotificationCenter.default()
             center.addObserver(
-                self, selector: #selector(locked), name: DisplayWatch.screenLocked, object: nil,
-                suspensionBehavior: .deliverImmediately)
+                self, selector: #selector(locked), name: names.locked, object: nil, suspensionBehavior: .deliverImmediately)
             center.addObserver(
-                self, selector: #selector(unlocked), name: DisplayWatch.screenUnlocked, object: nil,
+                self, selector: #selector(unlocked), name: names.unlocked, object: nil,
                 suspensionBehavior: .deliverImmediately)
         }
 

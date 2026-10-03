@@ -415,6 +415,28 @@ final class DisplayWatchTests: XCTestCase {
         XCTAssertEqual(said, [false, true, false, true], "another user in front, then back")
     }
 
+    /// The lock pair as the app hears it: on the system's distributed centre, delivered at once
+    /// and on the main thread (names of the test's own, so nothing else hears them).
+    func testItHearsTheLockOnTheSystemsCentre() {
+        let id = UUID().uuidString
+        let names = (locked: Notification.Name("inkwell.test.locked.\(id)"), unlocked: Notification.Name("inkwell.test.unlocked.\(id)"))
+        var said: [Bool] = []
+        let watch = DisplayWatch(workspace: NotificationCenter(), app: NotificationCenter(), lockNames: names) { said.append($0) }
+        let center = DistributedNotificationCenter.default()
+        func wait(for count: Int) {
+            let deadline = Date().addingTimeInterval(5)
+            while said.count < count && Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+        }
+        center.postNotificationName(names.locked, object: nil, userInfo: nil, deliverImmediately: true)
+        wait(for: 1)
+        XCTAssertFalse(watch.awake)
+        center.postNotificationName(names.unlocked, object: nil, userInfo: nil, deliverImmediately: true)
+        wait(for: 2)
+        XCTAssertEqual(said, [false, true])
+    }
+
     /// A missed unlock or wake never leaves the icon still for good: the app becoming active
     /// means someone is at an awake, unlocked screen.
     func testItFailsOpenWhenTheAppIsActive() {
@@ -832,6 +854,10 @@ final class StatusGlyphOverlayTests: XCTestCase {
                 defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close() }
+            // As if AppKit had dropped the layer's sublayer and its animation on the way.
+            overlay.breathing.removeAllAnimations()
+            overlay.breathing.removeFromSuperlayer()
+            overlay.breathing.contentsScale = 0.5
             window.contentView?.addSubview(overlay)
             XCTAssertTrue(overlay.breathing.superlayer === overlay.layer)
             XCTAssertEqual(overlay.breathing.contentsScale, window.backingScaleFactor)
