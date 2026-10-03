@@ -373,17 +373,17 @@ struct LanguageModelRows: View {
             }
         }
         // The key is the Mac account's, not the library's: Delete says so and asks first.
+        // The provider is handed to the actions (presenting:), not read back from @State when
+        // they run: the delete is of the key the question named.
         .confirmationDialog(
             cloud.deleteKeyTitle(deleting),
             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Delete Key", role: .destructive) {
-                if let deleting { cloud.deleteKey(deleting) }
-                deleting = nil
-            }
-            Button("Cancel", role: .cancel) { deleting = nil }
-        } message: {
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { id in
+            Button("Delete Key", role: .destructive) { cloud.deleteKey(id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
             Text(CloudModel.deleteKeyMessage)
         }
     }
@@ -398,8 +398,15 @@ struct GroqKeyRows: View {
     let polish: PolishModel
     /// The key being typed: sent once on Save, then cleared. Never kept anywhere else.
     @State private var key = ""
-    /// The other providers' rows are shown instead.
-    @State private var others = false
+    /// The other providers' rows are shown instead. Set when the rows are made, so a provider
+    /// already chosen or picked never flashes Groq's rows first.
+    @State private var others: Bool
+
+    init(cloud: CloudModel, polish: PolishModel) {
+        self.cloud = cloud
+        self.polish = polish
+        _others = State(initialValue: cloud.firstRunStartsOnOthers)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -425,8 +432,8 @@ struct GroqKeyRows: View {
             }
         }
         .onAppear {
+            // Nothing chosen or picked: Groq goes in the picker (the rows start on it).
             cloud.suggest("groq")
-            others = cloud.firstRunStartsOnOthers
         }
         .onChange(of: cloud.loaded) {
             // Opened before the providers were read: Groq goes in the picker once they are.

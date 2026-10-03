@@ -618,7 +618,7 @@ private struct ModelsSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Paper.Eyebrow(text: "Downloadable")
                     ForEach(catalogue.models, id: \.id) { model in
-                        ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: true)
+                        ModelDownloadRow(catalogue: catalogue, model: model)
                     }
                     Text("Nothing is downloaded until you press Download. Downloads run one at a time.")
                         .font(Typography.caption)
@@ -637,12 +637,11 @@ private struct ModelsSection: View {
 }
 
 /// A catalogue model: its name, licence, size and where it comes from, and its download: a
-/// Download button (when `offersDownload`) while it is not on this Mac, its bar while it downloads,
-/// and why it failed, with Retry. Settings > Models and the first run's Models step list these.
+/// Download button while it is not on this Mac, its bar while it downloads,
+/// and why it failed, with Retry. Settings > Models lists these (the first run's step shows choices: ModelChoices.swift).
 struct ModelDownloadRow: View {
     let catalogue: CatalogueModel
     let model: CatalogueEntry
-    let offersDownload: Bool
 
     var body: some View {
         let name = CatalogueModel.name(model.id)
@@ -687,10 +686,8 @@ struct ModelDownloadRow: View {
         case .installed:
             Text("On this Mac").font(Typography.caption).foregroundStyle(Theme.secondaryText)
         case .notInstalled:
-            if offersDownload {
-                Button("Download") { catalogue.download([model.id]) }
-                    .accessibilityLabel("Download \(name), \(facts)")
-            }
+            Button("Download") { catalogue.download([model.id]) }
+                .accessibilityLabel("Download \(name), \(facts)")
         case .waiting:
             Text("Waiting").font(Typography.caption).foregroundStyle(Theme.secondaryText)
         case .downloading(let progress?):
