@@ -81,6 +81,8 @@ public sealed class LibraryModel : ObservableModel
         StatsWeek,
         /// <summary>A name given to one of the open record's speakers.</summary>
         Speaker,
+        /// <summary>A record the user deleted.</summary>
+        Delete,
     }
 
     private static readonly Dictionary<Slot, string> SlotNames = new()
@@ -94,6 +96,7 @@ public sealed class LibraryModel : ObservableModel
         [Slot.StatsDay] = "statsDay",
         [Slot.StatsWeek] = "statsWeek",
         [Slot.Speaker] = "speaker",
+        [Slot.Delete] = "delete",
     };
 
     private static readonly Dictionary<string, Slot> SlotsByName =
@@ -115,6 +118,8 @@ public sealed class LibraryModel : ObservableModel
     /// saved, before the record is read again. Forgotten when one fails, and with the record.
     /// </summary>
     private readonly Dictionary<string, string> _sentNames = new(StringComparer.Ordinal);
+    /// <summary>The record the last record.delete asked about: its refusal is shown only on it.</summary>
+    private string? _deleting;
     // Every kind until a chip narrows it (the All chip).
     private RecordKind? _filter;
     private string _query = "";
@@ -212,6 +217,12 @@ public sealed class LibraryModel : ObservableModel
 
     /// <summary>Why the last name given to a speaker was not saved (the core's words), until the next try or another record.</summary>
     public string? NamingFailure { get; private set; }
+
+    /// <summary>Why the record the user deleted was not deleted (the core's words), on that record, until the next try.</summary>
+    public string? DeleteFailure { get; private set; }
+
+    /// <summary>What the last deletion left on this PC, when it left anything, until another record opens.</summary>
+    public string? DeletionNote { get; private set; }
 
     /// <summary>Today: the latest finished meeting, whole.</summary>
     public RecordDocument? LastMeeting { get; private set; }
@@ -379,6 +390,8 @@ public sealed class LibraryModel : ObservableModel
         Document = null;
         OpenFailure = null;
         NamingFailure = null;
+        DeleteFailure = null;
+        DeletionNote = null;
         _sentNames.Clear();
         ReplacePlayer(null);
         _send(new CoreCommand.RecordOpen(record, RefFor(Slot.Open)));
@@ -449,6 +462,28 @@ public sealed class LibraryModel : ObservableModel
         Changed();
     }
 
+    /// <summary>
+    /// Deletes <paramref name="record"/> whole: asked only once the user confirmed
+    /// (DeletionWarning). Nothing moves until the core says it is gone (record.deleted); a refusal
+    /// (a record still being recorded or finished) is said on that record (DeleteFailure).
+    /// </summary>
+    public void DeleteRecord(string record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        DeleteFailure = null;
+        _deleting = record;
+        _send(new CoreCommand.RecordDelete(record, RefFor(Slot.Delete)));
+        Changed();
+    }
+
+    /// <summary>What the confirmation says goes with a record of <paramref name="kind"/>, and that it can't be undone.</summary>
+    public static string DeletionWarning(RecordKind kind) => kind switch
+    {
+        RecordKind.Meeting => "Its audio, transcript, notes and summary, and what's owed from it, are deleted from this PC.",
+        RecordKind.Dictation => "Its words are deleted from this PC.",
+        _ => "Its transcript, notes and summary, and what's owed from it, are deleted from this PC. The file you imported stays where it is.",
+    } + " This can't be undone.";
+
     /// <summary>Puts the playhead at <paramref name="ms"/> (a chip, a line, a search hit) and plays from there.</summary>
     public void PlayFrom(long ms, bool start = true)
     {
@@ -518,6 +553,12 @@ public sealed class LibraryModel : ObservableModel
                     break;
                 case CommandFailed failed:
                     changed |= Fail(failed);
+                    break;
+                case RecordDeleted deleted:
+                    Removed(deleted);
+                    // Today's counts and its last meeting may have changed.
+                    libraryChanged = true;
+                    changed = true;
                     break;
                 case SpeakerNamed named:
                     // The name shows wherever that record does: the open record, and Today's last
@@ -595,6 +636,13 @@ public sealed class LibraryModel : ObservableModel
                 Week = null;
                 WeekLoad = LibraryLoad.Failed;
                 return true;
+            case Slot.Delete:
+                // Only on the record it was about: another may be open by now.
+                if (Selected == _deleting)
+                {
+                    DeleteFailure = failed.Message;
+                }
+                return true;
             case Slot.Speaker:
                 NamingFailure = failed.Message;
                 // What was sent did not stick: the record's names are what stands.
@@ -603,6 +651,53 @@ public sealed class LibraryModel : ObservableModel
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// A record is gone: out of the list and the matches, out of Today, and the selection moves to
+    /// the record below it in what the column shows (the matches while searching, else the list;
+    /// above when it was the last), or to none. What it left behind is said until another record
+    /// opens.
+    /// </summary>
+    private void Removed(RecordDeleted deleted)
+    {
+        var gone = deleted.Record;
+        List<string> Shown() => (IsSearching ? Hits.Select(h => h.Record) : Records.Select(r => r.Record)).Distinct().ToList();
+        var index = Shown().IndexOf(gone);
+        Records = Records.Where(r => r.Record != gone).ToList();
+        Hits = Hits.Where(h => h.Record != gone).ToList();
+        if (LastMeeting?.Record.Record == gone)
+        {
+            LastMeeting = null;
+            // Asked for again (the library changed): not "no meetings yet" meanwhile.
+            LastMeetingLoad = LibraryLoad.Loading;
+        }
+        if (Selected == gone)
+        {
+            var rest = Shown();
+            if (index >= 0 && rest.Count > 0)
+            {
+                Open(rest[Math.Min(index, rest.Count - 1)]);
+            }
+            else
+            {
+                Selected = null;
+                Document = null;
+                OpenFailure = null;
+                _pendingSeek = null;
+                ReplacePlayer(null);
+            }
+        }
+        var left = new List<string>();
+        if (!deleted.Scrubbed)
+        {
+            left.Add("its words are still in the library's files while another app reads them, and Inkwell clears them as soon as it can");
+        }
+        if (deleted.AudioLeft)
+        {
+            left.Add("its recording couldn't be removed from the library's folder");
+        }
+        DeletionNote = left.Count == 0 ? null : $"Deleted, but {string.Join(", and ", left)}.";
     }
 
     private bool Receive(LibraryRecords answer)

@@ -25,11 +25,22 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <Grid Padding="6,0">
+            <Grid Padding="6,0" RowSpacing="6">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <!-- What the last deletion left on this PC, until another record opens. -->
+                <TextBlock
+                    x:Name="DeletionNote"
+                    Grid.Row="1"
+                    Grid.ColumnSpan="2"
+                    Style="{StaticResource InkCaptionStyle}"
+                    Visibility="Collapsed" />
                 <TextBlock
                     x:Name="ColumnTitle"
                     AutomationProperties.HeadingLevel="Level1"

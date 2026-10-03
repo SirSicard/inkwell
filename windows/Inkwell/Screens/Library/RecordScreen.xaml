@@ -36,6 +36,8 @@
                         <TextBlock x:Name="RecordLine" Style="{StaticResource InkTimestampStyle}" TextWrapping="Wrap" />
                         <!-- A copy the clipboard refused (another app holding it). -->
                         <TextBlock x:Name="CopyFailure" Style="{StaticResource InkAlertTextStyle}" Visibility="Collapsed" />
+                        <!-- Why this record was not deleted, until the next try. -->
+                        <TextBlock x:Name="DeleteFailureText" Style="{StaticResource InkAlertTextStyle}" Visibility="Collapsed" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
                         <Button
@@ -59,6 +61,9 @@
                                 <MenuFlyout Placement="BottomEdgeAlignedRight">
                                     <MenuFlyoutItem Click="OnCopyTranscript" Text="Copy transcript" />
                                     <MenuFlyoutItem x:Name="CopySummaryItem" Click="OnCopySummary" Text="Copy summary" />
+                                    <!-- Destructive, last, after a separator; asks first. -->
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem Click="OnDeleteRecord" Foreground="{ThemeResource InkAlertBrush}" Text="Delete Record…" />
                                 </MenuFlyout>
                             </Button.Flyout>
                         </Button>

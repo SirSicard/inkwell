@@ -168,6 +168,109 @@ public class LibraryModelTests
         Assert.Null(library.NamingFailure);
     }
 
+    /// <summary>
+    /// Deleting a record (the Mac's a4ebc89): record.delete once confirmed, and nothing moves until
+    /// the core answers record.deleted. Then it leaves the list and the matches; the selection moves
+    /// to the record below it in what the column shows (above when it was the last, or none); the
+    /// list and Today are read again; what was left behind is said until another record opens; a
+    /// refusal is said only on the record it was about.
+    /// </summary>
+    [Fact]
+    public void ADeletedRecordLeavesOnlyWhenTheCoreSaysAndTheSelectionMovesOn()
+    {
+        var (library, sent) = Model();
+        library.RefreshList();
+        library.Apply(Ev.Of($$"""
+            {"type":"library.records","ref":"{{RequestId(sent.Commands[^1])}}","more":false,"records":[
+              {{Row("r3", start: 3_000, end: 3_500)}}, {{Row("r2", start: 2_000, end: 2_500)}}, {{Row("r1", start: 1_000, end: 1_500)}}]}
+            """));
+        library.Open("r2");
+        library.Apply(RecordEvent(RequestId(sent.Commands[^1])));
+
+        library.DeleteRecord("r2");
+        var delete = Fields(sent.Commands[^1]);
+        Assert.Equal("record.delete", delete.GetProperty("cmd").GetString());
+        Assert.Equal("r2", delete.GetProperty("record").GetString());
+        Assert.Equal(["r3", "r2", "r1"], library.Records.Select(r => r.Record)); // nothing moves yet
+        Assert.Equal("r2", library.Selected);
+
+        var before = sent.Commands.Count;
+        library.Apply(Ev.Of($$"""{"type":"record.deleted","record":"r2","kind":"meeting","audio_left":false,"scrubbed":true,"ref":"{{delete.GetProperty("id").GetString()}}"}"""));
+        Assert.Equal(["r3", "r1"], library.Records.Select(r => r.Record));
+        Assert.Equal("r1", library.Selected); // the one below it
+        var asked = sent.Commands.Skip(before).Select(Cmd).ToList();
+        Assert.Contains("record.open", asked);
+        Assert.Contains("records.list", asked);
+        Assert.Contains("library.stats", asked);
+        Assert.Null(library.DeletionNote);
+
+        // The last one: the selection moves up. Words still in the files and audio left are said.
+        library.Apply(RecordEvent(RequestId(sent.Commands.Last(c => Cmd(c) == "record.open"))));
+        library.DeleteRecord("r1");
+        library.Apply(Ev.Of("""{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":true,"scrubbed":false}"""));
+        Assert.Equal("r3", library.Selected);
+        Assert.Equal(
+            "Deleted, but its words are still in the library's files while another app reads them, and Inkwell clears them as soon as it can, and its recording couldn't be removed from the library's folder.",
+            library.DeletionNote);
+        library.Open("r3");
+        Assert.Null(library.DeletionNote);
+
+        // The only one left: none selected.
+        library.DeleteRecord("r3");
+        library.Apply(Ev.Of("""{"type":"record.deleted","record":"r3","kind":"meeting","audio_left":false,"scrubbed":true}"""));
+        Assert.Null(library.Selected);
+        Assert.Null(library.Document);
+    }
+
+    /// <summary>A refusal (a record still recording, say) is said on that record only; the confirmation names what goes.</summary>
+    [Fact]
+    public void ARefusedDeletionIsSaidOnThatRecordOnly()
+    {
+        var (library, sent) = Model();
+        library.Open("r1");
+        library.DeleteRecord("r1");
+        var id = RequestId(sent.Commands[^1]);
+        library.Apply(Ev.Of($$"""{"type":"command.failed","command":"record.delete","id":"{{id}}","message":"the record is still being recorded"}"""));
+        Assert.Equal("the record is still being recorded", library.DeleteFailure);
+        library.Open("r2");
+        Assert.Null(library.DeleteFailure);
+        library.DeleteRecord("r1");
+        var other = RequestId(sent.Commands[^1]);
+        library.Apply(Ev.Of($$"""{"type":"command.failed","command":"record.delete","id":"{{other}}","message":"no"}"""));
+        Assert.Null(library.DeleteFailure); // r2 is shown, not r1
+
+        Assert.Equal(
+            "Its audio, transcript, notes and summary, and what's owed from it, are deleted from this PC. This can't be undone.",
+            LibraryModel.DeletionWarning(RecordKind.Meeting));
+        Assert.Equal("Its words are deleted from this PC. This can't be undone.", LibraryModel.DeletionWarning(RecordKind.Dictation));
+        Assert.EndsWith("The file you imported stays where it is. This can't be undone.", LibraryModel.DeletionWarning(RecordKind.FileImport), StringComparison.Ordinal);
+    }
+
+    /// <summary>While searching, the deleted record leaves the matches, and the selection moves within them; Today's last meeting goes and is asked for again.</summary>
+    [Fact]
+    public void ADeletedRecordLeavesTheMatchesAndToday()
+    {
+        var (library, sent) = Model();
+        library.RefreshToday();
+        library.Apply(Ev.Of($$"""
+            {"type":"library.records","ref":"{{RequestId(sent.Commands[0])}}","more":false,"kind":"meeting","records":[{{Row("r1", start: 5_000, end: 6_000)}}]}
+            """));
+        library.Apply(RecordEvent(RequestId(sent.Commands[^1])));
+        Assert.Equal("r1", library.LastMeeting?.Record.Record);
+        library.Query = "launch";
+        library.Apply(Ev.Of($$"""
+            {"type":"library.search","ref":"{{RequestId(sent.Commands[^1])}}","query":"launch","hits":[
+              {"record":"r1","started_at_unix_ms":5000,"start_ms":0,"snippet":"launch"},
+              {"record":"r9","started_at_unix_ms":9000,"start_ms":0,"snippet":"launch"}]}
+            """));
+        library.Open("r1");
+        library.Apply(Ev.Of("""{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"""));
+        Assert.Equal(["r9"], library.Hits.Select(h => h.Record));
+        Assert.Equal("r9", library.Selected);
+        Assert.Null(library.LastMeeting);
+        Assert.Equal(LibraryLoad.Loading, library.LastMeetingLoad); // asked for again, not "no meetings yet"
+    }
+
     /// <summary>A name's length as the core counts it: Unicode scalars, on one line.</summary>
     [Fact]
     public void ANamesLengthIsCountedAsTheCoreCountsIt()

@@ -55,6 +55,8 @@ public class OwedModelTests
         Assert.Equal(new CoreCommand.CommitmentsList(), sent.Commands[^1]); // listed again from the core
         owed.Apply(Ev.Of("""{"type":"meeting.commitments","record":"r2","filed":2,"merged":0}"""));
         Assert.Equal(3, sent.Commands.Count); // a meeting filed new ones: listed again
+        owed.Apply(Ev.Of("""{"type":"record.deleted","record":"r2","kind":"meeting","audio_left":false,"scrubbed":true}"""));
+        Assert.Equal(4, sent.Commands.Count); // a deleted record took its promises: listed again
     }
 
     /// <summary>Windows only: a list the core could not read says so, never loading or empty (the Mac keeps its spinner).</summary>

@@ -54,6 +54,8 @@ public sealed partial class RecordScreen : UserControl
         var document = _library.Document;
         NamingFailureText.Text = _library.NamingFailure is string naming ? $"The speaker's name wasn't saved: {naming}" : "";
         NamingFailureText.Visibility = _library.NamingFailure is null ? Visibility.Collapsed : Visibility.Visible;
+        DeleteFailureText.Text = _library.DeleteFailure is string refused ? $"This record wasn't deleted: {refused}" : "";
+        DeleteFailureText.Visibility = _library.DeleteFailure is null ? Visibility.Collapsed : Visibility.Visible;
         var failure = document is null ? _library.OpenFailure : null;
         var opening = document is null && failure is null && _library.Selected is not null;
         Shown.Visibility = document is null ? Visibility.Collapsed : Visibility.Visible;
@@ -256,6 +258,41 @@ public sealed partial class RecordScreen : UserControl
         };
         Update();
         flyout.ShowAt(anchor);
+    }
+
+    /// <summary>
+    /// Delete Record…: a confirmation that says what goes with this kind of record and that it
+    /// can't be undone; only its Delete Record sends anything. Cancel is the default.
+    /// </summary>
+    private async void OnDeleteRecord(object sender, RoutedEventArgs e)
+    {
+        if (_library.Document is not { } document)
+        {
+            return;
+        }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            // A dialog does not take the window's theme: the appearance shown now.
+            RequestedTheme = ActualTheme,
+            Title = "Delete this record?",
+            Content = new TextBlock { Text = LibraryModel.DeletionWarning(document.Record.Kind), TextWrapping = TextWrapping.Wrap, MaxWidth = 420 },
+            PrimaryButtonText = "Delete Record",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        try
+        {
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                _library.DeleteRecord(document.Record.Record);
+            }
+        }
+        catch (Exception failure)
+        {
+            // Another dialog is open (only one can be): nothing is deleted.
+            ScreenLog.System.Write($"the delete confirmation could not open ({failure.GetType().Name})");
+        }
     }
 
     private void OnLineClick(object sender, ItemClickEventArgs e)

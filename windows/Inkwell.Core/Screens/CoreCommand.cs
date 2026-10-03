@@ -197,6 +197,17 @@ public abstract record CoreCommand
             [("cmd", Name), ("record", Record), ("speaker", Speaker), ("name", Given), ("id", Ref)];
     }
 
+    /// <summary>
+    /// Deletes a record whole, only after the user confirmed it. Answered by record.deleted with
+    /// the ref, or a command.failed with it as the id (a record still live is refused).
+    /// </summary>
+    public sealed record RecordDelete(string Record, string Ref) : CoreCommand
+    {
+        public override string Name => "record.delete";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("record", Record), ("id", Ref)];
+    }
+
     public sealed record LibraryStats(long SinceUnixMs, string Ref) : CoreCommand
     {
         public override string Name => "library.stats";
