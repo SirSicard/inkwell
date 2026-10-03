@@ -307,68 +307,66 @@ private struct DictationSection: View {
             .font(Typography.body)
             .padding(.vertical, 5)
             .accessibilityElement(children: .contain)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Dictate").frame(width: 150, alignment: .leading)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Picker("Dictate", selection: Binding(get: { dictation.key }, set: { dictation.setKey($0) })) {
-                        ForEach(DictationModel.keys) { key in
-                            Text(key.name).tag(key.token)
+            SettingRow(title: "Dictate") {
+                KeyControls {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Picker("Dictate", selection: Binding(get: { dictation.key }, set: { dictation.setKey($0) })) {
+                            ForEach(DictationModel.keys) { key in
+                                Text(key.name).tag(key.token)
+                            }
+                            // A recorded key is not a quick pick: it is listed so the picker shows it.
+                            if !DictationModel.keys.contains(where: { $0.token == dictation.key }),
+                               let recorded = DictationModel.key(dictation.key) {
+                                Text(recorded.cap).accessibilityLabel(recorded.name).tag(dictation.key)
+                            }
                         }
-                        // A recorded key is not a quick pick: it is listed so the picker shows it.
-                        if !DictationModel.keys.contains(where: { $0.token == dictation.key }),
-                           let recorded = DictationModel.key(dictation.key) {
-                            Text(recorded.cap).accessibilityLabel(recorded.name).tag(dictation.key)
-                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        .disabled(shortcuts.recording != nil)
+                        Key(text: DictationModel.cap(dictation.key))
+                            .accessibilityLabel(DictationModel.key(dictation.key)?.name ?? dictation.key)
                     }
-                    .labelsHidden()
                     .fixedSize()
-                    .disabled(shortcuts.recording != nil)
-                    Key(text: DictationModel.cap(dictation.key))
-                        .accessibilityLabel(DictationModel.key(dictation.key)?.name ?? dictation.key)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { dictateKeysWidth = $0 }
+                    .frame(minWidth: keysColumn, alignment: .leading)
+                } record: {
+                    RecordShortcutButton(recorder: shortcuts, target: .dictation, what: "the dictation key")
                 }
-                .fixedSize()
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { dictateKeysWidth = $0 }
-                .frame(minWidth: keysColumn, alignment: .leading)
-                RecordShortcutButton(recorder: shortcuts, target: .dictation, what: "the dictation key")
-                Text("hold, speak, let go").foregroundStyle(Theme.secondaryText)
+                KeyHint(text: "hold, speak, let go")
             }
-            .font(Typography.body)
-            .padding(.vertical, 5)
-            .accessibilityElement(children: .contain)
             ShortcutMessage(recorder: shortcuts, target: .dictation)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Edit a selection").frame(width: 150, alignment: .leading)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Picker("Edit a selection", selection: Binding(
-                        get: { dictation.editKey ?? "off" },
-                        set: { screens.chooseEditKey($0 == "off" ? nil : $0) }
-                    )) {
-                        Text("Off").tag("off")
-                        ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
-                            Text(key.name).tag(key.token)
+            SettingRow(title: "Edit a selection") {
+                KeyControls {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Picker("Edit a selection", selection: Binding(
+                            get: { dictation.editKey ?? "off" },
+                            set: { screens.chooseEditKey($0 == "off" ? nil : $0) }
+                        )) {
+                            Text("Off").tag("off")
+                            ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
+                                Text(key.name).tag(key.token)
+                            }
+                            if let edit = dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }),
+                               let recorded = DictationModel.key(edit) {
+                                Text(recorded.cap).accessibilityLabel(recorded.name).tag(edit)
+                            }
                         }
-                        if let edit = dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }),
-                           let recorded = DictationModel.key(edit) {
-                            Text(recorded.cap).accessibilityLabel(recorded.name).tag(edit)
+                        .labelsHidden()
+                        .fixedSize()
+                        .disabled(shortcuts.recording != nil)
+                        if let edit = dictation.editKey, dictation.editKeyProblem == nil {
+                            Key(text: DictationModel.cap(edit))
+                                .accessibilityLabel(DictationModel.key(edit)?.name ?? edit)
                         }
                     }
-                    .labelsHidden()
                     .fixedSize()
-                    .disabled(shortcuts.recording != nil)
-                    if let edit = dictation.editKey, dictation.editKeyProblem == nil {
-                        Key(text: DictationModel.cap(edit))
-                            .accessibilityLabel(DictationModel.key(edit)?.name ?? edit)
-                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { editKeysWidth = $0 }
+                    .frame(minWidth: keysColumn, alignment: .leading)
+                } record: {
+                    RecordShortcutButton(recorder: shortcuts, target: .edit, what: "the edit key")
                 }
-                .fixedSize()
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { editKeysWidth = $0 }
-                .frame(minWidth: keysColumn, alignment: .leading)
-                RecordShortcutButton(recorder: shortcuts, target: .edit, what: "the edit key")
-                Text("select text, hold, say what to change").foregroundStyle(Theme.secondaryText)
+                KeyHint(text: "select text, hold, say what to change")
             }
-            .font(Typography.body)
-            .padding(.vertical, 5)
-            .accessibilityElement(children: .contain)
             ShortcutMessage(recorder: shortcuts, target: .edit)
             VStack(alignment: .leading, spacing: 4) {
                 Text(dictation.keyFailure ?? dictation.status)
@@ -405,12 +403,54 @@ private struct DictationSection: View {
     private var keysColumn: CGFloat { max(dictateKeysWidth, editKeysWidth) }
 }
 
+/// A key row's controls: the picker and its cap, then Record a shortcut…, on one line where the
+/// row has room, else the button under them, never a label cut short. The line is measured with
+/// the button's longest label, so both rows choose alike (their key slots are as wide) and the
+/// buttons stay in one column, and pressing the button never moves it to the next line.
+struct KeyControls<Keys: View, Record: View>: View {
+    @ViewBuilder var keys: Keys
+    @ViewBuilder var record: Record
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                keys
+                ZStack(alignment: .leading) {
+                    Button(RecordShortcutButton.recordingTitle) {}
+                        .hidden()
+                        .accessibilityHidden(true)
+                    record
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                keys
+                record
+            }
+        }
+    }
+}
+
+/// What a key does, under its controls, as the other rows' details are.
+private struct KeyHint: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(Typography.caption)
+            .foregroundStyle(Theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// "Record a shortcut…", and while recording, what to do and how to stop.
-private struct RecordShortcutButton: View {
+struct RecordShortcutButton: View {
     let recorder: ShortcutRecorderModel
     let target: ShortcutRecorderModel.Target
     /// "the dictation key", for VoiceOver.
     let what: String
+
+    /// The title while recording, the longest it has.
+    static let recordingTitle = "Press the keys\u{2026} (Esc cancels)"
 
     private var isRecording: Bool { recorder.recording == target }
     private var isChecking: Bool { recorder.checking?.target == target }
@@ -418,12 +458,9 @@ private struct RecordShortcutButton: View {
     var body: some View {
         // Pressed while recording or checking, it cancels: a check the core never answers is
         // given up after a few seconds anyway (ShortcutRecorderModel.checkTimeout).
-        Button(isRecording ? "Press the keys\u{2026} (Esc cancels)" : isChecking ? "Cancel" : "Record a shortcut\u{2026}") {
+        Button(isRecording ? Self.recordingTitle : isChecking ? "Cancel" : "Record a shortcut\u{2026}") {
             recorder.toggle(target)
         }
-        // Whole where the row has room, at the column both rows share: the hint beside it wraps
-        // first.
-        .layoutPriority(1)
         .accessibilityLabel(isRecording
             ? "Recording a shortcut for \(what)"
             : isChecking ? "Cancel checking the shortcut for \(what)" : "Record a shortcut for \(what)")
