@@ -4,6 +4,7 @@ import AppKit
 import Foundation
 import InkBridge
 import InkRenderer
+import SwiftUI
 import XCTest
 
 @testable import Inkwell
@@ -48,6 +49,32 @@ final class GlowThemeTests: XCTestCase {
         theme.apply(event(#"{"type":"setting.value","key":"appearance.mode"}"#))
         XCTAssertEqual(theme.settings.mode, .system)
         XCTAssertEqual(applied.last, .some(nil), "system: the app follows the system again")
+    }
+
+    /// The speaker-name popover and polish's consent alert drew as dark glass over a Light window.
+    /// A window (with its sheets) and a popover that follow the app's mode pin their own
+    /// appearance to it, so what they present follows the window, not whatever else the app or
+    /// the system holds: here the system's appearance is left alone (applyAppearance does
+    /// nothing), and the window still reads the mode. Match system pins nothing.
+    func testAWindowThatFollowsTheModePinsItsAppearanceToIt() {
+        let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
+        let hosting = NSHostingController(rootView: Text("Inkwell").followsAppMode().environment(theme))
+        let window = NSWindow(contentViewController: hosting)
+        defer { window.close() }
+        func shown() -> NSAppearance.Name? {
+            hosting.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            return window.appearance?.name
+        }
+        for (mode, name) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua), ("light", .aqua)] {
+            theme.apply(event(#"{"type":"setting.value","key":"appearance.mode","value":"\#(mode)"}"#))
+            XCTAssertEqual(shown(), name, mode)
+        }
+        theme.apply(event(#"{"type":"setting.value","key":"appearance.mode","value":"system"}"#))
+        XCTAssertNil(shown(), "Match system: the window follows the app, and the app the system")
+        XCTAssertEqual(theme.appearance?.name, nil)
+        theme.apply(event(#"{"type":"setting.value","key":"appearance.mode","value":"dark"}"#))
+        XCTAssertEqual(theme.appearance?.name, .darkAqua, "what an app-modal alert is given")
     }
 
     func testPickingAPresetDropsThatModesOwnColours() {

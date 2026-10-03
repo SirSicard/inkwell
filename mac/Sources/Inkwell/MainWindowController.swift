@@ -25,7 +25,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let upNext = UpNextModel(access: EventKitCalendar(), events: events)
         events.observe { [weak upNext] in upNext?.refresh() }
         self.events = events
-        let root = ShellView(router: router).environment(store).environment(ink).environment(updates)
+        // The window's appearance is the mode's (followsAppMode), so its sheets, alerts and
+        // popovers follow the window rather than only the app's appearance.
+        let root = ShellView(router: router).followsAppMode().environment(store).environment(ink).environment(updates)
             .environment(screens).environment(library).environment(upNext).environment(router)
             .environment(presence).environment(screens.theme)
             // The accent is the button fill (text-coloured), never the system's: switches,

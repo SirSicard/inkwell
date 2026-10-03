@@ -210,6 +210,10 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
 - [ ] Each screen side by side with its board on the design canvas (Live meeting, Owed, Settings):
       same order of parts, same words, same use of the seal red. Note any difference: ______
 - [ ] Light and dark appearance: text stays readable everywhere, the sepia of "Them" included.
+- [ ] Inkwell in Light with the system in Dark (and Dark with the system in Light): the
+      speaker-name popover in a record, polish's consent alert (first run and Settings > AI),
+      "Delete this record?", "Delete the … key from your keychain?" and Help > Keyboard Shortcuts
+      all draw in Inkwell's mode, their text readable; none is dark glass over a Light window.
 - [ ] VoiceOver (Command-F5): every control on these screens is announced with a name; Owed's
       rings say "Mark done:" and the promise; permission cards say their state; the order follows
       the screen from top to bottom.

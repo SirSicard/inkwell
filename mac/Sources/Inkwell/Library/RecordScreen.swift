@@ -424,6 +424,8 @@ struct RecordLedgerRow: View {
                         SpeakerNameEditor(speaker: speaker, done: { naming = false }) { name in
                             rename(speaker.label, name)
                         }
+                        // Its glass and words in the app's mode (it drew dark over a Light window).
+                        .followsAppMode()
                     }
                     .padding(.leading, Self.stampWidth + Self.dotWidth + 2 * Self.spacing)
                     .padding(.top, Self.verticalPadding)

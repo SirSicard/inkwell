@@ -78,7 +78,8 @@ struct ShellView: View {
             get: { screens.onboarding.showing },
             set: { if !$0 { screens.onboarding.sheetDismissed() } }
         )) {
-            OnboardingView()
+            // The sheet pins its own appearance too: polish's consent alert is presented from it.
+            OnboardingView().followsAppMode()
         }
     }
 }
