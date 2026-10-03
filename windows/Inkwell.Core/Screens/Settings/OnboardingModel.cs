@@ -258,8 +258,13 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string ReadyTitle = "Ready";
 
-    public static string ReadyLine(string keyName) =>
-        $"Hold {keyName}, say something, and let go. Inkwell lives in the notification area; this window opens from there.";
+    /// <summary>
+    /// The last step's line: how to dictate, or, with no speech model installed, that one is needed
+    /// (never "Hold … and speak" when nothing could be written down).
+    /// </summary>
+    public static string ReadyLine(string keyName, bool noSpeechModel = false) => noSpeechModel
+        ? "Inkwell needs a speech model before it can write anything down: the recommended set is about 640 MB. Inkwell lives in the notification area; this window opens from there."
+        : $"Hold {keyName}, say something, and let go. Inkwell lives in the notification area; this window opens from there.";
 
     /// <summary>The ready step's warning about cards still off, or null when none is.</summary>
     public static string? StillOff(PermissionsModel permissions)

@@ -39,6 +39,12 @@ public sealed record NeedsYouItem(string Id, string Title, string Detail, string
 
 public static class NeedsYou
 {
+    /// <summary>The one action while no speech model is installed (Today, and the first run's last step).</summary>
+    public const string DownloadModelsTitle = "Download recommended models";
+
+    /// <summary>Said instead of that action while the recommended models download.</summary>
+    public const string ModelsDownloadingText = "The recommended models are downloading. Settings > Models shows how far they are.";
+
     /// <summary>What Today's banner lists, from the models Today reads: the permission cards, the watchdog and notices (CoreStore), and the far-end check (LibraryModel), where "could not read" stays apart from "none" (the Mac's TodayScreen.needItems).</summary>
     public static IReadOnlyList<NeedsYouItem> Items(PermissionsModel permissions, LibraryModel library, CoreStore store, CatalogueModel? catalogue = null)
     {
@@ -105,11 +111,10 @@ public static class NeedsYou
         if (noSpeechModel)
         {
             items.Add(downloadingModels
-                ? new("no-speech-model", "No speech model is installed",
-                    "The recommended models are downloading. Settings > Models shows how far they are.", null, null)
-                : new("no-speech-model", "No speech model is installed",
+                ? new("no-speech-model", TodayText.NoSpeechModelText, ModelsDownloadingText, null, null)
+                : new("no-speech-model", TodayText.NoSpeechModelText,
                     "Nothing you say can be written down until one is. The recommended set is about 640 MB.",
-                    "Download recommended models", new NeedsYouAction.DownloadModels()));
+                    DownloadModelsTitle, new NeedsYouAction.DownloadModels()));
         }
 
         // Whether recent meetings kept the far end, and the microphone's permission.

@@ -89,6 +89,8 @@ public sealed partial class OnboardingSheet : ContentDialog
         AutomationProperties.SetHelpText(OwnKeyUse, OnboardingModel.OwnKeyNote);
         OwnKeyNote.Text = OnboardingModel.OwnKeyNote;
         ReadyTitle.Text = OnboardingModel.ReadyTitle;
+        ReadyDownload.Content = NeedsYou.DownloadModelsTitle;
+        ReadyDownloading.Text = NeedsYou.ModelsDownloadingText;
         AutomationProperties.SetHelpText(SkipButton, OnboardingModel.SkipHint);
         ConsentTitle.Text = PolishModel.ConsentTitle;
         AutomationProperties.SetName(ConsentCancel, ConsentModel.CancelName(LlmFeature.Polish));
@@ -340,7 +342,12 @@ public sealed partial class OnboardingSheet : ContentDialog
                 AutomationProperties.SetName(ConsentAllow, ConsentModel.AllowName(LlmFeature.Polish, asking));
             }
 
-            ReadyLine.Text = OnboardingModel.ReadyLine(keyName);
+            // No speech model: no "Hold … and speak" and no box to try it in; the orb stays.
+            var noSpeechModel = catalogue.HasSpeechModel == false;
+            ReadyLine.Text = OnboardingModel.ReadyLine(keyName, noSpeechModel);
+            ReadyDownload.Visibility = Visible(noSpeechModel && !catalogue.Downloading);
+            ReadyDownloading.Visibility = Visible(noSpeechModel && catalogue.Downloading);
+            TryIt.Visibility = Visible(!noSpeechModel);
             var stillOff = OnboardingModel.StillOff(permissions);
             StillOffLine.Text = stillOff ?? "";
             StillOffLine.Visibility = Visible(stillOff is not null);
@@ -448,6 +455,8 @@ public sealed partial class OnboardingSheet : ContentDialog
     }
 
     private void OnModelsTryAgain(object sender, RoutedEventArgs e) => catalogue.Requery();
+
+    private void OnReadyDownload(object sender, RoutedEventArgs e) => catalogue.DownloadRecommended();
 
     private void OnPolishToggled(object sender, RoutedEventArgs e)
     {

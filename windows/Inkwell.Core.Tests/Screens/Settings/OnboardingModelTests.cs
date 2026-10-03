@@ -248,4 +248,16 @@ public class OnboardingModelTests
         Assert.Equal("Save", OnboardingModel.OwnKeyButton);
     }
 
+
+    /// <summary>With no speech model the last step never says "Hold … and speak": it says one is needed.</summary>
+    [Fact]
+    public void TheLastStepWithNoSpeechModelSaysOneIsNeeded()
+    {
+        Assert.StartsWith("Hold Right Ctrl, say something, and let go.", OnboardingModel.ReadyLine("Right Ctrl"), StringComparison.Ordinal);
+        var line = OnboardingModel.ReadyLine("Right Ctrl", noSpeechModel: true);
+        Assert.StartsWith("Inkwell needs a speech model before it can write anything down", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("Hold", line, StringComparison.Ordinal);
+        Assert.Equal("Download recommended models", NeedsYou.DownloadModelsTitle);
+    }
+
 }

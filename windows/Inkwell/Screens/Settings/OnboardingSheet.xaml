@@ -143,6 +143,9 @@
             <StackPanel x:Name="ReadyStep" Spacing="14">
                 <TextBlock x:Name="ReadyTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <TextBlock x:Name="ReadyLine" Style="{StaticResource InkReadingStyle}" />
+                <!-- With no speech model: Today's one action, or that the download runs. -->
+                <Button x:Name="ReadyDownload" Click="OnReadyDownload" Style="{StaticResource InkAccentButtonStyle}" />
+                <TextBlock x:Name="ReadyDownloading" Style="{StaticResource InkCaptionStyle}" />
                 <!-- Try it: the orb answers the voice, and the words land in the box. -->
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
