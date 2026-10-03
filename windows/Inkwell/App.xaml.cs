@@ -206,7 +206,11 @@ public partial class App : Application
             }
             drop.Apply(store, batch);
         };
-        var made = new AppScreens(core.Store, models, router, glow, shownInk);
+        var shownWindow = window;
+        var made = new AppScreens(core.Store, models, router, glow, shownInk)
+        {
+            WindowHandle = () => (nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(shownWindow.AppWindow.Id),
+        };
         window.Attach(core.Store, router, made.Screen, made.Search, models.Meetings, models.Owed);
         made.AttachFirstRun(window.Content as FrameworkElement);
         // Up next's minute redraws only while the window is on screen (rule 9).
