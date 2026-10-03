@@ -10,6 +10,14 @@ namespace Inkwell.Core.Screens;
 
 public sealed class LiveModel : ObservableModel
 {
+    /// <summary>
+    /// What Live says while nothing has been transcribed yet: waiting for speech, or, with no
+    /// speech model installed, that the meeting is recorded but can't be transcribed.
+    /// </summary>
+    public static string WaitingText(bool noSpeechModel) => noSpeechModel
+        ? "This meeting is being recorded, but it can't be transcribed until a speech model is installed. Settings > Models downloads one."
+        : "Waiting for someone to speak.";
+
     private static readonly string[] NoteCommands = ["note.add", "note.update", "note.delete"];
 
     private readonly Action<CoreCommand> send;

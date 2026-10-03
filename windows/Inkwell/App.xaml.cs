@@ -121,7 +121,7 @@ public partial class App : Application
         // What the Drop says, after the store has taken each batch.
         var drop = new DropModel(
             new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine,
-            () => models.Meetings.FailureOn(MeetingPlace.Drop));
+            () => models.Meetings.FailureOn(MeetingPlace.Drop), noSpeechModel: () => models.Catalogue.HasSpeechModel == false);
         dropModel = drop;
         var shellInk = ink;
         drop.Changed += () =>

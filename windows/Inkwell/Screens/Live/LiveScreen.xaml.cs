@@ -31,6 +31,7 @@ public sealed partial class LiveScreen : UserControl
     /// <summary>The header's clock: runs only while this screen is loaded and the meeting still records.</summary>
     private readonly DispatcherQueueTimer clock;
     private readonly WindowPresence presence;
+    private readonly CatalogueModel catalogue;
     private string? shownRecord;
     private int? lastParagraph;
     private bool loaded;
@@ -39,8 +40,11 @@ public sealed partial class LiveScreen : UserControl
 
     /// <param name="meetings">Stop, Record now and their failures (the meetings model, Settings' area).</param>
     /// <param name="presence">Whether the window is on screen: the clock stops while it is hidden to the tray.</param>
-    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings, WindowPresence presence)
+    /// <param name="catalogue">Whether a speech model is installed (the waiting line says when none is).</param>
+    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings, WindowPresence presence, CatalogueModel catalogue)
     {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        this.catalogue = catalogue;
         ArgumentNullException.ThrowIfNull(presence);
         this.presence = presence;
         ArgumentNullException.ThrowIfNull(store);
@@ -86,12 +90,14 @@ public sealed partial class LiveScreen : UserControl
         {
             loaded = true;
             presence.PropertyChanged += OnPresenceChanged;
+            catalogue.PropertyChanged += OnPresenceChanged;
             Render();
         };
         Unloaded += (_, _) =>
         {
             loaded = false;
             presence.PropertyChanged -= OnPresenceChanged;
+            catalogue.PropertyChanged -= OnPresenceChanged;
             clock.Stop();
         };
         Render();
@@ -200,6 +206,8 @@ public sealed partial class LiveScreen : UserControl
         var lastBefore = ledger.Count > 0 ? ledger[^1] : null;
         ListSync.Sync(ledger, lines, SameLine);
         WaitingLine.Visibility = lines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        // With no speech model nothing will arrive: the meeting is recorded, not transcribed.
+        WaitingLine.Text = LiveModel.WaitingText(catalogue.HasSpeechModel == false);
         EarlierLine.Visibility = LiveHeader.EarlierInRecord(meeting) ? Visibility.Visible : Visibility.Collapsed;
         if (ledger.Count > 0 && !ReferenceEquals(ledger[^1], lastBefore))
         {

@@ -177,8 +177,20 @@ public static class DictationDrop
     /// in as it should, or a screen shows it). <paramref name="hasLanguageModel"/>: whether a model
     /// could rewrite a selection, for a failed edit's words.
     /// </summary>
-    public static DropLine? Note(InkEvent e, bool hasLanguageModel) => e switch
+    public static DropLine? Note(InkEvent e, bool hasLanguageModel) => Note(e, hasLanguageModel, noSpeechModel: false);
+
+    /// <summary>The line a take ends on while no speech model is installed: why nothing was written, not a guess.</summary>
+    public static readonly DropLine NoSpeechModel = new("No speech model is installed", "Settings > Models downloads one", DropLineTone.Alert);
+
+    /// <summary>
+    /// As <see cref="Note(InkEvent, bool)"/>; with <paramref name="noSpeechModel"/>, a take that
+    /// heard or transcribed nothing says there is no speech model, not that the microphone is
+    /// silent or the transcription failed.
+    /// </summary>
+    public static DropLine? Note(InkEvent e, bool hasLanguageModel, bool noSpeechModel) => e switch
     {
+        DictationDiscarded { Reason: Discard.Silence or Discard.NoSpeech or Discard.NothingHeard } when noSpeechModel => NoSpeechModel,
+        DictationFailed { Stage: FailedStage.Transcription } when noSpeechModel => NoSpeechModel,
         DictationDiscarded d => d.Reason switch
         {
             Discard.TooShort or Discard.SpeechTooShort => new("Too short", "Try again"),
@@ -254,6 +266,7 @@ public sealed class DropModel
 
     private readonly IWakeScheduler wake;
     private readonly Func<bool> hasLanguageModel;
+    private readonly Func<bool> noSpeechModel;
     private readonly Func<string?> offerFailure;
     private DropLine? live;
     private DropLine? noteShowing;
@@ -264,11 +277,13 @@ public sealed class DropModel
     /// <param name="wake">Ends a note after <see cref="NoteDuration"/> (one delayed call per note).</param>
     /// <param name="hasLanguageModel">Whether a language model could rewrite a selection (Polish's engine).</param>
     /// <param name="offerFailure">A Drop answer that failed, in words (the meetings model's), or null.</param>
-    public DropModel(IWakeScheduler wake, Func<bool>? hasLanguageModel = null, Func<string?>? offerFailure = null)
+    /// <param name="noSpeechModel">Whether no speech model is installed (the catalogue's answer).</param>
+    public DropModel(IWakeScheduler wake, Func<bool>? hasLanguageModel = null, Func<string?>? offerFailure = null, Func<bool>? noSpeechModel = null)
     {
         ArgumentNullException.ThrowIfNull(wake);
         this.wake = wake;
         this.hasLanguageModel = hasLanguageModel ?? (() => false);
+        this.noSpeechModel = noSpeechModel ?? (() => false);
         this.offerFailure = offerFailure ?? (() => null);
     }
 
@@ -303,7 +318,7 @@ public sealed class DropModel
         offer = live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure()) : null;
         foreach (var e in batch)
         {
-            if (DictationDrop.Note(e, hasLanguageModel()) is not { } note)
+            if (DictationDrop.Note(e, hasLanguageModel(), noSpeechModel()) is not { } note)
             {
                 continue;
             }

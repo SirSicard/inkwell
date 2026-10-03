@@ -29,6 +29,9 @@ public abstract record NeedsYouAction
 
     /// <summary>Reads Today's counts again (they could not be read).</summary>
     public sealed record RetryChecks : NeedsYouAction;
+
+    /// <summary>Downloads the recommended models (CatalogueModel.DownloadRecommended).</summary>
+    public sealed record DownloadModels : NeedsYouAction;
 }
 
 /// <summary>One thing that needs the user: what is wrong, and the one thing to do about it, when there is one.</summary>
@@ -37,12 +40,14 @@ public sealed record NeedsYouItem(string Id, string Title, string Detail, string
 public static class NeedsYou
 {
     /// <summary>What Today's banner lists, from the models Today reads: the permission cards, the watchdog and notices (CoreStore), and the far-end check (LibraryModel), where "could not read" stays apart from "none" (the Mac's TodayScreen.needItems).</summary>
-    public static IReadOnlyList<NeedsYouItem> Items(PermissionsModel permissions, LibraryModel library, CoreStore store)
+    public static IReadOnlyList<NeedsYouItem> Items(PermissionsModel permissions, LibraryModel library, CoreStore store, CatalogueModel? catalogue = null)
     {
         ArgumentNullException.ThrowIfNull(permissions);
         ArgumentNullException.ThrowIfNull(library);
         ArgumentNullException.ThrowIfNull(store);
-        return Items(p => permissions.State(Card(p)), library.FarEnd, store.Meeting, store.Notices, library.Calendar);
+        return Items(
+            p => permissions.State(Card(p)), library.FarEnd, store.Meeting, store.Notices, library.Calendar,
+            noSpeechModel: catalogue?.HasSpeechModel == false, downloadingModels: catalogue?.Downloading == true);
     }
 
     /// <summary>The Settings card that asks for <paramref name="permission"/> (an Allow item's button asks as that card does).</summary>
@@ -57,7 +62,9 @@ public static class NeedsYou
         FarEndCheck farEnd,
         LiveMeeting? meeting,
         IReadOnlyList<Notice> notices,
-        LibraryCalendar calendar)
+        LibraryCalendar calendar,
+        bool noSpeechModel = false,
+        bool downloadingModels = false)
     {
         ArgumentNullException.ThrowIfNull(permission);
         ArgumentNullException.ThrowIfNull(farEnd);
@@ -92,6 +99,17 @@ public static class NeedsYou
                     "Your microphone is sending silence. This meeting may keep only the other side.",
                     "Check the microphone", allowMic));
             }
+        }
+
+        // No speech model: nothing can be written down. One action, the recommended set.
+        if (noSpeechModel)
+        {
+            items.Add(downloadingModels
+                ? new("no-speech-model", "No speech model is installed",
+                    "The recommended models are downloading. Settings > Models shows how far they are.", null, null)
+                : new("no-speech-model", "No speech model is installed",
+                    "Nothing you say can be written down until one is. The recommended set is about 640 MB.",
+                    "Download recommended models", new NeedsYouAction.DownloadModels()));
         }
 
         // Whether recent meetings kept the far end, and the microphone's permission.

@@ -218,4 +218,27 @@ public class NeedsYouTests
         Assert.Equal("2 more", NeedsYou.MoreTitle(3, false));
         Assert.Equal("Show less", NeedsYou.MoreTitle(3, true));
     }
+
+    /// <summary>
+    /// With no speech model, Today says so plainly and offers one action, the recommended set's
+    /// download; while it downloads there is nothing to press; with a model the item goes.
+    /// </summary>
+    [Fact]
+    public void NoSpeechModelIsSaidWithOneActionToDownloadTheRecommendedSet()
+    {
+        var list = NeedsYou.Items(_ => CardState.Allowed, new FarEndCheck.Unknown(), null, [], LibraryCalendar.Local, noSpeechModel: true);
+        Assert.Equal(["no-speech-model"], list.Select(i => i.Id));
+        Assert.Equal("No speech model is installed", list[0].Title);
+        Assert.Equal("Nothing you say can be written down until one is. The recommended set is about 640 MB.", list[0].Detail);
+        Assert.Equal("Download recommended models", list[0].ActionTitle);
+        Assert.Equal(new NeedsYouAction.DownloadModels(), list[0].Action);
+        var downloading = NeedsYou.Items(_ => CardState.Allowed, new FarEndCheck.Unknown(), null, [], LibraryCalendar.Local, noSpeechModel: true, downloadingModels: true)[0];
+        Assert.Null(downloading.Action);
+        Assert.Equal("The recommended models are downloading. Settings > Models shows how far they are.", downloading.Detail);
+        Assert.Empty(NeedsYou.Items(_ => CardState.Allowed, new FarEndCheck.Unknown(), null, [], LibraryCalendar.Local));
+
+        Assert.Equal("Listening for meetings · No speech model is installed", TodayText.HeroStatus(false, true, "Hold Right Ctrl to dictate", noSpeechModel: true));
+        Assert.Equal("Listening for meetings · Hold Right Ctrl to dictate", TodayText.HeroStatus(false, true, "Hold Right Ctrl to dictate"));
+    }
+
 }

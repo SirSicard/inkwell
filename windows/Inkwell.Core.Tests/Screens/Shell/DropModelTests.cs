@@ -52,9 +52,9 @@ public sealed class DropModelTests
         public DropModel Drop { get; }
         public int Changes { get; private set; }
 
-        public Rig(bool hasLanguageModel = false)
+        public Rig(bool hasLanguageModel = false, bool noSpeechModel = false)
         {
-            Drop = new DropModel(Wakes, () => hasLanguageModel);
+            Drop = new DropModel(Wakes, () => hasLanguageModel, noSpeechModel: () => noSpeechModel);
             Drop.Changed += () => Changes++;
         }
 
@@ -173,6 +173,25 @@ public sealed class DropModelTests
         rig.Apply(Started, Stopped, """{"type":"dictation.inserted","text":"x","outcome":"blocked"}""");
         Assert.Equal(new DropLine("Can't type into this app", "It runs as administrator; your words are in the Library", DropLineTone.Alert), rig.Drop.Line);
         Assert.Equal(DropLineTone.Alert, DictationDrop.Note(Ev.Of("""{"type":"dictation.edit_failed","reason":"secure_input"}"""), false)!.Tone);
+    }
+
+    /// <summary>
+    /// A hold with no speech model installed says so, not "the microphone is silent" nor "couldn't
+    /// transcribe that"; with a model the usual lines come back.
+    /// </summary>
+    [Fact]
+    public void AHoldWithNoSpeechModelSaysThereIsNone()
+    {
+        var none = new DropLine("No speech model is installed", "Settings > Models downloads one", DropLineTone.Alert);
+        var rig = new Rig(noSpeechModel: true);
+        rig.Apply(Started, Stopped, """{"type":"dictation.discarded","reason":"silence"}""");
+        Assert.Equal(none, rig.Drop.Line);
+        var failed = new Rig(noSpeechModel: true);
+        failed.Apply(Started, Stopped, """{"type":"dictation.failed","stage":"transcription","message":"model not installed"}""");
+        Assert.Equal(none, failed.Drop.Line);
+        var withModel = new Rig();
+        withModel.Apply(Started, Stopped, """{"type":"dictation.discarded","reason":"silence"}""");
+        Assert.Equal("The microphone is silent", withModel.Drop.Line!.Title);
     }
 
     [Fact]

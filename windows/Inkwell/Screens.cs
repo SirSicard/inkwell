@@ -55,10 +55,10 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     {
         Route.Today => new TodayScreen(
             store, models.Library, models.Owed, models.Permissions, models.UpNext, Presence, router.Open, OpenRecord,
-            models.RecordControls, models.Meetings, models.Live),
+            models.RecordControls, models.Meetings, models.Live, models.Catalogue),
         Route.Library => new LibraryScreen(models.Library, () => models.Ai.SummaryOffNote, Presence),
         Route.Owed => new OwedScreen(models.Owed, (record, ms) => OpenRecord(record, ms, play: true)),
-        Route.Live => new LiveScreen(store, models.Live, models.Meetings, Presence),
+        Route.Live => new LiveScreen(store, models.Live, models.Meetings, Presence, models.Catalogue),
         Route.Settings => new SettingsScreen(SettingsSections()),
         _ => throw new ArgumentOutOfRangeException(nameof(route)),
     };

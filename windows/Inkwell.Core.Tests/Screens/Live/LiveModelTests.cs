@@ -372,4 +372,15 @@ public class LiveLayoutTests
         Assert.Equal(minimum, LiveLayout.MinimumWidth); // nothing the meeting holds changes it
         Assert.True(LiveLayout.MinimumWidth < LiveLayout.WindowMinWidth, "within the window's minimum content width");
     }
+
+    /// <summary>With no speech model, Live says the meeting is recorded but can't be transcribed yet.</summary>
+    [Fact]
+    public void LiveSaysAMeetingCantBeTranscribedWithoutASpeechModel()
+    {
+        Assert.Equal("Waiting for someone to speak.", LiveModel.WaitingText(noSpeechModel: false));
+        Assert.Equal(
+            "This meeting is being recorded, but it can't be transcribed until a speech model is installed. Settings > Models downloads one.",
+            LiveModel.WaitingText(noSpeechModel: true));
+    }
+
 }

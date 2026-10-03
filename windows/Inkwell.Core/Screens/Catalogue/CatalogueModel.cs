@@ -262,6 +262,24 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         Changed();
     }
 
+    /// <summary>
+    /// Whether a speech model is installed: any of dictation, meeting transcript and live words
+    /// served by a model. Null until all three have answered (or one could not be asked): never
+    /// "no model" on a guess.
+    /// </summary>
+    public bool? HasSpeechModel
+    {
+        get
+        {
+            var lines = Jobs.Select(Line).ToList();
+            if (lines.Any(l => l.Engine is not null))
+            {
+                return true;
+            }
+            return lines.All(l => l.Known) ? false : null;
+        }
+    }
+
     public CatalogueLine Line(Job job)
     {
         if (routeFailed.Contains(job))
