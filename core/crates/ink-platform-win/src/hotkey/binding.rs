@@ -51,6 +51,10 @@ pub(crate) mod vk {
     pub const ESCAPE: u32 = 0x1B;
     /// `VK_V`: the paste key.
     pub const V: u32 = 0x56;
+    /// The left-hand modifiers, as the hook reports them (a chord's modifier coming up).
+    pub const LCONTROL: u32 = 0xA2;
+    pub const LSHIFT: u32 = 0xA0;
+    pub const LMENU: u32 = 0xA4;
     /// `VK_F1`; F1 to F24 are consecutive.
     pub const F1: u32 = 0x70;
 }

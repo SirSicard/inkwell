@@ -109,6 +109,29 @@ pub(crate) fn event_time_ns(now_ns: u64, now_tick_ms: u32, event_tick_ms: u32) -
 }
 
 /// The chord modifiers down now. **Hook thread.**
+/// The chord modifiers still down once `released` is up. The hook runs before the key state takes
+/// its event in, so the key coming up still reads as down: each modifier counts while a key of it
+/// other than `released` is down (left Ctrl let go of with right Ctrl held: still Ctrl). Reads key
+/// state only: no allocation, no lock.
+fn modifiers_after_release(released: u32) -> u8 {
+    // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
+    let down = |key: u32| key != released && unsafe { GetAsyncKeyState(key as i32) } < 0;
+    let mut bits = 0;
+    if down(vk::LCONTROL) || down(vk::RCONTROL) {
+        bits |= modifier::CTRL;
+    }
+    if down(vk::LSHIFT) || down(vk::RSHIFT) {
+        bits |= modifier::SHIFT;
+    }
+    if down(vk::LMENU) || down(vk::RMENU) {
+        bits |= modifier::ALT;
+    }
+    if down(vk::LWIN) || down(vk::RWIN) {
+        bits |= modifier::WIN;
+    }
+    bits
+}
+
 fn modifiers_down() -> u8 {
     // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
     let down = |key: u32| unsafe { GetAsyncKeyState(key as i32) } < 0;
@@ -194,7 +217,10 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
             vk: event.vkCode,
             modifiers: modifiers_down(),
         },
-        WM_KEYUP | WM_SYSKEYUP => HookInput::KeyUp { vk: event.vkCode },
+        WM_KEYUP | WM_SYSKEYUP => HookInput::KeyUp {
+            vk: event.vkCode,
+            modifiers: modifiers_after_release(event.vkCode),
+        },
         _ => return false,
     };
     let Some(mut machine) = MACHINE.with(Cell::get) else {
