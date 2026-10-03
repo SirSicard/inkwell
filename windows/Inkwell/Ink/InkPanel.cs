@@ -163,6 +163,9 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     /// <summary>The window was activated: a resting orb that held its spot long enough moves.</summary>
     internal void Activated() => surface?.Activated();
 
+    /// <summary>The window was covered by others and is not any more: a resting orb moves, as on coming on screen.</summary>
+    internal void Uncovered() => surface?.Uncovered();
+
     /// <summary>Whether it glides to a new spot now.</summary>
     internal bool IsGliding => surface?.IsGliding ?? false;
 

@@ -31,6 +31,8 @@ public partial class App : Application
     private TermsWindow? terms;
     private MainWindow? window;
     private TrayIcon? tray;
+    /// <summary>Held for the app's life: its hook follows what covers the window.</summary>
+    private WindowCover? windowCover;
     private CoreController? core;
     private ScreenModels? screens;
     private ShellInk? ink;
@@ -213,13 +215,19 @@ public partial class App : Application
         };
         window.Attach(core.Store, router, made.Screen, made.Search, models.Meetings, models.Owed);
         made.AttachFirstRun(window.Content as FrameworkElement);
-        // Up next's minute redraws only while the window is on screen (rule 9).
-        window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: true);
+        // Up next's minute redraws only while the window is on screen (rule 9): shown, not
+        // minimised, and not hidden behind other windows (WindowCover).
+        var cover = new WindowCover((nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(window.AppWindow.Id));
+        windowCover = cover;
+        cover.Changed += covered => made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !covered);
+        // Uncovered, the orb at rest goes to a new spot, as on coming on screen.
+        cover.Uncovered += window.WindowUncovered;
+        window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: !cover.Covered);
         window.AppWindow.Changed += (sender, e) =>
         {
             if (e.DidPresenterChange || e.DidVisibilityChange)
             {
-                made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: true);
+                made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
                 // A shortcut being recorded is the window's: hidden or minimised, it is cancelled.
                 if (!sender.IsVisible || Minimized(window))
                 {
@@ -256,7 +264,7 @@ public partial class App : Application
         window.Activate();
         window.FitToWorkArea();
         // On screen from the start: the window's own change events may not come for the first show.
-        made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
+        made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
         core.Start();
         // Once, at launch, when the user turned the automatic check on (never on a timer).
         _ = models.Updates.CheckAtLaunch();

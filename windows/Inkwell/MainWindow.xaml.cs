@@ -145,6 +145,9 @@ public sealed partial class MainWindow : Window
     /// <summary>UI thread. The window was activated: a resting orb that has held its spot for a while moves (OrbWander.RestInterval).</summary>
     internal void WindowActivated() => Orb.Activated();
 
+    /// <summary>UI thread. Other windows hid all of it, and now do not (WindowCover): a resting orb moves.</summary>
+    internal void WindowUncovered() => Orb.Uncovered();
+
     /// <summary>
     /// UI thread, on any change of the window's place: on another monitor, a resting orb goes to a
     /// new spot.

@@ -47,4 +47,22 @@ public class WindowFrameTests
         Assert.Equal(new WindowFrame(-1200, 800, 1200, 800), new WindowFrame(100, 900, 1200, 800).Fitted(left));
         Assert.Equal(new WindowFrame(-2560, 200, 1200, 800), new WindowFrame(-3000, 0, 1200, 800).Fitted(left));
     }
+
+    /// <summary>
+    /// Covered: the windows above hide all of it, alone or together; a corner or a strip left
+    /// showing is not covered (the orb's wander moves when a covered window is uncovered).
+    /// </summary>
+    [Fact]
+    public void AWindowIsCoveredOnlyWhenAllOfItIsHidden()
+    {
+        var window = new WindowFrame(100, 100, 1000, 700);
+        Assert.False(window.CoveredBy([]));
+        Assert.True(window.CoveredBy([new WindowFrame(0, 0, 1920, 1080)]));
+        Assert.True(window.CoveredBy([new WindowFrame(100, 100, 1000, 700)])); // exactly over it
+        Assert.False(window.CoveredBy([new WindowFrame(100, 100, 999, 700)])); // its right edge shows
+        Assert.False(window.CoveredBy([new WindowFrame(0, 0, 900, 1080)])); // a strip shows
+        Assert.True(window.CoveredBy([new WindowFrame(0, 0, 700, 1080), new WindowFrame(600, 0, 1000, 1080)])); // two together
+        Assert.False(window.CoveredBy([new WindowFrame(200, 200, 300, 300)])); // a small one on top
+        Assert.False(new WindowFrame(0, 0, 0, 0).CoveredBy([new WindowFrame(0, 0, 10, 10)]));
+    }
 }

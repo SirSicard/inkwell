@@ -284,6 +284,22 @@ public sealed class InkSurface : IDisposable
     }
 
     /// <summary>
+    /// The window behind it was covered by others and is not any more: as coming on screen, a
+    /// resting orb (or a stilled one) goes to a new spot, held too, unless its spot has been read.
+    /// </summary>
+    public void Uncovered()
+    {
+        if (wander is not { } w || (State.IsLive() && !schedule.ReduceMotion) || !schedule.OnScreen || HoldsSpot)
+        {
+            return;
+        }
+        lastMove = Now();
+        w.Move(lastMove, animated: !schedule.ReduceMotion);
+        wander = w;
+        Perform(schedule.ReduceMotion ? schedule.Invalidate() : schedule.SetGliding(true));
+    }
+
+    /// <summary>
     /// The user comes back to the window (activated): a resting orb moves if it has held its spot
     /// for RestInterval. No timer: a window left alone at rest draws nothing at all.
     /// </summary>
