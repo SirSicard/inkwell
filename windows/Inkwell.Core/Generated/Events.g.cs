@@ -113,6 +113,7 @@ public abstract record InkEvent
                 "record.deleted" => root.Deserialize(InkEventsJson.Default.RecordDeleted)!,
                 "models.listed" => root.Deserialize(InkEventsJson.Default.ModelsListed)!,
                 "setting.value" => root.Deserialize(InkEventsJson.Default.SettingValue)!,
+                "hotkey.checked" => root.Deserialize(InkEventsJson.Default.HotkeyChecked)!,
                 "consent.state" => root.Deserialize(InkEventsJson.Default.ConsentState)!,
                 "llm.providers" => root.Deserialize(InkEventsJson.Default.LlmProviders)!,
                 "llm.tested" => root.Deserialize(InkEventsJson.Default.LlmTested)!,
@@ -249,6 +250,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(RecordDeleted))]
 [JsonSerializable(typeof(ModelsListed))]
 [JsonSerializable(typeof(SettingValue))]
+[JsonSerializable(typeof(HotkeyChecked))]
 [JsonSerializable(typeof(ConsentState))]
 [JsonSerializable(typeof(LlmProviders))]
 [JsonSerializable(typeof(LlmTested))]
@@ -1498,6 +1500,47 @@ public enum FarEnd
     App,
     [JsonStringEnumMemberName("everything")]
     Everything,
+}
+
+/// <summary>
+/// Whether this computer can watch a key binding as the dictation key or the edit key, in
+/// answer to hotkey.check. A shell checks a shortcut the user recorded before it stores it with
+/// setting.set; nothing is stored here.
+/// </summary>
+public sealed record HotkeyChecked : InkEvent
+{
+    /// <summary>
+    /// The binding as the command spelled it.
+    /// </summary>
+    [JsonPropertyName("binding")]
+    public required string Binding { get; init; }
+
+    /// <summary>
+    /// When ok: its one spelling, to store with setting.set and to compare keys by (two
+    /// spellings of one chord are one key). For example ctrl+shift+space, right_option or f13.
+    /// </summary>
+    [JsonPropertyName("canonical")]
+    public string? Canonical { get; init; }
+
+    /// <summary>
+    /// Whether this computer can watch it.
+    /// </summary>
+    [JsonPropertyName("ok")]
+    public required bool Ok { get; init; }
+
+    /// <summary>
+    /// When not ok: why not, in plain words starting in lower case and without a full stop, to
+    /// show after "can't use that:". For example "that key on its own would stop working
+    /// everywhere else; add Control, Option or Command".
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 }
 
 /// <summary>

@@ -485,6 +485,118 @@ fn the_edit_key_is_held_on_its_own_and_never_the_dictation_key() {
     assert!(rig.edit.hotkey_binding().is_none());
 }
 
+/// Any key the Mac can watch is a dictation key: a chord is stored in its one spelling, bound,
+/// and named so in dictation.ready. One it cannot watch is refused with the reason, and the key
+/// before stays.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_chord_is_a_dictation_key_stored_in_its_one_spelling() {
+    let rig = VoiceRig::new("chord-key");
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"Shift+Ctrl+Space"}"#);
+    let value = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "dictation.key"
+        })
+        .expect("stored");
+    assert_eq!(value["value"], "ctrl+shift+space");
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["key"] == "ctrl+shift+space"
+        })
+        .expect("rebound");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("ctrl+shift+space")
+    );
+    let refused = rig
+        .core()
+        .command(r#"{"cmd":"setting.set","key":"dictation.key","value":"shift+a"}"#)
+        .expect_err("a capital is typing");
+    assert!(refused.contains("capital"), "{refused}");
+    assert_eq!(
+        rig.setting("dictation.key").as_deref(),
+        Some("ctrl+shift+space")
+    );
+    // A take on the chord, as on any key: the hold machinery past the tap does not care.
+    let inserted = rig.dictate(1.0, 5);
+    assert_eq!(inserted["type"], "dictation.inserted", "{inserted}");
+}
+
+/// The edit key takes the same shapes; the dictation key under another spelling is still the
+/// dictation key.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_edit_key_may_be_a_chord_but_never_the_dictation_key_respelt() {
+    let rig = VoiceRig::new("chord-edit-key");
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"ctrl+shift+space"}"#);
+    rig.events
+        .wait_for(WAIT, |v| v["key"] == "ctrl+shift+space")
+        .expect("rebound");
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"cmd+option+e"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["edit_key"] == "option+cmd+e"
+        })
+        .expect("edit chord bound");
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("option+cmd+e")
+    );
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"shift+ctrl+space"}"#);
+    let same = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v.get("edit_key_error").is_some()
+        })
+        .expect("refused as the dictation key");
+    assert!(same.get("edit_key").is_none(), "{same}");
+    assert!(rig.edit.hotkey_binding().is_none());
+}
+
+/// consent.allow turns voice edit on with a chord, stored in its one spelling.
+#[cfg(target_os = "macos")]
+#[test]
+fn edit_consent_takes_a_chord_for_its_key() {
+    let rig = VoiceRig::new("chord-edit-consent");
+    rig.register_local();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"Option+Cmd+E","id":"c1"}"#,
+        "c1",
+    );
+    assert_eq!(state["on"], true, "{state}");
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("option+cmd+e")
+    );
+    assert!(
+        rig.core()
+            .command(r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"e"}"#)
+            .is_err(),
+        "a key the Mac cannot watch"
+    );
+}
+
+/// A key stored outside setting.set (an older build, an import) reaches the platform as it is,
+/// never quietly swapped for the default: the platform holds it, or refuses it by name.
+#[test]
+fn a_stored_key_reaches_the_platform_as_it_is() {
+    let rig = VoiceRig::new("stored-key");
+    rig.core()
+        .shared()
+        .store
+        .set_setting("dictation.key", "f13")
+        .unwrap();
+    let ready = rig.enable();
+    assert_eq!(ready["key"], "f13", "{ready}");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("f13")
+    );
+}
+
 /// Taking the edit key as the dictation key lets go of the edit key first: one key, one tap.
 #[test]
 fn the_edit_keys_key_taken_for_dictation_is_let_go_of_as_the_edit_key() {

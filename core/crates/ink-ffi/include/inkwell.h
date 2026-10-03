@@ -233,13 +233,18 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
  *       "dictation.polish" (on|off; setting.set takes only off, which also withdraws polish's
  *       consent in the same write, and answers "consent.state" too: consent.allow turns it on),
- *       "dictation.key" (fn|right_option|right_command|right_control|right_shift|right_alt|
- *       right_win; a key this OS cannot hold is refused when dictation binds it, as
- *       "dictation.off" with "key_refused"; the default is fn on macOS and right_control on
+ *       "dictation.key" (any key this computer can watch, as hotkey.check judges it: a
+ *       right-hand modifier, or fn on macOS, held on its own; a function key; or modifiers and
+ *       one key such as ctrl+shift+space. Stored in hotkey.check's one spelling, which
+ *       "setting.value" echoes; a key it refuses is refused here with its reason. The named
+ *       tokens fn|right_option|right_command|right_control|right_shift|right_alt|right_win are
+ *       stored on either OS: one this OS cannot hold is refused when dictation binds it, as
+ *       "dictation.off" with "key_refused". The default is fn on macOS and right_control on
  *       Windows),
- *       "dictation.edit_key" (off or one of those; voice edit turns on with its consent through
- *       consent.allow, and off withdraws that consent in the same write, answering
- *       "consent.state" too; an edit key set without a consent edits nothing),
+ *       "dictation.edit_key" (off or a key as for dictation.key, never the dictation key in any
+ *       spelling; voice edit turns on with its consent through consent.allow, and off withdraws
+ *       that consent in the same write, answering "consent.state" too; an edit key set without a
+ *       consent edits nothing),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
  *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
  *       "meetings.llm" (on|off: a meeting's summary and Ask; as for dictation.polish, setting.set
@@ -253,6 +258,13 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       saying what became of 0.2's hotkey). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
+ *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
+ *       Whether this computer can watch a key binding as the dictation or edit key, before the
+ *       shell stores one the user recorded: "hotkey.checked" with "ok", and either "canonical"
+ *       (its one spelling, to store and to compare keys by: modifiers on macOS in the order
+ *       fn ctrl option shift cmd, e.g. ctrl+shift+space) or "reason" (why not, in plain words to
+ *       show after "can't use that:"). Nothing is stored. The platform's own parser answers, so a
+ *       key binds exactly when this says yes.
  *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
  *       Dictation live: the core holds the keys (the dictation key, and the edit key if one is
  *       set), opens the mic at the first press and lets it go after 1 minute without a take.

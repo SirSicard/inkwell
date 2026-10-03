@@ -29,7 +29,7 @@ use serde_json::Value;
 
 use crate::events::event;
 use crate::runtime::Shared;
-use crate::voice::{EDIT_KEY_SETTING, EDIT_KEYS, POLISH_SETTING};
+use crate::voice::{EDIT_KEY_SETTING, POLISH_SETTING};
 
 /// The store setting holding the meetings switch (`on` or `off`): a meeting's summary (with its
 /// commitments) and Ask send its transcript to a language model. Only `consent.allow` turns it on.
@@ -145,14 +145,16 @@ pub struct Allow {
     pub feature: Feature,
     /// The destination the shell showed (a cloud one's name is not needed to compare).
     pub asked: LlmConsent,
-    /// For voice edit, the key it is turned on with (one of [`EDIT_KEYS`] but `off`).
+    /// For voice edit, the key it is turned on with, as stored ([`crate::hotkey::stored_value`]).
     pub key: Option<String>,
 }
 
 /// Reads `consent.allow`'s feature and key: voice edit needs a key, the others take none.
 pub fn check_key(feature: Feature, key: Option<&str>) -> Result<Option<String>, String> {
     match (feature, key) {
-        (Feature::Edit, Some(k)) if k != "off" && EDIT_KEYS.contains(&k) => Ok(Some(k.to_owned())),
+        (Feature::Edit, Some(k)) if k != "off" => crate::hotkey::stored_value(k)
+            .map(Some)
+            .map_err(|why| format!("voice edit can't use \"{k}\": {why}")),
         (Feature::Edit, _) => Err("voice edit is turned on with its key: \"key\"".into()),
         (_, None) => Ok(None),
         (_, Some(_)) => Err(format!("{} takes no \"key\"", feature.name())),

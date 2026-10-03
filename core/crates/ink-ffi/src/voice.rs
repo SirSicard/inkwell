@@ -84,24 +84,13 @@ pub const DEFAULT_KEY: &str = "fn";
 /// the OS (ink-platform-win's `DEFAULT_BINDING`).
 #[cfg(windows)]
 pub const DEFAULT_KEY: &str = ink_platform_win::hotkey::DEFAULT_BINDING;
-/// The keys a shell may offer (modifiers held on their own; see each platform's bindings). One
-/// list for both platforms: the Mac offers `fn`, `right_option` and `right_command`, Windows
-/// `right_alt` and `right_win`, and a platform that cannot hold a key refuses it when dictation
-/// binds it (`dictation.off` with `key_refused`), so a key stored on the other OS is said, never
-/// quietly swapped.
+/// The named keys: the modifiers held on their own that either OS knows by these tokens. One list
+/// for both platforms: the Mac holds `fn`, `right_option` and `right_command`, Windows
+/// `right_alt` and `right_win`. The settings take any of them on either OS, and a platform that
+/// cannot hold one refuses it when dictation binds it (`dictation.off` with `key_refused`), so a
+/// key stored on the other OS is said, never quietly swapped. Any other key the platform can
+/// watch (a chord, a function key) is taken too: [`crate::hotkey`] has the rule.
 pub const KEYS: &[&str] = &[
-    "fn",
-    "right_option",
-    "right_command",
-    "right_control",
-    "right_shift",
-    "right_alt",
-    "right_win",
-];
-/// The edit key's values: `off` (the default: a held modifier would otherwise read the selection
-/// in every app) or one of [`KEYS`].
-pub const EDIT_KEYS: &[&str] = &[
-    "off",
     "fn",
     "right_option",
     "right_command",
@@ -491,11 +480,14 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
             None
         }
     };
+    // As stored, never quietly the default: a key the platform cannot hold is refused by name
+    // when it binds. The edit key is off (the default) unless one is set: a held key would
+    // otherwise read the selection in every app.
     let key = read(KEY_SETTING, "the dictation key")
-        .filter(|k| KEYS.contains(&k.as_str()))
+        .filter(|k| !k.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_KEY.to_owned());
-    let edit_key = read(EDIT_KEY_SETTING, "the edit key")
-        .filter(|k| k != "off" && EDIT_KEYS.contains(&k.as_str()));
+    let edit_key =
+        read(EDIT_KEY_SETTING, "the edit key").filter(|k| k != "off" && !k.trim().is_empty());
     let polish_wish = read(POLISH_SETTING, "the polish switch").as_deref() == Some("on");
     // Unreadable consent is no consent: the feature fails closed, and the shell hears why.
     let mut consent = |feature: Feature, name: &'static str| {
@@ -764,13 +756,19 @@ impl Voice {
     }
 
     /// Holds `key` (and `edit_key`), replacing what was held. The dictation key must bind; the edit
-    /// key's failure is reported and dictation goes on without it.
+    /// key's failure is reported and dictation goes on without it. Both are taken in their one
+    /// spelling ([`crate::hotkey::spelling`]), so the edit key is never the dictation key under
+    /// another name.
     fn bind(
         &mut self,
         key: &str,
         edit_key: Option<&str>,
         force: bool,
     ) -> Result<Ready, (OffReason, String)> {
+        let key = crate::hotkey::spelling(key);
+        let key = key.as_str();
+        let edit_key = edit_key.map(crate::hotkey::spelling);
+        let edit_key = edit_key.as_deref();
         if force || self.key.as_deref() != Some(key) {
             // The edit key taking the dictation key's place is let go of first, so two taps never
             // hold one key.
@@ -1090,7 +1088,10 @@ mod tests {
     #[test]
     fn the_default_key_is_this_platforms_own() {
         assert!(KEYS.contains(&DEFAULT_KEY), "{DEFAULT_KEY}");
-        assert!(EDIT_KEYS.contains(&DEFAULT_KEY), "{DEFAULT_KEY}");
+        assert_eq!(
+            crate::hotkey::check(DEFAULT_KEY).as_deref(),
+            Ok(DEFAULT_KEY)
+        );
         let expected = if cfg!(windows) { "right_control" } else { "fn" };
         assert_eq!(DEFAULT_KEY, expected);
     }
@@ -1101,7 +1102,7 @@ mod tests {
     fn every_windows_key_can_be_chosen() {
         for key in ink_platform_win::hotkey::KEYS {
             assert!(KEYS.contains(key), "{key}");
-            assert!(EDIT_KEYS.contains(key), "{key}");
+            assert_eq!(crate::hotkey::stored_value(key).as_deref(), Ok(*key));
         }
     }
 
