@@ -132,6 +132,38 @@ fn digests_are_kept_until_their_transcript_changes() {
     assert_eq!(digest_rows(&db), 1, "deleted with its record");
 }
 
+/// A digest kept under other counting rules (`DIGEST_VERSION`) is counted again on the next read,
+/// so a change to the rules never leaves old numbers behind.
+#[test]
+fn a_digest_kept_under_other_rules_is_counted_again() {
+    let db = TempDb::new("digests-version");
+    let store = db.open();
+    let a = meeting(&store, 1);
+    store
+        .append_segments(&a, &[seg(Channel::Mic, 0, "one two three")])
+        .unwrap();
+    store.digests().unwrap();
+    // Another build's rules (a newer one, or an older one's once raised).
+    db.raw()
+        .execute(
+            "UPDATE record_digest SET version = ?2, mic_words = 99 WHERE record_id = ?1",
+            rusqlite::params![a.0, i64::from(ink_core::stats::DIGEST_VERSION) + 1],
+        )
+        .unwrap();
+    let all = store.digests().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].transcript.mic.words, 3, "recounted, not the old row");
+    let kept: (i64, i64) = db
+        .raw()
+        .query_row(
+            "SELECT version, mic_words FROM record_digest WHERE record_id = ?1",
+            [&a.0],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(kept, (i64::from(ink_core::stats::DIGEST_VERSION), 3));
+}
+
 /// The first read after an upgrade counts the whole library, a batch at a time, so the store's
 /// lock is let go between batches; every record still gets its digest.
 #[test]

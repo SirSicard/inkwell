@@ -45,7 +45,7 @@ use rusqlite::{
 
 use codec::{Fail, channel_at, channel_text, kind_at, kind_text, ms, ms_at, stretch};
 
-pub use digest::DIGEST_BATCH;
+pub use digest::{DIGEST_BATCH, DIGEST_LINE_BUDGET};
 pub use schema::SCHEMA_VERSION;
 
 /// How long a call waits for another process holding the write lock (a backup tool, a second

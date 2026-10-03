@@ -80,9 +80,17 @@ pub struct CommitmentState {
     pub merged: bool,
 }
 
+/// The version of [`digest`]'s rules. A store that keeps digests keeps this beside each one and
+/// recounts any kept under another, so changing what a digest counts (the word split, the pause
+/// that ends a monologue, the question rule) must raise it: the pinned test below fails until it
+/// is raised.
+pub const DIGEST_VERSION: u32 = 1;
+
 /// Counts `segments` (one record's current transcript).
 pub fn digest(segments: &[Segment]) -> TranscriptDigest {
-    let side = |channel: Channel| -> (ChannelDigest, Vec<(u64, u64)>) {
+    // The side's counts, its lines' spans as said, and their union.
+    type Spans = Vec<(u64, u64)>;
+    let side = |channel: Channel| -> (ChannelDigest, Spans, Spans) {
         let mut d = ChannelDigest::default();
         let mut spans = Vec::new();
         for s in segments.iter().filter(|s| s.channel == channel) {
@@ -90,17 +98,12 @@ pub fn digest(segments: &[Segment]) -> TranscriptDigest {
             d.lines += 1;
             spans.push((s.start_ms, s.end_ms.max(s.start_ms)));
         }
-        let spans = union(spans);
-        d.speech_ms = spans.iter().map(|(a, b)| b - a).sum();
-        (d, spans)
+        let merged = union(spans.clone());
+        d.speech_ms = merged.iter().map(|(a, b)| b - a).sum();
+        (d, spans, merged)
     };
-    let (mic, _) = side(Channel::Mic);
-    let (far, far_spans) = side(Channel::Far);
-    let mic_spans: Vec<(u64, u64)> = segments
-        .iter()
-        .filter(|s| s.channel == Channel::Mic)
-        .map(|s| (s.start_ms, s.end_ms.max(s.start_ms)))
-        .collect();
+    let (mic, mic_spans, _) = side(Channel::Mic);
+    let (far, _, far_spans) = side(Channel::Far);
     TranscriptDigest {
         mic,
         far,
@@ -194,6 +197,36 @@ mod tests {
     }
     fn far(start_ms: u64, end_ms: u64, text: &str) -> Segment {
         seg(Channel::Far, start_ms, end_ms, text)
+    }
+
+    /// Pins what version 1 of the rules counts for one transcript. If this fails, the rules
+    /// changed: raise [`DIGEST_VERSION`] (so kept digests are recounted), then update the numbers.
+    #[test]
+    fn digest_version_1_counts_this_transcript_so() {
+        assert_eq!(DIGEST_VERSION, 1);
+        let d = digest(&[
+            mic(0, 4_000, "shall we start?"),
+            mic(6_500, 9_000, "one two  three"),
+            far(9_500, 12_000, "yes we can"),
+            mic(16_000, 17_000, "ok？"),
+        ]);
+        assert_eq!(
+            d,
+            TranscriptDigest {
+                mic: ChannelDigest {
+                    words: 7,
+                    speech_ms: 7_500,
+                    lines: 3
+                },
+                far: ChannelDigest {
+                    words: 3,
+                    speech_ms: 2_500,
+                    lines: 1
+                },
+                longest_monologue_ms: 9_000,
+                mic_questions: 2,
+            }
+        );
     }
 
     #[test]

@@ -223,9 +223,12 @@ ALTER TABLE record ADD COLUMN imported INTEGER NOT NULL DEFAULT 0 CHECK (importe
 ///
 /// The record's own columns the stats need are copied in, so a stats read scans this one table:
 /// joining 75,000 records to their digests by id took 47 ms, a scan of this table alone about 10.
+/// `version` is the counting rules' (`ink_core::stats::DIGEST_VERSION`): a row kept under other
+/// rules is counted again, so a change to the rules needs no migration of its own.
 const V5: &str = "
 CREATE TABLE record_digest (
     record_id            TEXT PRIMARY KEY NOT NULL REFERENCES record (id) ON DELETE CASCADE,
+    version              INTEGER NOT NULL CHECK (version >= 1),
     kind                 TEXT NOT NULL CHECK (kind IN ('dictation', 'meeting', 'file_import')),
     started_at_unix_ms   INTEGER NOT NULL,
     ended_at_unix_ms     INTEGER,
