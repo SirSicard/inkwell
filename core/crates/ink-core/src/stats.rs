@@ -14,8 +14,16 @@
 use crate::audio::Channel;
 use crate::store::{CommitmentId, RecordId, RecordKind, Segment};
 
-/// What ends a question: the question mark, its full-width form, and the Arabic one (U+061F).
+/// What ends a question: the question mark, its full-width form, and the Arabic one (U+061F). A
+/// deliberate shortlist, not every script's question mark: the count is labelled as lines ending
+/// in a question mark, and a mark added here changes what a digest counts (raise
+/// [`DIGEST_VERSION`]).
 pub const QUESTION_MARKS: [char; 3] = ['?', '？', '؟'];
+
+/// Invisible marks that set text direction (left-to-right U+200E, right-to-left U+200F, Arabic
+/// letter U+061C). Dictated right-to-left text can end with one after its question mark; they are
+/// not text, so they are trimmed with trailing whitespace before the question mark is looked for.
+pub const DIRECTION_MARKS: [char; 3] = ['\u{200E}', '\u{200F}', '\u{061C}'];
 
 /// The longest pause that still leaves the user's speech one monologue. A longer silence, or any
 /// speech from the far end, ends it.
@@ -45,7 +53,7 @@ pub struct TranscriptDigest {
     /// [`MONOLOGUE_PAUSE_MS`], ms: from the start of its first line to the end of its last.
     pub longest_monologue_ms: u64,
     /// The user's lines whose text ends in a question mark (`?`, the full-width `？` or the Arabic
-    /// `؟`), trailing space aside. A plain count, labelled as such: no judgement of what a question is.
+    /// `؟`), trailing space and direction marks aside. A plain count, labelled as such: no judgement of what a question is.
     pub mic_questions: u64,
 }
 
@@ -87,8 +95,11 @@ pub struct CommitmentState {
 /// recounts any kept under another, so changing what a digest counts (the word split, the pause
 /// that ends a monologue, the question rule) must raise it: the pinned test below fails until it
 /// is raised.
-/// Version 2 counts the Arabic question mark as a question.
-pub const DIGEST_VERSION: u32 = 2;
+///
+/// - 1: the first rules.
+/// - 2: the Arabic question mark (`؟`) ends a question.
+/// - 3: direction marks after a question mark are trimmed ([`DIRECTION_MARKS`]).
+pub const DIGEST_VERSION: u32 = 3;
 
 /// Counts `segments` (one record's current transcript).
 pub fn digest(segments: &[Segment]) -> TranscriptDigest {
@@ -115,7 +126,11 @@ pub fn digest(segments: &[Segment]) -> TranscriptDigest {
         mic_questions: segments
             .iter()
             .filter(|s| s.channel == Channel::Mic)
-            .filter(|s| s.text.trim_end().ends_with(QUESTION_MARKS))
+            .filter(|s| {
+                s.text
+                    .trim_end_matches(|c: char| c.is_whitespace() || DIRECTION_MARKS.contains(&c))
+                    .ends_with(QUESTION_MARKS)
+            })
             .count() as u64,
     }
 }
@@ -203,12 +218,11 @@ mod tests {
         seg(Channel::Far, start_ms, end_ms, text)
     }
 
-    /// Pins what version 2 of the rules counts for one transcript. If this fails, the rules
+    /// Pins what version 3 of the rules counts for one transcript. If this fails, the rules
     /// changed: raise [`DIGEST_VERSION`] (so kept digests are recounted), then update the numbers.
-    /// Version 2 counts the Arabic question mark `؟` as a question.
     #[test]
-    fn digest_version_2_counts_this_transcript_so() {
-        assert_eq!(DIGEST_VERSION, 2);
+    fn digest_version_3_counts_this_transcript_so() {
+        assert_eq!(DIGEST_VERSION, 3);
         let d = digest(&[
             mic(0, 4_000, "shall we start?"),
             mic(6_500, 9_000, "one two  three"),
@@ -219,14 +233,16 @@ mod tests {
             mic(34_000, 40_000, "b"),
             mic(43_001, 45_000, "c"),
             mic(50_000, 51_000, "هل نبدأ؟"),
+            // A right-to-left mark after the question mark: still a question (version 3).
+            mic(56_000, 57_000, "هل انتهينا؟\u{200F}"),
         ]);
         assert_eq!(
             d,
             TranscriptDigest {
                 mic: ChannelDigest {
-                    words: 12,
-                    speech_ms: 17_499,
-                    lines: 7
+                    words: 14,
+                    speech_ms: 18_499,
+                    lines: 8
                 },
                 far: ChannelDigest {
                     words: 3,
@@ -235,7 +251,7 @@ mod tests {
                 },
                 // 30..40 s joined across 3 s; 43.001 s split off.
                 longest_monologue_ms: 10_000,
-                mic_questions: 3,
+                mic_questions: 4,
             }
         );
     }
@@ -290,8 +306,14 @@ mod tests {
             far(5, 6, "What about you?"),
             mic(6, 7, "هل انتهينا؟ "),
             mic(7, 8, "؟ لا"),
+            // Direction marks after the question mark, with or without space, are not text.
+            mic(8, 9, "هل نبدأ؟\u{200F}"),
+            mic(9, 10, "Ready?\u{200E} "),
+            mic(10, 11, "هل نبدأ؟ \u{061C}\n"),
+            // A mark alone is not a question.
+            mic(11, 12, "\u{200F}"),
         ]);
-        assert_eq!(d.mic_questions, 4);
+        assert_eq!(d.mic_questions, 7);
     }
 
     /// A monologue: the user's lines joined across pauses of up to three seconds, ended by a
