@@ -120,7 +120,11 @@ internal sealed class LiveIconHost : IDisposable
     private void Follow()
     {
         var state = drop.Ink;
-        var progress = state == DropInk.Blotting ? LiveIcon.FinalPassProgress(store.Meeting) : null;
+        // The store lets the meeting go a moment before the Drop leaves the final pass: its last
+        // progress stays, rather than one frame of a dashed ring before rest.
+        var progress = state != DropInk.Blotting ? null
+            : store.Meeting is null && icon.Frame.Look is LiveIconLook.Ring shown ? shown.Progress
+            : LiveIcon.FinalPassProgress(store.Meeting);
         var still = theme.AlwaysStill || !SystemMotion.AnimationsEnabled;
         icon.Update(LiveIconLook.For(state, progress, still), Colours());
         tray.Tooltip = App.TrayTooltip(inkProblem, state);
