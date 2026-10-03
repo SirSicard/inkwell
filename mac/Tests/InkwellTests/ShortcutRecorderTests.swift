@@ -3,6 +3,7 @@
 // accepts is saved, and dictation is off while recording. The real core's answers for every key
 // the recorder names are in DictationCoreContractTests; pressing keys in the running app is on
 // mac/DICTATION-CHECKLIST.md.
+import AppKit
 import Carbon.HIToolbox
 import Foundation
 import InkBridge
@@ -290,17 +291,75 @@ final class ShortcutRecorderTests: XCTestCase {
     }
 
     /// The core stopped mid-recording: nothing will answer, and the restarted core turns dictation
-    /// on from its switch, so nothing is left paused.
-    func testACoreThatStopsLeavesNothingPaused() {
+    /// on from its switch, so nothing is left paused. The recorder ends cleanly, recording or
+    /// checking: nothing is sent to the stopped core, no line is left under the row, a late answer
+    /// or the check's timeout changes nothing, and the next recording starts afresh.
+    func testACoreThatStopsLeavesNothingPaused() async throws {
         let sent = Sent()
         let screens = live(sent)
-        screens.shortcuts.start(.dictation)
+        let recorder = screens.shortcuts
+        recorder.start(.dictation)
         XCTAssertTrue(screens.dictation.suspendedForRecording)
+        let sentBefore = sent.commands.count
         screens.apply([event(#"{"type":"core.stopped"}"#)])
-        XCTAssertNil(screens.shortcuts.recording)
+        XCTAssertNil(recorder.recording)
+        XCTAssertNil(recorder.checking)
+        XCTAssertNil(recorder.message(for: .dictation))
         XCTAssertFalse(screens.dictation.suspendedForRecording)
         XCTAssertEqual(screens.dictation.status, "Starting\u{2026}")
-        XCTAssertFalse(screens.shortcuts.feed(.keyDown(keyCode: 0x00, flags: 0, isRepeat: false)))
+        XCTAssertFalse(recorder.feed(.keyDown(keyCode: 0x00, flags: 0, isRepeat: false)))
+        XCTAssertEqual(sent.commands.count, sentBefore, "nothing sent to the stopped core")
+
+        // Stopped while the core checks a captured key.
+        recorder.checkTimeout = .milliseconds(20)
+        recorder.start(.dictation)
+        _ = press(recorder, 0x69, 0)
+        XCTAssertEqual(sent.commands.last, .hotkeyCheck(binding: "f13", ref: "hotkey:1"))
+        XCTAssertNotNil(recorder.checking)
+        let sentAtStop = sent.commands.count
+        let heardAtStop = heard.count
+        screens.apply([event(#"{"type":"core.stopped"}"#)])
+        XCTAssertNil(recorder.recording)
+        XCTAssertNil(recorder.checking)
+        XCTAssertNil(recorder.message(for: .dictation), "the Checking line goes")
+        XCTAssertFalse(screens.dictation.suspendedForRecording)
+        // Past the check's timeout: it was given up with the core, so it says nothing now.
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(recorder.message(for: .dictation))
+        XCTAssertEqual(heard.count, heardAtStop, "VoiceOver hears nothing more")
+        // The stopped core's answer, late: nothing is saved.
+        screens.apply([event(#"{"type":"hotkey.checked","binding":"f13","ok":true,"canonical":"f13","ref":"hotkey:1"}"#)])
+        XCTAssertFalse(sent.commands.contains(.settingSet(.dictationKey, "f13")))
+        XCTAssertEqual(sent.commands.count, sentAtStop, "nothing sent to the stopped core")
+
+        // The next recording, on the restarted core, starts afresh.
+        recorder.start(.dictation)
+        XCTAssertEqual(recorder.recording, .dictation)
+        XCTAssertTrue(press(recorder, 0x6A, 0))
+        XCTAssertEqual(sent.commands.last, .hotkeyCheck(binding: "f16", ref: "hotkey:2"))
+    }
+
+    /// The recorder hears keys only from its own window: another window's events, or any before its
+    /// view has a window, go on as they were and leave the recording running.
+    func testTheRecorderIgnoresKeysFromOtherWindows() {
+        let sent = Sent()
+        let screens = live(sent)
+        let recorder = screens.shortcuts
+        let settings = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        let other = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        recorder.start(.dictation)
+        let key = ShortcutCapture.Input.keyDown(keyCode: 0x69, flags: 0, isRepeat: false)
+        let checks = { sent.commands.filter { if case .hotkeyCheck = $0 { true } else { false } }.count }
+
+        XCTAssertFalse(ShortcutRecordingFilter.feed(key, from: ObjectIdentifier(other), host: settings, to: recorder))
+        XCTAssertFalse(ShortcutRecordingFilter.feed(key, from: nil, host: settings, to: recorder), "no window")
+        XCTAssertFalse(ShortcutRecordingFilter.feed(key, from: ObjectIdentifier(settings), host: nil, to: recorder),
+                       "the view has no window yet")
+        XCTAssertEqual(recorder.recording, .dictation, "still recording")
+        XCTAssertEqual(checks(), 0, "nothing captured")
+
+        XCTAssertTrue(ShortcutRecordingFilter.feed(key, from: ObjectIdentifier(settings), host: settings, to: recorder))
+        XCTAssertEqual(sent.commands.last, .hotkeyCheck(binding: "f13", ref: "hotkey:1"))
     }
 
     /// Nothing turns dictation on while a shortcut is recorded: the switch, Try again, coming back
