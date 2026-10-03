@@ -379,6 +379,8 @@ public sealed class ConsentModel : ObservableModel
     public void SwitchedOff()
     {
         ClearStep();
+        // Off withdraws the consent: an agreement still waiting for its choice goes with it.
+        Agreed = null;
         Failure = null;
         if (!hasBeforeOff)
         {
@@ -481,6 +483,11 @@ public sealed class ConsentModel : ObservableModel
                 return true;
             case CommandFailed failed when failed.Id is not null && failed.Id == newestAllow:
                 Failure = ConsentFailure.Allow;
+                return true;
+            case CommandFailed { Command: "llm.choose" } when Agreed is not null:
+                // The choice the agreement waits for was refused (CloudModel says why): it is
+                // dropped, or choosing that model later, where nothing asks, would allow it.
+                Agreed = null;
                 return true;
             case DictationWarningEvent { Kind: DictationWarning.PolishNotAllowed } when Feature == LlmFeature.Polish:
             case DictationEditFailed { Reason: EditFailure.NotAllowed } when Feature == LlmFeature.Edit:

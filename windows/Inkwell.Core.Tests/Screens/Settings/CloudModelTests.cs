@@ -218,6 +218,34 @@ public class CloudModelTests
         Assert.Empty(other.Commands.OfType<CoreCommand.LlmChoose>());
         Assert.Null(polish2.Consent.Agreed);
         Assert.Equal(ConsentFailure.Allow, polish2.Consent.Failure);
+
+        // A choice the core refuses drops the agreement: choosing Groq later (Settings' Use, with
+        // no step) allows nothing.
+        var third = new Sent();
+        var cloud3 = new CloudModel(third.Send);
+        var polish3 = new PolishModel(third.Send);
+        cloud3.Apply(Providers(keyed: ["groq"]));
+        cloud3.Suggest("groq");
+        polish3.UseOwnKey(cloud3);
+        polish3.AllowConsent();
+        var refused = Assert.Single(third.Commands.OfType<CoreCommand.LlmChoose>());
+        polish3.Apply(new CommandFailed { Type = "command.failed", Command = "llm.choose", Message = "couldn't save the choice", Id = refused.Ref });
+        Assert.Null(polish3.Consent.Agreed);
+        polish3.Apply(State(on: false, allowed: false, to: "cloud", name: "Groq", endpoint: "https://api.groq.com/openai/v1"));
+        Assert.Empty(third.Commands.OfType<CoreCommand.ConsentAllow>());
+
+        // So does turning polish off before the core names the model.
+        var fourth = new Sent();
+        var cloud4 = new CloudModel(fourth.Send);
+        var polish4 = new PolishModel(fourth.Send);
+        cloud4.Apply(Providers(keyed: ["groq"]));
+        cloud4.Suggest("groq");
+        polish4.UseOwnKey(cloud4);
+        polish4.AllowConsent();
+        polish4.Consent.SwitchedOff();
+        Assert.Null(polish4.Consent.Agreed);
+        polish4.Apply(State(on: false, allowed: false, to: "cloud", name: "Groq", endpoint: "https://api.groq.com/openai/v1"));
+        Assert.Empty(fourth.Commands.OfType<CoreCommand.ConsentAllow>());
     }
 
     /// <summary>The first run opens on the other providers' rows when another provider is picked or chosen; Back picks Groq.</summary>
