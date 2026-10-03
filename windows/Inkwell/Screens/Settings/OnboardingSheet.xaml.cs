@@ -79,10 +79,12 @@ public sealed partial class OnboardingSheet : ContentDialog
         PolishTitle.Text = OnboardingModel.PolishTitle;
         PolishNote.Text = OnboardingModel.PolishNote;
         AutomationProperties.SetName(PolishSwitch, OnboardingModel.PolishToggle);
-        OwnKeyLine.Text = OnboardingModel.OwnKeyLine;
+        // "Use Groq's free model: get a key at " and the host as its link.
+        OwnKeyLead.Text = OnboardingModel.OwnKeyLine[..OnboardingModel.OwnKeyLine.IndexOf(OnboardingModel.OwnKeyHost, StringComparison.Ordinal)];
+        OwnKeyLink.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = OnboardingModel.OwnKeyHost });
         OwnKeyLink.NavigateUri = new Uri(OnboardingModel.OwnKeyUrl);
         AutomationProperties.SetName(OwnKeyBox, OnboardingModel.OwnKeyBoxName);
-        OwnKeyBox.PlaceholderText = OnboardingModel.OwnKeyBoxName;
+        OwnKeyBox.PlaceholderText = OnboardingModel.OwnKeyPlaceholder;
         OwnKeyUse.Content = OnboardingModel.OwnKeyButton;
         AutomationProperties.SetHelpText(OwnKeyUse, OnboardingModel.OwnKeyNote);
         OwnKeyNote.Text = OnboardingModel.OwnKeyNote;

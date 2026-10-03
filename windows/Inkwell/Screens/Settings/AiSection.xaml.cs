@@ -120,7 +120,8 @@ public sealed partial class AiSection : UserControl
         {
             ServerBox.Text = cloud.DraftBaseUrl;
         }
-        KeyBox.PlaceholderText = provider?.HasKey == true ? "Paste a new key to replace the stored one" : "Paste your API key";
+        // Short enough to show whole in the box; the line under it says a key is stored.
+        KeyBox.PlaceholderText = provider?.HasKey == true ? "Paste a new key" : "Paste your API key";
         KeyStatus.Text = cloud.KeyStatus;
         DeleteKeyButton.IsEnabled = provider?.HasKey == true;
         var models = new List<string>();

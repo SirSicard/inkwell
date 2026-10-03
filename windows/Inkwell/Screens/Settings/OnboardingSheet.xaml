@@ -109,13 +109,19 @@
                 <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
                 <!-- While this PC has no language model: Groq's free key, through Settings > AI's
                      flow (CloudModel.UseKey: pick, save the key, use). -->
+                <!-- One choice: the line (its link inline), the key box under it with Save. -->
                 <StackPanel x:Name="OwnKeyPanel" Spacing="8">
-                    <TextBlock x:Name="OwnKeyLine" Style="{StaticResource InkBodyStyle}" TextWrapping="Wrap" />
-                    <HyperlinkButton x:Name="OwnKeyLink" Padding="0" Content="console.groq.com" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <PasswordBox x:Name="OwnKeyBox" MinWidth="320" />
-                        <Button x:Name="OwnKeyUse" Click="OnOwnKeyUse" />
-                    </StackPanel>
+                    <TextBlock x:Name="OwnKeyLine" Style="{StaticResource InkBodyStyle}" TextWrapping="Wrap">
+                        <Run x:Name="OwnKeyLead" /><Hyperlink x:Name="OwnKeyLink" />
+                    </TextBlock>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <PasswordBox x:Name="OwnKeyBox" />
+                        <Button x:Name="OwnKeyUse" Grid.Column="1" Click="OnOwnKeyUse" Style="{StaticResource InkAccentButtonStyle}" />
+                    </Grid>
                     <TextBlock x:Name="OwnKeyNote" Style="{StaticResource InkCaptionStyle}" />
                     <TextBlock x:Name="OwnKeyStatus" Style="{StaticResource InkAlertTextStyle}" />
                 </StackPanel>

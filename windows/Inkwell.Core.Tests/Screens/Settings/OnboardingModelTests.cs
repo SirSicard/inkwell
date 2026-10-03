@@ -237,4 +237,15 @@ public class OnboardingModelTests
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
         Assert.Null(new ModelChoices().DownloadTitle(catalogue, CultureInfo.InvariantCulture));
     }
+
+    /// <summary>The own key is one choice: its line ends in the link's host (the view makes that part the link).</summary>
+    [Fact]
+    public void TheOwnKeyIsOneChoiceWithItsLinkInTheLine()
+    {
+        Assert.Equal("Use Groq's free model: get a key at console.groq.com", OnboardingModel.OwnKeyLine);
+        Assert.EndsWith(OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyLine, StringComparison.Ordinal);
+        Assert.Equal("https://" + OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyUrl);
+        Assert.Equal("Save", OnboardingModel.OwnKeyButton);
+    }
+
 }

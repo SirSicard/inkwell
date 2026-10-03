@@ -225,17 +225,23 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>Where Groq's keys are made (the homepage's link).</summary>
     public const string OwnKeyUrl = "https://console.groq.com";
 
-    /// <summary>The Polish step's own key, while no language model is available (the homepage's words).</summary>
-    public const string OwnKeyLine =
-        "Or bring your own key. Groq's free tier covers ordinary personal use and needs no credit card: sign in at console.groq.com, create a key under API Keys, copy it (Groq shows it once) and paste it here. Settings > AI has the other providers.";
+    /// <summary>The Polish step's own key, while no language model is available: one choice, the link in it.</summary>
+    public const string OwnKeyLine = "Use Groq's free model: get a key at console.groq.com";
 
-    /// <summary>What pressing the own-key button means, said before it is pressed.</summary>
+    /// <summary>The part of <see cref="OwnKeyLine"/> that is the link to <see cref="OwnKeyUrl"/>.</summary>
+    public const string OwnKeyHost = "console.groq.com";
+
+    /// <summary>What Save means, said before it is pressed.</summary>
     public const string OwnKeyNote =
-        "Using Groq turns local-only mode off, so polish can send to Groq once you turn it on and allow it. The key is kept in Windows Credential Manager, never in Inkwell's files.";
+        "Groq's free tier needs no credit card, and shows a new key once: copy it there and paste it here. Saving turns local-only mode off, so polish can send to Groq once you turn it on and allow it. The key is kept in Windows Credential Manager, never in Inkwell's files; Settings > AI has the other providers.";
 
-    public const string OwnKeyButton = "Use Groq";
+    /// <summary>Stores the key and chooses Groq (CloudModel.UseKey).</summary>
+    public const string OwnKeyButton = "Save";
 
     public const string OwnKeyBoxName = "Groq API key";
+
+    /// <summary>The key box's placeholder: short enough to show whole.</summary>
+    public const string OwnKeyPlaceholder = "Paste your Groq key";
 
     public const string ReadyTitle = "Ready";
 
