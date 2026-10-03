@@ -66,6 +66,10 @@ pub const CELEBRATE_KEY: &str = "stats.celebrate";
 /// The store setting noting the milestones already celebrated, or passed while celebrations were
 /// off: a JSON array of ids. The core's own; no shell reads or writes it.
 pub const MILESTONES_KEY: &str = "stats.milestones";
+/// The store setting an import sets (`yes`) so the next milestone check notes what is reached
+/// without reporting it: imported words are history, not a milestone reached now. The check
+/// clears it (`no`) with its note, in one write. The core's own.
+pub const MILESTONES_AFRESH_KEY: &str = "stats.milestones_afresh";
 /// The least speech a window needs before it has a words-per-minute figure.
 pub const WPM_MIN_SPOKEN_MS: u64 = 60_000;
 /// How far back the 30-day average reaches, today included.
@@ -541,13 +545,15 @@ fn parse_calendar(name: &str, v: &Value) -> Result<Calendar, String> {
 /// - **A first check reports nothing.** With no note (a library from before milestones, or one
 ///   just imported into), what is reached already is noted silently: an old milestone is not
 ///   celebrated as new. A note that cannot be read is treated the same way, rather than
-///   celebrating everything at once.
+///   celebrating everything at once. So is the first check after an import (`afresh`), which keeps
+///   what was noted before.
 /// - **Off notes without reporting.** With celebrations off a milestone reached is noted, so
 ///   turning them back on later does not celebrate it late.
 pub fn celebrations(
     reached: &[&'static str],
     noted: Option<&str>,
     celebrate: bool,
+    afresh: bool,
 ) -> (Vec<&'static str>, Option<String>) {
     let previous: Option<BTreeSet<String>> = noted.and_then(|n| {
         let ids = serde_json::from_str::<Value>(n).ok()?;
@@ -559,7 +565,7 @@ pub fn celebrations(
     if noted.is_some() && previous.is_none() {
         log::warn!("stats: the note of milestones celebrated could not be read; noted afresh");
     }
-    let first = previous.is_none();
+    let first = previous.is_none() || afresh;
     let mut all = previous.unwrap_or_default();
     let new: Vec<&'static str> = reached
         .iter()
@@ -610,11 +616,17 @@ pub fn answer(shared: &Shared, query: StatsQuery, id: Option<&str>) -> Result<Va
         .collect();
     let noted = store.setting(MILESTONES_KEY).map_err(e)?;
     let celebrate = store.setting(CELEBRATE_KEY).map_err(e)?.as_deref() != Some("off");
-    let (report, note) = celebrations(&reached, noted.as_deref(), celebrate);
+    let afresh = store.setting(MILESTONES_AFRESH_KEY).map_err(e)?.as_deref() == Some("yes");
+    let (report, note) = celebrations(&reached, noted.as_deref(), celebrate, afresh);
     // Noted before it is reported: a note that fails to save fails the check, so a milestone is
     // never celebrated without being remembered.
-    if let Some(note) = note {
-        store.set_setting(MILESTONES_KEY, &note).map_err(e)?;
+    match (note, afresh) {
+        (Some(note), true) => store
+            .set_settings(&[(MILESTONES_KEY, &note), (MILESTONES_AFRESH_KEY, "no")])
+            .map_err(e)?,
+        (Some(note), false) => store.set_setting(MILESTONES_KEY, &note).map_err(e)?,
+        (None, true) => store.set_setting(MILESTONES_AFRESH_KEY, "no").map_err(e)?,
+        (None, false) => {}
     }
     let rows = MILESTONES
         .iter()
@@ -1099,11 +1111,11 @@ mod tests {
         let ids = |v: &[&'static str]| v.to_vec();
         // First check: nothing reported, what is reached noted.
         assert_eq!(
-            celebrations(&ids(&["words_1000"]), None, true),
+            celebrations(&ids(&["words_1000"]), None, true, false),
             (vec![], Some(r#"["words_1000"]"#.to_string()))
         );
         assert_eq!(
-            celebrations(&[], None, true),
+            celebrations(&[], None, true, false),
             (vec![], Some("[]".to_string()))
         );
         // A new one is reported and noted with the old.
@@ -1111,7 +1123,8 @@ mod tests {
             celebrations(
                 &ids(&["words_1000", "streak_7"]),
                 Some(r#"["words_1000"]"#),
-                true
+                true,
+                false
             ),
             (
                 vec!["streak_7"],
@@ -1120,26 +1133,49 @@ mod tests {
         );
         // Nothing new: nothing reported, nothing written.
         assert_eq!(
-            celebrations(&ids(&["words_1000"]), Some(r#"["words_1000"]"#), true),
+            celebrations(
+                &ids(&["words_1000"]),
+                Some(r#"["words_1000"]"#),
+                true,
+                false
+            ),
             (vec![], None)
         );
         // Reached once, then not (records deleted): still noted, and not reported again later.
         assert_eq!(
-            celebrations(&[], Some(r#"["words_1000"]"#), true),
+            celebrations(&[], Some(r#"["words_1000"]"#), true, false),
             (vec![], None)
         );
         assert_eq!(
-            celebrations(&ids(&["words_1000"]), Some(r#"["words_1000"]"#), true),
+            celebrations(
+                &ids(&["words_1000"]),
+                Some(r#"["words_1000"]"#),
+                true,
+                false
+            ),
             (vec![], None)
         );
         // Off: noted, not reported.
         assert_eq!(
-            celebrations(&ids(&["streak_7"]), Some("[]"), false),
+            celebrations(&ids(&["streak_7"]), Some("[]"), false, false),
             (vec![], Some(r#"["streak_7"]"#.to_string()))
+        );
+        // After an import: noted silently, what was noted before kept.
+        assert_eq!(
+            celebrations(
+                &ids(&["words_1000", "words_10000"]),
+                Some(r#"["streak_7"]"#),
+                true,
+                true
+            ),
+            (
+                vec![],
+                Some(r#"["streak_7","words_1000","words_10000"]"#.to_string())
+            )
         );
         // An unreadable note is a first check, rather than a flood of old milestones.
         assert_eq!(
-            celebrations(&ids(&["words_1000"]), Some("not json"), true),
+            celebrations(&ids(&["words_1000"]), Some("not json"), true, false),
             (vec![], Some(r#"["words_1000"]"#.to_string()))
         );
     }

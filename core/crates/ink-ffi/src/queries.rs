@@ -932,9 +932,17 @@ impl Ctx<'_> {
                 match crate::import02::answer(import, query, id.as_deref()) {
                     Ok(e) => {
                         emit(e);
-                        // A running dictation takes the imported key and lists at once.
                         if query.imports() {
+                            // A running dictation takes the imported key and lists at once.
                             crate::voice::settings_changed(self.shared);
+                            // The imported words are history: the next milestone check notes
+                            // what they reach without celebrating it. A failure here only costs
+                            // a celebration the import did not earn, so it is logged.
+                            if let Err(err) =
+                                store.set_setting(crate::stats::MILESTONES_AFRESH_KEY, "yes")
+                            {
+                                log::warn!("import: milestones could not be noted afresh: {err}");
+                            }
                         }
                     }
                     Err(e) => fail(e),

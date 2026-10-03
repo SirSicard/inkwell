@@ -464,3 +464,37 @@ fn without_the_import_the_commands_fail_and_a_path_is_never_taken() {
     rig.events.assert_valid();
     rig.core.shutdown();
 }
+
+/// What an import brings is history, not a milestone reached now: the next check notes it
+/// silently, however many milestones the imported words pass at once.
+#[test]
+fn an_imports_milestones_are_noted_not_celebrated() {
+    let source = legacy("milestones", &[]);
+    let long = "word ".repeat(600);
+    transcripts_0_2(source.path(), &[&long, &long]);
+    let rig = Rig::new("milestones", Some(Some(source.path().to_owned())));
+    let check = |id: &str| {
+        rig.core
+            .command(&format!(
+                r#"{{"cmd":"milestones.check","utc_offsets":[{{"from_unix_ms":0,"minutes":0}}],"week_start":1,"id":"{id}"}}"#
+            ))
+            .unwrap();
+        rig.events
+            .wait_for(WAIT, |v| v["ref"] == id)
+            .unwrap_or_else(|| panic!("no answer to {id}"))
+    };
+    // The library's first check, before the import: nothing reached.
+    assert_eq!(check("before")["milestones"], serde_json::json!([]));
+    let finished = rig.ask("import.run");
+    assert_eq!(finished["type"], "import.finished", "{finished}");
+    // 1,200 words came over: words_1000 is noted, not reported.
+    let after = check("after");
+    assert_eq!(after["type"], "milestones.reached");
+    assert_eq!(after["milestones"], serde_json::json!([]));
+    let noted = Store::setting(rig.store.as_ref(), ink_ffi::stats::MILESTONES_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(noted, r#"["words_1000"]"#);
+    rig.events.assert_valid();
+    rig.core.shutdown();
+}
