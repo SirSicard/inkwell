@@ -13,7 +13,10 @@
 // it or its colours change. The recording's pulse is breathed two ways: the menu-bar item runs it
 // as a layer animation (the render server's, at the pulse's low rate, with no wakeup in the app),
 // and the Dock tile, which has no layers to animate, is ticked by a timer that runs only while the
-// tile is there and a pulse is shown. Each surface draws the frames it is given.
+// tile is there and a pulse is shown. While nobody can see the screen (the displays asleep, the
+// screen locked, another user in front: DisplayWatch) nothing ticks, breathes or draws; on waking,
+// the state as it is now is drawn once. Each surface draws the frames it is given.
+import AppKit
 import Foundation
 import InkBridge
 import InkRenderer
@@ -96,10 +99,13 @@ protocol LiveIconSurface: AnyObject {
     /// ticked.
     var breathesItself: Bool { get }
     func show(_ frame: LiveIconFrame)
+    /// Whether anyone can see the screen: a surface that breathes itself stops and resumes.
+    func setAwake(_ awake: Bool)
 }
 
 extension LiveIconSurface {
     var breathesItself: Bool { false }
+    func setAwake(_ awake: Bool) {}
 }
 
 /// The pulse's clock.
@@ -131,6 +137,10 @@ final class LiveIcon {
     private var surfaces: [LiveIconSurface] = []
     /// Ticks into the current breath.
     private var tick = 0
+    /// Someone can see the screen.
+    private(set) var isAwake = true
+    /// A frame came while nobody could see it: drawn on waking.
+    private var unshown = false
 
     init(ticker: LiveIconTicker = TimerTicker()) {
         self.ticker = ticker
@@ -142,7 +152,22 @@ final class LiveIcon {
     func attach(_ surface: LiveIconSurface) {
         guard !surfaces.contains(where: { $0 === surface }) else { return }
         surfaces.append(surface)
+        if !isAwake { surface.setAwake(false) }
         surface.show(frame)
+        reconcileTicker()
+    }
+
+    /// Whether anyone can see the screen. Asleep, nothing ticks, breathes or draws (a change is
+    /// kept); awake again, the frame as it is now is drawn if it changed, and the breath resumes.
+    func setAwake(_ awake: Bool) {
+        guard awake != isAwake else { return }
+        isAwake = awake
+        for surface in surfaces {
+            surface.setAwake(awake)
+        }
+        if awake && unshown {
+            deliver(frame)
+        }
         reconcileTicker()
     }
 
@@ -218,6 +243,11 @@ final class LiveIcon {
 
     private func deliver(_ next: LiveIconFrame) {
         frame = next
+        guard isAwake else {
+            unshown = true
+            return
+        }
+        unshown = false
         frames += 1
         for surface in surfaces {
             surface.show(next)
@@ -229,7 +259,7 @@ final class LiveIcon {
 
     /// Runs the timer exactly while a pulse is shown on a surface that needs its frames.
     private func reconcileTicker() {
-        let wanted = frame.look.pulses && !ticked.isEmpty
+        let wanted = isAwake && frame.look.pulses && !ticked.isEmpty
         if wanted && !ticker.running {
             ticker.start(interval: 1 / Self.pulseFPS) { [weak self] in self?.advance() }
         } else if !wanted && ticker.running {
@@ -270,5 +300,60 @@ final class TimerTicker: LiveIconTicker {
     func stop() {
         timer?.invalidate()
         timer = nil
+    }
+}
+
+/// Whether anyone can see the screen: the displays awake, the screen unlocked, and this user's
+/// session in front (fast user switching). Each is followed through the system's notifications;
+/// nothing polls. The lock is the distributed com.apple.screenIsLocked pair, which macOS posts
+/// for the lock screen and the screen saver's password, and has no AppKit name.
+@MainActor
+final class DisplayWatch {
+    static let screenLocked = Notification.Name("com.apple.screenIsLocked")
+    static let screenUnlocked = Notification.Name("com.apple.screenIsUnlocked")
+
+    private(set) var awake = true
+    private var asleep = false
+    private var locked = false
+    private var away = false
+    private let onChange: @MainActor (Bool) -> Void
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+
+    init(
+        workspace: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        distributed: NotificationCenter = DistributedNotificationCenter.default(),
+        onChange: @escaping @MainActor (Bool) -> Void
+    ) {
+        self.onChange = onChange
+        watch(workspace, NSWorkspace.screensDidSleepNotification) { $0.asleep = true }
+        watch(workspace, NSWorkspace.screensDidWakeNotification) { $0.asleep = false }
+        watch(workspace, NSWorkspace.sessionDidResignActiveNotification) { $0.away = true }
+        watch(workspace, NSWorkspace.sessionDidBecomeActiveNotification) { $0.away = false }
+        watch(distributed, Self.screenLocked) { $0.locked = true }
+        watch(distributed, Self.screenUnlocked) { $0.locked = false }
+    }
+
+    isolated deinit {
+        for (center, observer) in observers {
+            center.removeObserver(observer)
+        }
+    }
+
+    private func watch(_ center: NotificationCenter, _ name: Notification.Name, _ apply: @escaping @MainActor (DisplayWatch) -> Void) {
+        let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                apply(self)
+                self.settle()
+            }
+        }
+        observers.append((center, observer))
+    }
+
+    private func settle() {
+        let now = !asleep && !locked && !away
+        guard now != awake else { return }
+        awake = now
+        onChange(now)
     }
 }

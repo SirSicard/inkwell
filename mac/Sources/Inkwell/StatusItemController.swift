@@ -88,6 +88,10 @@ final class StatusItemController: NSObject, NSMenuDelegate, LiveIconSurface {
         overlay.show(frame)
     }
 
+    func setAwake(_ awake: Bool) {
+        overlay.setAwake(awake)
+    }
+
     /// Keeps the spoken label in line with the ink's state, then waits for the next change (the
     /// change is read on the next turn of the main queue, once applied).
     private func showState() {

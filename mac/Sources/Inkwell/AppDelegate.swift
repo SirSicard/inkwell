@@ -30,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var drop: DropController?
     /// What the Dock tile and the menu-bar item show of the state.
     private let liveIcon = LiveIcon()
+    /// Pauses the live icon while nobody can see the screen.
+    private var displayWatch: DisplayWatch?
     /// The Dock tile's surface, attached while the main window is open (the only time the tile
     /// exists). The art is the bundle's icon, read before anything draws over the tile.
     private lazy var liveDock = LiveIconDock(tile: NSApp.dockTile, base: NSApp.applicationIconImage ?? NSImage())
@@ -102,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         if let statusItem { liveIcon.attach(statusItem) }
         liveIcon.follow(ink: ink, theme: core.screens.theme)
+        displayWatch = DisplayWatch { [weak self] awake in self?.liveIcon.setAwake(awake) }
         // Opened by the user: show the window. Opened at login: stay in the menu bar, unless a
         // second copy asked for the window while this one was starting (served by attach).
         if !LoginItem.launchedAtLogin() {

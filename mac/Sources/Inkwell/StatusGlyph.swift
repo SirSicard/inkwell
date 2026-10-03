@@ -92,6 +92,8 @@ final class StatusGlyphOverlay: NSView {
     static let breathKey = "inkwell.breath"
 
     private var shown = LiveIconFrame(look: .rest, colours: .unset, strength: 1)
+    /// Someone can see the screen: the breath runs only then.
+    private var awake = true
     /// How many times a frame asked for a redraw (the pulse's frames are opacity only).
     private(set) var redraws = 0
 
@@ -128,7 +130,13 @@ final class StatusGlyphOverlay: NSView {
             needsDisplay = true
         }
         isHidden = frame.look == .rest
-        breathe(frame.look.pulses)
+        breathe(frame.look.pulses && awake)
+    }
+
+    /// Asleep or locked, the breath comes off the layer, so the render server has nothing to run.
+    func setAwake(_ awake: Bool) {
+        self.awake = awake
+        breathe(shown.look.pulses && awake)
     }
 
     /// Starts or stops the breath: the layer's opacity from full to `breathLow` and back over a

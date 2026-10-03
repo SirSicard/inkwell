@@ -59,8 +59,10 @@ final class StatusGlyphTests: XCTestCase {
 private final class RecordingSurface: LiveIconSurface {
     let breathesItself: Bool
     var shown: [LiveIconFrame] = []
+    var awake: [Bool] = []
     init(breathesItself: Bool = false) { self.breathesItself = breathesItself }
     func show(_ frame: LiveIconFrame) { shown.append(frame) }
+    func setAwake(_ awake: Bool) { self.awake.append(awake) }
 }
 
 /// A ticker the test fires by hand.
@@ -283,6 +285,90 @@ final class LiveIconSelfBreathTests: XCTestCase {
     }
 }
 
+/// Nobody can see the screen (the displays asleep, the screen locked, another user in front):
+/// nothing ticks, nothing breathes, nothing is drawn, until it can be seen again.
+@MainActor
+final class LiveIconAsleepTests: XCTestCase {
+    func testAsleepNothingTicksOrDraws() {
+        let ticker = HandTicker()
+        let icon = LiveIcon(ticker: ticker)
+        let dock = RecordingSurface()
+        let bar = RecordingSurface(breathesItself: true)
+        icon.attach(dock)
+        icon.attach(bar)
+        icon.update(look: .pulse(.them), colours: colours)
+        XCTAssertTrue(icon.isPulsing)
+
+        icon.setAwake(false)
+        XCTAssertFalse(icon.isPulsing, "the Dock's timer stops")
+        XCTAssertEqual(bar.awake, [false], "the menu bar's breath stops")
+        let start = icon.frames
+        let shown = dock.shown.count + bar.shown.count
+        ticker.fire(420)
+        icon.update(look: .ring(0.25), colours: colours)
+        icon.update(look: .ring(0.5), colours: colours)
+        XCTAssertEqual(icon.frames - start, 0, "a minute asleep, with the state changing: nothing drawn")
+        XCTAssertEqual(dock.shown.count + bar.shown.count, shown)
+
+        icon.setAwake(true)
+        XCTAssertEqual(bar.awake, [false, true])
+        XCTAssertEqual(dock.shown.last?.look, .ring(0.5), "awake: the state as it is now, at once")
+        XCTAssertEqual(bar.shown.last?.look, .ring(0.5))
+        XCTAssertEqual(icon.frames - start, 1)
+        XCTAssertFalse(icon.isPulsing, "the recording ended while asleep")
+    }
+
+    /// Awake again mid-recording: the breath picks up, with nothing to redraw.
+    func testTheBreathResumesOnWake() {
+        let ticker = HandTicker()
+        let icon = LiveIcon(ticker: ticker)
+        let dock = RecordingSurface()
+        icon.attach(dock)
+        icon.update(look: .pulse(.them), colours: colours)
+        icon.setAwake(false)
+        icon.setAwake(false)
+        let shown = dock.shown.count
+        icon.setAwake(true)
+        XCTAssertTrue(icon.isPulsing)
+        XCTAssertEqual(ticker.starts.count, 2)
+        XCTAssertEqual(dock.shown.count, shown, "nothing changed while asleep")
+        ticker.fire()
+        XCTAssertEqual(dock.shown.count, shown + 1)
+    }
+
+    /// A surface attached while nobody can see is told so before it is shown anything.
+    func testASurfaceAttachedAsleepStartsAsleep() {
+        let icon = LiveIcon(ticker: HandTicker())
+        icon.update(look: .pulse(.them), colours: colours)
+        icon.setAwake(false)
+        let bar = RecordingSurface(breathesItself: true)
+        icon.attach(bar)
+        XCTAssertEqual(bar.awake, [false])
+        XCTAssertFalse(icon.isPulsing)
+    }
+}
+
+@MainActor
+final class DisplayWatchTests: XCTestCase {
+    func testItFollowsSleepLockAndTheSession() {
+        let workspace = NotificationCenter()
+        let distributed = NotificationCenter()
+        var said: [Bool] = []
+        let watch = DisplayWatch(workspace: workspace, distributed: distributed) { said.append($0) }
+        XCTAssertTrue(watch.awake)
+        workspace.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        XCTAssertEqual(said, [false])
+        distributed.post(name: DisplayWatch.screenLocked, object: nil)
+        workspace.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
+        XCTAssertEqual(said, [false], "awake displays, but locked")
+        distributed.post(name: DisplayWatch.screenUnlocked, object: nil)
+        XCTAssertEqual(said, [false, true])
+        workspace.post(name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
+        workspace.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        XCTAssertEqual(said, [false, true, false, true], "another user in front, then back")
+    }
+}
+
 /// The energy probe: the app's own timer on the main run loop, counted over real seconds.
 @MainActor
 final class LiveIconEnergyTests: XCTestCase {
@@ -310,12 +396,17 @@ final class LiveIconEnergyTests: XCTestCase {
         // Loose: a busy machine (or the thread sanitizer) delays a timer, never hastens it.
         XCTAssertGreaterThanOrEqual(recording, 8, "and ticking")
 
+        icon.setAwake(false)
+        let asleep = frames(over: 1.5)
+        XCTAssertEqual(asleep, 0, "recording, the display asleep")
+        icon.setAwake(true)
+
         icon.update(look: .ring(0.5), colours: colours)
         XCTAssertFalse(icon.isPulsing)
         let after = frames(over: 1)
         XCTAssertEqual(after, 0, "the pulse stopped with the recording")
-        print("live icon frames per minute: idle \(idle * 40), dictating \(dictating * 40) after its change, "
-            + "recording \(recording * 20), after recording \(after * 60)")
+        print("live icon frames per minute (Dock tile): idle \(idle * 40), dictating \(dictating * 40) after its change, "
+            + "recording \(recording * 20), recording with the display asleep \(asleep * 40), after recording \(after * 60)")
     }
 }
 
@@ -639,6 +730,18 @@ final class StatusGlyphOverlayTests: XCTestCase {
         overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
         overlay.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
         XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey))
+    }
+
+    /// Asleep or locked, the breath is taken off the layer; awake, it is put back.
+    func testTheBreathPausesWhileNobodyCanSee() {
+        let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+        overlay.setAwake(false)
+        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey))
+        overlay.show(LiveIconFrame(look: .pulse(.you), colours: colours, strength: 1))
+        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey), "still asleep")
+        overlay.setAwake(true)
+        XCTAssertNotNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey))
     }
 
     func testItTakesNoClicksAndSaysNothing() {
