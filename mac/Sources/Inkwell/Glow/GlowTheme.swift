@@ -250,10 +250,24 @@ final class GlowTheme {
     }
 
     private func applyMode() {
+        applyAppearance(appearance)
+    }
+
+    /// The mode as an appearance: Light's or Dark's, or nil to follow the system.
+    var appearance: NSAppearance? {
         switch settings.mode {
-        case .light: applyAppearance(NSAppearance(named: .aqua))
-        case .dark: applyAppearance(NSAppearance(named: .darkAqua))
-        case .system: applyAppearance(nil)
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        case .system: nil
+        }
+    }
+
+    /// The mode as SwiftUI's colour scheme: nil follows the system.
+    var colorScheme: ColorScheme? {
+        switch settings.mode {
+        case .light: .light
+        case .dark: .dark
+        case .system: nil
         }
     }
 
@@ -304,5 +318,25 @@ final class GlowTheme {
         let modeChanged = next.mode != settings.mode
         if next != settings { settings = next }
         if modeChanged || key == .appearanceMode { applyMode() }
+    }
+}
+
+extension View {
+    /// Pins the appearance of the window, sheet or popover this view is the root of to the app's
+    /// mode (preferredColorScheme sets its enclosing presentation's), and with it what that
+    /// presents: alerts and confirmation dialogs as sheets, popovers. With only the app's
+    /// appearance set, the speaker-name popover and polish's consent alert drew as dark glass with
+    /// dark text over a Light window. Match system pins nothing. Reads the theme from the
+    /// environment.
+    func followsAppMode() -> some View {
+        modifier(FollowsAppMode())
+    }
+}
+
+private struct FollowsAppMode: ViewModifier {
+    @Environment(GlowTheme.self) private var theme
+
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(theme.colorScheme)
     }
 }

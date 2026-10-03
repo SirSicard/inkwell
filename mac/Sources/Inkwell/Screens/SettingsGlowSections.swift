@@ -272,6 +272,8 @@ struct LanguageModelRows: View {
     var firstRun: PolishModel?
     /// The key being typed: sent once on Save key, then cleared. Never kept anywhere else.
     @State private var key = ""
+    /// The provider whose key Delete asks about, while it asks.
+    @State private var deleting: String?
 
     /// Use: in the first run, polish's consent step first; in Settings, the choice itself.
     private func use() {
@@ -303,7 +305,8 @@ struct LanguageModelRows: View {
                             .frame(maxWidth: 340)
                     }
                     HStack(spacing: 8) {
-                        SecureField(provider.hasKey ? "Paste a new key to replace the stored one" : "Paste your API key", text: $key)
+                        // Short enough to fit the field: a longer one was cut off ("Paste a new key to replace t…").
+                        SecureField(provider.hasKey ? "Paste a new key" : "Paste your API key", text: $key)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 340)
                             .accessibilityLabel("API key")
@@ -313,7 +316,7 @@ struct LanguageModelRows: View {
                             key = ""
                             cloud.saveKey(typed)
                         }
-                        Button("Delete key") { cloud.deleteKey() }
+                        Button(cloud.deleteKeyLabel) { deleting = provider.id }
                             .disabled(!provider.hasKey)
                     }
                     Text(cloud.keyStatus)
@@ -363,11 +366,127 @@ struct LanguageModelRows: View {
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
+                Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain for this Mac account, shared by every Inkwell on it, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        // The key is the Mac account's, not the library's: Delete says so and asks first.
+        // The provider is handed to the actions (presenting:), not read back from @State when
+        // they run: the delete is of the key the question named.
+        .confirmationDialog(
+            cloud.deleteKeyTitle(deleting),
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { id in
+            Button("Delete Key", role: .destructive) { cloud.deleteKey(id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(CloudModel.deleteKeyMessage)
+        }
+    }
+}
+
+/// The first run's own key as one choice: Groq's free model, with the homepage's sentence and its
+/// console.groq.com link, the key field and Save, and Use, which asks polish's consent before
+/// choosing Groq (PolishModel.useOwnKey), so Local only goes off only with it. Another provider or
+/// model is under "Other providers or models…": Settings > AI's rows, with the same consent.
+struct GroqKeyRows: View {
+    let cloud: CloudModel
+    let polish: PolishModel
+    /// The key being typed: sent once on Save, then cleared. Never kept anywhere else.
+    @State private var key = ""
+    /// The other providers' rows are shown instead. Set when the rows are made, so a provider
+    /// already chosen or picked never flashes Groq's rows first.
+    @State private var others: Bool
+
+    init(cloud: CloudModel, polish: PolishModel) {
+        self.cloud = cloud
+        self.polish = polish
+        _others = State(initialValue: cloud.firstRunStartsOnOthers)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if others {
+                LanguageModelRows(cloud: cloud, firstRun: polish)
+                Button {
+                    key = ""
+                    cloud.pickGroq()
+                    others = false
+                } label: {
+                    Self.link("Back to Groq's free model")
+                }
+                .buttonStyle(.plain)
+            } else {
+                groq
+                Button {
+                    key = ""
+                    others = true
+                } label: {
+                    Self.link("Other providers or models\u{2026}")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onAppear {
+            // Nothing chosen or picked: Groq goes in the picker (the rows start on it).
+            cloud.suggest("groq")
+        }
+        .onChange(of: cloud.loaded) {
+            // Opened before the providers were read: Groq goes in the picker once they are.
+            cloud.suggest("groq")
+            if cloud.firstRunStartsOnOthers { others = true }
+        }
+    }
+
+    /// A link in the ink, as the console.groq.com link is (the system's blue is not the app's).
+    private static func link(_ title: String) -> some View {
+        Text(title).font(Typography.caption).underline().foregroundStyle(Theme.text)
+    }
+
+    private var groq: some View {
+        let provider = cloud.selectedProvider
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Groq's free tier covers ordinary personal use and needs no credit card. Sign in at [console.groq.com](https://console.groq.com), create a key under API Keys and paste it here.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                SecureField("Paste your Groq key", text: $key)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+                    .accessibilityLabel("Groq API key")
+                Button("Save") {
+                    // Sent once, then gone from the field.
+                    let typed = key
+                    key = ""
+                    cloud.saveKey(typed)
+                }
+            }
+            .disabled(provider?.id != "groq")
+            if provider?.id == "groq" {
+                Text(cloud.keyStatus)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                Button(cloud.useLabel) { polish.useOwnKey(cloud) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!polish.canUseOwnKey(cloud))
+                    .accessibilityHint(cloud.firstRunUseNote)
+                Text(cloud.firstRunUseNote)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(cloud.failure ?? cloud.status)
+                .font(Typography.caption)
+                .foregroundStyle(cloud.failure != nil || cloud.readError != nil ? Theme.alert : Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -4,6 +4,7 @@ import AppKit
 import Foundation
 import InkBridge
 import InkRenderer
+import SwiftUI
 import XCTest
 
 @testable import Inkwell
@@ -48,6 +49,32 @@ final class GlowThemeTests: XCTestCase {
         theme.apply(event(#"{"type":"setting.value","key":"appearance.mode"}"#))
         XCTAssertEqual(theme.settings.mode, .system)
         XCTAssertEqual(applied.last, .some(nil), "system: the app follows the system again")
+    }
+
+    /// The speaker-name popover and polish's consent alert drew as dark glass over a Light window.
+    /// A window (with its sheets) and a popover that follow the app's mode pin their own
+    /// appearance to it, so what they present follows the window, not whatever else the app or
+    /// the system holds: here the system's appearance is left alone (applyAppearance does
+    /// nothing), and the window still reads the mode. Match system pins nothing.
+    func testAWindowThatFollowsTheModePinsItsAppearanceToIt() {
+        let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
+        let hosting = NSHostingController(rootView: Text("Inkwell").followsAppMode().environment(theme))
+        let window = NSWindow(contentViewController: hosting)
+        defer { window.close() }
+        func shown() -> NSAppearance.Name? {
+            hosting.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            return window.appearance?.name
+        }
+        for (mode, name) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua), ("light", .aqua)] {
+            theme.apply(event(#"{"type":"setting.value","key":"appearance.mode","value":"\#(mode)"}"#))
+            XCTAssertEqual(shown(), name, mode)
+        }
+        theme.apply(event(#"{"type":"setting.value","key":"appearance.mode","value":"system"}"#))
+        XCTAssertNil(shown(), "Match system: the window follows the app, and the app the system")
+        XCTAssertEqual(theme.appearance?.name, nil)
+        theme.apply(event(#"{"type":"setting.value","key":"appearance.mode","value":"dark"}"#))
+        XCTAssertEqual(theme.appearance?.name, .darkAqua, "what an app-modal alert is given")
     }
 
     func testPickingAPresetDropsThatModesOwnColours() {
@@ -175,6 +202,43 @@ final class OrbBehindTextTests: XCTestCase {
             XCTAssertEqual(OrbLayer.opacity(state: state, behindText: true, dimmed: true), OrbLayer.liveBehindText, "\(state): never brighter for Increase Contrast")
         }
         XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: true), 0.45)
+    }
+
+    /// The first run's orb sits beside its text on the sheet, at rest until the user speaks. The
+    /// mode's idle colour is made to sit quietly behind text: beside it, on Light's paper, it was
+    /// all but invisible (about 1.3:1; "its orb didn't show"). At rest on the sheet, at the
+    /// opacity the sheet gives it (with Increase Contrast or Reduce Transparency too: no text is
+    /// over it, so nothing dims it), the orb is a disc that stands out from the paper: a share of
+    /// its pixels at 2:1 or more, not one bright speck.
+    func testTheFirstRunsOrbAtRestShowsOnTheSheetInBothModes() throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let pipeline = try InkPipelineLoader.shared.wait().get()
+        for dark in [false, true] {
+            let background = GlowColours.rgb(Glow.mode(dark: dark).background)
+            let surface = luminance(background)
+            for preset in Glow.presets {
+                for solidSurfaces in [false, true] {
+                    let style = OnboardingView.orbStyle(
+                        GlowColours.palette(preset: preset, you: nil, them: nil, dark: dark), dark: dark,
+                        solidSurfaces: solidSurfaces)
+                    let opacity = Double(OrbLayer.opacity(state: .idle, behindText: false, dimmed: style.dimmed))
+                    // The ready step's orb, 556 x 150 pt, at a quarter of its pixels.
+                    let image = try InkSnapshot.render(
+                        .idle, t: 12, width: 278, height: 75, palette: style.palette, placement: .centred,
+                        voice: .silent, blotDepth: OrbLayer.blotDepth(behindText: false), pipeline: pipeline)
+                    var standingOut = 0
+                    for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] > 0 {
+                        let alpha = Double(image.rgba[i + 3]) / 255
+                        let orb = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / 255
+                        let shown = luminance(orb * opacity + background * (1 - alpha * opacity))
+                        if contrast(surface, shown) >= 2 { standingOut += 1 }
+                    }
+                    let label = "\(dark ? "dark" : "light") \(preset.id)\(solidSurfaces ? " solid" : "")"
+                    // A disc, not a speck: Light reaches about 70 such pixels of 20,850, Dark about 600.
+                    XCTAssertGreaterThanOrEqual(standingOut, 50, label)
+                }
+            }
+        }
     }
 
     /// The orb drawn as the main window places it, loud voices on both sides, at a few moments

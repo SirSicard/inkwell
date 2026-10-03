@@ -146,6 +146,16 @@ final class SpeechModelsTests: XCTestCase {
 
     // MARK: The words
 
+    /// The first run's last step with no speech model says one is needed (with Today's download
+    /// under it) instead of "Hold fn, say something": a hold would type nothing.
+    func testTheReadyStepSaysAModelIsNeededWithoutOne() {
+        let needed = "Inkwell needs a speech model before it can type what you say."
+        XCTAssertEqual(SpeechModels.readyLine(SpeechModels(dictation: .missing, meetings: .missing)), needed)
+        XCTAssertEqual(SpeechModels.readyLine(SpeechModels(dictation: .missing, meetings: .served)), needed)
+        XCTAssertNil(SpeechModels.readyLine(SpeechModels(dictation: .served, meetings: .missing)), "dictation works: as before")
+        XCTAssertNil(SpeechModels.readyLine(.unknown), "not known: as before")
+    }
+
     func testTodaysLineAndTheHoldHint() {
         XCTAssertNil(SpeechModels.todayLine(.unknown))
         XCTAssertNil(SpeechModels.todayLine(SpeechModels(dictation: .served, meetings: .served)))

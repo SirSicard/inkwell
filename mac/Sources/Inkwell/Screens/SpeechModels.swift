@@ -44,6 +44,12 @@ struct SpeechModels: Equatable, Sendable {
         }
     }
 
+    /// The first run's last step while nothing can type a dictation: said in place of "Hold fn,
+    /// say something", with Today's download under it. nil when dictation works or is not known.
+    static func readyLine(_ speech: SpeechModels) -> String? {
+        speech.dictation == .missing ? "Inkwell needs a speech model before it can type what you say." : nil
+    }
+
     /// Live's line under its header during a meeting nothing can transcribe. The core records the
     /// audio whatever is installed, and its final pass, failing for want of an engine, keeps the
     /// (empty) live transcript and leaves the audio with the record.
