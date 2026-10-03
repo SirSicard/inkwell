@@ -285,6 +285,11 @@ public sealed partial class TodayScreen : UserControl
         words.Children.Add(new TextBlock { Text = item.Detail, Style = StyleOf("InkCaptionStyle") });
         Grid.SetColumn(words, 1);
         row.Children.Add(words);
+        if (item.Action is not { } action)
+        {
+            // The plain fact: nothing to press.
+            return row;
+        }
         var button = new Button
         {
             Content = item.ActionTitle,
@@ -293,7 +298,7 @@ public sealed partial class TodayScreen : UserControl
             Margin = new Thickness(12, 0, 0, 0),
         };
         AutomationProperties.SetHelpText(button, item.Title);
-        button.Click += (_, _) => Perform(item.Action);
+        button.Click += (_, _) => Perform(action);
         Grid.SetColumn(button, 2);
         row.Children.Add(button);
         return row;

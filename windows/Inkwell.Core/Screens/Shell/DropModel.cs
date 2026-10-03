@@ -109,10 +109,10 @@ public static class MeetingDrop
             case DropInk.Blotting:
                 return new("Blotting · final pass", meeting.Title ?? meeting.AppName ?? "The final pass");
             case DropInk.Problem:
-                // Windows has no system-audio permission to ask for: loopback arrives as silence
-                // when the call's sound is muted on this PC, and not at all when its device went.
+                // The plain fact, not a guess at why (muted, a quiet call, another device): Windows
+                // has no system-audio permission to ask for, and nothing here is known to fix it.
                 return meeting.Sides.GetValueOrDefault(Channel.Far, SideState.Ok) == SideState.Zeros
-                    ? new("The other side is silent", "It arrives as silence: the call's sound may be muted on this PC.", DropLineTone.Alert)
+                    ? new("The other side is silent", "Only silence is arriving from the call.", DropLineTone.Alert)
                     : new("The other side stopped", "Nothing is arriving from the call. Only your voice may be recorded.", DropLineTone.Alert);
             default:
                 var source = meeting.AppName ?? meeting.Title;

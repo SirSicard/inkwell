@@ -31,8 +31,8 @@ public abstract record NeedsYouAction
     public sealed record RetryChecks : NeedsYouAction;
 }
 
-/// <summary>One thing that needs the user: what is wrong, and the one thing to do about it.</summary>
-public sealed record NeedsYouItem(string Id, string Title, string Detail, string ActionTitle, NeedsYouAction Action);
+/// <summary>One thing that needs the user: what is wrong, and the one thing to do about it, when there is one.</summary>
+public sealed record NeedsYouItem(string Id, string Title, string Detail, string? ActionTitle, NeedsYouAction? Action);
 
 public static class NeedsYou
 {
@@ -73,10 +73,8 @@ public static class NeedsYou
             switch (meeting.Sides.GetValueOrDefault(Channel.Far, SideState.Ok))
             {
                 case SideState.Zeros:
-                    items.Add(new(
-                        "live-far", "Inkwell can't hear the other side of this call",
-                        "The other side is arriving as silence. The call's sound may be muted on this PC.",
-                        "Open Sound settings", sound));
+                    // The plain fact, with no button: nothing on this PC is known to fix it.
+                    items.Add(new("live-far", "The other side is silent", "Only silence is arriving from the call.", null, null));
                     break;
                 case SideState.Stopped:
                     items.Add(new(
@@ -117,6 +115,14 @@ public static class NeedsYou
                 break;
             default:
                 break;
+        }
+        // Only when the check says so (on Windows it never does: system audio needs no permission).
+        if (permission(PermissionName.SystemAudio) == CardState.Off)
+        {
+            items.Add(new(
+                "perm-system-audio", "System audio is off",
+                "Meetings record only your voice.",
+                "Open Sound settings", sound));
         }
         if (permission(PermissionName.Microphone) == CardState.Off)
         {

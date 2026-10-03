@@ -81,15 +81,18 @@ public class NeedsYouTests
         Assert.Empty(Items(permission: _ => CardState.Checking));
     }
 
-    /// Windows: system audio needs no permission (always granted), so the Mac's "System audio has
-    /// been off since" item cannot arise; the meetings that kept only the user's voice carry the
-    /// same warning, with since when, and open Sound settings.
+    /// Windows: system audio needs no permission (the check always says granted), so "System audio
+    /// is off" and its button show only if a check ever says off; the meetings that kept only the
+    /// user's voice carry the same warning, with since when, and open Sound settings.
     [Fact]
     public void SystemAudioOffSaysSinceWhenMeetingsKeptOnlyYourVoice()
     {
         var since = DateTimeOffset.FromUnixTimeSeconds(1_788_000_000); // 29 Aug 2026
         var list = Items(permission: Cards(PermissionName.SystemAudio), farSilent: 4, since: since);
-        Assert.Equal(["far-silent"], list.Select(i => i.Id));
+        Assert.Equal(["far-silent", "perm-system-audio"], list.Select(i => i.Id));
+        Assert.Equal("System audio is off", list[1].Title);
+        Assert.Equal("Open Sound settings", list[1].ActionTitle);
+        Assert.Equal(["far-silent"], Items(farSilent: 4, since: since).Select(i => i.Id)); // allowed: no such item
         Assert.Equal("Inkwell didn't hear the other side of your calls", list[0].Title);
         Assert.Equal(
             "Your last 4 meetings (since 29 Aug) kept only your own voice. Check that your calls' sound isn't muted on this PC.",
@@ -121,7 +124,10 @@ public class NeedsYouTests
         ]);
         var list = Items(permission: Cards(PermissionName.Microphone, PermissionName.Accessibility), store: store);
         Assert.Equal(["live-far", "live-mic", "perm-mic"], list.Select(i => i.Id));
-        Assert.Equal(new NeedsYouAction.OpenSoundSettings(), list[0].Action);
+        // A silent far end is the plain fact, with no button: nothing on this PC is known to fix it.
+        Assert.Equal(("The other side is silent", "Only silence is arriving from the call."), (list[0].Title, list[0].Detail));
+        Assert.Null(list[0].Action);
+        Assert.Null(list[0].ActionTitle);
         Assert.Equal(new NeedsYouAction.Allow(PermissionName.Microphone), list[1].Action);
         Assert.Equal(new NeedsYouAction.Allow(PermissionName.Microphone), list[2].Action);
     }
@@ -154,7 +160,7 @@ public class NeedsYouTests
         store.Apply([Ev.Of("""{"type":"meeting.recovered","record":"r0","trimmed":1,"rebuilt":0,"unrecoverable":0,"recorded_ms":12000}""")]);
         store.Apply([Ev.Of("""{"type":"meeting.detection","listening":false,"message":"the audio server stopped answering"}""")]);
         var titles = Items(store: store, farEnd: new FarEndCheck.Unknown()).Select(i => i.Title).ToList();
-        Assert.Equal("Inkwell can't hear the other side of this call", titles[0]);
+        Assert.Equal("The other side is silent", titles[0]);
         Assert.Contains("A meeting was finished after Inkwell quit unexpectedly", titles);
         Assert.Contains("Inkwell stopped listening for calls", titles);
     }

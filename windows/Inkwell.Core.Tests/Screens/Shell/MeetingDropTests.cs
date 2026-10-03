@@ -226,7 +226,7 @@ public sealed class MeetingDropTests
         rig.Apply("""{"type":"meeting.side_state","record":"r1","channel":"far","state":"zeros"}""");
         Assert.Equal(DropInk.Problem, rig.Drop.Ink);
         Assert.Equal(
-            new DropLine("The other side is silent", "It arrives as silence: the call's sound may be muted on this PC.", DropLineTone.Alert),
+            new DropLine("The other side is silent", "Only silence is arriving from the call.", DropLineTone.Alert),
             rig.Drop.Line);
         Assert.Null(rig.Drop.Line!.Actions);
 
