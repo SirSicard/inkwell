@@ -108,7 +108,6 @@ pub(crate) fn event_time_ns(now_ns: u64, now_tick_ms: u32, event_tick_ms: u32) -
     now_ns.saturating_sub(u64::from(age_ms) * 1_000_000)
 }
 
-/// The chord modifiers down now. **Hook thread.**
 /// The chord modifiers still down once `released` is up. The hook runs before the key state takes
 /// its event in, so the key coming up still reads as down: each modifier counts while a key of it
 /// other than `released` is down (left Ctrl let go of with right Ctrl held: still Ctrl). Reads key
@@ -132,6 +131,7 @@ fn modifiers_after_release(released: u32) -> u8 {
     bits
 }
 
+/// The chord modifiers down now. **Hook thread.**
 fn modifiers_down() -> u8 {
     // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
     let down = |key: u32| unsafe { GetAsyncKeyState(key as i32) } < 0;
