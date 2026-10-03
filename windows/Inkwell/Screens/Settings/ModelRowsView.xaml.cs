@@ -41,7 +41,8 @@ public sealed partial class ModelRowsView : UserControl
     {
         var rows = firstRun ? OnboardingModel.ModelRows(catalogue) : catalogue.Rows;
         var focus = RowFocus.Capture(Rows, XamlRoot);
-        Rows.ItemsSource = rows.Select(row => new ModelRowItem(row, OwnDownload: !firstRun)).ToList();
+        // The first run's Download takes the recommended set; the optional models keep their own.
+        Rows.ItemsSource = rows.Select(row => new ModelRowItem(row, OwnDownload: !firstRun || !CatalogueModel.IsRecommended(row.Id))).ToList();
         RowFocus.Restore(Rows, focus, item => ((ModelRowItem)item).Id);
     }
 

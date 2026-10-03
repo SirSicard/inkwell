@@ -195,6 +195,34 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         }
     }
 
+    /// <summary>
+    /// Windows' recommended set: Silero VAD (voice detection) and Windows' Parakeet TDT v3 (live
+    /// words and dictation), about 640 MB. Qwen3-ASR (the meeting final pass, about 2.5 GB) and
+    /// the diarizer are optional.
+    /// </summary>
+    public static ImmutableArray<string> RecommendedIds { get; } = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-int8"];
+
+    /// <summary>Whether <paramref name="id"/> is in the recommended set.</summary>
+    public static bool IsRecommended(string id) => RecommendedIds.Contains(id);
+
+    /// <summary>The recommended models not installed and not asked for yet.</summary>
+    public IReadOnlyList<CatalogueEntry> RecommendedNotAskedFor => NotAskedFor.Where(m => IsRecommended(m.Id)).ToList();
+
+    /// <summary>Downloads the recommended set's missing models, smallest first (the first run's Download, Today's).</summary>
+    public void DownloadRecommended()
+    {
+        var asked = false;
+        foreach (var entry in RecommendedNotAskedFor.OrderBy(m => m.SizeBytes))
+        {
+            asked |= Ask(entry.Id);
+        }
+        if (asked)
+        {
+            Pump();
+            Changed();
+        }
+    }
+
     /// <summary>Queues a model that can be downloaded, or retried; false for any other.</summary>
     private bool Ask(string id)
     {

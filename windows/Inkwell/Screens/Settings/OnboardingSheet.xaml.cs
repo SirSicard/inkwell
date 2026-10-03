@@ -303,6 +303,9 @@ public sealed partial class OnboardingSheet : ContentDialog
             WelcomeLine2.Text = welcome[2];
 
             ModelsNote.Text = OnboardingModel.ModelsNote(catalogue);
+            var meetingNote = OnboardingModel.MeetingModelNote(catalogue);
+            MeetingModelNote.Text = meetingNote ?? "";
+            MeetingModelNote.Visibility = Visible(meetingNote is not null);
             var downloadLine = OnboardingModel.DownloadLine(catalogue, CultureInfo.CurrentCulture);
             DownloadLine.Text = downloadLine ?? "";
             DownloadLine.Visibility = Visible(downloadLine is not null);
@@ -359,7 +362,7 @@ public sealed partial class OnboardingSheet : ContentDialog
     private void OnSkip(object sender, RoutedEventArgs e) => onboarding.Finish();
 
     /// <summary>The user's agreement to the models the step names: the only download the sheet starts.</summary>
-    private void OnDownload(object sender, RoutedEventArgs e) => catalogue.DownloadMissing();
+    private void OnDownload(object sender, RoutedEventArgs e) => catalogue.DownloadRecommended();
 
     private void OnModelsTryAgain(object sender, RoutedEventArgs e) => catalogue.Requery();
 

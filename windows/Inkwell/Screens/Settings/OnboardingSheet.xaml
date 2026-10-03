@@ -64,6 +64,8 @@
             <StackPanel x:Name="ModelsStep" Spacing="12">
                 <TextBlock x:Name="ModelsTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <TextBlock x:Name="ModelsNote" Style="{StaticResource InkBodyStyle}" />
+                <!-- While Qwen3-ASR is not in: what a meeting keeps without it, plainly. -->
+                <TextBlock x:Name="MeetingModelNote" Style="{StaticResource InkCaptionStyle}" />
                 <ContentPresenter x:Name="ModelRowsHost" />
                 <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">

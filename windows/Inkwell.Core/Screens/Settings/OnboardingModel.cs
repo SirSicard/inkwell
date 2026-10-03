@@ -182,7 +182,7 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string ModelsTitle = "Models";
 
-    /// <summary>The step's one Download: every model its line names (CatalogueModel.DownloadMissing).</summary>
+    /// <summary>The step's one Download: the recommended set its line names (CatalogueModel.DownloadRecommended).</summary>
     public const string DownloadTitle = "Download";
 
     /// <summary>Shown while a download runs: Continue does not wait for it.</summary>
@@ -191,11 +191,17 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>Asks for the model list again when it could not be read.</summary>
     public const string ModelsTryAgain = "Try again";
 
-    /// <summary>The models step's rows: every model not installed, and any downloaded this run (it stays, as installed).</summary>
+    /// <summary>
+    /// The models step's rows: every model not installed, and any downloaded this run (it stays, as
+    /// installed); the recommended set first, the optional models after it.
+    /// </summary>
     public static IReadOnlyList<ModelRow> ModelRows(CatalogueModel catalogue)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
-        return catalogue.Rows.Where(r => !r.Entry.Installed || r.Download is not null).ToList();
+        return catalogue.Rows
+            .Where(r => !r.Entry.Installed || r.Download is not null)
+            .OrderBy(r => CatalogueModel.IsRecommended(r.Id) ? 0 : 1)
+            .ToList();
     }
 
     /// <summary>The line over the models step's rows: what they are, or where the list is.</summary>
@@ -211,15 +217,27 @@ public sealed class OnboardingModel : ObservableModel
             return "Checking which models are on this PC…";
         }
         return ModelRows(catalogue).Any(r => !r.Installed)
-            ? "Inkwell turns speech into text with models that run on this PC. These are not on it yet:"
+            ? "Inkwell turns speech into text with models that run on this PC. The recommended two are small: Silero VAD hears when you speak, and Parakeet TDT v3 types your dictation and writes a meeting's transcript as it happens."
             : "Every model Inkwell uses is on this PC.";
+    }
+
+    /// <summary>
+    /// What the meeting model adds, said plainly while it is not installed: Windows' Parakeet does
+    /// no meeting final pass, so a meeting keeps its live transcript until Qwen3-ASR is added.
+    /// </summary>
+    public static string? MeetingModelNote(CatalogueModel catalogue)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        return catalogue.Rows.FirstOrDefault(r => r.Id == "qwen3-asr-1.7b-q8") is { Installed: false }
+            ? "On Windows, a meeting keeps that live transcript until you add the meeting model, Qwen3-ASR (about 2.5 GB): Parakeet has no final pass for meetings here. You can add it below, or later in Settings > Models."
+            : null;
     }
 
     /// <summary>The line by the step's Download: how much in all, and from where; null when there is nothing left to ask for.</summary>
     public static string? DownloadLine(CatalogueModel catalogue, IFormatProvider? format = null)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.NotAskedFor;
+        var models = catalogue.RecommendedNotAskedFor;
         return models.Count == 0
             ? null
             : $"{StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}. Nothing downloads until you press Download.";
@@ -229,7 +247,7 @@ public sealed class OnboardingModel : ObservableModel
     public static string DownloadName(CatalogueModel catalogue, IFormatProvider? format = null)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.NotAskedFor;
+        var models = catalogue.RecommendedNotAskedFor;
         return $"Download {And(models.Select(m => CatalogueModel.Name(m.Id)))}: {StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}";
     }
 
