@@ -54,17 +54,21 @@ the real core.
       on this Mac, and the line under it says why. With Apple Intelligence on, switching it on
       asks first ("Turn on polish?", naming Apple's on-device model); Cancel leaves it off.
 - [ ] Polish step, own key (a test key of your own, never committed; Settings > AI's Local only
-      reads On before): "Use your own key" is closed, and Continue and Skip work without opening
-      it. Opened: the line points at Groq's free key with a console.groq.com link, Groq is in the
-      picker, and the rows are Settings > AI's without the Local only switch. Use stays greyed until
-      the key is saved (the field clears; "A key is stored in your keychain"). Use: "Turn on
-      polish?" names Groq, says your words leave this Mac and go to Groq, and that Send to Groq
-      turns Local only off; nothing is sent yet (Settings > AI still reads Local only On). Cancel:
-      nothing changed. Use, Send to Groq: the switch reads on, its line says your words go to the
-      Groq model, Test answers, Settings > AI reads Groq in use with Local only Off, and a dictation
-      comes back polished.
-- [ ] VoiceOver on that step: "Use your own key" reads as a disclosure; inside, the picker, "API
-      key", "Model", Use (its hint is the line above it) and Test read as in Settings > AI.
+      reads On before): "Use Groq's free model" is closed, and Continue and Skip work without
+      opening it. Opened: the sentence says Groq's free tier needs no credit card, with a
+      console.groq.com link; under it "Paste your Groq key" (the placeholder fits) and Save, then
+      Use Groq. No model field and no provider picker: those are under "Other providers or
+      models…", which shows Settings > AI's rows without the Local only switch, and "Back to
+      Groq's free model" returns. Use stays greyed until the key is saved (the field clears). Use:
+      "Turn on polish?" names Groq, says your words leave this Mac and go to Groq, and that Send to
+      Groq turns Local only off; nothing is sent yet (Settings > AI still reads Local only On).
+      Cancel: nothing changed. Use, Send to Groq: the switch reads on, its line says your words go
+      to the Groq model, Settings > AI reads Groq in use with Local only Off, Test there answers,
+      and a dictation comes back polished. With OpenAI picked in Settings > AI first, opening it
+      shows the other providers' rows.
+- [ ] VoiceOver on that step: "Use Groq's free model" reads as a disclosure; inside, "Groq API key",
+      Save and Use Groq (its hint is the line beside it); under "Other providers or models…", the
+      picker, "API key", "Model", Use and Test read as in Settings > AI.
 - [ ] Start (or Skip) closes it. Quit and start again on the same library: it does not come back.
 - [ ] On a fresh library, with the sheet up, press Command-Q (and, separately, choose Quit Inkwell
       from the menu-bar item): Inkwell quits at once. Start it again on the same library: the

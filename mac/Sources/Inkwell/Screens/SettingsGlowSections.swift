@@ -303,7 +303,8 @@ struct LanguageModelRows: View {
                             .frame(maxWidth: 340)
                     }
                     HStack(spacing: 8) {
-                        SecureField(provider.hasKey ? "Paste a new key to replace the stored one" : "Paste your API key", text: $key)
+                        // Short enough to fit the field: a longer one was cut off ("Paste a new key to replace t…").
+                        SecureField(provider.hasKey ? "Paste a new key" : "Paste your API key", text: $key)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 340)
                             .accessibilityLabel("API key")
@@ -368,6 +369,101 @@ struct LanguageModelRows: View {
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+/// The first run's own key as one choice: Groq's free model, with the homepage's sentence and its
+/// console.groq.com link, the key field and Save, and Use, which asks polish's consent before
+/// choosing Groq (PolishModel.useOwnKey), so Local only goes off only with it. Another provider or
+/// model is under "Other providers or models…": Settings > AI's rows, with the same consent.
+struct GroqKeyRows: View {
+    let cloud: CloudModel
+    let polish: PolishModel
+    /// The key being typed: sent once on Save, then cleared. Never kept anywhere else.
+    @State private var key = ""
+    /// The other providers' rows are shown instead.
+    @State private var others = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if others {
+                LanguageModelRows(cloud: cloud, firstRun: polish)
+                Button {
+                    key = ""
+                    cloud.pickGroq()
+                    others = false
+                } label: {
+                    Self.link("Back to Groq's free model")
+                }
+                .buttonStyle(.plain)
+            } else {
+                groq
+                Button {
+                    key = ""
+                    others = true
+                } label: {
+                    Self.link("Other providers or models\u{2026}")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onAppear {
+            cloud.suggest("groq")
+            others = cloud.firstRunStartsOnOthers
+        }
+        .onChange(of: cloud.loaded) {
+            // Opened before the providers were read: Groq goes in the picker once they are.
+            cloud.suggest("groq")
+            if cloud.firstRunStartsOnOthers { others = true }
+        }
+    }
+
+    /// A link in the ink, as the console.groq.com link is (the system's blue is not the app's).
+    private static func link(_ title: String) -> some View {
+        Text(title).font(Typography.caption).underline().foregroundStyle(Theme.text)
+    }
+
+    private var groq: some View {
+        let provider = cloud.selectedProvider
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Groq's free tier covers ordinary personal use and needs no credit card. Sign in at [console.groq.com](https://console.groq.com), create a key under API Keys and paste it here.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                SecureField("Paste your Groq key", text: $key)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+                    .accessibilityLabel("Groq API key")
+                Button("Save") {
+                    // Sent once, then gone from the field.
+                    let typed = key
+                    key = ""
+                    cloud.saveKey(typed)
+                }
+            }
+            .disabled(provider?.id != "groq")
+            if provider?.id == "groq" {
+                Text(cloud.keyStatus)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                Button(cloud.useLabel) { polish.useOwnKey(cloud) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!polish.canUseOwnKey(cloud))
+                    .accessibilityHint(cloud.firstRunUseNote)
+                Text(cloud.firstRunUseNote)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(cloud.failure ?? cloud.status)
+                .font(Typography.caption)
+                .foregroundStyle(cloud.failure != nil || cloud.readError != nil ? Theme.alert : Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -438,6 +438,39 @@ final class OwnKeyPolishTests: XCTestCase {
         XCTAssertNil(chosen.selected, "a provider is chosen already")
     }
 
+    /// The first run's own key is one choice, Groq's free model: its rows start there (the key
+    /// saved for Groq, Use naming Groq) unless another provider is chosen or picked, which opens
+    /// the other providers instead; back from them, Groq is in the picker again. Nothing is sent
+    /// by either.
+    func testTheFirstRunsOwnKeyStartsOnGroqUnlessAnotherProviderIsChosenOrPicked() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent, groqKey: false)
+        cloud.suggest("groq")
+        XCTAssertFalse(cloud.firstRunStartsOnOthers, "nothing chosen: Groq's free model")
+        cloud.saveKey("gsk_test_not_a_real_key")
+        guard case .llmKeySave(let provider, _, _) = try XCTUnwrap(sent.commands.last) else { return XCTFail("no key saved") }
+        XCTAssertEqual(provider, "groq", "the key is Groq's")
+        cloud.apply(providers(groqKey: true))
+        polish.useOwnKey(cloud)
+        XCTAssertEqual(polish.pendingConsent?.name, "Groq", "Use asks polish's consent, naming Groq")
+        polish.cancelConsent()
+
+        cloud.select("openai")
+        XCTAssertTrue(cloud.firstRunStartsOnOthers, "another provider picked: the other providers")
+        sent.commands = []
+        cloud.pickGroq()
+        XCTAssertEqual(cloud.selected, "groq")
+        XCTAssertFalse(cloud.firstRunStartsOnOthers)
+        XCTAssertEqual(sent.commands, [], "picking sends nothing")
+
+        let chosen = CloudModel(send: { _ in })
+        chosen.apply(providers(chosen: "openai"))
+        XCTAssertTrue(chosen.firstRunStartsOnOthers, "another provider chosen")
+        let groqChosen = CloudModel(send: { _ in })
+        groqChosen.apply(providers(chosen: "groq"))
+        XCTAssertFalse(groqChosen.firstRunStartsOnOthers)
+    }
+
     /// Use asks first and sends nothing: the step names Groq and says the words leave this Mac
     /// and that local-only mode goes off. Cancel sends nothing either.
     func testUseAsksFirstNamingTheProviderAndCancelSendsNothing() throws {

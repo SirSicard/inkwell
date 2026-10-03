@@ -187,9 +187,10 @@ struct OnboardingView: View {
         .foregroundStyle(Theme.text)
     }
 
-    /// The switch (Apple's on-device model, where there is one), and the user's own key: Settings
-    /// > AI's rows, pointing at Groq's free key, where Use asks polish's consent before choosing
-    /// the provider, so local-only mode goes off only with it.
+    /// The switch (Apple's on-device model, where there is one), and the user's own key as one
+    /// choice, Groq's free model (GroqKeyRows; Settings > AI's rows behind "Other providers or
+    /// models…"), where Use asks polish's consent before choosing the provider, so local-only mode
+    /// goes off only with it.
     private var polish: some View {
         let polish = screens.polish
         let cloud = screens.cloud
@@ -208,20 +209,10 @@ struct OnboardingView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityHidden(true)
                 DisclosureGroup(isExpanded: $ownKey) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Or bring your own key for a language model online. Groq's free tier covers ordinary personal use and needs no credit card: sign in at [console.groq.com](https://console.groq.com), create a key under API Keys and paste it here.")
-                            .font(Typography.caption)
-                            .foregroundStyle(Theme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                        LanguageModelRows(cloud: cloud, firstRun: polish)
-                    }
-                    .padding(.top, 6)
+                    GroqKeyRows(cloud: cloud, polish: polish)
+                        .padding(.top, 6)
                 } label: {
-                    Text("Use your own key")
-                }
-                .onChange(of: ownKey) {
-                    // Groq's free key, unless the user picked or chose another.
-                    if ownKey { cloud.suggest("groq") }
+                    Text("Use Groq's free model")
                 }
             }
             .foregroundStyle(Theme.text)

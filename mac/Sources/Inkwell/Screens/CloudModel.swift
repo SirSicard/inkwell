@@ -135,6 +135,18 @@ final class CloudModel {
         select(id)
     }
 
+    /// The first run's own key is one choice, Groq's free model (its key and Use); another
+    /// provider or model is behind "Other providers or models…". Those open first when another
+    /// provider is chosen, or picked here or in Settings > AI: the user's pick stands.
+    var firstRunStartsOnOthers: Bool { selected != nil && selected != "groq" }
+
+    /// Back from the other providers to Groq's free model: Groq in the picker. Nothing is sent,
+    /// and nothing chosen changes until Use.
+    func pickGroq() {
+        guard providers.contains(where: { $0.id == "groq" }) else { return }
+        select("groq")
+    }
+
     /// Whether Use would change anything: another provider, model or address than the chosen one.
     var canUse: Bool {
         guard loaded else { return false }
