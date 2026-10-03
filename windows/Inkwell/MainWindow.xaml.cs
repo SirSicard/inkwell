@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
     private bool meetingLive;
     private bool syncing;
     private bool pulsing;
+    private Route? shownRoute;
     private Microsoft.UI.Windowing.OverlappedPresenterState? frameState;
 
     public MainWindow()
@@ -101,6 +102,8 @@ public sealed partial class MainWindow : Window
     {
         // Soft blotting: the window's orb, wide behind the text, stops partway (the Drop blots fully).
         Orb.BlotDepth = 0.45;
+        // It wanders, so it is not always in the same place (OrbWander).
+        Orb.WanderBounds = OrbWander.Main;
         Orb.State = ink.State;
         ink.Changed += () =>
         {
@@ -134,10 +137,29 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The orb at 30% behind the text while anything is live (dictating, a meeting, the final
-    /// pass) and under High Contrast, so what is written over it reads; whole at rest.
+    /// The orb behind the text: 70 % at rest, 30 % while anything is live (dictating, a meeting,
+    /// the final pass), and no more than 45 % under High Contrast, so what is written over it reads.
     /// </summary>
-    private void DimOrb() => Orb.OrbOpacity = theme?.HighContrast == true || Orb.State.IsLive() ? 0.3f : 1;
+    private void DimOrb() => Orb.OrbOpacity = OrbFade.BehindText(Orb.State.IsLive(), theme?.HighContrast == true);
+
+    /// <summary>UI thread. The window was activated: a resting orb that has held its spot for a while moves (OrbWander.RestInterval).</summary>
+    internal void WindowActivated() => Orb.Activated();
+
+    /// <summary>
+    /// UI thread, on any change of the window's place: on another monitor, a resting orb goes to a
+    /// new spot.
+    /// </summary>
+    internal void PlaceChanged()
+    {
+        var display = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).DisplayId.Value;
+        if (lastDisplay is { } before && before != display)
+        {
+            Orb.MoveAtRest();
+        }
+        lastDisplay = display;
+    }
+
+    private ulong? lastDisplay;
 
     /// <summary>UI thread. Why the Drop cannot draw its ink (it shows a plain panel meanwhile), or null once it draws again.</summary>
     internal void ShowInkFailure(string? failure)
@@ -295,6 +317,12 @@ public sealed partial class MainWindow : Window
         }
         Screen.Content = screen;
         WindowTitle.Text = $"Inkwell · {route.Title()}";
+        // Another screen in front of the orb: at rest it goes to a new spot (the Mac's contentID).
+        if (shownRoute is { } before && before != route)
+        {
+            Orb.MoveAtRest();
+        }
+        shownRoute = route;
         // Live's own Ctrl+1–4 (the asks) and Ctrl+. (Stop) take over while it shows.
         foreach (var key in routeKeys)
         {

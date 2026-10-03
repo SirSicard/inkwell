@@ -390,7 +390,8 @@ public sealed class InkSimulation(InkRandom random)
 
     /// <summary>
     /// The orb's uniform block for this frame (C4): the canvas, where the orb sits, the time, your
-    /// level and theirs (the envelopes), the state weights, the mode, and the colours.
+    /// level and theirs (the envelopes), the state weights, the mode, and the colours, with the rest
+    /// tint in idle's fourth lane (the uniform block keeps its size).
     /// <paramref name="moving"/> false is the still frame: the shader holds its time at 0.
     /// </summary>
     public InkUniforms Uniforms(InkPlacement placement, GlowLook look, bool moving)
@@ -417,7 +418,7 @@ public sealed class InkSimulation(InkRandom random)
             YouB = Vec(look.YouB),
             ThemA = Vec(look.ThemA),
             ThemB = Vec(look.ThemB),
-            Idle = Vec(look.Idle),
+            Idle = new Vector4(look.Idle.R, look.Idle.G, look.Idle.B, Math.Clamp(look.RestTint, 0, 1)),
             Ink = Vec(look.Ink),
         };
     }

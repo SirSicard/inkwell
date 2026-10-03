@@ -16,4 +16,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Inkwell.Ink\Inkwell.Ink.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Glow's tokens and presets (Inkwell.Core, pure): the text-over-orb check renders every
+         preset in both modes. Linked, so the ink's tests take no dependency on the screens. -->
+    <Compile Include="..\Inkwell.Core\Generated\GlowTokens.g.cs" Link="Glow\GlowTokens.g.cs" />
+    <Compile Include="..\Inkwell.Core\Glow\GlowScheme.cs" Link="Glow\GlowScheme.cs" />
+  </ItemGroup>
 </Project>

@@ -106,8 +106,10 @@ internal sealed class GlowTheme
             Dark = appearance.IsDark(Application.Current.RequestedTheme == ApplicationTheme.Dark);
         }
         Colours = appearance.Colours(Dark);
+        // At rest the orb leans toward the preset (the main window's and the Drop's; the first run
+        // rests untinted, OnboardingSheet).
         Look = new GlowLook(Dark, Tuple(Colours.You), Tuple(Colours.YouPartner), Tuple(Colours.Them), Tuple(Colours.ThemPartner),
-            Tuple(Colours.Idle), Tuple(Colours.Ink));
+            Tuple(Colours.Idle), Tuple(Colours.Ink), GlowLook.ShellRestTint);
         var tokens = GlowScheme.Palette(Dark);
         DropLook = new DropLook(Dark, Tuple(tokens.Background), Tuple(tokens.Border), Tuple(tokens.Text), Tuple(tokens.Secondary),
             Tuple(tokens.Alert), Tuple(tokens.ButtonFill), Tuple(tokens.ButtonLabel));

@@ -7,6 +7,16 @@ namespace Inkwell.Ink.Tests;
 
 public sealed class OrbFadeTests
 {
+    /// <summary>Behind the main window's text: 70 % at rest, 30 % live, never above 45 % under High Contrast (the Mac's OrbLayer.opacity).</summary>
+    [Fact]
+    public void BehindTextItRestsAtSeventyAndDimsLiveAndUnderHighContrast()
+    {
+        Assert.Equal(0.7f, OrbFade.BehindText(live: false, dimmed: false));
+        Assert.Equal(0.3f, OrbFade.BehindText(live: true, dimmed: false));
+        Assert.Equal(0.45f, OrbFade.BehindText(live: false, dimmed: true));
+        Assert.Equal(0.3f, OrbFade.BehindText(live: true, dimmed: true));
+    }
+
     [Fact]
     public void ItFadesToItsTargetOverEightTenthsOfASecondAndBack()
     {

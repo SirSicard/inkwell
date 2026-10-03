@@ -227,6 +227,10 @@ public partial class App : Application
                 }
             }
             window.FrameChanged();
+            if (e.DidPositionChange || e.DidSizeChange)
+            {
+                window.PlaceChanged();
+            }
         };
         // Coming back to the app re-checks what may have changed outside it (permissions, the keys).
         window.Activated += (_, e) =>
@@ -234,6 +238,7 @@ public partial class App : Application
             if (e.WindowActivationState != WindowActivationState.Deactivated)
             {
                 models.AppBecameActive();
+                window.WindowActivated();
             }
             else
             {
