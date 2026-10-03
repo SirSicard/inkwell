@@ -11,6 +11,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 
@@ -121,21 +122,29 @@ public sealed partial class StatsScreen : UserControl
     /// <summary>A line of the body text that wraps; <paramref name="secondary"/>, in the caption's grey.</summary>
     private static TextBlock Line(string text, bool secondary = false) => Parts.Text(text, secondary ? "InkCaptionStyle" : "InkBodyStyle");
 
-    /// <summary>A number over its label, read as one: "1,234 words today".</summary>
-    private static StackPanel BigNumber(string value, string label)
+    /// <summary>
+    /// A number over its label, read as one: "1,234 words today". One text of two runs, not two
+    /// texts with a name on the number: Narrator's scan mode reads a text's words, not its name,
+    /// so the number was read alone ("38, 38, 38").
+    /// </summary>
+    private TextBlock BigNumber(string value, string label)
     {
-        var number = Parts.Text(value, "InkHeadingStyle");
-        AutomationProperties.SetName(number, StatsFormat.Spoken(value, label));
-        var under = Parts.Text(label, "InkCaptionStyle");
-        AutomationProperties.SetAccessibilityView(under, AccessibilityView.Raw);
-        var panel = new StackPanel { Spacing = 2 };
-        panel.Children.Add(number);
-        panel.Children.Add(under);
-        return panel;
+        var text = Parts.Text("", "InkCaptionStyle");
+        text.LineHeight = 0;
+        text.Inlines.Add(new Run
+        {
+            Text = value,
+            FontFamily = Parts.Font("InkDisplayFontFamily"),
+            FontSize = (double)Application.Current.Resources["GlowHeadingFontSize"],
+            Foreground = Parts.Brush("InkTextBrush", this),
+        });
+        text.Inlines.Add(new LineBreak());
+        text.Inlines.Add(new Run { Text = label });
+        return text;
     }
 
     /// <summary>Numbers side by side when they fit, one under another when not.</summary>
-    private static WrapPanel NumberRow(params (string Value, string Label)[] numbers)
+    private WrapPanel NumberRow(params (string Value, string Label)[] numbers)
     {
         var row = new WrapPanel { Spacing = 32, RowSpacing = 10 };
         foreach (var (value, label) in numbers)

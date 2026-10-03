@@ -111,9 +111,6 @@ public static class StatsFormat
         return $"{MilestoneTitle(m.Kind, m.Threshold, culture)}, {(m.Reached ? "reached" : "not yet")}";
     }
 
-    /// <summary>A number over its label, read as one: "1,234 words today".</summary>
-    public static string Spoken(string value, string label) => $"{value} {label}";
-
     /// <summary>The talk bar's key, one side: <c>You 60 % · 4 min</c>.</summary>
     public static string TalkKey(string side, int percent, long ms) => $"{side} {percent} % · {Span(ms)}";
 
