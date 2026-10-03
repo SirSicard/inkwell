@@ -26,17 +26,28 @@ enum MilestoneCelebration {
     }
 }
 
-/// The glow, centred on the orb (its placement's centre and unit), in your colour fading to theirs.
-/// In the window only while a celebration shows and motion is allowed; it plays once per
-/// celebration (StatsModel.beginGlow), even if the window leaves the screen and comes back.
+/// The glow, centred on the orb where it is (it wanders: OrbHold holds it there until the glow has
+/// gone) at the orb's unit, in your colour fading to theirs. In the window only while a
+/// celebration shows and motion is allowed; it plays once per celebration (StatsModel.beginGlow),
+/// even if the window leaves the screen and comes back.
 struct MilestoneGlow: View {
     let serial: Int
     let you: Color
     let them: Color
+    /// The orb's home and unit; its home is the centre only with no orb to hold.
     let placement: OrbPlacement
+    let orb: OrbHold?
     let stats: StatsModel
     /// The celebration lit now: a replaced one's task never dims its successor.
     @State private var litSerial: Int?
+    /// Where the orb was held when the glow began, as fractions of the window.
+    @State private var centre: SIMD2<Double>?
+
+    /// Holds the orb (release it when the glow has gone) and returns the glow's centre: the orb's
+    /// spot, or its home with no orb.
+    static func holdCentre(_ orb: OrbHold?, home: OrbPlacement) -> SIMD2<Double> {
+        orb?.hold() ?? SIMD2(home.x, home.yFromTop)
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -46,7 +57,9 @@ struct MilestoneGlow: View {
                     colors: [you.opacity(0.9), them.opacity(0.5), .clear], center: .center,
                     startRadius: 0, endRadius: unit * 0.55))
                 .frame(width: unit * 1.1, height: unit * 1.1)
-                .position(x: geometry.size.width * placement.x, y: geometry.size.height * placement.yFromTop)
+                .position(
+                    x: geometry.size.width * (centre?.x ?? placement.x),
+                    y: geometry.size.height * (centre?.y ?? placement.yFromTop))
                 .opacity(litSerial == serial ? MilestoneCelebration.glowPeak : 0)
         }
         .allowsHitTesting(false)
@@ -54,12 +67,16 @@ struct MilestoneGlow: View {
         .task(id: serial) {
             let mine = serial
             guard stats.beginGlow(mine) else { return }
+            // The orb stays put under the glow until it has gone (or is cancelled).
+            centre = Self.holdCentre(orb, home: placement)
+            defer { orb?.release() }
             withAnimation(.easeOut(duration: MilestoneCelebration.glowIn)) { litSerial = mine }
             // Cancelled (the window left the screen, the line was dismissed): out at once.
             let held = (try? await Task.sleep(for: .seconds(MilestoneCelebration.glowIn) + MilestoneCelebration.glowHeld)) != nil
             withAnimation(held ? .easeIn(duration: MilestoneCelebration.glowOut) : nil) {
                 if litSerial == mine { litSerial = nil }
             }
+            if held { try? await Task.sleep(for: .seconds(MilestoneCelebration.glowOut)) }
         }
     }
 }

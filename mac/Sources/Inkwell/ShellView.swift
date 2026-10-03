@@ -27,6 +27,8 @@ struct ShellView: View {
     @Environment(WindowPresence.self) private var presence
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
+    /// The orb, held still under a milestone's glow, which sits where the orb has wandered to.
+    @State private var orbHold = OrbHold()
 
     private var meetingLive: Bool { store.meeting != nil }
 
@@ -67,7 +69,7 @@ struct ShellView: View {
                 OrbLayer(
                     state: ink.state, palette: theme.palette, placement: Glow.Orb.main, still: theme.motionStill,
                     dimmed: theme.solidSurfaces, behindText: true, wanderBounds: Glow.Orb.wander,
-                    contentID: router.current.rawValue)
+                    contentID: router.current.rawValue, hold: orbHold)
                 // A milestone reached: a quiet glow over the orb, once (MilestoneCelebration). Not
                 // in the window otherwise, so nothing is laid out or drawn for it at rest.
                 if let celebration,
@@ -75,7 +77,7 @@ struct ShellView: View {
                 {
                     MilestoneGlow(
                         serial: celebration.serial, you: theme.you, them: theme.them, placement: Glow.Orb.main,
-                        stats: screens.stats)
+                        orb: orbHold, stats: screens.stats)
                 }
             }
             .ignoresSafeArea()

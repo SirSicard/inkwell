@@ -255,6 +255,9 @@ struct OrbLayer: NSViewRepresentable {
     var wanderBounds: OrbWander.Bounds?
     /// What it sits behind (the main window's route): a change at rest moves a wandering orb.
     var contentID: String?
+    /// For what is drawn over it (the main window's milestone glow): holds it still and reads its
+    /// spot.
+    var hold: OrbHold?
     /// The live levels it answers; the app's by default.
     var levels: @MainActor () -> InkLevels = ShellInk.liveLevels
 
@@ -304,6 +307,7 @@ struct OrbLayer: NSViewRepresentable {
         view.motionStill = still
         view.blotDepth = Self.blotDepth(behindText: behindText)
         view.wanderBounds = wanderBounds
+        hold?.attach(view)
         view.contentID = contentID
         let opacity = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
         // Compared with a margin, not exactly: if the opacity ever reads back rounded (a layer
@@ -321,6 +325,37 @@ struct OrbLayer: NSViewRepresentable {
             }
         }
         view.state = state
+    }
+}
+
+/// Holds the main window's orb still for something drawn over it (a milestone's glow) and says
+/// where it is, so that thing sits on the orb wherever it has wandered, not at its home. OrbLayer
+/// attaches the view. Holds are counted: a glow that ends late never lets go of the next one's.
+@MainActor
+final class OrbHold {
+    private weak var view: InkView?
+    private var holders = 0
+
+    /// The orb's view; a new one takes the holds already made.
+    func attach(_ view: InkView) {
+        guard self.view !== view else { return }
+        self.view = view
+        view.holdsStill = holders > 0
+    }
+
+    /// Holds the orb where it is now and returns its centre (fractions of the view, y from the
+    /// top), or nil with no orb attached. Each hold needs its release.
+    func hold() -> SIMD2<Double>? {
+        holders += 1
+        view?.holdsStill = true
+        return view?.orbCentre
+    }
+
+    /// Lets go of one hold; with none left the orb wanders again.
+    func release() {
+        guard holders > 0 else { return }
+        holders -= 1
+        if holders == 0 { view?.holdsStill = false }
     }
 }
 

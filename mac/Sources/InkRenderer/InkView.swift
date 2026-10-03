@@ -12,7 +12,8 @@
 // when the content behind it changes, and when its window becomes key again after a few minutes in
 // one spot, then holds still again. No timer moves it: a window left alone at rest draws nothing.
 // Hidden or covered it never moves; with motion stilled it takes each new spot in the one still
-// frame, without a glide.
+// frame, without a glide. Held (`holdsStill`: something is drawn over it, as a milestone's glow) it
+// stops where it is and takes no new spot until let go.
 //
 // The canvas's resolution: the backing scale, capped at 1.25 for a large canvas (over 180,000
 // square points) and at 2 otherwise, so a window-sized orb is not drawn at full Retina resolution.
@@ -49,6 +50,17 @@ public final class InkView: NSView {
             }
             perform(schedule.set(gliding: false))
             perform(schedule.invalidate())
+        }
+    }
+
+    /// Held: a wandering orb stops where it is now (a glide under way ends there, in a still frame)
+    /// and takes no new spot, live or at rest, until let go; letting go moves nothing. For
+    /// something drawn over the orb's spot, which reads `orbCentre` once it holds.
+    public var holdsStill = false {
+        didSet {
+            guard holdsStill != oldValue, holdsStill else { return }
+            wander?.hold(at: CACurrentMediaTime())
+            if schedule.gliding { perform(schedule.set(gliding: false)) }
         }
     }
 
@@ -131,8 +143,8 @@ public final class InkView: NSView {
     /// (tests shorten it).
     var restInterval = OrbWander.restInterval
 
-    /// The orb's centre now, as fractions of the view.
-    var orbCentre: SIMD2<Double> {
+    /// The orb's centre now, as fractions of the view (x from the left, y from the top).
+    public var orbCentre: SIMD2<Double> {
         wander?.position(at: CACurrentMediaTime()) ?? SIMD2(placement.x, placement.yFromTop)
     }
 
@@ -285,7 +297,7 @@ public final class InkView: NSView {
     /// still frame, until the pipeline arrives.
     private func visibilityChanged() {
         let onScreen = isOnScreen && pipeline != nil
-        if onScreen && !schedule.onScreen && (!state.isLive || reduceMotion), var wander {
+        if onScreen && !schedule.onScreen && (!state.isLive || reduceMotion) && !holdsStill, var wander {
             // Coming on screen at rest (or still, live): a new spot, chosen before anything is
             // drawn, so a glide starts from where it was and, with motion stilled, the one still
             // frame is already there. Off screen the schedule's clock is stopped, so the action
@@ -301,7 +313,7 @@ public final class InkView: NSView {
     /// A wandering orb on screen goes to a new spot: at rest a glide, or at once with motion stilled
     /// (live too then: it has no frames of its own to wander on).
     private func moveAtRest() {
-        guard var wander, !state.isLive || reduceMotion, schedule.onScreen else { return }
+        guard var wander, !state.isLive || reduceMotion, schedule.onScreen, !holdsStill else { return }
         let now = CACurrentMediaTime()
         wander.move(at: now, animated: !reduceMotion)
         self.wander = wander
@@ -402,7 +414,7 @@ public final class InkView: NSView {
         }
         let live = levels?() ?? .silent
         simulation.step(dt, snap: false, voice: .levels(near: live.near, far: live.far))
-        wander?.wander(at: now)
+        if !holdsStill { wander?.wander(at: now) }
         draw(motion: true, at: now)
     }
 
