@@ -1512,6 +1512,54 @@ fn a_silent_meeting_keeps_its_empty_live_transcript_and_asks_no_model() {
     );
 }
 
+/// Review fix: a recording with nothing said kept one line, "Oh.", from a noise the final pass
+/// heard as speech, and the on-device model named it "The untitled matter" and summarised it as
+/// "The meeting was about the untitled matter." A transcript with no line long enough to cite
+/// (`MIN_QUOTE_WORDS`) has nothing to summarise: no model call, no summary, no title.
+#[test]
+fn a_meeting_too_short_to_cite_gets_no_summary_or_title() {
+    let llm = Arc::new(Scripted {
+        calls: AtomicUsize::new(0),
+    });
+    let mut rig = RigBuilder {
+        answer: Arc::new(|channel, _, audio| match channel {
+            Channel::Mic => Ok(words("Oh.", audio.len())),
+            Channel::Far => Ok(words("", audio.len())),
+        }),
+        meetings_consent: Some(LlmConsent::OnDevice),
+        llm: Some(llm.clone()),
+        title: None,
+        // The live words are the shell's on the Mac: here the final pass alone makes the line.
+        no_live_engine: true,
+        ..RigBuilder::default()
+    }
+    .build();
+    let record = rig.chain().record().clone();
+    let mic = join(&[silence(1.0), speech(1.0, -30.0, 81), silence(1.0)]);
+    rig.feed(&mic, &silence(3.0));
+    let outcome = rig.finish().unwrap();
+    let transcript = rig.store.segments(&record).unwrap();
+    assert_eq!(
+        transcript
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Oh."],
+        "outcome: {outcome:?}"
+    );
+    assert_eq!(llm.calls.load(Ordering::SeqCst), 0, "no model call");
+    assert!(rig.store.summary(&record).unwrap().is_none(), "no summary");
+    let stored = rig.store.record(&record).unwrap().unwrap();
+    assert_eq!(stored.title, None, "no title");
+    assert!(
+        !rig.events()
+            .iter()
+            .any(|e| matches!(e, MeetingEvent::Summarized { .. })),
+        "{:?}",
+        rig.events()
+    );
+}
+
 /// The chain moves to its worker thread, and an ended meeting to wherever the final pass runs.
 #[test]
 fn the_chain_can_move_between_threads() {

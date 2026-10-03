@@ -55,7 +55,7 @@ use ink_core::{
 use ink_llm::tasks::commitments::{RecordContext, harvest, looks_done};
 use ink_llm::tasks::dedup::dedup;
 use ink_llm::tasks::due::RecordTime;
-use ink_llm::tasks::summary::{SummaryOptions, summarize};
+use ink_llm::tasks::summary::{MIN_QUOTE_WORDS, SummaryOptions, summarize};
 
 use ink_echo::{DedupConfig, EchoError, PathReport, echo_duplicates};
 
@@ -1131,8 +1131,14 @@ impl EndedMeeting {
         cancel: &CancelToken,
     ) {
         let core = &self.core;
-        if ink_core::store::word_count(segments) == 0 {
-            // Nothing was said: there is nothing to summarise, and no call is made.
+        if !segments
+            .iter()
+            .any(|s| s.text.split_whitespace().count() >= MIN_QUOTE_WORDS)
+        {
+            // Nothing a summary could cite: nothing said, or only a stray word or two (a noise
+            // heard as "Oh."), which the summary's rules cannot support (every item quotes
+            // MIN_QUOTE_WORDS words of one line). A model asked anyway invents a headline, so no
+            // call is made, and the record keeps no title and no summary.
             return;
         }
         let Some(llm) = &core.services.llm else {
