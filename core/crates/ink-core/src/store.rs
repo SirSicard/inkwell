@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use crate::audio::Channel;
 use crate::engine::SpeakerId;
 use crate::error::StoreError;
+use crate::stats::{CommitmentState, RecordDigest};
 
 /// A record's id: UUID text in the SQLite store.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -454,7 +455,77 @@ pub trait Store: Send + Sync {
     /// Sets several settings in one transaction: all of them, or (on an error) none. For settings
     /// that must never be seen half-changed (a feature's switch and the user's consent for it).
     fn set_settings(&self, settings: &[(&str, &str)]) -> Result<(), StoreError>;
+
+    /// Every record with its current transcript counted ([`RecordDigest`]): counts and times,
+    /// never text, in no promised order. What the Stats screen counts from.
+    ///
+    /// The numbers are always [`digest`](crate::stats::digest)'s. This default reads every
+    /// transcript in the library, which grows with it; a store that can keep the digests (the
+    /// SQLite store) answers without re-reading the transcripts that have not changed.
+    fn digests(&self) -> Result<Vec<RecordDigest>, StoreError> {
+        let mut out = Vec::new();
+        let mut before = None;
+        loop {
+            let page = self.records(&RecordQuery {
+                kind: None,
+                before: before.clone(),
+                limit: DIGEST_PAGE,
+            })?;
+            for r in &page {
+                out.push(RecordDigest {
+                    record: r.id.clone(),
+                    kind: r.kind,
+                    started_at_unix_ms: r.started_at_unix_ms,
+                    ended_at_unix_ms: r.ended_at_unix_ms,
+                    imported: r.imported,
+                    transcript: crate::stats::digest(&self.segments(&r.id)?),
+                });
+            }
+            match page.last() {
+                Some(last) if page.len() == DIGEST_PAGE => before = Some(RecordCursor::from(last)),
+                _ => return Ok(out),
+            }
+        }
+    }
+
+    /// Every commitment's state across the library ([`CommitmentState`]), merged ones included,
+    /// never its text: what "promises kept" counts. No order is promised.
+    ///
+    /// This default reads every record's commitments; the SQLite store answers in one query.
+    fn commitment_states(&self) -> Result<Vec<CommitmentState>, StoreError> {
+        let mut out = Vec::new();
+        let mut before = None;
+        loop {
+            let page = self.records(&RecordQuery {
+                kind: None,
+                before: before.clone(),
+                limit: DIGEST_PAGE,
+            })?;
+            for r in &page {
+                out.extend(
+                    self.commitments(&r.id)?
+                        .into_iter()
+                        .map(|c| CommitmentState {
+                            commitment: c.id,
+                            record: r.id.clone(),
+                            record_started_at_unix_ms: r.started_at_unix_ms,
+                            due_at_unix_ms: c.due_at_unix_ms,
+                            done: c.done,
+                            merged: c.merged_into.is_some(),
+                        }),
+                );
+            }
+            match page.last() {
+                Some(last) if page.len() == DIGEST_PAGE => before = Some(RecordCursor::from(last)),
+                _ => return Ok(out),
+            }
+        }
+    }
 }
+
+/// Records per page when the default [`Store::digests`] and [`Store::commitment_states`] walk the
+/// library.
+const DIGEST_PAGE: usize = 500;
 
 /// Where each of `n` new commitments ends up after `merges` (`(from, into)` by index, applied in
 /// order and flattened as [`Store::merge_commitment`] applies them): the index of the commitment

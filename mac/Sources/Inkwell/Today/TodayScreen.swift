@@ -359,22 +359,33 @@ struct TodayScreen: View {
             met.map { "This week · \($0.records) \($0.records == 1 ? "meeting" : "meetings") · \(LibraryFormat.duration(ms: $0.durationMs))" }
                 ?? (library.weekLoad == .failed ? "This week · couldn't be counted" : nil),
         ].compactMap { $0 }
-        // Side by side when they fit, one under the other when not: never a line broken mid-count.
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 28) {
-                ForEach(lines, id: \.self) { Text($0).lineLimit(1) }
-                Spacer(minLength: 0)
+        // The counts lead to Stats, where the rest of them are.
+        return Button { router.open(.stats) } label: {
+            // Side by side when they fit, one under the other when not: never a line broken
+            // mid-count.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 28) {
+                    ForEach(lines, id: \.self) { Text($0).lineLimit(1) }
+                    Text("Stats \u{203A}").lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(lines, id: \.self) { Text($0) }
+                    Text("Stats \u{203A}")
+                }
             }
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(lines, id: \.self) { Text($0) }
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
         .font(PaperType.meta)
         .foregroundStyle(Theme.secondaryText)
         .padding(.top, 8)
         .padding(.horizontal, 14)
-        .accessibilityElement(children: .combine)
+        .pointerStyle(.link)
+        // Its words without the arrow, which VoiceOver would read out.
+        .accessibilityLabel(lines.isEmpty ? "Stats" : lines.joined(separator: ". "))
+        .accessibilityHint("Opens Stats")
     }
 }
 

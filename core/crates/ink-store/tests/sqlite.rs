@@ -60,6 +60,166 @@ fn fts5_is_compiled_in() {
     assert_eq!(n, 1);
 }
 
+// --- Digests ---------------------------------------------------------------------------------
+
+fn digest_rows(db: &TempDb) -> i64 {
+    db.raw()
+        .query_row("SELECT count(*) FROM record_digest", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// A stats query reads each transcript once: its digest is kept beside the record, and every
+/// write that changes the transcript (an append, a supersede, a delete) drops it until the next
+/// read. A kept digest is what the next read returns, without the transcript being read again.
+#[test]
+fn digests_are_kept_until_their_transcript_changes() {
+    let db = TempDb::new("digests-kept");
+    let store = db.open();
+    let a = meeting(&store, 1);
+    store
+        .append_segments(&a, &[seg(Channel::Mic, 0, "one two three")])
+        .unwrap();
+    let b = meeting(&store, 2);
+    store
+        .append_segments(&b, &[seg(Channel::Far, 0, "four five")])
+        .unwrap();
+    assert_eq!(digest_rows(&db), 0, "nothing is counted until asked");
+
+    let first = store.digests().unwrap();
+    assert_eq!(digest_rows(&db), 2);
+    for d in &first {
+        assert_eq!(
+            d.transcript,
+            ink_core::stats::digest(&store.segments(&d.record).unwrap())
+        );
+    }
+
+    store
+        .append_segments(&a, &[seg(Channel::Mic, 1_000, "four?")])
+        .unwrap();
+    assert_eq!(digest_rows(&db), 1, "the append dropped a's");
+    let after = store.digests().unwrap();
+    assert_eq!(digest_rows(&db), 2);
+    let a_now = after.iter().find(|d| d.record == a).unwrap();
+    assert_eq!(a_now.transcript.mic.words, 4);
+    assert_eq!(a_now.transcript.mic_questions, 1);
+
+    store
+        .supersede(&b, &[seg(Channel::Far, 0, "four five six")])
+        .unwrap();
+    assert_eq!(digest_rows(&db), 1, "the supersede dropped b's");
+    store.digests().unwrap();
+
+    // A kept row is trusted: change it behind the store's back and the next read returns it.
+    db.raw()
+        .execute(
+            "UPDATE record_digest SET far_words = 99 WHERE record_id = ?1",
+            [&b.0],
+        )
+        .unwrap();
+    let kept = store.digests().unwrap();
+    assert_eq!(
+        kept.iter()
+            .find(|d| d.record == b)
+            .unwrap()
+            .transcript
+            .far
+            .words,
+        99
+    );
+
+    store.delete_record(&a).unwrap();
+    assert_eq!(digest_rows(&db), 1, "deleted with its record");
+}
+
+/// A digest kept under other counting rules (`DIGEST_VERSION`) is counted again on the next read,
+/// so a change to the rules never leaves old numbers behind.
+#[test]
+fn a_digest_kept_under_other_rules_is_counted_again() {
+    let db = TempDb::new("digests-version");
+    let store = db.open();
+    let a = meeting(&store, 1);
+    store
+        .append_segments(&a, &[seg(Channel::Mic, 0, "one two three")])
+        .unwrap();
+    store.digests().unwrap();
+    // Another build's rules (a newer one, or an older one's once raised).
+    db.raw()
+        .execute(
+            "UPDATE record_digest SET version = ?2, mic_words = 99 WHERE record_id = ?1",
+            rusqlite::params![a.0, i64::from(ink_core::stats::DIGEST_VERSION) + 1],
+        )
+        .unwrap();
+    let all = store.digests().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].transcript.mic.words, 3, "recounted, not the old row");
+    let kept: (i64, i64) = db
+        .raw()
+        .query_row(
+            "SELECT version, mic_words FROM record_digest WHERE record_id = ?1",
+            [&a.0],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(kept, (i64::from(ink_core::stats::DIGEST_VERSION), 3));
+}
+
+/// The first read after an upgrade counts the whole library, a batch at a time, so the store's
+/// lock is let go between batches; every record still gets its digest.
+#[test]
+fn a_library_larger_than_a_batch_is_counted_whole() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let n = ink_store::DIGEST_BATCH + 7;
+    for i in 0..n {
+        let id = store
+            .create_record(NewRecord {
+                kind: RecordKind::Dictation,
+                title: None,
+                started_at_unix_ms: i as i64,
+                source_app: None,
+                audio_dir: None,
+            })
+            .unwrap();
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "a b")])
+            .unwrap();
+    }
+    let all = store.digests().unwrap();
+    assert_eq!(all.len(), n);
+    assert!(all.iter().all(|d| d.transcript.mic.words == 2));
+    let mut starts: Vec<i64> = all.iter().map(|d| d.started_at_unix_ms).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    assert_eq!(starts.len(), n, "each record once");
+}
+
+/// A library from before digests were kept is counted on its first read.
+#[test]
+fn a_database_from_before_digests_is_counted_after_the_upgrade() {
+    let db = TempDb::new("migrate-v4");
+    let id = {
+        let store = db.open();
+        let id = meeting(&store, 1);
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "kept through the upgrade")])
+            .unwrap();
+        id
+    };
+    db.raw()
+        .execute_batch(
+            "DROP TRIGGER record_digest_on_insert; DROP TRIGGER record_digest_on_delete;
+             DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
+             DROP TABLE record_digest; PRAGMA user_version = 4;",
+        )
+        .unwrap();
+    let store = db.open();
+    assert_eq!(user_version(&db.raw()), SCHEMA_VERSION);
+    let all = store.digests().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].record, id);
+    assert_eq!(all[0].transcript.mic.words, 4);
+}
+
 // --- Migrations ------------------------------------------------------------------------------
 
 #[test]
@@ -68,7 +228,7 @@ fn migrations_from_empty_reach_the_current_version() {
     drop(db.open());
     let raw = db.raw();
     assert_eq!(user_version(&raw), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 4);
+    assert_eq!(SCHEMA_VERSION, 5);
 
     let mut stmt = raw
         .prepare(
@@ -91,6 +251,7 @@ fn migrations_from_empty_reach_the_current_version() {
             "commitment_span",
             "note",
             "record",
+            "record_digest",
             "removed_line",
             "segment",
             "setting",
@@ -132,7 +293,9 @@ fn a_database_from_before_removed_lines_is_brought_up_to_date() {
     {
         let raw = db.raw();
         raw.execute_batch(
-            "DROP TABLE removed_line; DROP TABLE summary_item;
+            "DROP TRIGGER record_digest_on_insert; DROP TRIGGER record_digest_on_delete;
+             DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
+             DROP TABLE record_digest; DROP TABLE removed_line; DROP TABLE summary_item;
              DROP TABLE commitment_done_evidence; ALTER TABLE commitment DROP COLUMN recipient;
              ALTER TABLE record DROP COLUMN imported; PRAGMA user_version = 1;",
         )
@@ -185,7 +348,9 @@ fn a_database_from_before_summary_items_is_brought_up_to_date() {
     {
         let raw = db.raw();
         raw.execute_batch(
-            "DROP TABLE summary_item; DROP TABLE commitment_done_evidence;
+            "DROP TRIGGER record_digest_on_insert; DROP TRIGGER record_digest_on_delete;
+             DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
+             DROP TABLE record_digest; DROP TABLE summary_item; DROP TABLE commitment_done_evidence;
              ALTER TABLE commitment DROP COLUMN recipient; ALTER TABLE record DROP COLUMN imported;
              PRAGMA user_version = 2;",
         )
@@ -233,7 +398,9 @@ fn a_database_from_before_imports_were_marked_is_brought_up_to_date() {
     {
         let raw = db.raw();
         raw.execute_batch(
-            "ALTER TABLE record DROP COLUMN imported; PRAGMA user_version = 3;
+            "DROP TRIGGER record_digest_on_insert; DROP TRIGGER record_digest_on_delete;
+             DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
+             DROP TABLE record_digest; ALTER TABLE record DROP COLUMN imported; PRAGMA user_version = 3;
              INSERT INTO record (id, kind, started_at_unix_ms) VALUES ('from-v3', 'dictation', 2);",
         )
         .unwrap();

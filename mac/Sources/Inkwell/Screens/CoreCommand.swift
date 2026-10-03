@@ -91,6 +91,21 @@ enum CoreCommand: Equatable, Sendable {
     /// Mac turns local-only mode off (the core refuses such a choice without it).
     case llmChoose(provider: String, model: String?, baseURL: String?, localOnlyOff: Bool, ref: String)
     case llmTest(ref: String)
+    /// The Stats screen's numbers (`stats.counted` with `ref`, or a `command.failed` with it as the
+    /// id), counted on the user's calendar: their zone's UTC offsets over time and the ISO weekday
+    /// their weeks start on (StatsModel.calendarFields).
+    case statsGet(utcOffsets: [UTCOffset], weekStart: Int, ref: String)
+    /// The milestones reached since the last check, each reported once ever: `milestones.reached`
+    /// with `ref`. Takes stats.get's calendar.
+    case milestonesCheck(utcOffsets: [UTCOffset], weekStart: Int, ref: String)
+
+    /// A UTC offset from the moment it took effect.
+    struct UTCOffset: Equatable, Sendable {
+        let fromUnixMs: Int64
+        let minutes: Int
+
+        var fields: [String: Any] { ["from_unix_ms": fromUnixMs, "minutes": minutes] }
+    }
 
     /// Where a page of records continues: the last record of the previous page.
     struct RecordCursor: Equatable, Sendable {
@@ -168,6 +183,10 @@ enum CoreCommand: Equatable, Sendable {
                 .merging(baseURL.map { ["base_url": $0] } ?? [:]) { a, _ in a }
                 .merging(localOnlyOff ? ["local_only": "off"] : [:]) { a, _ in a }
         case .llmTest(let ref): ["cmd": "llm.test", "id": ref]
+        case .statsGet(let offsets, let weekStart, let ref):
+            ["cmd": "stats.get", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
+        case .milestonesCheck(let offsets, let weekStart, let ref):
+            ["cmd": "milestones.check", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -220,6 +239,8 @@ enum CoreCommand: Equatable, Sendable {
         case .llmKeyDelete: "llm.key.delete"
         case .llmChoose: "llm.choose"
         case .llmTest: "llm.test"
+        case .statsGet: "stats.get"
+        case .milestonesCheck: "milestones.check"
         }
     }
 
@@ -285,6 +306,11 @@ enum ShellSetting: String, Sendable {
     case appearanceEdgeGlow = "appearance.edge_glow"
     /// "system" (the default: Reduce Motion decides) or "still".
     case appearanceMotion = "appearance.motion"
+    /// The typing speed the Stats screen measures time saved against: a whole number of words a
+    /// minute, 10 to 200 (40 unless set).
+    case statsTypingWpm = "stats.typing_wpm"
+    /// "on" (the default) or "off": a milestone reached is celebrated.
+    case statsCelebrate = "stats.celebrate"
 }
 
 /// Where the screens' commands go.

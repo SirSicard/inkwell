@@ -1,5 +1,6 @@
 // The main window's content: the orb behind everything, the sidebar and the route's screen over
-// it, and the edge glow on top.
+// it, and the edge glow on top. A milestone reached glows over the orb once, with its line at the
+// foot (MilestoneCelebration).
 //
 //   ┌──────────────────────────────────────────────────┐ ← the edge glow (while live; no clicks)
 //   │ sidebar (glass) │ content (the route's screen)    │
@@ -23,6 +24,8 @@ struct ShellView: View {
     @Environment(ScreenModels.self) private var screens
     @Environment(GlowTheme.self) private var theme
     @Environment(ShellInk.self) private var ink
+    @Environment(WindowPresence.self) private var presence
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
 
     private var meetingLive: Bool { store.meeting != nil }
@@ -59,10 +62,28 @@ struct ShellView: View {
                 }
         }
         .background {
-            OrbLayer(
-                state: ink.state, palette: theme.palette, placement: Glow.Orb.main, still: theme.motionStill,
-                dimmed: theme.solidSurfaces, behindText: true)
-                .ignoresSafeArea()
+            let celebration = MilestoneCelebration.showing(screens.stats.celebration, onScreen: presence.onScreen)
+            ZStack {
+                OrbLayer(
+                    state: ink.state, palette: theme.palette, placement: Glow.Orb.main, still: theme.motionStill,
+                    dimmed: theme.solidSurfaces, behindText: true)
+                // A milestone reached: a quiet glow over the orb, once (MilestoneCelebration). Not
+                // in the window otherwise, so nothing is laid out or drawn for it at rest.
+                if let celebration,
+                    MilestoneCelebration.glows(still: theme.motionStill, reduceMotion: reduceMotion)
+                {
+                    MilestoneGlow(
+                        serial: celebration.serial, you: theme.you, them: theme.them, placement: Glow.Orb.main,
+                        stats: screens.stats)
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .overlay(alignment: .bottom) {
+            if let celebration = MilestoneCelebration.showing(screens.stats.celebration, onScreen: presence.onScreen) {
+                MilestoneNote(celebration: celebration, stats: screens.stats)
+                    .padding(.bottom, 24)
+            }
         }
         .overlay {
             EdgeGlowLayer(state: ink.state, palette: theme.palette, on: theme.settings.edgeGlow, still: theme.motionStill)

@@ -63,6 +63,7 @@ pub mod recovery;
 pub mod retention;
 pub mod runtime;
 pub mod schema;
+pub mod stats;
 mod vad;
 pub mod voice;
 

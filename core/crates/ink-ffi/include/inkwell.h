@@ -255,7 +255,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       (forever|7|30|90|365: meetings and dictations older than that are deleted, never
  *       imports; at launch, after each meeting and when it changes, on the core's own thread;
  *       "library.swept" says how many), "import.key_note" (dismissed: import.notes stops
- *       saying what became of 0.2's hotkey). A change to the keys or to dictation.polish reaches a
+ *       saying what became of 0.2's hotkey), "stats.typing_wpm" (a whole number from 10 to 200,
+ *       written plainly: the typing speed stats.get measures time saved against; 40 unless set)
+ *       and "stats.celebrate" (on|off: milestones are celebrated; on unless set). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
  *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
@@ -367,6 +369,23 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       of the newest meetings in a row kept the user's words and none of the far end's.
  *       These four answer with the command's "id" as "ref"; a failure is "command.failed" with
  *       that "id", so a screen can tell "could not load" from "empty".
+ *   {"cmd":"stats.get","utc_offsets":[{"from_unix_ms":0,"minutes":60}],"week_start":1,
+ *    "id":"<ref>"}
+ *       "stats.counted": the Stats screen's numbers, counted on this computer from the library:
+ *       words dictated, speed against the user's own past, time saved against stats.typing_wpm,
+ *       the streak and a heatmap of words per day; meetings' hours, talk time (mic is the user,
+ *       far end the others), longest monologue and the user's lines ending in "?"; promises kept,
+ *       open and overdue; and which milestones are reached. Days are the user's: "utc_offsets" is
+ *       the zone's UTC offset over time, oldest first, each from the moment it took effect (the
+ *       first also covers everything before it; 1 to 400 of them, minutes -840 to 840), and
+ *       "week_start" the ISO weekday weeks start on (1 Monday to 7 Sunday). It answers with the
+ *       "id" as "ref"; a failure is "command.failed" with that "id".
+ *   {"cmd":"milestones.check","utc_offsets":[...],"week_start":1,"id":"<ref>"}
+ *       "milestones.reached": the milestones (words dictated 1,000 to 100,000, streaks of 7 to
+ *       100 days) reached since the last check, to celebrate; usually none. Each is reported
+ *       once ever, remembered in the library. A library's first check reports none and notes
+ *       what is already reached; with stats.celebrate off a milestone is noted, never reported.
+ *       Send it at launch and after a dictation or a meeting ends. Takes stats.get's calendar.
  *
  * Returns INK_OK once the command is queued; its outcome arrives as events. A command the core
  * cannot read returns INK_ERR_INVALID_ARGUMENT and queues nothing.
