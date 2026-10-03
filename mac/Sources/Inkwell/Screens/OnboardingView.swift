@@ -17,8 +17,10 @@ struct OnboardingView: View {
     /// The Polish step's own-key rows are open (closed at first: skipping them costs nothing).
     @State private var ownKey = false
 
-    /// The sheet's size and margin. Each step fits it without scrolling (OnboardingLayoutTests).
-    static let size = CGSize(width: 620, height: 520)
+    /// The sheet's size and margin. Each step fits it without scrolling (OnboardingLayoutTests):
+    /// 560 high, not 520, so the Speech models step holds two failures in the core's long words
+    /// with their Retry. The main window opens 700 high.
+    static let size = CGSize(width: 620, height: 560)
     static let padding: CGFloat = 32
     /// The room a step has: the sheet less its margins, the step dots and the buttons, and the
     /// spacing between them.
@@ -316,7 +318,7 @@ struct FirstRunModelsStep: View {
 
 /// One choice: its box (the set's is ticked and fixed), what it does, its size, and its models;
 /// on this Mac, its download's progress, or its failure with Retry, in place of the size.
-private struct ChoiceRow: View {
+struct ChoiceRow: View {
     let catalogue: CatalogueModel
     let choice: CatalogueModel.Choice
     @Binding var ticked: Set<CatalogueModel.Choice>

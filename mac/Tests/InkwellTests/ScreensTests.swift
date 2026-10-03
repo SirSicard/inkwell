@@ -2077,27 +2077,56 @@ final class OnboardingLayoutTests: XCTestCase {
         return hosting.sizeThatFits(in: CGSize(width: room.width, height: 10_000))
     }
 
-    func testTheModelsStepFitsTheSheetBeforeDuringAndAfterAFailure() {
+    /// Each scenario is checked to be what it says (a row with its bar, rows with Retry), then the
+    /// step is measured as a whole and row by row: no row is wider than the step.
+    private func assertFits(_ catalogue: CatalogueModel, screens: ScreenModels, _ label: String,
+                            file: StaticString = #filePath, line: UInt = #line) {
         let room = OnboardingView.stepRoom
+        let step = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
+        XCTAssertLessThanOrEqual(step.height, room.height, "\(label): the step's height", file: file, line: line)
+        for choice in catalogue.choices {
+            let row = needed(ChoiceRow(catalogue: catalogue, choice: choice, ticked: .constant([])), screens: screens)
+            XCTAssertLessThanOrEqual(row.width, room.width + 0.5, "\(label): \(choice) is wider than the step", file: file, line: line)
+        }
+    }
+
+    private func listed() -> ScreenModels {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.catalogue.apply(event(listedAll))
+        return screens
+    }
+
+    private let longFailure = "the new files could not be installed: downloading parakeet_tdt_0.6b_v3.mlmodelc: the connection was reset by the server before the file was complete"
+
+    func testTheModelsStepFitsTheSheetBeforeThePress() {
+        let screens = listed()
+        assertFits(screens.catalogue, screens: screens, "before the press")
+    }
+
+    func testTheModelsStepFitsTheSheetWithADownloadsBar() {
+        let screens = listed()
         let catalogue = screens.catalogue
-        catalogue.apply(event(listedAll))
-        var size = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
-        XCTAssertLessThanOrEqual(size.height, room.height, "before the press")
-        XCTAssertLessThanOrEqual(size.width, room.width + 0.5)
-        // The set downloading, an extra waiting, and one failed with the core's long words.
         catalogue.download(choices: [.speakers, .accuracy])
         catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":true,"no_model_warm":false}"#))
         catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
-        catalogue.apply(event(#"{"type":"command.failed","command":"model.update","id":"model.update:2","message":"stale"}"#))
-        size = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
-        XCTAssertLessThanOrEqual(size.height, room.height, "while downloading")
-        let failing = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
-        failing.catalogue.apply(event(listedAll))
-        failing.catalogue.download(choices: [.speakers])
-        failing.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
-        size = needed(FirstRunModelsStep(catalogue: failing.catalogue), screens: failing)
-        XCTAssertLessThanOrEqual(size.height, room.height, "with a failure and its Retry")
+        guard case .downloading(let progress?) = catalogue.state(of: .transcripts), progress.done > 0 else {
+            return XCTFail("the set's row should show its bar")
+        }
+        XCTAssertEqual(catalogue.state(of: .speakers), .waiting)
+        assertFits(catalogue, screens: screens, "with a bar")
+    }
+
+    func testTheModelsStepFitsTheSheetWithFailuresAndRetry() {
+        let screens = listed()
+        let catalogue = screens.catalogue
+        catalogue.download(choices: [.speakers])
+        catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":true,"no_model_warm":false}"#))
+        for id in ["parakeet-tdt-0.6b-v3-coreml", "nemotron-3-diarization-q8"] {
+            catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":false,"no_model_warm":false,"message":"\#(longFailure)"}"#))
+        }
+        XCTAssertEqual(catalogue.state(of: .transcripts), .failed(longFailure), "the set's row shows Retry")
+        XCTAssertEqual(catalogue.state(of: .speakers), .failed(longFailure), "and the diarizer's")
+        assertFits(catalogue, screens: screens, "with two failures")
     }
 }
 
