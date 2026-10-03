@@ -98,6 +98,7 @@ struct TodayScreen: View {
                     .minimumScaleFactor(0.5)
                     .accessibilityAddTraits(.isHeader)
                 Text(statusLine)
+                    .accessibilityLabel(statusLine(spoken: true))
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .padding(.top, 4)
@@ -113,18 +114,22 @@ struct TodayScreen: View {
         .frame(minHeight: 240, alignment: .bottom)
     }
 
-    private var statusLine: String {
+    private var statusLine: String { statusLine(spoken: false) }
+
+    private func statusLine(spoken: Bool) -> String {
         Self.statusLine(
             listening: RecordControls.listeningText(recording: store.meeting != nil, listening: store.listening),
             key: screens.dictation.key,
-            offersDictation: screens.catalogue.speech.offersDictation)
+            offersDictation: screens.catalogue.speech.offersDictation,
+            spoken: spoken)
     }
 
     /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now,
     /// unless no speech model could type what it hears (the line under it says so). The key as its
-    /// cap reads in Settings (DictationModel.cap).
-    static func statusLine(listening: String, key: String, offersDictation: Bool) -> String {
-        let hold = offersDictation ? "Hold \(DictationModel.cap(key)) to dictate" : ""
+    /// cap reads in Settings (DictationModel.cap); `spoken`, as VoiceOver reads it, by its name.
+    static func statusLine(listening: String, key: String, offersDictation: Bool, spoken: Bool = false) -> String {
+        let shown = spoken ? DictationModel.key(key)?.name ?? key : DictationModel.cap(key)
+        let hold = offersDictation ? "Hold \(shown) to dictate" : ""
         return [listening, hold]
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .joined(separator: " · ")

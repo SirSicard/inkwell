@@ -57,7 +57,8 @@ final class DictationModel {
 
     /// How a key is written wherever the app names it in a line (Today, Settings' status) and on
     /// its key cap: one formatter, so they never name the same key two ways (⌃⇧Space, never
-    /// Control-Shift-Space beside it). VoiceOver reads the spoken name from `key(_:)` instead.
+    /// Control-Shift-Space beside it). Where VoiceOver reads the line, it hears the name from
+    /// `key(_:)` (Today's status line does).
     static func cap(_ token: String) -> String {
         key(token)?.cap ?? token
     }

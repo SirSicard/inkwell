@@ -263,6 +263,9 @@ final class TodayStatusLineTests: XCTestCase {
         XCTAssertEqual(line, "Listening for calls · Hold \u{2303}\u{21E7}Space to dictate")
         XCTAssertEqual(DictationModel.cap(dictation.key), "\u{2303}\u{21E7}Space", "Settings' key cap")
         XCTAssertFalse(line.contains("Control"), line)
+        XCTAssertEqual(
+            TodayScreen.statusLine(listening: "Listening for calls", key: dictation.key, offersDictation: true, spoken: true),
+            "Listening for calls · Hold Control-Shift-Space to dictate", "VoiceOver hears the name")
         XCTAssertEqual(TodayScreen.statusLine(listening: "", key: "fn", offersDictation: true), "Hold fn to dictate")
         XCTAssertEqual(TodayScreen.statusLine(listening: "Listening for calls", key: "fn", offersDictation: false), "Listening for calls")
     }
