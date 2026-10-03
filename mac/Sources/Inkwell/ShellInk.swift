@@ -335,27 +335,40 @@ struct OrbLayer: NSViewRepresentable {
 final class OrbHold {
     private weak var view: InkView?
     private var holders = 0
+    /// A hold has read the spot: it stays pinned (InkView.holdsSpot) until every hold is let go.
+    private var spotRead = false
 
-    /// The orb's view; a new one takes the holds already made.
+    /// The orb's view; a new one takes the holds already made. A view replaced while a hold waits
+    /// leaves that wait to its cancellation (OrbLayer keeps one view for the window's life).
     func attach(_ view: InkView) {
         guard self.view !== view else { return }
         self.view = view
         view.holdsStill = holders > 0
+        view.holdsSpot = spotRead
     }
 
-    /// Holds the orb where it is now and returns its centre (fractions of the view, y from the
-    /// top), or nil with no orb attached. Each hold needs its release.
-    func hold() -> SIMD2<Double>? {
+    /// Holds the orb and returns its centre (fractions of the view, y from the top) once it is on
+    /// screen and has arrived (a glide under way, or the one it takes on coming on screen,
+    /// finishes first), or nil with no orb attached. Each hold needs its release, cancelled or not.
+    func hold() async -> SIMD2<Double>? {
         holders += 1
-        view?.holdsStill = true
-        return view?.orbCentre
+        guard let view else { return nil }
+        view.holdsStill = true
+        await view.settled()
+        guard !Task.isCancelled, let view = self.view else { return nil }
+        spotRead = true
+        view.holdsSpot = true
+        return view.orbCentre
     }
 
     /// Lets go of one hold; with none left the orb wanders again.
     func release() {
         guard holders > 0 else { return }
         holders -= 1
-        if holders == 0 { view?.holdsStill = false }
+        guard holders == 0 else { return }
+        spotRead = false
+        view?.holdsSpot = false
+        view?.holdsStill = false
     }
 }
 

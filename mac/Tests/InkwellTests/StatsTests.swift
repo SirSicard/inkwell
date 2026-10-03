@@ -499,22 +499,16 @@ final class MilestoneCelebrationTests: XCTestCase {
         XCTAssertEqual(glow.sizeThatFits(in: .zero), .zero, "it takes whatever room the window has, and asks for none")
     }
 
-    /// The main window's orb wanders, so the glow sits where the orb is, not at its home: after a
-    /// glide to a new spot, and part way through the next, the glow's centre is the orb's, and the
-    /// orb holds there under it (no screen change moves it) until the glow lets go.
+    /// The main window's orb wanders, so the glow sits where the orb is, not at its home. Held part
+    /// way through a glide, the orb finishes it and the glow takes the spot it arrives at; held, a
+    /// change of screen moves nothing and nothing is drawn; let go, it wanders again.
     func testTheGlowSitsOnTheOrbWhereverItHasWanderedAndHoldsItThere() async throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
-        let view = InkView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
-        view.assumeReduceMotion = false
-        view.wanderRandom = .seeded(11)
-        view.placement = Glow.Orb.main
-        view.wanderBounds = Glow.Orb.wander
+        let view = wanderingOrb()
         let orb = OrbHold()
         orb.attach(view)
         let home = SIMD2(Glow.Orb.main.x, Glow.Orb.main.yFromTop)
-        _ = try InkPipelineLoader.shared.wait().get()
-        try await Task.sleep(for: .seconds(0.05))
-        view.assumeOnScreen = true
+        try await show(view)
         try await Task.sleep(for: .seconds(OrbWander.restGlide + 0.4))
         XCTAssertFalse(view.isAnimating, "arrived")
         XCTAssertNotEqual(view.orbCentre, home, "wandered off its home")
@@ -522,10 +516,12 @@ final class MilestoneCelebrationTests: XCTestCase {
         view.contentID = "library"
         try await Task.sleep(for: .seconds(0.6))
         XCTAssertTrue(view.isAnimating, "part way to the next spot")
-        let centre = MilestoneGlow.holdCentre(orb, home: Glow.Orb.main)
+        let partWay = view.orbCentre
+        let centre = await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main)
+        XCTAssertFalse(view.isAnimating, "the glide finished before the glow's centre was read")
         XCTAssertEqual(centre, view.orbCentre, "the glow's centre is the orb's")
+        XCTAssertNotEqual(centre, partWay, "where it arrived, not where it was held")
         XCTAssertNotEqual(centre, home)
-        XCTAssertFalse(view.isAnimating, "held: the glide ends where it is, in a still frame")
         let frames = view.framesDrawn
         view.contentID = "settings"
         try await Task.sleep(for: .seconds(0.3))
@@ -538,21 +534,106 @@ final class MilestoneCelebrationTests: XCTestCase {
         XCTAssertTrue(view.isAnimating, "let go: it wanders again")
     }
 
-    /// Holds are counted: a glow ending after the next has begun never lets go of the next one's.
-    func testAnEarlierGlowLettingGoKeepsTheNextOnesHold() {
-        let view = InkView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+    /// Held before the orb is on screen (the glow and the window's coming on screen arrive in
+    /// either order): the orb still glides to its new spot, and the glow's centre is where it
+    /// arrives, read only once it has.
+    func testHeldBeforeItComesOnScreenTheOrbStillGlidesAndTheGlowWaitsForIt() async throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let view = wanderingOrb()
         let orb = OrbHold()
-        XCTAssertNil(orb.hold(), "no orb yet: the glow falls back to the home")
         orb.attach(view)
-        XCTAssertTrue(view.holdsStill, "an orb attached later takes the hold already made")
-        XCTAssertNotNil(orb.hold())
+        let before = view.orbCentre
+        _ = try InkPipelineLoader.shared.wait().get()
+        try await Task.sleep(for: .seconds(0.05))
+        let glow = Task { await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main) }
+        try await Task.sleep(for: .seconds(0.1))
+        view.assumeOnScreen = true
+        XCTAssertTrue(view.isAnimating, "held, coming on screen still glides")
+        let centre = await glow.value
+        XCTAssertFalse(view.isAnimating)
+        XCTAssertEqual(centre, view.orbCentre)
+        XCTAssertNotEqual(centre, before, "the new spot, once there")
         orb.release()
-        XCTAssertTrue(view.holdsStill)
+    }
+
+    /// Once the glow has read the spot, covering and uncovering the window leaves the orb under it;
+    /// let go, coming on screen moves it again.
+    func testALitGlowKeepsTheOrbWhenTheWindowIsCoveredAndUncovered() async throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let view = wanderingOrb()
+        let orb = OrbHold()
+        orb.attach(view)
+        try await show(view)
+        let spot = await orb.hold()
+        XCTAssertEqual(spot, view.orbCentre)
+        view.assumeOnScreen = false
+        view.assumeOnScreen = true
+        XCTAssertFalse(view.isAnimating, "lit: no glide away from under the glow")
+        XCTAssertEqual(view.orbCentre, spot)
+        orb.release()
+        view.assumeOnScreen = false
+        view.assumeOnScreen = true
+        XCTAssertTrue(view.isAnimating, "let go: coming on screen glides again")
+    }
+
+    /// A glow cancelled while it waits for the orb lets go at once, without waiting for a glide.
+    func testAGlowCancelledWhileItWaitsLetsGoAtOnce() async throws {
+        let view = wanderingOrb()
+        let orb = OrbHold()
+        orb.attach(view)
+        let glow = Task { await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main) }
+        try await Task.sleep(for: .seconds(0.1))
+        glow.cancel()
+        _ = await glow.value
         orb.release()
         XCTAssertFalse(view.holdsStill)
+    }
+
+    /// Holds are counted: a glow ending after the next has begun never lets go of the next one's.
+    func testAnEarlierGlowLettingGoKeepsTheNextOnesHold() async {
+        let view = InkView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+        let orb = OrbHold()
+        let unattached = await orb.hold()
+        XCTAssertNil(unattached, "no orb yet: the glow falls back to the home")
+        orb.attach(view)
+        XCTAssertTrue(view.holdsStill, "an orb attached later takes the hold already made")
         orb.release()
+        XCTAssertFalse(view.holdsStill)
+        view.holdsStill = true
+        let other = OrbHold()
+        other.attach(view)
+        XCTAssertFalse(view.holdsStill, "a new hold of its own starts with none")
+        let first = Task { await other.hold() }, second = Task { await other.hold() }
+        try? await Task.sleep(for: .seconds(0.05))
+        XCTAssertTrue(view.holdsStill)
+        other.release()
+        XCTAssertTrue(view.holdsStill, "the second glow's hold stays")
+        other.release()
+        XCTAssertFalse(view.holdsStill)
+        other.release()
         XCTAssertFalse(view.holdsStill, "an extra release changes nothing")
-        XCTAssertEqual(MilestoneGlow.holdCentre(nil, home: Glow.Orb.main), SIMD2(Glow.Orb.main.x, Glow.Orb.main.yFromTop))
+        first.cancel()
+        second.cancel()
+        _ = await (first.value, second.value)
+        let home = await MilestoneGlow.holdCentre(nil, home: Glow.Orb.main)
+        XCTAssertEqual(home, SIMD2(Glow.Orb.main.x, Glow.Orb.main.yFromTop))
+    }
+
+    /// The main window's orb, wandering on a seeded path, not yet on screen.
+    private func wanderingOrb() -> InkView {
+        let view = InkView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+        view.assumeReduceMotion = false
+        view.wanderRandom = .seeded(11)
+        view.placement = Glow.Orb.main
+        view.wanderBounds = Glow.Orb.wander
+        return view
+    }
+
+    /// Puts the view on screen once the pipeline is ready: it glides to a new spot.
+    private func show(_ view: InkView) async throws {
+        _ = try InkPipelineLoader.shared.wait().get()
+        try await Task.sleep(for: .seconds(0.05))
+        view.assumeOnScreen = true
     }
 }
 
