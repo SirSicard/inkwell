@@ -69,6 +69,9 @@ final class GlowTheme {
     private(set) var effectiveDark = false
     /// Increase Contrast or Reduce Transparency is on: solid cards, a dimmed orb.
     private(set) var solidSurfaces = false
+    /// The system's Reduce Motion, followed as it changes: the live icon's pulse stops with it.
+    /// (The ink's views read it as they draw.)
+    private(set) var reduceMotion = false
     /// A key could not be read or saved.
     private(set) var failure: String?
 
@@ -121,6 +124,8 @@ final class GlowTheme {
         let solid = workspace.accessibilityDisplayShouldIncreaseContrast
             || workspace.accessibilityDisplayShouldReduceTransparency
         if solid != solidSurfaces { solidSurfaces = solid }
+        let still = workspace.accessibilityDisplayShouldReduceMotion
+        if still != reduceMotion { reduceMotion = still }
     }
 
     nonisolated static func isDark(_ appearance: NSAppearance) -> Bool {
@@ -154,6 +159,12 @@ final class GlowTheme {
     /// Yours and theirs, as the mode shows them (fitted).
     var dots: (you: GlowColours.RGB, them: GlowColours.RGB) {
         GlowColours.dots(preset: preset, you: customYou, them: customThem, dark: isDark)
+    }
+
+    /// Yours and theirs as the dark mode shows them, whichever mode is shown: for what is drawn
+    /// on night in either mode (the app icon's plate, in the Dock).
+    var nightDots: (you: GlowColours.RGB, them: GlowColours.RGB) {
+        GlowColours.dots(preset: Glow.preset(settings.dotsDark), you: settings.youDark, them: settings.themDark, dark: true)
     }
 
     var you: Color { GlowColours.color(dots.you) }

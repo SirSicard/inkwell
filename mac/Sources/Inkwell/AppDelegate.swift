@@ -28,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var ink = ShellInk(
         store: core.store, permissions: core.screens.permissions, meetings: core.screens.meetings)
     private var drop: DropController?
+    /// What the Dock tile and the menu-bar item show of the state.
+    private let liveIcon = LiveIcon()
+    /// The Dock tile's surface, attached while the main window is open (the only time the tile
+    /// exists). The art is the bundle's icon, read before anything draws over the tile.
+    private lazy var liveDock = LiveIconDock(tile: NSApp.dockTile, base: NSApp.applicationIconImage)
     private var dropDemo: DropDemo?
     private var signalSources: [DispatchSourceSignal] = []
     private var quitting = false
@@ -95,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showMainWindow()
                 self?.router.open(.settings)
             })
+        liveIcon.follow(ink: ink, theme: core.screens.theme)
         // Opened by the user: show the window. Opened at login: stay in the menu bar, unless a
         // second copy asked for the window while this one was starting (served by attach).
         if !LoginItem.launchedAtLogin() {
@@ -140,8 +146,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mainWindow = MainWindowController(
                 router: router, store: core.store, ink: ink, updates: updates, screens: core.screens,
                 library: core.library)
+            mainWindow?.didClose = { [weak self] in
+                guard let self else { return }
+                liveIcon.detach(liveDock)
+            }
         }
         mainWindow?.present()
+        // After present: the app is a regular one now, with a tile to draw on.
+        liveIcon.attach(liveDock)
     }
 
     /// SIGTERM and SIGINT become an ordinary Quit, so they stop the core like any other.

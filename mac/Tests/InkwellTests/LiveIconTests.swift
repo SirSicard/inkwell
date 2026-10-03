@@ -276,3 +276,177 @@ final class LiveIconEnergyTests: XCTestCase {
             + "recording \(recording * 20), after recording \(after * 60)")
     }
 }
+
+/// A Dock tile that counts what it is asked to do.
+@MainActor
+private final class CountingTile: LiveIconTile {
+    var contentView: NSView?
+    var size = NSSize(width: 128, height: 128)
+    var displays = 0
+    func display() { displays += 1 }
+}
+
+/// The app icon as the bundle carries it.
+@MainActor
+private func appIcon() throws -> NSImage {
+    let mac = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    return try XCTUnwrap(NSImage(contentsOf: mac.appendingPathComponent("AppIcon.icns")))
+}
+
+/// `frame` drawn over the icon, `side` pixels square.
+@MainActor
+private func render(_ frame: LiveIconFrame?, side: Int = 256) throws -> NSBitmapImageRep {
+    let rep = try XCTUnwrap(NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8, samplesPerPixel: 4,
+        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+    let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: rep))
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    let rect = NSRect(x: 0, y: 0, width: side, height: side)
+    let base = try appIcon()
+    if let frame {
+        LiveIconArt.draw(frame, base: base, in: rect)
+    } else {
+        base.draw(in: rect)
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    return rep
+}
+
+private func rgb(_ rep: NSBitmapImageRep, _ x: CGFloat, _ y: CGFloat) -> GlowColours.RGB {
+    // colorAt counts rows from the top; the art's points count from the bottom.
+    let c = rep.colorAt(x: Int(x), y: rep.pixelsHigh - 1 - Int(y))?.usingColorSpace(.deviceRGB)
+    return GlowColours.RGB(Double(c?.redComponent ?? -1), Double(c?.greenComponent ?? -1), Double(c?.blueComponent ?? -1))
+}
+
+private func distance(_ a: GlowColours.RGB, _ b: GlowColours.RGB) -> Double {
+    let d = a - b
+    return (d * d).sum().squareRoot()
+}
+
+@MainActor
+final class LiveIconDockTests: XCTestCase {
+    /// At rest the tile has no view of its own: macOS draws the bundle's icon, exactly the static
+    /// one. Live, the view draws the frame, once per frame.
+    func testTheTileDrawsOnlyWhileLive() {
+        let tile = CountingTile()
+        let dock = LiveIconDock(tile: tile, base: NSImage(size: NSSize(width: 16, height: 16)))
+        dock.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
+        XCTAssertNil(tile.contentView)
+        XCTAssertEqual(tile.displays, 0, "at rest from the start: nothing to put back")
+
+        dock.show(LiveIconFrame(look: .glow(.you), colours: colours, strength: 1))
+        XCTAssertNotNil(tile.contentView)
+        XCTAssertEqual(tile.contentView?.frame.size, tile.size)
+        XCTAssertEqual(tile.displays, 1)
+        dock.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 0.8))
+        XCTAssertEqual(tile.displays, 2)
+
+        dock.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
+        XCTAssertNil(tile.contentView, "back to the bundle's icon")
+        XCTAssertEqual(tile.displays, 3)
+    }
+
+    /// Each look over the icon: the orb takes the colour, the ring fills clockwise from the top,
+    /// and the plate's corners stay the icon's own.
+    func testTheArtShowsEachLook() throws {
+        let side: CGFloat = 256
+        let orb = CGPoint(x: side / 2, y: side * LiveIconArt.orbCentre.y)
+        let still = try render(nil)
+        let glow = try render(LiveIconFrame(look: .glow(.you), colours: colours, strength: 1))
+        XCTAssertLessThan(distance(rgb(glow, orb.x + 20, orb.y), colours.night.you), 0.15, "the orb in your night colour")
+        XCTAssertGreaterThan(distance(rgb(still, orb.x + 20, orb.y), colours.night.you), 0.2, "which the icon is not")
+        let corner = CGPoint(x: side * 0.16, y: side * 0.16)
+        XCTAssertLessThan(distance(rgb(glow, corner.x, corner.y), rgb(still, corner.x, corner.y)), 0.02)
+
+        let alert = try render(LiveIconFrame(look: .glow(.alert), colours: colours, strength: 1))
+        XCTAssertLessThan(distance(rgb(alert, orb.x + 20, orb.y), LiveIconArt.alert), 0.15)
+
+        let faint = try render(LiveIconFrame(look: .pulse(.them), colours: colours, strength: LiveIcon.breathLow))
+        let full = try render(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+        XCTAssertLessThan(distance(rgb(full, orb.x + 20, orb.y), colours.night.them), 0.15)
+        XCTAssertGreaterThan(distance(rgb(faint, orb.x + 20, orb.y), rgb(full, orb.x + 20, orb.y)), 0.05, "it breathes")
+
+        // Half way: the right side is filled, the left is the track.
+        let half = try render(LiveIconFrame(look: .ring(0.5), colours: colours, strength: 1))
+        let ring = LiveIconArt.ringRect(in: NSRect(x: 0, y: 0, width: side, height: side))
+        let right = CGPoint(x: ring.maxX, y: ring.midY)
+        let left = CGPoint(x: ring.minX, y: ring.midY)
+        XCTAssertLessThan(distance(rgb(half, right.x, right.y), colours.night.them), 0.15, "filled")
+        XCTAssertGreaterThan(distance(rgb(half, left.x, left.y), colours.night.them), 0.3, "still to come")
+        XCTAssertLessThan(distance(rgb(half, orb.x + 20, orb.y), rgb(still, orb.x + 20, orb.y)), 0.02,
+                          "the orb is left as it is")
+    }
+}
+
+@MainActor
+final class LiveIconFeedTests: XCTestCase {
+    /// The theme's colours: the shown mode's for the menu bar, the dark mode's for the Dock.
+    func testTheColoursComeFromTheTheme() {
+        let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
+        theme.setMode(.light)
+        theme.setYou("#336699")
+        theme.setMode(.dark)
+        theme.setYou("#aa33ff")
+        theme.setMode(.light)
+        let c = LiveIcon.colours(theme)
+        XCTAssertEqual(GlowColours.hex(c.shown.you), GlowColours.hex(theme.dots.you))
+        XCTAssertEqual(GlowColours.hex(c.night.you), "#aa33ff", "the Dock's plate is night in either mode")
+    }
+
+    /// The look follows the ink, the final pass's steps and the motion setting, without polling.
+    func testTheIconFollowsTheInk() async throws {
+        let store = CoreStore()
+        let ink = ShellInk(store: store)
+        let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
+        let icon = LiveIcon(ticker: HandTicker())
+        icon.follow(ink: ink, theme: theme)
+        XCTAssertEqual(icon.frame.look, .rest)
+
+        ink.held = .meeting
+        await Task.yield()
+        try await waitFor { icon.frame.look == .pulse(.them) }
+        theme.setMotion(.still)
+        try await waitFor { icon.frame.look == .glow(.them) }
+        ink.held = nil
+        try await waitFor { icon.frame.look == .rest }
+    }
+
+    private func waitFor(_ condition: @MainActor () -> Bool) async throws {
+        for _ in 0..<100 where !condition() {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(condition())
+    }
+}
+
+/// Renders for a design review, written only when asked:
+///
+///   INK_LIVE_ICON_RENDER=<folder>   the Dock tile in each state, with the default colours
+@MainActor
+final class LiveIconRenderTests: XCTestCase {
+    func testRenderTheDockTile() throws {
+        guard let folder = ProcessInfo.processInfo.environment["INK_LIVE_ICON_RENDER"] else {
+            throw XCTSkip("INK_LIVE_ICON_RENDER is not set")
+        }
+        let out = URL(fileURLWithPath: folder, isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let colours = LiveIcon.colours(GlowTheme(send: { _ in }, applyAppearance: { _ in }))
+        let frames: [(String, LiveIconFrame?)] = [
+            ("idle", nil),
+            ("dictating", LiveIconFrame(look: .glow(.you), colours: colours, strength: 1)),
+            ("recording-breath-in", LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1)),
+            ("recording-breath-out", LiveIconFrame(look: .pulse(.them), colours: colours, strength: LiveIcon.breathLow)),
+            ("recording-still", LiveIconFrame(look: .glow(.them), colours: colours, strength: 1)),
+            ("final-pass-indeterminate", LiveIconFrame(look: .ring(nil), colours: colours, strength: 1)),
+            ("final-pass-50", LiveIconFrame(look: .ring(0.5), colours: colours, strength: 1)),
+            ("final-pass-75", LiveIconFrame(look: .ring(0.75), colours: colours, strength: 1)),
+            ("problem", LiveIconFrame(look: .glow(.alert), colours: colours, strength: 1)),
+        ]
+        for (name, frame) in frames {
+            let png = try XCTUnwrap(render(frame, side: 512).representation(using: .png, properties: [:]))
+            try png.write(to: out.appendingPathComponent("dock-\(name).png"))
+        }
+    }
+}

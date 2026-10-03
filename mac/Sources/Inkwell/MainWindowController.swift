@@ -15,6 +15,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let events: EventKitEvents
     /// Whether the window is on screen, for what redraws on a clock (Up next's minute).
     private let presence = WindowPresence()
+    /// Called as the window closes: the app is going back to the menu bar, and its Dock tile with it.
+    var didClose: (@MainActor () -> Void)?
 
     /// `ink` is what the orb and the edge glow show; `updates` is in the environment for the
     /// Settings screen;
@@ -96,6 +98,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // Back to the menu bar: no Dock icon for an app with no window open.
         NSApp.setActivationPolicy(.accessory)
         presence.update(nil)
+        didClose?()
     }
 
     // What changes whether the window is on screen (WindowPresence): covered or uncovered (which

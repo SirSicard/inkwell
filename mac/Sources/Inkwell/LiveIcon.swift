@@ -15,6 +15,7 @@
 import Foundation
 import InkBridge
 import InkRenderer
+import Observation
 
 /// What the icon shows.
 enum LiveIconLook: Equatable, Sendable {
@@ -172,6 +173,31 @@ final class LiveIcon {
         let sides = later ? 2 : min(meeting.transcribed.count, 2)
         let steps = sides + (meeting.diarized ? 1 : 0) + (meeting.summarized ? 1 : 0)
         return steps == 0 ? nil : Double(steps) / 4
+    }
+
+    /// The theme's colours for each surface.
+    static func colours(_ theme: GlowTheme) -> LiveIconColours {
+        let shown = theme.dots
+        let night = theme.nightDots
+        return LiveIconColours(
+            night: .init(you: night.you, them: night.them), shown: .init(you: shown.you, them: shown.them))
+    }
+
+    /// Follows the ink's state, the final pass's steps, the theme's colours and the motion
+    /// settings through observation, from now on: nothing polls, and a change that alters nothing
+    /// shown draws nothing (update).
+    func follow(ink: ShellInk, theme: GlowTheme) {
+        withObservationTracking {
+            let state = ink.state
+            let progress = state == .blotting ? Self.finalPassProgress(ink.store.meeting) : nil
+            let still = theme.motionStill || theme.reduceMotion
+            update(look: .for(state, progress: progress, still: still), colours: Self.colours(theme))
+        } onChange: { [weak self] in
+            // Read on the next turn of the main queue, once the change is applied.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.follow(ink: ink, theme: theme) }
+            }
+        }
     }
 
     /// The strength `tick` frames into a breath: full, out to `breathLow`, and back.
