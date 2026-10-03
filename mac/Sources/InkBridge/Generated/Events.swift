@@ -181,6 +181,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case librarySwept(LibrarySwept)
     /// `stats.counted`
     case statsCounted(StatsCounted)
+    /// `milestones.reached`
+    case milestonesReached(MilestonesReached)
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
@@ -290,6 +292,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "library.stats": self = .libraryStats(try LibraryStats(from: decoder))
             case "library.swept": self = .librarySwept(try LibrarySwept(from: decoder))
             case "stats.counted": self = .statsCounted(try StatsCounted(from: decoder))
+            case "milestones.reached": self = .milestonesReached(try MilestonesReached(from: decoder))
             default: self = .unknown(type: type)
             }
         } catch {
@@ -385,6 +388,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .libraryStats(let event): try event.encode(to: encoder)
         case .librarySwept(let event): try event.encode(to: encoder)
         case .statsCounted(let event): try event.encode(to: encoder)
+        case .milestonesReached(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var keys = encoder.container(keyedBy: TypeKey.self)
             try keys.encode(type, forKey: .type)
@@ -2219,6 +2223,19 @@ public struct MilestoneRow: Codable, Sendable, Equatable {
     public let reached: Bool
     /// The count that reaches it.
     public let threshold: Int64
+}
+
+/// In answer to milestones.check: the milestones reached since the last check, to celebrate.
+/// Each is reported once ever; a library's first check, and any check while stats.celebrate is
+/// off, reports none (what is reached is noted all the same).
+public struct MilestonesReached: Codable, Sendable, Equatable {
+    /// The newly reached milestones, in the fixed order of stats.counted's; usually none.
+    public let milestones: [MilestoneRow]
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// Always `milestones.reached`.
+    public let type: String
 }
 
 /// A mode: how dictation writes in the apps it names.

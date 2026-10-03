@@ -380,6 +380,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       first also covers everything before it; 1 to 400 of them, minutes -840 to 840), and
  *       "week_start" the ISO weekday weeks start on (1 Monday to 7 Sunday). It answers with the
  *       "id" as "ref"; a failure is "command.failed" with that "id".
+ *   {"cmd":"milestones.check","utc_offsets":[...],"week_start":1,"id":"<ref>"}
+ *       "milestones.reached": the milestones (words dictated 1,000 to 100,000, streaks of 7 to
+ *       100 days) reached since the last check, to celebrate; usually none. Each is reported
+ *       once ever, remembered in the library. A library's first check reports none and notes
+ *       what is already reached; with stats.celebrate off a milestone is noted, never reported.
+ *       Send it at launch and after a dictation or a meeting ends. Takes stats.get's calendar.
  *
  * Returns INK_OK once the command is queued; its outcome arrives as events. A command the core
  * cannot read returns INK_ERR_INVALID_ARGUMENT and queues nothing.

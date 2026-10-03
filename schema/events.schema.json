@@ -261,6 +261,9 @@
     },
     {
       "$ref": "#/$defs/StatsCounted"
+    },
+    {
+      "$ref": "#/$defs/MilestonesReached"
     }
   ],
   "$defs": {
@@ -4426,6 +4429,32 @@
         "meetings_all",
         "promises_month",
         "promises_all",
+        "milestones"
+      ],
+      "additionalProperties": false
+    },
+    "MilestonesReached": {
+      "type": "object",
+      "description": "In answer to milestones.check: the milestones reached since the last check, to celebrate. Each is reported once ever; a library's first check, and any check while stats.celebrate is off, reports none (what is reached is noted all the same).",
+      "properties": {
+        "type": {
+          "const": "milestones.reached"
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, echoed so the shell can match the answer to its question."
+        },
+        "milestones": {
+          "type": "array",
+          "description": "The newly reached milestones, in the fixed order of stats.counted's; usually none.",
+          "items": {
+            "$ref": "#/$defs/MilestoneRow",
+            "description": "One milestone."
+          }
+        }
+      },
+      "required": [
+        "type",
         "milestones"
       ],
       "additionalProperties": false

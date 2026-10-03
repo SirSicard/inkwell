@@ -7,6 +7,7 @@
 //! | Command | Answer |
 //! |---|---|
 //! | `stats.get` | `stats.counted`: dictation, meetings, promises and milestones, on the user's calendar |
+//! | `milestones.check` | `milestones.reached`: the milestones reached since the last check, each reported once ever ([`celebrations`]) |
 //!
 //! # Where each number comes from
 //!
@@ -62,6 +63,9 @@ pub const TYPING_WPM_RANGE: std::ops::RangeInclusive<u32> = 10..=200;
 pub const TYPING_WPM_KEY: &str = "stats.typing_wpm";
 /// The store setting that turns milestone celebrations off (`off`); on unless set.
 pub const CELEBRATE_KEY: &str = "stats.celebrate";
+/// The store setting noting the milestones already celebrated, or passed while celebrations were
+/// off: a JSON array of ids. The core's own; no shell reads or writes it.
+pub const MILESTONES_KEY: &str = "stats.milestones";
 /// The least speech a window needs before it has a words-per-minute figure.
 pub const WPM_MIN_SPOKEN_MS: u64 = 60_000;
 /// How far back the 30-day average reaches, today included.
@@ -462,20 +466,33 @@ pub fn count(
     }
 }
 
-/// A `stats.get`, read.
+/// A stats command, read. Both count the library on the user's calendar.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StatsQuery {
-    /// The user's calendar.
-    pub calendar: Calendar,
+pub enum StatsQuery {
+    /// `stats.get`: everything the screen shows.
+    Get {
+        /// The user's calendar.
+        calendar: Calendar,
+    },
+    /// `milestones.check`: what is newly reached, reported once.
+    CheckMilestones {
+        /// The user's calendar (a streak counts local days).
+        calendar: Calendar,
+    },
 }
 
-/// Reads `v` as `stats.get` when `name` is that: `None` for any other command.
+/// Reads `v` as a stats command when `name` is one: `None` for any other command.
 pub fn parse(name: &str, v: &Value) -> Option<Result<StatsQuery, String>> {
-    (name == "stats.get").then(|| parse_get(v))
+    match name {
+        "stats.get" => Some(parse_calendar(name, v).map(|calendar| StatsQuery::Get { calendar })),
+        "milestones.check" => {
+            Some(parse_calendar(name, v).map(|calendar| StatsQuery::CheckMilestones { calendar }))
+        }
+        _ => None,
+    }
 }
 
-fn parse_get(v: &Value) -> Result<StatsQuery, String> {
-    let name = "stats.get";
+fn parse_calendar(name: &str, v: &Value) -> Result<Calendar, String> {
     let obj = v.as_object().ok_or("command: not an object")?;
     if let Some(k) = obj
         .keys()
@@ -512,8 +529,50 @@ fn parse_get(v: &Value) -> Result<StatsQuery, String> {
         .and_then(Value::as_u64)
         .and_then(|w| u32::try_from(w).ok())
         .ok_or_else(|| format!("{name}: needs an integer \"week_start\""))?;
-    let calendar = Calendar::new(offsets, week_start).map_err(|e| format!("{name}: {e}"))?;
-    Ok(StatsQuery { calendar })
+    Calendar::new(offsets, week_start).map_err(|e| format!("{name}: {e}"))
+}
+
+/// What a milestone check reports, and the note to store (`None`: unchanged), from the milestones
+/// `reached` now and the stored note of those already handled.
+///
+/// - **Once ever.** A milestone is reported the first time a check finds it reached, and noted;
+///   it stays noted if the count later falls back (records deleted), so it is never reported
+///   twice.
+/// - **A first check reports nothing.** With no note (a library from before milestones, or one
+///   just imported into), what is reached already is noted silently: an old milestone is not
+///   celebrated as new. A note that cannot be read is treated the same way, rather than
+///   celebrating everything at once.
+/// - **Off notes without reporting.** With celebrations off a milestone reached is noted, so
+///   turning them back on later does not celebrate it late.
+pub fn celebrations(
+    reached: &[&'static str],
+    noted: Option<&str>,
+    celebrate: bool,
+) -> (Vec<&'static str>, Option<String>) {
+    let previous: Option<BTreeSet<String>> = noted.and_then(|n| {
+        let ids = serde_json::from_str::<Value>(n).ok()?;
+        ids.as_array()?
+            .iter()
+            .map(|id| id.as_str().map(str::to_owned))
+            .collect()
+    });
+    if noted.is_some() && previous.is_none() {
+        log::warn!("stats: the note of milestones celebrated could not be read; noted afresh");
+    }
+    let first = previous.is_none();
+    let mut all = previous.unwrap_or_default();
+    let new: Vec<&'static str> = reached
+        .iter()
+        .copied()
+        .filter(|id| !all.contains(*id))
+        .collect();
+    if !first && new.is_empty() {
+        return (Vec::new(), None);
+    }
+    all.extend(new.iter().map(|id| (*id).to_owned()));
+    let note = Value::from(all.into_iter().collect::<Vec<String>>()).to_string();
+    let report = if first || !celebrate { Vec::new() } else { new };
+    (report, Some(note))
 }
 
 /// The typing speed in the store, or the default when unset or unreadable as one.
@@ -526,19 +585,49 @@ pub fn typing_wpm(store: &dyn Store) -> Result<u32, String> {
         .unwrap_or(DEFAULT_TYPING_WPM))
 }
 
-/// **Worker** (the screens' thread). Counts the library and answers `stats.counted`, echoing `id`
-/// as `ref`; or why it could not.
+/// **Worker** (the screens' thread). Counts the library and answers `stats.counted` or
+/// `milestones.reached`, echoing `id` as `ref`; or why it could not.
 pub fn answer(shared: &Shared, query: StatsQuery, id: Option<&str>) -> Result<Value, String> {
     let store = shared.store.as_ref();
     let e = |err: ink_core::StoreError| err.to_string();
+    let calendar = match &query {
+        StatsQuery::Get { calendar } | StatsQuery::CheckMilestones { calendar } => calendar,
+    };
     let counted = count(
         &store.digests().map_err(e)?,
         &store.commitment_states().map_err(e)?,
         shared.clock.unix_ms(),
-        &query.calendar,
+        calendar,
         typing_wpm(store)?,
     );
-    Ok(counted_event(&counted, id))
+    if let StatsQuery::Get { .. } = query {
+        return Ok(counted_event(&counted, id));
+    }
+    let reached: Vec<&'static str> = MILESTONES
+        .iter()
+        .filter(|m| counted.reached(m))
+        .map(|m| m.id)
+        .collect();
+    let noted = store.setting(MILESTONES_KEY).map_err(e)?;
+    let celebrate = store.setting(CELEBRATE_KEY).map_err(e)?.as_deref() != Some("off");
+    let (report, note) = celebrations(&reached, noted.as_deref(), celebrate);
+    // Noted before it is reported: a note that fails to save fails the check, so a milestone is
+    // never celebrated without being remembered.
+    if let Some(note) = note {
+        store.set_setting(MILESTONES_KEY, &note).map_err(e)?;
+    }
+    let rows = MILESTONES
+        .iter()
+        .filter(|m| report.contains(&m.id))
+        .map(|m| milestone(m, true))
+        .collect();
+    Ok(event(
+        "milestones.reached",
+        &[
+            ("ref", id.map(Value::from)),
+            ("milestones", Some(Value::Array(rows))),
+        ],
+    ))
 }
 
 fn meetings(m: &Meetings) -> Value {
@@ -1002,6 +1091,59 @@ mod tests {
         assert!(MILESTONES.iter().take(4).all(|m| c.reached(m)));
     }
 
+    /// The once-only rule, in full: a first check takes note silently; after that a milestone is
+    /// reported the first time it is reached and never again, kept even if the count falls back;
+    /// with celebrations off it is noted and not reported; an unreadable note is a first check.
+    #[test]
+    fn milestones_are_reported_once_and_noted_whatever_happens() {
+        let ids = |v: &[&'static str]| v.to_vec();
+        // First check: nothing reported, what is reached noted.
+        assert_eq!(
+            celebrations(&ids(&["words_1000"]), None, true),
+            (vec![], Some(r#"["words_1000"]"#.to_string()))
+        );
+        assert_eq!(
+            celebrations(&[], None, true),
+            (vec![], Some("[]".to_string()))
+        );
+        // A new one is reported and noted with the old.
+        assert_eq!(
+            celebrations(
+                &ids(&["words_1000", "streak_7"]),
+                Some(r#"["words_1000"]"#),
+                true
+            ),
+            (
+                vec!["streak_7"],
+                Some(r#"["streak_7","words_1000"]"#.to_string())
+            )
+        );
+        // Nothing new: nothing reported, nothing written.
+        assert_eq!(
+            celebrations(&ids(&["words_1000"]), Some(r#"["words_1000"]"#), true),
+            (vec![], None)
+        );
+        // Reached once, then not (records deleted): still noted, and not reported again later.
+        assert_eq!(
+            celebrations(&[], Some(r#"["words_1000"]"#), true),
+            (vec![], None)
+        );
+        assert_eq!(
+            celebrations(&ids(&["words_1000"]), Some(r#"["words_1000"]"#), true),
+            (vec![], None)
+        );
+        // Off: noted, not reported.
+        assert_eq!(
+            celebrations(&ids(&["streak_7"]), Some("[]"), false),
+            (vec![], Some(r#"["streak_7"]"#.to_string()))
+        );
+        // An unreadable note is a first check, rather than a flood of old milestones.
+        assert_eq!(
+            celebrations(&ids(&["words_1000"]), Some("not json"), true),
+            (vec![], Some(r#"["words_1000"]"#.to_string()))
+        );
+    }
+
     #[test]
     fn stats_get_parses_or_says_why_not() {
         let p = |json: &str| {
@@ -1012,7 +1154,7 @@ mod tests {
         assert_eq!(
             p(r#"{"cmd":"stats.get","id":"s1","week_start":7,
                   "utc_offsets":[{"from_unix_ms":0,"minutes":60},{"from_unix_ms":9,"minutes":120}]}"#),
-            Some(Ok(StatsQuery {
+            Some(Ok(StatsQuery::Get {
                 calendar: Calendar::new(vec![(0, 60), (9, 120)], 7).unwrap()
             }))
         );

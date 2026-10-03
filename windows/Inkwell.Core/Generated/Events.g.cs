@@ -129,6 +129,7 @@ public abstract record InkEvent
                 "library.stats" => root.Deserialize(InkEventsJson.Default.LibraryStats)!,
                 "library.swept" => root.Deserialize(InkEventsJson.Default.LibrarySwept)!,
                 "stats.counted" => root.Deserialize(InkEventsJson.Default.StatsCounted)!,
+                "milestones.reached" => root.Deserialize(InkEventsJson.Default.MilestonesReached)!,
                 _ => new UnknownEvent { Type = type },
             };
         }
@@ -267,6 +268,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(LibraryStats))]
 [JsonSerializable(typeof(LibrarySwept))]
 [JsonSerializable(typeof(StatsCounted))]
+[JsonSerializable(typeof(MilestonesReached))]
 public sealed partial class InkEventsJson : JsonSerializerContext
 {
 }
@@ -3375,6 +3377,27 @@ public sealed record MilestoneRow
     /// </summary>
     [JsonPropertyName("threshold")]
     public required long Threshold { get; init; }
+}
+
+/// <summary>
+/// In answer to milestones.check: the milestones reached since the last check, to celebrate.
+/// Each is reported once ever; a library's first check, and any check while stats.celebrate is
+/// off, reports none (what is reached is noted all the same).
+/// </summary>
+public sealed record MilestonesReached : InkEvent
+{
+    /// <summary>
+    /// The newly reached milestones, in the fixed order of stats.counted's; usually none.
+    /// </summary>
+    [JsonPropertyName("milestones")]
+    public required global::System.Collections.Generic.IReadOnlyList<MilestoneRow> Milestones { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 }
 
 /// <summary>

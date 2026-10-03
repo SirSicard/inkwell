@@ -209,3 +209,100 @@ fn a_bad_stats_get_or_typing_speed_is_refused() {
     core.shutdown();
     events.assert_valid();
 }
+
+fn dictate(store: &dyn Store, start: i64, words: usize) {
+    add(
+        store,
+        RecordKind::Dictation,
+        start,
+        1,
+        &[line(Channel::Mic, 0, 60_000, &"word ".repeat(words))],
+    );
+}
+
+fn check(core: &Core, events: &Recorder, id: &str) -> Vec<String> {
+    let answer = ask(
+        core,
+        events,
+        json!({"cmd": "milestones.check", "utc_offsets": utc(), "week_start": 1}),
+        id,
+    );
+    assert_eq!(answer["type"], "milestones.reached", "{answer}");
+    answer["milestones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Each milestone is celebrated once: the check that first finds it reached says so, and no
+/// later one does. A library's first check only takes note of what was already reached (an
+/// upgrade, an import): nothing old is celebrated as new.
+#[test]
+fn a_milestone_is_celebrated_once() {
+    let dir = TempDir::new("milestones-once");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    let now = core.shared().clock.unix_ms();
+
+    dictate(store.as_ref(), now - 10 * MINUTE, 1_200);
+    assert_eq!(
+        check(&core, &events, "first"),
+        Vec::<String>::new(),
+        "already reached"
+    );
+    assert_eq!(check(&core, &events, "again"), Vec::<String>::new());
+
+    dictate(store.as_ref(), now - 5 * MINUTE, 9_000);
+    assert_eq!(check(&core, &events, "ten"), ["words_10000"]);
+    assert_eq!(
+        check(&core, &events, "ten-again"),
+        Vec::<String>::new(),
+        "once"
+    );
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// With celebrations off, a milestone reached is noted and never celebrated, then or after
+/// celebrations are turned back on.
+#[test]
+fn celebrations_turned_off_celebrate_nothing_later_either() {
+    let dir = TempDir::new("milestones-off");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    let now = core.shared().clock.unix_ms();
+    assert_eq!(check(&core, &events, "first"), Vec::<String>::new());
+
+    core.command(
+        &json!({"cmd": "setting.set", "key": "stats.celebrate", "value": "off"}).to_string(),
+    )
+    .unwrap();
+    events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "stats.celebrate"
+        })
+        .unwrap();
+    dictate(store.as_ref(), now - 10 * MINUTE, 1_000);
+    assert_eq!(check(&core, &events, "off"), Vec::<String>::new());
+
+    core.command(
+        &json!({"cmd": "setting.set", "key": "stats.celebrate", "value": "on"}).to_string(),
+    )
+    .unwrap();
+    events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "stats.celebrate" && v["value"] == "on"
+        })
+        .unwrap();
+    assert_eq!(
+        check(&core, &events, "on"),
+        Vec::<String>::new(),
+        "not late either"
+    );
+    dictate(store.as_ref(), now - 5 * MINUTE, 9_000);
+    assert_eq!(check(&core, &events, "ten"), ["words_10000"]);
+    core.shutdown();
+    events.assert_valid();
+}
