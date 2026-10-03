@@ -2064,6 +2064,41 @@ final class LiveLayoutTests: XCTestCase {
     }
 }
 
+/// Settings > Dictation's key rows, too narrow for their controls and hints at the window's smaller
+/// sizes (found by offscreen renders): the picker, cap and Record a shortcut… share a line only
+/// while the button's longest label fits on it, and narrower they stack as a group.
+@MainActor
+final class KeyControlsLayoutTests: XCTestCase {
+    /// The room `title`'s controls need at `width`, beside keys as wide as a picker and its cap.
+    private func needed(_ title: String, width: CGFloat) -> CGSize {
+        let controls = KeyControls { Color.clear.frame(width: 225, height: 22) } record: { Button(title) {} }
+        return NSHostingController(rootView: controls).sizeThatFits(in: CGSize(width: width, height: 10_000))
+    }
+
+    private func buttonWidth(_ title: String) -> CGFloat {
+        NSHostingController(rootView: Button(title) {}.fixedSize()).sizeThatFits(in: .zero).width
+    }
+
+    func testTheControlsShareALineOnlyWithRoomForTheLongestLabel() {
+        let idle = "Record a shortcut\u{2026}"
+        let recording = RecordShortcutButton.recordingTitle
+        let line = 225 + 12 + buttonWidth(recording)
+        XCTAssertGreaterThan(buttonWidth(recording), buttonWidth(idle) + 20, "the scenario below needs a longer label")
+        // A point over the line, clear of rounding at the threshold.
+        let oneLine = needed(idle, width: line + 1)
+        XCTAssertEqual(oneLine.width, line, accuracy: 0.5)
+        XCTAssertEqual(needed(recording, width: line + 1), oneLine, "recording keeps the line")
+        // Room for the idle label but not the recording one: stacked either way, so pressing the
+        // button never moves it to the next line.
+        let between = 225 + 12 + buttonWidth(idle) + 10
+        let stacked = needed(idle, width: between)
+        XCTAssertGreaterThan(stacked.height, oneLine.height + 10, "the button goes under the keys")
+        XCTAssertEqual(needed(recording, width: between).height, stacked.height, accuracy: 0.5)
+        // Narrower than the line, the group stacks inside the room it has.
+        XCTAssertLessThanOrEqual(needed(idle, width: 240).width, 240.5)
+    }
+}
+
 /// The first-run sheet's steps fit the sheet: nothing is clipped and nothing scrolls (a clipped
 /// Qwen3-ASR line, and Download buttons under the scroll bar, were found by hand).
 @MainActor
