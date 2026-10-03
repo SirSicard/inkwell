@@ -68,6 +68,27 @@ public sealed class LocalLogTests : IDisposable
         Assert.Contains("shell: 3 ", File.ReadAllText(Path.Combine(folder, "inkwell.2.log")), StringComparison.Ordinal);
     }
 
+    /// <summary>An older log held open stops the move, not the log: lines still land, past the cap.</summary>
+    [Fact]
+    public void AnOlderLogHeldOpenDoesNotStopTheLog()
+    {
+        var log = new LocalLog(folder, maxBytes: 100, keep: 1, now: () => At);
+        var line = new string('x', 40);
+        log.Write("shell", "1 " + line);
+        log.Write("shell", "2 " + line); // the first moves to inkwell.1.log
+        using (new FileStream(Path.Combine(folder, "inkwell.1.log"), FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            log.Write("shell", "3 " + line); // inkwell.1.log can't be replaced now
+            log.Write("shell", "4 " + line);
+        }
+        var current = File.ReadAllText(log.Path);
+        Assert.Contains("shell: 3 ", current, StringComparison.Ordinal);
+        Assert.Contains("shell: 4 ", current, StringComparison.Ordinal);
+        log.Write("shell", "5 " + line); // free again: it moves
+        Assert.Contains("shell: 5 ", File.ReadAllText(log.Path), StringComparison.Ordinal);
+        Assert.Contains("shell: 4 ", File.ReadAllText(Path.Combine(folder, "inkwell.1.log")), StringComparison.Ordinal);
+    }
+
     /// <summary>A crash note names the exception and the ones inside it by type, with stacks and the version; never a message.</summary>
     [Fact]
     public void ACrashNoteHoldsTypesStacksAndTheVersionButNoMessage()

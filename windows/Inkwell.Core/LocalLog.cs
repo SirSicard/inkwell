@@ -82,7 +82,15 @@ public sealed partial class LocalLog
                 var current = new FileInfo(Path);
                 if (current.Exists && current.Length + Utf8.GetByteCount(line) > maxBytes)
                 {
-                    Rotate();
+                    try
+                    {
+                        Rotate();
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        // An older log held open (a viewer, a scan): this one grows past the cap
+                        // until it can move, rather than every line after it being lost.
+                    }
                 }
                 File.AppendAllText(Path, line, Utf8);
             }
@@ -112,8 +120,9 @@ public sealed partial class LocalLog
             File.WriteAllText(note, CrashNote(exception, appVersion, at), Utf8);
             PruneCrashNotes();
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
+            // In a crash handler nothing may throw: no note, and the process ends as it would have.
             ended = true;
             return null;
         }

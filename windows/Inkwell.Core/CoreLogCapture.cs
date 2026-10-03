@@ -45,7 +45,15 @@ public static partial class CoreLogCapture
         {
             while (reader.ReadLine() is { } text)
             {
-                line(text);
+                try
+                {
+                    line(text);
+                }
+                catch (Exception)
+                {
+                    // A line the log could not take is lost; the pump goes on. An exception
+                    // escaping this thread would end the app over a diagnostics line.
+                }
             }
         }
         catch (IOException)
