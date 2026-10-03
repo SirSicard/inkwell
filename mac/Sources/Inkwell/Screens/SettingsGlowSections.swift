@@ -82,10 +82,12 @@ struct GeneralSection: View {
 /// SettingColumns).
 struct SettingRow<Content: View>: View {
     let title: String
+    /// The least room the controls get beside the name (SettingColumnsLayout).
+    var controlsMinimum: CGFloat = SettingColumnsLayout.controlsMinimum
     @ViewBuilder var content: Content
 
     var body: some View {
-        SettingColumns {
+        SettingColumns(controlsMinimum: controlsMinimum) {
             Text(title)
         } controls: {
             VStack(alignment: .leading, spacing: 6) {
@@ -106,12 +108,14 @@ struct SettingRow<Content: View>: View {
 struct SettingColumns<Title: View, Controls: View>: View {
     /// The name's column, side by side.
     var titleWidth: CGFloat = SettingColumnsLayout.titleWidth
+    /// The least room the controls get beside the name.
+    var controlsMinimum: CGFloat = SettingColumnsLayout.controlsMinimum
     @ViewBuilder var title: Title
     @ViewBuilder var controls: Controls
 
     var body: some View {
         // Each side one subview, whatever it holds.
-        SettingColumnsLayout(titleWidth: titleWidth) {
+        SettingColumnsLayout(titleWidth: titleWidth, controlsMinimum: controlsMinimum) {
             VStack(alignment: .leading, spacing: 0) { title }
             controls
         }
@@ -123,16 +127,20 @@ struct SettingColumns<Title: View, Controls: View>: View {
 struct SettingColumnsLayout: Layout {
     static let titleWidth: CGFloat = 150
     static let spacing: CGFloat = 12
-    /// The least room the controls get beside the name: the widest segmented picker's (Mode, 325.5
-    /// pt on macOS 26), so a picker that shows segments in the stacked row still has room for them
-    /// beside the name, and as the window widens each picker turns from a menu to segments once
-    /// (SegmentsOrMenu). The dictation keys' controls fit in it with their button stacked.
-    static let controlsMinimum: CGFloat = 330
+    /// The least room a row's controls get beside the name, unless it asks for more: as much as
+    /// the dictation keys' controls need with their button stacked (KeyControls).
+    static let controlsMinimum: CGFloat = 240
+    /// The room a row with the Mode picker asks for: its segments' width (325.5 pt on macOS 26), so
+    /// segments shown in the stacked row still fit beside the name, and as the window widens the
+    /// picker turns from a menu to segments once (SegmentsOrMenu). The ink-motion picker's
+    /// segments fit in the default.
+    static let segmentedModeRoom: CGFloat = 330
     /// Between the name and the controls under it.
     static let stackedSpacing: CGFloat = 4
 
     var titleWidth: CGFloat = Self.titleWidth
-    var sideBySideWidth: CGFloat { titleWidth + Self.spacing + Self.controlsMinimum }
+    var controlsMinimum: CGFloat = Self.controlsMinimum
+    var sideBySideWidth: CGFloat { titleWidth + Self.spacing + controlsMinimum }
 
     private struct Arrangement {
         var size: CGSize
@@ -211,7 +219,7 @@ struct AppearanceSection: View {
                     .foregroundStyle(Theme.alert)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            SettingRow(title: "Mode") {
+            SettingRow(title: "Mode", controlsMinimum: SettingColumnsLayout.segmentedModeRoom) {
                 // In a window a segmented control keeps its full width (325 pt on macOS 26), and
                 // that would set Settings' minimum width: a menu where the row is narrower.
                 SegmentsOrMenu {

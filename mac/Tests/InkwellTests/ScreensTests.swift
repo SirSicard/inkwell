@@ -2127,16 +2127,122 @@ final class MainWindowWidthTests: XCTestCase {
         }
     }
 
-    /// Each picker that shows segments in a stacked row keeps them beside the row's name, so as
-    /// the window widens it turns from a menu to segments once (SettingColumnsLayout).
-    func testTheWidestSegmentedPickerFitsBesideARowsName() {
-        let mode = Picker("Mode", selection: .constant(GlowTheme.Mode.light)) {
-            ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
+    /// The Mode picker's segments, in the app's window, fit the room its row asks for beside its
+    /// name, so as the window widens the picker turns from a menu to segments once
+    /// (SettingColumnsLayout.segmentedModeRoom); the ink-motion picker's fit the default room.
+    func testTheSegmentedPickersFitBesideTheirRowsNames() {
+        func segmentsWidth<Value: Hashable & Identifiable>(_ cases: [Value], title: @escaping (Value) -> String) -> CGFloat {
+            let measured = Measured()
+            let picker = Picker("Picker", selection: .constant(cases[0])) {
+                ForEach(cases) { Text(title($0)).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measured.width = $0 }
+            let window = MainWindowController.makeWindow(root: picker.frame(maxWidth: .infinity, alignment: .leading))
+            defer { window.close() }
+            window.setContentSize(NSSize(width: 720, height: 460))
+            settle(window)
+            return measured.width
         }
-        .pickerStyle(.segmented).labelsHidden().fixedSize()
-        let width = NSHostingController(rootView: mode).sizeThatFits(in: .zero).width
-        XCTAssertGreaterThan(width, 200, "a segmented picker, measured")
-        XCTAssertLessThanOrEqual(width, SettingColumnsLayout.controlsMinimum)
+        let mode = segmentsWidth(GlowTheme.Mode.allCases) { $0.title }
+        let motion = segmentsWidth(GlowTheme.Motion.allCases) { $0.title }
+        // Three segments and two, measured, not a collapsed control.
+        XCTAssertGreaterThan(mode, 290)
+        XCTAssertGreaterThan(motion, 180)
+        XCTAssertLessThanOrEqual(mode, SettingColumnsLayout.segmentedModeRoom)
+        XCTAssertLessThanOrEqual(motion, SettingColumnsLayout.controlsMinimum)
+    }
+
+    /// The page's sections only ever widen as the window does: the margins never take back more
+    /// than the column gains.
+    func testTheSectionsWidthNeverShrinksAsTheColumnWidens() {
+        var previous = -CGFloat.infinity
+        for step in 0...2000 {
+            let column = CGFloat(step) / 2
+            let sections = column - 2 * SettingsMarginsLayout.margin(column)
+            XCTAssertGreaterThanOrEqual(sections, previous - 0.0001, "at \(column)")
+            previous = sections
+        }
+        XCTAssertEqual(SettingsMarginsLayout.margin(300), SettingsMarginsLayout.narrow)
+        XCTAssertEqual(SettingsMarginsLayout.margin(600), SettingsMarginsLayout.wide)
+    }
+
+    /// The snippet and voice command forms in the app's window: on one line from their line width,
+    /// the fixed-width fields at their width, the text field sharing the rest (wider in a wider
+    /// form), and Add whole and inside the form; under it, one field under another.
+    func testTheAddFormsShareTheirLineAndStackUnderIt() throws {
+        // Add's own width, in the app's window.
+        let addMeasured = Measured()
+        let addWindow = MainWindowController.makeWindow(root: Button("Add") {}.fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { addMeasured.width = $0 }
+            .frame(maxWidth: .infinity, alignment: .leading))
+        addWindow.setContentSize(NSSize(width: 720, height: 460))
+        settle(addWindow)
+        addWindow.close()
+        let addWidth = addMeasured.width
+        XCTAssertGreaterThan(addWidth, 30)
+        let snippets = SnippetsModel(send: { _ in })
+        let commands = VoiceCommandsModel(send: { _ in })
+        let forms: [(name: String, form: AnyView, lineWidth: CGFloat, flexible: String, fixed: [String: CGFloat])] = [
+            ("snippet", AnyView(SnippetAddForm(snippets: snippets)), SnippetAddForm.lineWidth, "Text it becomes",
+             ["Trigger": 150, "Category": 110]),
+            ("voice command", AnyView(VoiceCommandAddForm(commands: commands)), VoiceCommandAddForm.lineWidth,
+             "Text to type", ["Phrases, comma-separated": 200]),
+        ]
+        for (name, form, lineWidth, flexible, fixed) in forms {
+            var flexibleWidths: [CGFloat: CGFloat] = [:]
+            for width in [480, 520, 700] as [CGFloat] {
+                let window = MainWindowController.makeWindow(
+                    root: form.frame(width: width, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading))
+                defer { window.close() }
+                window.setContentSize(NSSize(width: 720, height: 460))
+                settle(window)
+                let root = try XCTUnwrap(window.contentViewController?.view)
+                let fields = Dictionary(
+                    descendants(of: root, as: NSTextField.self).compactMap { field in
+                        field.placeholderString.map { ($0, field.convert(field.bounds, to: root)) }
+                    }, uniquingKeysWith: { first, _ in first })
+                let label = "\(name) at \(width)"
+                XCTAssertEqual(Set(fields.keys), Set(fixed.keys).union([flexible]), label)
+                let formMinX = try XCTUnwrap(fields.values.map(\.minX).min())
+                let rows = Set(fields.values.map { $0.midY.rounded() })
+                if width >= lineWidth {
+                    // SwiftUI draws Add itself, last on the line: what the form leaves after the
+                    // last field holds it whole.
+                    let lastField = try XCTUnwrap(fields.values.map(\.maxX).max())
+                    let room = formMinX + width - lastField - LineOrStackLayout.lineSpacing
+                    XCTAssertGreaterThanOrEqual(room, addWidth - 0.5, "\(label): Add is cut")
+                    XCTAssertLessThanOrEqual((rows.max() ?? 0) - (rows.min() ?? 0), 2, "\(label): on one line")
+                    for (placeholder, expected) in fixed {
+                        XCTAssertEqual(fields[placeholder]?.width ?? 0, expected, accuracy: 1, "\(label): \(placeholder)")
+                    }
+                    flexibleWidths[width] = fields[flexible]?.width
+                } else {
+                    XCTAssertEqual(rows.count, fields.count, "\(label): one under another")
+                    for (placeholder, frame) in fields {
+                        XCTAssertLessThanOrEqual(frame.maxX, formMinX + width + 0.5, "\(label): \(placeholder)")
+                    }
+                }
+            }
+            let widest = try XCTUnwrap(flexibleWidths[700], name)
+            let narrowest = try XCTUnwrap(flexibleWidths.filter { $0.key < 700 }.min { $0.key < $1.key }?.value, name)
+            XCTAssertGreaterThan(widest, narrowest + 100, "\(name): the text field grows with the form")
+        }
+    }
+
+    @MainActor private final class Measured {
+        var width: CGFloat = 0
+    }
+
+    private func settle(_ window: NSWindow) {
+        for _ in 0..<4 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+    }
+
+    private func descendants<T: NSView>(of view: NSView, as type: T.Type) -> [T] {
+        view.subviews.flatMap { ([$0 as? T].compactMap { $0 }) + descendants(of: $0, as: type) }
     }
 }
 

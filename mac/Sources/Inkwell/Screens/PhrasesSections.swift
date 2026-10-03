@@ -9,9 +9,6 @@ import SwiftUI
 struct SnippetsSection: View {
     let snippets: SnippetsModel
 
-    @State private var trigger = ""
-    @State private var expansion = ""
-    @State private var category = ""
     /// The snippet being edited, as edited so far.
     @State private var editing: SnippetDraft?
 
@@ -40,7 +37,7 @@ struct SnippetsSection: View {
                 }
                 Rectangle().fill(PaperPalette.separator).frame(height: 1).accessibilityHidden(true)
             }
-            addForm
+            SnippetAddForm(snippets: snippets)
             Text("A trigger is matched as whole words, in any case, after the dictionary. {date} and {time} in the text are filled in when it goes in.")
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
@@ -71,8 +68,19 @@ struct SnippetsSection: View {
         }
     }
 
-    private var addForm: some View {
-        LineOrStack(minWidth: 480) {
+}
+
+/// A new snippet's trigger, text and category, and Add: on one line from `lineWidth`.
+struct SnippetAddForm: View {
+    let snippets: SnippetsModel
+    static let lineWidth: CGFloat = 480
+
+    @State private var trigger = ""
+    @State private var expansion = ""
+    @State private var category = ""
+
+    var body: some View {
+        LineOrStack(minWidth: Self.lineWidth) {
             TextField("Trigger", text: $trigger).frame(width: 150)
             TextField("Text it becomes", text: $expansion, axis: .vertical).lineLimit(1...4)
             TextField("Category", text: $category).frame(width: 110)
@@ -139,9 +147,6 @@ struct VoiceCommandsSection: View {
     let commands: VoiceCommandsModel
 
     @State private var wake = ""
-    @State private var triggers = ""
-    @State private var action: CommandAction = .insertText
-    @State private var value = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -193,12 +198,23 @@ struct VoiceCommandsSection: View {
                     .disabled(!commands.loaded)
                 Rectangle().fill(PaperPalette.separator).frame(height: 1).accessibilityHidden(true)
             }
-            addForm
+            VoiceCommandAddForm(commands: commands)
         }
     }
+}
 
-    private var addForm: some View {
-        LineOrStack(minWidth: 520) {
+/// A new voice command's phrases, what it does and its text or style, and Add: on one line from
+/// `lineWidth`.
+struct VoiceCommandAddForm: View {
+    let commands: VoiceCommandsModel
+    static let lineWidth: CGFloat = 520
+
+    @State private var triggers = ""
+    @State private var action: CommandAction = .insertText
+    @State private var value = ""
+
+    var body: some View {
+        LineOrStack(minWidth: Self.lineWidth) {
             TextField("Phrases, comma-separated", text: $triggers).frame(width: 200)
             Picker("Does", selection: $action) {
                 Text("Type text").tag(CommandAction.insertText)
