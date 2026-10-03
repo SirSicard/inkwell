@@ -110,7 +110,7 @@ public class CloudModelTests
         Assert.DoesNotContain(Key, save.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(Key, save.Name, StringComparison.Ordinal);
         cloud.Apply(Providers(keyed: ["openai"], reference: save.Ref));
-        Assert.Equal("A key is stored in Windows Credential Manager.", cloud.KeyStatus);
+        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
         Assert.Equal("openai", cloud.Selected); // saving a key keeps the picker where it was
 
         cloud.DraftModel = " gpt-synthetic ";
@@ -208,15 +208,15 @@ public class CloudModelTests
         var (cloud, _) = Loaded(Providers(keyed: ["custom"]));
         cloud.Select("custom");
         Assert.False(cloud.KeyWithheld); // Ollama's default, on this PC
-        Assert.Equal("A key is stored in Windows Credential Manager.", cloud.KeyStatus);
+        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
         cloud.DraftBaseUrl = "http://192.0.2.10:8000/v1";
         Assert.True(cloud.KeyWithheld);
         Assert.Equal(
-            "A key is stored in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
+            "A key is stored for this Windows account, in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
             cloud.KeyStatus);
         cloud.DraftBaseUrl = "https://llm.example.com/v1";
         Assert.False(cloud.KeyWithheld);
-        Assert.Equal("A key is stored in Windows Credential Manager.", cloud.KeyStatus);
+        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
 
         (cloud, _) = Loaded();
         cloud.Select("custom");
@@ -353,6 +353,36 @@ public class CloudModelTests
         cloud.Apply(Ev.Of("""{"type":"setting.value","key":"llm.local_only","value":"on"}"""));
         Assert.IsType<CoreCommand.LlmProviders>(sent.Commands[before]);
     }
+
+    /// <summary>
+    /// Credential Manager's entry is the Windows account's, shared by every Inkwell on it: a stored
+    /// key says so, in Settings and in the first run, and Delete says whose key goes before it goes.
+    /// </summary>
+    [Fact]
+    public void AStoredKeyIsSaidToBeTheAccountsAndDeleteSaysWhatItDeletes()
+    {
+        var (cloud, sent) = Loaded(Providers(keyed: ["groq"]));
+        Assert.Equal(
+            "A Groq key is already stored for this Windows account, in Windows Credential Manager: every Inkwell on this account can use it. Saving a new one replaces it.",
+            OnboardingModel.StoredKeyLine(cloud));
+        cloud.Select("groq");
+        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
+        Assert.Equal("Delete Groq key", cloud.DeleteKeyLabel);
+        Assert.Equal("Delete the Groq key stored for this Windows account?", cloud.DeleteKeyQuestion);
+        Assert.Equal(
+            "It is removed from Windows Credential Manager, so no Inkwell on this account can use it, whichever library it opens. Nothing else is deleted.",
+            CloudModel.DeleteKeyDetail);
+        var before = sent.Commands.Count;
+        cloud.DeleteKey();
+        Assert.Equal("groq", Assert.IsType<CoreCommand.LlmKeyDelete>(sent.Commands[^1]).Provider);
+        Assert.Equal(before + 1, sent.Commands.Count);
+
+        (cloud, _) = Loaded(Providers(keyed: []));
+        Assert.Null(OnboardingModel.StoredKeyLine(cloud));
+        cloud.Select(null);
+        Assert.Equal("Delete key", cloud.DeleteKeyLabel);
+    }
+
 }
 
 public class CloudPolishTests

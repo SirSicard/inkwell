@@ -326,6 +326,9 @@ public sealed partial class OnboardingSheet : ContentDialog
             // Offered only while there is no language model; once one is ready, the switch can be used.
             OwnKeyPanel.Visibility = Visible(!polish.HasWorkingEngine);
             OwnKeyUse.IsEnabled = cloud.Loaded;
+            var storedKey = OnboardingModel.StoredKeyLine(cloud);
+            StoredKeyLine.Text = storedKey ?? "";
+            StoredKeyLine.Visibility = Visible(storedKey is not null);
             OwnKeyStatus.Text = cloud.Failure ?? "";
             OwnKeyStatus.Visibility = Visible(cloud.Failure is not null);
             var asking = polish.Consent.IsShowingStep(ConsentHost.Onboarding) ? polish.PendingConsent : null;

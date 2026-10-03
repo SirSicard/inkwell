@@ -243,6 +243,19 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>The key box's placeholder: short enough to show whole.</summary>
     public const string OwnKeyPlaceholder = "Paste your Groq key";
 
+    /// <summary>
+    /// Said over the key box when a Groq key is already stored: it is the Windows account's (every
+    /// Inkwell on it shares Credential Manager's entry), so it shows here in any library. Null
+    /// when none is stored.
+    /// </summary>
+    public static string? StoredKeyLine(CloudModel cloud)
+    {
+        ArgumentNullException.ThrowIfNull(cloud);
+        return cloud.Providers.Any(p => p.Id == OwnKeyProvider && p.HasKey)
+            ? "A Groq key is already stored for this Windows account, in Windows Credential Manager: every Inkwell on this account can use it. Saving a new one replaces it."
+            : null;
+    }
+
     public const string ReadyTitle = "Ready";
 
     public static string ReadyLine(string keyName) =>

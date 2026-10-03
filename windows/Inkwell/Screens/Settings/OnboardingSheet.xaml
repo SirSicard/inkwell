@@ -114,6 +114,8 @@
                     <TextBlock x:Name="OwnKeyLine" Style="{StaticResource InkBodyStyle}" TextWrapping="Wrap">
                         <Run x:Name="OwnKeyLead" /><Hyperlink x:Name="OwnKeyLink" />
                     </TextBlock>
+                    <!-- A key already stored is the Windows account's: said, so it is no surprise. -->
+                    <TextBlock x:Name="StoredKeyLine" Style="{StaticResource InkCaptionStyle}" />
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
