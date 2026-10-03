@@ -25,6 +25,15 @@ public class CatalogueDownloadTests
           {"id":"{{Nemotron}}","licence":"OpenMDW-1.1","size_bytes":107012128,"installed":true,"jobs":[{"job":"diarization","wer":20.2}]}]}
         """);
 
+    /// <summary>The Windows catalogue: Qwen3-ASR, the diarizer, Windows' Parakeet and Silero VAD.</summary>
+    internal static InkEvent ListedWindows(bool qwen = false, bool nemotron = false, bool parakeet = false, bool silero = false) => Ev.Of($$"""
+        {"type":"models.listed","models":[
+          {"id":"{{Qwen}}","licence":"Apache-2.0","size_bytes":2500000000,"installed":{{Bool(qwen)}},"jobs":[{"job":"dictation_final","wer":4.59},{"job":"meeting_final","wer":12.0}]},
+          {"id":"{{Nemotron}}","licence":"OpenMDW-1.1","size_bytes":107012128,"installed":{{Bool(nemotron)}},"jobs":[{"job":"diarization","wer":20.2}]},
+          {"id":"parakeet-tdt-0.6b-v3-int8","licence":"CC-BY-4.0","size_bytes":670000000,"installed":{{Bool(parakeet)}},"jobs":[{"job":"live_partials","wer":8.0},{"job":"dictation_final","wer":6.0}]},
+          {"id":"{{Silero}}","licence":"MIT","size_bytes":1289603,"installed":{{Bool(silero)}},"jobs":[{"job":"voice_activity","wer":1.5}]}]}
+        """);
+
     internal static InkEvent Progress(string id, long done, long total) =>
         Ev.Of($$"""{"type":"model.update_progress","id":"{{id}}","next":"{{id}}","done_bytes":{{done}},"total_bytes":{{total}}}""");
 

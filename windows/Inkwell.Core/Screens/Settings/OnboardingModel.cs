@@ -1,7 +1,7 @@
 // The first-run state: a sheet over the window until the user finishes or skips it, remembered in
 // the core's store (onboarding.done). What Inkwell does, the four permission cards (nothing asked
-// for until the user presses a card's button), the models not on this PC yet (nothing downloads
-// until the user presses the step's Download, which says what, how much and from where; the
+// for until the user presses a card's button), the models as choices by outcome (ModelChoices:
+// nothing downloads until the user presses the step's Download, which carries the total; the
 // downloads are the CatalogueModel's and go on after the sheet), Inkwell 0.2's history (only while
 // there is some to import: Import02Model.Offered), the appearance (the mode and the dots, which
 // Settings > Appearance holds too), polish (off, and turned on only through its
@@ -15,7 +15,7 @@ public enum OnboardingStep
 {
     Welcome,
     Permissions,
-    /// <summary>The models not on this PC yet, and one Download for them.</summary>
+    /// <summary>What Inkwell should be able to do, as choices, and one Download for them (ModelChoices).</summary>
     Models,
     /// <summary>Only while Inkwell 0.2's data is offered.</summary>
     ImportData,
@@ -182,8 +182,8 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string ModelsTitle = "Models";
 
-    /// <summary>The step's one Download: every model its line names (CatalogueModel.DownloadMissing).</summary>
-    public const string DownloadTitle = "Download";
+    /// <summary>The step's choices: which are ticked (the first is always).</summary>
+    public ModelChoices Choices { get; } = new();
 
     /// <summary>Shown while a download runs: Continue does not wait for it.</summary>
     public const string ModelsGoOn = "You can go on: the downloads continue, and Settings > Models shows them.";
@@ -191,14 +191,7 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>Asks for the model list again when it could not be read.</summary>
     public const string ModelsTryAgain = "Try again";
 
-    /// <summary>The models step's rows: every model not installed, and any downloaded this run (it stays, as installed).</summary>
-    public static IReadOnlyList<ModelRow> ModelRows(CatalogueModel catalogue)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        return catalogue.Rows.Where(r => !r.Entry.Installed || r.Download is not null).ToList();
-    }
-
-    /// <summary>The line over the models step's rows: what they are, or where the list is.</summary>
+    /// <summary>The line over the models step's choices: what they are for, or where the list is.</summary>
     public static string ModelsNote(CatalogueModel catalogue)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
@@ -210,36 +203,9 @@ public sealed class OnboardingModel : ObservableModel
         {
             return "Checking which models are on this PC…";
         }
-        return ModelRows(catalogue).Any(r => !r.Installed)
-            ? "Inkwell turns speech into text with models that run on this PC. These are not on it yet:"
+        return ModelChoices.Shown(catalogue).Any(c => !ModelChoices.Installed(c, catalogue))
+            ? "Inkwell turns speech into text with models that run on this PC. Choose what it should do; you can add the rest later in Settings > Models."
             : "Every model Inkwell uses is on this PC.";
-    }
-
-    /// <summary>The line by the step's Download: how much in all, and from where; null when there is nothing left to ask for.</summary>
-    public static string? DownloadLine(CatalogueModel catalogue, IFormatProvider? format = null)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.NotAskedFor;
-        return models.Count == 0
-            ? null
-            : $"{StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}. Nothing downloads until you press Download.";
-    }
-
-    /// <summary>The step's Download for screen readers: which models, how much in all, from where.</summary>
-    public static string DownloadName(CatalogueModel catalogue, IFormatProvider? format = null)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.NotAskedFor;
-        return $"Download {And(models.Select(m => CatalogueModel.Name(m.Id)))}: {StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}";
-    }
-
-    private static string Sources(IEnumerable<CatalogueEntry> models) => And(models.Select(m => CatalogueModel.Source(m.Id)).Distinct());
-
-    /// <summary>"a", "a and b", "a, b and c".</summary>
-    private static string And(IEnumerable<string> items)
-    {
-        var list = items.ToList();
-        return list.Count < 2 ? string.Concat(list) : $"{string.Join(", ", list.Take(list.Count - 1))} and {list[^1]}";
     }
 
     public const string AppearanceTitle = "Appearance";
@@ -259,22 +225,46 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>Where Groq's keys are made (the homepage's link).</summary>
     public const string OwnKeyUrl = "https://console.groq.com";
 
-    /// <summary>The Polish step's own key, while no language model is available (the homepage's words).</summary>
-    public const string OwnKeyLine =
-        "Or bring your own key. Groq's free tier covers ordinary personal use and needs no credit card: sign in at console.groq.com, create a key under API Keys, copy it (Groq shows it once) and paste it here. Settings > AI has the other providers.";
+    /// <summary>The Polish step's own key, while no language model is available: one choice, the link in it.</summary>
+    public const string OwnKeyLine = "Use Groq's free model: get a key at console.groq.com";
 
-    /// <summary>What pressing the own-key button means, said before it is pressed.</summary>
+    /// <summary>The part of <see cref="OwnKeyLine"/> that is the link to <see cref="OwnKeyUrl"/>.</summary>
+    public const string OwnKeyHost = "console.groq.com";
+
+    /// <summary>What Save means, said before it is pressed.</summary>
     public const string OwnKeyNote =
-        "Using Groq turns local-only mode off, so polish can send to Groq once you turn it on and allow it. The key is kept in Windows Credential Manager, never in Inkwell's files.";
+        "Groq's free tier needs no credit card, and shows a new key once: copy it there and paste it here. Saving turns local-only mode off, so polish can send to Groq once you turn it on and allow it. The key is kept in Windows Credential Manager, never in Inkwell's files; Settings > AI has the other providers.";
 
-    public const string OwnKeyButton = "Use Groq";
+    /// <summary>Stores the key and chooses Groq (CloudModel.UseKey).</summary>
+    public const string OwnKeyButton = "Save";
 
     public const string OwnKeyBoxName = "Groq API key";
 
+    /// <summary>The key box's placeholder: short enough to show whole.</summary>
+    public const string OwnKeyPlaceholder = "Paste your Groq key";
+
+    /// <summary>
+    /// Said over the key box when a Groq key is already stored: it is the Windows account's (every
+    /// Inkwell on it shares Credential Manager's entry), so it shows here in any library. Null
+    /// when none is stored.
+    /// </summary>
+    public static string? StoredKeyLine(CloudModel cloud)
+    {
+        ArgumentNullException.ThrowIfNull(cloud);
+        return cloud.Providers.Any(p => p.Id == OwnKeyProvider && p.HasKey)
+            ? "A Groq key is already stored for this Windows account, in Windows Credential Manager: every Inkwell on this account can use it. Saving a new one replaces it."
+            : null;
+    }
+
     public const string ReadyTitle = "Ready";
 
-    public static string ReadyLine(string keyName) =>
-        $"Hold {keyName}, say something, and let go. Inkwell lives in the notification area; this window opens from there.";
+    /// <summary>
+    /// The last step's line: how to dictate, or, with no speech model installed, that one is needed
+    /// (never "Hold … and speak" when nothing could be written down).
+    /// </summary>
+    public static string ReadyLine(string keyName, bool noSpeechModel = false) => noSpeechModel
+        ? "Inkwell needs a speech model before it can write anything down: the recommended set is about 640 MB. Inkwell lives in the notification area; this window opens from there."
+        : $"Hold {keyName}, say something, and let go. Inkwell lives in the notification area; this window opens from there.";
 
     /// <summary>The ready step's warning about cards still off, or null when none is.</summary>
     public static string? StillOff(PermissionsModel permissions)

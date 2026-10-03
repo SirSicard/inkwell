@@ -195,6 +195,42 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         }
     }
 
+    /// <summary>
+    /// Windows' recommended set: Silero VAD (voice detection) and Windows' Parakeet TDT v3 (live
+    /// words and dictation), about 640 MB. Qwen3-ASR (the meeting final pass, about 2.5 GB) and
+    /// the diarizer are optional.
+    /// </summary>
+    public static ImmutableArray<string> RecommendedIds { get; } = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-int8"];
+
+    /// <summary>Whether <paramref name="id"/> is in the recommended set.</summary>
+    public static bool IsRecommended(string id) => RecommendedIds.Contains(id);
+
+    /// <summary>The recommended models not installed and not asked for yet.</summary>
+    public IReadOnlyList<CatalogueEntry> RecommendedNotAskedFor => NotAskedFor.Where(m => IsRecommended(m.Id)).ToList();
+
+    /// <summary>Downloads the recommended set's missing models, smallest first (Today's Download).</summary>
+    public void DownloadRecommended() => Download(RecommendedIds);
+
+    /// <summary>
+    /// Downloads these models, smallest first, after the downloads asked for before them (the first
+    /// run's Download: ModelChoices). A model installed, already asked for or not listed is passed
+    /// over; one that failed is retried.
+    /// </summary>
+    public void Download(IEnumerable<string> ids)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        var asked = false;
+        foreach (var row in Rows.Where(r => ids.Contains(r.Id)).OrderBy(r => r.Entry.SizeBytes))
+        {
+            asked |= Ask(row.Id);
+        }
+        if (asked)
+        {
+            Pump();
+            Changed();
+        }
+    }
+
     /// <summary>Queues a model that can be downloaded, or retried; false for any other.</summary>
     private bool Ask(string id)
     {
@@ -232,6 +268,24 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         running = null;
         Pump();
         Changed();
+    }
+
+    /// <summary>
+    /// Whether a speech model is installed: any of dictation, meeting transcript and live words
+    /// served by a model. Null until all three have answered (or one could not be asked): never
+    /// "no model" on a guess.
+    /// </summary>
+    public bool? HasSpeechModel
+    {
+        get
+        {
+            var lines = Jobs.Select(Line).ToList();
+            if (lines.Any(l => l.Engine is not null))
+            {
+                return true;
+            }
+            return lines.All(l => l.Known) ? false : null;
+        }
     }
 
     public CatalogueLine Line(Job job)

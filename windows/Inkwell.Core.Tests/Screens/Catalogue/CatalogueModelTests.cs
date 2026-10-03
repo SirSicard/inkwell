@@ -89,4 +89,23 @@ public class CatalogueModelTests
         catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"meeting_final"}"""));
         Assert.Equal("Nothing installed yet", catalogue.Line(Job.MeetingFinal).EngineText);
     }
+
+    /// <summary>
+    /// Whether a speech model is installed: any of dictation, meeting transcript and live words
+    /// routed to a model. Not known until all three have answered; none routed is "no model".
+    /// </summary>
+    [Fact]
+    public void ASpeechModelIsInstalledWhenAnySpeechJobHasOne()
+    {
+        var catalogue = new CatalogueModel(_ => { });
+        Assert.Null(catalogue.HasSpeechModel);
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"dictation_final"}"""));
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"meeting_final"}"""));
+        Assert.Null(catalogue.HasSpeechModel); // live words not answered yet
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"live_partials"}"""));
+        Assert.False(catalogue.HasSpeechModel);
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"live_partials","id":"parakeet-tdt-0.6b-v3-int8","source":"registry"}"""));
+        Assert.True(catalogue.HasSpeechModel);
+    }
+
 }

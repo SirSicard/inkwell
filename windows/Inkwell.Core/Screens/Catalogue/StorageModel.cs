@@ -6,6 +6,7 @@
 // "Couldn't ...", never zero. Opening the folder is the view's (File Explorer): the model only
 // hands it the path. Paths never reach the log (they carry the user's name).
 using System.Globalization;
+using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
 
@@ -25,6 +26,8 @@ public sealed class StorageModel(
 
     private readonly ScreenLog log = log ?? ScreenLog.System;
     private bool measuring;
+    /// <summary>A measure was asked while one ran: that one may have walked past what changed, so another follows it.</summary>
+    private bool again;
 
     public string? DataDirectory { get; } = dataDirectory;
 
@@ -39,11 +42,15 @@ public sealed class StorageModel(
     /// <summary>Whether "Show in File Explorer" can open anything.</summary>
     public bool CanReveal => DataDirectory is not null && reveal is not null;
 
-    /// <summary>Measures off the UI thread; the task ends once the sizes are applied. A measure already running is not doubled.</summary>
+    /// <summary>
+    /// Measures off the UI thread; the task ends once the sizes are applied. A measure asked while
+    /// one runs is not doubled: one more follows the running one.
+    /// </summary>
     public async Task Measure()
     {
         if (measuring)
         {
+            again = true;
             return;
         }
         if (DataDirectory is not string data)
@@ -71,7 +78,21 @@ public sealed class StorageModel(
             measuring = false;
         }
         Changed();
+        if (again)
+        {
+            again = false;
+            await Measure().ConfigureAwait(true);
+        }
     }
+
+    /// <summary>
+    /// Measures again when a model's files or a record's recording changed (a model installed, or
+    /// failed and removed what it downloaded; a record deleted): a download Settings started could
+    /// finish while it shows, and the sizes read stale. Only once Settings has measured: nobody
+    /// reads the sizes before. UI thread; the task ends with the measure.
+    /// </summary>
+    public Task Apply(InkEvent e) =>
+        e is ModelUpdateFinished or RecordDeleted && (Sizes is not null || Failed || measuring) ? Measure() : Task.CompletedTask;
 
     /// <summary>
     /// Sums the files under <paramref name="data"/>: the library's database files, the models (under

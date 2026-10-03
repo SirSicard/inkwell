@@ -126,16 +126,17 @@ public sealed unsafe class CompositionSwapChain : IDisposable
     /// <summary>
     /// Draws the orb over the whole back buffer, cleared to <paramref name="backdrop"/> (or to
     /// transparent when null), and presents it (a SwapChainPanel's frame). Over a backdrop, an
-    /// <paramref name="opacity"/> under 1 fades the orb into it. UI thread.
+    /// <paramref name="opacity"/> under 1 fades the orb into it. False when the present was
+    /// dropped (Present). UI thread.
     /// </summary>
-    public void DrawInk(in InkUniforms uniforms, (float R, float G, float B)? backdrop = null, float opacity = 1)
+    public bool DrawInk(in InkUniforms uniforms, (float R, float G, float B)? backdrop = null, float opacity = 1)
     {
         pipeline.Encode(RenderTargetView, Width, Height, uniforms, backdrop);
         if (backdrop is { } colour && opacity < 1)
         {
             Fade(colour, opacity);
         }
-        Present();
+        return Present();
     }
 
     /// <summary>
@@ -169,8 +170,27 @@ public sealed unsafe class CompositionSwapChain : IDisposable
     /// <summary>For tests: an HRESULT the next Present returns instead of presenting (a lost device), once.</summary>
     internal int InjectedPresentResult { get; set; }
 
-    /// <summary>Presents the back buffer at the next frame. A removed or reset device throws.</summary>
-    public void Present()
+    /// <summary>DXGI_ERROR_WAS_STILL_DRAWING (winerror.h): the compositor has not taken an earlier frame yet.</summary>
+    internal const int WasStillDrawing = unchecked((int)0x887A000A);
+
+    /// <summary>DXGI_PRESENT_DO_NOT_WAIT (dxgi.h).</summary>
+    private const uint PresentDoNotWait = 0x00000008;
+
+    /// <summary>Frames dropped because the compositor had not taken the one before (for tests and logs).</summary>
+    public int DroppedFrames { get; private set; }
+
+    /// <summary>
+    /// Presents the back buffer for the compositor's next frame, never waiting. The clock already
+    /// paces the ink to the compositor, so the frame goes with sync interval 0: the compositor shows
+    /// the newest frame it has and lets an older queued one go, which frees a buffer every frame.
+    /// A present that waited (sync interval 1) blocked the UI thread a whole frame, and on a 60 Hz
+    /// display the ink's 60 presents a second left it nothing else: the window stopped answering
+    /// while the orb moved. Not waiting with sync interval 1 instead dropped nearly every frame of
+    /// the window's orb. A frame the compositor still has no room for is dropped: false, and the
+    /// host tells its surface (InkSurface.PresentDropped), which draws it again. A removed or reset
+    /// device throws.
+    /// </summary>
+    public bool Present()
     {
         HRESULT hr;
         if (InjectedPresentResult != 0)
@@ -180,9 +200,15 @@ public sealed unsafe class CompositionSwapChain : IDisposable
         }
         else
         {
-            hr = SwapChain->Present(1, 0);
+            hr = SwapChain->Present(0, PresentDoNotWait);
+        }
+        if (hr == WasStillDrawing)
+        {
+            DroppedFrames++;
+            return false;
         }
         InkRendererException.Check(hr, "present the ink");
+        return true;
     }
 
     /// <summary>

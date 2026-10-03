@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The catalogue's models where they can be downloaded (Settings > Models and the first-run
-     sheet): each model's line, where it would come from, its download's progress, and a failure in
-     words with Retry. Settings gives each row its own Download; the first run has one for all. -->
+<!-- The catalogue's models where they can be downloaded (Settings > Models): each model's line,
+     where it would come from, its download's progress, a failure in words with Retry, and a
+     Download of its own. The first run offers choices instead (ModelChoices). -->
 <UserControl
     x:Class="Inkwell.Screens.ModelRowsView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"

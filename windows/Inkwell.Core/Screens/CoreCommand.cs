@@ -185,6 +185,29 @@ public abstract record CoreCommand
             [("cmd", Name), ("record", Record), ("id", Ref)];
     }
 
+    /// <summary>
+    /// Names a far-end speaker of a record by the diarizer's label (<paramref name="Given"/> is the
+    /// name; empty clears it). Answered by speaker.named with the ref, or a command.failed with it
+    /// as the id.
+    /// </summary>
+    public sealed record SpeakerName(string Record, string Speaker, string Given, string Ref) : CoreCommand
+    {
+        public override string Name => "speaker.name";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("record", Record), ("speaker", Speaker), ("name", Given), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Deletes a record whole, only after the user confirmed it. Answered by record.deleted with
+    /// the ref, or a command.failed with it as the id (a record still live is refused).
+    /// </summary>
+    public sealed record RecordDelete(string Record, string Ref) : CoreCommand
+    {
+        public override string Name => "record.delete";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("record", Record), ("id", Ref)];
+    }
+
     public sealed record LibraryStats(long SinceUnixMs, string Ref) : CoreCommand
     {
         public override string Name => "library.stats";
@@ -588,8 +611,18 @@ public sealed class ScreenLog(Action<string> write)
 {
     public void Write(string message) => write(message);
 
-    /// <summary>The debug trace (the core logs its own side). Built from command names and fixed words only.</summary>
-    public static ScreenLog System { get; } = new(message => global::System.Diagnostics.Trace.WriteLine($"Inkwell screens: {message}"));
+    /// <summary>
+    /// The debug trace, and <see cref="Also"/> once the app has set it (the local log). Built from
+    /// command names and fixed words only.
+    /// </summary>
+    public static ScreenLog System { get; } = new(message =>
+    {
+        global::System.Diagnostics.Trace.WriteLine($"Inkwell screens: {message}");
+        Also?.Invoke(message);
+    });
+
+    /// <summary>Where <see cref="System"/>'s lines also go: the local log, set once at launch (App).</summary>
+    public static Action<string>? Also { get; set; }
 }
 
 /// <summary>An enum value's JSON name (its JsonStringEnumMemberName), through the source-generated serializer.</summary>

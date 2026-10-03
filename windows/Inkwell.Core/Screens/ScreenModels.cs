@@ -154,6 +154,8 @@ public sealed class ScreenModels
             ImportNote.Apply(e);
             RecordControls.Apply(e);
             Appearance.Apply(e);
+            // The sizes a model install or a deleted record changed; the view shows them when they land.
+            _ = Storage.Apply(e);
         }
         // The Library folds a batch at once, and refreshes once per batch.
         Library.Apply(batch);

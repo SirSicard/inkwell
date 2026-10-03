@@ -59,6 +59,8 @@ public sealed partial class LibraryScreen : UserControl
     {
         ColumnTitle.Text = _library.ColumnTitle;
         Count.Text = _library.CountText;
+        DeletionNote.Text = _library.DeletionNote ?? "";
+        DeletionNote.Visibility = _library.DeletionNote is null ? Visibility.Collapsed : Visibility.Visible;
         AutomationProperties.SetName(Count, _library.CountLabel);
         if (SearchBox.Text != _library.Query)
         {

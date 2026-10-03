@@ -29,6 +29,10 @@ public sealed partial class SettingsScreen : UserControl
         foreach (var section in sections)
         {
             SectionList.Items.Add(section.Title);
+            if (Sections.Children.Count > 1)
+            {
+                Sections.Children.Add(new Border { Style = (Style)Resources["SectionHairlineStyle"] });
+            }
             Sections.Children.Add(section.Content);
         }
         if (sections.Count > 0)

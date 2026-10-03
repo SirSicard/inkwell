@@ -50,6 +50,38 @@ public sealed class StorageModelTests : IDisposable
         Assert.Equal(0, StorageModel.MeasureFolders(data, Path.Combine(root, "none")).Models);
     }
 
+    /// <summary>
+    /// The Mac's 7609b53: once Settings has measured, a model that finishes installing (or fails:
+    /// it may have removed what it downloaded) and a record the user deleted are measured again;
+    /// before that, nobody reads the sizes and nothing is measured.
+    /// </summary>
+    [Fact]
+    public async Task AModelInstalledOrARecordDeletedIsMeasuredAgain()
+    {
+        var data = Path.Combine(root, "data");
+        Write(Path.Combine("data", "library.sqlite"), 1000);
+        Write(Path.Combine("data", "meetings", "r1", "mic.flac"), 3000);
+        var storage = new StorageModel(data, null, log: new Logged().Log);
+        var installed = Ev.Of("""{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":true,"no_model_warm":false}""");
+        await storage.Apply(installed);
+        Assert.Null(storage.Sizes); // not measured before Settings asks
+
+        await storage.Measure();
+        Assert.Equal(0, storage.Sizes?.Models);
+        Write(Path.Combine("data", "models", "silero", "model.onnx"), 5000);
+        await storage.Apply(installed);
+        Assert.Equal(5000, storage.Sizes?.Models);
+
+        File.Delete(Path.Combine(data, "meetings", "r1", "mic.flac"));
+        await storage.Apply(Ev.Of("""{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"""));
+        Assert.Equal(0, storage.Sizes?.Recordings);
+
+        // Anything else measures nothing.
+        Write(Path.Combine("data", "meetings", "r2", "mic.flac"), 7000);
+        await storage.Apply(Ev.Of($$"""{"type":"core.ready","abi":{{InkSession.AbiVersion}},"version":"1.0.0"}"""));
+        Assert.Equal(0, storage.Sizes?.Recordings);
+    }
+
     [Fact]
     public async Task AFolderThatCantBeReadSaysSoNeverZero()
     {

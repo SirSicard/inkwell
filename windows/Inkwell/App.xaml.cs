@@ -9,6 +9,10 @@
 // The tray icon shows the state (idle, dictating in your colour, recording in theirs, a problem
 // in the alert colour: TrayGlyph draws the dot) and its menu is made when it opens (TrayMenu): a
 // left click opens the window. The automatic update check, when on, runs once here at launch.
+//
+// From the start, the screens' log and the core's log lines go to the local log in the library's
+// folder (LocalLog, "logs"), and an exception that ends the app leaves a crash note there.
+using Inkwell.Core;
 using Inkwell.Core.Screens;
 using Inkwell.Ink;
 using Inkwell.Screens;
@@ -39,10 +43,58 @@ public partial class App : Application
     private string? inkProblem;
     private bool quitting;
     private readonly Router router = new();
+    private readonly LocalLog? localLog = OpenLocalLog();
 
     public App()
     {
         InitializeComponent();
+        // A crash note for whatever ends the app: the UI thread's exceptions, then any other thread's.
+        UnhandledException += (_, e) => localLog?.WriteCrashNote(e.Exception, AppVersion.Release);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception exception)
+            {
+                localLog?.WriteCrashNote(exception, AppVersion.Release);
+            }
+        };
+        // Not a crash in .NET, but nothing else would ever say it happened.
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+            localLog?.Write("shell", $"a task failed and nothing waited for it ({e.Exception.InnerException?.GetType().Name ?? "unknown"})");
+    }
+
+    /// <summary>
+    /// The local log in the library's folder, now taking the screens' log and the core's lines
+    /// (stderr), or null when that folder is not known (the core then says why).
+    /// </summary>
+    private static LocalLog? OpenLocalLog()
+    {
+        LocalLog log;
+        try
+        {
+            log = LocalLog.In(DataLocation.DataDirectory());
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        ScreenLog.Also = message => log.Write("shell", message);
+        // The ink's lines (its GPU, its failures) too, still to the trace as before.
+        var trace = InkLog.Write;
+        InkLog.Write = line =>
+        {
+            trace(line);
+            log.Write("ink", line);
+        };
+        if (!CoreLogCapture.Start(line =>
+            {
+                var (source, text) = LocalLog.FromStderr(line);
+                log.Write(source, text);
+            }))
+        {
+            log.Write("shell", "the core's log lines could not be captured");
+        }
+        log.Write("shell", $"Inkwell {AppVersion.Release ?? "development build"} started");
+        return log;
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -121,7 +173,7 @@ public partial class App : Application
         // What the Drop says, after the store has taken each batch.
         var drop = new DropModel(
             new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine,
-            () => models.Meetings.FailureOn(MeetingPlace.Drop));
+            () => models.Meetings.FailureOn(MeetingPlace.Drop), noSpeechModel: () => models.Catalogue.HasSpeechModel == false);
         dropModel = drop;
         var shellInk = ink;
         drop.Changed += () =>
@@ -165,6 +217,7 @@ public partial class App : Application
             {
                 made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: true);
             }
+            window.FrameChanged();
         };
         // Coming back to the app re-checks what may have changed outside it (permissions, the keys).
         window.Activated += (_, e) =>
@@ -181,6 +234,7 @@ public partial class App : Application
         tray.IsVisible = true;
         ShowTrayState();
         window.Activate();
+        window.FitToWorkArea();
         // On screen from the start: the window's own change events may not come for the first show.
         made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
         core.Start();
@@ -194,6 +248,17 @@ public partial class App : Application
     private MenuFlyout TrayMenuFlyout()
     {
         var menu = new MenuFlyout();
+        // It opens in the icon's own window, outside the main window's tree: without this it takes
+        // Windows' mode, not the one Inkwell shows (Light while Windows is Dark, say). That window's
+        // backdrop follows Windows, so the menu gets the mode's own opaque background too.
+        if (theme is not null)
+        {
+            var style = new Style(typeof(MenuFlyoutPresenter));
+            style.Setters.Add(new Setter(FrameworkElement.RequestedThemeProperty, theme.Dark ? ElementTheme.Dark : ElementTheme.Light));
+            var background = GlowTheme.ColorOf(Inkwell.Core.Glow.GlowRgb.From(Inkwell.Core.Glow.GlowScheme.Palette(theme.Dark).Background));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, new Microsoft.UI.Xaml.Media.SolidColorBrush(background)));
+            menu.MenuFlyoutPresenterStyle = style;
+        }
         if (core is null || screens is null)
         {
             return menu;
@@ -350,6 +415,8 @@ public partial class App : Application
 
     private void ShowWindow()
     {
+        // From the tray: where it was hidden, which may be a display since unplugged.
+        window?.FitToWorkArea();
         window?.AppWindow.Show();
         window?.Activate();
     }
@@ -362,6 +429,7 @@ public partial class App : Application
             return;
         }
         quitting = true;
+        localLog?.Write("shell", "quitting");
         // Quitting is not skipping the first run; and what the screens hold unsaved (the notes line
         // under the caret) reaches the core before it stops.
         screens?.AppQuitting();

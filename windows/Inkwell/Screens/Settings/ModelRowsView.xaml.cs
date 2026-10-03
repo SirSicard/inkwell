@@ -1,6 +1,5 @@
-// The catalogue's models where they can be downloaded. The rows and what each says are the
-// CatalogueModel's (and, in the first run, OnboardingModel.ModelRows); this lays them out, and its
-// buttons only ask the model. Redrawn on the model's changes while on screen: a download's progress
+// The catalogue's models where they can be downloaded (Settings > Models). The rows and what each
+// says are the CatalogueModel's; this lays them out, and its buttons only ask the model. Redrawn on the model's changes while on screen: a download's progress
 // comes about four times a second, and nothing redraws when none runs.
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
@@ -11,14 +10,11 @@ namespace Inkwell.Screens;
 public sealed partial class ModelRowsView : UserControl
 {
     private readonly CatalogueModel catalogue;
-    private readonly bool firstRun;
 
-    /// <param name="firstRun">The first run's rows (the models not installed), without a Download of their own.</param>
-    public ModelRowsView(CatalogueModel catalogue, bool firstRun)
+    public ModelRowsView(CatalogueModel catalogue)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
         this.catalogue = catalogue;
-        this.firstRun = firstRun;
         InitializeComponent();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
@@ -39,9 +35,8 @@ public sealed partial class ModelRowsView : UserControl
 
     private void Render()
     {
-        var rows = firstRun ? OnboardingModel.ModelRows(catalogue) : catalogue.Rows;
         var focus = RowFocus.Capture(Rows, XamlRoot);
-        Rows.ItemsSource = rows.Select(row => new ModelRowItem(row, OwnDownload: !firstRun)).ToList();
+        Rows.ItemsSource = catalogue.Rows.Select(row => new ModelRowItem(row)).ToList();
         RowFocus.Restore(Rows, focus, item => ((ModelRowItem)item).Id);
     }
 

@@ -102,6 +102,26 @@ public sealed class RenderTests
         Assert.InRange(over.Pixel(x, y).R, r + 0xFB * (1 - a) - 2, r + 0xFB * (1 - a) + 2);
     }
 
+    /// <summary>
+    /// A frame the compositor has no room for yet is dropped, not waited for: the swapchain presents
+    /// without waiting (DXGI_PRESENT_DO_NOT_WAIT), and "still drawing" is not a failure. Waiting
+    /// there blocked the UI thread a whole frame per present, 60 times a second on a 60 Hz display.
+    /// </summary>
+    [Fact]
+    public void APresentTheCompositorIsNotReadyForIsDroppedNotAFailure()
+    {
+        lock (TestPipeline.Lock)
+        {
+            using var swapChain = new CompositionSwapChain(TestPipeline.Get(), 64, 64);
+            swapChain.InjectedPresentResult = CompositionSwapChain.WasStillDrawing;
+            Assert.False(swapChain.Present()); // dropped: the host draws it again
+            Assert.Equal(1, swapChain.DroppedFrames);
+            Assert.True(swapChain.Present());
+            swapChain.InjectedPresentResult = FlakyTarget.DeviceRemoved;
+            Assert.Throws<InkRendererException>(() => swapChain.Present()); // a lost device still is
+        }
+    }
+
     /// <summary>The orb takes the colours it is given: your colour while dictating, the idle colour at rest.</summary>
     [Fact]
     public void TheOrbTakesItsColours()

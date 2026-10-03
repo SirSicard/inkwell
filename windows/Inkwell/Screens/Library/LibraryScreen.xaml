@@ -25,11 +25,22 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
-            <Grid Padding="6,0">
+            <Grid Padding="6,0" RowSpacing="6">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <!-- What the last deletion left on this PC, until another record opens. -->
+                <TextBlock
+                    x:Name="DeletionNote"
+                    Grid.Row="1"
+                    Grid.ColumnSpan="2"
+                    Style="{StaticResource InkCaptionStyle}"
+                    Visibility="Collapsed" />
                 <TextBlock
                     x:Name="ColumnTitle"
                     AutomationProperties.HeadingLevel="Level1"
@@ -47,12 +58,13 @@
                 Grid.Row="1"
                 QueryIcon="Find"
                 TextChanged="OnSearchChanged" />
-            <StackPanel
+            <!-- The kind filters wrap between chips, never inside one: the column is 272 wide. -->
+            <local:WrapPanel
                 x:Name="Chips"
                 Grid.Row="2"
-                Padding="6,0"
+                Margin="6,0"
                 AutomationProperties.Name="Show"
-                Orientation="Horizontal"
+                RowSpacing="6"
                 Spacing="6" />
 
             <!-- The list could not be read: never an empty library. -->

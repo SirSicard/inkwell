@@ -120,9 +120,11 @@ public sealed partial class AiSection : UserControl
         {
             ServerBox.Text = cloud.DraftBaseUrl;
         }
-        KeyBox.PlaceholderText = provider?.HasKey == true ? "Paste a new key to replace the stored one" : "Paste your API key";
+        // Short enough to show whole in the box; the line under it says a key is stored.
+        KeyBox.PlaceholderText = provider?.HasKey == true ? "Paste a new key" : "Paste your API key";
         KeyStatus.Text = cloud.KeyStatus;
         DeleteKeyButton.IsEnabled = provider?.HasKey == true;
+        DeleteKeyButton.Content = cloud.DeleteKeyLabel;
         var models = new List<string>();
         if (provider is not null)
         {
@@ -211,7 +213,31 @@ public sealed partial class AiSection : UserControl
         cloud.SaveKey(key);
     }
 
-    private void OnDeleteKey(object sender, RoutedEventArgs e) => cloud.DeleteKey();
+    /// <summary>Delete asks first, saying which key goes and that every Inkwell on the account loses it.</summary>
+    private void OnDeleteKey(object sender, RoutedEventArgs e)
+    {
+        var question = new TextBlock { Text = cloud.DeleteKeyQuestion, TextWrapping = TextWrapping.Wrap, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Style = (Style)Application.Current.Resources["InkBodyStyle"] };
+        var detail = new TextBlock { Text = CloudModel.DeleteKeyDetail, TextWrapping = TextWrapping.Wrap, Style = (Style)Application.Current.Resources["InkCaptionStyle"] };
+        var delete = new Button { Content = cloud.DeleteKeyLabel, Style = (Style)Application.Current.Resources["InkAccentButtonStyle"] };
+        var cancel = new Button { Content = "Cancel" };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(delete);
+        var panel = new StackPanel { Spacing = 8, Width = 320 };
+        panel.Children.Add(question);
+        panel.Children.Add(detail);
+        panel.Children.Add(buttons);
+        var flyout = new Flyout { Content = panel };
+        delete.Click += (_, _) =>
+        {
+            flyout.Hide();
+            cloud.DeleteKey();
+        };
+        cancel.Click += (_, _) => flyout.Hide();
+        // Cancel first: Enter on an opened question deletes nothing.
+        flyout.Opened += (_, _) => cancel.Focus(FocusState.Programmatic);
+        flyout.ShowAt(DeleteKeyButton);
+    }
 
     private void OnUse(object sender, RoutedEventArgs e) => cloud.Use();
 

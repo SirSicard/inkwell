@@ -29,20 +29,31 @@ public abstract record NeedsYouAction
 
     /// <summary>Reads Today's counts again (they could not be read).</summary>
     public sealed record RetryChecks : NeedsYouAction;
+
+    /// <summary>Downloads the recommended models (CatalogueModel.DownloadRecommended).</summary>
+    public sealed record DownloadModels : NeedsYouAction;
 }
 
-/// <summary>One thing that needs the user: what is wrong, and the one thing to do about it.</summary>
-public sealed record NeedsYouItem(string Id, string Title, string Detail, string ActionTitle, NeedsYouAction Action);
+/// <summary>One thing that needs the user: what is wrong, and the one thing to do about it, when there is one.</summary>
+public sealed record NeedsYouItem(string Id, string Title, string Detail, string? ActionTitle, NeedsYouAction? Action);
 
 public static class NeedsYou
 {
+    /// <summary>The one action while no speech model is installed (Today, and the first run's last step).</summary>
+    public const string DownloadModelsTitle = "Download recommended models";
+
+    /// <summary>Said instead of that action while the recommended models download.</summary>
+    public const string ModelsDownloadingText = "The recommended models are downloading. Settings > Models shows how far they are.";
+
     /// <summary>What Today's banner lists, from the models Today reads: the permission cards, the watchdog and notices (CoreStore), and the far-end check (LibraryModel), where "could not read" stays apart from "none" (the Mac's TodayScreen.needItems).</summary>
-    public static IReadOnlyList<NeedsYouItem> Items(PermissionsModel permissions, LibraryModel library, CoreStore store)
+    public static IReadOnlyList<NeedsYouItem> Items(PermissionsModel permissions, LibraryModel library, CoreStore store, CatalogueModel? catalogue = null)
     {
         ArgumentNullException.ThrowIfNull(permissions);
         ArgumentNullException.ThrowIfNull(library);
         ArgumentNullException.ThrowIfNull(store);
-        return Items(p => permissions.State(Card(p)), library.FarEnd, store.Meeting, store.Notices, library.Calendar);
+        return Items(
+            p => permissions.State(Card(p)), library.FarEnd, store.Meeting, store.Notices, library.Calendar,
+            noSpeechModel: catalogue?.HasSpeechModel == false, downloadingModels: catalogue?.Downloading == true);
     }
 
     /// <summary>The Settings card that asks for <paramref name="permission"/> (an Allow item's button asks as that card does).</summary>
@@ -57,7 +68,9 @@ public static class NeedsYou
         FarEndCheck farEnd,
         LiveMeeting? meeting,
         IReadOnlyList<Notice> notices,
-        LibraryCalendar calendar)
+        LibraryCalendar calendar,
+        bool noSpeechModel = false,
+        bool downloadingModels = false)
     {
         ArgumentNullException.ThrowIfNull(permission);
         ArgumentNullException.ThrowIfNull(farEnd);
@@ -73,10 +86,8 @@ public static class NeedsYou
             switch (meeting.Sides.GetValueOrDefault(Channel.Far, SideState.Ok))
             {
                 case SideState.Zeros:
-                    items.Add(new(
-                        "live-far", "Inkwell can't hear the other side of this call",
-                        "The other side is arriving as silence. The call's sound may be muted on this PC.",
-                        "Open Sound settings", sound));
+                    // The plain fact, with no button: nothing on this PC is known to fix it.
+                    items.Add(new("live-far", "The other side is silent", "Only silence is arriving from the call.", null, null));
                     break;
                 case SideState.Stopped:
                     items.Add(new(
@@ -94,6 +105,16 @@ public static class NeedsYou
                     "Your microphone is sending silence. This meeting may keep only the other side.",
                     "Check the microphone", allowMic));
             }
+        }
+
+        // No speech model: nothing can be written down. One action, the recommended set.
+        if (noSpeechModel)
+        {
+            items.Add(downloadingModels
+                ? new("no-speech-model", TodayText.NoSpeechModelText, ModelsDownloadingText, null, null)
+                : new("no-speech-model", TodayText.NoSpeechModelText,
+                    "Nothing you say can be written down until one is. The recommended set is about 640 MB.",
+                    DownloadModelsTitle, new NeedsYouAction.DownloadModels()));
         }
 
         // Whether recent meetings kept the far end, and the microphone's permission.
@@ -117,6 +138,14 @@ public static class NeedsYou
                 break;
             default:
                 break;
+        }
+        // Only when the check says so (on Windows it never does: system audio needs no permission).
+        if (permission(PermissionName.SystemAudio) == CardState.Off)
+        {
+            items.Add(new(
+                "perm-system-audio", "System audio is off",
+                "Meetings record only your voice.",
+                "Open Sound settings", sound));
         }
         if (permission(PermissionName.Microphone) == CardState.Off)
         {

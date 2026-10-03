@@ -414,11 +414,26 @@ What the checks guarantee:
   first call (ink-engines' `src/nemo.rs`).
 - **It is x64's.** `pack.ps1` refuses an `Inkwell.exe` or core built for another architecture.
 - **The core's version.** A tag waits, as the Mac's does, until `core/Cargo.toml` says the tag's
-  version, which About shows as the core's (`mac/scripts/core-version.sh`, the build job's step
-  after the version's); a dry run says so and goes on.
+  version, which About shows as the core's (`windows/scripts/release-version.sh` runs
+  `mac/scripts/core-version.sh`, as the Mac's release-version.sh does); a dry run says so and
+  goes on.
 - **Notices first.** A tag waits, as the Mac's does, for every notice written without its upstream
   file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
   included (`windows/scripts/release-version.sh`).
+
+**When a PC reports a problem.** The app keeps a log of its own on the PC and never sends it
+anywhere: `logs\inkwell.log` in the library folder (`%LOCALAPPDATA%\Inkwell\logs`, or under
+`INK_DATA_DIR`), up to 1 MB, with the two before it as `inkwell.1.log` and `inkwell.2.log`
+(`windows/Inkwell.Core/LocalLog.cs`). It holds the shell's diagnostics (`ScreenLog`: what failed,
+by command name and fixed words, never a command's fields), the ink's (`InkLog`: the GPU it draws
+on, why it could not) and what the core writes to stderr at its default level, info. The core keeps what was said out of its lines; they can name files in
+the library and models folders, and quote an online provider's error. Of anything else written
+to stderr only the length is kept, and of a Rust panic only its first line (where, never the
+message). When an exception ends the app, it first writes
+`crash-YYYYMMDD-HHMMSS.txt` beside the log: the time, the app's and Windows' versions, and each
+exception's type and stack, without its message (the newest ten are kept). A crash inside native
+code (the core, an engine, a GPU driver) ends the process without a note. Ask the user for the
+files; uninstalling leaves them, with the library.
 
 The same build on a PC (Visual Studio's C++ build tools, CMake, Ninja, LLVM, Git Bash, the Vulkan
 SDK with `VULKAN_SDK` set, the .NET SDK `windows/global.json` pins), x64:

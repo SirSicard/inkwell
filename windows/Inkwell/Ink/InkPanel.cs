@@ -27,7 +27,10 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     private InkState state = InkState.Idle;
     private GlowLook look = GlowLook.Default;
     private bool alwaysStill;
-    private float orbOpacity = 1;
+    /// <summary>The orb's opacity over its backdrop, fading toward what the window asks (OrbOpacity).</summary>
+    private readonly OrbFade fade = new();
+    /// <summary>Draws the fade's end once it is reached, when no frame of the ink would (a still orb).</summary>
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? fadeEnd;
     private (float, float) transform;
 
     /// <summary>The process's clock; the app sets it at launch, before any panel loads.</summary>
@@ -98,18 +101,39 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     }
 
     /// <summary>
-    /// The orb's opacity over its backdrop (High Contrast dims it behind the text). Not the
-    /// element's Opacity: that fades the panel to white by day, not to the window.
+    /// The orb's opacity over its backdrop, reached over 0.8 s (OrbFade; at once without
+    /// animations): dimmed while anything is live, and under High Contrast, so the text over it
+    /// reads. Not the element's Opacity: that fades the panel to white by day, not to the window.
+    /// A live orb draws the fade frame by frame; a still one draws once now and once at its end.
     /// </summary>
     internal float OrbOpacity
     {
-        get => orbOpacity;
+        get => fade.Target;
         set
         {
-            orbOpacity = value;
+            if (value == fade.Target)
+            {
+                return;
+            }
+            var animate = SystemMotion.AnimationsEnabled && !alwaysStill;
+            fade.FadeTo(value, Now, animate);
             surface?.Invalidate();
+            if (animate)
+            {
+                fadeEnd ??= DispatcherQueue.CreateTimer();
+                fadeEnd.IsRepeating = false;
+                fadeEnd.Interval = TimeSpan.FromSeconds(OrbFade.Duration);
+                fadeEnd.Tick -= OnFadeEnd;
+                fadeEnd.Tick += OnFadeEnd;
+                fadeEnd.Start();
+            }
         }
     }
+
+    private static double Now => System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency;
+
+    private void OnFadeEnd(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args) => surface?.Invalidate();
+
 
     /// <summary>A frame was drawn (live, or the still frame). UI thread.</summary>
     internal event Action<GlowFrame>? Drawn;
@@ -119,6 +143,9 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
 
     /// <summary>The prototype's stand-in voice instead of the live levels (the first run's demo). Set before it loads.</summary>
     internal bool Demo { get; set; }
+
+    /// <summary>How far the final pass's blot goes (InkSimulation.BlotDepth): the window's orb stops partway. Set before it loads.</summary>
+    internal double BlotDepth { get; set; } = 1;
 
     /// <summary>Frames this panel has presented (0 before it loads).</summary>
     public int FramesDrawn => surface?.FramesDrawn ?? 0;
@@ -134,6 +161,7 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
             State = state,
             Placement = Placement,
             Demo = Demo,
+            BlotDepth = BlotDepth,
             Look = look,
             AlwaysStill = alwaysStill,
             Levels = ShellInk.LiveLevels,
@@ -212,7 +240,11 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
             swapChain.SetMatrixTransform(transform.Item1, transform.Item2);
             this.transform = transform;
         }
-        swapChain.DrawInk(uniforms, BackdropColour(), orbOpacity);
+        if (!swapChain.DrawInk(uniforms, BackdropColour(), fade.ValueAt(Now)))
+        {
+            // The compositor had no room: a still frame is drawn again a frame later.
+            surface!.PresentDropped();
+        }
         return true;
     }
 

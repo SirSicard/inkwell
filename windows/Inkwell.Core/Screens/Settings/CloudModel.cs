@@ -178,16 +178,29 @@ public sealed class CloudModel : ObservableModel
     /// </summary>
     public bool KeyWithheld => SelectedProvider is { CustomUrl: true } p && KeyWithheldFrom(BaseUrlFor(p));
 
-    /// <summary>The line about the key of the provider in the picker.</summary>
+    /// <summary>
+    /// The line about the key of the provider in the picker. A stored key is the Windows account's,
+    /// not this library's: Credential Manager's entry is shared by every Inkwell on the account.
+    /// </summary>
     public string KeyStatus => SelectedProvider switch
     {
         null => "",
-        { HasKey: true } when KeyWithheld => "A key is stored in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
+        { HasKey: true } when KeyWithheld => "A key is stored for this Windows account, in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
         _ when KeyWithheld => "No key is sent to this server: keys go only over https or to a server on this PC.",
         { NeedsKey: false, HasKey: false } => "No key is needed unless your server asks for one.",
-        { HasKey: true } => "A key is stored in Windows Credential Manager.",
+        { HasKey: true } => "A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.",
         _ => "No key is stored yet.",
     };
+
+    /// <summary>The Delete button: whose key it deletes.</summary>
+    public string DeleteKeyLabel => SelectedProvider is CloudProvider p ? $"Delete {ProviderName(p.Id)} key" : "Delete key";
+
+    /// <summary>Asked before Delete deletes: which key, and for whom.</summary>
+    public string DeleteKeyQuestion => $"Delete the {(SelectedProvider is CloudProvider p ? ProviderName(p.Id) + " " : "")}key stored for this Windows account?";
+
+    /// <summary>What Delete deletes, said with the question.</summary>
+    public const string DeleteKeyDetail =
+        "It is removed from Windows Credential Manager, so no Inkwell on this account can use it, whichever library it opens. Nothing else is deleted.";
 
     /// <summary>Whether the core keeps a key back from <paramref name="url"/>: plain http to a server that is not on this PC.</summary>
     public static bool KeyWithheldFrom(string url)

@@ -111,12 +111,19 @@ public sealed class InkSimulation(InkRandom random)
     /// </summary>
     public (double Dictating, double Meeting, double Blotting, double Problem) Weights { get; private set; }
 
-    /// <summary>The weights a state settles at.</summary>
-    public static (double Dictating, double Meeting, double Blotting, double Problem) WeightsFor(InkState state) => state switch
+    /// <summary>
+    /// How far the final pass's blot goes, 0..1: 1 (the Drop) blots down to one small drop of ink;
+    /// the window's orb stops at 0.45, where the orbs have merged, shrunk and taken the ink colour
+    /// with a soft edge, so a wide panel behind the text never ends on a hard dot.
+    /// </summary>
+    public double BlotDepth { get; set; } = 1;
+
+    /// <summary>The weights a state settles at, the blot going <paramref name="blotDepth"/> of the way.</summary>
+    public static (double Dictating, double Meeting, double Blotting, double Problem) WeightsFor(InkState state, double blotDepth = 1) => state switch
     {
         InkState.Dictating => (1, 0, 0, 0),
         InkState.Meeting => (0, 1, 0, 0),
-        InkState.Blotting => (0, 1, 1, 0),
+        InkState.Blotting => (0, 1, blotDepth, 0),
         // Still a meeting, whose far end has gone silent.
         InkState.Problem => (0, 1, 0, 1),
         _ => (0, 0, 0, 0),
@@ -227,7 +234,7 @@ public sealed class InkSimulation(InkRandom random)
         var k = snap ? 1 : 1 - Math.Exp(-dt * 3.2);
         // Glow's weights: 0.04 per 60 Hz frame, whatever the frame rate.
         var kw = snap ? 1 : 1 - Math.Pow(1 - 0.04, dt * 60);
-        var target = WeightsFor(State);
+        var target = WeightsFor(State, BlotDepth);
         Weights = (
             Weights.Dictating + (target.Dictating - Weights.Dictating) * kw,
             Weights.Meeting + (target.Meeting - Weights.Meeting) * kw,

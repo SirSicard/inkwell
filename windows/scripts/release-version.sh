@@ -10,8 +10,9 @@
 # A release tag also waits until every licence notice the Windows app shows that was written
 # without its upstream file on hand has been compared with it (mac/scripts/notices-verified.sh,
 # over the Rust overrides, those of the crates in Velopack's Setup.exe and Update.exe, the shared
-# composed notices and the Windows-only ones); a dry run lists those still open, on stderr, and
-# goes on.
+# composed notices and the Windows-only ones), and until the core says the same version
+# (mac/scripts/core-version.sh: About shows it), as the Mac's tag does; a dry run reports either,
+# on stderr, and goes on. INK_CORE_MANIFEST replaces core/Cargo.toml, for the tests.
 #
 # Only plain X.Y.Z, no suffix: Velopack compares versions to decide what is newer, and the Mac's
 # release of the same tag allows no more. No leading zeros: "1.02" and "1.2" would name one
@@ -39,8 +40,11 @@ lists="${INK_NOTICES_FILES:-$root/core/crates/ink-ffi/notices/overrides.txt:$roo
 if [ "$1" = tag ]; then
   INK_NOTICES_FILES="$lists" /bin/bash "$root/mac/scripts/notices-verified.sh" \
     || fail "a release tag needs every licence notice compared with its upstream file first (above)"
+  /bin/bash "$root/mac/scripts/core-version.sh" "$version" \
+    || fail "a release tag needs the core at the release's version first (above)"
 else
   INK_NOTICES_FILES="$lists" /bin/bash "$root/mac/scripts/notices-verified.sh" --warn
+  /bin/bash "$root/mac/scripts/core-version.sh" --warn "$version"
 fi
 echo "version=$version"
 # x64 only (Directory.Build.props). windows/scripts/pack.ps1 writes these names.

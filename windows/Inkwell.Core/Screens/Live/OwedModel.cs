@@ -348,9 +348,9 @@ public sealed class OwedModel : ObservableModel
                 Loaded = true;
                 LoadFailure = null;
                 break;
-            case CommitmentUpdated or MeetingCommitments or MeetingLooksDone or Events.LibrarySwept:
-                // A promise changed, a meeting filed new ones or found some done, or old ones went:
-                // list again.
+            case CommitmentUpdated or MeetingCommitments or MeetingLooksDone or Events.LibrarySwept or RecordDeleted:
+                // A promise changed, a meeting filed new ones or found some done, or old ones (or a
+                // record the user deleted) went: list again.
                 Load();
                 return;
             case CommandFailed failed when failed.Command is "commitment.set_done" or "commitment.not_yet":
