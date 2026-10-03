@@ -91,7 +91,7 @@ public class CloudModelTests
         var before = sent.Commands.Count;
         cloud.Select("openai");
         Assert.Equal(before, sent.Commands.Count);
-        Assert.Equal("No key is stored yet.", cloud.KeyStatus);
+        Assert.Equal("No OpenAI key is saved yet.", cloud.KeyStatus);
         Assert.True(cloud.SelectedIsCloud);
         Assert.Equal(
             "Using OpenAI turns local-only mode off, so the features below can send to OpenAI. Each one sends only once you allow it for OpenAI; one you already allowed for OpenAI sends again straight away.",
@@ -110,7 +110,7 @@ public class CloudModelTests
         Assert.DoesNotContain(Key, save.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(Key, save.Name, StringComparison.Ordinal);
         cloud.Apply(Providers(keyed: ["openai"], reference: save.Ref));
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
+        Assert.Equal("An OpenAI key is already saved for this Windows account.", cloud.KeyStatus);
         Assert.Equal("openai", cloud.Selected); // saving a key keeps the picker where it was
 
         cloud.DraftModel = " gpt-synthetic ";
@@ -267,15 +267,15 @@ public class CloudModelTests
         var (cloud, _) = Loaded(Providers(keyed: ["custom"]));
         cloud.Select("custom");
         Assert.False(cloud.KeyWithheld); // Ollama's default, on this PC
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
+        Assert.Equal("A server key is already saved for this Windows account.", cloud.KeyStatus);
         cloud.DraftBaseUrl = "http://192.0.2.10:8000/v1";
         Assert.True(cloud.KeyWithheld);
         Assert.Equal(
-            "A key is stored for this Windows account, in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
+            "A server key is already saved for this Windows account, but it is not sent to this server: keys go only over https or to a server on this PC.",
             cloud.KeyStatus);
         cloud.DraftBaseUrl = "https://llm.example.com/v1";
         Assert.False(cloud.KeyWithheld);
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
+        Assert.Equal("A server key is already saved for this Windows account.", cloud.KeyStatus);
 
         (cloud, _) = Loaded();
         cloud.Select("custom");
@@ -422,11 +422,12 @@ public class CloudModelTests
     {
         var (cloud, sent) = Loaded(Providers(keyed: ["groq"]));
         cloud.Select("groq");
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
-        Assert.Equal("Delete Groq key", cloud.DeleteKeyLabel);
-        Assert.Equal("Delete the Groq key stored for this Windows account?", cloud.DeleteKeyQuestion);
+        Assert.Equal("A Groq key is already saved for this Windows account.", cloud.KeyStatus);
+        Assert.Equal("Delete Groq key\u2026", cloud.DeleteKeyLabel);
+        Assert.Equal("Delete the Groq key from this Windows account?", cloud.DeleteKeyQuestion);
+        Assert.Equal("Delete Key", CloudModel.DeleteKeyConfirm);
         Assert.Equal(
-            "It is removed from Windows Credential Manager, so no Inkwell on this account can use it, whichever library it opens. Nothing else is deleted.",
+            "It is saved for this Windows account, not in this library: every Inkwell on this account stops using it. You can paste it again later.",
             CloudModel.DeleteKeyDetail);
         var before = sent.Commands.Count;
         cloud.DeleteKey();
@@ -435,7 +436,9 @@ public class CloudModelTests
 
         (cloud, _) = Loaded(Providers(keyed: []));
         cloud.Select(null);
-        Assert.Equal("Delete key", cloud.DeleteKeyLabel);
+        Assert.Equal("Delete key\u2026", cloud.DeleteKeyLabel);
+        cloud.Select("groq");
+        Assert.Equal("No Groq key is saved yet.", cloud.KeyStatus);
     }
 
 }

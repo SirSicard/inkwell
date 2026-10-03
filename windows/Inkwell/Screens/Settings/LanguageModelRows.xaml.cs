@@ -164,12 +164,15 @@ public sealed partial class LanguageModelRows : UserControl
         cloud.SaveKey(key);
     }
 
-    /// <summary>Delete asks first, saying which key goes and that every Inkwell on the account loses it.</summary>
+    /// <summary>
+    /// Delete asks first, saying which key goes and that every Inkwell on the account loses it (the
+    /// Mac's words): Delete Key or Cancel, Cancel focused.
+    /// </summary>
     private void OnDeleteKey(object sender, RoutedEventArgs e)
     {
         var question = new TextBlock { Text = cloud.DeleteKeyQuestion, TextWrapping = TextWrapping.Wrap, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Style = (Style)Application.Current.Resources["InkBodyStyle"] };
         var detail = new TextBlock { Text = CloudModel.DeleteKeyDetail, TextWrapping = TextWrapping.Wrap, Style = (Style)Application.Current.Resources["InkCaptionStyle"] };
-        var delete = new Button { Content = cloud.DeleteKeyLabel, Style = (Style)Application.Current.Resources["InkAccentButtonStyle"] };
+        var delete = new Button { Content = CloudModel.DeleteKeyConfirm, Style = (Style)Application.Current.Resources["InkAccentButtonStyle"] };
         var cancel = new Button { Content = "Cancel" };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
         buttons.Children.Add(cancel);
