@@ -219,7 +219,9 @@ struct AppearanceSection: View {
                 Text("\(modeName) keeps its own choice")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                // Two columns where a tile beside a tile has room for the longest name on one line,
+                // else one: a name never breaks inside a word.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: PresetButton.minimumWidth), spacing: 8)], spacing: 8) {
                     ForEach(Glow.presets) { preset in
                         PresetButton(preset: preset, selected: preset.id == theme.preset.id) {
                             theme.setPreset(preset.id)
@@ -306,6 +308,15 @@ struct PresetButton: View {
     let selected: Bool
     let pick: () -> Void
 
+    static let nameSize: CGFloat = 14
+    /// The narrowest tile with every preset's name on one line: the margins, the dots and the
+    /// longest name (a point over it, clear of rounding).
+    static let minimumWidth: CGFloat = {
+        let font = NSFont.systemFont(ofSize: nameSize)
+        let longest = Glow.presets.map { ($0.name as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return 12 + 42 + 12 + ceil(longest) + 1 + 12
+    }()
+
     var body: some View {
         Button(action: pick) {
             HStack(spacing: 12) {
@@ -316,8 +327,9 @@ struct PresetButton: View {
                 .frame(width: 42, height: 26, alignment: .leading)
                 .accessibilityHidden(true)
                 Text(preset.name)
-                    .font(.system(size: 14))
+                    .font(.system(size: Self.nameSize))
                     .foregroundStyle(Theme.text)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)

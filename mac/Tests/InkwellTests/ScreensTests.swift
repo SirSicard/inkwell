@@ -2123,6 +2123,25 @@ final class MainWindowWidthTests: XCTestCase {
     }
 }
 
+/// Settings > Appearance's dot presets: at 720 their names broke inside a word ("Lago / on") in
+/// two columns too narrow for them. A column is never narrower than PresetButton.minimumWidth,
+/// which holds every name on one line beside the dots.
+@MainActor
+final class PresetTileTests: XCTestCase {
+    func testEveryPresetsNameFitsOnOneLineInTheNarrowestTile() {
+        // The tile's margins (12 each side), the dots (42) and the gap after them (12).
+        let room = PresetButton.minimumWidth - 12 - 42 - 12 - 12
+        XCTAssertGreaterThan(Glow.presets.count, 1)
+        for preset in Glow.presets {
+            let name = Text(preset.name).font(.system(size: PresetButton.nameSize)).fixedSize()
+            let width = NSHostingController(rootView: name).sizeThatFits(in: .zero).width
+            XCTAssertLessThanOrEqual(width, room, preset.name)
+        }
+        // Two columns in the grid's widest frame (420), as before.
+        XCTAssertLessThanOrEqual(2 * PresetButton.minimumWidth + 8, 420)
+    }
+}
+
 /// Settings > Dictation's key rows, too narrow for their controls and hints at the window's smaller
 /// sizes (found by offscreen renders): the picker, cap and Record a shortcut… share a line only
 /// while the button's longest label fits on it, and narrower they stack as a group.
