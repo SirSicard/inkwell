@@ -204,7 +204,7 @@ public sealed class OnboardingModel : ObservableModel
             return "Checking which models are on this PC…";
         }
         return ModelChoices.Shown(catalogue).Any(c => !ModelChoices.Installed(c, catalogue))
-            ? "Inkwell turns speech into text with models that run on this PC. Choose what it should do; you can add the rest later in Settings > Models."
+            ? "Inkwell writes down speech with models that run on this PC. Each is downloaded once, and only when you press Download."
             : "Every model Inkwell uses is on this PC.";
     }
 
@@ -225,46 +225,43 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>Where Groq's keys are made (the homepage's link).</summary>
     public const string OwnKeyUrl = "https://console.groq.com";
 
-    /// <summary>The Polish step's own key, while no language model is available: one choice, the link in it.</summary>
-    public const string OwnKeyLine = "Use Groq's free model: get a key at console.groq.com";
+    /// <summary>The Polish step's own key: one choice, Groq's free model, behind this disclosure.</summary>
+    public const string OwnKeyTitle = "Use Groq's free model";
 
-    /// <summary>The part of <see cref="OwnKeyLine"/> that is the link to <see cref="OwnKeyUrl"/>.</summary>
+    /// <summary>Under it: the homepage's sentence, its host a link to <see cref="OwnKeyUrl"/>.</summary>
+    public const string OwnKeyLead =
+        "Groq's free tier covers ordinary personal use and needs no credit card. Sign in at console.groq.com, create a key under API Keys and paste it here.";
+
+    /// <summary>The part of <see cref="OwnKeyLead"/> that is the link.</summary>
     public const string OwnKeyHost = "console.groq.com";
-
-    /// <summary>What Save means, said before it is pressed.</summary>
-    public const string OwnKeyNote =
-        "Groq's free tier needs no credit card, and shows a new key once: copy it there and paste it here. Saving turns local-only mode off, so polish can send to Groq once you turn it on and allow it. The key is kept in Windows Credential Manager, never in Inkwell's files; Settings > AI has the other providers.";
-
-    /// <summary>Stores the key and chooses Groq (CloudModel.UseKey).</summary>
-    public const string OwnKeyButton = "Save";
 
     public const string OwnKeyBoxName = "Groq API key";
 
     /// <summary>The key box's placeholder: short enough to show whole.</summary>
     public const string OwnKeyPlaceholder = "Paste your Groq key";
 
-    /// <summary>
-    /// Said over the key box when a Groq key is already stored: it is the Windows account's (every
-    /// Inkwell on it shares Credential Manager's entry), so it shows here in any library. Null
-    /// when none is stored.
-    /// </summary>
-    public static string? StoredKeyLine(CloudModel cloud)
-    {
-        ArgumentNullException.ThrowIfNull(cloud);
-        return cloud.Providers.Any(p => p.Id == OwnKeyProvider && p.HasKey)
-            ? "A Groq key is already stored for this Windows account, in Windows Credential Manager: every Inkwell on this account can use it. Saving a new one replaces it."
-            : null;
-    }
+    /// <summary>Stores the key, nothing more (CloudModel.SaveKey); Use Groq then asks and chooses.</summary>
+    public const string OwnKeySave = "Save";
+
+    /// <summary>To Settings > AI's rows, for another provider or model.</summary>
+    public const string OtherProviders = "Other providers or models\u2026";
+
+    /// <summary>Back from those rows to Groq's.</summary>
+    public const string BackToGroq = "Back to Groq's free model";
 
     public const string ReadyTitle = "Ready";
 
     /// <summary>
     /// The last step's line: how to dictate, or, with no speech model installed, that one is needed
-    /// (never "Hold … and speak" when nothing could be written down).
+    /// (the Mac's words; never "Hold … and speak" when nothing could be typed). With no model the
+    /// download follows it, then <see cref="TrayLine"/>.
     /// </summary>
     public static string ReadyLine(string keyName, bool noSpeechModel = false) => noSpeechModel
-        ? "Inkwell needs a speech model before it can write anything down: the recommended set is about 640 MB. Inkwell lives in the notification area; this window opens from there."
-        : $"Hold {keyName}, say something, and let go. Inkwell lives in the notification area; this window opens from there.";
+        ? "Inkwell needs a speech model before it can type what you say."
+        : $"Hold {keyName}, say something, and let go. {TrayLine}";
+
+    /// <summary>Where Inkwell lives once the sheet closes.</summary>
+    public const string TrayLine = "Inkwell lives in the notification area; this window opens from there.";
 
     /// <summary>The ready step's warning about cards still off, or null when none is.</summary>
     public static string? StillOff(PermissionsModel permissions)

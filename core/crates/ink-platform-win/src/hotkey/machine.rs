@@ -10,6 +10,13 @@
 //! app's menu on release. A release is swallowed only when its press was, so an app that saw a
 //! press (before the hook existed) also sees the release. Everything else passes through.
 //!
+//! **A chord ends when any part of it is let go of (decided, as on the Mac).** Hold to talk means
+//! the hold lasts while the whole chord is down: one of its modifiers coming up ends it as surely
+//! as its key does. The modifier's own key-up passes through (the app saw it go down), and the
+//! key, still down, keeps its repeats and its key-up swallowed: they were the hotkey's, and an app
+//! getting them would type spaces nobody asked for. A function key alone has no modifiers to let
+//! go of.
+//!
 //! **The stray modifier tap.** A swallowed chord key leaves its modifiers looking pressed and
 //! released on their own: Windows then opens the Start menu (Win), activates a menu bar (Alt) or
 //! switches the keyboard layout (Ctrl+Shift, Alt+Shift). So a chord press with modifiers asks for a
@@ -33,6 +40,8 @@ pub(crate) enum HookInput {
     KeyUp {
         /// The virtual key.
         vk: u32,
+        /// The chord modifiers still down once this key is up ([`super::binding::modifier`] bits).
+        modifiers: u8,
     },
 }
 
@@ -59,6 +68,9 @@ pub(crate) struct Verdict {
 pub(crate) struct HoldMachine {
     binding: Binding,
     held: bool,
+    /// A chord's key is still down after a modifier ended the hold: its repeats and key-up are
+    /// ours to swallow, without another edge.
+    trailing: bool,
 }
 
 impl HoldMachine {
@@ -66,6 +78,7 @@ impl HoldMachine {
         Self {
             binding,
             held: false,
+            trailing: false,
         }
     }
 
@@ -76,6 +89,7 @@ impl HoldMachine {
     /// Forgets any hold (the core may have missed an edge: its sink panicked).
     pub(crate) fn reset(&mut self) {
         self.held = false;
+        self.trailing = false;
     }
 
     /// Decides one event.
@@ -84,12 +98,13 @@ impl HoldMachine {
             (Binding::Modifier(key), HookInput::KeyDown { vk, .. }) if vk == key.vk() => {
                 self.transition(true)
             }
-            (Binding::Modifier(key), HookInput::KeyUp { vk }) if vk == key.vk() => {
+            (Binding::Modifier(key), HookInput::KeyUp { vk, .. }) if vk == key.vk() => {
                 self.transition(false)
             }
             (Binding::Chord(chord), HookInput::KeyDown { vk, modifiers }) if vk == chord.vk => {
-                if self.held {
-                    // Auto-repeat of the held chord.
+                if self.held || self.trailing {
+                    // Auto-repeat of the held chord, or of its key after a modifier ended the
+                    // hold (the hook cannot tell a repeat from a press: the key has not come up).
                     Verdict {
                         swallow: true,
                         edge: None,
@@ -105,8 +120,30 @@ impl HoldMachine {
                     Verdict::default()
                 }
             }
-            (Binding::Chord(chord), HookInput::KeyUp { vk }) if vk == chord.vk => {
-                self.transition(false)
+            (Binding::Chord(chord), HookInput::KeyUp { vk, .. }) if vk == chord.vk => {
+                if self.trailing {
+                    self.trailing = false;
+                    Verdict {
+                        swallow: true,
+                        edge: None,
+                        mask: false,
+                    }
+                } else {
+                    self.transition(false)
+                }
+            }
+            (Binding::Chord(chord), HookInput::KeyUp { modifiers, .. })
+                if self.held && modifiers & chord.modifiers != chord.modifiers =>
+            {
+                // One of the chord's modifiers came up: the hold ends here. The key-up itself is
+                // the app's (it saw the modifier go down); the chord key's up is still to come.
+                self.held = false;
+                self.trailing = true;
+                Verdict {
+                    swallow: false,
+                    edge: Some(Edge::Released),
+                    mask: false,
+                }
             }
             _ => Verdict::default(),
         }
@@ -143,8 +180,14 @@ mod tests {
         HookInput::KeyDown { vk, modifiers }
     }
 
+    /// A key coming up with nothing left down.
     fn up(vk: u32) -> HookInput {
-        HookInput::KeyUp { vk }
+        HookInput::KeyUp { vk, modifiers: 0 }
+    }
+
+    /// A key coming up with `modifiers` still down.
+    fn up_with(vk: u32, modifiers: u8) -> HookInput {
+        HookInput::KeyUp { vk, modifiers }
     }
 
     const SWALLOW: Verdict = Verdict {
@@ -225,6 +268,103 @@ mod tests {
         // Repeats swallow even after a modifier lets go.
         assert_eq!(m.on(down(vk::SPACE, modifier::CTRL)), SWALLOW);
         assert_eq!(m.on(up(vk::SPACE)), RELEASED);
+    }
+
+    /// Letting go of any part of the chord ends the hold: Shift first, here. The app saw Shift go
+    /// down, so it sees it come up; the key is still down, and its repeats and its key-up stay
+    /// swallowed, or the app would get spaces it never asked for.
+    #[test]
+    fn letting_go_of_a_modifier_first_ends_the_hold() {
+        let mut m = machine("ctrl+shift+space");
+        let both = modifier::CTRL | modifier::SHIFT;
+        assert_eq!(m.on(down(vk::SPACE, both)), PRESSED_MASKED);
+        // Left Shift up: Ctrl is still down, Shift is not.
+        let released_passing = Verdict {
+            swallow: false,
+            edge: Some(Edge::Released),
+            mask: false,
+        };
+        assert_eq!(m.on(up_with(vk::LSHIFT, modifier::CTRL)), released_passing);
+        assert!(!m.is_held());
+        // The key, still down, repeats with what is left of the modifiers: swallowed, no edge.
+        assert_eq!(m.on(down(vk::SPACE, modifier::CTRL)), SWALLOW);
+        assert_eq!(
+            m.on(down(vk::SPACE, both)),
+            SWALLOW,
+            "not a new press while it is down"
+        );
+        assert_eq!(
+            m.on(up(vk::SPACE)),
+            SWALLOW,
+            "its key-up is ours, and reports nothing more"
+        );
+        // Ctrl up afterwards is the app's.
+        assert_eq!(m.on(up(vk::LCONTROL)), PASS);
+        // The next press is a new hold.
+        assert_eq!(m.on(down(vk::SPACE, both)), PRESSED_MASKED);
+        assert_eq!(m.on(up_with(vk::SPACE, both)), RELEASED);
+    }
+
+    /// The key let go of first ends the hold as before; the modifiers then are the app's.
+    #[test]
+    fn letting_go_of_the_key_first_ends_the_hold() {
+        let mut m = machine("ctrl+shift+space");
+        let both = modifier::CTRL | modifier::SHIFT;
+        m.on(down(vk::SPACE, both));
+        assert_eq!(m.on(up_with(vk::SPACE, both)), RELEASED);
+        assert_eq!(m.on(up_with(vk::LSHIFT, modifier::CTRL)), PASS);
+        assert_eq!(m.on(up(vk::LCONTROL)), PASS);
+        assert!(!m.is_held());
+    }
+
+    /// Another modifier going up or down, or the other Ctrl key coming up while one is still held,
+    /// is not a part of the chord let go of.
+    #[test]
+    fn key_changes_that_keep_the_chord_down_change_nothing() {
+        let mut m = machine("ctrl+space");
+        m.on(down(vk::SPACE, modifier::CTRL));
+        assert_eq!(m.on(down(vk::LSHIFT, modifier::CTRL)), PASS);
+        assert_eq!(
+            m.on(up_with(vk::LSHIFT, modifier::CTRL)),
+            PASS,
+            "Shift is not part of the chord"
+        );
+        assert_eq!(
+            m.on(up_with(vk::RCONTROL, modifier::CTRL)),
+            PASS,
+            "left Ctrl is still down"
+        );
+        assert!(m.is_held());
+        assert_eq!(m.on(up_with(vk::SPACE, modifier::CTRL)), RELEASED);
+    }
+
+    /// A function key alone has no modifiers: other keys coming up never end its hold.
+    #[test]
+    fn a_function_key_hold_ends_only_at_its_key_up() {
+        let mut m = machine("f13");
+        assert_eq!(m.on(down(0x7C, 0)), PRESSED);
+        assert_eq!(m.on(up(vk::LSHIFT)), PASS);
+        assert!(m.is_held());
+        assert_eq!(m.on(up(0x7C)), RELEASED);
+    }
+
+    /// A modifier held on its own is unchanged: only its own key-up ends it.
+    #[test]
+    fn a_modifier_hold_ignores_other_key_ups() {
+        let mut m = machine("right_alt");
+        assert_eq!(m.on(down(vk::RMENU, modifier::ALT)), PRESSED);
+        assert_eq!(m.on(up(vk::LSHIFT)), PASS);
+        assert!(m.is_held());
+        assert_eq!(m.on(up(vk::RMENU)), RELEASED);
+    }
+
+    #[test]
+    fn reset_forgets_a_trailing_key() {
+        let mut m = machine("ctrl+space");
+        m.on(down(vk::SPACE, modifier::CTRL));
+        m.on(up(vk::LCONTROL));
+        m.reset();
+        assert_eq!(m.on(up(vk::SPACE)), PASS, "the app gets the key-up now");
     }
 
     #[test]

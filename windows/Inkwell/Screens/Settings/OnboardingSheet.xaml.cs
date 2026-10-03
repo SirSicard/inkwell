@@ -49,6 +49,10 @@ public sealed partial class OnboardingSheet : ContentDialog
     private bool rendering;
     private readonly List<ChoiceRow> choiceRows = [];
     private OnboardingStep? shownStep;
+    /// <summary>The own key shows the other providers' rows, not Groq's.</summary>
+    private bool others;
+    /// <summary>Groq was suggested since the disclosure last opened.</summary>
+    private bool suggested;
 
     private OnboardingSheet(
         FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
@@ -80,18 +84,23 @@ public sealed partial class OnboardingSheet : ContentDialog
         PolishTitle.Text = OnboardingModel.PolishTitle;
         PolishNote.Text = OnboardingModel.PolishNote;
         AutomationProperties.SetName(PolishSwitch, OnboardingModel.PolishToggle);
-        // "Use Groq's free model: get a key at " and the host as its link.
-        OwnKeyLead.Text = OnboardingModel.OwnKeyLine[..OnboardingModel.OwnKeyLine.IndexOf(OnboardingModel.OwnKeyHost, StringComparison.Ordinal)];
+        OwnKeyExpander.Header = OnboardingModel.OwnKeyTitle;
+        // The homepage's sentence, its host a link.
+        var link = OnboardingModel.OwnKeyLead.IndexOf(OnboardingModel.OwnKeyHost, StringComparison.Ordinal);
+        OwnKeyLeadStart.Text = OnboardingModel.OwnKeyLead[..link];
         OwnKeyLink.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = OnboardingModel.OwnKeyHost });
         OwnKeyLink.NavigateUri = new Uri(OnboardingModel.OwnKeyUrl);
+        OwnKeyLeadEnd.Text = OnboardingModel.OwnKeyLead[(link + OnboardingModel.OwnKeyHost.Length)..];
         AutomationProperties.SetName(OwnKeyBox, OnboardingModel.OwnKeyBoxName);
         OwnKeyBox.PlaceholderText = OnboardingModel.OwnKeyPlaceholder;
-        OwnKeyUse.Content = OnboardingModel.OwnKeyButton;
-        AutomationProperties.SetHelpText(OwnKeyUse, OnboardingModel.OwnKeyNote);
-        OwnKeyNote.Text = OnboardingModel.OwnKeyNote;
+        OwnKeySave.Content = OnboardingModel.OwnKeySave;
+        OthersLink.Content = OnboardingModel.OtherProviders;
+        BackToGroqLink.Content = OnboardingModel.BackToGroq;
+        OthersHost.Content = new LanguageModelRows(cloud, polish);
         ReadyTitle.Text = OnboardingModel.ReadyTitle;
         ReadyDownload.Content = NeedsYou.DownloadModelsTitle;
         ReadyDownloading.Text = NeedsYou.ModelsDownloadingText;
+        ReadyTrayLine.Text = OnboardingModel.TrayLine;
         AutomationProperties.SetHelpText(SkipButton, OnboardingModel.SkipHint);
         ConsentTitle.Text = PolishModel.ConsentTitle;
         AutomationProperties.SetName(ConsentCancel, ConsentModel.CancelName(LlmFeature.Polish));
@@ -193,8 +202,12 @@ public sealed partial class OnboardingSheet : ContentDialog
         onboarding.PropertyChanged += (_, _) => sheet.Update();
         onboarding.Choices.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         polish.PropertyChanged += (_, _) => sheet.RenderIfOpen();
-        // The own key's answer: stored and chosen (polish then has a model), or why not.
-        cloud.PropertyChanged += (_, _) => sheet.RenderIfOpen();
+        // The own key's answers (stored, chosen, why not); the providers read: Groq goes in the picker.
+        cloud.PropertyChanged += (_, _) =>
+        {
+            sheet.SuggestGroq();
+            sheet.RenderIfOpen();
+        };
         permissions.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         dictation.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         // The models step's lines: the list, what is left to ask for, whether a download runs.
@@ -332,14 +345,7 @@ public sealed partial class OnboardingSheet : ContentDialog
             AutomationProperties.SetHelpText(PolishSwitch, polish.Status);
             PolishStatus.Text = polish.Status;
             PolishStatus.Style = (Style)Application.Current.Resources[polish.IsProblem ? "InkAlertTextStyle" : "InkCaptionStyle"];
-            // Offered only while there is no language model; once one is ready, the switch can be used.
-            OwnKeyPanel.Visibility = Visible(!polish.HasWorkingEngine);
-            OwnKeyUse.IsEnabled = cloud.Loaded;
-            var storedKey = OnboardingModel.StoredKeyLine(cloud);
-            StoredKeyLine.Text = storedKey ?? "";
-            StoredKeyLine.Visibility = Visible(storedKey is not null);
-            OwnKeyStatus.Text = cloud.Failure ?? "";
-            OwnKeyStatus.Visibility = Visible(cloud.Failure is not null);
+            RenderOwnKey();
             var asking = polish.Consent.IsShowingStep(ConsentHost.Onboarding) ? polish.PendingConsent : null;
             ConsentCard.Visibility = Visible(asking is not null);
             if (asking is not null)
@@ -355,6 +361,7 @@ public sealed partial class OnboardingSheet : ContentDialog
             ReadyDownload.Visibility = Visible(noSpeechModel && !catalogue.Downloading);
             ReadyDownloading.Visibility = Visible(noSpeechModel && catalogue.Downloading);
             TryIt.Visibility = Visible(!noSpeechModel);
+            ReadyTrayLine.Visibility = Visible(noSpeechModel);
             var stillOff = OnboardingModel.StillOff(permissions);
             StillOffLine.Text = stillOff ?? "";
             StillOffLine.Visibility = Visible(stillOff is not null);
@@ -409,12 +416,13 @@ public sealed partial class OnboardingSheet : ContentDialog
 
     /// <summary>
     /// One choice: its box, its title beside it (in the text colour: a required box is disabled,
-    /// its words are not), and under the title the models line, Windows' note and the download's
-    /// state. Every line wraps; nothing is cut.
+    /// its words are not), and under the title what it adds, a line per model, Windows' note and
+    /// the download's state. Every line wraps; nothing is cut.
     /// </summary>
     private sealed class ChoiceRow
     {
-        private readonly TextBlock line = Caption();
+        private readonly TextBlock detail = Caption();
+        private readonly StackPanel lines = new() { Spacing = 0 };
         private readonly TextBlock note = Caption();
         private readonly TextBlock status = Caption();
 
@@ -427,7 +435,8 @@ public sealed partial class OnboardingSheet : ContentDialog
             AutomationProperties.SetAccessibilityView(title, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
             var words = new StackPanel { Spacing = 2, Margin = new Thickness(0, 5, 0, 0) };
             words.Children.Add(title);
-            words.Children.Add(line);
+            words.Children.Add(detail);
+            words.Children.Add(lines);
             words.Children.Add(note);
             words.Children.Add(status);
             var root = new Grid { ColumnSpacing = 4 };
@@ -447,14 +456,28 @@ public sealed partial class OnboardingSheet : ContentDialog
         {
             Box.IsChecked = choices.IsTicked(Choice, catalogue);
             Box.IsEnabled = ModelChoices.CanTick(Choice, catalogue);
-            line.Text = ModelChoices.Line(Choice, catalogue, CultureInfo.CurrentCulture);
+            var detailText = ModelChoices.Detail(Choice);
+            detail.Text = detailText ?? "";
+            detail.Visibility = detailText is null ? Visibility.Collapsed : Visibility.Visible;
+            var modelLines = ModelChoices.Lines(Choice, catalogue, CultureInfo.CurrentCulture);
+            if (!modelLines.SequenceEqual(lines.Children.OfType<TextBlock>().Select(t => t.Text)))
+            {
+                lines.Children.Clear();
+                foreach (var text in modelLines)
+                {
+                    var line = Caption();
+                    line.Text = text;
+                    line.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["InkSecondaryTextBrush"];
+                    lines.Children.Add(line);
+                }
+            }
             var noteText = ModelChoices.Note(Choice, catalogue);
             note.Text = noteText ?? "";
             note.Visibility = noteText is null ? Visibility.Collapsed : Visibility.Visible;
             var statusText = ModelChoices.Status(Choice, catalogue, CultureInfo.CurrentCulture);
             status.Text = statusText ?? "";
             status.Visibility = statusText is null ? Visibility.Collapsed : Visibility.Visible;
-            AutomationProperties.SetHelpText(Box, string.Join(" ", new[] { line.Text, noteText, statusText }.Where(t => !string.IsNullOrEmpty(t))));
+            AutomationProperties.SetHelpText(Box, string.Join(" ", new[] { detailText, string.Join(". ", modelLines), noteText, statusText }.Where(t => !string.IsNullOrEmpty(t))));
         }
 
         private static TextBlock Caption() =>
@@ -474,12 +497,77 @@ public sealed partial class OnboardingSheet : ContentDialog
         }
     }
 
-    private void OnOwnKeyUse(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// The own key's rows: Groq's (its key, the key's line, Use Groq and what it means, what is in
+    /// use), or the other providers' (LanguageModelRows) with the way back.
+    /// </summary>
+    private void RenderOwnKey()
+    {
+        GroqRows.Visibility = Visible(!others);
+        OthersRows.Visibility = Visible(others);
+        var groq = cloud.SelectedProvider?.Id == OnboardingModel.OwnKeyProvider;
+        OwnKeyBox.IsEnabled = groq;
+        OwnKeySave.IsEnabled = groq;
+        OwnKeyStatus.Text = groq ? cloud.KeyStatus : "";
+        OwnKeyStatus.Visibility = Visible(groq);
+        OwnKeyUse.Content = cloud.UseLabel;
+        OwnKeyUse.IsEnabled = PolishModel.CanUseOwnKey(cloud);
+        OwnKeyUseNote.Text = cloud.FirstRunUseNote;
+        AutomationProperties.SetHelpText(OwnKeyUse, cloud.FirstRunUseNote);
+        OwnKeyCloudStatus.Text = cloud.Failure ?? cloud.Status;
+        OwnKeyCloudStatus.Style = (Style)Application.Current.Resources[
+            cloud.Failure is not null || cloud.ReadError is not null ? "InkAlertTextStyle" : "InkCaptionStyle"];
+    }
+
+    /// <summary>
+    /// While the disclosure is open: Groq goes in the picker if nothing is chosen or picked (it
+    /// sends nothing), once per opening, as soon as the providers are read; a provider chosen or
+    /// picked already opens the other providers' rows.
+    /// </summary>
+    private void SuggestGroq()
+    {
+        if (!OwnKeyExpander.IsExpanded || suggested || !cloud.Loaded)
+        {
+            return;
+        }
+        suggested = true;
+        cloud.Suggest(OnboardingModel.OwnKeyProvider);
+        others = cloud.FirstRunStartsOnOthers;
+    }
+
+    private void OnOwnKeyExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    {
+        suggested = false;
+        // IsExpanded turns true just after this: the suggestion waits for it.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            SuggestGroq();
+            RenderIfOpen();
+        });
+    }
+
+    private void OnOwnKeySave(object sender, RoutedEventArgs e)
     {
         // Sent once, then gone from the box: the key is never kept or shown here (as in Settings > AI).
         var key = OwnKeyBox.Password;
         OwnKeyBox.Password = "";
-        cloud.UseKey(OnboardingModel.OwnKeyProvider, key);
+        cloud.SaveKey(key);
+    }
+
+    private void OnOwnKeyUse(object sender, RoutedEventArgs e) => polish.UseOwnKey(cloud);
+
+    private void OnOthers(object sender, RoutedEventArgs e)
+    {
+        OwnKeyBox.Password = "";
+        others = true;
+        RenderIfOpen();
+    }
+
+    private void OnBackToGroq(object sender, RoutedEventArgs e)
+    {
+        cloud.PickGroq();
+        others = false;
+        RenderIfOpen();
     }
 
     private void OnConsentCancel(object sender, RoutedEventArgs e) => polish.CancelConsent();

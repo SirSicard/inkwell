@@ -45,8 +45,6 @@ public sealed class CloudModel : ObservableModel
 {
     private readonly Action<CoreCommand> send;
     private int requests;
-    /// <summary>The first run's own key, sent to be stored: its provider is chosen once the core answers that save.</summary>
-    private (string Provider, string SaveRef)? pendingUse;
     /// <summary>The newest test's ref: only its answer is shown, and none once the provider, model or key changed.</summary>
     private string? testRef;
 
@@ -178,29 +176,63 @@ public sealed class CloudModel : ObservableModel
     /// </summary>
     public bool KeyWithheld => SelectedProvider is { CustomUrl: true } p && KeyWithheldFrom(BaseUrlFor(p));
 
-    /// <summary>
-    /// The line about the key of the provider in the picker. A stored key is the Windows account's,
-    /// not this library's: Credential Manager's entry is shared by every Inkwell on the account.
-    /// </summary>
-    public string KeyStatus => SelectedProvider switch
+    /// <summary>The key's name for people: "Groq key"; a server of the user's own has a "server key".</summary>
+    public static string KeyName(CloudProvider provider)
     {
-        null => "",
-        { HasKey: true } when KeyWithheld => "A key is stored for this Windows account, in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
-        _ when KeyWithheld => "No key is sent to this server: keys go only over https or to a server on this PC.",
-        { NeedsKey: false, HasKey: false } => "No key is needed unless your server asks for one.",
-        { HasKey: true } => "A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.",
-        _ => "No key is stored yet.",
-    };
+        ArgumentNullException.ThrowIfNull(provider);
+        return provider.CustomUrl ? "server key" : $"{ProviderName(provider.Id)} key";
+    }
 
-    /// <summary>The Delete button: whose key it deletes.</summary>
-    public string DeleteKeyLabel => SelectedProvider is CloudProvider p ? $"Delete {ProviderName(p.Id)} key" : "Delete key";
+    /// <summary>"A Groq key", "An OpenAI key".</summary>
+    private static string AKey(CloudProvider provider)
+    {
+        var key = KeyName(provider);
+        return ("aeiou".Contains(char.ToLowerInvariant(key[0]), StringComparison.Ordinal) ? "An " : "A ") + key;
+    }
 
-    /// <summary>Asked before Delete deletes: which key, and for whom.</summary>
-    public string DeleteKeyQuestion => $"Delete the {(SelectedProvider is CloudProvider p ? ProviderName(p.Id) + " " : "")}key stored for this Windows account?";
+    /// <summary>
+    /// The line about the key of the provider in the picker (the Mac's words). Keys are in Windows
+    /// Credential Manager for the Windows account, shared by every Inkwell on it and never in a
+    /// library: a scratch library sees the user's own key, so the line says whose it is.
+    /// </summary>
+    public string KeyStatus
+    {
+        get
+        {
+            if (SelectedProvider is not CloudProvider p)
+            {
+                return "";
+            }
+            if (p.HasKey && KeyWithheld)
+            {
+                return $"{AKey(p)} is already saved for this Windows account, but it is not sent to this server: keys go only over https or to a server on this PC.";
+            }
+            if (KeyWithheld)
+            {
+                return "No key is sent to this server: keys go only over https or to a server on this PC.";
+            }
+            if (!p.NeedsKey && !p.HasKey)
+            {
+                return "No key is needed unless your server asks for one.";
+            }
+            return p.HasKey ? $"{AKey(p)} is already saved for this Windows account." : $"No {KeyName(p)} is saved yet.";
+        }
+    }
+
+    /// <summary>The Delete button of the provider in the picker: what it deletes, and that it asks first.</summary>
+    public string DeleteKeyLabel => SelectedProvider is CloudProvider p ? $"Delete {KeyName(p)}\u2026" : "Delete key\u2026";
+
+    /// <summary>The question Delete asks about the provider in the picker's key.</summary>
+    public string DeleteKeyQuestion => SelectedProvider is CloudProvider p
+        ? $"Delete the {KeyName(p)} from this Windows account?"
+        : "Delete the key from this Windows account?";
 
     /// <summary>What Delete deletes, said with the question.</summary>
     public const string DeleteKeyDetail =
-        "It is removed from Windows Credential Manager, so no Inkwell on this account can use it, whichever library it opens. Nothing else is deleted.";
+        "It is saved for this Windows account, not in this library: every Inkwell on this account stops using it. You can paste it again later.";
+
+    /// <summary>The question's buttons.</summary>
+    public const string DeleteKeyConfirm = "Delete Key";
 
     /// <summary>Whether the core keeps a key back from <paramref name="url"/>: plain http to a server that is not on this PC.</summary>
     public static bool KeyWithheldFrom(string url)
@@ -309,13 +341,14 @@ public sealed class CloudModel : ObservableModel
 
     /// <summary>
     /// Use: chooses the provider in the picker with its model (and address), or none. For a
-    /// provider off this PC it carries the user's say-so that local-only mode goes off.
+    /// provider off this PC it carries the user's say-so that local-only mode goes off. Whether
+    /// the choice was sent.
     /// </summary>
-    public void Use()
+    public bool Use()
     {
         if (!CanUse)
         {
-            return;
+            return false;
         }
         Failure = null;
         ForgetTest();
@@ -330,32 +363,59 @@ public sealed class CloudModel : ObservableModel
                 p.Id, model.Length == 0 ? null : model, p.CustomUrl ? BaseUrlFor(p) : null, SelectedIsCloud, NextRef("choose")));
         }
         Changed();
+        return true;
     }
 
     /// <summary>
-    /// The first run's own key: picks <paramref name="provider"/>, stores <paramref name="key"/>
-    /// and, once the core has stored it, chooses the provider with its default model, as the
-    /// picker, Save key and Use do one after another in Settings > AI. A key the core refuses
-    /// chooses nothing: the core would choose a provider without a key, turning local-only mode
-    /// off, and the choice's answer would clear the refusal from the line. Nothing is sent before
-    /// the providers are read, or without a key.
+    /// Puts <paramref name="id"/> in the picker while nothing is chosen or picked (the first run
+    /// points at Groq's free key). Nothing is sent.
     /// </summary>
-    public void UseKey(string provider, string key)
+    public void Suggest(string id)
     {
-        ArgumentNullException.ThrowIfNull(key);
-        pendingUse = null;
-        if (!Loaded || Providers.All(p => p.Id != provider))
+        if (Chosen is null && Selected is null && Providers.Any(p => p.Id == id))
         {
-            Failure = "Inkwell hasn't read its language model settings yet. Try again in a moment.";
-            Changed();
-            return;
+            Select(id);
         }
-        Select(provider);
-        SaveKey(key);
-        if (Failure is null)
+    }
+
+    /// <summary>
+    /// The first run's own key is one choice, Groq's free model (its key and Use); another provider
+    /// or model is behind "Other providers or models…". Those open first when another provider is
+    /// chosen, or picked here or in Settings > AI: the user's pick stands.
+    /// </summary>
+    public bool FirstRunStartsOnOthers => Selected is not null && Selected != "groq";
+
+    /// <summary>Back from the other providers to Groq's free model: Groq in the picker. Nothing is sent.</summary>
+    public void PickGroq()
+    {
+        if (Providers.Any(p => p.Id == "groq"))
         {
-            // SaveKey's command carries the latest ref.
-            pendingUse = (provider, $"{RefPrefix}key.save:{requests}");
+            Select("groq");
+        }
+    }
+
+    /// <summary>Where the provider in the picker would send: its address, as the consent step names it.</summary>
+    public string? SelectedEndpoint => SelectedProvider is CloudProvider p
+        ? (p.CustomUrl ? BaseUrlFor(p).TrimEnd('/') : p.Endpoint)
+        : null;
+
+    /// <summary>What Use means in the first run, where it asks polish's consent before choosing.</summary>
+    public string FirstRunUseNote
+    {
+        get
+        {
+            if (SelectedProvider is not CloudProvider p)
+            {
+                return "Pick a provider to bring your own key.";
+            }
+            var name = ProviderName(p.Id);
+            if (p.NeedsKey && !p.HasKey)
+            {
+                return $"Save your {name} key first.";
+            }
+            return SelectedIsCloud
+                ? $"Use asks first: polish sends your words to {name} only once you allow it, which also turns Local only off."
+                : "This server is on this PC, so Local only stays on. Use asks before polish uses it.";
         }
     }
 
@@ -448,16 +508,6 @@ public sealed class CloudModel : ObservableModel
                 {
                     Select(Chosen);
                 }
-                // The first run's key is stored: now its provider is chosen.
-                if (pendingUse is var (provider, saveRef) && state.Ref == saveRef)
-                {
-                    pendingUse = null;
-                    if (Providers.Any(p => p.Id == provider && p.HasKey))
-                    {
-                        Select(provider);
-                        Use();
-                    }
-                }
                 return true;
             case LlmTested tested when tested.Ref is not null && tested.Ref == testRef:
                 TestState = tested.Ok ? CloudTestState.Passed : CloudTestState.Failed;
@@ -466,11 +516,6 @@ public sealed class CloudModel : ObservableModel
                     : $"{Sentence(tested.Error ?? "couldn't get an answer")}.";
                 return true;
             case CommandFailed failed when Handles(failed):
-                if (pendingUse is (_, var pendingRef) && failed.Id == pendingRef)
-                {
-                    // The first run's key was refused: nothing is chosen.
-                    pendingUse = null;
-                }
                 if (failed.Command == "llm.test")
                 {
                     if (failed.Id != testRef)

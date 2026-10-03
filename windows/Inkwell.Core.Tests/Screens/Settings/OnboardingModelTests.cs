@@ -177,7 +177,7 @@ public class OnboardingModelTests
         // This catalogue lists Silero VAD, Qwen3-ASR and the diarizer (installed), no Parakeet.
         Assert.Equal(["speech", "accuracy", "speakers"], ModelChoices.Shown(catalogue).Select(c => c.Id));
         Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speakers, catalogue, CultureInfo.InvariantCulture));
-        Assert.StartsWith("Inkwell turns speech into text with models that run on this PC.", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
+        Assert.StartsWith("Inkwell writes down speech with models that run on this PC.", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
         Assert.Equal("Download 1.22 MB", onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture));
         Assert.Equal(
             "Download Silero VAD: 1.22 MB in all, from raw.githubusercontent.com",
@@ -221,7 +221,7 @@ public class OnboardingModelTests
         Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
         // A choice installed this run says so.
         Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speech, catalogue, CultureInfo.InvariantCulture));
-        Assert.StartsWith("Inkwell turns speech into text", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
+        Assert.StartsWith("Inkwell writes down speech", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
         screens.Apply([CatalogueDownloadTests.Finished("qwen3-asr-1.7b-q8", ok: true)]);
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
         Assert.False(catalogue.Downloading);
@@ -238,14 +238,20 @@ public class OnboardingModelTests
         Assert.Null(new ModelChoices().DownloadTitle(catalogue, CultureInfo.InvariantCulture));
     }
 
-    /// <summary>The own key is one choice: its line ends in the link's host (the view makes that part the link).</summary>
+    /// <summary>The own key is one choice, in the Mac's words: its sentence carries the link's host.</summary>
     [Fact]
-    public void TheOwnKeyIsOneChoiceWithItsLinkInTheLine()
+    public void TheOwnKeyIsOneChoiceWithItsLinkInTheSentence()
     {
-        Assert.Equal("Use Groq's free model: get a key at console.groq.com", OnboardingModel.OwnKeyLine);
-        Assert.EndsWith(OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyLine, StringComparison.Ordinal);
+        Assert.Equal("Use Groq's free model", OnboardingModel.OwnKeyTitle);
+        Assert.Equal(
+            "Groq's free tier covers ordinary personal use and needs no credit card. Sign in at console.groq.com, create a key under API Keys and paste it here.",
+            OnboardingModel.OwnKeyLead);
+        Assert.Contains(OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyLead, StringComparison.Ordinal);
         Assert.Equal("https://" + OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyUrl);
-        Assert.Equal("Save", OnboardingModel.OwnKeyButton);
+        Assert.Equal("Paste your Groq key", OnboardingModel.OwnKeyPlaceholder);
+        Assert.Equal("Save", OnboardingModel.OwnKeySave);
+        Assert.Equal("Other providers or models\u2026", OnboardingModel.OtherProviders);
+        Assert.Equal("Back to Groq's free model", OnboardingModel.BackToGroq);
     }
 
 
@@ -255,7 +261,9 @@ public class OnboardingModelTests
     {
         Assert.StartsWith("Hold Right Ctrl, say something, and let go.", OnboardingModel.ReadyLine("Right Ctrl"), StringComparison.Ordinal);
         var line = OnboardingModel.ReadyLine("Right Ctrl", noSpeechModel: true);
-        Assert.StartsWith("Inkwell needs a speech model before it can write anything down", line, StringComparison.Ordinal);
+        Assert.Equal("Inkwell needs a speech model before it can type what you say.", line);
+        Assert.Equal("Inkwell lives in the notification area; this window opens from there.", OnboardingModel.TrayLine);
+        Assert.EndsWith(OnboardingModel.TrayLine, OnboardingModel.ReadyLine("Right Ctrl"), StringComparison.Ordinal);
         Assert.DoesNotContain("Hold", line, StringComparison.Ordinal);
         Assert.Equal("Download recommended models", NeedsYou.DownloadModelsTitle);
     }

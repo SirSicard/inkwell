@@ -1,6 +1,6 @@
 // The first run's models step as choices by outcome, not by model: what Inkwell can do with each,
-// the models it takes in a small line under it (name, licence, size and host), and one Download
-// whose title carries the total of what is chosen. The first choice is the recommended set and is
+// what it adds in the user's terms, then each model it takes on a line of its own (name, licence,
+// size and host, the Mac's words), and one Download whose title carries the total of what is chosen. The first choice is the recommended set and is
 // always taken; the other two stay off until ticked. Nothing downloads until Download is pressed,
 // and the downloads are the CatalogueModel's (they go on after the sheet). Settings > Models keeps
 // a row and a Download per model.
@@ -67,29 +67,43 @@ public sealed class ModelChoices : ObservableModel
     }
 
     /// <summary>
-    /// The small line under a choice: each model with its licence, the size and where it comes
-    /// from. "Silero VAD (MIT) and Parakeet TDT v3 (CC-BY-4.0) · 640 MB from raw.githubusercontent.com and huggingface.co".
+    /// Under a choice, one line per model it takes, smallest first (the order they download in):
+    /// "Parakeet TDT v3 · CC-BY-4.0 · 639 MB · from huggingface.co" (sizes in Windows' units).
     /// </summary>
-    public static string Line(ModelChoice choice, CatalogueModel catalogue, IFormatProvider? format = null)
+    public static IReadOnlyList<string> Lines(ModelChoice choice, CatalogueModel catalogue, IFormatProvider? format = null)
     {
         ArgumentNullException.ThrowIfNull(choice);
-        var rows = Rows(choice, catalogue);
-        return $"{And(rows.Select(r => $"{r.Name} ({r.Entry.Licence})"))} · {StorageModel.Size(rows.Sum(r => r.Entry.SizeBytes), format)} from {And(rows.Select(r => CatalogueModel.Source(r.Id)).Distinct())}";
+        return Rows(choice, catalogue)
+            .OrderBy(r => r.Entry.SizeBytes)
+            .Select(r => $"{r.Name} · {r.Entry.Licence} · {StorageModel.Size(r.Entry.SizeBytes, format)} · from {CatalogueModel.Source(r.Id)}")
+            .ToList();
     }
 
-    /// <summary>What a choice adds that its title does not say, on Windows; null when nothing.</summary>
+    /// <summary>
+    /// What a choice adds over the set, in the user's terms (the Mac's words; on Windows the meeting
+    /// model's final pass too); null for the set.
+    /// </summary>
+    public static string? Detail(ModelChoice choice)
+    {
+        ArgumentNullException.ThrowIfNull(choice);
+        if (choice == Accuracy)
+        {
+            return "About a third fewer wrong words in dictation and meetings, and it gives meetings their final pass.";
+        }
+        return choice == Speakers ? "Speaker 1, Speaker 2 instead of \u201CThem\u201D." : null;
+    }
+
+    /// <summary>
+    /// Windows' honest line under the set while the meeting model is not in: Windows' Parakeet has
+    /// no final pass for meetings. Null otherwise, and for the other choices.
+    /// </summary>
     public static string? Note(ModelChoice choice, CatalogueModel catalogue)
     {
         ArgumentNullException.ThrowIfNull(choice);
         ArgumentNullException.ThrowIfNull(catalogue);
-        if (choice == Speech)
-        {
-            // Windows' Parakeet has no final pass for meetings: said plainly while Qwen3-ASR is not in.
-            return catalogue.Rows.FirstOrDefault(r => r.Id == QwenId) is { Installed: false }
-                ? "On Windows, a meeting keeps this live transcript until the meeting model, under Fewer mistakes, is added."
-                : null;
-        }
-        return choice == Accuracy ? "On Windows this is also the meeting model: it gives a meeting its final pass." : null;
+        return choice == Speech && catalogue.Rows.FirstOrDefault(r => r.Id == QwenId) is { Installed: false }
+            ? "On Windows, a meeting keeps this live transcript until the meeting model, under Fewer mistakes, is added."
+            : null;
     }
 
     /// <summary>Whether every model a choice takes is on this PC.</summary>

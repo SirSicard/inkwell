@@ -198,6 +198,18 @@ public abstract record CoreCommand
     }
 
     /// <summary>
+    /// Asks whether this computer can watch <paramref name="Binding"/> as a dictation or edit key
+    /// (the shortcut recorder, before it stores one). Answered by hotkey.checked with the ref: its
+    /// canonical spelling, or why not; or a command.failed with it as the id.
+    /// </summary>
+    public sealed record HotkeyCheck(string Binding, string Ref) : CoreCommand
+    {
+        public override string Name => "hotkey.check";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("binding", Binding), ("id", Ref)];
+    }
+
+    /// <summary>
     /// Deletes a record whole, only after the user confirmed it. Answered by record.deleted with
     /// the ref, or a command.failed with it as the id (a record still live is refused).
     /// </summary>

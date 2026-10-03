@@ -112,26 +112,46 @@
                     OnContent=""
                     Toggled="OnPolishToggled" />
                 <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-                <!-- While this PC has no language model: Groq's free key, through Settings > AI's
-                     flow (CloudModel.UseKey: pick, save the key, use). -->
-                <!-- One choice: the line (its link inline), the key box under it with Save. -->
-                <StackPanel x:Name="OwnKeyPanel" Spacing="8">
-                    <TextBlock x:Name="OwnKeyLine" Style="{StaticResource InkBodyStyle}" TextWrapping="Wrap">
-                        <Run x:Name="OwnKeyLead" /><Hyperlink x:Name="OwnKeyLink" />
-                    </TextBlock>
-                    <!-- A key already stored is the Windows account's: said, so it is no surprise. -->
-                    <TextBlock x:Name="StoredKeyLine" Style="{StaticResource InkCaptionStyle}" />
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <PasswordBox x:Name="OwnKeyBox" />
-                        <Button x:Name="OwnKeyUse" Grid.Column="1" Click="OnOwnKeyUse" Style="{StaticResource InkAccentButtonStyle}" />
-                    </Grid>
-                    <TextBlock x:Name="OwnKeyNote" Style="{StaticResource InkCaptionStyle}" />
-                    <TextBlock x:Name="OwnKeyStatus" Style="{StaticResource InkAlertTextStyle}" />
-                </StackPanel>
+                <!-- The own key as one choice (the Mac's): Groq's free model behind a disclosure, its
+                     key with Save (stored, nothing more), and Use Groq, which asks polish's consent
+                     before it chooses Groq (PolishModel.UseOwnKey). Another provider or model is
+                     behind "Other providers or models…": Settings > AI's rows, with the same consent. -->
+                <Expander
+                    x:Name="OwnKeyExpander"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Expanding="OnOwnKeyExpanding">
+                    <StackPanel Spacing="8">
+                        <StackPanel x:Name="GroqRows" Spacing="8">
+                            <TextBlock Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap">
+                                <Run x:Name="OwnKeyLeadStart" /><Hyperlink x:Name="OwnKeyLink" /><Run x:Name="OwnKeyLeadEnd" />
+                            </TextBlock>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <PasswordBox x:Name="OwnKeyBox" />
+                                <Button x:Name="OwnKeySave" Grid.Column="1" Click="OnOwnKeySave" />
+                            </Grid>
+                            <TextBlock x:Name="OwnKeyStatus" Style="{StaticResource InkCaptionStyle}" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="OwnKeyUse" VerticalAlignment="Top" Click="OnOwnKeyUse" Style="{StaticResource InkAccentButtonStyle}" />
+                                <TextBlock x:Name="OwnKeyUseNote" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource InkCaptionStyle}" />
+                            </Grid>
+                            <TextBlock x:Name="OwnKeyCloudStatus" Style="{StaticResource InkCaptionStyle}" />
+                            <HyperlinkButton x:Name="OthersLink" Padding="0" Click="OnOthers" />
+                        </StackPanel>
+                        <StackPanel x:Name="OthersRows" Spacing="8">
+                            <ContentPresenter x:Name="OthersHost" />
+                            <HyperlinkButton x:Name="BackToGroqLink" Padding="0" Click="OnBackToGroq" />
+                        </StackPanel>
+                    </StackPanel>
+                </Expander>
                 <!-- Polish's consent step, inside the sheet. Only its agreeing button sends anything. -->
                 <Border x:Name="ConsentCard" Style="{StaticResource InkCardStyle}">
                     <StackPanel Spacing="10">
@@ -151,6 +171,7 @@
                 <!-- With no speech model: Today's one action, or that the download runs. -->
                 <Button x:Name="ReadyDownload" Click="OnReadyDownload" Style="{StaticResource InkAccentButtonStyle}" />
                 <TextBlock x:Name="ReadyDownloading" Style="{StaticResource InkCaptionStyle}" />
+                <TextBlock x:Name="ReadyTrayLine" Style="{StaticResource InkReadingStyle}" />
                 <!-- Try it: the orb answers the voice, and the words land in the box. -->
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>

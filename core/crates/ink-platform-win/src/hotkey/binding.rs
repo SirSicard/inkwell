@@ -6,7 +6,13 @@
 //!   (`VK_RCONTROL`, `VK_RMENU`...), so the right-hand key is watched on its own. Left-hand
 //!   modifiers alone are not offered: watching left Ctrl would start a hold on every Ctrl+C.
 //! - **A chord:** modifiers and one key, `"ctrl+shift+space"`, `"alt+d"`, or a function key alone,
-//!   `"f13"`. A typing key needs at least one modifier, or the hook would swallow it.
+//!   `"f13"`. Any other key needs at least one modifier, or the hook would swallow it everywhere.
+//!   The keys are named as the Mac names them ([`NAMED_KEYS`]: arrows, Delete, Home and End,
+//!   Page Up and Down, the punctuation keys by their US position), plus `oem_102`, the extra key
+//!   by left Shift on ISO keyboards.
+//!
+//! A token Windows cannot watch is refused with a reason in plain words ([`refusal`], the Mac's
+//! list in Windows' terms), which the shell shows as it is.
 //!
 //! **Fn is not offered:** the keyboard handles it in firmware and Windows never sees it. The
 //! Windows default is [`DEFAULT_BINDING`], right Ctrl: it is on full-size and most laptop
@@ -45,6 +51,10 @@ pub(crate) mod vk {
     pub const ESCAPE: u32 = 0x1B;
     /// `VK_V`: the paste key.
     pub const V: u32 = 0x56;
+    /// The left-hand modifiers, as the hook reports them (a chord's modifier coming up).
+    pub const LCONTROL: u32 = 0xA2;
+    pub const LSHIFT: u32 = 0xA0;
+    pub const LMENU: u32 = 0xA4;
     /// `VK_F1`; F1 to F24 are consecutive.
     pub const F1: u32 = 0x70;
 }
@@ -114,65 +124,10 @@ pub(crate) enum Binding {
 }
 
 impl Binding {
-    /// Parses a platform token. Anything Windows cannot bind is [`PlatformError::Unsupported`].
+    /// Parses a platform token. Anything Windows cannot bind is [`PlatformError::Unsupported`],
+    /// with a [`refusal`] reason.
     pub(crate) fn parse(token: &str) -> Result<Self, PlatformError> {
-        let token = token.trim().to_ascii_lowercase();
-        if token.is_empty() {
-            return Err(PlatformError::Unsupported("an empty hotkey"));
-        }
-        if token == "fn" {
-            return Err(PlatformError::Unsupported(
-                "the Fn key never reaches Windows; pick another key",
-            ));
-        }
-        if !token.contains('+') {
-            if let Some(key) = modifier_key(&token)? {
-                return Ok(Self::Modifier(key));
-            }
-            if let Some(code) = function_key(&token) {
-                return Ok(Self::Chord(Chord {
-                    modifiers: 0,
-                    vk: code,
-                }));
-            }
-            if key_code(&token).is_some() {
-                return Err(PlatformError::Unsupported(
-                    "a hotkey on a typing key needs a modifier",
-                ));
-            }
-            return Err(PlatformError::Unsupported("an unknown hotkey token"));
-        }
-        let parts: Vec<&str> = token.split('+').map(str::trim).collect();
-        let Some((key, modifiers)) = parts.split_last() else {
-            return Err(PlatformError::Unsupported("an empty hotkey"));
-        };
-        if key.is_empty() || modifiers.iter().any(|m| m.is_empty()) {
-            return Err(PlatformError::Unsupported("a hotkey with an empty part"));
-        }
-        let mut bits = 0u8;
-        for name in modifiers {
-            let bit = chord_modifier(name).ok_or(PlatformError::Unsupported(
-                "an unknown modifier in a hotkey chord",
-            ))?;
-            if bits & bit != 0 {
-                return Err(PlatformError::Unsupported(
-                    "a repeated modifier in a hotkey",
-                ));
-            }
-            bits |= bit;
-        }
-        let code = key_code(key).ok_or(PlatformError::Unsupported(
-            "an unknown key in a hotkey chord",
-        ))?;
-        // Shift and any key but a function key already does something everywhere; the hook
-        // would swallow it (as on the Mac).
-        if bits == modifier::SHIFT && function_key(key).is_none() {
-            return Err(PlatformError::Unsupported(SHIFT_TYPES));
-        }
-        Ok(Self::Chord(Chord {
-            modifiers: bits,
-            vk: code,
-        }))
+        parse_token(token).map_err(PlatformError::Unsupported)
     }
 
     /// The one spelling of this binding (`hotkey::check`): a modifier's token, or a chord's
@@ -194,8 +149,110 @@ impl Binding {
     }
 }
 
-/// Why Shift goes only with a function key.
-pub(crate) const SHIFT_TYPES: &str = "Shift with that key already does something everywhere (a capital, a symbol, selecting text); add Ctrl, Alt or Win";
+/// Why a token is refused, in plain words the shell shows after "Can't use X: " (the Mac's list,
+/// in Windows' terms).
+pub(crate) mod refusal {
+    pub const EMPTY: &str = "no key was given";
+    /// A letter, digit, arrow... alone: the hook would swallow it everywhere.
+    pub const KEY_ALONE: &str =
+        "that key on its own would stop working everywhere else; add Ctrl, Alt or Win";
+    /// Shift and any key but a function key already does something everywhere: a capital, a
+    /// symbol, selecting text, a back-tab. The hook would swallow it.
+    pub const SHIFT_TYPES: &str = "Shift with that key already does something everywhere (a capital, a symbol, selecting text); add Ctrl, Alt or Win";
+    /// Watching left Ctrl would start a hold on every Ctrl+C in every app.
+    pub const LEFT_MODIFIER_ALONE: &str = "a left-hand modifier on its own would start dictation with every shortcut that uses it; use a right-hand one, or add a key";
+    pub const MODIFIERS_ONLY: &str = "modifiers together need a key with them; hold one right-hand modifier on its own, or add a key";
+    /// Caps Lock reports a switch, not a hold.
+    pub const CAPS_LOCK: &str = "Caps Lock switches on and off instead of being held";
+    /// The keyboard handles Fn in its firmware.
+    pub const FN: &str =
+        "the keyboard handles the Fn key itself and never tells Windows; pick another key";
+    /// Its place on a Windows keyboard is the Windows key, which most keyboards lack on the right.
+    pub const NO_COMMAND: &str = "there is no Command key on Windows; use Win, or pick another key";
+    pub const UNKNOWN_KEY: &str = "Inkwell doesn't know that key";
+    pub const UNKNOWN_MODIFIER: &str = "one of the modifiers isn't one Inkwell knows";
+    pub const REPEATED_MODIFIER: &str = "a modifier is named twice";
+    pub const EMPTY_PART: &str = "a part of the shortcut is empty";
+}
+
+fn parse_token(token: &str) -> Result<Binding, &'static str> {
+    let token = token.trim().to_ascii_lowercase();
+    if token.is_empty() {
+        return Err(refusal::EMPTY);
+    }
+    if !token.contains('+') {
+        if let Some(key) = modifier_key(&token)? {
+            return Ok(Binding::Modifier(key));
+        }
+        if let Some(code) = function_key(&token) {
+            return Ok(Binding::Chord(Chord {
+                modifiers: 0,
+                vk: code,
+            }));
+        }
+        return Err(if token == "fn" {
+            refusal::FN
+        } else if is_command(&token) {
+            refusal::NO_COMMAND
+        } else if is_modifier_name(&token) {
+            refusal::LEFT_MODIFIER_ALONE
+        } else if token == "caps_lock" || token == "capslock" {
+            refusal::CAPS_LOCK
+        } else if key_code(&token).is_some() {
+            refusal::KEY_ALONE
+        } else {
+            refusal::UNKNOWN_KEY
+        });
+    }
+    let parts: Vec<&str> = token.split('+').map(str::trim).collect();
+    let Some((key, modifiers)) = parts.split_last() else {
+        return Err(refusal::EMPTY);
+    };
+    if key.is_empty() || modifiers.iter().any(|m| m.is_empty()) {
+        return Err(refusal::EMPTY_PART);
+    }
+    let mut bits = 0u8;
+    for name in modifiers {
+        if *name == "fn" {
+            return Err(refusal::FN);
+        }
+        if is_command(name) {
+            return Err(refusal::NO_COMMAND);
+        }
+        let Some(bit) = chord_modifier(name) else {
+            return Err(refusal::UNKNOWN_MODIFIER);
+        };
+        if bits & bit != 0 {
+            return Err(refusal::REPEATED_MODIFIER);
+        }
+        bits |= bit;
+    }
+    // Keys that are never a chord's key say why, as they do alone.
+    if *key == "fn" {
+        return Err(refusal::FN);
+    }
+    if *key == "caps_lock" || *key == "capslock" {
+        return Err(refusal::CAPS_LOCK);
+    }
+    if is_command(key) {
+        return Err(refusal::NO_COMMAND);
+    }
+    if is_modifier_name(key) || matches!(modifier_key(key), Ok(Some(_))) {
+        return Err(refusal::MODIFIERS_ONLY);
+    }
+    let Some(code) = key_code(key) else {
+        return Err(refusal::UNKNOWN_KEY);
+    };
+    // Shift and any key but a function key already does something everywhere; the hook would
+    // swallow it (as on the Mac).
+    if bits == modifier::SHIFT && function_key(key).is_none() {
+        return Err(refusal::SHIFT_TYPES);
+    }
+    Ok(Binding::Chord(Chord {
+        modifiers: bits,
+        vk: code,
+    }))
+}
 
 /// A chord's modifiers in the order a canonical token spells them.
 const CHORD_ORDER: [(u8, &str); 4] = [
@@ -207,31 +264,100 @@ const CHORD_ORDER: [(u8, &str); 4] = [
 
 /// The canonical name of a key [`key_code`] gave.
 fn key_name(code: u32) -> String {
+    if let Some((name, _)) = NAMED_KEYS.iter().find(|(_, c)| *c == code) {
+        return (*name).to_owned();
+    }
     match code {
-        vk::SPACE => "space".to_owned(),
-        vk::RETURN => "return".to_owned(),
-        vk::TAB => "tab".to_owned(),
-        vk::ESCAPE => "escape".to_owned(),
         f if (vk::F1..vk::F1 + 24).contains(&f) => format!("f{}", f - vk::F1 + 1),
         // VK_A..VK_Z and VK_0..VK_9 are the ASCII codes of the upper-case letter and the digit.
         c => char::from_u32(c).map_or_else(String::new, |c| c.to_ascii_lowercase().to_string()),
     }
 }
 
-fn modifier_key(token: &str) -> Result<Option<RightModifier>, PlatformError> {
+fn modifier_key(token: &str) -> Result<Option<RightModifier>, &'static str> {
     Ok(Some(match token {
         "right_control" | "right_ctrl" => RightModifier::Control,
         "right_alt" | "right_option" | "right_opt" | "altgr" => RightModifier::Alt,
         "right_shift" => RightModifier::Shift,
         "right_win" | "right_super" => RightModifier::Win,
-        "right_command" | "right_cmd" => {
-            return Err(PlatformError::Unsupported(
-                "there is no Command key on Windows; pick another key",
-            ));
-        }
+        "right_command" | "right_cmd" => return Err(refusal::NO_COMMAND),
         _ => return Ok(None),
     }))
 }
+
+/// The Mac's Command, by any of its names and sides.
+fn is_command(name: &str) -> bool {
+    let unsided = name
+        .strip_prefix("left_")
+        .or_else(|| name.strip_prefix("right_"))
+        .unwrap_or(name);
+    matches!(unsided, "cmd" | "command")
+}
+
+/// A modifier named without a side, or by its left-hand key: never watched on its own, and never
+/// a chord's key.
+fn is_modifier_name(name: &str) -> bool {
+    chord_modifier(name.strip_prefix("left_").unwrap_or(name)).is_some()
+}
+
+/// Keys named in words, past letters, digits and function keys: (canonical name, virtual key).
+/// The names are the Mac's (`delete` is the key left of the backspace-arrow, Backspace on a PC;
+/// `forward_delete` is Delete), so a token reads the same on both; the punctuation keys are named
+/// by what they type on a US layout, as Windows' `VK_OEM_*` codes are, wherever the user's layout
+/// puts other characters on them.
+pub(crate) const NAMED_KEYS: &[(&str, u32)] = &[
+    ("space", vk::SPACE),
+    ("return", vk::RETURN),
+    ("tab", vk::TAB),
+    ("escape", vk::ESCAPE),
+    ("delete", 0x08),
+    ("forward_delete", 0x2E),
+    ("left", 0x25),
+    ("right", 0x27),
+    ("down", 0x28),
+    ("up", 0x26),
+    ("home", 0x24),
+    ("end", 0x23),
+    ("page_up", 0x21),
+    ("page_down", 0x22),
+    ("minus", 0xBD),
+    ("equal", 0xBB),
+    ("left_bracket", 0xDB),
+    ("right_bracket", 0xDD),
+    ("backslash", 0xDC),
+    ("semicolon", 0xBA),
+    ("quote", 0xDE),
+    ("comma", 0xBC),
+    ("period", 0xBE),
+    ("slash", 0xBF),
+    ("grave", 0xC0),
+    // VK_OEM_102: the extra key by left Shift on ISO keyboards (< > on many layouts).
+    ("oem_102", 0xE2),
+];
+
+/// Other spellings of [`NAMED_KEYS`]: the character a punctuation key types unshifted on a US
+/// layout, and the names Windows and other apps use.
+const KEY_ALIASES: &[(&str, &str)] = &[
+    ("enter", "return"),
+    ("esc", "escape"),
+    ("backspace", "delete"),
+    ("del", "forward_delete"),
+    ("pageup", "page_up"),
+    ("pagedown", "page_down"),
+    ("pgup", "page_up"),
+    ("pgdn", "page_down"),
+    ("-", "minus"),
+    ("=", "equal"),
+    ("[", "left_bracket"),
+    ("]", "right_bracket"),
+    ("\\", "backslash"),
+    (";", "semicolon"),
+    ("'", "quote"),
+    (",", "comma"),
+    (".", "period"),
+    ("/", "slash"),
+    ("`", "grave"),
+];
 
 fn chord_modifier(name: &str) -> Option<u8> {
     Some(match name {
@@ -252,12 +378,12 @@ fn key_code(name: &str) -> Option<u32> {
     if let Some(code) = function_key(name) {
         return Some(code);
     }
-    match name {
-        "space" => return Some(vk::SPACE),
-        "return" | "enter" => return Some(vk::RETURN),
-        "tab" => return Some(vk::TAB),
-        "escape" | "esc" => return Some(vk::ESCAPE),
-        _ => {}
+    let name = KEY_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == name)
+        .map_or(name, |(_, canonical)| *canonical);
+    if let Some((_, code)) = NAMED_KEYS.iter().find(|(n, _)| *n == name) {
+        return Some(*code);
     }
     let mut chars = name.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else {
@@ -310,6 +436,115 @@ mod tests {
         assert_eq!(m("right_win"), Binding::Modifier(RightModifier::Win));
         assert_eq!(RightModifier::Control.vk(), vk::RCONTROL);
         assert_eq!(RightModifier::Alt.vk(), vk::RMENU);
+    }
+
+    fn refused(token: &str) -> &'static str {
+        match Binding::parse(token) {
+            Err(PlatformError::Unsupported(why)) => why,
+            other => panic!("{token:?} parsed as {other:?}"),
+        }
+    }
+
+    /// Every refusal says why in plain words, as the Mac's do, in Windows' terms.
+    #[test]
+    fn refusals_say_why_in_plain_words() {
+        let cases = [
+            ("", refusal::EMPTY),
+            ("   ", refusal::EMPTY),
+            ("a", refusal::KEY_ALONE),
+            ("space", refusal::KEY_ALONE),
+            ("left", refusal::KEY_ALONE),
+            ("page_down", refusal::KEY_ALONE),
+            ("slash", refusal::KEY_ALONE),
+            ("left_alt", refusal::LEFT_MODIFIER_ALONE),
+            ("left_control", refusal::LEFT_MODIFIER_ALONE),
+            ("left_ctrl", refusal::LEFT_MODIFIER_ALONE),
+            ("left_shift", refusal::LEFT_MODIFIER_ALONE),
+            ("left_win", refusal::LEFT_MODIFIER_ALONE),
+            ("alt", refusal::LEFT_MODIFIER_ALONE),
+            ("ctrl", refusal::LEFT_MODIFIER_ALONE),
+            ("win", refusal::LEFT_MODIFIER_ALONE),
+            ("ctrl+shift", refusal::MODIFIERS_ONLY),
+            ("ctrl+alt+win", refusal::MODIFIERS_ONLY),
+            ("ctrl+right_shift", refusal::MODIFIERS_ONLY),
+            ("alt+left_ctrl", refusal::MODIFIERS_ONLY),
+            ("caps_lock", refusal::CAPS_LOCK),
+            ("capslock", refusal::CAPS_LOCK),
+            ("fn", refusal::FN),
+            ("fn+f5", refusal::FN),
+            ("right_command", refusal::NO_COMMAND),
+            ("cmd", refusal::NO_COMMAND),
+            ("left_command", refusal::NO_COMMAND),
+            ("cmd+space", refusal::NO_COMMAND),
+            ("right_command+space", refusal::NO_COMMAND),
+            ("right_cmd+space", refusal::NO_COMMAND),
+            ("ctrl+right_cmd", refusal::NO_COMMAND),
+            ("ctrl+cmd", refusal::NO_COMMAND),
+            ("ctrl+fn", refusal::FN),
+            ("ctrl+caps_lock", refusal::CAPS_LOCK),
+            ("ctrl+nosuchkey", refusal::UNKNOWN_KEY),
+            ("nosuchkey", refusal::UNKNOWN_KEY),
+            ("f25", refusal::UNKNOWN_KEY),
+            ("hyper+a", refusal::UNKNOWN_MODIFIER),
+            ("ctrl+ctrl+a", refusal::REPEATED_MODIFIER),
+            ("ctrl+control+a", refusal::REPEATED_MODIFIER),
+            ("ctrl+", refusal::EMPTY_PART),
+            ("+a", refusal::EMPTY_PART),
+            ("shift+a", refusal::SHIFT_TYPES),
+            ("shift+left", refusal::SHIFT_TYPES),
+        ];
+        for (token, why) in cases {
+            assert_eq!(refused(token), why, "{token:?}");
+        }
+        // The core's Windows test reads "Fn" in the refusal of the Mac's default.
+        assert!(refusal::FN.contains("Fn"));
+    }
+
+    /// The Mac's key names parse on Windows to their virtual keys, and each reads back as one
+    /// canonical name; the aliases (a punctuation key's character, Windows' own names) too.
+    #[test]
+    fn the_named_keys_parse_and_read_back() {
+        for (name, code) in NAMED_KEYS {
+            let token = format!("ctrl+{name}");
+            assert_eq!(chord(&token).vk, *code, "{name}");
+            assert_eq!(Binding::parse(&token).unwrap().canonical(), token);
+        }
+        let cases = [
+            ("ctrl+left", 0x25),
+            ("ctrl+up", 0x26),
+            ("alt+page_up", 0x21),
+            ("alt+pageup", 0x21),
+            ("ctrl+pgdn", 0x22),
+            ("ctrl+home", 0x24),
+            ("ctrl+end", 0x23),
+            ("ctrl+backspace", 0x08),
+            ("ctrl+del", 0x2E),
+            ("ctrl+-", 0xBD),
+            ("ctrl+=", 0xBB),
+            ("ctrl+[", 0xDB),
+            ("ctrl+]", 0xDD),
+            ("ctrl+\\", 0xDC),
+            ("ctrl+;", 0xBA),
+            ("ctrl+'", 0xDE),
+            ("ctrl+,", 0xBC),
+            ("ctrl+.", 0xBE),
+            ("ctrl+/", 0xBF),
+            ("ctrl+`", 0xC0),
+            ("ctrl+oem_102", 0xE2),
+        ];
+        for (token, code) in cases {
+            assert_eq!(chord(token).vk, code, "{token}");
+        }
+        assert_eq!(
+            Binding::parse("ctrl+backspace").unwrap().canonical(),
+            "ctrl+delete"
+        );
+        assert_eq!(
+            Binding::parse("ctrl+del").unwrap().canonical(),
+            "ctrl+forward_delete"
+        );
+        assert_eq!(Binding::parse("alt+,").unwrap().canonical(), "alt+comma");
+        assert_eq!(Binding::parse("shift+f5").unwrap().canonical(), "shift+f5");
     }
 
     #[test]
@@ -391,7 +626,7 @@ mod tests {
         ] {
             assert_eq!(
                 Binding::parse(token),
-                Err(PlatformError::Unsupported(SHIFT_TYPES)),
+                Err(PlatformError::Unsupported(refusal::SHIFT_TYPES)),
                 "{token}"
             );
         }

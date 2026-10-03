@@ -91,7 +91,7 @@ public class CloudModelTests
         var before = sent.Commands.Count;
         cloud.Select("openai");
         Assert.Equal(before, sent.Commands.Count);
-        Assert.Equal("No key is stored yet.", cloud.KeyStatus);
+        Assert.Equal("No OpenAI key is saved yet.", cloud.KeyStatus);
         Assert.True(cloud.SelectedIsCloud);
         Assert.Equal(
             "Using OpenAI turns local-only mode off, so the features below can send to OpenAI. Each one sends only once you allow it for OpenAI; one you already allowed for OpenAI sends again straight away.",
@@ -110,7 +110,7 @@ public class CloudModelTests
         Assert.DoesNotContain(Key, save.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(Key, save.Name, StringComparison.Ordinal);
         cloud.Apply(Providers(keyed: ["openai"], reference: save.Ref));
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
+        Assert.Equal("An OpenAI key is already saved for this Windows account.", cloud.KeyStatus);
         Assert.Equal("openai", cloud.Selected); // saving a key keeps the picker where it was
 
         cloud.DraftModel = " gpt-synthetic ";
@@ -128,52 +128,139 @@ public class CloudModelTests
     }
 
     /// <summary>
-    /// The first run's own key (onboarding's Polish step): one press picks the provider and stores
-    /// the key once; only once the core has stored it is the provider chosen, with its default
-    /// model (the commands Settings > AI's picker, Save key and Use send). A key the core refuses
-    /// chooses nothing, so local-only mode stays on, and the refusal stays shown. No key, or
-    /// providers not read yet, sends nothing and says so.
+    /// The first run's own key, the Mac's final flow: Groq is suggested in the picker; Save only
+    /// stores the key; Use Groq asks polish's consent for Groq before anything is chosen; Cancel
+    /// sends nothing; Allow chooses Groq (with the say-so that local-only mode goes off) and,
+    /// once the core names Groq as polish's destination, sends the consent.
     /// </summary>
     [Fact]
-    public void TheFirstRunsOwnKeyIsChosenOnlyOnceTheCoreHasStoredIt()
+    public void TheFirstRunsOwnKeyIsChosenOnlyWithPolishsConsent()
     {
-        var early = new Sent();
-        var unread = new CloudModel(early.Send);
-        unread.UseKey("groq", Key);
-        Assert.Empty(early.Commands);
-        Assert.NotNull(unread.Failure);
-
-        var (cloud, sent) = Loaded();
-        var before = sent.Commands.Count;
-        cloud.UseKey("groq", "  ");
-        Assert.Equal(before, sent.Commands.Count);
-        Assert.Equal("Type or paste the key first.", cloud.Failure);
-
-        // Refused: nothing is chosen, and the refusal survives the providers read after it.
-        cloud.UseKey("groq", Key);
-        var refused = Assert.IsType<CoreCommand.LlmKeySave>(sent.Commands[^1]);
-        Assert.Equal(before + 1, sent.Commands.Count);
-        cloud.Apply(Ev.Of($$"""{"type":"command.failed","command":"llm.key.save","id":"{{refused.Ref}}","message":"couldn't store the key"}"""));
+        var sent = new Sent();
+        var cloud = new CloudModel(sent.Send);
+        var polish = new PolishModel(sent.Send);
+        cloud.Suggest("groq");
+        Assert.Null(cloud.Selected); // nothing to suggest before the providers are read
         cloud.Apply(Providers());
-        Assert.Equal(before + 1, sent.Commands.Count);
-        Assert.Equal("Couldn't store the key.", cloud.Failure);
+        cloud.Suggest("groq");
+        Assert.Equal("groq", cloud.Selected);
+        Assert.False(cloud.FirstRunStartsOnOthers);
+        Assert.False(PolishModel.CanUseOwnKey(cloud), "no key yet");
+        Assert.Equal("Save your Groq key first.", cloud.FirstRunUseNote);
 
-        // Stored: then chosen.
-        cloud.UseKey("groq", Key);
+        cloud.SaveKey(Key);
         var save = Assert.IsType<CoreCommand.LlmKeySave>(sent.Commands[^1]);
         Assert.Equal("groq", save.Provider);
-        Assert.Null(cloud.Failure);
         cloud.Apply(Providers(keyed: ["groq"], reference: save.Ref));
-        var choose = Assert.IsType<CoreCommand.LlmChoose>(sent.Commands[^1]);
+        Assert.Empty(sent.Commands.OfType<CoreCommand.LlmChoose>()); // stored, nothing chosen
+        Assert.True(PolishModel.CanUseOwnKey(cloud));
+        Assert.Equal(
+            "Use asks first: polish sends your words to Groq only once you allow it, which also turns Local only off.",
+            cloud.FirstRunUseNote);
+
+        // Use asks; Cancel sends nothing.
+        polish.UseOwnKey(cloud);
+        Assert.True(polish.Consent.IsShowingStep(ConsentHost.Onboarding));
+        Assert.Equal(ConsentDestination.Cloud("https://api.groq.com/openai/v1", "Groq"), polish.Consent.Pending);
+        polish.CancelConsent();
+        Assert.Empty(sent.Commands.OfType<CoreCommand.LlmChoose>());
+        Assert.Empty(sent.Commands.OfType<CoreCommand.ConsentAllow>());
+
+        // Allow chooses Groq; the consent goes once the core names it, not before.
+        polish.UseOwnKey(cloud);
+        polish.AllowConsent();
+        var choose = Assert.Single(sent.Commands.OfType<CoreCommand.LlmChoose>());
         Assert.Equal("groq", choose.Provider);
-        Assert.Null(choose.Model); // the provider's default
-        Assert.True(choose.LocalOnlyOff); // the step says so before the press
+        Assert.True(choose.LocalOnlyOff);
+        Assert.Empty(sent.Commands.OfType<CoreCommand.ConsentAllow>());
+        polish.Apply(State(on: false, allowed: false, to: "cloud", name: "Groq", endpoint: "https://api.groq.com/openai/v1"));
+        var allow = Assert.Single(sent.Commands.OfType<CoreCommand.ConsentAllow>());
+        Assert.Equal(LlmFeature.Polish, allow.Feature);
+        Assert.Equal(LlmDestination.Cloud, allow.To);
+        Assert.Equal("https://api.groq.com/openai/v1", allow.Endpoint);
+        Assert.Null(polish.Consent.Agreed);
+        Assert.Null(polish.Consent.Failure);
+    }
+
+    /// <summary>
+    /// An agreement waits for its own choice only: the core's state after the choice naming
+    /// another destination settles it as a failed allow, and a step asked meanwhile drops it.
+    /// </summary>
+    [Fact]
+    public void AnAgreementTheCoreSettlesElsewhereAllowsNothing()
+    {
+        var sent = new Sent();
+        var cloud = new CloudModel(sent.Send);
+        var polish = new PolishModel(sent.Send);
+        cloud.Apply(Providers(keyed: ["groq"]));
+        cloud.Suggest("groq");
+        polish.UseOwnKey(cloud);
+        polish.AllowConsent();
+        Assert.NotNull(polish.Consent.Agreed);
+        // An answer to an older read (it has a ref, and is not the newest) is not about the choice.
+        polish.Apply(State(on: false, allowed: false, to: "on_device", reference: "consent.get:polish:99"));
+        Assert.NotNull(polish.Consent.Agreed);
+        // The core's own state after the choice names somewhere else: refused.
+        polish.Apply(State(on: false, allowed: false, to: "on_device"));
+        Assert.Null(polish.Consent.Agreed);
+        Assert.Equal(ConsentFailure.Allow, polish.Consent.Failure);
+        Assert.Empty(sent.Commands.OfType<CoreCommand.ConsentAllow>());
+
+        // A choice that did not go (the picker moved before Allow) agrees to nothing.
+        var other = new Sent();
+        var cloud2 = new CloudModel(other.Send);
+        var polish2 = new PolishModel(other.Send);
+        cloud2.Apply(Providers(keyed: ["groq", "openai"]));
+        cloud2.Suggest("groq");
+        polish2.UseOwnKey(cloud2);
+        cloud2.Select("openai");
+        polish2.AllowConsent();
+        Assert.Empty(other.Commands.OfType<CoreCommand.LlmChoose>());
+        Assert.Null(polish2.Consent.Agreed);
+        Assert.Equal(ConsentFailure.Allow, polish2.Consent.Failure);
+
+        // A choice the core refuses drops the agreement: choosing Groq later (Settings' Use, with
+        // no step) allows nothing.
+        var third = new Sent();
+        var cloud3 = new CloudModel(third.Send);
+        var polish3 = new PolishModel(third.Send);
+        cloud3.Apply(Providers(keyed: ["groq"]));
+        cloud3.Suggest("groq");
+        polish3.UseOwnKey(cloud3);
+        polish3.AllowConsent();
+        var refused = Assert.Single(third.Commands.OfType<CoreCommand.LlmChoose>());
+        polish3.Apply(new CommandFailed { Type = "command.failed", Command = "llm.choose", Message = "couldn't save the choice", Id = refused.Ref });
+        Assert.Null(polish3.Consent.Agreed);
+        polish3.Apply(State(on: false, allowed: false, to: "cloud", name: "Groq", endpoint: "https://api.groq.com/openai/v1"));
+        Assert.Empty(third.Commands.OfType<CoreCommand.ConsentAllow>());
+
+        // So does turning polish off before the core names the model.
+        var fourth = new Sent();
+        var cloud4 = new CloudModel(fourth.Send);
+        var polish4 = new PolishModel(fourth.Send);
+        cloud4.Apply(Providers(keyed: ["groq"]));
+        cloud4.Suggest("groq");
+        polish4.UseOwnKey(cloud4);
+        polish4.AllowConsent();
+        polish4.Consent.SwitchedOff();
+        Assert.Null(polish4.Consent.Agreed);
+        polish4.Apply(State(on: false, allowed: false, to: "cloud", name: "Groq", endpoint: "https://api.groq.com/openai/v1"));
+        Assert.Empty(fourth.Commands.OfType<CoreCommand.ConsentAllow>());
+    }
+
+    /// <summary>The first run opens on the other providers' rows when another provider is picked or chosen; Back picks Groq.</summary>
+    [Fact]
+    public void TheFirstRunStartsOnTheOtherProvidersWhenOneIsPicked()
+    {
+        var (cloud, sent) = Loaded(Providers("openai", "gpt-4o-mini", "cloud", localOnly: false, keyed: ["openai"]));
+        var before = sent.Commands.Count;
+        cloud.Suggest("groq");
+        Assert.Equal("openai", cloud.Selected); // the user's choice stands
+        Assert.True(cloud.FirstRunStartsOnOthers);
+        cloud.PickGroq();
         Assert.Equal("groq", cloud.Selected);
-        // Chosen once: the providers read after the choice sends nothing more.
-        var after = sent.Commands.Count;
-        cloud.Apply(Providers("groq", "llama-3.3-70b-versatile", "cloud", localOnly: false, ready: true, keyed: ["groq"], reference: choose.Ref));
-        Assert.Equal(after, sent.Commands.Count);
-        Assert.True(cloud.Ready);
+        Assert.False(cloud.FirstRunStartsOnOthers);
+        Assert.Equal(before, sent.Commands.Count); // picking sends nothing
     }
 
     /// <summary>A server on this PC keeps local-only mode on: Use says so, and sends no say-so.</summary>
@@ -208,15 +295,15 @@ public class CloudModelTests
         var (cloud, _) = Loaded(Providers(keyed: ["custom"]));
         cloud.Select("custom");
         Assert.False(cloud.KeyWithheld); // Ollama's default, on this PC
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
+        Assert.Equal("A server key is already saved for this Windows account.", cloud.KeyStatus);
         cloud.DraftBaseUrl = "http://192.0.2.10:8000/v1";
         Assert.True(cloud.KeyWithheld);
         Assert.Equal(
-            "A key is stored for this Windows account, in Windows Credential Manager, but it is not sent to this server: keys go only over https or to a server on this PC.",
+            "A server key is already saved for this Windows account, but it is not sent to this server: keys go only over https or to a server on this PC.",
             cloud.KeyStatus);
         cloud.DraftBaseUrl = "https://llm.example.com/v1";
         Assert.False(cloud.KeyWithheld);
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
+        Assert.Equal("A server key is already saved for this Windows account.", cloud.KeyStatus);
 
         (cloud, _) = Loaded();
         cloud.Select("custom");
@@ -362,15 +449,13 @@ public class CloudModelTests
     public void AStoredKeyIsSaidToBeTheAccountsAndDeleteSaysWhatItDeletes()
     {
         var (cloud, sent) = Loaded(Providers(keyed: ["groq"]));
-        Assert.Equal(
-            "A Groq key is already stored for this Windows account, in Windows Credential Manager: every Inkwell on this account can use it. Saving a new one replaces it.",
-            OnboardingModel.StoredKeyLine(cloud));
         cloud.Select("groq");
-        Assert.Equal("A key is stored for this Windows account, in Windows Credential Manager: every Inkwell on this account uses it, whichever library it opens.", cloud.KeyStatus);
-        Assert.Equal("Delete Groq key", cloud.DeleteKeyLabel);
-        Assert.Equal("Delete the Groq key stored for this Windows account?", cloud.DeleteKeyQuestion);
+        Assert.Equal("A Groq key is already saved for this Windows account.", cloud.KeyStatus);
+        Assert.Equal("Delete Groq key\u2026", cloud.DeleteKeyLabel);
+        Assert.Equal("Delete the Groq key from this Windows account?", cloud.DeleteKeyQuestion);
+        Assert.Equal("Delete Key", CloudModel.DeleteKeyConfirm);
         Assert.Equal(
-            "It is removed from Windows Credential Manager, so no Inkwell on this account can use it, whichever library it opens. Nothing else is deleted.",
+            "It is saved for this Windows account, not in this library: every Inkwell on this account stops using it. You can paste it again later.",
             CloudModel.DeleteKeyDetail);
         var before = sent.Commands.Count;
         cloud.DeleteKey();
@@ -378,9 +463,10 @@ public class CloudModelTests
         Assert.Equal(before + 1, sent.Commands.Count);
 
         (cloud, _) = Loaded(Providers(keyed: []));
-        Assert.Null(OnboardingModel.StoredKeyLine(cloud));
         cloud.Select(null);
-        Assert.Equal("Delete key", cloud.DeleteKeyLabel);
+        Assert.Equal("Delete key\u2026", cloud.DeleteKeyLabel);
+        cloud.Select("groq");
+        Assert.Equal("No Groq key is saved yet.", cloud.KeyStatus);
     }
 
 }

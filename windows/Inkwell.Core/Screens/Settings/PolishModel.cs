@@ -159,6 +159,42 @@ public sealed class PolishModel : ObservableModel
 
     public void AllowConsent() => Consent.Allow();
 
+    // The first run's own key.
+
+    /// <summary>
+    /// Whether the first run's Use can ask: a provider picked, its key stored if it needs one (a
+    /// provider that cannot be called is no use to agree to), and a choice that changes something.
+    /// </summary>
+    public static bool CanUseOwnKey(CloudModel cloud)
+    {
+        ArgumentNullException.ThrowIfNull(cloud);
+        return cloud.CanUse && cloud.SelectedProvider is CloudProvider provider && (!provider.NeedsKey || provider.HasKey);
+    }
+
+    /// <summary>
+    /// The first run's Use (Use Groq, or the other providers' rows in the Polish step): polish's
+    /// consent step for the provider picked, before it is chosen, so local-only mode goes off only
+    /// with the user's agreement to where the words go. Allow chooses it (turning local-only mode
+    /// off for a provider off this PC); the consent is recorded once the core names it. Cancel
+    /// sends nothing.
+    /// </summary>
+    public void UseOwnKey(CloudModel cloud)
+    {
+        ArgumentNullException.ThrowIfNull(cloud);
+        if (!CanUseOwnKey(cloud) || cloud.SelectedProvider is not CloudProvider provider || cloud.SelectedEndpoint is not string endpoint)
+        {
+            return;
+        }
+        var name = CloudModel.ProviderName(provider.Id);
+        var isCloud = cloud.SelectedIsCloud;
+        var destination = isCloud ? ConsentDestination.Cloud(endpoint, name) : ConsentDestination.OnDevice(name);
+        // Use chooses what the picker holds at Allow, only if that is still what the step named
+        // (Settings > AI shares the picker), so local-only mode never goes off for anything else.
+        Consent.Ask(destination, Screens.ConsentHost.Onboarding, () =>
+            cloud.SelectedProvider?.Id == provider.Id && cloud.SelectedEndpoint == endpoint
+            && cloud.SelectedIsCloud == isCloud && cloud.Use());
+    }
+
     public void CancelConsent() => Consent.Cancel();
 
     /// <summary>Whether this model shows <paramref name="failed"/>: its setting's read or write, and polish's consent commands.</summary>

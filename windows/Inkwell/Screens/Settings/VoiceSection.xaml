@@ -38,20 +38,25 @@
         <StackPanel Orientation="Horizontal" Padding="0,5" Spacing="12">
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Dictate" />
             <ComboBox x:Name="KeyBox" MinWidth="170" AutomationProperties.Name="Dictate" SelectionChanged="OnKeyChosen" />
+            <!-- Any key: the next press, checked by the core (ShortcutRecorderModel). -->
+            <Button x:Name="RecordKeyButton" Click="OnRecordKey" />
             <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
                 <TextBlock x:Name="KeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
             </Border>
             <TextBlock VerticalAlignment="Center" Style="{StaticResource InkCaptionStyle}" Text="hold, speak, let go" />
         </StackPanel>
+        <TextBlock x:Name="KeyMessage" Margin="162,0,0,0" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
 
         <StackPanel Orientation="Horizontal" Padding="0,5" Spacing="12">
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Edit a selection" />
             <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Edit a selection" SelectionChanged="OnEditKeyChosen" />
+            <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
             <Border x:Name="EditKeyCapBorder" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
                 <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
             </Border>
             <TextBlock VerticalAlignment="Center" Style="{StaticResource InkCaptionStyle}" Text="select text, hold, say what to change" />
         </StackPanel>
+        <TextBlock x:Name="EditMessage" Margin="162,0,0,0" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
 
         <StackPanel Spacing="4">
             <TextBlock x:Name="StatusText" Style="{StaticResource InkCaptionStyle}" />
