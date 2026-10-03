@@ -202,7 +202,8 @@ final class CloudModel {
     /// "A Groq key", "An OpenAI key".
     private static func aKey(_ p: Provider) -> String {
         let key = keyName(p)
-        return ("AEIOU".contains(key.prefix(1)) ? "An " : "A ") + key
+        // By the first letter, whatever its case: an id this build has no name for is lower case.
+        return ("aeiou".contains(key.prefix(1).lowercased()) ? "An " : "A ") + key
     }
 
     /// The line about the key of the provider in the picker. Keys are in the keychain of the Mac

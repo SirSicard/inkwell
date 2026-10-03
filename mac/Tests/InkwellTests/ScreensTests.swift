@@ -488,6 +488,11 @@ final class OwnKeyPolishTests: XCTestCase {
         cloud.select("openai")
         XCTAssertEqual(cloud.keyStatus, "No OpenAI key is saved yet.")
         XCTAssertEqual(cloud.deleteKeyLabel, "Delete OpenAI key\u{2026}")
+        // A provider this build has no name for is named by its id: still "An", by its sound.
+        let unknown = CloudModel(send: { _ in })
+        unknown.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"openllm","default_model":"m","endpoint":"https://example.com/v1","custom_url":false,"needs_key":true,"has_key":true}]}"#))
+        unknown.select("openllm")
+        XCTAssertEqual(unknown.keyStatus, "An openllm key is already saved in your keychain for this Mac account.")
         cloud.select("custom")
         cloud.draftBaseURL = "http://192.168.1.20:8080/v1"
         XCTAssertEqual(cloud.keyStatus, "No key is sent to this server: keys go only over https or to a server on this Mac.")
@@ -1277,6 +1282,23 @@ final class ModelDownloadTests: XCTestCase {
         XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .notInstalled)
         catalogue.apply(finished(parakeet))
         XCTAssertEqual(installs(sent).count, 1)
+        // A download the stop interrupted is not on this Mac: it reads as still to fetch, and the
+        // next press fetches it again.
+        XCTAssertFalse(catalogue.isOnThisMac(parakeet), "interrupted, not installed")
+        XCTAssertFalse(catalogue.isOnThisMac(qwen), "never started")
+        XCTAssertEqual(catalogue.state(of: .accuracy), .available)
+        XCTAssertEqual(catalogue.bytesToDownload([.accuracy]), 2_520_744_288)
+        catalogue.download(choices: [.accuracy])
+        XCTAssertEqual(installs(sent).last, .modelInstall(qwen, ref: "model.update:2"))
+    }
+
+    /// The step's sizes round as Today's "484 MB" does, and never read "1000 MB".
+    func testSizesRoundToWholeMegabytesOrOneDecimalOfAGigabyte() {
+        XCTAssertEqual(CatalogueModel.roundedSize(1_289_603), "1 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(484_395_248), "484 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(999_400_000), "999 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(999_600_000), "1.0 GB", "not 1000 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(2_520_744_288), "2.5 GB")
     }
 
     func testEveryDownloadableModelIsNamedWithWhereItComesFrom() {

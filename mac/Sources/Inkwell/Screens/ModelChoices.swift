@@ -154,7 +154,8 @@ extension CatalogueModel {
     /// as the Windows app's does.
     static func roundedSize(_ bytes: Int64) -> String {
         let mb = Double(bytes) / 1_000_000
-        return mb < 1000 ? "\(Int(mb.rounded())) MB" : String(format: "%.1f GB", mb / 1000)
+        // Compared once rounded, so 999.6 MB reads "1.0 GB", never "1000 MB".
+        return mb.rounded() < 1000 ? "\(Int(mb.rounded())) MB" : String(format: "%.1f GB", mb / 1000)
     }
 
     /// The Download button's title, with the total it fetches.

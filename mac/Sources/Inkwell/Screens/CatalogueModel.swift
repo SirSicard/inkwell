@@ -308,6 +308,9 @@ final class CatalogueModel {
             shellEngines = [:]
             serving = [:]
             routeFailed = []
+            // What the stop interrupted, or never started, is not on this Mac: out of `asked`, or
+            // isOnThisMac would read it as installed until the list is read again.
+            asked.subtract(waiting + [installing].compactMap { $0 })
             (installing, installRef, progress, waiting) = (nil, nil, nil, [])
         default:
             break
