@@ -278,7 +278,9 @@ internal sealed class StatsShareDialog
 
     private async Task Save()
     {
-        if (png is null)
+        // The image as it is now: the card may be drawn again while the picker is open (new
+        // numbers, the mode), which clears what Copy and Save use until it is done.
+        if (png is not { } bytes)
         {
             return;
         }
@@ -302,7 +304,7 @@ internal sealed class StatsShareDialog
         }
         try
         {
-            await FileIO.WriteBytesAsync(file, png);
+            await FileIO.WriteBytesAsync(file, bytes);
             Report("Saved.", failed: false);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
