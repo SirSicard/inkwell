@@ -33,6 +33,12 @@ const BLOCK: usize = 480;
 /// its grace, 550 ms after the release on the mock clock). See [`VoiceRig::release_take`].
 const TAIL_ROOM: f64 = 0.4;
 
+/// Right Option in this platform's one spelling: `right_option` on the Mac, the same key's
+/// `right_alt` on Windows (`ink_ffi::hotkey`).
+fn right_option() -> String {
+    ink_ffi::hotkey::spelling("right_option")
+}
+
 struct VoiceRig {
     core: Option<Core>,
     events: Arc<Recorder>,
@@ -410,13 +416,13 @@ fn changing_the_key_setting_rebinds_it_at_once() {
     let ready = rig
         .events
         .wait_for(WAIT, |v| {
-            v["type"] == "dictation.ready" && v["key"] == "right_option"
+            v["type"] == "dictation.ready" && v["key"] == right_option()
         })
         .expect("rebound");
     assert!(ready.get("ref").is_none());
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     // A key the platform cannot hold is refused before it is stored.
     assert!(
@@ -1516,7 +1522,7 @@ fn turning_voice_edit_off_withdraws_its_consent_or_changes_nothing() {
     );
     assert_eq!(
         rig.setting("dictation.edit_key").as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     assert_eq!(
         rig.setting("llm.consent.edit").as_deref(),
@@ -1594,11 +1600,11 @@ fn an_imported_modifier_hotkey_is_the_key_held_and_imported_snippets_expand() {
         ],
     );
     let ready = rig.enable();
-    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(ready["key"], right_option(), "{ready}");
     assert!(ready.get("settings_error").is_none(), "{ready}");
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     // The mock engine hears "hello world"; the imported snippet expands "hello".
     let inserted = rig.dictate(1.2, 1);
@@ -1717,10 +1723,10 @@ fn an_import_from_the_screens_reaches_a_running_dictation_at_once() {
         .into_iter()
         .rfind(|v| v["type"] == "dictation.ready")
         .unwrap();
-    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(ready["key"], right_option(), "{ready}");
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     assert_eq!(rig.dictate(1.2, 1)["text"], "Greetings world.");
     rig.events.assert_valid();

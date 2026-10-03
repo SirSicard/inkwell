@@ -67,6 +67,16 @@ pub(crate) enum RightModifier {
 }
 
 impl RightModifier {
+    /// Its token, the canonical spelling.
+    const fn token(self) -> &'static str {
+        match self {
+            Self::Control => "right_control",
+            Self::Alt => "right_alt",
+            Self::Shift => "right_shift",
+            Self::Win => "right_win",
+        }
+    }
+
     /// The virtual key its events carry.
     pub(crate) const fn vk(self) -> u32 {
         match self {
@@ -154,10 +164,57 @@ impl Binding {
         let code = key_code(key).ok_or(PlatformError::Unsupported(
             "an unknown key in a hotkey chord",
         ))?;
+        // Shift and any key but a function key already does something everywhere; the hook
+        // would swallow it (as on the Mac).
+        if bits == modifier::SHIFT && function_key(key).is_none() {
+            return Err(PlatformError::Unsupported(SHIFT_TYPES));
+        }
         Ok(Self::Chord(Chord {
             modifiers: bits,
             vk: code,
         }))
+    }
+
+    /// The one spelling of this binding (`hotkey::check`): a modifier's token, or a chord's
+    /// modifiers in Windows' order (Ctrl, Alt, Shift, Win) and its key's name, so two spellings of
+    /// one chord, or a Mac alias, compare as one key.
+    pub(crate) fn canonical(self) -> String {
+        match self {
+            Self::Modifier(key) => key.token().to_owned(),
+            Self::Chord(chord) => {
+                let mut parts: Vec<String> = CHORD_ORDER
+                    .iter()
+                    .filter(|(bit, _)| chord.modifiers & bit != 0)
+                    .map(|(_, name)| (*name).to_owned())
+                    .collect();
+                parts.push(key_name(chord.vk));
+                parts.join("+")
+            }
+        }
+    }
+}
+
+/// Why Shift goes only with a function key.
+pub(crate) const SHIFT_TYPES: &str = "Shift with that key already does something everywhere (a capital, a symbol, selecting text); add Ctrl, Alt or Win";
+
+/// A chord's modifiers in the order a canonical token spells them.
+const CHORD_ORDER: [(u8, &str); 4] = [
+    (modifier::CTRL, "ctrl"),
+    (modifier::ALT, "alt"),
+    (modifier::SHIFT, "shift"),
+    (modifier::WIN, "win"),
+];
+
+/// The canonical name of a key [`key_code`] gave.
+fn key_name(code: u32) -> String {
+    match code {
+        vk::SPACE => "space".to_owned(),
+        vk::RETURN => "return".to_owned(),
+        vk::TAB => "tab".to_owned(),
+        vk::ESCAPE => "escape".to_owned(),
+        f if (vk::F1..vk::F1 + 24).contains(&f) => format!("f{}", f - vk::F1 + 1),
+        // VK_A..VK_Z and VK_0..VK_9 are the ASCII codes of the upper-case letter and the digit.
+        c => char::from_u32(c).map_or_else(String::new, |c| c.to_ascii_lowercase().to_string()),
     }
 }
 
@@ -296,6 +353,50 @@ mod tests {
         );
         assert_eq!(chord("f24").vk, 0x87);
         assert_eq!(chord("ctrl+f1").vk, vk::F1);
+    }
+
+    /// One spelling per binding: modifiers in Windows' order, aliases (and the Mac's names for
+    /// the same keys) under the Windows token. Every canonical spelling parses to its binding.
+    #[test]
+    fn every_binding_has_one_canonical_spelling() {
+        let cases = [
+            (" Shift + Ctrl + SPACE ", "ctrl+shift+space"),
+            ("win+alt+d", "alt+win+d"),
+            ("super+shift+control+option+k", "ctrl+alt+shift+win+k"),
+            ("ctrl+enter", "ctrl+return"),
+            ("alt+esc", "alt+escape"),
+            ("F13", "f13"),
+            ("ctrl+F24", "ctrl+f24"),
+            ("ctrl+7", "ctrl+7"),
+            ("right_ctrl", "right_control"),
+            ("right_option", "right_alt"),
+            ("altgr", "right_alt"),
+            ("right_super", "right_win"),
+        ];
+        for (token, canonical) in cases {
+            let parsed = Binding::parse(token).unwrap();
+            assert_eq!(parsed.canonical(), canonical, "{token:?}");
+            assert_eq!(Binding::parse(canonical), Ok(parsed), "{canonical}");
+        }
+    }
+
+    #[test]
+    fn shift_alone_goes_only_with_a_function_key() {
+        for token in [
+            "shift+a",
+            "shift+space",
+            "shift+tab",
+            "shift+return",
+            "shift+7",
+        ] {
+            assert_eq!(
+                Binding::parse(token),
+                Err(PlatformError::Unsupported(SHIFT_TYPES)),
+                "{token}"
+            );
+        }
+        assert!(Binding::parse("shift+f5").is_ok());
+        assert!(Binding::parse("ctrl+shift+a").is_ok());
     }
 
     #[test]

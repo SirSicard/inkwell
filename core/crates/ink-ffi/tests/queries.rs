@@ -606,6 +606,17 @@ fn a_key_is_checked_before_it_is_stored() {
         "words to show after \"can't use that:\": {reason:?}"
     );
     assert_eq!(rig.store.setting("dictation.key").unwrap(), None);
+    // A key setting's refusal gives the reason, never the settings table's placeholder.
+    for value in ["off", "a"] {
+        let refused = rig
+            .core
+            .command(
+                &json!({"cmd": "setting.set", "key": "dictation.key", "value": value}).to_string(),
+            )
+            .expect_err("not a key this computer watches");
+        assert!(!refused.contains("<key>"), "{refused}");
+        assert!(refused.contains("can't be"), "{refused}");
+    }
     for bad in [
         json!({"cmd": "hotkey.check"}),
         json!({"cmd": "hotkey.check", "binding": 13}),

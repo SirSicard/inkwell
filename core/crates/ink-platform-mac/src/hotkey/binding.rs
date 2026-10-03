@@ -7,8 +7,10 @@
 //!   public Command (or Option...) flag is set for either side. Left-hand modifiers alone are not
 //!   offered: watching left Command would start a hold on every Cmd+C in every app.
 //! - **A chord:** modifiers and one key, `"ctrl+shift+space"`, `"cmd+option+d"`, or a function
-//!   key alone, `"f13"`. Any other key needs a modifier, or the tap would swallow it everywhere,
-//!   and Shift alone does not count with a key that types (it types a capital or a symbol).
+//!   key alone, `"f13"`. Any other key needs a modifier, or the tap would swallow it everywhere;
+//!   Shift alone counts only with a function key (with any other it already types or selects),
+//!   and a chord naming Fn takes no key the keyboard sets Fn on by itself (the function row, the
+//!   arrows), where the tap could not tell Fn from no Fn.
 //!
 //! The user may choose any binding of those shapes. [`check_token`] is the one judge: it gives a
 //! binding's canonical spelling, or a [`refusal`] in plain words, and a binding parses exactly
@@ -235,9 +237,12 @@ pub(crate) mod refusal {
     /// A letter, digit, arrow... alone: the tap would swallow it everywhere.
     pub const KEY_ALONE: &str =
         "that key on its own would stop working everywhere else; add Control, Option or Command";
-    /// Shift and a typing key is a capital or a symbol: the tap would swallow it.
-    pub const SHIFT_TYPES: &str =
-        "Shift with that key is how a capital or a symbol is typed; add Control, Option or Command";
+    /// Shift and any key but a function key already does something everywhere: a capital, a
+    /// symbol, selecting text, a back-tab. The tap would swallow it.
+    pub const SHIFT_TYPES: &str = "Shift with that key already does something everywhere (a capital, a symbol, selecting text); add Control, Option or Command";
+    /// The keyboard sets Fn on the function row and the arrows by itself, so Fn named with one of
+    /// them cannot be told from the key alone.
+    pub const FN_ALREADY: &str = "the keyboard sets Fn on that key by itself, so Fn with it can't be told from the key alone; leave Fn out";
     /// Watching left Command would start a hold on every Cmd+C in every app.
     pub const LEFT_MODIFIER_ALONE: &str = "a left-hand modifier on its own would start dictation with every shortcut that uses it; use a right-hand one, or add a key";
     pub const MODIFIERS_ONLY: &str = "modifiers together need a key with them; hold one right-hand modifier on its own, or add a key";
@@ -298,8 +303,11 @@ fn parse_token(token: &str) -> Result<Binding, &'static str> {
     let Some(code) = key_code(key) else {
         return Err(refusal::UNKNOWN_KEY);
     };
-    if bits == flag::SHIFT && is_typing_key(code) {
+    if bits == flag::SHIFT && function_key(key).is_none() {
         return Err(refusal::SHIFT_TYPES);
+    }
+    if bits & flag::SECONDARY_FN != 0 && sets_fn(code) {
+        return Err(refusal::FN_ALREADY);
     }
     Ok(Binding::Chord(Chord {
         modifiers: bits,
@@ -345,35 +353,36 @@ fn is_modifier_name(name: &str) -> bool {
     chord_modifier(side).is_some_and(|bit| bit != flag::SECONDARY_FN)
 }
 
-/// Keys named in words, past letters, digits and function keys: (canonical name, keycode, whether
-/// it types a character). Codes from `HIToolbox/Events.h`; the punctuation is by ANSI position,
+/// Keys named in words, past letters, digits and function keys: (canonical name, keycode). Codes from `HIToolbox/Events.h`; the punctuation is by ANSI position,
 /// as the letters are.
-pub(crate) const NAMED_KEYS: &[(&str, u16, bool)] = &[
-    ("space", keycode::SPACE, true),
-    ("return", keycode::RETURN, false),
-    ("tab", keycode::TAB, false),
-    ("escape", keycode::ESCAPE, false),
-    ("delete", 0x33, false),
-    ("forward_delete", 0x75, false),
-    ("left", 0x7B, false),
-    ("right", 0x7C, false),
-    ("down", 0x7D, false),
-    ("up", 0x7E, false),
-    ("home", 0x73, false),
-    ("end", 0x77, false),
-    ("page_up", 0x74, false),
-    ("page_down", 0x79, false),
-    ("minus", 0x1B, true),
-    ("equal", 0x18, true),
-    ("left_bracket", 0x21, true),
-    ("right_bracket", 0x1E, true),
-    ("backslash", 0x2A, true),
-    ("semicolon", 0x29, true),
-    ("quote", 0x27, true),
-    ("comma", 0x2B, true),
-    ("period", 0x2F, true),
-    ("slash", 0x2C, true),
-    ("grave", 0x32, true),
+pub(crate) const NAMED_KEYS: &[(&str, u16)] = &[
+    ("space", keycode::SPACE),
+    ("return", keycode::RETURN),
+    ("tab", keycode::TAB),
+    ("escape", keycode::ESCAPE),
+    ("delete", 0x33),
+    ("forward_delete", 0x75),
+    ("left", 0x7B),
+    ("right", 0x7C),
+    ("down", 0x7D),
+    ("up", 0x7E),
+    ("home", 0x73),
+    ("end", 0x77),
+    ("page_up", 0x74),
+    ("page_down", 0x79),
+    ("minus", 0x1B),
+    ("equal", 0x18),
+    ("left_bracket", 0x21),
+    ("right_bracket", 0x1E),
+    ("backslash", 0x2A),
+    ("semicolon", 0x29),
+    ("quote", 0x27),
+    ("comma", 0x2B),
+    ("period", 0x2F),
+    ("slash", 0x2C),
+    ("grave", 0x32),
+    // `kVK_ISO_Section`: the key left of 1 on ISO keyboards (§ on many).
+    ("section", 0x0A),
 ];
 
 /// Other spellings of [`NAMED_KEYS`]: the character a punctuation key types unshifted, and the
@@ -395,6 +404,7 @@ const KEY_ALIASES: &[(&str, &str)] = &[
     (".", "period"),
     ("/", "slash"),
     ("`", "grave"),
+    ("§", "section"),
 ];
 
 const LETTER_NAMES: [&str; 26] = [
@@ -420,7 +430,7 @@ fn key_code(name: &str) -> Option<u16> {
         .iter()
         .find(|(alias, _)| *alias == name)
         .map_or(name, |(_, canonical)| *canonical);
-    if let Some((_, code, _)) = NAMED_KEYS.iter().find(|(n, ..)| *n == name) {
+    if let Some((_, code)) = NAMED_KEYS.iter().find(|(n, _)| *n == name) {
         return Some(*code);
     }
     let mut chars = name.chars();
@@ -452,18 +462,19 @@ fn key_name(code: u16) -> &'static str {
         .or_else(|| {
             NAMED_KEYS
                 .iter()
-                .find(|(_, c, _)| *c == code)
-                .map(|(name, ..)| *name)
+                .find(|(_, c)| *c == code)
+                .map(|(name, _)| *name)
         })
         // Unreachable for a parsed chord; a name that parses to nothing rather than a panic.
         .unwrap_or("unknown")
 }
 
-/// Whether the key types a character: a letter, a digit, Space or punctuation.
-fn is_typing_key(code: u16) -> bool {
-    keycode::ANSI_LETTERS.contains(&code)
-        || keycode::ANSI_DIGITS.contains(&code)
-        || NAMED_KEYS.iter().any(|(_, c, types)| *c == code && *types)
+/// Whether the keyboard sets the Fn flag on this key by itself: the function row, the arrows,
+/// and Home, End, Page Up, Page Down and Forward Delete (the keys Fn+arrow and Fn+Delete make on
+/// a laptop). [`Chord::matches`] ignores Fn unless a chord names it for the same reason.
+fn sets_fn(code: u16) -> bool {
+    const NAVIGATION: [u16; 9] = [0x7B, 0x7C, 0x7D, 0x7E, 0x73, 0x77, 0x74, 0x79, 0x75];
+    keycode::FUNCTION_KEYS.contains(&code) || NAVIGATION.contains(&code)
 }
 
 #[cfg(test)]
@@ -524,10 +535,10 @@ mod tests {
             }
         );
         assert_eq!(
-            chord("fn+f5"),
+            chord("fn+d"),
             Chord {
                 modifiers: flag::SECONDARY_FN,
-                keycode: 0x60
+                keycode: 0x02
             }
         );
         assert_eq!(
@@ -672,9 +683,9 @@ mod tests {
 
     #[test]
     fn a_chord_that_names_fn_requires_it() {
-        let c = chord("fn+f5");
-        assert!(c.matches(0x60, flag::SECONDARY_FN));
-        assert!(!c.matches(0x60, 0));
+        let c = chord("fn+d");
+        assert!(c.matches(0x02, flag::SECONDARY_FN));
+        assert!(!c.matches(0x02, 0));
         let bare = chord("f5");
         assert!(
             bare.matches(0x60, flag::SECONDARY_FN),
@@ -699,7 +710,8 @@ mod tests {
             ("right_alt", "right_option"),
             ("FN", "fn"),
             ("F13", "f13"),
-            ("fn+f5", "fn+f5"),
+            ("fn+d", "fn+d"),
+            ("ctrl+§", "ctrl+section"),
             ("ctrl+enter", "ctrl+return"),
             ("ctrl+esc", "ctrl+escape"),
             ("ctrl+backspace", "ctrl+delete"),
@@ -728,7 +740,7 @@ mod tests {
     fn every_key_name_round_trips() {
         let mut names: Vec<String> = ('a'..='z').chain('0'..='9').map(String::from).collect();
         names.extend((1..=20).map(|n| format!("f{n}")));
-        names.extend(NAMED_KEYS.iter().map(|(name, ..)| (*name).to_owned()));
+        names.extend(NAMED_KEYS.iter().map(|(name, _)| (*name).to_owned()));
         for name in names {
             let token = format!("ctrl+{name}");
             assert_eq!(check_token(&token), Ok(token.clone()), "{token}");
@@ -760,6 +772,7 @@ mod tests {
             ("period", 0x2F),
             ("slash", 0x2C),
             ("grave", 0x32),
+            ("section", 0x0A),
         ];
         for (name, code) in expected {
             assert_eq!(chord(&format!("ctrl+{name}")).keycode, code, "{name}");
@@ -780,6 +793,15 @@ mod tests {
             ("shift+7", refusal::SHIFT_TYPES),
             ("shift+space", refusal::SHIFT_TYPES),
             ("shift+slash", refusal::SHIFT_TYPES),
+            ("shift+left", refusal::SHIFT_TYPES),
+            ("shift+return", refusal::SHIFT_TYPES),
+            ("shift+tab", refusal::SHIFT_TYPES),
+            ("shift+delete", refusal::SHIFT_TYPES),
+            ("shift+page_down", refusal::SHIFT_TYPES),
+            ("fn+f5", refusal::FN_ALREADY),
+            ("fn+left", refusal::FN_ALREADY),
+            ("fn+ctrl+home", refusal::FN_ALREADY),
+            ("fn+forward_delete", refusal::FN_ALREADY),
             ("left_option", refusal::LEFT_MODIFIER_ALONE),
             ("option", refusal::LEFT_MODIFIER_ALONE),
             ("cmd", refusal::LEFT_MODIFIER_ALONE),
@@ -814,16 +836,26 @@ mod tests {
         }
     }
 
-    /// Shift with a key that types nothing is a shortcut like any other.
+    /// Shift alone goes only with a function key: with any other key it already does something
+    /// everywhere (a capital, a symbol, selecting, a back-tab). With another modifier it is fine.
     #[test]
-    fn shift_goes_with_keys_that_do_not_type() {
+    fn shift_alone_goes_only_with_a_function_key() {
         for token in [
             "shift+f5",
-            "shift+left",
-            "shift+return",
-            "shift+tab",
-            "shift+delete",
+            "shift+f13",
+            "ctrl+shift+left",
+            "shift+cmd+return",
         ] {
+            assert!(check_token(token).is_ok(), "{token}");
+        }
+    }
+
+    /// The keyboard sets Fn on the function row, the arrows and the keys Fn+arrow makes by itself,
+    /// so the tap cannot tell Fn+F5 from F5: a chord naming Fn takes another key. Without Fn named
+    /// those keys are fine, and Fn with a letter is too.
+    #[test]
+    fn fn_goes_only_with_keys_that_do_not_set_it_themselves() {
+        for token in ["f5", "ctrl+left", "fn+d", "fn+ctrl+space", "fn+return"] {
             assert!(check_token(token).is_ok(), "{token}");
         }
     }

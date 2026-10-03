@@ -436,10 +436,10 @@ mod tests {
     /// A chord that names Fn ends when Fn comes up.
     #[test]
     fn a_chord_naming_fn_ends_when_fn_comes_up() {
-        let mut m = machine("fn+f5");
+        let mut m = machine("fn+d");
         assert_eq!(
             m.on(TapInput::KeyDown {
-                keycode: 0x60,
+                keycode: 0x02,
                 flags: flag::SECONDARY_FN,
                 autorepeat: false,
             }),
