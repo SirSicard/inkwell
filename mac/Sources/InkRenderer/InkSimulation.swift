@@ -363,8 +363,8 @@ public struct InkSimulation: Sendable {
 
     /// The orb's uniform block for this state (shaders/ink.wgsl, `G`): the canvas, where the orb
     /// sits and how large a unit is, the time, your level and theirs (the envelopes), the state
-    /// weights, and the theme's colours, with the rest tint in idle's fourth lane. `motion` false draws a still frame: the shader stops its
-    /// time.
+    /// weights, and the theme's colours, with the rest tint in idle's fourth lane. `motion` false
+    /// draws a still frame: the shader stops its time.
     public func uniforms(palette: OrbPalette, placement: OrbPlacement, motion: Bool) -> InkUniforms {
         var u = InkUniforms()
         u.res = SIMD2(Float(canvasWidth), Float(canvasHeight))
@@ -389,8 +389,8 @@ public struct InkSimulation: Sendable {
 /// The shader's uniform block `G` (shaders/ink.wgsl), 160 bytes: the canvas and the orb's centre
 /// in pixels (top-left origin), the time, the unit, your level and theirs, the four state weights,
 /// dark and motion, then six colours (rgb; the fourth unused, but idle's is the rest tint). A
-/// plain value, so a frame hands it
-/// to Metal without allocating; Swift lays it out at the shader's offsets (SimulationTests checks).
+/// plain value, so a frame hands it to Metal without allocating; Swift lays it out at the shader's
+/// offsets (SimulationTests checks).
 public struct InkUniforms: Equatable, Sendable {
     public var res = SIMD2<Float>(0, 0)
     public var center = SIMD2<Float>(0, 0)

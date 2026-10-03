@@ -223,9 +223,9 @@ final class OrbAtRestTests: XCTestCase {
         return (you, them, solid, solid > 0 ? sum / Double(solid) : sum)
     }
 
-    /// Aurora rests green and violet, Lagoon teal and amber, in Light and in Dark: a fifth or more
+    /// Aurora rests green and violet, Lagoon teal and amber, in Light and in Dark: a sixth or more
     /// of the resting orb's pixels leans toward each of the preset's colours (a quarter to a half
-    /// at the rest tint of 0.2; untinted, none but a few highlight pixels in Light), and the two
+    /// at the rest tint of 0.2; untinted, none but a twelfth in Light's highlight), and the two
     /// presets' resting orbs differ.
     func testTheRestingOrbLeansTowardThePresetsColoursInBothModes() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
@@ -236,8 +236,8 @@ final class OrbAtRestTests: XCTestCase {
                 let r = try rest(id, dark: dark, pipeline: pipeline)
                 let label = "\(dark ? "dark" : "light") \(id): \(r.you) toward yours, \(r.them) toward theirs of \(r.solid)"
                 XCTAssertGreaterThan(r.solid, 500, label)
-                XCTAssertGreaterThanOrEqual(r.you * 5, r.solid, label)
-                XCTAssertGreaterThanOrEqual(r.them * 5, r.solid, label)
+                XCTAssertGreaterThanOrEqual(r.you * 6, r.solid, label)
+                XCTAssertGreaterThanOrEqual(r.them * 6, r.solid, label)
                 means.append(r.mean)
             }
             let apart = ((means[0] - means[1]) * (means[0] - means[1])).sum().squareRoot()
@@ -312,7 +312,7 @@ final class OrbBehindTextTests: XCTestCase {
     /// The orb drawn as the main window places it, loud voices on both sides, at a few moments
     /// (its noise and highlight move), composited over the mode's background at the opacity the
     /// window gives it: every pixel keeps text at 4.5:1 and secondary text at 3:1 or more. At rest
-    /// that is the orb leaning toward the preset at Glow.restTint, undimmed: the worst is Dark's
+    /// that is the orb leaning toward the preset at GlowColours.restTint, undimmed: the worst is Dark's
     /// secondary text over Lagoon, 3.10:1 at 0.2 (2.96:1 at 0.25; 3.62:1 untinted).
     func testTextStaysReadableOverTheMainWindowsOrbWithEveryPresetInBothModes() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")

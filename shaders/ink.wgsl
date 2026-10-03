@@ -58,7 +58,7 @@
 //     48     4    dark    1 in dark mode, 0 in light
 //     52     4    motion  1 animates; 0 draws one still frame, whatever `time` is
 //     56     8    pad     unused (vec2)
-//     64     16   yA      your colour (vec4: rgb, a unused; so are the others but idle)
+//     64     16   yA      your colour (vec4: rgb; a is unused here and in yB, tA, tB and ink)
 //     80     16   yB      your partner shade
 //     96     16   tA      the far end's colour
 //     112    16   tB      its partner shade
