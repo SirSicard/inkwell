@@ -40,7 +40,6 @@ public sealed partial class VoiceSection : UserControl
         dictation = ai.Dictation;
         InitializeComponent();
         ImportNoteHost.Content = importNote;
-        recorder.Describe = token => KeyNotation.Describe(token, KeyboardLayout.Character);
         recorder.Announce = Announce;
         Loaded += (_, _) =>
         {

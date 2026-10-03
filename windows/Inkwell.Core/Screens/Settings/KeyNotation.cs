@@ -119,6 +119,13 @@ public static class KeyNotation
     };
 
     /// <summary>
+    /// The keyboard layout every key name uses when none is passed (the status line, Today, the
+    /// first run, the recorder alike): the app sets it to <see cref="KeyboardLayout.Character"/>
+    /// at start. Null (tests): typing keys by their US position.
+    /// </summary>
+    public static Func<uint, string?>? Layout { get; set; }
+
+    /// <summary>
     /// How a token reads: its spoken name and its key cap ("Ctrl+Shift+Space", "Right Ctrl").
     /// <paramref name="layout"/> names a typing key by what the keyboard layout puts on it (null:
     /// by its US position). A token outside the core's grammar reads as itself.
@@ -126,6 +133,7 @@ public static class KeyNotation
     public static DictationKey Describe(string token, Func<uint, string?>? layout = null)
     {
         ArgumentNullException.ThrowIfNull(token);
+        layout ??= Layout;
         if (ModifiersAlone.TryGetValue(token, out var alone))
         {
             return new DictationKey(token, alone.Name, alone.Cap);

@@ -30,6 +30,8 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
         }
         // The installed apps are indexed off the UI thread, before Settings > Modes asks.
         InstalledApps.Shared.Warm();
+        // Keys are named as this keyboard labels them, wherever they are named.
+        KeyNotation.Layout = KeyboardLayout.Character;
         var screens = new ScreenModels(
             core.Send,
             dataDirectory: data,
