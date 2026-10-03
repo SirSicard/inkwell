@@ -92,14 +92,18 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Grid Margin="80,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ContentPresenter x:Name="LedgerEyebrow" />
-                        <TextBlock x:Name="LedgerStatus" Grid.Column="1" Style="{StaticResource InkTimestampStyle}" />
-                    </Grid>
+                    <StackPanel Margin="80,0,0,10" Spacing="6">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter x:Name="LedgerEyebrow" />
+                            <TextBlock x:Name="LedgerStatus" Grid.Column="1" Style="{StaticResource InkTimestampStyle}" />
+                        </Grid>
+                        <!-- Why the last name given to a speaker was not saved, until the next try. -->
+                        <TextBlock x:Name="NamingFailureText" Style="{StaticResource InkAlertTextStyle}" Visibility="Collapsed" />
+                    </StackPanel>
                     <TextBlock
                         x:Name="EmptyLedger"
                         Grid.Row="1"
@@ -156,7 +160,22 @@
                                             FontWeight="SemiBold"
                                             Foreground="{ThemeResource InkTextBrush}"
                                             Text="{x:Bind Who}"
-                                            Visibility="{x:Bind local:Show.Unless(IsYou)}" />
+                                            Visibility="{x:Bind local:Show.If(IsPlainThem)}" />
+                                        <!-- A speaker the diarizer told apart: a button that names them (its own click, not the line's). -->
+                                        <HyperlinkButton
+                                            Padding="0"
+                                            AutomationProperties.Name="{x:Bind NameLabel}"
+                                            Click="OnNameSpeaker"
+                                            Tag="{x:Bind Label}"
+                                            ToolTipService.ToolTip="Name this speaker"
+                                            Visibility="{x:Bind local:Show.If(IsNameable)}">
+                                            <TextBlock
+                                                FontSize="12"
+                                                FontWeight="SemiBold"
+                                                Foreground="{ThemeResource InkTextBrush}"
+                                                Text="{x:Bind Who}"
+                                                TextDecorations="Underline" />
+                                        </HyperlinkButton>
                                         <TextBlock FontSize="15.5" Style="{StaticResource InkReadingStyle}" Text="{x:Bind Text}" />
                                     </StackPanel>
                                 </Grid>

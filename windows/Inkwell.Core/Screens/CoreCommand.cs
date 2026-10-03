@@ -185,6 +185,18 @@ public abstract record CoreCommand
             [("cmd", Name), ("record", Record), ("id", Ref)];
     }
 
+    /// <summary>
+    /// Names a far-end speaker of a record by the diarizer's label (<paramref name="Given"/> is the
+    /// name; empty clears it). Answered by speaker.named with the ref, or a command.failed with it
+    /// as the id.
+    /// </summary>
+    public sealed record SpeakerName(string Record, string Speaker, string Given, string Ref) : CoreCommand
+    {
+        public override string Name => "speaker.name";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("record", Record), ("speaker", Speaker), ("name", Given), ("id", Ref)];
+    }
+
     public sealed record LibraryStats(long SinceUnixMs, string Ref) : CoreCommand
     {
         public override string Name => "library.stats";

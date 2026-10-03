@@ -34,8 +34,22 @@ public sealed record Speaker
     public string Label { get; }
 }
 
-/// <summary>One line of the ledger transcript; <paramref name="Id"/> is its index in the transcript.</summary>
-public sealed record LedgerLine(int Id, Speaker Speaker, long StartMs, long EndMs, string Text);
+/// <summary>
+/// One line of the ledger transcript; <paramref name="Id"/> is its index in the transcript, and
+/// <paramref name="Label"/> the diarizer's label on a far-end line that has one: the speaker the
+/// user can name.
+/// </summary>
+public sealed record LedgerLine(int Id, Speaker Speaker, long StartMs, long EndMs, string Text, string? Label = null);
+
+/// <summary>
+/// A far-end speaker the diarizer told apart, which the user can name (the Mac's FarSpeaker).
+/// <paramref name="Number"/> is its place in the order the far end's speakers first speak, from 1:
+/// "Speaker N" while it has no name, and kept when it has one.
+/// </summary>
+public sealed record FarSpeaker(string Label, string? Name, int Number)
+{
+    public string Display => Name ?? string.Create(CultureInfo.InvariantCulture, $"Speaker {Number}");
+}
 
 /// <summary>What an entry of the notes-first merged view is.</summary>
 public enum MergedKind
@@ -132,6 +146,9 @@ public sealed class RecordDocument
     /// <summary>The people on the far end, as named or numbered.</summary>
     public IReadOnlyList<string> People { get; }
 
+    /// <summary>The far end's diarized speakers, in the order they first speak.</summary>
+    public IReadOnlyList<FarSpeaker> Speakers { get; }
+
     public IReadOnlyList<TimelineChunk> Chunks { get; }
 
     /// <summary>
@@ -158,33 +175,28 @@ public sealed class RecordDocument
         {
             names.TryAdd(named.Speaker, named.Name);
         }
-        // Unnamed diarized speakers are numbered in the order they first speak.
-        var numbered = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Diarized speakers are numbered in the order they first speak, named or not: naming one
+        // never renumbers the others, and clearing a name brings back the same "Speaker N".
+        var speakers = new List<FarSpeaker>();
         foreach (var segment in answer.Segments)
         {
-            if (segment.Channel == Channel.Far && segment.Speaker is string label && !names.ContainsKey(label))
+            if (segment.Channel == Channel.Far && segment.Speaker is string label && !speakers.Exists(s => s.Label == label))
             {
-                numbered.TryAdd(label, numbered.Count + 1);
+                speakers.Add(new FarSpeaker(label, names.GetValueOrDefault(label), speakers.Count + 1));
             }
         }
+        Speakers = speakers;
         Speaker SpeakerOf(RecordSegment segment)
         {
             if (segment.Channel != Channel.Far)
             {
                 return answer.Record.Kind == RecordKind.FileImport ? Speaker.Recording : Speaker.You;
             }
-            if (segment.Speaker is not string label)
-            {
-                return Speaker.Them("Them");
-            }
-            if (names.TryGetValue(label, out var name))
-            {
-                return Speaker.Them(name);
-            }
-            return Speaker.Them(string.Create(CultureInfo.InvariantCulture, $"Speaker {numbered.GetValueOrDefault(label, 1)}"));
+            return Speaker.Them(segment.Speaker is string label && speakers.Find(s => s.Label == label) is { } far ? far.Display : "Them");
         }
         var ledger = answer.Segments
-            .Select((segment, index) => new LedgerLine(index, SpeakerOf(segment), segment.StartMs, segment.EndMs, segment.Text.Trim()))
+            .Select((segment, index) => new LedgerLine(
+                index, SpeakerOf(segment), segment.StartMs, segment.EndMs, segment.Text.Trim(), segment.Channel == Channel.Far ? segment.Speaker : null))
             .ToList();
         Ledger = ledger;
 
@@ -313,6 +325,9 @@ public sealed class RecordDocument
 
     /// <summary>What the notes column says when there are none; null when there are.</summary>
     public string? NoNotesText => HasNotes ? null : Record.Kind == RecordKind.Meeting ? "You typed no notes in this meeting." : "No notes.";
+
+    /// <summary>The far-end speaker with the diarizer's label <paramref name="label"/>, if the transcript has one.</summary>
+    public FarSpeaker? SpeakerLabelled(string label) => Speakers.FirstOrDefault(s => s.Label == label);
 
     /// <summary>The people the heading names: you first, in a meeting.</summary>
     public IReadOnlyList<string> HeaderPeople => Record.Kind == RecordKind.Meeting ? ["You", .. People] : People;

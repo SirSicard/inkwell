@@ -79,6 +79,8 @@ public sealed class LibraryModel : ObservableModel
         TodayOpen,
         StatsDay,
         StatsWeek,
+        /// <summary>A name given to one of the open record's speakers.</summary>
+        Speaker,
     }
 
     private static readonly Dictionary<Slot, string> SlotNames = new()
@@ -91,6 +93,7 @@ public sealed class LibraryModel : ObservableModel
         [Slot.TodayOpen] = "todayOpen",
         [Slot.StatsDay] = "statsDay",
         [Slot.StatsWeek] = "statsWeek",
+        [Slot.Speaker] = "speaker",
     };
 
     private static readonly Dictionary<string, Slot> SlotsByName =
@@ -107,6 +110,11 @@ public sealed class LibraryModel : ObservableModel
     /// <summary>Where to put the playhead once the record being opened arrives.</summary>
     private long? _pendingSeek;
     private bool _pendingPlay;
+    /// <summary>
+    /// The names sent for the open record's speakers, by label: what the store holds once each is
+    /// saved, before the record is read again. Forgotten when one fails, and with the record.
+    /// </summary>
+    private readonly Dictionary<string, string> _sentNames = new(StringComparer.Ordinal);
     // Every kind until a chip narrows it (the All chip).
     private RecordKind? _filter;
     private string _query = "";
@@ -201,6 +209,9 @@ public sealed class LibraryModel : ObservableModel
 
     /// <summary>Plays the open record's audio.</summary>
     public RecordPlayer? Player { get; private set; }
+
+    /// <summary>Why the last name given to a speaker was not saved (the core's words), until the next try or another record.</summary>
+    public string? NamingFailure { get; private set; }
 
     /// <summary>Today: the latest finished meeting, whole.</summary>
     public RecordDocument? LastMeeting { get; private set; }
@@ -367,6 +378,8 @@ public sealed class LibraryModel : ObservableModel
         Selected = record;
         Document = null;
         OpenFailure = null;
+        NamingFailure = null;
+        _sentNames.Clear();
         ReplacePlayer(null);
         _send(new CoreCommand.RecordOpen(record, RefFor(Slot.Open)));
         Changed();
@@ -389,6 +402,52 @@ public sealed class LibraryModel : ObservableModel
     /// shows a failure (it lists again); the record is read again when the core says it changed.
     /// </summary>
     public void SetDone(string commitment, bool done) => _send(new CoreCommand.CommitmentSetDone(commitment, done));
+
+    /// <summary>
+    /// The longest name a speaker takes, in Unicode scalars, as the core counts it
+    /// (MAX_SPEAKER_NAME_CHARS): an emoji is one, an accent written as two scalars is two.
+    /// </summary>
+    public const int MaxSpeakerName = 80;
+
+    /// <summary>A name's length as the core counts it, once on one line.</summary>
+    public static int NameLength(string name) => OneLine(name).EnumerateRunes().Count();
+
+    /// <summary><paramref name="text"/> on one line: every run of white space and control characters (the core refuses those) is one space, and none at either end.</summary>
+    public static string OneLine(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return string.Join(' ', text.Split(
+            text.Where(c => char.IsWhiteSpace(c) || char.IsControl(c)).Distinct().ToArray(),
+            StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>
+    /// Names one of the open record's far-end speakers, by the diarizer's label, as the user typed
+    /// it: on one line, and empty clears the name (the speaker reads as "Speaker N" again).
+    /// Nothing is sent when nothing changed, or for a label the record's far end does not have
+    /// (the mic is the user, never renamed). The record is read again when the core says it is
+    /// saved; a name the core refuses is said (NamingFailure).
+    /// </summary>
+    public void NameSpeaker(string label, string name)
+    {
+        ArgumentNullException.ThrowIfNull(label);
+        ArgumentNullException.ThrowIfNull(name);
+        if (Document is not { } document || document.SpeakerLabelled(label) is not { } speaker)
+        {
+            return;
+        }
+        var oneLine = OneLine(name);
+        // Unchanged from what was last sent, or else from what the record says: a rename sent
+        // since the record was read makes the record's name stale.
+        if (oneLine == (_sentNames.TryGetValue(label, out var sent) ? sent : speaker.Name ?? ""))
+        {
+            return;
+        }
+        NamingFailure = null;
+        _sentNames[label] = oneLine;
+        _send(new CoreCommand.SpeakerName(document.Record.Record, label, oneLine, RefFor(Slot.Speaker)));
+        Changed();
+    }
 
     /// <summary>Puts the playhead at <paramref name="ms"/> (a chip, a line, a search hit) and plays from there.</summary>
     public void PlayFrom(long ms, bool start = true)
@@ -460,6 +519,23 @@ public sealed class LibraryModel : ObservableModel
                 case CommandFailed failed:
                     changed |= Fail(failed);
                     break;
+                case SpeakerNamed named:
+                    // The name shows wherever that record does: the open record, and Today's last
+                    // meeting.
+                    if (Document?.Record.Record == named.Record)
+                    {
+                        recordChanged = true;
+                        if (Current(named.Ref) == Slot.Speaker && NamingFailure is not null)
+                        {
+                            NamingFailure = null;
+                            changed = true;
+                        }
+                    }
+                    if (LastMeeting?.Record.Record == named.Record)
+                    {
+                        _send(new CoreCommand.RecordOpen(named.Record, RefFor(Slot.TodayOpen)));
+                    }
+                    break;
                 case CommitmentUpdated or NoteAdded or NoteUpdated or NoteDeleted:
                     // The open record may hold it: read it again.
                     recordChanged = true;
@@ -518,6 +594,11 @@ public sealed class LibraryModel : ObservableModel
             case Slot.StatsWeek:
                 Week = null;
                 WeekLoad = LibraryLoad.Failed;
+                return true;
+            case Slot.Speaker:
+                NamingFailure = failed.Message;
+                // What was sent did not stick: the record's names are what stands.
+                _sentNames.Clear();
                 return true;
             default:
                 return false;

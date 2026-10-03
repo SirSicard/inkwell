@@ -52,6 +52,8 @@ public sealed partial class RecordScreen : UserControl
     private void Render()
     {
         var document = _library.Document;
+        NamingFailureText.Text = _library.NamingFailure is string naming ? $"The speaker's name wasn't saved: {naming}" : "";
+        NamingFailureText.Visibility = _library.NamingFailure is null ? Visibility.Collapsed : Visibility.Visible;
         var failure = document is null ? _library.OpenFailure : null;
         var opening = document is null && failure is null && _library.Selected is not null;
         Shown.Visibility = document is null ? Visibility.Collapsed : Visibility.Visible;
@@ -184,6 +186,76 @@ public sealed partial class RecordScreen : UserControl
         {
             LedgerList.SelectedIndex = line;
         }
+    }
+
+    /// <summary>
+    /// What to call a far-end speaker in this record (the Mac's SpeakerNameEditor): Enter or Save
+    /// names them, empty goes back to "Speaker N", and a name longer than the core takes cannot be
+    /// saved. The mic is the user and is never named here.
+    /// </summary>
+    private void OnNameSpeaker(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string label } anchor || _library.Document?.SpeakerLabelled(label) is not { } speaker)
+        {
+            return;
+        }
+        var box = new TextBox
+        {
+            Header = "Name this speaker",
+            Text = speaker.Name ?? "",
+            PlaceholderText = $"Speaker {speaker.Number}",
+            Width = 260,
+        };
+        AutomationProperties.SetName(box, "Name");
+        var hint = new TextBlock { Style = (Style)Application.Current.Resources["InkCaptionStyle"], Width = 260 };
+        var save = new Button { Content = "Save", Style = (Style)Application.Current.Resources["InkAccentButtonStyle"] };
+        var cancel = new Button { Content = "Cancel" };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(save);
+        var panel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(box);
+        panel.Children.Add(hint);
+        panel.Children.Add(buttons);
+        var flyout = new Flyout { Content = panel };
+        void Update()
+        {
+            var tooLong = LibraryModel.NameLength(box.Text) > LibraryModel.MaxSpeakerName;
+            hint.Text = tooLong
+                ? $"At most {LibraryModel.MaxSpeakerName} characters."
+                : $"In this record. Leave it empty to go back to Speaker {speaker.Number}.";
+            save.IsEnabled = !tooLong;
+        }
+        // Enter and Save can both fire: one save.
+        var saved = false;
+        void Commit()
+        {
+            if (saved || !save.IsEnabled)
+            {
+                return;
+            }
+            saved = true;
+            _library.NameSpeaker(label, box.Text);
+            flyout.Hide();
+        }
+        box.TextChanged += (_, _) => Update();
+        box.KeyDown += (_, args) =>
+        {
+            if (args.Key == Windows.System.VirtualKey.Enter)
+            {
+                args.Handled = true;
+                Commit();
+            }
+        };
+        save.Click += (_, _) => Commit();
+        cancel.Click += (_, _) => flyout.Hide();
+        flyout.Opened += (_, _) =>
+        {
+            box.Focus(FocusState.Programmatic);
+            box.SelectAll();
+        };
+        Update();
+        flyout.ShowAt(anchor);
     }
 
     private void OnLineClick(object sender, ItemClickEventArgs e)

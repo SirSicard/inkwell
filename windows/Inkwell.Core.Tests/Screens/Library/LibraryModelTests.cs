@@ -118,6 +118,66 @@ public class LibraryModelTests
         Assert.Null(library.Document); // Today's record is not the Library's selection
     }
 
+    /// <summary>
+    /// Naming a far-end speaker (the Mac's nameSpeaker): on one line and trimmed, sent once as
+    /// speaker.name, never when nothing changed (against the last name sent, else the record's),
+    /// never for a label the record does not have. When the core answers, the open record is read
+    /// again, and Today's last meeting too when it is that record; a refusal is said on the record
+    /// until the next try or another record.
+    /// </summary>
+    [Fact]
+    public void NamingASpeakerSendsItOnceAndRereadsWhereTheRecordShows()
+    {
+        var (library, sent) = Model();
+        library.RefreshToday();
+        library.Apply(Ev.Of($$"""
+            {"type":"library.records","ref":"{{RequestId(sent.Commands[0])}}","more":false,"kind":"meeting","records":[{{Row("r1", start: 5_000, end: 6_000)}}]}
+            """));
+        library.Apply(RecordEvent(RequestId(sent.Commands[^1])));
+        library.Open("r1");
+        library.Apply(RecordEvent(RequestId(sent.Commands[^1])));
+        var before = sent.Commands.Count;
+
+        library.NameSpeaker("spk1", "  Robin\n  Lee  ");
+        var name = Fields(sent.Commands[^1]);
+        Assert.Equal("speaker.name", name.GetProperty("cmd").GetString());
+        Assert.Equal("r1", name.GetProperty("record").GetString());
+        Assert.Equal("spk1", name.GetProperty("speaker").GetString());
+        Assert.Equal("Robin Lee", name.GetProperty("name").GetString());
+        var id = name.GetProperty("id").GetString()!;
+
+        // Unchanged since it was sent, a label the record lacks, the record's own name: nothing.
+        library.NameSpeaker("spk1", "Robin Lee");
+        library.NameSpeaker("nobody", "X");
+        library.NameSpeaker("spk0", "Alex");
+        Assert.Equal(before + 1, sent.Commands.Count);
+
+        library.Apply(Ev.Of($$"""{"type":"speaker.named","record":"r1","speaker":"spk1","named":true,"ref":"{{id}}"}"""));
+        var reads = sent.Commands.Skip(before + 1).Select(c => (Cmd(c), Fields(c).GetProperty("record").GetString())).ToList();
+        Assert.Equal([("record.open", "r1"), ("record.open", "r1")], reads); // the record, and Today's last meeting
+
+        // A refusal is said on the record, and the next try clears it.
+        library.NameSpeaker("spk2", "Sam");
+        var refused = RequestId(sent.Commands[^1]);
+        library.Apply(Ev.Of($$"""{"type":"command.failed","command":"speaker.name","id":"{{refused}}","message":"the name is longer than 80 characters"}"""));
+        Assert.Equal("the name is longer than 80 characters", library.NamingFailure);
+        library.NameSpeaker("spk2", "Sam");
+        Assert.Null(library.NamingFailure);
+        Assert.Equal("speaker.name", Cmd(sent.Commands[^1])); // what was refused is not taken as sent
+        library.Open("other");
+        Assert.Null(library.NamingFailure);
+    }
+
+    /// <summary>A name's length as the core counts it: Unicode scalars, on one line.</summary>
+    [Fact]
+    public void ANamesLengthIsCountedAsTheCoreCountsIt()
+    {
+        Assert.Equal(80, LibraryModel.MaxSpeakerName);
+        Assert.Equal("a b c", LibraryModel.OneLine(" a\r\n b\tc\u0007"));
+        Assert.Equal(3, LibraryModel.NameLength("\U0001F600e\u0301")); // an emoji is one scalar, an accent written as two is two
+        Assert.Equal(3, LibraryModel.NameLength(" e\u0301\U0001F600 "));
+    }
+
     [Fact]
     public void ANewRecordOrAMarkedCommitmentRefreshesWhatIsShown()
     {
