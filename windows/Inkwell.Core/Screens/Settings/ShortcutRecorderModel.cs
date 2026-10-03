@@ -200,6 +200,21 @@ public sealed class ShortcutRecorderModel : ObservableModel
     public string ButtonTitle(ShortcutTarget target) =>
         Recording == target ? RecordingTitle : Checking?.Target == target ? CancelTitle : RecordTitle;
 
+    /// <summary>The button's name for Narrator, which says what it is for in each state.</summary>
+    public string ButtonName(ShortcutTarget target)
+    {
+        var what = target == ShortcutTarget.Dictation ? "dictation" : "editing a selection";
+        return Recording == target ? $"Recording a shortcut for {what}"
+            : Checking?.Target == target ? $"Cancel checking the shortcut for {what}"
+            : $"Record a shortcut for {what}";
+    }
+
+    /// <summary>The button's hint for Narrator.</summary>
+    public string ButtonHint(ShortcutTarget target) =>
+        Recording == target ? "Press the keys you want: a right-hand modifier alone, a function key, or modifiers and a key. Escape on its own cancels."
+            : Checking?.Target == target ? ""
+            : "Then press the keys you want to use.";
+
     private static string Spoken(ShortcutTarget target) => target == ShortcutTarget.Dictation ? "the dictation key" : "the edit key";
 
     /// <summary>Starts recording <paramref name="target"/>'s key, or (pressed again, while recording or checking) stops.</summary>

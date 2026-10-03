@@ -149,6 +149,10 @@ public sealed partial class VoiceSection : UserControl
 
             RecordKeyButton.Content = recorder.ButtonTitle(ShortcutTarget.Dictation);
             RecordEditButton.Content = recorder.ButtonTitle(ShortcutTarget.Edit);
+            AutomationProperties.SetName(RecordKeyButton, recorder.ButtonName(ShortcutTarget.Dictation));
+            AutomationProperties.SetName(RecordEditButton, recorder.ButtonName(ShortcutTarget.Edit));
+            AutomationProperties.SetHelpText(RecordKeyButton, recorder.ButtonHint(ShortcutTarget.Dictation));
+            AutomationProperties.SetHelpText(RecordEditButton, recorder.ButtonHint(ShortcutTarget.Edit));
             Message(KeyMessage, recorder.Message(ShortcutTarget.Dictation));
             Message(EditMessage, recorder.Message(ShortcutTarget.Edit));
             Capture(recorder.Recording is not null);

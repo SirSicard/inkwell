@@ -183,6 +183,10 @@ public class ShortcutRecorderTests
         Assert.Equal(ShortcutTarget.Dictation, rig.Recorder.Recording);
         Assert.Equal("Press the keys… (Esc cancels)", rig.Recorder.ButtonTitle(ShortcutTarget.Dictation));
         Assert.Equal("Record a shortcut…", rig.Recorder.ButtonTitle(ShortcutTarget.Edit));
+        // Narrator hears what each button is for now (the Mac's labels).
+        Assert.Equal("Recording a shortcut for dictation", rig.Recorder.ButtonName(ShortcutTarget.Dictation));
+        Assert.StartsWith("Press the keys you want", rig.Recorder.ButtonHint(ShortcutTarget.Dictation), StringComparison.Ordinal);
+        Assert.Equal("Record a shortcut for editing a selection", rig.Recorder.ButtonName(ShortcutTarget.Edit));
         Assert.IsType<CoreCommand.DictationDisable>(Assert.Single(rig.Sent.Commands));
         Assert.Equal("Dictation is paused while you record a shortcut.", rig.Dictation.Status);
         Assert.Equal("Recording a shortcut for the dictation key. Press the keys. Escape on its own cancels.", rig.Announced[^1]);
@@ -195,6 +199,7 @@ public class ShortcutRecorderTests
         Assert.Equal("ctrl+shift+space", rig.Check.Binding);
         Assert.StartsWith(ShortcutRecorderModel.RefPrefix, rig.Check.Ref, StringComparison.Ordinal);
         Assert.Equal("Cancel", rig.Recorder.ButtonTitle(ShortcutTarget.Dictation));
+        Assert.Equal("Cancel checking the shortcut for dictation", rig.Recorder.ButtonName(ShortcutTarget.Dictation));
         Assert.Equal(new ShortcutMessage("Checking Ctrl+Shift+Space…", false), rig.Recorder.Message(ShortcutTarget.Dictation));
         Assert.Equal(TimeSpan.FromSeconds(5), rig.Wakes.Scheduled.Single().Delay);
 
