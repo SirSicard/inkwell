@@ -423,7 +423,8 @@ final class LiveIconFeedTests: XCTestCase {
 
 /// Renders for a design review, written only when asked:
 ///
-///   INK_LIVE_ICON_RENDER=<folder>   the Dock tile in each state, with the default colours
+///   INK_LIVE_ICON_RENDER=<folder>   the Dock tile and the menu-bar item in each state, with the
+///                                   default colours (the menu bar light and dark, 2x)
 @MainActor
 final class LiveIconRenderTests: XCTestCase {
     func testRenderTheDockTile() throws {
@@ -448,5 +449,150 @@ final class LiveIconRenderTests: XCTestCase {
             let png = try XCTUnwrap(render(frame, side: 512).representation(using: .png, properties: [:]))
             try png.write(to: out.appendingPathComponent("dock-\(name).png"))
         }
+    }
+
+    func testRenderTheMenuBarItem() throws {
+        guard let folder = ProcessInfo.processInfo.environment["INK_LIVE_ICON_RENDER"] else {
+            throw XCTSkip("INK_LIVE_ICON_RENDER is not set")
+        }
+        let out = URL(fileURLWithPath: folder, isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let looks: [(String, LiveIconLook, Double)] = [
+            ("idle", .rest, 1), ("dictating", .glow(.you), 1), ("recording-breath-in", .pulse(.them), 1),
+            ("recording-breath-out", .pulse(.them), LiveIcon.breathLow), ("final-pass-indeterminate", .ring(nil), 1),
+            ("final-pass-50", .ring(0.5), 1), ("problem", .glow(.alert), 1),
+        ]
+        // An item's cell on a 24 pt menu bar, at 2x. The menu bar's own material is approximated
+        // by a flat fill, and the template's tint by the label colour, as macOS draws it.
+        let cell = NSSize(width: 24, height: 24)
+        for (bar, name) in [(NSAppearance.Name.aqua, "light"), (.darkAqua, "dark")] {
+            let appearance = try XCTUnwrap(NSAppearance(named: bar))
+            let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
+            theme.setMode(bar == .darkAqua ? .dark : .light)
+            let colours = LiveIcon.colours(theme)
+            let strip = try XCTUnwrap(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(cell.width) * 2 * looks.count, pixelsHigh: Int(cell.height) * 2,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0))
+            strip.size = NSSize(width: cell.width * CGFloat(looks.count), height: cell.height)
+            let window = NSWindow(
+                contentRect: NSRect(origin: .zero, size: cell), styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.appearance = appearance
+            let overlay = StatusGlyphOverlay(frame: NSRect(origin: .zero, size: cell))
+            window.contentView?.addSubview(overlay)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: strip)
+            appearance.performAsCurrentDrawingAppearance {
+                (bar == .darkAqua ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
+                NSRect(origin: .zero, size: strip.size).fill()
+                let mark = StatusGlyph.image()
+                let tinted = NSImage(size: mark.size, flipped: false) { rect in
+                    mark.draw(in: rect)
+                    NSColor.labelColor.setFill()
+                    rect.fill(using: .sourceAtop)
+                    return true
+                }
+                for (i, look) in looks.enumerated() {
+                    let origin = CGPoint(x: CGFloat(i) * cell.width, y: 0)
+                    tinted.draw(in: StatusGlyphOverlay.glyphRect(in: NSRect(origin: .zero, size: cell)).offsetBy(dx: origin.x, dy: 0))
+                    overlay.show(LiveIconFrame(look: look.1, colours: colours, strength: look.2))
+                    guard !overlay.isHidden, let rep = overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds) else { continue }
+                    overlay.cacheDisplay(in: overlay.bounds, to: rep)
+                    rep.draw(in: NSRect(origin: origin, size: cell), from: .zero, operation: .sourceOver,
+                             fraction: overlay.alphaValue, respectFlipped: false, hints: nil)
+                }
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            let png = try XCTUnwrap(strip.representation(using: .png, properties: [:]))
+            try png.write(to: out.appendingPathComponent("menubar-\(name).png"))
+        }
+    }
+}
+
+@MainActor
+final class StatusGlyphOverlayTests: XCTestCase {
+    /// The overlay as drawn over a menu-bar button, 2x, `appearance`'s menu bar.
+    private func snapshot(_ overlay: StatusGlyphOverlay, appearance: NSAppearance.Name = .aqua) throws -> NSBitmapImageRep {
+        overlay.appearance = NSAppearance(named: appearance)
+        let rep = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: rep)
+        return rep
+    }
+
+    private func colour(_ rep: NSBitmapImageRep, at point: CGPoint, in overlay: StatusGlyphOverlay) -> (GlowColours.RGB, CGFloat) {
+        let scale = CGFloat(rep.pixelsWide) / overlay.bounds.width
+        let glyph = StatusGlyphOverlay.glyphRect(in: overlay.bounds)
+        let x = Int((glyph.minX + point.x) * scale)
+        let y = rep.pixelsHigh - 1 - Int((glyph.minY + point.y) * scale)
+        let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+        return (GlowColours.RGB(Double(c?.redComponent ?? 0), Double(c?.greenComponent ?? 0), Double(c?.blueComponent ?? 0)),
+                c?.alphaComponent ?? 0)
+    }
+
+    func testTheOrbTakesTheStateColourOverTheTemplate() throws {
+        let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        overlay.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
+        XCTAssertTrue(overlay.isHidden, "at rest only the template mark shows")
+
+        overlay.show(LiveIconFrame(look: .glow(.you), colours: colours, strength: 1))
+        XCTAssertFalse(overlay.isHidden)
+        let (orb, alpha) = colour(try snapshot(overlay), at: CGPoint(x: 9, y: 9), in: overlay)
+        XCTAssertEqual(alpha, 1, accuracy: 0.01)
+        XCTAssertLessThan(distance(orb, colours.shown.you), 0.05, "the menu bar takes the mode shown's colours")
+        let (rim, rimAlpha) = colour(try snapshot(overlay), at: CGPoint(x: 9, y: 15), in: overlay)
+        XCTAssertEqual(rimAlpha, 0, accuracy: 0.01, "the rim stays the template's: \(rim)")
+    }
+
+    /// The alert colour is the menu bar's own appearance's, so it reads on either menu bar.
+    func testTheAlertFollowsTheMenuBarsAppearance() throws {
+        let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        overlay.show(LiveIconFrame(look: .glow(.alert), colours: colours, strength: 1))
+        let light = colour(try snapshot(overlay, appearance: .aqua), at: CGPoint(x: 9, y: 9), in: overlay).0
+        let dark = colour(try snapshot(overlay, appearance: .darkAqua), at: CGPoint(x: 9, y: 9), in: overlay).0
+        XCTAssertLessThan(distance(light, GlowColours.rgb(Glow.day.alert)), 0.05)
+        XCTAssertLessThan(distance(dark, GlowColours.rgb(Glow.night.alert)), 0.05)
+    }
+
+    /// The final pass fills the rim clockwise from the top, in their colour.
+    func testTheRingFillsTheRim() throws {
+        let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        overlay.show(LiveIconFrame(look: .ring(0.5), colours: colours, strength: 1))
+        let rep = try snapshot(overlay)
+        let (right, rightAlpha) = colour(rep, at: CGPoint(x: 15, y: 9), in: overlay)
+        XCTAssertEqual(rightAlpha, 1, accuracy: 0.01)
+        XCTAssertLessThan(distance(right, colours.shown.them), 0.05)
+        XCTAssertEqual(colour(rep, at: CGPoint(x: 3, y: 9), in: overlay).1, 0, accuracy: 0.01, "still to come")
+        XCTAssertEqual(colour(rep, at: CGPoint(x: 9, y: 9), in: overlay).1, 0, accuracy: 0.01, "the orb stays the template's")
+    }
+
+    /// The pulse changes only the overlay's opacity: composited, never redrawn.
+    func testThePulseOnlyFades() {
+        let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+        XCTAssertEqual(overlay.redraws, 1)
+        for tick in 1...14 {
+            overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: LiveIcon.breath(tick)))
+        }
+        XCTAssertEqual(overlay.redraws, 1, "a breath is opacity only")
+        XCTAssertEqual(overlay.alphaValue, 1, accuracy: 0.001)
+        overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 0.6))
+        XCTAssertEqual(overlay.alphaValue, 0.6, accuracy: 0.001)
+        overlay.show(LiveIconFrame(look: .glow(.them), colours: colours, strength: 1))
+        XCTAssertEqual(overlay.redraws, 2, "a new look is drawn")
+        XCTAssertEqual(overlay.alphaValue, 1)
+    }
+
+    func testItTakesNoClicksAndSaysNothing() {
+        let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        overlay.show(LiveIconFrame(look: .glow(.you), colours: colours, strength: 1))
+        XCTAssertNil(overlay.hitTest(NSPoint(x: 12, y: 12)), "clicks reach the button and its menu")
+        XCTAssertFalse(overlay.isAccessibilityElement(), "the button's label says the state")
+    }
+
+    func testTheSpokenLabelSaysTheState() {
+        XCTAssertEqual(StatusItemController.spoken(.meeting), "Inkwell, recording")
+        XCTAssertEqual(StatusItemController.spoken(.idle), "Inkwell")
     }
 }

@@ -169,7 +169,7 @@ enum LiveIconArt {
 
     /// A rounded rectangle starting at the top's middle and running clockwise, so a dash pattern
     /// fills it as a clock's hand sweeps.
-    private static func clockwiseFromTop(_ r: NSRect, corner: CGFloat) -> CGPath {
+    static func clockwiseFromTop(_ r: NSRect, corner: CGFloat) -> CGPath {
         let path = CGMutablePath()
         path.move(to: CGPoint(x: r.midX, y: r.maxY))
         path.addArc(tangent1End: CGPoint(x: r.maxX, y: r.maxY), tangent2End: CGPoint(x: r.maxX, y: r.minY), radius: corner)

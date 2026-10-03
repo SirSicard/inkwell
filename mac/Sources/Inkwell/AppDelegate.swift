@@ -100,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showMainWindow()
                 self?.router.open(.settings)
             })
+        if let statusItem { liveIcon.attach(statusItem) }
         liveIcon.follow(ink: ink, theme: core.screens.theme)
         // Opened by the user: show the window. Opened at login: stay in the menu bar, unless a
         // second copy asked for the window while this one was starting (served by attach).

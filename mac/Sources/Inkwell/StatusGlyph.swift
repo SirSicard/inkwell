@@ -75,3 +75,102 @@ enum StatusGlyph {
         return rep
     }
 }
+
+/// The live state over the menu-bar mark. The mark stays a template, tinted by macOS; the state
+/// is a coloured part laid exactly over one of its parts, rather than a coloured copy of the whole
+/// glyph, which would lose the template's tinting for the menu bar, the wallpaper and an inactive
+/// display:
+///
+///   glow, pulse   the orb in the state's colour (the pulse fades this view; nothing redraws)
+///   ring          the rim filled clockwise from the top with the final pass, in their colour
+///
+/// It takes no clicks and is not an accessibility element: the button's label says the state.
+final class StatusGlyphOverlay: NSView {
+    private var shown = LiveIconFrame(look: .rest, colours: .unset, strength: 1)
+    /// How many times a frame asked for a redraw (the pulse's frames are opacity only).
+    private(set) var redraws = 0
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        // Layer-backed, so the pulse's opacity is composited, never redrawn.
+        wantsLayer = true
+        isHidden = true
+        setAccessibilityElement(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("not built from a nib")
+    }
+
+    /// Where the button draws the mark: centred in its bounds, on whole pixels.
+    static func glyphRect(in bounds: NSRect) -> NSRect {
+        NSRect(
+            x: (bounds.width - StatusGlyph.size) / 2, y: (bounds.height - StatusGlyph.size) / 2,
+            width: StatusGlyph.size, height: StatusGlyph.size)
+    }
+
+    func show(_ frame: LiveIconFrame) {
+        // The strength is the view's opacity; only a new look or colour is drawn again.
+        var drawn = frame
+        drawn.strength = 1
+        if drawn != shown {
+            shown = drawn
+            redraws += 1
+            needsDisplay = true
+        }
+        isHidden = frame.look == .rest
+        alphaValue = frame.strength
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let glyph = backingAlignedRect(Self.glyphRect(in: bounds), options: .alignAllEdgesNearest)
+        let shownColours = shown.colours.shown
+        switch shown.look {
+        case .rest:
+            break
+        case .glow(let tone), .pulse(let tone):
+            // Half a point over the template's orb all round, so no edge of it shows through.
+            let orb = StatusGlyph.orb.offsetBy(dx: glyph.minX, dy: glyph.minY).insetBy(dx: -0.5, dy: -0.5)
+            Self.colour(tone, shownColours).setFill()
+            NSBezierPath(ovalIn: orb).fill()
+        case .ring(let progress):
+            // Exactly over the rim as this scale's bitmap draws it (2 pt at 1x, 1.5 pt at 2x).
+            let scale = max(convertToBacking(NSSize(width: 1, height: 1)).width, 1)
+            let g = StatusGlyph.geometry(scale: Int(scale.rounded()))
+            let px = 1 / scale
+            let stroke = CGFloat(g.stroke) * px
+            let ring = glyph.insetBy(dx: CGFloat(g.inset) * px + stroke / 2, dy: CGFloat(g.inset) * px + stroke / 2)
+            let corner = (g.corner - CGFloat(g.stroke) / 2) * px
+            guard let cg = NSGraphicsContext.current?.cgContext else { return }
+            let path = LiveIconArt.clockwiseFromTop(ring, corner: corner)
+            let length = 2 * (ring.width + ring.height) - 8 * corner + 2 * .pi * corner
+            cg.setLineWidth(stroke)
+            cg.setLineCap(.butt)
+            cg.setStrokeColor(GlowColours.nsColor(shownColours.them).cgColor)
+            if let progress {
+                let filled = length * CGFloat(min(max(progress, 0), 1))
+                guard filled > 0 else { return }
+                cg.setLineDash(phase: 0, lengths: [filled, length + 1])
+            } else {
+                cg.setLineDash(phase: 0, lengths: [length / 16, length / 16])
+            }
+            cg.addPath(path)
+            cg.strokePath()
+        }
+    }
+
+    /// The alert colour resolves against the menu bar's appearance as it draws, so it reads on a
+    /// light or a dark menu bar; yours and theirs are the mode shown's, as every other dot.
+    private static func colour(_ tone: LiveIconLook.Tone, _ pair: LiveIconColours.Pair) -> NSColor {
+        switch tone {
+        case .you: GlowColours.nsColor(pair.you)
+        case .them: GlowColours.nsColor(pair.them)
+        case .alert: Theme.dynamic { $0.alert.nsColor }
+        }
+    }
+}
