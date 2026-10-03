@@ -42,7 +42,9 @@ public class StatsModelTests
         public FakeWakes Wakes { get; } = new();
         public StatsModel Stats { get; }
 
-        public Rig() => Stats = new StatsModel(Sent.Send, Wakes, TimeZoneInfo.Utc, Gb, () => Now);
+        public TimeZoneInfo Zone { get; set; } = TimeZoneInfo.Utc;
+
+        public Rig() => Stats = new StatsModel(Sent.Send, Wakes, () => Zone, Gb, () => Now);
 
         public List<string> Names() => Sent.Commands.Select(c => c.Name).ToList();
 
@@ -104,6 +106,18 @@ public class StatsModelTests
         rig.Stats.Apply(Ev.Of(Counted(second, words: (5, 50, 500))));
         Assert.Equal(500, rig.Stats.Counted?.Dictation.WordsAll);
         Assert.Equal(StatsModel.Load.Loaded, rig.Stats.LoadState);
+    }
+
+    /// <summary>Each question reads the zone afresh: a PC that moved zones while Inkwell ran counts in the new one.</summary>
+    [Fact]
+    public void EachQuestionTakesTheZoneAsItIsNow()
+    {
+        var rig = new Rig();
+        rig.Stats.Reload();
+        Assert.Equal(0, rig.LastFields("stats.get").GetProperty("utc_offsets")[0].GetProperty("minutes").GetInt32());
+        rig.Zone = TimeZoneInfo.FindSystemTimeZoneById("Asia/Tokyo");
+        rig.Stats.CheckMilestones();
+        Assert.Equal(540, rig.LastFields("milestones.check").GetProperty("utc_offsets")[0].GetProperty("minutes").GetInt32());
     }
 
     [Fact]

@@ -13,8 +13,10 @@
 // in flight would otherwise lose one. A milestone reached waits here until the window is on screen,
 // where the window shows its glow and note, each once.
 //
-// The days are the user's current zone's: a record made while travelling is placed by the zone
-// the PC is in now, as the store keeps no zone per record.
+// The days are the user's current zone's, read afresh for each question (as the Mac's
+// autoupdating calendar is): a PC that changes zone while Inkwell runs counts in the new one. A
+// record made while travelling is placed by the zone the PC is in now, as the store keeps no zone
+// per record.
 using System.Globalization;
 using Inkwell.Core.Events;
 
@@ -78,7 +80,7 @@ public sealed class StatsModel : ObservableModel
 
     private readonly Action<CoreCommand> send;
     private readonly IWakeScheduler wake;
-    private readonly TimeZoneInfo zone;
+    private readonly Func<TimeZoneInfo> zone;
     private readonly Func<DateTimeOffset> now;
     private int sequence;
     private string? latestGet;
@@ -106,16 +108,16 @@ public sealed class StatsModel : ObservableModel
     private readonly Dictionary<ShellSetting, int> unechoed = [];
 
     /// <param name="wake">The load's time limit (the view's clock).</param>
-    /// <param name="zone">The user's time zone (null: this PC's).</param>
+    /// <param name="zone">The user's time zone, asked for each question (null: this PC's, as it is then).</param>
     /// <param name="culture">Their culture: where weeks start, and how counts read (null: this PC's).</param>
     /// <param name="now">The clock (null: the system's).</param>
-    public StatsModel(Action<CoreCommand> send, IWakeScheduler wake, TimeZoneInfo? zone = null, CultureInfo? culture = null, Func<DateTimeOffset>? now = null)
+    public StatsModel(Action<CoreCommand> send, IWakeScheduler wake, Func<TimeZoneInfo>? zone = null, CultureInfo? culture = null, Func<DateTimeOffset>? now = null)
     {
         ArgumentNullException.ThrowIfNull(send);
         ArgumentNullException.ThrowIfNull(wake);
         this.send = send;
         this.wake = wake;
-        this.zone = zone ?? TimeZoneInfo.Local;
+        this.zone = zone ?? LocalZoneNow;
         Culture = culture ?? CultureInfo.CurrentCulture;
         this.now = now ?? (() => DateTimeOffset.UtcNow);
     }
@@ -146,7 +148,14 @@ public sealed class StatsModel : ObservableModel
 
     /// <summary>The calendar fields both questions carry.</summary>
     private (IReadOnlyList<UtcOffset> Offsets, int WeekStart) CalendarFields() =>
-        (UtcOffsets(zone, now()), IsoWeekStart(Culture));
+        (UtcOffsets(zone(), now()), IsoWeekStart(Culture));
+
+    /// <summary>This PC's zone as it is now: .NET keeps the first it read until its cache is cleared.</summary>
+    private static TimeZoneInfo LocalZoneNow()
+    {
+        TimeZoneInfo.ClearCachedData();
+        return TimeZoneInfo.Local;
+    }
 
     /// <summary>Counts again.</summary>
     public void Reload()
