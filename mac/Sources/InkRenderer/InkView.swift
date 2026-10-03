@@ -28,8 +28,13 @@ public final class InkView: NSView {
         didSet {
             guard state != oldValue else { return }
             simulation.state = state
-            // Live it wanders on from wherever it is; going to rest it stays where it got to.
-            wander?.hold(at: CACurrentMediaTime())
+            // Going to rest it stays where it got to (and that counts as its last move); going
+            // live it sets off from there. From one live state to another it keeps going.
+            if !(oldValue.isLive && state.isLive) {
+                let now = CACurrentMediaTime()
+                wander?.hold(at: now)
+                if !state.isLive { lastMove = now }
+            }
             perform(schedule.set(state: state))
         }
     }
@@ -280,9 +285,11 @@ public final class InkView: NSView {
     /// still frame, until the pipeline arrives.
     private func visibilityChanged() {
         let onScreen = isOnScreen && pipeline != nil
-        if onScreen && !schedule.onScreen && !state.isLive, var wander {
-            // Coming on screen at rest: a new spot, chosen before anything is drawn, so a glide
-            // starts from where it was and, with motion stilled, the one still frame is already there.
+        if onScreen && !schedule.onScreen && (!state.isLive || reduceMotion), var wander {
+            // Coming on screen at rest (or still, live): a new spot, chosen before anything is
+            // drawn, so a glide starts from where it was and, with motion stilled, the one still
+            // frame is already there. Off screen the schedule's clock is stopped, so the action
+            // ignored here is always .nothing; set(onScreen:) below acts on both.
             lastMove = CACurrentMediaTime()
             wander.move(at: lastMove, animated: !reduceMotion)
             self.wander = wander
@@ -291,9 +298,10 @@ public final class InkView: NSView {
         perform(schedule.set(onScreen: onScreen))
     }
 
-    /// A wandering orb at rest on screen goes to a new spot: a glide, or at once with motion stilled.
+    /// A wandering orb on screen goes to a new spot: at rest a glide, or at once with motion stilled
+    /// (live too then: it has no frames of its own to wander on).
     private func moveAtRest() {
-        guard var wander, !state.isLive, schedule.onScreen else { return }
+        guard var wander, !state.isLive || reduceMotion, schedule.onScreen else { return }
         let now = CACurrentMediaTime()
         wander.move(at: now, animated: !reduceMotion)
         self.wander = wander

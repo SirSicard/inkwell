@@ -90,7 +90,7 @@ final class WanderViewTests: XCTestCase {
     func testComingBackToTheWindowMovesItAfterAWhileOnlyWhileOnScreen() async throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
         let view = makeView(reduceMotion: true)
-        view.restInterval = 0.4
+        view.restInterval = 1.5
         // In a window that is never ordered in: the view hears its window's notices, and counts as
         // on screen by assumeOnScreen.
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 80), styleMask: [.borderless],
@@ -102,7 +102,7 @@ final class WanderViewTests: XCTestCase {
         let shown = view.orbCentre, framesShown = view.framesDrawn
         becomeKey()
         XCTAssertEqual(view.orbCentre, shown, "just moved: it stays")
-        try await spin(0.6)
+        try await spin(1.6)
         XCTAssertEqual(view.framesDrawn, framesShown, "no timer: nothing drawn while left alone")
         becomeKey()
         XCTAssertNotEqual(view.orbCentre, shown, "back after a while: a new spot")
@@ -125,11 +125,36 @@ final class WanderViewTests: XCTestCase {
         let rest = view.orbCentre
         view.state = .dictating
         try await spin(1.0)
+        XCTAssertNotEqual(view.orbCentre, rest, "live: it drifts")
+        view.state = .meeting
+        let onTheWay = view.orbCentre
+        try await spin(0.3)
+        XCTAssertGreaterThan(distance(view.orbCentre, onTheWay), 1e-5, "live to live: it keeps going")
         let drifted = view.orbCentre
-        XCTAssertNotEqual(drifted, rest, "live: it drifts")
         view.state = .idle
         XCTAssertFalse(view.isAnimating)
-        XCTAssertEqual(view.orbCentre, drifted, accuracy: 0.002, "no jump back on going to rest")
+        let held = view.orbCentre
+        XCTAssertEqual(held, drifted, accuracy: 1e-6, "no jump on going to rest")
+        try await spin(0.3)
+        XCTAssertEqual(view.orbCentre, held, "and it holds there")
+    }
+
+    /// Motion off while live (no frames but the state's still one): a change of screen still takes
+    /// a new spot, in a new still frame.
+    func testWithMotionOffALiveOrbStillTakesANewSpot() async throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let view = makeView(reduceMotion: true)
+        try await show(view)
+        view.state = .dictating
+        let frames = view.framesDrawn, before = view.orbCentre
+        view.contentID = "live"
+        XCTAssertFalse(view.isAnimating)
+        XCTAssertEqual(view.framesDrawn, frames + 1)
+        XCTAssertNotEqual(view.orbCentre, before)
+    }
+
+    private func distance(_ a: SIMD2<Double>, _ b: SIMD2<Double>) -> Double {
+        ((a - b) * (a - b)).sum().squareRoot()
     }
 
     /// Without bounds (the Drop, the first run) it stays at its placement, whatever happens.

@@ -79,11 +79,17 @@ final class ScheduleTests: XCTestCase {
         XCTAssertEqual(s.update(), .nothing, "and nothing after it")
         XCTAssertFalse(s.clockRunning)
 
+        XCTAssertEqual(s.set(gliding: true), .startClock)
+        XCTAssertEqual(s.set(reduceMotion: true), .stopClockAndDrawStill, "motion stilled mid-glide: it holds")
+        XCTAssertFalse(s.gliding)
+        XCTAssertEqual(s.set(reduceMotion: false), .nothing, "and no glide resumes")
         _ = s.set(reduceMotion: true)
         XCTAssertEqual(s.set(gliding: true), .nothing, "motion off: no glide")
         _ = s.set(gliding: false)
         _ = s.set(reduceMotion: false)
-        _ = s.set(onScreen: false)
+        _ = s.set(gliding: true)
+        XCTAssertEqual(s.set(onScreen: false), .stopClock, "hidden mid-glide")
+        XCTAssertFalse(s.gliding)
         XCTAssertEqual(s.set(gliding: true), .nothing, "off screen: nothing moves")
     }
 

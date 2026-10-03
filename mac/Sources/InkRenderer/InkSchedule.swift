@@ -44,13 +44,16 @@ struct InkSchedule: Equatable {
         return update()
     }
 
+    /// Hidden, or with motion stilled, a glide under way ends (the orb holds where it was).
     mutating func set(onScreen new: Bool) -> Action {
         onScreen = new
+        if !new { gliding = false }
         return update()
     }
 
     mutating func set(reduceMotion new: Bool) -> Action {
         reduceMotion = new
+        if new { gliding = false }
         return update()
     }
 
