@@ -72,7 +72,7 @@ pub fn check(token: &str) -> Result<String, &'static str> {
         Ok(binding) => Ok(binding.canonical()),
         Err(PlatformError::Unsupported(why)) => Err(why),
         // The parser refuses only as Unsupported; anything else is still a refusal.
-        Err(_) => Err("Windows cannot watch that key"),
+        Err(_) => Err(binding::refusal::UNKNOWN_KEY),
     }
 }
 
