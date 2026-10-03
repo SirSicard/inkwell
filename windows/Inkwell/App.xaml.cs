@@ -78,7 +78,11 @@ public partial class App : Application
             return null;
         }
         ScreenLog.Also = message => log.Write("shell", message);
-        if (!CoreLogCapture.Start(line => log.Write(LocalLog.StderrSource(line), line)))
+        if (!CoreLogCapture.Start(line =>
+            {
+                var (source, text) = LocalLog.FromStderr(line);
+                log.Write(source, text);
+            }))
         {
             log.Write("shell", "the core's log lines could not be captured");
         }

@@ -6,11 +6,12 @@
 // value).
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Inkwell.Core;
 
 /// <summary>The local log and crash notes. Any thread.</summary>
-public sealed class LocalLog
+public sealed partial class LocalLog
 {
     /// <summary>The folder in the library's folder that holds the log and the crash notes.</summary>
     public const string FolderName = "logs";
@@ -122,15 +123,27 @@ public sealed class LocalLog
     }
 
     /// <summary>
-    /// Who wrote a line that arrived on stderr: "core" for the core's own lines ("[warn ink_ffi] ..."),
-    /// "stderr" for anything else in the process that wrote there.
+    /// What of a line that arrived on stderr goes in the log, and from whom. The core's own lines
+    /// ("[warn ink_ffi] ...", through its filtered logger) as they are. A Rust panic's first line
+    /// ("thread 'x' panicked at src/a.rs:1:2:") as it is: it names only where. Anything else, a
+    /// panic's message included (Rust's default hook prints the payload, which can quote what was
+    /// said), only by its length.
     /// </summary>
-    public static string StderrSource(string line)
+    public static (string Source, string Text) FromStderr(string line)
     {
         ArgumentNullException.ThrowIfNull(line);
         string[] levels = ["[error ", "[warn ", "[info ", "[debug ", "[trace "];
-        return levels.Any(l => line.StartsWith(l, StringComparison.Ordinal)) ? "core" : "stderr";
+        if (levels.Any(l => line.StartsWith(l, StringComparison.Ordinal)))
+        {
+            return ("core", line);
+        }
+        return PanicAt().IsMatch(line)
+            ? ("stderr", line)
+            : ("stderr", $"a line that is not the core's, not kept ({line.Length} characters)");
     }
+
+    [GeneratedRegex(@"^thread '[^']*' panicked at [^\s]+:\d+:\d+:$", RegexOptions.CultureInvariant)]
+    private static partial Regex PanicAt();
 
     /// <summary>A crash note's text: when, the app's version, Windows' version, then each exception's type and stack.</summary>
     public static string CrashNote(Exception exception, string? appVersion, DateTimeOffset at)

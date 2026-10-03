@@ -427,8 +427,9 @@ anywhere: `logs\inkwell.log` in the library folder (`%LOCALAPPDATA%\Inkwell\logs
 (`windows/Inkwell.Core/LocalLog.cs`). It holds the shell's diagnostics (`ScreenLog`: what failed,
 by command name and fixed words, never a command's fields) and what the core writes to stderr at
 its default level, info. The core keeps what was said out of its lines; they can name files in
-the library and models folders, and quote an online provider's error. Anything else in the
-process that writes to stderr is marked `stderr`. When an exception ends the app, it first writes
+the library and models folders, and quote an online provider's error. Of anything else written
+to stderr only the length is kept, and of a Rust panic only its first line (where, never the
+message). When an exception ends the app, it first writes
 `crash-YYYYMMDD-HHMMSS.txt` beside the log: the time, the app's and Windows' versions, and each
 exception's type and stack, without its message (the newest ten are kept). A crash inside native
 code (the core, an engine, a GPU driver) ends the process without a note. Ask the user for the

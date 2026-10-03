@@ -33,13 +33,19 @@ public sealed class LocalLogTests : IDisposable
         Assert.Equal((byte)'2', File.ReadAllBytes(log.Path)[0]); // no byte-order mark
     }
 
+    /// <summary>
+    /// Of stderr, the core's own lines and a panic's location are kept; anything else, a panic's
+    /// message included (it can quote what was said), only by its length.
+    /// </summary>
     [Theory]
-    [InlineData("[warn ink_ffi::runtime] warming the DictationFinal model failed", "core")]
-    [InlineData("[info ink_ffi::control] meeting detection: offering it", "core")]
-    [InlineData("Unhandled exception. System.FormatException: words", "stderr")]
-    [InlineData("[warning] something else's format", "stderr")]
-    public void StderrLinesSayWhetherTheCoreWroteThem(string line, string source) =>
-        Assert.Equal(source, LocalLog.StderrSource(line));
+    [InlineData("[warn ink_ffi::runtime] warming the DictationFinal model failed", "core", "[warn ink_ffi::runtime] warming the DictationFinal model failed")]
+    [InlineData("[info ink_ffi::control] meeting detection: offering it", "core", "[info ink_ffi::control] meeting detection: offering it")]
+    [InlineData("thread 'meetings' panicked at crates/ink-pipeline/src/final_pass.rs:212:31:", "stderr", "thread 'meetings' panicked at crates/ink-pipeline/src/final_pass.rs:212:31:")]
+    [InlineData("byte index 7 is not a char boundary; it is inside 'é' of `the words the user said`", "stderr", "a line that is not the core's, not kept (82 characters)")]
+    [InlineData("Unhandled exception. System.FormatException: words", "stderr", "a line that is not the core's, not kept (50 characters)")]
+    [InlineData("[warning] something else's format", "stderr", "a line that is not the core's, not kept (33 characters)")]
+    public void OfStderrOnlyTheCoresLinesAndAPanicsPlaceAreKept(string line, string source, string text) =>
+        Assert.Equal((source, text), LocalLog.FromStderr(line));
 
     [Fact]
     public void ALibrarysLogIsInItsLogsFolder() =>
