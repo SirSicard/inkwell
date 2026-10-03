@@ -152,8 +152,13 @@ final class LiveIcon {
     func attach(_ surface: LiveIconSurface) {
         guard !surfaces.contains(where: { $0 === surface }) else { return }
         surfaces.append(surface)
-        if !isAwake { surface.setAwake(false) }
-        surface.show(frame)
+        if isAwake {
+            surface.show(frame)
+        } else {
+            // Shown on waking, with the rest.
+            surface.setAwake(false)
+            unshown = true
+        }
         reconcileTicker()
     }
 
@@ -268,7 +273,8 @@ final class LiveIcon {
     }
 
     private func advance() {
-        guard frame.look.pulses else { return }
+        // A tick that lands after the timer was stopped (asleep, or the pulse over) draws nothing.
+        guard isAwake, frame.look.pulses else { return }
         tick = (tick + 1) % Int(Self.pulseFPS * Self.breathPeriod)
         frame.strength = Self.breath(tick)
         frames += 1
@@ -306,11 +312,17 @@ final class TimerTicker: LiveIconTicker {
 /// Whether anyone can see the screen: the displays awake, the screen unlocked, and this user's
 /// session in front (fast user switching). Each is followed through the system's notifications;
 /// nothing polls. The lock is the distributed com.apple.screenIsLocked pair, which macOS posts
-/// for the lock screen and the screen saver's password, and has no AppKit name.
+/// for the lock screen and the screen saver's password, and has no AppKit name; it is asked for
+/// at once even while the app is inactive (a menu-bar app nearly always is), since AppKit
+/// otherwise holds distributed notifications back. A screen saver without a password is neither
+/// sleep nor lock, so the icon carries on under it.
+///
+/// It fails open: the app becoming active means someone is at an unlocked, awake screen, so a
+/// missed unlock or wake can never leave the icon still for good.
 @MainActor
 final class DisplayWatch {
-    static let screenLocked = Notification.Name("com.apple.screenIsLocked")
-    static let screenUnlocked = Notification.Name("com.apple.screenIsUnlocked")
+    nonisolated static let screenLocked = Notification.Name("com.apple.screenIsLocked")
+    nonisolated static let screenUnlocked = Notification.Name("com.apple.screenIsUnlocked")
 
     private(set) var awake = true
     private var asleep = false
@@ -318,10 +330,15 @@ final class DisplayWatch {
     private var away = false
     private let onChange: @MainActor (Bool) -> Void
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    /// The lock pair's observer on the system's distributed centre (selector-based, the only form
+    /// that takes a suspension behaviour).
+    private var lockRelay: LockRelay?
 
+    /// `distributed`: nil for the system's distributed centre; tests pass their own.
     init(
         workspace: NotificationCenter = NSWorkspace.shared.notificationCenter,
-        distributed: NotificationCenter = DistributedNotificationCenter.default(),
+        app: NotificationCenter = NotificationCenter.default,
+        distributed: NotificationCenter? = nil,
         onChange: @escaping @MainActor (Bool) -> Void
     ) {
         self.onChange = onChange
@@ -329,13 +346,57 @@ final class DisplayWatch {
         watch(workspace, NSWorkspace.screensDidWakeNotification) { $0.asleep = false }
         watch(workspace, NSWorkspace.sessionDidResignActiveNotification) { $0.away = true }
         watch(workspace, NSWorkspace.sessionDidBecomeActiveNotification) { $0.away = false }
-        watch(distributed, Self.screenLocked) { $0.locked = true }
-        watch(distributed, Self.screenUnlocked) { $0.locked = false }
+        watch(app, NSApplication.didBecomeActiveNotification) {
+            $0.asleep = false
+            $0.locked = false
+            $0.away = false
+        }
+        if let distributed {
+            watch(distributed, Self.screenLocked) { $0.locked = true }
+            watch(distributed, Self.screenUnlocked) { $0.locked = false }
+        } else {
+            lockRelay = LockRelay { [weak self] locked in
+                guard let self else { return }
+                self.locked = locked
+                self.settle()
+            }
+        }
     }
 
     isolated deinit {
         for (center, observer) in observers {
             center.removeObserver(observer)
+        }
+    }
+
+    /// Hears the lock pair at once, whether or not the app is active.
+    @MainActor
+    private final class LockRelay: NSObject {
+        private let changed: @MainActor (Bool) -> Void
+
+        init(_ changed: @escaping @MainActor (Bool) -> Void) {
+            self.changed = changed
+            super.init()
+            let center = DistributedNotificationCenter.default()
+            center.addObserver(
+                self, selector: #selector(locked), name: DisplayWatch.screenLocked, object: nil,
+                suspensionBehavior: .deliverImmediately)
+            center.addObserver(
+                self, selector: #selector(unlocked), name: DisplayWatch.screenUnlocked, object: nil,
+                suspensionBehavior: .deliverImmediately)
+        }
+
+        deinit {
+            DistributedNotificationCenter.default().removeObserver(self)
+        }
+
+        // Distributed notifications are delivered on the main thread.
+        @objc private func locked(_ note: Notification) {
+            changed(true)
+        }
+
+        @objc private func unlocked(_ note: Notification) {
+            changed(false)
         }
     }
 

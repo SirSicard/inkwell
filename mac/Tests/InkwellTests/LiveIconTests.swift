@@ -99,13 +99,22 @@ private final class HandTicker: LiveIconTicker {
         self.tick = tick
     }
 
+    /// The last closure, kept past stop(): a tick already on its way when the timer stopped.
+    private var last: (@MainActor () -> Void)?
+
     func stop() {
         if tick != nil { stops += 1 }
+        last = tick
         tick = nil
     }
 
     func fire(_ times: Int = 1) {
         for _ in 0..<times { tick?() }
+    }
+
+    /// Fires the stopped timer's closure, as a late tick would.
+    func fireLate(_ times: Int = 1) {
+        for _ in 0..<times { (tick ?? last)?() }
     }
 }
 
@@ -217,6 +226,19 @@ final class LiveIconPulseTests: XCTestCase {
         XCTAssertEqual(surface.shown.last, LiveIconFrame(look: .ring(nil), colours: colours, strength: 1))
     }
 
+    /// A tick already on its way when the recording ended draws nothing.
+    func testALateTickDrawsNothing() {
+        let ticker = HandTicker()
+        let icon = LiveIcon(ticker: ticker)
+        let surface = RecordingSurface()
+        icon.attach(surface)
+        icon.update(look: .pulse(.them), colours: colours)
+        icon.update(look: .glow(.you), colours: colours)
+        let shown = surface.shown.count
+        ticker.fireLate(3)
+        XCTAssertEqual(surface.shown.count, shown)
+    }
+
     func testStillMeansNoTimer() {
         let ticker = HandTicker()
         let icon = LiveIcon(ticker: ticker)
@@ -301,7 +323,7 @@ final class LiveIconSelfBreathTests: XCTestCase {
         icon.attach(RecordingSurface(breathesItself: true))
         let start = icon.frames
         icon.update(look: .pulse(.them), colours: colours)
-        ticker.fire(420)
+        XCTAssertTrue(ticker.starts.isEmpty, "no timer at all")
         XCTAssertEqual(icon.frames - start, 1)
     }
 }
@@ -325,7 +347,7 @@ final class LiveIconAsleepTests: XCTestCase {
         XCTAssertEqual(bar.awake, [false], "the menu bar's breath stops")
         let start = icon.frames
         let shown = dock.shown.count + bar.shown.count
-        ticker.fire(420)
+        ticker.fireLate(420)
         icon.update(look: .ring(0.25), colours: colours)
         icon.update(look: .ring(0.5), colours: colours)
         XCTAssertEqual(icon.frames - start, 0, "a minute asleep, with the state changing: nothing drawn")
@@ -365,7 +387,10 @@ final class LiveIconAsleepTests: XCTestCase {
         let bar = RecordingSurface(breathesItself: true)
         icon.attach(bar)
         XCTAssertEqual(bar.awake, [false])
+        XCTAssertTrue(bar.shown.isEmpty, "nothing drawn on a sleeping display")
         XCTAssertFalse(icon.isPulsing)
+        icon.setAwake(true)
+        XCTAssertEqual(bar.shown.map(\.look), [.pulse(.them)], "shown on waking")
     }
 }
 
@@ -373,9 +398,10 @@ final class LiveIconAsleepTests: XCTestCase {
 final class DisplayWatchTests: XCTestCase {
     func testItFollowsSleepLockAndTheSession() {
         let workspace = NotificationCenter()
+        let app = NotificationCenter()
         let distributed = NotificationCenter()
         var said: [Bool] = []
-        let watch = DisplayWatch(workspace: workspace, distributed: distributed) { said.append($0) }
+        let watch = DisplayWatch(workspace: workspace, app: app, distributed: distributed) { said.append($0) }
         XCTAssertTrue(watch.awake)
         workspace.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
         XCTAssertEqual(said, [false])
@@ -387,6 +413,22 @@ final class DisplayWatchTests: XCTestCase {
         workspace.post(name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
         workspace.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
         XCTAssertEqual(said, [false, true, false, true], "another user in front, then back")
+    }
+
+    /// A missed unlock or wake never leaves the icon still for good: the app becoming active
+    /// means someone is at an awake, unlocked screen.
+    func testItFailsOpenWhenTheAppIsActive() {
+        let workspace = NotificationCenter()
+        let app = NotificationCenter()
+        let distributed = NotificationCenter()
+        var said: [Bool] = []
+        let watch = DisplayWatch(workspace: workspace, app: app, distributed: distributed) { said.append($0) }
+        distributed.post(name: DisplayWatch.screenLocked, object: nil)
+        workspace.post(name: NSWorkspace.screensDidSleepNotification, object: nil)
+        XCTAssertFalse(watch.awake)
+        app.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        XCTAssertTrue(watch.awake)
+        XCTAssertEqual(said, [false, true])
     }
 }
 
@@ -777,6 +819,28 @@ final class StatusGlyphOverlayTests: XCTestCase {
         overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
         overlay.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
         XCTAssertNil(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey))
+    }
+
+    /// In a window: the breathing orb sits on the view's layer at the window's scale, over the
+    /// orb's place, and the breath survives the view moving between windows.
+    func testTheBreathHoldsInAWindow() throws {
+        let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+        for _ in 0..<2 {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 24, height: 24), styleMask: .borderless, backing: .buffered,
+                defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView?.addSubview(overlay)
+            XCTAssertTrue(overlay.breathing.superlayer === overlay.layer)
+            XCTAssertEqual(overlay.breathing.contentsScale, window.backingScaleFactor)
+            XCTAssertNotNil(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey))
+            let box = try XCTUnwrap(overlay.breathing.path?.boundingBox)
+            let glyph = overlay.backingAlignedRect(StatusGlyphOverlay.glyphRect(in: overlay.bounds), options: .alignAllEdgesNearest)
+            XCTAssertEqual(box, StatusGlyph.orb.offsetBy(dx: glyph.minX, dy: glyph.minY))
+            overlay.removeFromSuperview()
+        }
     }
 
     /// Asleep or locked, the breath is taken off the layer; awake, it is put back.

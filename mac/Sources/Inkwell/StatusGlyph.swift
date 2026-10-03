@@ -158,6 +158,32 @@ final class StatusGlyphOverlay: NSView {
         placeBreathing()
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        placeBreathing()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        restoreBreathing()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        restoreBreathing()
+    }
+
+    /// The breath is set up once, when the pulse starts, and nothing else would redo it: so when
+    /// the view lands in a window, or its display's scale changes, the layer is put back on the
+    /// view's own (should AppKit have made it a new one), sized for the scale, and the breath
+    /// restarted if it was dropped.
+    private func restoreBreathing() {
+        if let layer, breathing.superlayer !== layer { layer.addSublayer(breathing) }
+        breathing.contentsScale = window?.backingScaleFactor ?? 2
+        placeBreathing()
+        breathe(shown.look.pulses && awake)
+    }
+
     /// Puts the breathing orb over the drawn tint while a pulse shows, hidden otherwise; set
     /// without the layer's implicit animations.
     private func placeBreathing() {
