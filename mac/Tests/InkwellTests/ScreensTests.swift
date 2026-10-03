@@ -2084,9 +2084,10 @@ final class KeyControlsLayoutTests: XCTestCase {
         let recording = RecordShortcutButton.recordingTitle
         let line = 225 + 12 + buttonWidth(recording)
         XCTAssertGreaterThan(buttonWidth(recording), buttonWidth(idle) + 20, "the scenario below needs a longer label")
-        let oneLine = needed(idle, width: line)
+        // A point over the line, clear of rounding at the threshold.
+        let oneLine = needed(idle, width: line + 1)
         XCTAssertEqual(oneLine.width, line, accuracy: 0.5)
-        XCTAssertEqual(needed(recording, width: line), oneLine, "recording keeps the line")
+        XCTAssertEqual(needed(recording, width: line + 1), oneLine, "recording keeps the line")
         // Room for the idle label but not the recording one: stacked either way, so pressing the
         // button never moves it to the next line.
         let between = 225 + 12 + buttonWidth(idle) + 10

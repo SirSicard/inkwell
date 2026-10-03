@@ -404,9 +404,10 @@ private struct DictationSection: View {
 }
 
 /// A key row's controls: the picker and its cap, then Record a shortcut…, on one line where the
-/// row has room, else the button under them, never a label cut short. The line is measured with
-/// the button's longest label, so both rows choose alike (their key slots are as wide) and the
-/// buttons stay in one column, and pressing the button never moves it to the next line.
+/// row has room for the button's longest label, else the button under them. Measured with that
+/// label, both rows choose alike (their key slots are as wide) and the buttons stay in one column,
+/// and pressing the button never moves it to the next line. Crossing the width rebuilds the
+/// controls, so an open picker menu closes; a recording, held by the recorder, goes on.
 struct KeyControls<Keys: View, Record: View>: View {
     @ViewBuilder var keys: Keys
     @ViewBuilder var record: Record
@@ -416,8 +417,10 @@ struct KeyControls<Keys: View, Record: View>: View {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 keys
                 ZStack(alignment: .leading) {
+                    // Only its width: never drawn, pressed, tabbed to or read out.
                     Button(RecordShortcutButton.recordingTitle) {}
                         .hidden()
+                        .disabled(true)
                         .accessibilityHidden(true)
                     record
                 }
