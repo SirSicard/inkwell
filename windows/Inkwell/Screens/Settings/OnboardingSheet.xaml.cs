@@ -100,6 +100,7 @@ public sealed partial class OnboardingSheet : ContentDialog
         ReadyTitle.Text = OnboardingModel.ReadyTitle;
         ReadyDownload.Content = NeedsYou.DownloadModelsTitle;
         ReadyDownloading.Text = NeedsYou.ModelsDownloadingText;
+        ReadyTrayLine.Text = OnboardingModel.TrayLine;
         AutomationProperties.SetHelpText(SkipButton, OnboardingModel.SkipHint);
         ConsentTitle.Text = PolishModel.ConsentTitle;
         AutomationProperties.SetName(ConsentCancel, ConsentModel.CancelName(LlmFeature.Polish));
@@ -360,6 +361,7 @@ public sealed partial class OnboardingSheet : ContentDialog
             ReadyDownload.Visibility = Visible(noSpeechModel && !catalogue.Downloading);
             ReadyDownloading.Visibility = Visible(noSpeechModel && catalogue.Downloading);
             TryIt.Visibility = Visible(!noSpeechModel);
+            ReadyTrayLine.Visibility = Visible(noSpeechModel);
             var stillOff = OnboardingModel.StillOff(permissions);
             StillOffLine.Text = stillOff ?? "";
             StillOffLine.Visibility = Visible(stillOff is not null);

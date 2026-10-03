@@ -261,7 +261,9 @@ public class OnboardingModelTests
     {
         Assert.StartsWith("Hold Right Ctrl, say something, and let go.", OnboardingModel.ReadyLine("Right Ctrl"), StringComparison.Ordinal);
         var line = OnboardingModel.ReadyLine("Right Ctrl", noSpeechModel: true);
-        Assert.StartsWith("Inkwell needs a speech model before it can write anything down", line, StringComparison.Ordinal);
+        Assert.Equal("Inkwell needs a speech model before it can type what you say.", line);
+        Assert.Equal("Inkwell lives in the notification area; this window opens from there.", OnboardingModel.TrayLine);
+        Assert.EndsWith(OnboardingModel.TrayLine, OnboardingModel.ReadyLine("Right Ctrl"), StringComparison.Ordinal);
         Assert.DoesNotContain("Hold", line, StringComparison.Ordinal);
         Assert.Equal("Download recommended models", NeedsYou.DownloadModelsTitle);
     }

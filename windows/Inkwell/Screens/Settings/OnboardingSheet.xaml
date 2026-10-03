@@ -171,6 +171,7 @@
                 <!-- With no speech model: Today's one action, or that the download runs. -->
                 <Button x:Name="ReadyDownload" Click="OnReadyDownload" Style="{StaticResource InkAccentButtonStyle}" />
                 <TextBlock x:Name="ReadyDownloading" Style="{StaticResource InkCaptionStyle}" />
+                <TextBlock x:Name="ReadyTrayLine" Style="{StaticResource InkReadingStyle}" />
                 <!-- Try it: the orb answers the voice, and the words land in the box. -->
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
