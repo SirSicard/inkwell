@@ -153,6 +153,11 @@ public sealed partial class VoiceSection : UserControl
             AutomationProperties.SetName(RecordEditButton, recorder.ButtonName(ShortcutTarget.Edit));
             AutomationProperties.SetHelpText(RecordKeyButton, recorder.ButtonHint(ShortcutTarget.Dictation));
             AutomationProperties.SetHelpText(RecordEditButton, recorder.ButtonHint(ShortcutTarget.Edit));
+            // While recording, the key comes from the keyboard: the switch and the pickers wait.
+            var idle = recorder.Recording is null;
+            DictationSwitch.IsEnabled = idle;
+            KeyBox.IsEnabled = idle;
+            EditKeyBox.IsEnabled = idle;
             Message(KeyMessage, recorder.Message(ShortcutTarget.Dictation));
             Message(EditMessage, recorder.Message(ShortcutTarget.Edit));
             Capture(recorder.Recording is not null);
