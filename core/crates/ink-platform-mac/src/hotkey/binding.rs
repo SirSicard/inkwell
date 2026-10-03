@@ -7,9 +7,16 @@
 //!   public Command (or Option...) flag is set for either side. Left-hand modifiers alone are not
 //!   offered: watching left Command would start a hold on every Cmd+C in every app.
 //! - **A chord:** modifiers and one key, `"ctrl+shift+space"`, `"cmd+option+d"`, or a function
-//!   key alone, `"f13"`. A typing key needs at least one modifier, or the tap would swallow it.
+//!   key alone, `"f13"`. Any other key needs a modifier, or the tap would swallow it everywhere,
+//!   and Shift alone does not count with a key that types (it types a capital or a symbol).
 //!
-//! Letter and digit tokens name the key at that position on an ANSI keyboard (`kVK_ANSI_*`). The
+//! The user may choose any binding of those shapes. [`check_token`] is the one judge: it gives a
+//! binding's canonical spelling, or a [`refusal`] in plain words, and a binding parses exactly
+//! when it says yes. Keys are letters, digits, F1 to F20, and the keys named in [`NAMED_KEYS`]
+//! (Space, Return, the arrows, punctuation...).
+//!
+//! Letter, digit and punctuation tokens name the key at that position on an ANSI keyboard
+//! (`kVK_ANSI_*`). The
 //! keycode is fixed here, never looked up through the keyboard layout: that lookup goes through
 //! Text Services, which asserts it is on the main thread and kills the process from any other.
 //!
@@ -112,6 +119,17 @@ pub(crate) enum ModifierKey {
 }
 
 impl ModifierKey {
+    /// Its 1.0 token, the canonical spelling.
+    const fn token(self) -> &'static str {
+        match self {
+            Self::Fn => "fn",
+            Self::RightOption => "right_option",
+            Self::RightCommand => "right_command",
+            Self::RightControl => "right_control",
+            Self::RightShift => "right_shift",
+        }
+    }
+
     /// The keycode its `flagsChanged` events carry.
     pub(crate) const fn keycode(self) -> u16 {
         match self {
@@ -168,60 +186,26 @@ pub(crate) enum Binding {
 
 impl Binding {
     /// Parses a platform token. Anything this platform cannot bind is
-    /// [`PlatformError::Unsupported`].
+    /// [`PlatformError::Unsupported`], with the [`refusal`] that says why.
     pub(crate) fn parse(token: &str) -> Result<Self, PlatformError> {
-        let token = token.trim().to_ascii_lowercase();
-        if token.is_empty() {
-            return Err(PlatformError::Unsupported("an empty hotkey"));
-        }
-        if !token.contains('+') {
-            if let Some(key) = modifier_key(&token) {
-                return Ok(Self::Modifier(key));
-            }
-            if let Some(code) = function_key(&token) {
-                return Ok(Self::Chord(Chord {
-                    modifiers: 0,
-                    keycode: code,
-                }));
-            }
-            if key_code(&token).is_some() {
-                return Err(PlatformError::Unsupported(
-                    "a hotkey on a typing key needs a modifier",
-                ));
-            }
-            return Err(PlatformError::Unsupported("an unknown hotkey token"));
-        }
+        parse_token(token).map_err(PlatformError::Unsupported)
+    }
 
-        let parts: Vec<&str> = token.split('+').map(str::trim).collect();
-        let Some((key, modifiers)) = parts.split_last() else {
-            return Err(PlatformError::Unsupported("an empty hotkey"));
-        };
-        if key.is_empty() || modifiers.iter().any(|m| m.is_empty()) {
-            return Err(PlatformError::Unsupported("a hotkey with an empty part"));
-        }
-        let mut bits = 0;
-        for name in modifiers {
-            let Some(bit) = chord_modifier(name) else {
-                return Err(PlatformError::Unsupported(
-                    "an unknown modifier in a hotkey chord",
-                ));
-            };
-            if bits & bit != 0 {
-                return Err(PlatformError::Unsupported(
-                    "a repeated modifier in a hotkey",
-                ));
+    /// The one spelling of this binding ([`check_token`]): a modifier's 1.0 token, or a chord's
+    /// modifiers in the Mac's order (Fn, Control, Option, Shift, Command) and its key's name.
+    pub(crate) fn canonical(self) -> String {
+        match self {
+            Self::Modifier(key) => key.token().to_owned(),
+            Self::Chord(chord) => {
+                let mut parts: Vec<&str> = CHORD_ORDER
+                    .iter()
+                    .filter(|(bit, _)| chord.modifiers & bit != 0)
+                    .map(|(_, name)| *name)
+                    .collect();
+                parts.push(key_name(chord.keycode));
+                parts.join("+")
             }
-            bits |= bit;
         }
-        let Some(code) = key_code(key) else {
-            return Err(PlatformError::Unsupported(
-                "an unknown key in a hotkey chord",
-            ));
-        };
-        Ok(Self::Chord(Chord {
-            modifiers: bits,
-            keycode: code,
-        }))
     }
 
     /// The `CGEventMask` the tap needs: `flagsChanged` for a modifier, key down and up for a
@@ -238,6 +222,91 @@ impl Binding {
     }
 }
 
+/// Whether the Mac can watch `token`: its canonical spelling ([`Binding::canonical`]), or the
+/// [`refusal`] that says why not. The one rule set: a hotkey binds exactly when this says yes.
+pub(crate) fn check_token(token: &str) -> Result<String, &'static str> {
+    parse_token(token).map(Binding::canonical)
+}
+
+/// Why a token cannot be watched, in words for the person choosing a key: the shell shows them
+/// after "can't use that:", so each starts in lower case and has no full stop.
+pub(crate) mod refusal {
+    pub const EMPTY: &str = "no key was given";
+    /// A letter, digit, arrow... alone: the tap would swallow it everywhere.
+    pub const KEY_ALONE: &str =
+        "that key on its own would stop working everywhere else; add Control, Option or Command";
+    /// Shift and a typing key is a capital or a symbol: the tap would swallow it.
+    pub const SHIFT_TYPES: &str =
+        "Shift with that key is how a capital or a symbol is typed; add Control, Option or Command";
+    /// Watching left Command would start a hold on every Cmd+C in every app.
+    pub const LEFT_MODIFIER_ALONE: &str = "a left-hand modifier on its own would start dictation with every shortcut that uses it; use a right-hand one, or add a key";
+    pub const MODIFIERS_ONLY: &str = "modifiers together need a key with them; hold one right-hand modifier on its own, or add a key";
+    /// Caps Lock reports a switch, not a hold.
+    pub const CAPS_LOCK: &str = "Caps Lock switches on and off instead of being held";
+    pub const UNKNOWN_KEY: &str = "Inkwell doesn't know that key";
+    pub const UNKNOWN_MODIFIER: &str = "one of the modifiers isn't one Inkwell knows";
+    pub const REPEATED_MODIFIER: &str = "a modifier is named twice";
+    pub const EMPTY_PART: &str = "a part of the shortcut is empty";
+}
+
+fn parse_token(token: &str) -> Result<Binding, &'static str> {
+    let token = token.trim().to_ascii_lowercase();
+    if token.is_empty() {
+        return Err(refusal::EMPTY);
+    }
+    if !token.contains('+') {
+        if let Some(key) = modifier_key(&token) {
+            return Ok(Binding::Modifier(key));
+        }
+        if let Some(code) = function_key(&token) {
+            return Ok(Binding::Chord(Chord {
+                modifiers: 0,
+                keycode: code,
+            }));
+        }
+        return Err(if is_modifier_name(&token) {
+            refusal::LEFT_MODIFIER_ALONE
+        } else if token == "caps_lock" || token == "capslock" {
+            refusal::CAPS_LOCK
+        } else if key_code(&token).is_some() {
+            refusal::KEY_ALONE
+        } else {
+            refusal::UNKNOWN_KEY
+        });
+    }
+
+    let parts: Vec<&str> = token.split('+').map(str::trim).collect();
+    let Some((key, modifiers)) = parts.split_last() else {
+        return Err(refusal::EMPTY);
+    };
+    if key.is_empty() || modifiers.iter().any(|m| m.is_empty()) {
+        return Err(refusal::EMPTY_PART);
+    }
+    let mut bits = 0;
+    for name in modifiers {
+        let Some(bit) = chord_modifier(name) else {
+            return Err(refusal::UNKNOWN_MODIFIER);
+        };
+        if bits & bit != 0 {
+            return Err(refusal::REPEATED_MODIFIER);
+        }
+        bits |= bit;
+    }
+    if is_modifier_name(key) || modifier_key(key).is_some() {
+        return Err(refusal::MODIFIERS_ONLY);
+    }
+    let Some(code) = key_code(key) else {
+        return Err(refusal::UNKNOWN_KEY);
+    };
+    if bits == flag::SHIFT && is_typing_key(code) {
+        return Err(refusal::SHIFT_TYPES);
+    }
+    Ok(Binding::Chord(Chord {
+        modifiers: bits,
+        keycode: code,
+    }))
+}
+
 fn modifier_key(token: &str) -> Option<ModifierKey> {
     Some(match token {
         "fn" => ModifierKey::Fn,
@@ -248,6 +317,15 @@ fn modifier_key(token: &str) -> Option<ModifierKey> {
         _ => return None,
     })
 }
+
+/// A chord's modifiers in the order a canonical token spells them.
+const CHORD_ORDER: [(u64, &str); 5] = [
+    (flag::SECONDARY_FN, "fn"),
+    (flag::CONTROL, "ctrl"),
+    (flag::OPTION, "option"),
+    (flag::SHIFT, "shift"),
+    (flag::COMMAND, "cmd"),
+];
 
 fn chord_modifier(name: &str) -> Option<u64> {
     Some(match name {
@@ -260,6 +338,75 @@ fn chord_modifier(name: &str) -> Option<u64> {
     })
 }
 
+/// A modifier named without a side, or by its left-hand key: never watched on its own, and never
+/// a chord's key.
+fn is_modifier_name(name: &str) -> bool {
+    let side = name.strip_prefix("left_").unwrap_or(name);
+    chord_modifier(side).is_some_and(|bit| bit != flag::SECONDARY_FN)
+}
+
+/// Keys named in words, past letters, digits and function keys: (canonical name, keycode, whether
+/// it types a character). Codes from `HIToolbox/Events.h`; the punctuation is by ANSI position,
+/// as the letters are.
+pub(crate) const NAMED_KEYS: &[(&str, u16, bool)] = &[
+    ("space", keycode::SPACE, true),
+    ("return", keycode::RETURN, false),
+    ("tab", keycode::TAB, false),
+    ("escape", keycode::ESCAPE, false),
+    ("delete", 0x33, false),
+    ("forward_delete", 0x75, false),
+    ("left", 0x7B, false),
+    ("right", 0x7C, false),
+    ("down", 0x7D, false),
+    ("up", 0x7E, false),
+    ("home", 0x73, false),
+    ("end", 0x77, false),
+    ("page_up", 0x74, false),
+    ("page_down", 0x79, false),
+    ("minus", 0x1B, true),
+    ("equal", 0x18, true),
+    ("left_bracket", 0x21, true),
+    ("right_bracket", 0x1E, true),
+    ("backslash", 0x2A, true),
+    ("semicolon", 0x29, true),
+    ("quote", 0x27, true),
+    ("comma", 0x2B, true),
+    ("period", 0x2F, true),
+    ("slash", 0x2C, true),
+    ("grave", 0x32, true),
+];
+
+/// Other spellings of [`NAMED_KEYS`]: the character a punctuation key types unshifted, and the
+/// names other apps use.
+const KEY_ALIASES: &[(&str, &str)] = &[
+    ("enter", "return"),
+    ("esc", "escape"),
+    ("backspace", "delete"),
+    ("pageup", "page_up"),
+    ("pagedown", "page_down"),
+    ("-", "minus"),
+    ("=", "equal"),
+    ("[", "left_bracket"),
+    ("]", "right_bracket"),
+    ("\\", "backslash"),
+    (";", "semicolon"),
+    ("'", "quote"),
+    (",", "comma"),
+    (".", "period"),
+    ("/", "slash"),
+    ("`", "grave"),
+];
+
+const LETTER_NAMES: [&str; 26] = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
+    "t", "u", "v", "w", "x", "y", "z",
+];
+const DIGIT_NAMES: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+const FUNCTION_NAMES: [&str; 20] = [
+    "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "f13", "f14", "f15",
+    "f16", "f17", "f18", "f19", "f20",
+];
+
 fn function_key(name: &str) -> Option<u16> {
     let n: usize = name.strip_prefix('f')?.parse().ok()?;
     keycode::FUNCTION_KEYS.get(n.checked_sub(1)?).copied()
@@ -269,12 +416,12 @@ fn key_code(name: &str) -> Option<u16> {
     if let Some(code) = function_key(name) {
         return Some(code);
     }
-    match name {
-        "space" => return Some(keycode::SPACE),
-        "return" | "enter" => return Some(keycode::RETURN),
-        "tab" => return Some(keycode::TAB),
-        "escape" | "esc" => return Some(keycode::ESCAPE),
-        _ => {}
+    let name = KEY_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == name)
+        .map_or(name, |(_, canonical)| *canonical);
+    if let Some((_, code, _)) = NAMED_KEYS.iter().find(|(n, ..)| *n == name) {
+        return Some(*code);
     }
     let mut chars = name.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else {
@@ -289,6 +436,34 @@ fn key_code(name: &str) -> Option<u16> {
             .copied(),
         _ => None,
     }
+}
+
+/// The canonical name of a key [`key_code`] gave. Every code it gives is in one of the tables.
+fn key_name(code: u16) -> &'static str {
+    let find = |codes: &[u16], names: &[&'static str]| {
+        codes
+            .iter()
+            .position(|c| *c == code)
+            .and_then(|i| names.get(i).copied())
+    };
+    find(&keycode::ANSI_LETTERS, &LETTER_NAMES)
+        .or_else(|| find(&keycode::ANSI_DIGITS, &DIGIT_NAMES))
+        .or_else(|| find(&keycode::FUNCTION_KEYS, &FUNCTION_NAMES))
+        .or_else(|| {
+            NAMED_KEYS
+                .iter()
+                .find(|(_, c, _)| *c == code)
+                .map(|(name, ..)| *name)
+        })
+        // Unreachable for a parsed chord; a name that parses to nothing rather than a panic.
+        .unwrap_or("unknown")
+}
+
+/// Whether the key types a character: a letter, a digit, Space or punctuation.
+fn is_typing_key(code: u16) -> bool {
+    keycode::ANSI_LETTERS.contains(&code)
+        || keycode::ANSI_DIGITS.contains(&code)
+        || NAMED_KEYS.iter().any(|(_, c, types)| *c == code && *types)
 }
 
 #[cfg(test)]
@@ -506,6 +681,151 @@ mod tests {
             "laptops set Fn on F-keys"
         );
         assert!(bare.matches(0x60, 0));
+    }
+
+    /// What `hotkey.check` stores and shows: one spelling per binding, modifiers in the Mac's own
+    /// order (Fn, Control, Option, Shift, Command), 0.2's aliases under their 1.0 names.
+    #[test]
+    fn every_binding_has_one_canonical_spelling() {
+        let cases = [
+            (" Shift + Ctrl + SPACE ", "ctrl+shift+space"),
+            ("cmd+option+d", "option+cmd+d"),
+            (
+                "command+alt+shift+control+fn+k",
+                "fn+ctrl+option+shift+cmd+k",
+            ),
+            ("right_opt", "right_option"),
+            ("right_cmd", "right_command"),
+            ("right_alt", "right_option"),
+            ("FN", "fn"),
+            ("F13", "f13"),
+            ("fn+f5", "fn+f5"),
+            ("ctrl+enter", "ctrl+return"),
+            ("ctrl+esc", "ctrl+escape"),
+            ("ctrl+backspace", "ctrl+delete"),
+            ("option+-", "option+minus"),
+            ("ctrl+/", "ctrl+slash"),
+            ("cmd+shift+pageup", "shift+cmd+page_up"),
+        ];
+        for (token, canonical) in cases {
+            assert_eq!(check_token(token), Ok(canonical.to_owned()), "{token:?}");
+            assert_eq!(
+                check_token(canonical),
+                Ok(canonical.to_owned()),
+                "{canonical}"
+            );
+            assert_eq!(
+                Binding::parse(token),
+                Binding::parse(canonical),
+                "{token:?}"
+            );
+        }
+    }
+
+    /// Every key name reads back as itself: the canonical spelling never names a key the parser
+    /// does not know.
+    #[test]
+    fn every_key_name_round_trips() {
+        let mut names: Vec<String> = ('a'..='z').chain('0'..='9').map(String::from).collect();
+        names.extend((1..=20).map(|n| format!("f{n}")));
+        names.extend(NAMED_KEYS.iter().map(|(name, ..)| (*name).to_owned()));
+        for name in names {
+            let token = format!("ctrl+{name}");
+            assert_eq!(check_token(&token), Ok(token.clone()), "{token}");
+        }
+    }
+
+    /// The keys past letters, digits and function keys, pinned to `HIToolbox/Events.h`.
+    #[test]
+    fn named_keys_match_the_headers() {
+        let expected = [
+            ("delete", 0x33),
+            ("forward_delete", 0x75),
+            ("left", 0x7B),
+            ("right", 0x7C),
+            ("down", 0x7D),
+            ("up", 0x7E),
+            ("home", 0x73),
+            ("end", 0x77),
+            ("page_up", 0x74),
+            ("page_down", 0x79),
+            ("minus", 0x1B),
+            ("equal", 0x18),
+            ("left_bracket", 0x21),
+            ("right_bracket", 0x1E),
+            ("backslash", 0x2A),
+            ("semicolon", 0x29),
+            ("quote", 0x27),
+            ("comma", 0x2B),
+            ("period", 0x2F),
+            ("slash", 0x2C),
+            ("grave", 0x32),
+        ];
+        for (name, code) in expected {
+            assert_eq!(chord(&format!("ctrl+{name}")).keycode, code, "{name}");
+        }
+    }
+
+    /// Each refusal says why, in words for the person choosing the key.
+    #[test]
+    fn refusals_say_why() {
+        let cases = [
+            ("", refusal::EMPTY),
+            ("  ", refusal::EMPTY),
+            ("a", refusal::KEY_ALONE),
+            ("space", refusal::KEY_ALONE),
+            ("left", refusal::KEY_ALONE),
+            ("escape", refusal::KEY_ALONE),
+            ("shift+a", refusal::SHIFT_TYPES),
+            ("shift+7", refusal::SHIFT_TYPES),
+            ("shift+space", refusal::SHIFT_TYPES),
+            ("shift+slash", refusal::SHIFT_TYPES),
+            ("left_option", refusal::LEFT_MODIFIER_ALONE),
+            ("option", refusal::LEFT_MODIFIER_ALONE),
+            ("cmd", refusal::LEFT_MODIFIER_ALONE),
+            ("left_command", refusal::LEFT_MODIFIER_ALONE),
+            ("left_shift", refusal::LEFT_MODIFIER_ALONE),
+            ("ctrl", refusal::LEFT_MODIFIER_ALONE),
+            ("ctrl+shift", refusal::MODIFIERS_ONLY),
+            ("fn+right_option", refusal::MODIFIERS_ONLY),
+            ("cmd+right_option", refusal::MODIFIERS_ONLY),
+            ("ctrl+left_shift", refusal::MODIFIERS_ONLY),
+            ("caps_lock", refusal::CAPS_LOCK),
+            ("hyper", refusal::UNKNOWN_KEY),
+            ("right_fn", refusal::UNKNOWN_KEY),
+            ("f0", refusal::UNKNOWN_KEY),
+            ("f21", refusal::UNKNOWN_KEY),
+            ("ctrl+é", refusal::UNKNOWN_KEY),
+            ("ctrl+ab", refusal::UNKNOWN_KEY),
+            ("ctrl+hyper+a", refusal::UNKNOWN_MODIFIER),
+            ("ctrl+ctrl+a", refusal::REPEATED_MODIFIER),
+            ("ctrl+control+a", refusal::REPEATED_MODIFIER),
+            ("ctrl+", refusal::EMPTY_PART),
+            ("+a", refusal::EMPTY_PART),
+            ("ctrl++a", refusal::EMPTY_PART),
+        ];
+        for (token, why) in cases {
+            assert_eq!(check_token(token), Err(why), "{token:?}");
+            assert_eq!(
+                Binding::parse(token),
+                Err(PlatformError::Unsupported(why)),
+                "{token:?}"
+            );
+        }
+    }
+
+    /// Shift with a key that types nothing is a shortcut like any other.
+    #[test]
+    fn shift_goes_with_keys_that_do_not_type() {
+        for token in [
+            "shift+f5",
+            "shift+left",
+            "shift+return",
+            "shift+tab",
+            "shift+delete",
+        ] {
+            assert!(check_token(token).is_ok(), "{token}");
+        }
     }
 
     #[test]
