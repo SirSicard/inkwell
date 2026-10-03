@@ -795,7 +795,7 @@ impl Voice {
                     _ => OffReason::KeyRefused,
                 };
                 log::warn!("dictation: the key {key} could not be held: {e}");
-                return Err((reason, e.to_string()));
+                return Err((reason, refusal_words(&e)));
             }
             self.key = Some(key.to_owned());
         }
@@ -822,7 +822,7 @@ impl Voice {
                     Ok(()) => self.edit_key = Some(edit.to_owned()),
                     Err(e) => {
                         log::warn!("dictation: the edit key {edit} could not be held: {e}");
-                        edit_key_error = Some(e.to_string());
+                        edit_key_error = Some(refusal_words(&e));
                     }
                 }
             }
@@ -854,6 +854,16 @@ impl Voice {
         if let Some(warmer) = self.warmer.take() {
             warmer.stop();
         }
+    }
+}
+
+/// Why a key could not be held, as the shell shows it: a platform's refusal in its own words
+/// (the reason `hotkey.check` gives, without Display's "not supported here:"), anything else as
+/// it is.
+fn refusal_words(e: &PlatformError) -> String {
+    match e {
+        PlatformError::Unsupported(why) => (*why).to_owned(),
+        other => other.to_string(),
     }
 }
 
@@ -1094,6 +1104,20 @@ mod tests {
         );
         let expected = if cfg!(windows) { "right_control" } else { "fn" };
         assert_eq!(DEFAULT_KEY, expected);
+    }
+
+    /// A refused key reads as the parser's own words, which the shell shows after "can't be used
+    /// here:"; other failures keep their kind.
+    #[test]
+    fn a_refused_key_is_said_in_the_parsers_words() {
+        assert_eq!(
+            refusal_words(&PlatformError::Unsupported("Inkwell doesn't know that key")),
+            "Inkwell doesn't know that key"
+        );
+        assert_eq!(
+            refusal_words(&PlatformError::Failed("the tap did not start".into())),
+            "platform call failed: the tap did not start"
+        );
     }
 
     /// Every key the Windows hook holds on its own can be chosen (the Windows shell offers them).
