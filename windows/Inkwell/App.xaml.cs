@@ -206,6 +206,7 @@ public partial class App : Application
             {
                 made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: true);
             }
+            window.FrameChanged();
         };
         // Coming back to the app re-checks what may have changed outside it (permissions, the keys).
         window.Activated += (_, e) =>
@@ -222,6 +223,7 @@ public partial class App : Application
         tray.IsVisible = true;
         ShowTrayState();
         window.Activate();
+        window.FitToWorkArea();
         // On screen from the start: the window's own change events may not come for the first show.
         made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
         core.Start();
@@ -391,6 +393,8 @@ public partial class App : Application
 
     private void ShowWindow()
     {
+        // From the tray: where it was hidden, which may be a display since unplugged.
+        window?.FitToWorkArea();
         window?.AppWindow.Show();
         window?.Activate();
     }

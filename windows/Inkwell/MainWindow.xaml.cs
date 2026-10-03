@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
     private bool meetingLive;
     private bool syncing;
     private bool pulsing;
+    private Microsoft.UI.Windowing.OverlappedPresenterState? frameState;
 
     public MainWindow()
     {
@@ -56,6 +57,43 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetName(liveDot, "Recording");
         SystemMotion.Changed += UpdatePulse;
         Accelerators();
+    }
+
+    /// <summary>
+    /// UI thread. Keeps the window inside its display's work area (WindowFrame.Fitted): moved and,
+    /// if bigger, shrunk so all of it shows. Not while minimised or maximised (Windows places those).
+    /// </summary>
+    internal void FitToWorkArea()
+    {
+        if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: not Microsoft.UI.Windowing.OverlappedPresenterState.Restored }
+            || TerraFX.Interop.Windows.Windows.IsIconic((TerraFX.Interop.Windows.HWND)Microsoft.UI.Win32Interop.GetWindowFromWindowId(AppWindow.Id)))
+        {
+            return;
+        }
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
+        var frame = new WindowFrame(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
+        var fitted = frame.Fitted(new WindowFrame(area.X, area.Y, area.Width, area.Height));
+        if (fitted != frame)
+        {
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(fitted.X, fitted.Y, fitted.Width, fitted.Height));
+        }
+    }
+
+    /// <summary>
+    /// UI thread, on any change of the window (AppWindow.Changed). Restored from minimised or
+    /// maximised, it comes back where it was, which may now be off screen: fitted then. Windows
+    /// says "restored" while the window is still at its minimised place, so the fit waits until
+    /// the restore is done (the next turn of the UI thread).
+    /// </summary>
+    internal void FrameChanged()
+    {
+        var state = (AppWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter)?.State;
+        if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Restored
+            && frameState is not null and not Microsoft.UI.Windowing.OverlappedPresenterState.Restored)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FitToWorkArea);
+        }
+        frameState = state;
     }
 
     /// <summary>UI thread. The window's orb follows the shell's ink state; the edge glow follows the orb.</summary>
