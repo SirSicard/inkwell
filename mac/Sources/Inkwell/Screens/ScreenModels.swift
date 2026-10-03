@@ -238,6 +238,8 @@ final class ScreenModels {
     let theme: GlowTheme
     /// Settings > AI: the language model you bring, and local-only mode.
     let cloud: CloudModel
+    /// The Stats screen, milestones, and Settings > Stats.
+    let stats: StatsModel
 
     /// The id of the meetings switch's command (a `command.failed` carries it).
     static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
@@ -255,6 +257,7 @@ final class ScreenModels {
     ) {
         theme = GlowTheme(send: send)
         cloud = CloudModel(send: send)
+        stats = StatsModel(send: send)
         permissions = PermissionsModel(send: send, calendar: calendar)
         polish = PolishModel(send: send)
         catalogue = CatalogueModel(send: send)
@@ -299,6 +302,7 @@ final class ScreenModels {
             cloud.apply(event)
             import02.apply(event)
             storage.apply(event)
+            stats.apply(event)
             if onboarding.showing {
                 // The first run offers its import step only when there is something to import.
                 import02.checkOnce()
@@ -436,13 +440,17 @@ final class ScreenModels {
         case "model.update":
             // The download's row says it failed, and why (the first run and Settings > Models).
             true
+        case "stats.get":
+            // The Stats screen says it couldn't count. (A milestone check that failed celebrates
+            // nothing until the next one; no screen shows it, so it is logged.)
+            stats.handles(failed)
         case "setting.get":
-            failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
+            stats.handles(failed) || failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
-            failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
+            stats.handles(failed) || failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
                 || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
         case "dictation.enable", "dictation.disable":
