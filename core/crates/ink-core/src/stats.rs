@@ -209,21 +209,26 @@ mod tests {
             mic(6_500, 9_000, "one two  three"),
             far(9_500, 12_000, "yes we can"),
             mic(16_000, 17_000, "ok？"),
+            // The pause rule at its edge: 3 s joins, 3.001 s splits.
+            mic(30_000, 31_000, "a"),
+            mic(34_000, 40_000, "b"),
+            mic(43_001, 45_000, "c"),
         ]);
         assert_eq!(
             d,
             TranscriptDigest {
                 mic: ChannelDigest {
-                    words: 7,
-                    speech_ms: 7_500,
-                    lines: 3
+                    words: 10,
+                    speech_ms: 16_499,
+                    lines: 6
                 },
                 far: ChannelDigest {
                     words: 3,
                     speech_ms: 2_500,
                     lines: 1
                 },
-                longest_monologue_ms: 9_000,
+                // 30..40 s joined across 3 s; 43.001 s split off.
+                longest_monologue_ms: 10_000,
                 mic_questions: 2,
             }
         );

@@ -58,6 +58,7 @@ fn count_missing(conn: &Connection) -> Result<Vec<RecordDigest>, Fail> {
          FROM record AS r
          WHERE NOT EXISTS (
              SELECT 1 FROM record_digest AS d WHERE d.record_id = r.id AND d.version = ?1)
+         ORDER BY r.rowid
          LIMIT ?2",
     )?;
     let mut rows = select.query(params![version(), DIGEST_BATCH as i64])?;
@@ -92,7 +93,7 @@ fn count_missing(conn: &Connection) -> Result<Vec<RecordDigest>, Fail> {
 
 /// Counts and keeps one batch of missing digests ([`count_missing`]); how many.
 fn fill_batch(conn: &Connection) -> Result<usize, Fail> {
-    if missing(conn)? == 0 {
+    if missing(conn)? <= 0 {
         return Ok(0);
     }
     let counted = count_missing(conn)?;
