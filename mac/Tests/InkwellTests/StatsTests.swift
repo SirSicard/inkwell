@@ -229,6 +229,11 @@ final class StatsModelTests: XCTestCase {
         stats.apply(event(#"{"type":"setting.value","key":"stats.typing_wpm","value":"70"}"#))
         XCTAssertEqual(stats.typingWpm, 70)
         XCTAssertFalse(stats.settingsFailed)
+        // A write the core never echoed (it started again) does not swallow the new core's answer.
+        stats.setTypingWpm(80)
+        stats.apply(event(#"{"type":"core.ready","version":"1.0.0","abi":2}"#))
+        stats.apply(event(#"{"type":"setting.value","key":"stats.typing_wpm","value":"65"}"#))
+        XCTAssertEqual(stats.typingWpm, 65)
     }
 
     /// The window off screen: nothing is counted for it; back on screen, Stats counts again.

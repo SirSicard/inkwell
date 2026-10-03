@@ -144,7 +144,8 @@ final class StatsModel {
         if visible && !was { load() }
     }
 
-    /// The numbers did not come within the time limit: said, rather than a spinner for ever.
+    /// The numbers did not come within the time limit: said, rather than a spinner for ever. Only
+    /// while nothing is shown yet: a refresh that hangs leaves the last numbers up.
     func loadTimedOut(_ ref: String) {
         guard ref == latestGet, loadState == .loading else { return }
         loadState = .failed
@@ -209,6 +210,8 @@ final class StatsModel {
     func apply(_ event: InkEvent) {
         switch event {
         case .coreReady:
+            // A core that started again answers none of the old one's writes.
+            unechoed = [:]
             send(.settingGet(.statsCelebrate))
             send(.settingGet(.statsTypingWpm))
             checkMilestones()

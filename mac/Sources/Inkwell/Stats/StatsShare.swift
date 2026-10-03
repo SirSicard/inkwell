@@ -269,13 +269,18 @@ struct ShareCardSheet: View {
         .frame(width: 640)
         .background(WindowReader(window: $window))
         .onAppear(perform: render)
-        .onChange(of: selected) { render() }
+        // The ticks, or new numbers counted while the sheet is open; the mode; your colours.
+        .onChange(of: lines) { render() }
         .onChange(of: theme.isDark) { render() }
+        .onChange(of: theme.settings) { render() }
     }
 
     private func render() {
         png = StatsShare.png(lines: lines, dark: theme.isDark, you: theme.you, them: theme.them)
         preview = png.flatMap(NSImage.init(data:))
+        if png == nil, !lines.isEmpty {
+            report("Couldn't make the image.", failed: true)
+        }
     }
 
     private func copy() {
