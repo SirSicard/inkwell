@@ -57,7 +57,9 @@ final class StatusGlyphTests: XCTestCase {
 /// Records what a surface was asked to show.
 @MainActor
 private final class RecordingSurface: LiveIconSurface {
+    let breathesItself: Bool
     var shown: [LiveIconFrame] = []
+    init(breathesItself: Bool = false) { self.breathesItself = breathesItself }
     func show(_ frame: LiveIconFrame) { shown.append(frame) }
 }
 
@@ -239,6 +241,45 @@ final class LiveIconPulseTests: XCTestCase {
         start = icon.frames
         ticker.fire(minute)
         XCTAssertEqual(icon.frames - start, 420, "recording")
+    }
+}
+
+@MainActor
+final class LiveIconSelfBreathTests: XCTestCase {
+    /// The menu bar breathes by itself (a layer animation run by the render server): it is told
+    /// the pulse once, and no timer runs for it.
+    func testASurfaceThatBreathesItselfRunsNoTimer() {
+        let ticker = HandTicker()
+        let icon = LiveIcon(ticker: ticker)
+        let bar = RecordingSurface(breathesItself: true)
+        icon.attach(bar)
+        icon.update(look: .pulse(.them), colours: colours)
+        XCTAssertFalse(icon.isPulsing)
+        XCTAssertTrue(ticker.starts.isEmpty)
+        XCTAssertEqual(bar.shown.last, LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+
+        // The Dock tile needs the frames: the timer runs while it is there, and only it is ticked.
+        let dock = RecordingSurface()
+        icon.attach(dock)
+        XCTAssertTrue(icon.isPulsing)
+        let barFrames = bar.shown.count
+        ticker.fire(14)
+        XCTAssertEqual(bar.shown.count, barFrames, "the menu bar is not ticked")
+        XCTAssertEqual(dock.shown.count, 15)
+        icon.detach(dock)
+        XCTAssertFalse(icon.isPulsing, "the window closed: nothing left to tick")
+        XCTAssertEqual(ticker.stops, 1)
+    }
+
+    /// A minute's recording with the window closed: one frame (the change) for the app to draw.
+    func testAMinuteRecordingInTheMenuBarAloneIsOneFrame() {
+        let ticker = HandTicker()
+        let icon = LiveIcon(ticker: ticker)
+        icon.attach(RecordingSurface(breathesItself: true))
+        let start = icon.frames
+        icon.update(look: .pulse(.them), colours: colours)
+        ticker.fire(420)
+        XCTAssertEqual(icon.frames - start, 1)
     }
 }
 
@@ -507,7 +548,7 @@ final class LiveIconRenderTests: XCTestCase {
                     guard !overlay.isHidden, let rep = overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds) else { continue }
                     overlay.cacheDisplay(in: overlay.bounds, to: rep)
                     rep.draw(in: NSRect(origin: origin, size: cell), from: .zero, operation: .sourceOver,
-                             fraction: overlay.alphaValue, respectFlipped: false, hints: nil)
+                             fraction: look.2, respectFlipped: false, hints: nil)
                 }
             }
             NSGraphicsContext.restoreGraphicsState()
@@ -573,21 +614,31 @@ final class StatusGlyphOverlayTests: XCTestCase {
         XCTAssertEqual(colour(rep, at: CGPoint(x: 9, y: 9), in: overlay).1, 0, accuracy: 0.01, "the orb stays the template's")
     }
 
-    /// The pulse changes only the overlay's opacity: composited, never redrawn.
-    func testThePulseOnlyFades() {
+    /// The breath is a layer animation: run by the render server at the pulse's low rate, with
+    /// no wakeup or redraw in the app. It starts with the pulse and stops with it.
+    func testThePulseIsALayerAnimation() throws {
         let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        XCTAssertTrue(overlay.breathesItself)
         overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+        let breath = try XCTUnwrap(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey) as? CABasicAnimation)
+        XCTAssertEqual(breath.keyPath, "opacity")
+        XCTAssertEqual(breath.fromValue as? Double, 1)
+        XCTAssertEqual(breath.toValue as? Double, LiveIcon.breathLow)
+        XCTAssertTrue(breath.autoreverses)
+        XCTAssertEqual(breath.duration, LiveIcon.breathPeriod / 2)
+        XCTAssertEqual(breath.repeatCount, .infinity)
+        XCTAssertEqual(breath.preferredFrameRateRange.maximum, Float(LiveIcon.pulseFPS + 1))
         XCTAssertEqual(overlay.redraws, 1)
-        for tick in 1...14 {
-            overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: LiveIcon.breath(tick)))
-        }
-        XCTAssertEqual(overlay.redraws, 1, "a breath is opacity only")
-        XCTAssertEqual(overlay.alphaValue, 1, accuracy: 0.001)
-        overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 0.6))
-        XCTAssertEqual(overlay.alphaValue, 0.6, accuracy: 0.001)
+
+        overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+        XCTAssertEqual(overlay.redraws, 1, "the same pulse again: nothing")
+
         overlay.show(LiveIconFrame(look: .glow(.them), colours: colours, strength: 1))
+        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey), "stopped with the recording")
         XCTAssertEqual(overlay.redraws, 2, "a new look is drawn")
-        XCTAssertEqual(overlay.alphaValue, 1)
+        overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
+        overlay.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
+        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey))
     }
 
     func testItTakesNoClicksAndSaysNothing() {

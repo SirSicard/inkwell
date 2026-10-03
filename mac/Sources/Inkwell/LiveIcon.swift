@@ -10,8 +10,10 @@
 //   a problem   the orb in the alert colour
 //
 // LiveIcon decides what each surface shows and when it redraws. A still look is drawn once, when
-// it or its colours change; only the recording's pulse runs a timer, and only while it is shown on
-// some surface. Each surface (the Dock tile, the menu-bar item) draws the frames it is given.
+// it or its colours change. The recording's pulse is breathed two ways: the menu-bar item runs it
+// as a layer animation (the render server's, at the pulse's low rate, with no wakeup in the app),
+// and the Dock tile, which has no layers to animate, is ticked by a timer that runs only while the
+// tile is there and a pulse is shown. Each surface draws the frames it is given.
 import Foundation
 import InkBridge
 import InkRenderer
@@ -90,7 +92,14 @@ struct LiveIconFrame: Equatable, Sendable {
 /// Something that shows the icon: the Dock tile, the menu-bar item.
 @MainActor
 protocol LiveIconSurface: AnyObject {
+    /// It breathes the pulse itself (a layer animation), so it is shown the pulse once and never
+    /// ticked.
+    var breathesItself: Bool { get }
     func show(_ frame: LiveIconFrame)
+}
+
+extension LiveIconSurface {
+    var breathesItself: Bool { false }
 }
 
 /// The pulse's clock.
@@ -113,8 +122,9 @@ final class LiveIcon {
     static let breathLow = 0.55
 
     private(set) var frame = LiveIconFrame(look: .rest, colours: .unset, strength: 1)
-    /// Frames produced since launch: each change, and each tick of the pulse. The energy budget's
-    /// count (0 a minute at rest, 1 a change while dictating, 420 a minute while recording).
+    /// Frames the app drew since launch: each change, and each tick of the pulse. The energy
+    /// budget's count (0 a minute at rest, 1 a change while dictating; while recording, 420 a
+    /// minute with the Dock tile showing, 1 with only the menu bar, which breathes by itself).
     private(set) var frames = 0
 
     private let ticker: LiveIconTicker
@@ -214,9 +224,12 @@ final class LiveIcon {
         }
     }
 
-    /// Runs the timer exactly while a pulse is shown somewhere.
+    /// The surfaces the pulse's timer draws on.
+    private var ticked: [LiveIconSurface] { surfaces.filter { !$0.breathesItself } }
+
+    /// Runs the timer exactly while a pulse is shown on a surface that needs its frames.
     private func reconcileTicker() {
-        let wanted = frame.look.pulses && !surfaces.isEmpty
+        let wanted = frame.look.pulses && !ticked.isEmpty
         if wanted && !ticker.running {
             ticker.start(interval: 1 / Self.pulseFPS) { [weak self] in self?.advance() }
         } else if !wanted && ticker.running {
@@ -227,9 +240,11 @@ final class LiveIcon {
     private func advance() {
         guard frame.look.pulses else { return }
         tick = (tick + 1) % Int(Self.pulseFPS * Self.breathPeriod)
-        var next = frame
-        next.strength = Self.breath(tick)
-        deliver(next)
+        frame.strength = Self.breath(tick)
+        frames += 1
+        for surface in ticked {
+            surface.show(frame)
+        }
     }
 }
 

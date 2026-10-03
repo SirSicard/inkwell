@@ -7,6 +7,7 @@
 // straight edges and the orb's centre fall on whole pixels at 1x and at 2x, crisp as a symbol is.
 // The rim is filled as the space between two rounded squares, not stroked, so its edges are exact.
 import AppKit
+import QuartzCore
 
 enum StatusGlyph {
     /// The mark's size, in points: a status item's image.
@@ -81,11 +82,15 @@ enum StatusGlyph {
 /// glyph, which would lose the template's tinting for the menu bar, the wallpaper and an inactive
 /// display:
 ///
-///   glow, pulse   the orb in the state's colour (the pulse fades this view; nothing redraws)
+///   glow, pulse   the orb in the state's colour (the pulse is a layer animation of this view's
+///                 opacity, run by the render server: nothing redraws, the app never wakes)
 ///   ring          the rim filled clockwise from the top with the final pass, in their colour
 ///
 /// It takes no clicks and is not an accessibility element: the button's label says the state.
 final class StatusGlyphOverlay: NSView {
+    /// The breath's animation, on the layer.
+    static let breathKey = "inkwell.breath"
+
     private var shown = LiveIconFrame(look: .rest, colours: .unset, strength: 1)
     /// How many times a frame asked for a redraw (the pulse's frames are opacity only).
     private(set) var redraws = 0
@@ -110,8 +115,11 @@ final class StatusGlyphOverlay: NSView {
             width: StatusGlyph.size, height: StatusGlyph.size)
     }
 
+    /// It breathes by itself: LiveIcon shows it the pulse once and never ticks it.
+    var breathesItself: Bool { true }
+
     func show(_ frame: LiveIconFrame) {
-        // The strength is the view's opacity; only a new look or colour is drawn again.
+        // Only a new look or colour is drawn again; the strength is the animation's.
         var drawn = frame
         drawn.strength = 1
         if drawn != shown {
@@ -120,7 +128,28 @@ final class StatusGlyphOverlay: NSView {
             needsDisplay = true
         }
         isHidden = frame.look == .rest
-        alphaValue = frame.strength
+        breathe(frame.look.pulses)
+    }
+
+    /// Starts or stops the breath: the layer's opacity from full to `breathLow` and back over a
+    /// breath, asking the render server for the pulse's low rate rather than the display's.
+    private func breathe(_ on: Bool) {
+        guard let layer else { return }
+        let running = layer.animation(forKey: Self.breathKey) != nil
+        if on && !running {
+            let breath = CABasicAnimation(keyPath: "opacity")
+            breath.fromValue = 1.0
+            breath.toValue = LiveIcon.breathLow
+            breath.duration = LiveIcon.breathPeriod / 2
+            breath.autoreverses = true
+            breath.repeatCount = .infinity
+            breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            let fps = Float(LiveIcon.pulseFPS)
+            breath.preferredFrameRateRange = CAFrameRateRange(minimum: fps - 1, maximum: fps + 1, preferred: fps)
+            layer.add(breath, forKey: Self.breathKey)
+        } else if !on && running {
+            layer.removeAnimation(forKey: Self.breathKey)
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {

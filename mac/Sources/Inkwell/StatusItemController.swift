@@ -81,6 +81,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, LiveIconSurface {
 
     // MARK: The icon
 
+    /// The overlay runs the breath as a layer animation.
+    var breathesItself: Bool { overlay.breathesItself }
+
     func show(_ frame: LiveIconFrame) {
         overlay.show(frame)
     }
