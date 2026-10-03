@@ -177,6 +177,34 @@ final class OrbBehindTextTests: XCTestCase {
         XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: true), 0.45)
     }
 
+    /// The first run's orb sits beside its text on the sheet, at rest until the user speaks. The
+    /// mode's idle colour is made to sit quietly behind text: beside it, on Light's paper, it was
+    /// all but invisible (about 1.1:1; "its orb didn't show"). At rest on the sheet the orb stands
+    /// out from the sheet's paper in both modes.
+    func testTheFirstRunsOrbAtRestShowsOnTheSheetInBothModes() throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let pipeline = try InkPipelineLoader.shared.wait().get()
+        for dark in [false, true] {
+            let background = GlowColours.rgb(Glow.mode(dark: dark).background)
+            let surface = luminance(background)
+            for preset in Glow.presets {
+                let palette = OnboardingView.orbPalette(
+                    GlowColours.palette(preset: preset, you: nil, them: nil, dark: dark), dark: dark)
+                // The ready step's orb, 556 x 150 pt, at a quarter of its pixels.
+                let image = try InkSnapshot.render(
+                    .idle, t: 12, width: 278, height: 75, palette: palette, placement: .centred,
+                    voice: .silent, blotDepth: OrbLayer.blotDepth(behindText: false), pipeline: pipeline)
+                var best = 1.0
+                for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] > 0 {
+                    let alpha = Double(image.rgba[i + 3]) / 255
+                    let orb = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / 255
+                    best = max(best, contrast(surface, luminance(orb + background * (1 - alpha))))
+                }
+                XCTAssertGreaterThanOrEqual(best, 2, "\(dark ? "dark" : "light") \(preset.id)")
+            }
+        }
+    }
+
     /// The orb drawn as the main window places it, loud voices on both sides, at a few moments
     /// (its noise and highlight move), composited over the mode's background at the opacity the
     /// window gives it: every pixel keeps text at 4.5:1 and secondary text at 3:1 or more.

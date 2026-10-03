@@ -90,6 +90,17 @@ struct OnboardingView: View {
         Text(text).font(Typography.heading).accessibilityAddTraits(.isHeader)
     }
 
+    /// The first run's orb colours: the theme's, except at rest in Light, where it takes the dark
+    /// mode's idle colour, a deeper shade of the same violet. Light's own is made to sit quietly
+    /// behind text; beside it, on the sheet's paper, the resting orb was all but invisible (about
+    /// 1.3:1, "its orb didn't show"). Dark's already stands out from its paper.
+    static func orbPalette(_ palette: OrbPalette, dark: Bool) -> OrbPalette {
+        guard !dark else { return palette }
+        var palette = palette
+        palette.idle = SIMD3<Float>(GlowColours.rgb(Glow.mode(dark: true).idleOrb))
+        return palette
+    }
+
     /// The orb in the theme's colours: the welcome's demo, the ready step's try-it.
     private func orb(_ state: InkState, height: CGFloat, live: Bool) -> some View {
         let theme = screens.theme
@@ -100,7 +111,8 @@ struct OnboardingView: View {
             levels = { .silent }
         }
         return OrbLayer(
-            state: state, palette: theme.palette, placement: .centred, still: theme.motionStill,
+            state: state, palette: Self.orbPalette(theme.palette, dark: theme.isDark), placement: .centred,
+            still: theme.motionStill,
             dimmed: theme.solidSurfaces, levels: levels)
             .frame(maxWidth: .infinity)
             .frame(height: height)
@@ -223,16 +235,24 @@ struct OnboardingView: View {
 
     /// Names the key dictation uses now: the import step can change it from fn. The try-it: the
     /// orb shows what is live (the Drop does too), answering the voice while the key is held.
+    /// With no speech model a hold would type nothing: the step says a model is needed, with
+    /// Today's download of the recommended set (its size and hosts shown), and no try-it.
     private var ready: some View {
         let dictation = screens.dictation
+        let speech = screens.catalogue.speech
         return VStack(alignment: .leading, spacing: 12) {
             title("Ready")
-            Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key), say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
-            orb(ink.state, height: 150, live: true)
-            Text(ink.state == .dictating ? "Listening…" : "Try it now: the orb answers your voice.")
-                .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
-                .frame(maxWidth: .infinity)
+            if let needed = SpeechModels.readyLine(speech) {
+                SpeechModelLine(line: needed, lineFont: Typography.body)
+                Text("Inkwell lives in the menu bar; this window opens from there.")
+            } else {
+                Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key), say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
+                orb(ink.state, height: 150, live: true)
+                Text(ink.state == .dictating ? "Listening…" : "Try it now: the orb answers your voice.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .frame(maxWidth: .infinity)
+            }
             if !screens.permissions.offCards.isEmpty {
                 Text("Still off: \(screens.permissions.offCards.map(\.title).joined(separator: ", ")). Settings can turn them on.")
                     .foregroundStyle(Theme.alert)

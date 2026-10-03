@@ -69,6 +69,11 @@ the real core.
 - [ ] VoiceOver on that step: "Use Groq's free model" reads as a disclosure; inside, "Groq API key",
       Save and Use Groq (its hint is the line beside it); under "Other providers or models…", the
       picker, "API key", "Model", Use and Test read as in Settings > AI.
+- [ ] Ready step, before any speech model is in: "Inkwell needs a speech model before it can type
+      what you say." with "Download speech models (484 MB)" and its hosts (Today's button); no
+      "Hold fn" and no orb. Pressed, it shows the download's percentage. With a model in: "Hold fn
+      (Globe), say something, and let go", and the orb shows at rest as a soft violet disc, in Light
+      as in Dark; holding fn, it answers your voice.
 - [ ] Start (or Skip) closes it. Quit and start again on the same library: it does not come back.
 - [ ] On a fresh library, with the sheet up, press Command-Q (and, separately, choose Quit Inkwell
       from the menu-bar item): Inkwell quits at once. Start it again on the same library: the

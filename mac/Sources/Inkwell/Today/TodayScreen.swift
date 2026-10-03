@@ -445,16 +445,18 @@ struct OwedSoonRow: View {
 }
 
 /// Under Today's greeting while no speech model is installed: what that means, and the download
-/// of the recommended set (or how far it has got, or why it failed).
-private struct SpeechModelLine: View {
+/// of the recommended set (or how far it has got, or why it failed). The first run's last step
+/// shows it too, in its body size.
+struct SpeechModelLine: View {
     let line: String
+    var lineFont = Typography.caption
     @Environment(ScreenModels.self) private var screens
 
     var body: some View {
         let catalogue = screens.catalogue
         VStack(alignment: .leading, spacing: 8) {
             Text(line)
-                .font(Typography.caption)
+                .font(lineFont)
                 .foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
             switch catalogue.speechDownload {
