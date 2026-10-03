@@ -44,9 +44,16 @@ public sealed unsafe partial class WindowHook : IDisposable
             throw new InkRendererException($"couldn't watch the window's messages (error {GetLastError()})");
         }
         // Best effort: without them the pulse runs while locked, which it never needs to.
-        _ = WTSRegisterSessionNotification(window, 0);
+        if (!WTSRegisterSessionNotification(window, 0))
+        {
+            InkLog.Write("couldn't hear the screen lock: the live icon's pulse runs while it is locked");
+        }
         var guid = SessionDisplayStatus;
         display = RegisterPowerSettingNotification((HANDLE)this.window.Value, &guid, 0);
+        if (display == HPOWERNOTIFY.NULL)
+        {
+            InkLog.Write("couldn't hear the display go off: the live icon's pulse runs while it is off");
+        }
     }
 
     /// <summary>The window's taskbar button was made (at start, and again when Explorer restarts).</summary>
