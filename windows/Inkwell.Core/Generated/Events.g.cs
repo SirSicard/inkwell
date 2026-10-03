@@ -128,6 +128,7 @@ public abstract record InkEvent
                 "library.record" => root.Deserialize(InkEventsJson.Default.LibraryRecord)!,
                 "library.stats" => root.Deserialize(InkEventsJson.Default.LibraryStats)!,
                 "library.swept" => root.Deserialize(InkEventsJson.Default.LibrarySwept)!,
+                "stats.counted" => root.Deserialize(InkEventsJson.Default.StatsCounted)!,
                 _ => new UnknownEvent { Type = type },
             };
         }
@@ -265,6 +266,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(LibraryRecord))]
 [JsonSerializable(typeof(LibraryStats))]
 [JsonSerializable(typeof(LibrarySwept))]
+[JsonSerializable(typeof(StatsCounted))]
 public sealed partial class InkEventsJson : JsonSerializerContext
 {
 }
@@ -1055,6 +1057,90 @@ public sealed record DictationStarted : InkEvent
     /// </summary>
     [JsonPropertyName("take")]
     public required long Take { get; init; }
+}
+
+/// <summary>
+/// The user's dictation, counted on this computer: finished dictations by the local day they
+/// started. Speed and time saved count only dictations that know how long the key was held.
+/// </summary>
+public sealed record DictationStats
+{
+    /// <summary>
+    /// Dictations, all time.
+    /// </summary>
+    [JsonPropertyName("dictations_all")]
+    public required long DictationsAll { get; init; }
+
+    /// <summary>
+    /// The heatmap's first local day, YYYY-MM-DD: the first day of the week eleven weeks before
+    /// this one.
+    /// </summary>
+    [JsonPropertyName("heatmap_first_day")]
+    public required string HeatmapFirstDay { get; init; }
+
+    /// <summary>
+    /// Words dictated per local day, from heatmap_first_day to today.
+    /// </summary>
+    [JsonPropertyName("heatmap_words")]
+    public required global::System.Collections.Generic.IReadOnlyList<long> HeatmapWords { get; init; }
+
+    /// <summary>
+    /// The longest streak, all time.
+    /// </summary>
+    [JsonPropertyName("longest_streak_days")]
+    public required long LongestStreakDays { get; init; }
+
+    /// <summary>
+    /// Time saved all time, ms, as saved_ms_week.
+    /// </summary>
+    [JsonPropertyName("saved_ms_all")]
+    public required long SavedMsAll { get; init; }
+
+    /// <summary>
+    /// Time saved this week, ms: the same words typed at typing_wpm less the time spent
+    /// speaking. Negative when speaking took longer.
+    /// </summary>
+    [JsonPropertyName("saved_ms_week")]
+    public required long SavedMsWeek { get; init; }
+
+    /// <summary>
+    /// The current streak: local days with a dictation in a row, one missed day forgiven, two
+    /// ending it. Running while the last such day is today, yesterday, or the day before.
+    /// </summary>
+    [JsonPropertyName("streak_days")]
+    public required long StreakDays { get; init; }
+
+    /// <summary>
+    /// Words dictated, all time.
+    /// </summary>
+    [JsonPropertyName("words_all")]
+    public required long WordsAll { get; init; }
+
+    /// <summary>
+    /// Words dictated today.
+    /// </summary>
+    [JsonPropertyName("words_today")]
+    public required long WordsToday { get; init; }
+
+    /// <summary>
+    /// Words dictated since this week started (the shell's first weekday).
+    /// </summary>
+    [JsonPropertyName("words_week")]
+    public required long WordsWeek { get; init; }
+
+    /// <summary>
+    /// Words per minute over the last 30 days, today included: the user's own average. Absent
+    /// with less than a minute of speech in them.
+    /// </summary>
+    [JsonPropertyName("wpm_average")]
+    public long? WpmAverage { get; init; }
+
+    /// <summary>
+    /// Words per minute this week: words over the time the key was held. Absent with less than
+    /// a minute of speech this week.
+    /// </summary>
+    [JsonPropertyName("wpm_week")]
+    public long? WpmWeek { get; init; }
 }
 
 /// <summary>
@@ -2854,6 +2940,51 @@ public sealed record MeetingStarted : InkEvent
 }
 
 /// <summary>
+/// Meetings recorded here and finished, counted (imported meetings are left out: their channels
+/// came from elsewhere). Me versus them is stream identity: the mic is the user, the far end
+/// everyone else.
+/// </summary>
+public sealed record MeetingStats
+{
+    /// <summary>
+    /// The user's longest stretch of speech with no one else speaking and no pause over 3
+    /// seconds, ms.
+    /// </summary>
+    [JsonPropertyName("longest_monologue_ms")]
+    public required long LongestMonologueMs { get; init; }
+
+    /// <summary>
+    /// Meetings.
+    /// </summary>
+    [JsonPropertyName("meetings")]
+    public required long Meetings { get; init; }
+
+    /// <summary>
+    /// The user's lines ending in a question mark: a plain count.
+    /// </summary>
+    [JsonPropertyName("questions")]
+    public required long Questions { get; init; }
+
+    /// <summary>
+    /// Their total length, ms.
+    /// </summary>
+    [JsonPropertyName("recorded_ms")]
+    public required long RecordedMs { get; init; }
+
+    /// <summary>
+    /// Everyone else's talk time, ms.
+    /// </summary>
+    [JsonPropertyName("them_ms")]
+    public required long ThemMs { get; init; }
+
+    /// <summary>
+    /// The user's talk time, ms: how long their lines cover.
+    /// </summary>
+    [JsonPropertyName("you_ms")]
+    public required long YouMs { get; init; }
+}
+
+/// <summary>
 /// Capture ended and the record is marked ended; the final pass runs next.
 /// </summary>
 public sealed record MeetingStopped : InkEvent
@@ -3201,6 +3332,49 @@ public enum MicTransport
     Virtual,
     [JsonStringEnumMemberName("other")]
     Other,
+}
+
+/// <summary>
+/// What a milestone counts: words dictated all time, or the longest streak in days.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<MilestoneKind>))]
+public enum MilestoneKind
+{
+    [JsonStringEnumMemberName("words")]
+    Words,
+    [JsonStringEnumMemberName("streak")]
+    Streak,
+}
+
+/// <summary>
+/// A milestone and whether the library has reached it.
+/// </summary>
+public sealed record MilestoneRow
+{
+    /// <summary>
+    /// Its id: words_1000, words_10000, words_50000, words_100000, streak_7, streak_30,
+    /// streak_100.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// What it counts.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public required MilestoneKind Kind { get; init; }
+
+    /// <summary>
+    /// Whether it is reached.
+    /// </summary>
+    [JsonPropertyName("reached")]
+    public required bool Reached { get; init; }
+
+    /// <summary>
+    /// The count that reaches it.
+    /// </summary>
+    [JsonPropertyName("threshold")]
+    public required long Threshold { get; init; }
 }
 
 /// <summary>
@@ -3690,6 +3864,36 @@ public enum Phase
     Live,
     [JsonStringEnumMemberName("final")]
     Final,
+}
+
+/// <summary>
+/// Promises from meetings (commitments not merged into another), in Owed's states.
+/// </summary>
+public sealed record PromiseStats
+{
+    /// <summary>
+    /// Marked done.
+    /// </summary>
+    [JsonPropertyName("kept")]
+    public required long Kept { get; init; }
+
+    /// <summary>
+    /// Promises made: kept, open and overdue together.
+    /// </summary>
+    [JsonPropertyName("made")]
+    public required long Made { get; init; }
+
+    /// <summary>
+    /// Not done, and not past their due day.
+    /// </summary>
+    [JsonPropertyName("open")]
+    public required long Open { get; init; }
+
+    /// <summary>
+    /// Not done, past their due day (due today is not late).
+    /// </summary>
+    [JsonPropertyName("overdue")]
+    public required long Overdue { get; init; }
 }
 
 /// <summary>
@@ -4205,6 +4409,68 @@ public sealed record SpeakerNamed : InkEvent
     /// </summary>
     [JsonPropertyName("speaker")]
     public required string Speaker { get; init; }
+}
+
+/// <summary>
+/// The Stats screen's numbers, in answer to stats.get: counted on this computer from the
+/// library, on the user's calendar. Nothing here is sent anywhere or drawn from what was said.
+/// </summary>
+public sealed record StatsCounted : InkEvent
+{
+    /// <summary>
+    /// Dictation.
+    /// </summary>
+    [JsonPropertyName("dictation")]
+    public required DictationStats Dictation { get; init; }
+
+    /// <summary>
+    /// Meetings, all time.
+    /// </summary>
+    [JsonPropertyName("meetings_all")]
+    public required MeetingStats MeetingsAll { get; init; }
+
+    /// <summary>
+    /// Meetings that started this month.
+    /// </summary>
+    [JsonPropertyName("meetings_month")]
+    public required MeetingStats MeetingsMonth { get; init; }
+
+    /// <summary>
+    /// Every milestone, in a fixed order.
+    /// </summary>
+    [JsonPropertyName("milestones")]
+    public required global::System.Collections.Generic.IReadOnlyList<MilestoneRow> Milestones { get; init; }
+
+    /// <summary>
+    /// Promises, all time.
+    /// </summary>
+    [JsonPropertyName("promises_all")]
+    public required PromiseStats PromisesAll { get; init; }
+
+    /// <summary>
+    /// Promises made in meetings that started this month.
+    /// </summary>
+    [JsonPropertyName("promises_month")]
+    public required PromiseStats PromisesMonth { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// Today on the user's calendar, YYYY-MM-DD.
+    /// </summary>
+    [JsonPropertyName("today")]
+    public required string Today { get; init; }
+
+    /// <summary>
+    /// The typing speed time saved is measured against (stats.typing_wpm, 40 unless set).
+    /// </summary>
+    [JsonPropertyName("typing_wpm")]
+    public required long TypingWpm { get; init; }
 }
 
 /// <summary>

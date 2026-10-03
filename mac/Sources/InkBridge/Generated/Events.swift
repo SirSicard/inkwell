@@ -179,6 +179,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case libraryStats(LibraryStats)
     /// `library.swept`
     case librarySwept(LibrarySwept)
+    /// `stats.counted`
+    case statsCounted(StatsCounted)
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
@@ -287,6 +289,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
             case "library.stats": self = .libraryStats(try LibraryStats(from: decoder))
             case "library.swept": self = .librarySwept(try LibrarySwept(from: decoder))
+            case "stats.counted": self = .statsCounted(try StatsCounted(from: decoder))
             default: self = .unknown(type: type)
             }
         } catch {
@@ -381,6 +384,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .libraryRecord(let event): try event.encode(to: encoder)
         case .libraryStats(let event): try event.encode(to: encoder)
         case .librarySwept(let event): try event.encode(to: encoder)
+        case .statsCounted(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var keys = encoder.container(keyedBy: TypeKey.self)
             try keys.encode(type, forKey: .type)
@@ -863,6 +867,55 @@ public struct DictationStarted: Codable, Sendable, Equatable {
     public let take: Int64
     /// Always `dictation.started`.
     public let type: String
+}
+
+/// The user's dictation, counted on this computer: finished dictations by the local day they
+/// started. Speed and time saved count only dictations that know how long the key was held.
+public struct DictationStats: Codable, Sendable, Equatable {
+    /// Dictations, all time.
+    public let dictationsAll: Int64
+    /// The heatmap's first local day, YYYY-MM-DD: the first day of the week eleven weeks before
+    /// this one.
+    public let heatmapFirstDay: String
+    /// Words dictated per local day, from heatmap_first_day to today.
+    public let heatmapWords: [Int64]
+    /// The longest streak, all time.
+    public let longestStreakDays: Int64
+    /// Time saved all time, ms, as saved_ms_week.
+    public let savedMsAll: Int64
+    /// Time saved this week, ms: the same words typed at typing_wpm less the time spent
+    /// speaking. Negative when speaking took longer.
+    public let savedMsWeek: Int64
+    /// The current streak: local days with a dictation in a row, one missed day forgiven, two
+    /// ending it. Running while the last such day is today, yesterday, or the day before.
+    public let streakDays: Int64
+    /// Words dictated, all time.
+    public let wordsAll: Int64
+    /// Words dictated today.
+    public let wordsToday: Int64
+    /// Words dictated since this week started (the shell's first weekday).
+    public let wordsWeek: Int64
+    /// Words per minute over the last 30 days, today included: the user's own average. Absent
+    /// with less than a minute of speech in them.
+    public let wpmAverage: Int64?
+    /// Words per minute this week: words over the time the key was held. Absent with less than
+    /// a minute of speech this week.
+    public let wpmWeek: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case dictationsAll = "dictations_all"
+        case heatmapFirstDay = "heatmap_first_day"
+        case heatmapWords = "heatmap_words"
+        case longestStreakDays = "longest_streak_days"
+        case savedMsAll = "saved_ms_all"
+        case savedMsWeek = "saved_ms_week"
+        case streakDays = "streak_days"
+        case wordsAll = "words_all"
+        case wordsToday = "words_today"
+        case wordsWeek = "words_week"
+        case wpmAverage = "wpm_average"
+        case wpmWeek = "wpm_week"
+    }
 }
 
 /// The take is closed and being processed.
@@ -1922,6 +1975,34 @@ public struct MeetingStarted: Codable, Sendable, Equatable {
     }
 }
 
+/// Meetings recorded here and finished, counted (imported meetings are left out: their channels
+/// came from elsewhere). Me versus them is stream identity: the mic is the user, the far end
+/// everyone else.
+public struct MeetingStats: Codable, Sendable, Equatable {
+    /// The user's longest stretch of speech with no one else speaking and no pause over 3
+    /// seconds, ms.
+    public let longestMonologueMs: Int64
+    /// Meetings.
+    public let meetings: Int64
+    /// The user's lines ending in a question mark: a plain count.
+    public let questions: Int64
+    /// Their total length, ms.
+    public let recordedMs: Int64
+    /// Everyone else's talk time, ms.
+    public let themMs: Int64
+    /// The user's talk time, ms: how long their lines cover.
+    public let youMs: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case longestMonologueMs = "longest_monologue_ms"
+        case meetings
+        case questions
+        case recordedMs = "recorded_ms"
+        case themMs = "them_ms"
+        case youMs = "you_ms"
+    }
+}
+
 /// Capture ended and the record is marked ended; the final pass runs next.
 public struct MeetingStopped: Codable, Sendable, Equatable {
     /// The meeting's record id.
@@ -2119,6 +2200,25 @@ public enum MicTransport: String, Codable, Sendable, Equatable, CaseIterable {
     case usb
     case virtual
     case other
+}
+
+/// What a milestone counts: words dictated all time, or the longest streak in days.
+public enum MilestoneKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case words
+    case streak
+}
+
+/// A milestone and whether the library has reached it.
+public struct MilestoneRow: Codable, Sendable, Equatable {
+    /// Its id: words_1000, words_10000, words_50000, words_100000, streak_7, streak_30,
+    /// streak_100.
+    public let id: String
+    /// What it counts.
+    public let kind: MilestoneKind
+    /// Whether it is reached.
+    public let reached: Bool
+    /// The count that reaches it.
+    public let threshold: Int64
 }
 
 /// A mode: how dictation writes in the apps it names.
@@ -2422,6 +2522,18 @@ public struct PermissionsChecked: Codable, Sendable, Equatable {
 public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
     case live
     case `final`
+}
+
+/// Promises from meetings (commitments not merged into another), in Owed's states.
+public struct PromiseStats: Codable, Sendable, Equatable {
+    /// Marked done.
+    public let kept: Int64
+    /// Promises made: kept, open and overdue together.
+    public let made: Int64
+    /// Not done, and not past their due day.
+    public let `open`: Int64
+    /// Not done, past their due day (due today is not late).
+    public let overdue: Int64
 }
 
 /// Where a record's audio is: its chunks per side, placed on its timeline.
@@ -2732,6 +2844,45 @@ public struct SpeakerNamed: Codable, Sendable, Equatable {
     public let speaker: String
     /// Always `speaker.named`.
     public let type: String
+}
+
+/// The Stats screen's numbers, in answer to stats.get: counted on this computer from the
+/// library, on the user's calendar. Nothing here is sent anywhere or drawn from what was said.
+public struct StatsCounted: Codable, Sendable, Equatable {
+    /// Dictation.
+    public let dictation: DictationStats
+    /// Meetings, all time.
+    public let meetingsAll: MeetingStats
+    /// Meetings that started this month.
+    public let meetingsMonth: MeetingStats
+    /// Every milestone, in a fixed order.
+    public let milestones: [MilestoneRow]
+    /// Promises, all time.
+    public let promisesAll: PromiseStats
+    /// Promises made in meetings that started this month.
+    public let promisesMonth: PromiseStats
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// Today on the user's calendar, YYYY-MM-DD.
+    public let today: String
+    /// Always `stats.counted`.
+    public let type: String
+    /// The typing speed time saved is measured against (stats.typing_wpm, 40 unless set).
+    public let typingWpm: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case dictation
+        case meetingsAll = "meetings_all"
+        case meetingsMonth = "meetings_month"
+        case milestones
+        case promisesAll = "promises_all"
+        case promisesMonth = "promises_month"
+        case ref
+        case today
+        case type
+        case typingWpm = "typing_wpm"
+    }
 }
 
 /// Whether a summary item is a decision or an action.

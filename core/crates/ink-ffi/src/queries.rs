@@ -93,7 +93,16 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // `still` draws the orb and the edge glow without motion; `system` follows the system's
     // reduce-motion setting.
     ("appearance.motion", &["system", "still"]),
+    // The typing speed the Stats screen measures time saved against (crate::stats): whole words
+    // a minute, 40 unless set.
+    (crate::stats::TYPING_WPM_KEY, &[TYPING_WPM]),
+    // Whether a milestone reached is celebrated (crate::stats). On unless turned off.
+    (crate::stats::CELEBRATE_KEY, &["on", "off"]),
 ];
+
+/// In a value list of [`SHELL_SETTINGS`]: a typing speed, a whole number of words a minute in
+/// [`crate::stats::TYPING_WPM_RANGE`], written plainly (`40`).
+pub const TYPING_WPM: &str = "<wpm>";
 
 /// In a value list of [`SHELL_SETTINGS`]: any colour written `#rrggbb`, in lowercase hex.
 pub const HEX_COLOUR: &str = "#rrggbb";
@@ -239,6 +248,8 @@ pub enum Query {
     Cloud(crate::cloud::CloudQuery),
     /// Inkwell 0.2's data: looked for, or imported ([`import02`](crate::import02)).
     Import02(crate::import02::Import02Query),
+    /// The Stats screen's numbers ([`stats`](crate::stats)).
+    Stats(crate::stats::StatsQuery),
 }
 
 /// A query with the command's name and id, for its events.
@@ -310,6 +321,9 @@ pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     }
     if let Some(query) = crate::import02::parse(name, v) {
         return Some(query.map(Query::Import02));
+    }
+    if let Some(query) = crate::stats::parse(name, v) {
+        return Some(query.map(Query::Stats));
     }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
@@ -512,6 +526,14 @@ fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, 
 fn accepts(allowed: &str, value: &str) -> bool {
     if allowed == ANY_KEY {
         crate::hotkey::stored_value(value).is_ok()
+    } else if allowed == TYPING_WPM {
+        // Digits only, so the stored text reads back as the number it is ("040" and "+40" are
+        // refused rather than kept in two spellings).
+        !value.starts_with('0')
+            && value.bytes().all(|b| b.is_ascii_digit())
+            && value
+                .parse::<u32>()
+                .is_ok_and(|w| crate::stats::TYPING_WPM_RANGE.contains(&w))
     } else if allowed == HEX_COLOUR {
         // `#` and six lowercase hex digits; the pattern itself is not a colour.
         value.len() == 7
@@ -897,6 +919,10 @@ impl Ctx<'_> {
                 Ok(Some(e)) => emit(e),
                 // llm.test: the test thread answers.
                 Ok(None) => {}
+                Err(e) => fail(e),
+            },
+            Query::Stats(query) => match crate::stats::answer(self.shared, query, id.as_deref()) {
+                Ok(e) => emit(e),
                 Err(e) => fail(e),
             },
             // A store call and a read of 0.2's files: about a second for a long history, and

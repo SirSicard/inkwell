@@ -258,6 +258,9 @@
     },
     {
       "$ref": "#/$defs/LibrarySwept"
+    },
+    {
+      "$ref": "#/$defs/StatsCounted"
     }
   ],
   "$defs": {
@@ -4166,6 +4169,264 @@
         "deleted",
         "failed",
         "before_unix_ms"
+      ],
+      "additionalProperties": false
+    },
+    "DictationStats": {
+      "type": "object",
+      "description": "The user's dictation, counted on this computer: finished dictations by the local day they started. Speed and time saved count only dictations that know how long the key was held.",
+      "properties": {
+        "words_today": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words dictated today."
+        },
+        "words_week": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words dictated since this week started (the shell's first weekday)."
+        },
+        "words_all": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words dictated, all time."
+        },
+        "dictations_all": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dictations, all time."
+        },
+        "wpm_week": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words per minute this week: words over the time the key was held. Absent with less than a minute of speech this week."
+        },
+        "wpm_average": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words per minute over the last 30 days, today included: the user's own average. Absent with less than a minute of speech in them."
+        },
+        "saved_ms_week": {
+          "type": "integer",
+          "description": "Time saved this week, ms: the same words typed at typing_wpm less the time spent speaking. Negative when speaking took longer."
+        },
+        "saved_ms_all": {
+          "type": "integer",
+          "description": "Time saved all time, ms, as saved_ms_week."
+        },
+        "streak_days": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The current streak: local days with a dictation in a row, one missed day forgiven, two ending it. Running while the last such day is today, yesterday, or the day before."
+        },
+        "longest_streak_days": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The longest streak, all time."
+        },
+        "heatmap_first_day": {
+          "type": "string",
+          "description": "The heatmap's first local day, YYYY-MM-DD: the first day of the week eleven weeks before this one."
+        },
+        "heatmap_words": {
+          "type": "array",
+          "description": "Words dictated per local day, from heatmap_first_day to today.",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "One day's words."
+          }
+        }
+      },
+      "required": [
+        "words_today",
+        "words_week",
+        "words_all",
+        "dictations_all",
+        "saved_ms_week",
+        "saved_ms_all",
+        "streak_days",
+        "longest_streak_days",
+        "heatmap_first_day",
+        "heatmap_words"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingStats": {
+      "type": "object",
+      "description": "Meetings recorded here and finished, counted (imported meetings are left out: their channels came from elsewhere). Me versus them is stream identity: the mic is the user, the far end everyone else.",
+      "properties": {
+        "meetings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Meetings."
+        },
+        "recorded_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Their total length, ms."
+        },
+        "you_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The user's talk time, ms: how long their lines cover."
+        },
+        "them_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Everyone else's talk time, ms."
+        },
+        "longest_monologue_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The user's longest stretch of speech with no one else speaking and no pause over 3 seconds, ms."
+        },
+        "questions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The user's lines ending in a question mark: a plain count."
+        }
+      },
+      "required": [
+        "meetings",
+        "recorded_ms",
+        "you_ms",
+        "them_ms",
+        "longest_monologue_ms",
+        "questions"
+      ],
+      "additionalProperties": false
+    },
+    "PromiseStats": {
+      "type": "object",
+      "description": "Promises from meetings (commitments not merged into another), in Owed's states.",
+      "properties": {
+        "made": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Promises made: kept, open and overdue together."
+        },
+        "kept": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Marked done."
+        },
+        "open": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Not done, and not past their due day."
+        },
+        "overdue": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Not done, past their due day (due today is not late)."
+        }
+      },
+      "required": [
+        "made",
+        "kept",
+        "open",
+        "overdue"
+      ],
+      "additionalProperties": false
+    },
+    "MilestoneKind": {
+      "type": "string",
+      "description": "What a milestone counts: words dictated all time, or the longest streak in days.",
+      "enum": [
+        "words",
+        "streak"
+      ]
+    },
+    "MilestoneRow": {
+      "type": "object",
+      "description": "A milestone and whether the library has reached it.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id: words_1000, words_10000, words_50000, words_100000, streak_7, streak_30, streak_100."
+        },
+        "kind": {
+          "$ref": "#/$defs/MilestoneKind",
+          "description": "What it counts."
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The count that reaches it."
+        },
+        "reached": {
+          "type": "boolean",
+          "description": "Whether it is reached."
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "threshold",
+        "reached"
+      ],
+      "additionalProperties": false
+    },
+    "StatsCounted": {
+      "type": "object",
+      "description": "The Stats screen's numbers, in answer to stats.get: counted on this computer from the library, on the user's calendar. Nothing here is sent anywhere or drawn from what was said.",
+      "properties": {
+        "type": {
+          "const": "stats.counted"
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, echoed so the shell can match the answer to its question."
+        },
+        "today": {
+          "type": "string",
+          "description": "Today on the user's calendar, YYYY-MM-DD."
+        },
+        "typing_wpm": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The typing speed time saved is measured against (stats.typing_wpm, 40 unless set)."
+        },
+        "dictation": {
+          "$ref": "#/$defs/DictationStats",
+          "description": "Dictation."
+        },
+        "meetings_month": {
+          "$ref": "#/$defs/MeetingStats",
+          "description": "Meetings that started this month."
+        },
+        "meetings_all": {
+          "$ref": "#/$defs/MeetingStats",
+          "description": "Meetings, all time."
+        },
+        "promises_month": {
+          "$ref": "#/$defs/PromiseStats",
+          "description": "Promises made in meetings that started this month."
+        },
+        "promises_all": {
+          "$ref": "#/$defs/PromiseStats",
+          "description": "Promises, all time."
+        },
+        "milestones": {
+          "type": "array",
+          "description": "Every milestone, in a fixed order.",
+          "items": {
+            "$ref": "#/$defs/MilestoneRow",
+            "description": "One milestone."
+          }
+        }
+      },
+      "required": [
+        "type",
+        "today",
+        "typing_wpm",
+        "dictation",
+        "meetings_month",
+        "meetings_all",
+        "promises_month",
+        "promises_all",
+        "milestones"
       ],
       "additionalProperties": false
     }
