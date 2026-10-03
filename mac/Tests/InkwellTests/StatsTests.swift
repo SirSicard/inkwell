@@ -392,3 +392,89 @@ final class MilestoneCelebrationTests: XCTestCase {
         XCTAssertEqual(glow.sizeThatFits(in: .zero), .zero, "it takes whatever room the window has, and asks for none")
     }
 }
+
+/// The share card: numbers only, the ones the user ticks, made on this Mac as an image.
+@MainActor
+final class ShareCardTests: XCTestCase {
+    private let gb = Locale(identifier: "en_GB")
+
+    private func counted(_ json: String) throws -> StatsCounted {
+        try JSONDecoder().decode(StatsCounted.self, from: Data(json.utf8))
+    }
+
+    func testTheCardCarriesOnlyTheTickedNumbersInAFixedOrder() throws {
+        let c = try counted(statsCounted(
+            ref: "x", words: (10, 1_234, 56_789), dictations: 40, wpmWeek: 142, savedAll: 12_000_000, streak: 12,
+            longest: 31,
+            meetings: #"{"meetings":3,"recorded_ms":5400000,"you_ms":1000,"them_ms":3000,"longest_monologue_ms":1,"questions":2}"#,
+            promises: #"{"made":14,"kept":12,"open":2,"overdue":0}"#))
+        let all = ShareStat.lines(c, selected: Set(ShareStat.allCases), locale: gb)
+        XCTAssertEqual(all, [
+            ShareLine(value: "56,789", label: "words dictated"),
+            ShareLine(value: "1,234", label: "words this week"),
+            ShareLine(value: "142 wpm", label: "speaking speed this week"),
+            ShareLine(value: "3 h 20 min", label: "saved vs typing at 40 wpm"),
+            ShareLine(value: "12 days", label: "dictation streak"),
+            ShareLine(value: "1 h 30 min", label: "in meetings this month"),
+            ShareLine(value: "25 % / 75 %", label: "talk time this month, you / them"),
+            ShareLine(value: "12 of 14", label: "promises kept this month"),
+        ])
+        XCTAssertEqual(
+            ShareStat.lines(c, selected: [.streak, .wordsAll], locale: gb).map(\.label), ["words dictated", "dictation streak"],
+            "the order is the card's, not the ticking's")
+        // No text from the library anywhere: every value is a number with its unit.
+        for line in all {
+            XCTAssertNotNil(line.value.rangeOfCharacter(from: .decimalDigits), line.value)
+        }
+    }
+
+    /// A number the library does not have yet has no line, and its tick says so.
+    func testANumberNotYetThereHasNoLine() throws {
+        let c = try counted(statsCounted(ref: "x", words: (0, 0, 5), dictations: 1, streak: 1, longest: 1))
+        let lines = ShareStat.lines(c, selected: Set(ShareStat.allCases), locale: gb)
+        XCTAssertEqual(lines.map(\.label), ["words dictated", "words this week"])
+        XCTAssertFalse(ShareStat.saved.available(in: c))
+        XCTAssertTrue(ShareStat.wordsAll.available(in: c))
+        XCTAssertEqual(ShareStat.defaults, [.wordsAll, .saved, .streak])
+    }
+
+    func testTheCardRendersAsAPNGOnThisMac() throws {
+        let lines = [ShareLine(value: "56,789", label: "words dictated"), ShareLine(value: "12 days", label: "dictation streak")]
+        for dark in [false, true] {
+            let png = try XCTUnwrap(StatsShare.png(lines: lines, dark: dark, you: .blue, them: .orange))
+            XCTAssertEqual(Array(png.prefix(4)), [0x89, 0x50, 0x4E, 0x47], "a PNG")
+            let image = try XCTUnwrap(NSBitmapImageRep(data: png))
+            XCTAssertEqual(image.pixelsWide, Int(ShareCard.width * StatsShare.scale))
+            XCTAssertGreaterThan(image.pixelsHigh, 200)
+        }
+        XCTAssertNil(StatsShare.png(lines: [], dark: false, you: .blue, them: .orange), "nothing ticked, no card")
+    }
+
+    func testCopyPutsTheImageOnThePasteboardAndNothingElseLeaves() throws {
+        let board = NSPasteboard(name: NSPasteboard.Name("inkwell-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        let png = try XCTUnwrap(StatsShare.png(
+            lines: [ShareLine(value: "1", label: "words dictated")], dark: false, you: .blue, them: .orange))
+        StatsShare.copy(png, to: board)
+        XCTAssertEqual(board.data(forType: .png), png)
+        XCTAssertNil(board.string(forType: .string), "no text: an image only")
+    }
+}
+
+/// The share sheet fits a laptop screen with every number ticked.
+@MainActor
+final class ShareSheetLayoutTests: XCTestCase {
+    func testTheSheetFitsWithEveryNumber() throws {
+        let c = try JSONDecoder().decode(StatsCounted.self, from: Data(statsCounted(
+            ref: "x", words: (10, 1_234, 56_789), dictations: 40, wpmWeek: 142, savedAll: 12_000_000, streak: 12,
+            longest: 31,
+            meetings: #"{"meetings":3,"recorded_ms":5400000,"you_ms":1000,"them_ms":3000,"longest_monologue_ms":1,"questions":2}"#,
+            promises: #"{"made":14,"kept":12,"open":2,"overdue":0}"#).utf8))
+        let stats = StatsModel(send: { _ in })
+        let theme = GlowTheme(send: { _ in }, applyAppearance: { _ in })
+        let hosting = NSHostingController(rootView: ShareCardSheet(counted: c, stats: stats).environment(theme))
+        let size = hosting.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
+        XCTAssertLessThanOrEqual(size.width, 640.5)
+        XCTAssertLessThan(size.height, 760, "a 13-inch screen's height, less the menu bar and the window's title")
+    }
+}

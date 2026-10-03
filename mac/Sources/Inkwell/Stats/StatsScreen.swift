@@ -10,12 +10,19 @@ import SwiftUI
 
 struct StatsScreen: View {
     @Environment(ScreenModels.self) private var screens
+    @State private var sharing = false
 
     var body: some View {
         let stats = screens.stats
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Paper.Header(title: "Stats", subtitle: "Counted on this Mac from your library. Nothing leaves it.")
+                Paper.Header(title: "Stats", subtitle: "Counted on this Mac from your library. Nothing leaves it.") {
+                    if stats.counted != nil {
+                        Button("Share card\u{2026}") { sharing = true }
+                            .buttonStyle(PaperButtonStyle())
+                            .accessibilityHint("Makes an image of the numbers you pick, to copy or save")
+                    }
+                }
                 if let counted = stats.counted {
                     if stats.loadState == .failed {
                         Text("Couldn't count again. These are the numbers from before.")
@@ -45,6 +52,12 @@ struct StatsScreen: View {
         .scrollContentBackground(.hidden)
         .onAppear { stats.screenAppeared() }
         .onDisappear { stats.screenDisappeared() }
+        .sheet(isPresented: $sharing) {
+            if let counted = stats.counted {
+                // The sheet follows the app's appearance, as the first run's does.
+                ShareCardSheet(counted: counted, stats: stats).followsAppMode()
+            }
+        }
     }
 }
 
