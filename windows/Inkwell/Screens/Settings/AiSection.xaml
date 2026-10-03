@@ -23,61 +23,8 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Language model" />
-            <StackPanel Grid.Column="1" Spacing="8">
-                <ComboBox
-                    x:Name="ProviderBox"
-                    MinWidth="260"
-                    AutomationProperties.Name="Language model provider"
-                    SelectionChanged="OnProviderChosen" />
-                <StackPanel x:Name="ProviderDetails" Spacing="8">
-                    <TextBox
-                        x:Name="ServerBox"
-                        MinWidth="320"
-                        HorizontalAlignment="Left"
-                        AutomationProperties.Name="Server address"
-                        Header="Server address"
-                        TextChanged="OnServerChanged" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <PasswordBox
-                            x:Name="KeyBox"
-                            MinWidth="320"
-                            AutomationProperties.Name="API key"
-                            Header="API key" />
-                        <Button
-                            x:Name="SaveKeyButton"
-                            VerticalAlignment="Bottom"
-                            Click="OnSaveKey"
-                            Content="Save key" />
-                        <Button
-                            x:Name="DeleteKeyButton"
-                            VerticalAlignment="Bottom"
-                            Click="OnDeleteKey"
-                            Content="Delete key" />
-                    </StackPanel>
-                    <TextBlock x:Name="KeyStatus" Style="{StaticResource InkCaptionStyle}" />
-                    <ComboBox
-                        x:Name="ModelBox"
-                        MinWidth="320"
-                        AutomationProperties.Name="Model"
-                        Header="Model"
-                        IsEditable="True"
-                        SelectionChanged="OnModelChosen" />
-                </StackPanel>
-                <TextBlock x:Name="UseNote" Style="{StaticResource InkCaptionStyle}" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button
-                        x:Name="UseButton"
-                        Click="OnUse"
-                        Style="{StaticResource InkAccentButtonStyle}" />
-                    <Button
-                        x:Name="TestButton"
-                        AutomationProperties.Name="Test the language model"
-                        Click="OnTest"
-                        Content="Test" />
-                </StackPanel>
-                <TextBlock x:Name="TestStatus" Style="{StaticResource InkCaptionStyle}" />
-                <TextBlock x:Name="CloudStatus" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
+            <!-- The provider, its key, its model, Use and Test (LanguageModelRows, shared with the first run). -->
+            <ContentPresenter x:Name="LanguageModelHost" Grid.Column="1" />
         </Grid>
         <TextBlock
             Style="{StaticResource InkCaptionStyle}"

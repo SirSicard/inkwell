@@ -238,14 +238,20 @@ public class OnboardingModelTests
         Assert.Null(new ModelChoices().DownloadTitle(catalogue, CultureInfo.InvariantCulture));
     }
 
-    /// <summary>The own key is one choice: its line ends in the link's host (the view makes that part the link).</summary>
+    /// <summary>The own key is one choice, in the Mac's words: its sentence carries the link's host.</summary>
     [Fact]
-    public void TheOwnKeyIsOneChoiceWithItsLinkInTheLine()
+    public void TheOwnKeyIsOneChoiceWithItsLinkInTheSentence()
     {
-        Assert.Equal("Use Groq's free model: get a key at console.groq.com", OnboardingModel.OwnKeyLine);
-        Assert.EndsWith(OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyLine, StringComparison.Ordinal);
+        Assert.Equal("Use Groq's free model", OnboardingModel.OwnKeyTitle);
+        Assert.Equal(
+            "Groq's free tier covers ordinary personal use and needs no credit card. Sign in at console.groq.com, create a key under API Keys and paste it here.",
+            OnboardingModel.OwnKeyLead);
+        Assert.Contains(OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyLead, StringComparison.Ordinal);
         Assert.Equal("https://" + OnboardingModel.OwnKeyHost, OnboardingModel.OwnKeyUrl);
-        Assert.Equal("Save", OnboardingModel.OwnKeyButton);
+        Assert.Equal("Paste your Groq key", OnboardingModel.OwnKeyPlaceholder);
+        Assert.Equal("Save", OnboardingModel.OwnKeySave);
+        Assert.Equal("Other providers or models\u2026", OnboardingModel.OtherProviders);
+        Assert.Equal("Back to Groq's free model", OnboardingModel.BackToGroq);
     }
 
 

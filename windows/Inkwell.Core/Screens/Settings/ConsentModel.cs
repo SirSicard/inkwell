@@ -124,6 +124,18 @@ public sealed class ConsentModel : ObservableModel
     /// <summary>For voice edit, the key the step turns it on with.</summary>
     public string? PendingKey { get; private set; }
 
+    /// <summary>The step on screen names a model that is not chosen yet: Allow chooses it first.</summary>
+    public bool Choosing { get; private set; }
+
+    /// <summary>
+    /// The destination the user allowed before its model was chosen, waiting for the core to name
+    /// it; the consent is sent then.
+    /// </summary>
+    public ConsentDestination? Agreed { get; private set; }
+
+    /// <summary>What Allow does first when the step names a model not chosen yet; whether it sent the choice.</summary>
+    private Func<bool>? choose;
+
     /// <summary>Where the feature would send now, if the core named a model.</summary>
     public ConsentDestination? Destination => State?.Destination;
 
@@ -271,14 +283,43 @@ public sealed class ConsentModel : ObservableModel
         {
             return;
         }
+        ClearStep();
         Failure = null;
+        // An agreement waiting for its choice is not this step's: it is dropped, so it can never
+        // allow anything after this.
+        Agreed = null;
         Pending = destination;
         Host = host;
         PendingKey = key;
         Changed();
     }
 
-    /// <summary>The consent step's Allow: the user agreed to where the feature sends. The core records it only if that is still where the model goes.</summary>
+    /// <summary>
+    /// Shows the consent step for <paramref name="destination"/>, the model <paramref name="choose"/>
+    /// will choose (the first run's Use Groq): nothing is sent until Allow, which runs
+    /// <paramref name="choose"/> and sends the consent once the core names that destination.
+    /// <paramref name="choose"/> says whether it sent the choice (false: what it would choose is no
+    /// longer what the step named).
+    /// </summary>
+    public void Ask(ConsentDestination destination, ConsentHost host, Func<bool> choose)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(choose);
+        Failure = null;
+        Agreed = null;
+        Pending = destination;
+        Host = host;
+        PendingKey = null;
+        Choosing = true;
+        this.choose = choose;
+        Changed();
+    }
+
+    /// <summary>
+    /// The consent step's Allow: the user agreed to where the feature sends. The core records it
+    /// only if that is still where the model goes. A step naming a model not chosen yet chooses it
+    /// first, and the consent waits for the core to name it.
+    /// </summary>
     public void Allow()
     {
         if (Pending is not ConsentDestination destination)
@@ -286,12 +327,33 @@ public sealed class ConsentModel : ObservableModel
             return;
         }
         var key = PendingKey;
+        var chooseFirst = Choosing ? choose : null;
         ClearStep();
         Failure = null;
+        if (chooseFirst is not null)
+        {
+            // Waiting only for a choice that went: one that did not would leave an agreement that
+            // a later state could act on, with no step on screen.
+            if (chooseFirst())
+            {
+                Agreed = destination;
+            }
+            else
+            {
+                Failure = ConsentFailure.Allow;
+            }
+            Changed();
+            return;
+        }
+        SendAllow(destination, key);
+        Changed();
+    }
+
+    private void SendAllow(ConsentDestination destination, string? key)
+    {
         var reference = NextRef("allow");
         newestAllow = reference;
         send(new CoreCommand.ConsentAllow(Feature, destination.Kind, destination.IsOnDevice ? null : destination.Endpoint, key, reference));
-        Changed();
     }
 
     /// <summary>The consent step's Cancel (or the step dismissed): nothing is sent.</summary>
@@ -306,6 +368,8 @@ public sealed class ConsentModel : ObservableModel
         Pending = null;
         Host = null;
         PendingKey = null;
+        Choosing = false;
+        choose = null;
     }
 
     /// <summary>
@@ -361,6 +425,7 @@ public sealed class ConsentModel : ObservableModel
                 return false;
             case CoreStopped:
                 ClearStep();
+                Agreed = null;
                 return true;
             case ConsentState value when value.Feature == Feature:
                 // The answer to an older request, arriving after a newer one was sent: the newer
@@ -379,9 +444,27 @@ public sealed class ConsentModel : ObservableModel
                 }
                 // The step names a destination that is no longer the model's: close it rather than
                 // change its words under the user's finger. Turning the feature on asks about the new one.
-                if (Pending is not null && Pending != Destination)
+                // A step that chooses its model names one the core does not know yet: it stays.
+                if (Pending is not null && !Choosing && Pending != Destination)
                 {
                     ClearStep();
+                }
+                // The model the user allowed is chosen: the consent goes, for the destination the
+                // core names, only if it is the one agreed to (the core then records it only if it
+                // still is). The core's own state after the choice (no ref) naming another settles it
+                // as refused; an answer to an older read is not about the choice.
+                if (Agreed is ConsentDestination agreed)
+                {
+                    if (Destination is ConsentDestination now && now.Kind == agreed.Kind && now.Endpoint == agreed.Endpoint)
+                    {
+                        Agreed = null;
+                        SendAllow(now, null);
+                    }
+                    else if (value.Ref is null)
+                    {
+                        Agreed = null;
+                        Failure = ConsentFailure.Allow;
+                    }
                 }
                 return true;
             case CommandFailed failed when failed.Id == SwitchSettingId && failed.Command == "setting.set":
