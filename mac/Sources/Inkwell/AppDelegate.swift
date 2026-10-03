@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let liveIcon = LiveIcon()
     /// The Dock tile's surface, attached while the main window is open (the only time the tile
     /// exists). The art is the bundle's icon, read before anything draws over the tile.
-    private lazy var liveDock = LiveIconDock(tile: NSApp.dockTile, base: NSApp.applicationIconImage)
+    private lazy var liveDock = LiveIconDock(tile: NSApp.dockTile, base: NSApp.applicationIconImage ?? NSImage())
     private var dropDemo: DropDemo?
     private var signalSources: [DispatchSourceSignal] = []
     private var quitting = false
@@ -150,11 +150,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mainWindow?.didClose = { [weak self] in
                 guard let self else { return }
                 liveIcon.detach(liveDock)
+                liveDock.clear()
             }
         }
         mainWindow?.present()
-        // After present: the app is a regular one now, with a tile to draw on.
-        liveIcon.attach(liveDock)
+        // On the next turn, once the switch to a regular app (made by present) has given it a
+        // tile: a still look is drawn only once, so it must not land before the tile exists.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                // Not closed meanwhile (a minimised window still has its tile).
+                guard let self, let window = self.mainWindow?.window,
+                      window.isVisible || window.isMiniaturized else { return }
+                self.liveIcon.attach(self.liveDock)
+            }
+        }
     }
 
     /// SIGTERM and SIGINT become an ordinary Quit, so they stop the core like any other.

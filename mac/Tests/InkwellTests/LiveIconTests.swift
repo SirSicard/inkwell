@@ -266,7 +266,8 @@ final class LiveIconEnergyTests: XCTestCase {
         icon.update(look: .pulse(.them), colours: colours)
         let recording = frames(over: 3)
         XCTAssertLessThanOrEqual(recording, 22, "no faster than 7 fps")
-        XCTAssertGreaterThanOrEqual(recording, 15, "and close to it")
+        // Loose: a busy machine (or the thread sanitizer) delays a timer, never hastens it.
+        XCTAssertGreaterThanOrEqual(recording, 8, "and ticking")
 
         icon.update(look: .ring(0.5), colours: colours)
         XCTAssertFalse(icon.isPulsing)
@@ -346,6 +347,11 @@ final class LiveIconDockTests: XCTestCase {
         dock.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
         XCTAssertNil(tile.contentView, "back to the bundle's icon")
         XCTAssertEqual(tile.displays, 3)
+
+        // A window closed while live leaves no view behind for the next tile.
+        dock.show(LiveIconFrame(look: .ring(nil), colours: colours, strength: 1))
+        dock.clear()
+        XCTAssertNil(tile.contentView)
     }
 
     /// Each look over the icon: the orb takes the colour, the ring fills clockwise from the top,

@@ -42,7 +42,15 @@ final class LiveIconDock: LiveIconSurface {
             view.frame = NSRect(origin: .zero, size: tile.size)
             tile.contentView = view
         }
+        // Marked dirty too, so the tile's redraw never reuses the view's last drawing.
+        view.needsDisplay = true
         tile.display()
+    }
+
+    /// The window is closing and the tile with it: the next one starts from the bundle's icon,
+    /// and is given the current frame when it attaches again.
+    func clear() {
+        tile.contentView = nil
     }
 
     /// Draws the icon with the frame over it.
