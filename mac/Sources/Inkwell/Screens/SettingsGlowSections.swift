@@ -478,10 +478,14 @@ struct GroqKeyRows: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!polish.canUseOwnKey(cloud))
                     .accessibilityHint(cloud.firstRunUseNote)
+                // The note takes the row's width beside the button and wraps in it, its full
+                // height, rather than being clipped when the row is laid out again.
                 Text(cloud.firstRunUseNote)
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
             }
             Text(cloud.failure ?? cloud.status)
                 .font(Typography.caption)
