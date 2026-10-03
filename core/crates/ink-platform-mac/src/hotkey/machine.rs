@@ -11,6 +11,12 @@
 //! go down; key events typed meanwhile still carry the modifier flag, so Fn+arrow and similar
 //! keep working. A release is swallowed only when its press was, so an app that saw a press
 //! (while the tap was disabled) also sees the release. Everything else passes through untouched.
+//!
+//! **A chord ends when any part of it is let go of (decided).** Hold to talk means the hold lasts
+//! while the whole chord is down: a chord's modifier coming up ends it as surely as its key
+//! does. The modifier's own change passes through (the app saw it go down), and the key, still
+//! down, keeps its repeats and its key-up swallowed: they were the hotkey's, and an app getting
+//! them would type spaces nobody asked for.
 #![cfg(target_os = "macos")]
 
 use super::binding::Binding;
@@ -73,6 +79,9 @@ pub(crate) struct Verdict {
 pub(crate) struct HoldMachine {
     binding: Binding,
     held: bool,
+    /// A chord's key is still down after a modifier ended the hold: its repeats and key-up are
+    /// ours to swallow, without another edge.
+    trailing: bool,
 }
 
 impl HoldMachine {
@@ -81,6 +90,7 @@ impl HoldMachine {
         Self {
             binding,
             held: false,
+            trailing: false,
         }
     }
 
@@ -93,6 +103,7 @@ impl HoldMachine {
     /// an edge (its sink panicked) or the hotkey was lost.
     pub(crate) fn reset(&mut self) {
         self.held = false;
+        self.trailing = false;
     }
 
     /// Decides one event.
@@ -100,7 +111,7 @@ impl HoldMachine {
         match (self.binding, input) {
             (_, TapInput::Disabled) => {
                 let edge = self.held.then_some(Edge::Cancelled);
-                self.held = false;
+                self.reset();
                 Verdict {
                     swallow: false,
                     edge,
@@ -120,21 +131,48 @@ impl HoldMachine {
                     autorepeat,
                 },
             ) if keycode == chord.keycode => {
-                if self.held {
-                    // Auto-repeat of the held chord, or a down whose up was missed.
+                if self.held || (self.trailing && autorepeat) {
+                    // Auto-repeat of the held chord (or of its key after a modifier ended the
+                    // hold), or a down whose up was missed.
                     Verdict {
                         swallow: true,
                         ..Verdict::default()
                     }
                 } else if autorepeat || !chord.matches(keycode, flags) {
                     // The key on its own, with other modifiers, or already down before we looked.
+                    // A fresh down means the trailing key-up was missed: the next up is the app's.
+                    if !autorepeat {
+                        self.trailing = false;
+                    }
                     Verdict::default()
                 } else {
+                    self.trailing = false;
                     self.transition(true)
                 }
             }
             (Binding::Chord(chord), TapInput::KeyUp { keycode }) if keycode == chord.keycode => {
-                self.transition(false)
+                if self.trailing {
+                    self.trailing = false;
+                    Verdict {
+                        swallow: true,
+                        ..Verdict::default()
+                    }
+                } else {
+                    self.transition(false)
+                }
+            }
+            (Binding::Chord(chord), TapInput::FlagsChanged { flags, .. })
+                if self.held && flags & chord.modifiers != chord.modifiers =>
+            {
+                // One of the chord's modifiers came up: the hold ends here. The change itself is
+                // the app's (it saw the modifier go down); the key's up is still to come.
+                self.held = false;
+                self.trailing = true;
+                Verdict {
+                    swallow: false,
+                    edge: Some(Edge::Released),
+                    reenable: false,
+                }
             }
             _ => Verdict::default(),
         }
@@ -300,7 +338,60 @@ mod tests {
         };
         assert_eq!(m.on(down(false)), pressed());
         assert_eq!(m.on(down(true)), SWALLOW, "auto-repeat");
-        // The user lets go of the modifiers first: still held until the key comes up.
+        assert!(m.is_held());
+        assert_eq!(
+            m.on(TapInput::KeyUp {
+                keycode: keycode::SPACE
+            }),
+            released()
+        );
+        assert!(!m.is_held());
+    }
+
+    /// Letting go of any part of the chord ends the hold: a modifier first, here. The app saw the
+    /// modifier go down, so it sees it come up; the key is still down, and its repeats and its
+    /// key-up stay swallowed, or the app would get spaces it never asked for.
+    #[test]
+    fn letting_go_of_a_modifier_first_ends_the_hold() {
+        let mut m = machine("ctrl+shift+space");
+        let both = flag::CONTROL | flag::SHIFT;
+        assert_eq!(
+            m.on(TapInput::KeyDown {
+                keycode: keycode::SPACE,
+                flags: both,
+                autorepeat: false,
+            }),
+            pressed()
+        );
+        // Shift up: Control is still down, Shift is not.
+        let shift_up = TapInput::FlagsChanged {
+            keycode: 0x38,
+            flags: flag::CONTROL | 0x1,
+        };
+        assert_eq!(
+            m.on(shift_up),
+            Verdict {
+                swallow: false,
+                edge: Some(Edge::Released),
+                reenable: false,
+            }
+        );
+        assert!(!m.is_held());
+        // The key, still down, repeats with what is left of the modifiers.
+        let repeat = TapInput::KeyDown {
+            keycode: keycode::SPACE,
+            flags: flag::CONTROL,
+            autorepeat: true,
+        };
+        assert_eq!(m.on(repeat), SWALLOW);
+        assert_eq!(
+            m.on(TapInput::KeyUp {
+                keycode: keycode::SPACE
+            }),
+            SWALLOW,
+            "its key-up is ours, and reports nothing more"
+        );
+        // Control up afterwards is the app's.
         assert_eq!(
             m.on(TapInput::FlagsChanged {
                 keycode: 0x3B,
@@ -308,12 +399,75 @@ mod tests {
             }),
             PASS
         );
+        // The next press is a new hold.
+        assert_eq!(
+            m.on(TapInput::KeyDown {
+                keycode: keycode::SPACE,
+                flags: both,
+                autorepeat: false,
+            }),
+            pressed()
+        );
+    }
+
+    /// A modifier going down, or the other Control key coming up while one is still held, is not a
+    /// part of the chord let go of.
+    #[test]
+    fn modifier_changes_that_keep_the_chord_down_change_nothing() {
+        let mut m = machine("ctrl+space");
+        m.on(TapInput::KeyDown {
+            keycode: keycode::SPACE,
+            flags: flag::CONTROL,
+            autorepeat: false,
+        });
+        let shift_down = TapInput::FlagsChanged {
+            keycode: 0x38,
+            flags: flag::CONTROL | flag::SHIFT,
+        };
+        assert_eq!(m.on(shift_down), PASS);
+        let other_control_up = TapInput::FlagsChanged {
+            keycode: keycode::RIGHT_CONTROL,
+            flags: flag::CONTROL | flag::SHIFT | 0x1,
+        };
+        assert_eq!(m.on(other_control_up), PASS);
         assert!(m.is_held());
+    }
+
+    /// A chord that names Fn ends when Fn comes up.
+    #[test]
+    fn a_chord_naming_fn_ends_when_fn_comes_up() {
+        let mut m = machine("fn+f5");
+        assert_eq!(
+            m.on(TapInput::KeyDown {
+                keycode: 0x60,
+                flags: flag::SECONDARY_FN,
+                autorepeat: false,
+            }),
+            pressed()
+        );
+        assert_eq!(m.on(fn_flags(false)).edge, Some(Edge::Released));
+    }
+
+    /// After a cancel, the trailing key-up of a chord whose modifier went up first is the app's
+    /// again, as every release after a cancel is.
+    #[test]
+    fn a_disabled_tap_forgets_the_key_still_down() {
+        let mut m = machine("ctrl+space");
+        m.on(TapInput::KeyDown {
+            keycode: keycode::SPACE,
+            flags: flag::CONTROL,
+            autorepeat: false,
+        });
+        m.on(TapInput::FlagsChanged {
+            keycode: 0x3B,
+            flags: 0,
+        });
+        assert_eq!(m.on(TapInput::Disabled).edge, None, "already released");
         assert_eq!(
             m.on(TapInput::KeyUp {
                 keycode: keycode::SPACE
             }),
-            released()
+            PASS
         );
     }
 

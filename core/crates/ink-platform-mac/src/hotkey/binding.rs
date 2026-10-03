@@ -225,12 +225,15 @@ impl Binding {
     }
 
     /// The `CGEventMask` the tap needs: `flagsChanged` for a modifier, key down and up for a
-    /// chord. Nothing else passes through the callback, which keeps the tap off the path of
-    /// every other keystroke.
+    /// chord, and `flagsChanged` too for a chord with modifiers, whose hold ends when one comes
+    /// up. Nothing else passes through the callback, which keeps the tap off the path of every
+    /// other keystroke.
     pub(crate) fn event_mask(self) -> u64 {
+        let keys = (1 << event_type::KEY_DOWN) | (1 << event_type::KEY_UP);
         match self {
             Self::Modifier(_) => 1 << event_type::FLAGS_CHANGED,
-            Self::Chord(_) => (1 << event_type::KEY_DOWN) | (1 << event_type::KEY_UP),
+            Self::Chord(Chord { modifiers: 0, .. }) => keys,
+            Self::Chord(_) => keys | (1 << event_type::FLAGS_CHANGED),
         }
     }
 }
@@ -510,7 +513,13 @@ mod tests {
         assert_eq!(Binding::parse("fn").map(Binding::event_mask), Ok(1 << 12));
         assert_eq!(
             Binding::parse("ctrl+shift+space").map(Binding::event_mask),
-            Ok((1 << 10) | (1 << 11))
+            Ok((1 << 10) | (1 << 11) | (1 << 12)),
+            "a chord's modifiers coming up end its hold"
+        );
+        assert_eq!(
+            Binding::parse("f13").map(Binding::event_mask),
+            Ok((1 << 10) | (1 << 11)),
+            "a function key alone has no modifier to watch"
         );
     }
 }
