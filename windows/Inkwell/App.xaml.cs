@@ -216,6 +216,11 @@ public partial class App : Application
             if (e.DidPresenterChange || e.DidVisibilityChange)
             {
                 made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: true);
+                // A shortcut being recorded is the window's: hidden or minimised, it is cancelled.
+                if (!sender.IsVisible || Minimized(window))
+                {
+                    models.Recorder.Cancel();
+                }
             }
             window.FrameChanged();
         };
@@ -225,6 +230,12 @@ public partial class App : Application
             if (e.WindowActivationState != WindowActivationState.Deactivated)
             {
                 models.AppBecameActive();
+            }
+            else
+            {
+                // The recorder takes this window's keys only: losing focus cancels it, so dictation
+                // never stays paused behind a recorder nobody sees.
+                models.Recorder.Cancel();
             }
         };
         tray = new TrayIcon(1, IconPath, "Inkwell");

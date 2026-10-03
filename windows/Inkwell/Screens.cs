@@ -100,7 +100,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("General", new GeneralSection(models.Startup, models.Updates, import02)),
             new("Appearance", new AppearanceSection(theme)),
             new("Permissions", new PermissionsSection(models.Permissions)),
-            new("Dictation", new VoiceSection(models.Ai, importNote)),
+            new("Dictation", new VoiceSection(models.Ai, models.Recorder, importNote)),
             new("Modes", new ModesSection(models.Modes)),
             new("Snippets", new SnippetsSection(models.Snippets)),
             new("Voice commands", new VoiceCommandsSection(models.VoiceCommands)),
