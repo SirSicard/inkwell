@@ -414,8 +414,9 @@ What the checks guarantee:
   first call (ink-engines' `src/nemo.rs`).
 - **It is x64's.** `pack.ps1` refuses an `Inkwell.exe` or core built for another architecture.
 - **The core's version.** A tag waits, as the Mac's does, until `core/Cargo.toml` says the tag's
-  version, which About shows as the core's (`mac/scripts/core-version.sh`, the build job's step
-  after the version's); a dry run says so and goes on.
+  version, which About shows as the core's (`windows/scripts/release-version.sh` runs
+  `mac/scripts/core-version.sh`, as the Mac's release-version.sh does); a dry run says so and
+  goes on.
 - **Notices first.** A tag waits, as the Mac's does, for every notice written without its upstream
   file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
   included (`windows/scripts/release-version.sh`).

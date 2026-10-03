@@ -66,8 +66,9 @@ jobs:
 
       # From the tag (v1.X.Y exactly) or the dry run's input: passed through the environment and
       # checked, never pasted into a script. A tag also waits for every licence notice to be
-      # compared with its upstream file, the Windows-only ones included. bash, for pipefail: a
-      # refusal must fail the step.
+      # compared with its upstream file, the Windows-only ones included, and for the core to say
+      # the tag's version (About's "core X.Y.Z"), as the Mac's tag does; a dry run reports either
+      # and goes on. bash, for pipefail: a refusal must fail the step.
       - name: Version
         id: version
         shell: bash
@@ -79,21 +80,6 @@ jobs:
             windows/scripts/release-version.sh tag "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
           else
             windows/scripts/release-version.sh "$KIND" "$INPUT_VERSION" | tee -a "$GITHUB_OUTPUT"
-          fi
-
-      # The core says the version it is built as (About's "core X.Y.Z"): a tag waits until
-      # core/Cargo.toml has the tag's version, as the Mac's tag does (mac/scripts/release-version.sh
-      # runs the same check); a dry run says so and goes on.
-      - name: The core's version
-        shell: bash
-        env:
-          KIND: ${{ inputs.kind }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          if [ "$KIND" = tag ]; then
-            mac/scripts/core-version.sh "$VERSION"
-          else
-            mac/scripts/core-version.sh --warn "$VERSION"
           fi
 
       # A release is cut from main: a tag on a commit main does not contain stops here.

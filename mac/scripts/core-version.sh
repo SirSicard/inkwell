@@ -3,7 +3,7 @@
 # version, which every crate takes and the core reports in core.ready (About's "core X.Y.Z", on the
 # Mac and on Windows). The tag gives the app its version; nothing gives the core its, so a release
 # tag waits until the two agree. release-version.sh runs this for a tag, and with --warn for a dry
-# run; the Windows release's build job runs it the same way.
+# run; windows/scripts/release-version.sh runs it the same way.
 #
 #   mac/scripts/core-version.sh X.Y.Z          fails unless the core's version is X.Y.Z
 #   mac/scripts/core-version.sh --warn X.Y.Z   says so and passes (the dry run)
