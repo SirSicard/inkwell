@@ -19,9 +19,9 @@ final class RouterTests: XCTestCase {
 
     func testTheSidebarListsLiveOnlyWhileAMeetingIsLive() {
         let idle = SidebarSection.allCases.flatMap { $0.routes(meetingLive: false) }
-        XCTAssertEqual(idle, [.today, .library, .owed, .settings])
+        XCTAssertEqual(idle, [.today, .library, .owed, .stats, .settings])
         let live = SidebarSection.allCases.flatMap { $0.routes(meetingLive: true) }
-        XCTAssertEqual(live, [.today, .library, .owed, .live, .settings])
+        XCTAssertEqual(live, [.today, .library, .owed, .stats, .live, .settings])
         XCTAssertEqual(SidebarSection.recording.routes(meetingLive: false), [], "no empty section")
     }
 

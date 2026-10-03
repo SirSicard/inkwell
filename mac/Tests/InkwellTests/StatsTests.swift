@@ -285,3 +285,53 @@ final class StatsFormatTests: XCTestCase {
     }
 }
 
+/// The Stats screen never raises the window's minimum size (460 high, 720 wide), full or empty,
+/// and its cards fit a narrow window: numbers go one under another rather than clip.
+@MainActor
+final class StatsLayoutTests: XCTestCase {
+    private func screens(answer: String?) -> ScreenModels {
+        var sent: [CoreCommand] = []
+        let screens = ScreenModels(send: { sent.append($0) }, calendar: NoCalendar(), apps: WorkspaceApps())
+        screens.stats.load()
+        if let answer, let ref = sent.last?.commandID {
+            screens.stats.apply(event(answer.replacingOccurrences(of: "REF", with: ref)))
+        }
+        return screens
+    }
+
+    private func minimum(_ screens: ScreenModels) -> CGSize {
+        let hosting = NSHostingController(
+            rootView: StatsScreen().environment(screens).environment(CoreStore()).environment(screens.theme)
+                .environment(LibraryModel(send: { _ in })).environment(Router()))
+        return hosting.sizeThatFits(in: .zero)
+    }
+
+    func testAFullLibraryAndAnEmptyOneNeverRaiseTheWindowsMinimumSize() {
+        var words = Array(repeating: 0, count: 83)
+        for i in stride(from: 0, to: 83, by: 2) { words[i] = 120 * (i % 7 + 1) }
+        let full = statsCounted(
+            ref: "REF", words: (1_234, 12_345, 123_456), dictations: 900, wpmWeek: 142, wpmAverage: 135,
+            savedWeek: 1_500_000, savedAll: 72_000_000, streak: 12, longest: 31, heatmap: words,
+            meetings: #"{"meetings":14,"recorded_ms":33600000,"you_ms":12000000,"them_ms":18000000,"longest_monologue_ms":250000,"questions":37}"#,
+            promises: #"{"made":14,"kept":12,"open":1,"overdue":1}"#,
+            reached: ["words_1000", "words_10000", "words_50000", "words_100000", "streak_7", "streak_30"])
+        for (name, answer) in [("full", full), ("empty", statsCounted(ref: "REF")), ("loading", nil)] {
+            let screens = screens(answer: answer)
+            XCTAssertEqual(screens.stats.counted == nil, answer == nil, "\(name): answered as meant")
+            let size = minimum(screens)
+            XCTAssertLessThan(size.height, 460, name)
+            XCTAssertLessThan(size.width, 720, name)
+        }
+    }
+
+    func testTheCardsFitANarrowContentColumn() {
+        let screens = screens(answer: statsCounted(ref: "REF", words: (1_234_567, 12_345_678, 123_456_789), dictations: 5))
+        guard let counted = screens.stats.counted else { return XCTFail("not answered") }
+        // The narrowest the content gets: the window's 720 less the sidebar and the margins.
+        let width: CGFloat = 720 - 280 - 96
+        let hosting = NSHostingController(
+            rootView: StatsCards(counted: counted, calendar: screens.stats.calendar).environment(screens.theme))
+        let fitted = hosting.sizeThatFits(in: CGSize(width: width, height: 10_000))
+        XCTAssertLessThanOrEqual(fitted.width, width + 0.5)
+    }
+}
