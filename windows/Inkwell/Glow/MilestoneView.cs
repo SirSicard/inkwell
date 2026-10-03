@@ -42,6 +42,8 @@ internal sealed class MilestoneView
     /// <summary>The celebration shown now, and what cancels its glow.</summary>
     private int? shownSerial;
     private CancellationTokenSource? glowing;
+    /// <summary>The celebration whose glow is lit now: only it puts the glow out (a late end of an earlier one never does).</summary>
+    private int? litSerial;
 
     /// <param name="glowLayer">Over the orb, under the screens: where the glow is drawn.</param>
     /// <param name="noteHost">Over the screens: where the line sits, at the foot.</param>
@@ -136,8 +138,10 @@ internal sealed class MilestoneView
         }
         noteText.Text = showing.Note;
         note.Visibility = Visibility.Visible;
-        if (stats.BeginAnnouncement(showing.Serial)
-            && FrameworkElementAutomationPeer.FromElement(noteText) is { } peer)
+        // A peer made if none exists yet (no screen reader has asked for one), and the line counted
+        // as read only once it is raised: it is read once, never lost.
+        if ((FrameworkElementAutomationPeer.FromElement(noteText) ?? FrameworkElementAutomationPeer.CreatePeerForElement(noteText)) is { } peer
+            && stats.BeginAnnouncement(showing.Serial))
         {
             peer.RaiseNotificationEvent(AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantMostRecent, showing.Note, "milestone");
         }
@@ -160,6 +164,7 @@ internal sealed class MilestoneView
                 return;
             }
             Place(x, y);
+            litSerial = serial;
             Fade((float)MilestoneCelebration.GlowPeak, MilestoneCelebration.GlowIn, compositor.CreateCubicBezierEasingFunction(new Vector2(0, 0), new Vector2(0.58f, 1)));
             await Task.Delay(MilestoneCelebration.GlowIn + MilestoneCelebration.GlowHeld, cancel);
             Fade(0, MilestoneCelebration.GlowOut, compositor.CreateCubicBezierEasingFunction(new Vector2(0.42f, 0), new Vector2(1, 1)));
@@ -170,12 +175,19 @@ internal sealed class MilestoneView
         {
             // Out at once (the window left the screen, the line was dismissed).
         }
+        catch (Exception e)
+        {
+            // Named, never left lit: the line still shows and is read.
+            Inkwell.Ink.InkLog.Write($"the milestone's glow failed: {e.GetType().Name}");
+        }
         finally
         {
-            if (cancel.IsCancellationRequested)
+            // Put out by its own celebration only: a later one may already be lit.
+            if (litSerial == serial)
             {
                 glow.StopAnimation(nameof(glow.Opacity));
                 glow.Opacity = 0;
+                litSerial = null;
             }
             orb.Release();
         }
