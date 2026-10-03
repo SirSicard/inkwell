@@ -64,7 +64,7 @@ final class DictationModelTests: XCTestCase {
         dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"right_option"}"#))
         dictation.apply(event(#"{"type":"dictation.ready","key":"right_option"}"#))
         XCTAssertEqual(dictation.key, "right_option")
-        XCTAssertEqual(dictation.status, "Hold right ⌥, speak, let go.")
+        XCTAssertEqual(dictation.status, "Hold Right ⌥, speak, let go.")
         dictation.setEditKey("right_command")
         XCTAssertEqual(sent.commands.last, .settingSet(.dictationEditKey, "right_command"))
         dictation.apply(event(#"{"type":"dictation.ready","key":"right_option","edit_key":"right_command"}"#))
@@ -441,6 +441,31 @@ final class DictationCoreContractTests: XCTestCase {
         XCTAssertEqual(enabled, "dictation:1")
         let key = try answer(.settingSet(.dictationKey, "right_option")) { if case .settingValue(let v) = $0 { v } else { nil } }
         XCTAssertEqual(key?.value, "right_option")
+        // Every key the recorder names, with a modifier, is one the core watches, and the core
+        // spells it as the recorder does: what is recorded is what the tap matches.
+        for (i, key) in KeyNotation.allKeys.enumerated() {
+            let token = "ctrl+\(key.token)"
+            let checked = try answer(.hotkeyCheck(binding: token, ref: "hotkey:\(i)")) { event -> HotkeyChecked? in
+                if case .hotkeyChecked(let c) = event, c.ref == "hotkey:\(i)" { c } else { nil }
+            }
+            XCTAssertEqual(checked?.canonical, token, "\(token): \(checked?.reason ?? "no answer")")
+        }
+        // And the modifiers alone it names: the right-hand ones and fn held, the rest refused with
+        // the core's reason.
+        for (token, watched) in [("fn", true), ("right_option", true), ("right_command", true), ("right_control", true),
+                                 ("right_shift", true), ("left_option", false), ("left_command", false),
+                                 ("left_control", false), ("left_shift", false), ("caps_lock", false), ("ctrl+shift", false)] {
+            let checked = try answer(.hotkeyCheck(binding: token, ref: "hotkey:\(token)")) { event -> HotkeyChecked? in
+                if case .hotkeyChecked(let c) = event, c.ref == "hotkey:\(token)" { c } else { nil }
+            }
+            XCTAssertEqual(checked?.ok, watched, token)
+            if !watched {
+                XCTAssertFalse(checked?.reason?.isEmpty ?? true, token)
+            }
+        }
+        // A recorded chord is stored in the core's spelling.
+        let chord = try answer(.settingSet(.dictationKey, "ctrl+shift+space")) { if case .settingValue(let v) = $0 { v } else { nil } }
+        XCTAssertEqual(chord?.value, "ctrl+shift+space")
         let switched = try answer(.settingSet(.dictationEnabled, "off")) { if case .settingValue(let v) = $0 { v } else { nil } }
         XCTAssertEqual(switched?.value, "off")
         let disabled = try answer(.dictationDisable(ref: "dictation:2")) { if case .dictationOff(let o) = $0, o.ref == "dictation:2" { o } else { nil } }

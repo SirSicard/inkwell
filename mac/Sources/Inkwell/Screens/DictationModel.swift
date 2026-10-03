@@ -44,18 +44,14 @@ final class DictationModel {
         let text: DropText
     }
 
-    /// The keys a user can pick (the core's tokens: modifiers held on their own).
-    static let keys: [DictationKey] = [
-        DictationKey(token: "fn", name: "fn (Globe)", cap: "fn"),
-        DictationKey(token: "right_option", name: "Right Option", cap: "right ⌥"),
-        DictationKey(token: "right_command", name: "Right Command", cap: "right ⌘"),
-        DictationKey(token: "right_control", name: "Right Control", cap: "right ⌃"),
-        DictationKey(token: "right_shift", name: "Right Shift", cap: "right ⇧"),
-    ]
+    /// The quick picks (the core's tokens for modifiers held on their own). Any other key the core
+    /// can watch is recorded instead ("Record a shortcut…", ShortcutRecorderModel).
+    static let keys: [DictationKey] = ["fn", "right_option", "right_command", "right_control", "right_shift"]
+        .map(KeyNotation.describe)
 
-    /// A token's key, for showing it.
+    /// A token's key, for showing it: a quick pick, or any token in Mac notation (KeyNotation).
     static func key(_ token: String?) -> DictationKey? {
-        keys.first { $0.token == token }
+        token.map(KeyNotation.describe)
     }
 
     private(set) var state: State = .starting
@@ -77,6 +73,8 @@ final class DictationModel {
     /// A dictation.enable or dictation.disable that failed as a command (never ran, or a bug in the
     /// core stopped it), until the core answers the next one.
     private(set) var commandFailure: CommandFailure?
+    /// Off while a shortcut is recorded (ShortcutRecorderModel), to come back on when it ends.
+    private(set) var suspendedForRecording = false
 
     enum CommandFailure: Equatable, Sendable {
         case enable
@@ -156,10 +154,29 @@ final class DictationModel {
 
     /// Back from System Settings, perhaps with Accessibility granted: try again.
     func appBecameActive() {
-        guard wantsOn != false else { return }
+        guard wantsOn != false, !suspendedForRecording else { return }
         if case .off(let reason, _) = state, reason == .needsAccessibility || reason == .keyRefused {
             enable()
         } else if keyLost || editKeyProblem == Self.editKeyLostText {
+            enable()
+        }
+    }
+
+    /// A shortcut is being recorded: the keys are let go of, or the current key would start a take
+    /// and the core's tap would swallow it before the recorder saw it. Only when dictation is on
+    /// (or not read yet: then there is nothing to let go of either).
+    func suspendForRecording() {
+        guard !suspendedForRecording, wantsOn == true else { return }
+        suspendedForRecording = true
+        disable()
+    }
+
+    /// The recording ended (saved, refused or cancelled): dictation comes back, on the key just
+    /// saved if one was (setting.set was sent first, and the core runs both in order).
+    func resumeAfterRecording() {
+        guard suspendedForRecording else { return }
+        suspendedForRecording = false
+        if wantsOn == true {
             enable()
         }
     }
@@ -192,6 +209,7 @@ final class DictationModel {
     /// Whether dictation is off for a reason turning it on again may fix (the Dictation section offers
     /// that): not for Accessibility, which has its own Allow, nor for an unsupported build.
     var canRetry: Bool {
+        if suspendedForRecording { return false }
         if commandFailure != nil { return true }
         if case .off(let reason, _) = state {
             // Off by the user's switch is the switch's to change.
@@ -209,6 +227,7 @@ final class DictationModel {
     var status: String {
         // The user's latest action first: a turn-off that failed outranks an older lost key.
         if commandFailure == .disable { return "Dictation couldn't be turned off." }
+        if suspendedForRecording { return "Dictation is paused while you record a shortcut." }
         if keyLost { return Self.keyLostText }
         switch state {
         case .starting:
@@ -236,6 +255,7 @@ final class DictationModel {
 
     /// Whether the status is a problem to show in the alert colour.
     var isProblem: Bool {
+        if suspendedForRecording { return false }
         if case .off(let reason, _) = state { return reason != .disabled }
         return keyFailure != nil || keyLost || editKeyProblem != nil || commandFailure != nil
     }

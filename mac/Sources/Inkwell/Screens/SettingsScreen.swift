@@ -304,15 +304,23 @@ private struct DictationSection: View {
                     ForEach(DictationModel.keys) { key in
                         Text(key.name).tag(key.token)
                     }
+                    // A recorded key is not a quick pick: it is listed so the picker shows it.
+                    if !DictationModel.keys.contains(where: { $0.token == dictation.key }) {
+                        Text(KeyNotation.describe(dictation.key).cap).tag(dictation.key)
+                    }
                 }
                 .labelsHidden()
                 .fixedSize()
+                .disabled(shortcuts.recording != nil)
                 Key(text: DictationModel.key(dictation.key)?.cap ?? dictation.key)
+                    .accessibilityLabel(DictationModel.key(dictation.key)?.name ?? dictation.key)
+                RecordShortcutButton(recorder: shortcuts, target: .dictation, what: "the dictation key")
                 Text("hold, speak, let go").foregroundStyle(Theme.secondaryText)
             }
             .font(Typography.body)
             .padding(.vertical, 5)
             .accessibilityElement(children: .contain)
+            ShortcutMessage(recorder: shortcuts, target: .dictation)
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("Edit a selection").frame(width: 150, alignment: .leading)
                 Picker("Edit a selection", selection: Binding(
@@ -323,17 +331,24 @@ private struct DictationSection: View {
                     ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
                         Text(key.name).tag(key.token)
                     }
+                    if let edit = dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }) {
+                        Text(KeyNotation.describe(edit).cap).tag(edit)
+                    }
                 }
                 .labelsHidden()
                 .fixedSize()
+                .disabled(shortcuts.recording != nil)
                 if let edit = dictation.editKey, dictation.editKeyProblem == nil {
                     Key(text: DictationModel.key(edit)?.cap ?? edit)
+                        .accessibilityLabel(DictationModel.key(edit)?.name ?? edit)
                 }
+                RecordShortcutButton(recorder: shortcuts, target: .edit, what: "the edit key")
                 Text("select text, hold, say what to change").foregroundStyle(Theme.secondaryText)
             }
             .font(Typography.body)
             .padding(.vertical, 5)
             .accessibilityElement(children: .contain)
+            ShortcutMessage(recorder: shortcuts, target: .edit)
             VStack(alignment: .leading, spacing: 4) {
                 Text(dictation.keyFailure ?? dictation.status)
                     .foregroundStyle(dictation.isProblem ? Theme.alert : Theme.secondaryText)
@@ -362,6 +377,49 @@ private struct DictationSection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .consentStep(screens.editConsent, host: .settings)
+        .shortcutRecording(shortcuts)
+    }
+
+    private var shortcuts: ShortcutRecorderModel { screens.shortcuts }
+}
+
+/// "Record a shortcut…", and while recording, what to do and how to stop.
+private struct RecordShortcutButton: View {
+    let recorder: ShortcutRecorderModel
+    let target: ShortcutRecorderModel.Target
+    /// "the dictation key", for VoiceOver.
+    let what: String
+
+    private var isRecording: Bool { recorder.recording == target }
+    private var isChecking: Bool { recorder.checking?.target == target }
+
+    var body: some View {
+        Button(isRecording ? "Press the keys\u{2026} (Esc cancels)" : isChecking ? "Checking\u{2026}" : "Record a shortcut\u{2026}") {
+            recorder.toggle(target)
+        }
+        .disabled(isChecking)
+        .accessibilityLabel(isRecording ? "Recording a shortcut for \(what)" : "Record a shortcut for \(what)")
+        .accessibilityHint(isRecording
+            ? "Press the keys you want: a right-hand modifier alone, a function key, or modifiers and a key. Escape cancels."
+            : "Then press the keys you want to use.")
+    }
+}
+
+/// What became of the last recording of a key: why it was refused, or a clash with a shortcut the
+/// app knows. Read out by VoiceOver when it appears.
+private struct ShortcutMessage: View {
+    let recorder: ShortcutRecorderModel
+    let target: ShortcutRecorderModel.Target
+
+    var body: some View {
+        if let message = recorder.message(for: target) {
+            Text(message.text)
+                .font(Typography.caption)
+                .foregroundStyle(message.isProblem ? Theme.alert : Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 162)
+                .onAppear { AccessibilityNotification.Announcement(message.text).post() }
+        }
     }
 }
 

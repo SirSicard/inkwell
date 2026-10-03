@@ -10,8 +10,9 @@ voice edit, the polish switch, live words, the mic let go of while idle), polish
 every path, and voice edit's (`--test llm_consent`, and through the core `cargo test -p ink-ffi
 --test voice`: the switch, a Polish mode, the default mode, a voice command, a 0.2 import, an edit
 key without consent, a model that moves to the cloud, a store that refuses the write), the warm-up (`--test warm`), dictation through the core on the mock platform
-(`cargo test -p ink-ffi --test voice`), and the shell (`swift test --package-path mac --filter
-"Dictation|Polish"`).
+(`cargo test -p ink-ffi --test voice`: a chord as the dictation and the edit key), the hotkey
+rules and the chord hold (`cargo test -p ink-platform-mac hotkey`), and the shell (`swift test
+--package-path mac --filter "Dictation|Polish|Shortcut|KeyNotation"`).
 
 ## Setup
 
@@ -52,6 +53,32 @@ key without consent, a model that moves to the cloud, a store that refuses the w
       key. Leave it Off for now.
 - [ ] A quick tap of fn (as in a shortcut) shows nothing and types nothing. fn + arrow keys still
       work in TextEdit.
+
+### 1b. Recording a shortcut
+
+- [ ] Dictate > **Record a shortcut…**: the button reads "Press the keys… (Esc cancels)" and the
+      line under the keys says dictation is paused. Holding fn now starts nothing (and macOS may
+      do what "Press 🌐 key to" says: that is expected while recording).
+- [ ] Press Escape: nothing changes, the window stays open, fn dictates again.
+- [ ] Record **Control-Shift-Space**: the key cap reads ⌃⇧Space, the picker shows it, and the
+      line reads "Hold ⌃⇧Space, speak, let go." In TextEdit: hold ⌃⇧Space and speak; let go of
+      **Shift first** while still holding Control and Space: the take ends at once, and no spaces
+      are typed while Space is still down. Again, letting go of Space first: it ends too.
+- [ ] Holding Control and Space alone (no Shift) types nothing odd and starts no take; a plain
+      space still types.
+- [ ] Record the letter **A** alone: "Can't use A: that key on its own would stop working
+      everywhere else…" shows under the row, and ⌃⇧Space still dictates.
+- [ ] Record **left Option** alone (press and let go): refused, naming left-hand modifiers.
+      Record **right Option** alone: accepted ("Right ⌥").
+- [ ] Record **F13** (or another function key your keyboard has): accepted; it dictates.
+- [ ] Record **⌘Space**: saved, with the warning that it is Spotlight's shortcut. Note whether
+      holding ⌘Space dictates or opens Spotlight (macOS may take it first). Pick **fn** again.
+- [ ] Edit a selection > Record a shortcut…, then press the dictation key: "… is the dictation
+      key. Pick another." Record **⌥⌘E**: the consent dialog asks first, as picking a key does.
+- [ ] While recording, switch to another app (⌘Tab): recording stops and dictation is back on.
+- [ ] VoiceOver: the button reads "Record a shortcut for the dictation key"; while recording,
+      "Recording a shortcut for the dictation key" with the hint; a refusal is read out when it
+      shows.
 - [ ] Settings > Voice > Dictation: switch it off. fn does what it did before Inkwell (the
       microphone indicator, if on, goes off). Quit and start Inkwell: it stays off. Switch it on:
       fn dictates again at once.
