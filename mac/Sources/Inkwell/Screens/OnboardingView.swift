@@ -1,7 +1,8 @@
 // The first-run state: a sheet over the window until the user finishes or skips it. What Inkwell
 // does (over the orb, playing a short demo), the four permissions (each asked for only when the
-// user presses Allow), the speech models (a recommended set and optional extras, each downloaded
-// only when the user presses Download, and still downloading while the user goes on), Inkwell
+// user presses Allow), the speech models (choices by what they do, the set every job needs always
+// included, downloaded only when the user presses Download, and still downloading while the user
+// goes on), Inkwell
 // 0.2's history (only when there is some to import), the appearance, polish (off, and turned on
 // only through its consent step, with Apple's model or the user's own key), and how to dictate,
 // with the orb answering the user's voice. Remembered in the core's store (onboarding.done).
@@ -15,6 +16,15 @@ struct OnboardingView: View {
     @State private var demo = InkState.idle
     /// The Polish step's own-key rows are open (closed at first: skipping them costs nothing).
     @State private var ownKey = false
+
+    /// The sheet's size and margin. Each step fits it without scrolling (OnboardingLayoutTests).
+    static let size = CGSize(width: 620, height: 520)
+    static let padding: CGFloat = 32
+    /// The room a step has: the sheet less its margins, the step dots and the buttons, and the
+    /// spacing between them.
+    static var stepRoom: CGSize {
+        CGSize(width: size.width - 2 * padding, height: size.height - 2 * padding - 7 - 2 * 20 - 28)
+    }
 
     var body: some View {
         let onboarding = screens.onboarding
@@ -45,8 +55,8 @@ struct OnboardingView: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(32)
-        .frame(width: 620, height: 520)
+        .padding(Self.padding)
+        .frame(width: Self.size.width, height: Self.size.height)
         .background(Theme.surface)
         .onAppear { screens.permissions.screenAppeared() }
         .onDisappear { screens.permissions.screenDisappeared() }
@@ -159,77 +169,8 @@ struct OnboardingView: View {
         }
     }
 
-    /// What will be downloaded (each model not on this Mac, its licence and size, and where from):
-    /// the recommended set with its total and the one Download that is the user's agreement to it,
-    /// then the optional extras, each with what it adds and its own Download. Nothing is fetched
-    /// before a press. Continue works at any time; the downloads keep going.
     private var models: some View {
-        let catalogue = screens.catalogue
-        let offered = catalogue.firstRunModels
-        let recommended = catalogue.firstRunRecommended
-        let extras = catalogue.firstRunExtras
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                title("Speech models")
-                if catalogue.failed {
-                    Text(CatalogueModel.failedText).foregroundStyle(Theme.alert)
-                    Button("Try again") { catalogue.requery() }
-                } else if !catalogue.listed {
-                    Text("Checking which models are on this Mac…").foregroundStyle(Theme.secondaryText)
-                } else if offered.isEmpty {
-                    Text("Every model Inkwell uses is on this Mac already.")
-                } else {
-                    Text("Inkwell turns speech into text with models that run on this Mac. They are downloaded once, from \(CatalogueModel.sources(offered)), and only when you press Download.")
-                        .fixedSize(horizontal: false, vertical: true)
-                    Paper.Eyebrow(text: "Recommended")
-                    if recommended.isEmpty {
-                        Text("The recommended models are on this Mac already.")
-                    } else {
-                        Text("Voice detection and Parakeet: enough for dictation, the live words and meeting transcripts.")
-                            .font(Typography.caption)
-                            .foregroundStyle(Theme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(recommended, id: \.id) { model in
-                                ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: false)
-                            }
-                        }
-                        let total = ModelDownloadRow.size(recommended.map(\.sizeBytes).reduce(0, +))
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("Total: \(total)").font(.system(.body, weight: .semibold))
-                            Spacer()
-                            if recommended.contains(where: { catalogue.download(of: $0) == .notInstalled }) {
-                                Button("Download") { catalogue.downloadRecommended() }
-                                    .accessibilityLabel("Download the recommended models, \(total), from \(CatalogueModel.sources(recommended))")
-                            }
-                        }
-                    }
-                    if !extras.isEmpty {
-                        Paper.Eyebrow(text: "Optional")
-                            .padding(.top, 6)
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(extras, id: \.id) { model in
-                                ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: true)
-                                if let adds = CatalogueModel.adds(model.id) {
-                                    Text(adds)
-                                        .font(Typography.caption)
-                                        .foregroundStyle(Theme.secondaryText)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .padding(.bottom, 4)
-                                }
-                            }
-                        }
-                    }
-                    if catalogue.downloading {
-                        Text("You can go on: the downloads keep going, and Settings > Models shows them.")
-                            .font(Typography.caption)
-                            .foregroundStyle(Theme.secondaryText)
-                    }
-                }
-            }
-            .foregroundStyle(Theme.text)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        FirstRunModelsStep(catalogue: screens.catalogue)
     }
 
     /// Shown only while Inkwell 0.2's data is offered: what it left, in words, with Import; after
@@ -309,5 +250,144 @@ struct OnboardingView: View {
         .font(Typography.body)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The Speech models step: a choice per outcome, the set every job needs always included, the
+/// extras ticked by the user, and one Download carrying the total of what is ticked. Under each
+/// choice, its models' names, licences, sizes and hosts. Nothing is fetched before a press;
+/// Continue works at any time, and the downloads keep going.
+struct FirstRunModelsStep: View {
+    let catalogue: CatalogueModel
+    /// The extras the user ticked (the set is always included).
+    @State private var ticked: Set<CatalogueModel.Choice> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Speech models").font(Typography.heading).accessibilityAddTraits(.isHeader)
+            if catalogue.failed {
+                Text(CatalogueModel.failedText).foregroundStyle(Theme.alert)
+                Button("Try again") { catalogue.requery() }
+            } else if !catalogue.listed {
+                Text("Checking which models are on this Mac…").foregroundStyle(Theme.secondaryText)
+            } else if catalogue.firstRunModels.isEmpty {
+                Text("Every model Inkwell uses is on this Mac already.")
+            } else {
+                Text("Inkwell writes down speech with models that run on this Mac. Each is downloaded once, and only when you press Download.")
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(catalogue.choices) { choice in
+                        ChoiceRow(catalogue: catalogue, choice: choice, ticked: $ticked)
+                    }
+                }
+                let bytes = catalogue.bytesToDownload(ticked)
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    if catalogue.downloading {
+                        Text("You can go on: the downloads keep going, and Settings > Models shows them.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if bytes > 0 {
+                        Button(CatalogueModel.downloadTitle(bytes)) { catalogue.download(choices: ticked) }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityLabel("\(CatalogueModel.downloadTitle(bytes)) from \(catalogue.downloadSources(ticked))")
+                    }
+                }
+            }
+        }
+        .font(Typography.body)
+        .foregroundStyle(Theme.text)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One choice: its box (the set's is ticked and fixed), what it does, its size, and its models;
+/// on this Mac, its download's progress, or its failure with Retry, in place of the size.
+private struct ChoiceRow: View {
+    let catalogue: CatalogueModel
+    let choice: CatalogueModel.Choice
+    @Binding var ticked: Set<CatalogueModel.Choice>
+
+    var body: some View {
+        let state = catalogue.state(of: choice)
+        // Only a choice still to fetch takes a tick: the set is always in, and one on this Mac or
+        // on its way has nothing left to choose.
+        let choosable = !choice.isRequired && (state == .available || isFailed(state))
+        let isOn = choice.isRequired || !choosable || ticked.contains(choice)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Toggle(choice.title, isOn: Binding(get: { isOn }, set: { on in
+                if on { ticked.insert(choice) } else { ticked.remove(choice) }
+            }))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+            .disabled(!choosable)
+            .accessibilityHint(choice.isRequired ? "Always included: every job needs it" : choice.detail ?? "")
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(choice.title).font(.system(.body, weight: .semibold))
+                    Spacer(minLength: 8)
+                    trailing(state)
+                }
+                if let detail = choice.detail {
+                    Text(detail)
+                        .font(Typography.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(catalogue.entries(choice), id: \.id) { entry in
+                    Text(CatalogueModel.facts(entry))
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                if case .failed(let why) = state {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text("Couldn't download it: \(why)")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.alert)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        Button("Retry") { catalogue.retry(choice) }
+                            .accessibilityLabel("Retry downloading \(choice.title)")
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // The words tick the box too, as a checkbox's label does.
+                guard choosable else { return }
+                if ticked.contains(choice) { ticked.remove(choice) } else { ticked.insert(choice) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func isFailed(_ state: CatalogueModel.ChoiceState) -> Bool {
+        if case .failed = state { true } else { false }
+    }
+
+    @ViewBuilder
+    private func trailing(_ state: CatalogueModel.ChoiceState) -> some View {
+        switch state {
+        case .installed:
+            Text("On this Mac").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        case .available, .failed:
+            Text(catalogue.sizeLabel(choice)).font(Typography.caption).monospacedDigit().foregroundStyle(Theme.secondaryText)
+        case .waiting:
+            Text("Waiting").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        case .downloading(let progress?):
+            HStack(spacing: 8) {
+                ProgressView(value: progress.fraction).frame(width: 90)
+                Text("\(CatalogueModel.roundedSize(progress.done)) of \(CatalogueModel.roundedSize(progress.total))")
+                    .font(Typography.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Downloading \(choice.title)")
+            .accessibilityValue("\(Int(progress.fraction * 100)) percent")
+        case .downloading(nil):
+            Text("Starting…").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+        }
     }
 }

@@ -912,8 +912,9 @@ final class ModelDownloadTests: XCTestCase {
     }
 
     /// Nothing downloads until the user presses Download: not at launch, not while the first run is
-    /// walked through. The press then fetches the recommended set only (voice detection and
-    /// Parakeet), smallest first, one at a time; Qwen3-ASR and the diarizer wait for their own.
+    /// walked through. The press with nothing ticked fetches the set every job needs only (voice
+    /// detection and Parakeet), smallest first, one at a time; Qwen3-ASR and the diarizer wait for
+    /// a tick of their own.
     func testNothingIsSentBeforeThePressAndThenTheRecommendedSetOneAtATime() throws {
         let sent = Sent()
         let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: WorkspaceApps())
@@ -924,56 +925,153 @@ final class ModelDownloadTests: XCTestCase {
         while screens.onboarding.step != .ready { screens.onboarding.next() }
         XCTAssertEqual(installs(sent), [], "nothing sent before the press")
         let catalogue = screens.catalogue
-        XCTAssertEqual(catalogue.firstRunRecommended.map(\.id), [silero, parakeet], "smallest first")
-        XCTAssertEqual(catalogue.firstRunRecommended.map(\.sizeBytes).reduce(0, +), 484_395_248, "the total it states")
-        XCTAssertEqual(catalogue.firstRunExtras.map(\.id), [nemotron, qwen], "the rest, optional, smallest first")
+        XCTAssertEqual(catalogue.entries(.transcripts).map(\.id), [silero, parakeet], "smallest first")
+        XCTAssertEqual(catalogue.size(of: .transcripts), 484_395_248, "the size it states")
 
-        catalogue.downloadRecommended()
+        catalogue.download(choices: [])
         XCTAssertEqual(installs(sent), [.modelInstall(silero, ref: "model.update:1")], "one at a time")
         XCTAssertEqual(catalogue.download(of: try entry(catalogue, silero)), .downloading(nil))
         XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .waiting)
-        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .notInstalled, "not part of the press")
-        XCTAssertEqual(catalogue.download(of: try entry(catalogue, nemotron)), .notInstalled, "not part of the press")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .notInstalled, "not ticked")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, nemotron)), .notInstalled, "not ticked")
+        catalogue.download(choices: [])
         catalogue.downloadRecommended()
         XCTAssertEqual(installs(sent).count, 1, "a second press queues nothing twice")
 
-        // An extra's own Download queues behind the set, and stays listed once it is in.
-        catalogue.download([qwen])
+        // A choice ticked later queues behind the set, and stays listed once it is in.
+        catalogue.download(choices: [.accuracy])
         catalogue.apply(finished(silero))
         catalogue.apply(finished(parakeet))
         XCTAssertEqual(installs(sent).map { if case .modelInstall(let id, _) = $0 { id } else { "" } }, [silero, parakeet, qwen])
-        XCTAssertEqual(catalogue.firstRunExtras.map(\.id), [nemotron, qwen])
+        catalogue.apply(finished(qwen))
+        XCTAssertEqual(catalogue.state(of: .accuracy), .installed, "listed, as downloaded")
     }
 
-    /// A recommended model already on this Mac is not offered again; with every one of them in, the
-    /// press has nothing to fetch, and the extras are still offered on their own.
+    /// The first run offers choices by what they do for the user, not models: the set every job
+    /// needs (always included), fewer mistakes (Qwen3-ASR) and telling the far end's people apart
+    /// (the diarizer), each with its size as the step states it.
+    func testTheFirstRunOffersChoicesByWhatTheyDo() throws {
+        let catalogue = CatalogueModel(send: { _ in })
+        XCTAssertEqual(catalogue.choices, [], "nothing listed yet")
+        catalogue.apply(listedAll())
+        XCTAssertEqual(catalogue.choices, [.transcripts, .accuracy, .speakers])
+        XCTAssertEqual(CatalogueModel.Choice.transcripts.title, "Dictation, live words and meeting transcripts")
+        XCTAssertEqual(CatalogueModel.Choice.accuracy.title, "Fewer mistakes")
+        XCTAssertEqual(CatalogueModel.Choice.speakers.title, "Tell the people on the call apart")
+        XCTAssertTrue(CatalogueModel.Choice.transcripts.isRequired)
+        XCTAssertFalse(CatalogueModel.Choice.accuracy.isRequired)
+        XCTAssertFalse(CatalogueModel.Choice.speakers.isRequired)
+        XCTAssertEqual(CatalogueModel.Choice.transcripts.models, CatalogueModel.recommended)
+        XCTAssertEqual(CatalogueModel.Choice.accuracy.models, [qwen])
+        XCTAssertEqual(CatalogueModel.Choice.speakers.models, [nemotron])
+        XCTAssertEqual(catalogue.sizeLabel(.transcripts), "484 MB")
+        XCTAssertEqual(catalogue.sizeLabel(.accuracy), "+2.5 GB")
+        XCTAssertEqual(catalogue.sizeLabel(.speakers), "+107 MB")
+        // Each choice names its models: name, licence, size and host.
+        XCTAssertEqual(catalogue.entries(.speakers).map(CatalogueModel.facts), [
+            "Nemotron-3-Diarization · OpenMDW-1.1 · 107 MB · from huggingface.co",
+        ])
+        XCTAssertEqual(catalogue.entries(.transcripts).map(CatalogueModel.facts).last,
+                       "Parakeet TDT v3 · CC-BY-4.0 · 483 MB · from huggingface.co")
+        // A catalogue without a choice's model leaves that choice out.
+        let partial = CatalogueModel(send: { _ in })
+        partial.apply(listed())
+        XCTAssertEqual(partial.choices, [.accuracy], "no voice detection listed, no diarizer")
+    }
+
+    /// The one Download carries the total of what is ticked, and changes as boxes do: only models
+    /// still to fetch count (a model on this Mac, downloading or waiting is not counted again).
+    func testTheDownloadButtonCarriesTheTotalOfWhatIsTicked() throws {
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(listedAll())
+        XCTAssertEqual(catalogue.bytesToDownload([]), 484_395_248)
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([])), "Download 484 MB")
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([.speakers])), "Download 591 MB")
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([.accuracy])), "Download 3.0 GB")
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([.accuracy, .speakers])), "Download 3.1 GB")
+        XCTAssertEqual(catalogue.bytesToDownload([.transcripts]), 484_395_248, "the set counts once, ticked or not")
+
+        catalogue.download(choices: [])
+        XCTAssertEqual(catalogue.bytesToDownload([]), 0, "the set is on its way")
+        XCTAssertEqual(catalogue.bytesToDownload([.speakers]), 107_012_128)
+
+        let installed = CatalogueModel(send: { _ in })
+        installed.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":true,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(installed.state(of: .transcripts), .installed)
+        XCTAssertEqual(installed.bytesToDownload([]), 0, "nothing needed is missing")
+        XCTAssertEqual(installed.bytesToDownload([.accuracy]), 2_520_744_288)
+    }
+
+    /// The press fetches the set first (dictation works soonest), then the ticked extras smallest
+    /// first; an unticked extra is never fetched.
+    func testDownloadFetchesTheSetThenTheTickedExtrasSmallestFirst() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listedAll())
+        catalogue.download(choices: [.accuracy, .speakers])
+        XCTAssertEqual(installs(sent), [.modelInstall(silero, ref: "model.update:1")], "one at a time")
+        XCTAssertEqual(catalogue.waiting, [parakeet, nemotron, qwen])
+
+        let one = Sent()
+        let other = CatalogueModel(send: one.send)
+        other.apply(listedAll())
+        other.download(choices: [.speakers])
+        XCTAssertEqual(other.waiting, [parakeet, nemotron], "Qwen3-ASR not ticked")
+    }
+
+    /// Each choice shows where its models stand: available, waiting, downloading with the set's
+    /// progress (a finished model counts whole), failed in the core's words until Retry, and on
+    /// this Mac once every model is in.
+    func testEachChoiceShowsInstalledProgressOrFailure() throws {
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(listedAll())
+        XCTAssertEqual(catalogue.state(of: .transcripts), .available)
+        catalogue.download(choices: [.speakers])
+        XCTAssertEqual(catalogue.state(of: .transcripts), .downloading(nil), "voice detection under way")
+        XCTAssertEqual(catalogue.state(of: .speakers), .waiting)
+        XCTAssertEqual(catalogue.state(of: .accuracy), .available)
+        catalogue.apply(finished(silero))
+        catalogue.apply(progress(parakeet, 100_000_000, of: 483_105_645))
+        XCTAssertEqual(catalogue.state(of: .transcripts),
+                       .downloading(.init(done: 1_289_603 + 100_000_000, total: 484_395_248)), "the set's progress")
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(catalogue.state(of: .transcripts), .installed, "in, before the list is read again")
+        catalogue.apply(finished(nemotron, ok: false, message: "the connection was reset"))
+        XCTAssertEqual(catalogue.state(of: .speakers), .failed("the connection was reset"))
+        XCTAssertEqual(catalogue.bytesToDownload([.speakers]), 107_012_128, "a failed one can be fetched again")
+        catalogue.retry(.speakers)
+        XCTAssertEqual(catalogue.state(of: .speakers), .downloading(nil))
+    }
+
+    /// A recommended model already on this Mac is not fetched again; with every one of them in, the
+    /// press has nothing to fetch for the set, and the extras are still offered on their own.
     func testTheRecommendedSetOffersOnlyWhatIsMissing() throws {
         let sent = Sent()
         let catalogue = CatalogueModel(send: sent.send)
         catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
-        XCTAssertEqual(catalogue.firstRunRecommended.map(\.id), [silero])
+        XCTAssertEqual(catalogue.state(of: .transcripts), .available)
+        XCTAssertEqual(catalogue.bytesToDownload([]), 1_289_603, "only voice detection is missing")
         catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":true,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
-        XCTAssertEqual(catalogue.firstRunRecommended, [])
-        XCTAssertEqual(catalogue.firstRunExtras.map(\.id), [qwen])
+        XCTAssertEqual(catalogue.state(of: .transcripts), .installed)
+        XCTAssertEqual(catalogue.firstRunModels.map(\.id), [qwen])
         catalogue.downloadRecommended()
+        catalogue.download(choices: [])
         XCTAssertEqual(installs(sent), [], "nothing recommended is missing")
     }
 
-    /// Each extra says what it adds over the recommended set; the set's own models need no pitch.
-    /// The diarizer's line says what the user has without it: the far end is one voice, "Them".
+    /// Each extra says what it adds over the set, in the user's terms; the set needs no pitch. The
+    /// diarizer's line says what the user has without it: the far end is one voice, "Them".
     func testEachExtraSaysWhatItAdds() throws {
-        let qwenAdds = try XCTUnwrap(CatalogueModel.adds(qwen))
-        XCTAssertTrue(qwenAdds.contains("More accurate"), qwenAdds)
-        XCTAssertTrue(qwenAdds.contains("Parakeet still shows the live words"), qwenAdds)
-        let diarizerAdds = try XCTUnwrap(CatalogueModel.adds(nemotron))
-        XCTAssertTrue(diarizerAdds.contains("Speaker 1, Speaker 2"), diarizerAdds)
-        XCTAssertTrue(diarizerAdds.contains("\u{201C}Them\u{201D}"), diarizerAdds)
-        XCTAssertNil(CatalogueModel.adds(parakeet))
-        XCTAssertNil(CatalogueModel.adds(silero))
+        let accuracy = try XCTUnwrap(CatalogueModel.Choice.accuracy.detail)
+        XCTAssertEqual(accuracy, "About a third fewer wrong words in dictation and meetings.")
+        let speakers = try XCTUnwrap(CatalogueModel.Choice.speakers.detail)
+        XCTAssertTrue(speakers.contains("Speaker 1, Speaker 2"), speakers)
+        XCTAssertTrue(speakers.contains("\u{201C}Them\u{201D}"), speakers)
+        XCTAssertNil(CatalogueModel.Choice.transcripts.detail)
         XCTAssertEqual(CatalogueModel.recommended, [silero, parakeet])
     }
 
-    /// Qwen3-ASR's line claims about a third fewer words wrong than Parakeet: true of the rates
+    /// "Fewer mistakes" claims about a third fewer wrong words than Parakeet: true of the rates
     /// measured for both (the core's registry row, and Parakeet's as the Apple engines register
     /// it), on dictation and on meetings. New measurements that break the claim fail here.
     func testQwensClaimMatchesTheMeasuredRates() throws {
@@ -984,7 +1082,7 @@ final class ModelDownloadTests: XCTestCase {
             encoding: .utf8)
         let start = try XCTUnwrap(registry.range(of: "fn qwen3_asr_1_7b_q8()"))
         let row = registry[start.upperBound...]
-        XCTAssertTrue(try XCTUnwrap(CatalogueModel.adds(qwen)).contains("about a third fewer words wrong"))
+        XCTAssertTrue(try XCTUnwrap(CatalogueModel.Choice.accuracy.detail).contains("About a third fewer wrong words"))
         for (job, name) in [(Job.dictationFinal, "DictationFinal"), (.meetingFinal, "MeetingFinal")] {
             let match = try XCTUnwrap(row.firstMatch(of: try Regex("job: Job::\(name),\\s*wer: ([0-9.]+)")), name)
             let qwenRate = try XCTUnwrap(Double(try XCTUnwrap(match.output[1].substring)))
@@ -1880,6 +1978,43 @@ final class LiveLayoutTests: XCTestCase {
             XCTAssertLessThan(minimum.height, 460, name)
             XCTAssertLessThan(minimum.width, 720, name)
         }
+    }
+}
+
+/// The first-run sheet's steps fit the sheet: nothing is clipped and nothing scrolls (a clipped
+/// Qwen3-ASR line, and Download buttons under the scroll bar, were found by hand).
+@MainActor
+final class OnboardingLayoutTests: XCTestCase {
+    private let listedAll = #"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"nemotron-3-diarization-q8","licence":"OpenMDW-1.1","size_bytes":107012128,"installed":false,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]}]}"#
+
+    /// How much room `view` needs at the step's width.
+    private func needed<V: View>(_ view: V, screens: ScreenModels) -> CGSize {
+        let room = OnboardingView.stepRoom
+        let hosting = NSHostingController(rootView: view.environment(screens).environment(screens.theme))
+        return hosting.sizeThatFits(in: CGSize(width: room.width, height: 10_000))
+    }
+
+    func testTheModelsStepFitsTheSheetBeforeDuringAndAfterAFailure() {
+        let room = OnboardingView.stepRoom
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        let catalogue = screens.catalogue
+        catalogue.apply(event(listedAll))
+        var size = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
+        XCTAssertLessThanOrEqual(size.height, room.height, "before the press")
+        XCTAssertLessThanOrEqual(size.width, room.width + 0.5)
+        // The set downloading, an extra waiting, and one failed with the core's long words.
+        catalogue.download(choices: [.speakers, .accuracy])
+        catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":true,"no_model_warm":false}"#))
+        catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
+        catalogue.apply(event(#"{"type":"command.failed","command":"model.update","id":"model.update:2","message":"stale"}"#))
+        size = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
+        XCTAssertLessThanOrEqual(size.height, room.height, "while downloading")
+        let failing = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        failing.catalogue.apply(event(listedAll))
+        failing.catalogue.download(choices: [.speakers])
+        failing.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
+        size = needed(FirstRunModelsStep(catalogue: failing.catalogue), screens: failing)
+        XCTAssertLessThanOrEqual(size.height, room.height, "with a failure and its Retry")
     }
 }
 

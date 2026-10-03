@@ -204,26 +204,15 @@ final class CatalogueModel {
     }
 
     /// The recommended set, about 484 MB: voice detection and the Mac's Parakeet, smallest first,
-    /// the order they download in. The first run offers it, and so does Today while no speech
-    /// model is installed (SpeechModels.swift). They serve every job on their own: Parakeet
-    /// registers for the live words and, while Qwen3-ASR is not installed, for the dictation and
-    /// meeting finals (ParakeetOfflineEngine), and the router hands those to Qwen3-ASR once it is
-    /// in. So Qwen3-ASR's 2.5 GB and the diarizer are offered as extras, each with what it adds,
-    /// never fetched by the set's Download.
-    static let recommended = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml"]
+    /// the order they download in. The first run always includes it (ModelChoices.swift), and Today
+    /// offers it while no speech model is installed (SpeechModels.swift). They serve every job on
+    /// their own: Parakeet registers for the live words and, while Qwen3-ASR is not installed, for
+    /// the dictation and meeting finals (ParakeetOfflineEngine), and the router hands those to
+    /// Qwen3-ASR once it is in. So Qwen3-ASR's 2.5 GB and the diarizer are choices of their own,
+    /// each with what it adds, never fetched by the set's Download.
+    nonisolated static let recommended = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml"]
 
-    /// The recommended models the first run lists.
-    var firstRunRecommended: [CatalogueEntry] {
-        firstRunModels.filter { Self.recommended.contains($0.id) }
-    }
-
-    /// The other models the first run lists, each downloaded only from its own row.
-    var firstRunExtras: [CatalogueEntry] {
-        firstRunModels.filter { !Self.recommended.contains($0.id) }
-    }
-
-    /// The set's Download (the first run's, and Today's and its Try again while no speech model is
-    /// installed): every recommended model the list names that is not on this Mac, queued behind
+    /// The set's Download (Today's and its Try again while no speech model is installed): every recommended model the list names that is not on this Mac, queued behind
     /// any download under way. One whose last download failed is tried again; one downloading or
     /// waiting is not queued twice (`download`).
     func downloadRecommended() {
@@ -237,19 +226,6 @@ final class CatalogueModel {
     func isOnThisMac(_ id: String) -> Bool {
         if models.first(where: { $0.id == id })?.installed == true { return true }
         return asked.contains(id) && failures[id] == nil && id != installing && !waiting.contains(id)
-    }
-
-    /// What an extra adds over the recommended set, for the first run's row; nil for the set's own
-    /// models and for ids this build does not know. Qwen3-ASR's "a third fewer" is checked against
-    /// the measured rates (ScreensTests).
-    static func adds(_ id: String) -> String? {
-        switch id {
-        case "qwen3-asr-1.7b-q8":
-            "More accurate dictation and meeting transcripts: about a third fewer words wrong than Parakeet in tests. Parakeet still shows the live words."
-        case "nemotron-3-diarization-q8":
-            "After a call, tells the people on the other end apart: Speaker 1, Speaker 2. Without it, everyone on the other end is \u{201C}Them\u{201D}."
-        default: nil
-        }
     }
 
     /// Where a model's files come from: the host of every URL its row names in the core's registry
