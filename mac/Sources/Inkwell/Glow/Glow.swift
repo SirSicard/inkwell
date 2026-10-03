@@ -87,6 +87,11 @@ enum Glow {
     enum Orb {
         static let main = placement(GlowTokens.Orb.main)
         static let drop = placement(GlowTokens.Orb.drop)
+        /// Where the main window's orb wanders, around `main` (x 0.56, y 0.26): its centre stays
+        /// within this region of the window, which keeps it clear of the sidebar and mostly in the
+        /// top half, behind the screens' headings. OrbBehindTextTests renders the orb at each corner
+        /// too. The Drop's orb and the first run's do not wander.
+        static let wander = OrbWander.Bounds(x: 0.46...0.68, y: 0.18...0.36)
 
         private static func placement(_ p: GlowOrbPlacement) -> OrbPlacement {
             OrbPlacement(x: p.x, yFromTop: p.y, unit: p.unit)

@@ -251,6 +251,10 @@ struct OrbLayer: NSViewRepresentable {
     var dimmed: Bool
     /// Text sits over it (the main window's screens), not beside it (the first run's demo).
     var behindText = false
+    /// The region it wanders in (the main window's, Glow.Orb.wander); nil keeps it at `placement`.
+    var wanderBounds: OrbWander.Bounds?
+    /// What it sits behind (the main window's route): a change at rest moves a wandering orb.
+    var contentID: String?
     /// The live levels it answers; the app's by default.
     var levels: @MainActor () -> InkLevels = ShellInk.liveLevels
 
@@ -295,6 +299,8 @@ struct OrbLayer: NSViewRepresentable {
         view.placement = placement
         view.motionStill = still
         view.blotDepth = Self.blotDepth(behindText: behindText)
+        view.wanderBounds = wanderBounds
+        view.contentID = contentID
         let opacity = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
         // Compared with a margin, not exactly: if the opacity ever reads back rounded (a layer
         // keeps it as a Float), every update would start the fade again.

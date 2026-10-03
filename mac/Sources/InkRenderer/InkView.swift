@@ -7,6 +7,13 @@
 // it draws one still frame at most and then nothing. Every frame it presents is counted in
 // InkRenderer.frames, which the shell budget (scripts/idle-budget.sh) reads.
 //
+// Given bounds (the main window's orb), it wanders (OrbWander): live, slowly, on the frames it
+// draws anyway; at rest it glides to a new spot for a couple of seconds when it comes on screen,
+// when the content behind it changes, and when its window becomes key again after a few minutes in
+// one spot, then holds still again. No timer moves it: a window left alone at rest draws nothing.
+// Hidden or covered it never moves; with motion stilled it takes each new spot in the one still
+// frame, without a glide.
+//
 // The canvas's resolution: the backing scale, capped at 1.25 for a large canvas (over 180,000
 // square points) and at 2 otherwise, so a window-sized orb is not drawn at full Retina resolution.
 import AppKit
@@ -21,7 +28,31 @@ public final class InkView: NSView {
         didSet {
             guard state != oldValue else { return }
             simulation.state = state
+            // Live it wanders on from wherever it is; going to rest it stays where it got to.
+            wander?.hold(at: CACurrentMediaTime())
             perform(schedule.set(state: state))
+        }
+    }
+
+    /// The region the orb's centre wanders in, as fractions of the view; nil keeps it at
+    /// `placement` (the Drop, the first run). Its home is `placement`, where it starts.
+    public var wanderBounds: OrbWander.Bounds? {
+        didSet {
+            guard wanderBounds != oldValue else { return }
+            wander = wanderBounds.map {
+                OrbWander(bounds: $0, start: SIMD2(placement.x, placement.yFromTop), random: wanderRandom)
+            }
+            perform(schedule.set(gliding: false))
+            perform(schedule.invalidate())
+        }
+    }
+
+    /// What the orb sits behind (the main window's screen). A change at rest, on screen, moves a
+    /// wandering orb to a new spot.
+    public var contentID: String? {
+        didSet {
+            guard contentID != oldValue else { return }
+            moveAtRest()
         }
     }
 
@@ -55,7 +86,7 @@ public final class InkView: NSView {
     public var motionStill = false {
         didSet {
             guard motionStill != oldValue else { return }
-            perform(schedule.set(reduceMotion: reduceMotion))
+            reduceMotionChanged()
         }
     }
 
@@ -85,7 +116,19 @@ public final class InkView: NSView {
     /// For tests: pin Reduce Motion instead of reading the system setting. GitHub's macOS runners
     /// turn Reduce Motion on, so a test of live motion must not depend on the host's setting.
     var assumeReduceMotion: Bool? {
-        didSet { perform(schedule.set(reduceMotion: reduceMotion)) }
+        didSet { reduceMotionChanged() }
+    }
+
+    /// For tests: the wander's random source, read when `wanderBounds` is set.
+    var wanderRandom = InkRandom.system
+
+    /// Its window becoming key again moves a resting orb only this long after its last move
+    /// (tests shorten it).
+    var restInterval = OrbWander.restInterval
+
+    /// The orb's centre now, as fractions of the view.
+    var orbCentre: SIMD2<Double> {
+        wander?.position(at: CACurrentMediaTime()) ?? SIMD2(placement.x, placement.yFromTop)
     }
 
     /// The system's Reduce Motion setting, unless a test pinned it, or the user's "Always still".
@@ -95,6 +138,9 @@ public final class InkView: NSView {
 
     private var pipeline: InkPipeline?
     private var simulation = InkSimulation()
+    private var wander: OrbWander?
+    /// When the wandering orb last moved at rest.
+    private var lastMove: CFTimeInterval = 0
     private var schedule = InkSchedule()
     private let clock: InkClock
     private var lastTimestamp: CFTimeInterval = 0
@@ -164,11 +210,15 @@ public final class InkView: NSView {
         if let window {
             NotificationCenter.default.removeObserver(
                 self, name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: window)
         }
         if let newWindow {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(occlusionChanged(_:)),
                 name: NSWindow.didChangeOcclusionStateNotification, object: newWindow)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowBecameKey(_:)), name: NSWindow.didBecomeKeyNotification,
+                object: newWindow)
         }
         let workspace = NSWorkspace.shared.notificationCenter
         if newWindow != nil, !observesDisplayOptions {
@@ -186,7 +236,7 @@ public final class InkView: NSView {
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         // The setting may have changed while the view was out of a window, unheard.
-        perform(schedule.set(reduceMotion: reduceMotion))
+        reduceMotionChanged()
         updateCanvas()
         visibilityChanged()
     }
@@ -229,7 +279,40 @@ public final class InkView: NSView {
     /// The schedule sees a view that cannot draw yet (no pipeline) as not on screen: no clock, no
     /// still frame, until the pipeline arrives.
     private func visibilityChanged() {
-        perform(schedule.set(onScreen: isOnScreen && pipeline != nil))
+        let onScreen = isOnScreen && pipeline != nil
+        if onScreen && !schedule.onScreen && !state.isLive, var wander {
+            // Coming on screen at rest: a new spot, chosen before anything is drawn, so a glide
+            // starts from where it was and, with motion stilled, the one still frame is already there.
+            lastMove = CACurrentMediaTime()
+            wander.move(at: lastMove, animated: !reduceMotion)
+            self.wander = wander
+            _ = reduceMotion ? schedule.invalidate() : schedule.set(gliding: true)
+        }
+        perform(schedule.set(onScreen: onScreen))
+    }
+
+    /// A wandering orb at rest on screen goes to a new spot: a glide, or at once with motion stilled.
+    private func moveAtRest() {
+        guard var wander, !state.isLive, schedule.onScreen else { return }
+        let now = CACurrentMediaTime()
+        wander.move(at: now, animated: !reduceMotion)
+        self.wander = wander
+        lastMove = now
+        perform(reduceMotion ? schedule.invalidate() : schedule.set(gliding: true))
+    }
+
+    /// The user comes back to the window: a resting orb moves if it has held its spot for
+    /// `restInterval`. No timer: a window left alone at rest draws nothing at all (the shell
+    /// budget's idle phase, 0 frames in two minutes).
+    private func becameKey() {
+        guard CACurrentMediaTime() - lastMove >= restInterval else { return }
+        moveAtRest()
+    }
+
+    /// Reduce Motion or "Always still" changed: a glide under way stops where it is.
+    private func reduceMotionChanged() {
+        if reduceMotion { wander?.hold(at: CACurrentMediaTime()) }
+        perform(schedule.set(reduceMotion: reduceMotion))
     }
 
     // Both notifications arrive on the main thread; the hop covers a sender that ever does not.
@@ -237,9 +320,13 @@ public final class InkView: NSView {
         onMain { $0.visibilityChanged() }
     }
 
+    @objc private nonisolated func windowBecameKey(_ note: Notification) {
+        onMain { $0.becameKey() }
+    }
+
     @objc private nonisolated func displayOptionsChanged(_ note: Notification) {
         onMain { view in
-            view.perform(view.schedule.set(reduceMotion: view.reduceMotion))
+            view.reduceMotionChanged()
         }
     }
 
@@ -300,25 +387,38 @@ public final class InkView: NSView {
         let dt = firstTick ? 0.016 : min(0.05, max(0, now - lastTimestamp))
         lastTimestamp = now
         firstTick = false
+        guard state.isLive else {
+            // A glide at rest: the settled frame, moving, until it arrives (then the still there).
+            guard wander?.isMoving(at: now) == true else { return perform(schedule.set(gliding: false)) }
+            return draw(motion: false, at: now)
+        }
         let live = levels?() ?? .silent
         simulation.step(dt, snap: false, voice: .levels(near: live.near, far: live.far))
-        draw(motion: true)
+        wander?.wander(at: now)
+        draw(motion: true, at: now)
     }
 
     /// The settled frame: weights at their targets, no voice, the shader's time stopped. A still
     /// frame shows the state at rest, not whatever level happened to be live.
     private func drawStill() {
         simulation.settle(voice: .silent)
-        draw(motion: false)
+        draw(motion: false, at: CACurrentMediaTime())
     }
 
-    private func draw(motion: Bool) {
+    /// Where the orb sits at `now`: its placement, or where its wander has got to.
+    private func placement(at now: CFTimeInterval) -> OrbPlacement {
+        guard let wander else { return placement }
+        let p = wander.position(at: now)
+        return OrbPlacement(x: p.x, yFromTop: p.y, unit: placement.unit)
+    }
+
+    private func draw(motion: Bool, at now: CFTimeInterval) {
         guard let pipeline, let metalLayer, canvas.width > 0 else { return }
         guard let drawable = metalLayer.nextDrawable(),
             let commandBuffer = pipeline.queue.makeCommandBuffer()
         else { return }
         pipeline.encode(into: drawable.texture, commandBuffer: commandBuffer,
-                        uniforms: simulation.uniforms(palette: palette, placement: placement, motion: motion))
+                        uniforms: simulation.uniforms(palette: palette, placement: placement(at: now), motion: motion))
         InkRenderer.gpuTimes.observe(commandBuffer)
         commandBuffer.present(drawable)
         commandBuffer.commit()

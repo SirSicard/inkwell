@@ -61,7 +61,8 @@ struct ShellView: View {
         .background {
             OrbLayer(
                 state: ink.state, palette: theme.palette, placement: Glow.Orb.main, still: theme.motionStill,
-                dimmed: theme.solidSurfaces, behindText: true)
+                dimmed: theme.solidSurfaces, behindText: true, wanderBounds: Glow.Orb.wander,
+                contentID: router.current.rawValue)
                 .ignoresSafeArea()
         }
         .overlay {

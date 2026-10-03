@@ -262,6 +262,15 @@ final class OrbBehindTextTests: XCTestCase {
         (max(a, b) + 0.05) / (min(a, b) + 0.05)
     }
 
+    /// Only the main window's orb wanders, inside Glow.Orb.wander, around its home; the Drop's
+    /// and the first run's stay where they are placed.
+    func testOnlyTheMainWindowsOrbWanders() {
+        let layer = OrbLayer(state: .idle, palette: .neutral, placement: Glow.Orb.drop, still: false, dimmed: false)
+        XCTAssertNil(layer.wanderBounds, "an orb wanders only when given its bounds")
+        let home = SIMD2(Glow.Orb.main.x, Glow.Orb.main.yFromTop)
+        XCTAssertTrue(Glow.Orb.wander.contains(home))
+    }
+
     func testALiveOrbDimsBehindTextAndAnOrbAtRestDoesNot() {
         XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: false), 1, "at rest, as designed")
         for state in InkState.allCases where state.isLive {
@@ -309,14 +318,17 @@ final class OrbBehindTextTests: XCTestCase {
         }
     }
 
-    /// The orb drawn as the main window places it, loud voices on both sides, at a few moments
-    /// (its noise and highlight move), composited over the mode's background at the opacity the
-    /// window gives it: every pixel keeps text at 4.5:1 and secondary text at 3:1 or more. At rest
-    /// that is the orb leaning toward the preset at GlowColours.restTint, undimmed: the worst is Dark's
-    /// secondary text over Lagoon, 3.10:1 at 0.2 (2.96:1 at 0.25; 3.62:1 untinted).
+    /// The orb drawn where the main window puts it (its home, and each corner of the region it
+    /// wanders in), loud voices on both sides, at a few moments (its noise and highlight move),
+    /// composited over the mode's background at the opacity the window gives it: every pixel keeps
+    /// text at 4.5:1 and secondary text at 3:1 or more. At rest that is the orb leaning toward the
+    /// preset at GlowColours.restTint, undimmed: the worst is Dark's secondary text over Lagoon,
+    /// 3.10:1 at 0.2 (2.96:1 at 0.25; 3.62:1 untinted).
     func testTextStaysReadableOverTheMainWindowsOrbWithEveryPresetInBothModes() throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
         let pipeline = try InkPipelineLoader.shared.wait().get()
+        let home = Glow.Orb.main
+        let placements = [home] + Glow.Orb.wander.corners.map { OrbPlacement(x: $0.x, yFromTop: $0.y, unit: home.unit) }
         for dark in [false, true] {
             let mode = Glow.mode(dark: dark)
             let background = GlowColours.rgb(mode.background)
@@ -326,25 +338,29 @@ final class OrbBehindTextTests: XCTestCase {
                 let palette = GlowColours.palette(preset: preset, you: nil, them: nil, dark: dark)
                 for state in InkState.allCases {
                     let opacity = Double(OrbLayer.opacity(state: state, behindText: true, dimmed: false))
-                    var worstText = Double.infinity, worstSecondary = Double.infinity
-                    for t in [3.0, 12, 27] {
-                        // The orb scales with the window, so a small canvas holds the same colours.
-                        let image = try InkSnapshot.render(
-                            state, t: t, width: 208, height: 140, palette: palette, placement: Glow.Orb.main,
-                            voice: .levels(near: 1, far: 1), blotDepth: OrbLayer.blotDepth(behindText: true),
-                            pipeline: pipeline)
-                        for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] > 0 {
-                            let alpha = Double(image.rgba[i + 3]) / 255
-                            let orb = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / 255
-                            // Premultiplied over the background, as the window composites it.
-                            let shown = luminance(orb * opacity + background * (1 - alpha * opacity))
-                            worstText = min(worstText, contrast(text, shown))
-                            worstSecondary = min(worstSecondary, contrast(secondary, shown))
+                    for placement in placements {
+                        var worstText = Double.infinity, worstSecondary = Double.infinity, drawn = 0
+                        for t in [3.0, 12, 27] {
+                            // The orb scales with the window, so a small canvas holds the same colours.
+                            let image = try InkSnapshot.render(
+                                state, t: t, width: 208, height: 140, palette: palette, placement: placement,
+                                voice: .levels(near: 1, far: 1), blotDepth: OrbLayer.blotDepth(behindText: true),
+                                pipeline: pipeline)
+                            for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] > 0 {
+                                let alpha = Double(image.rgba[i + 3]) / 255
+                                let orb = SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / 255
+                                // Premultiplied over the background, as the window composites it.
+                                let shown = luminance(orb * opacity + background * (1 - alpha * opacity))
+                                worstText = min(worstText, contrast(text, shown))
+                                worstSecondary = min(worstSecondary, contrast(secondary, shown))
+                                drawn += 1
+                            }
                         }
+                        let label = "\(dark ? "dark" : "light") \(preset.id) \(state) at (\(placement.x), \(placement.yFromTop))"
+                        XCTAssertGreaterThan(drawn, 300, "\(label): the orb is in the frame")
+                        XCTAssertGreaterThanOrEqual(worstText, 4.5, label)
+                        XCTAssertGreaterThanOrEqual(worstSecondary, 3, label)
                     }
-                    let label = "\(dark ? "dark" : "light") \(preset.id) \(state)"
-                    XCTAssertGreaterThanOrEqual(worstText, 4.5, label)
-                    XCTAssertGreaterThanOrEqual(worstSecondary, 3, label)
                 }
             }
         }
