@@ -460,12 +460,14 @@ pub fn summarize(
     })
 }
 
+/// The meeting's title, when it has one, and its date. An untitled meeting gets no title line: a
+/// placeholder there ("(untitled)") was copied into the headline, which names the record.
 fn header(record: &RecordContext<'_>) -> String {
-    format!(
-        "Meeting: {}\nDate: {}",
-        record.title.unwrap_or("(untitled)"),
-        record.time.local_date()
-    )
+    let date = format!("Date: {}", record.time.local_date());
+    match record.title {
+        Some(title) => format!("Meeting: {title}\n{date}"),
+        None => date,
+    }
 }
 
 fn summary_request(user: String, max_tokens: u32) -> LlmRequest {

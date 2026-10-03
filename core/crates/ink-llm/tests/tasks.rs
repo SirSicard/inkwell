@@ -356,6 +356,38 @@ fn a_summary_carries_actions_with_provenance_and_a_title() {
     assert!(request.json_schema.is_some());
 }
 
+/// Review fix: an untitled meeting's prompt said "Meeting: (untitled)", and the model made the
+/// placeholder its headline ("The untitled matter"), which became the record's title. Untitled,
+/// the prompt names no meeting at all: only the date.
+#[test]
+fn an_untitled_meetings_summary_prompt_offers_no_title_to_copy() {
+    let llm = meeting_model();
+    summarize(
+        &meeting(),
+        &RecordContext {
+            title: None,
+            ..record()
+        },
+        &SummaryOptions::default(),
+        0,
+        &llm,
+        &CancelToken::new(),
+    )
+    .unwrap();
+    let request = &llm.requests.lock().unwrap()[0];
+    assert!(!request.user.contains("(untitled)"), "{}", request.user);
+    assert!(
+        !request.user.lines().any(|l| l.starts_with("Meeting:")),
+        "{}",
+        request.user
+    );
+    assert!(
+        request.user.starts_with("Date: 2026-09-23 (Wednesday)\n"),
+        "{}",
+        request.user
+    );
+}
+
 fn summary_of(answer: &'static str) -> ink_llm::tasks::summary::SummaryOutcome {
     let llm = ScriptedLlm::new(move |_| Ok(answer.to_owned()));
     summarize(
