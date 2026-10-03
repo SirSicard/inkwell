@@ -187,6 +187,17 @@ public sealed class InkSurface : IDisposable
     /// <summary>The prototype's stand-in voice instead of the live levels (the first run's demo).</summary>
     public bool Demo { get; set; }
 
+    /// <summary>How far the final pass's blot goes (InkSimulation.BlotDepth): 1, the Drop's, unless set.</summary>
+    public double BlotDepth
+    {
+        get => simulation.BlotDepth;
+        set
+        {
+            simulation.BlotDepth = value;
+            Perform(schedule.Invalidate());
+        }
+    }
+
     /// <summary>
     /// Each frame's state, as it is drawn (live on the clock, or the still frame): the window's edge
     /// glow follows it, so it moves exactly when the orb does and never on its own. UI thread.

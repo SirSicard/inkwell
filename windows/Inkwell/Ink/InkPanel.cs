@@ -143,6 +143,9 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
     /// <summary>The prototype's stand-in voice instead of the live levels (the first run's demo). Set before it loads.</summary>
     internal bool Demo { get; set; }
 
+    /// <summary>How far the final pass's blot goes (InkSimulation.BlotDepth): the window's orb stops partway. Set before it loads.</summary>
+    internal double BlotDepth { get; set; } = 1;
+
     /// <summary>Frames this panel has presented (0 before it loads).</summary>
     public int FramesDrawn => surface?.FramesDrawn ?? 0;
 
@@ -157,6 +160,7 @@ public sealed partial class InkPanel : SwapChainPanel, IInkTarget
             State = state,
             Placement = Placement,
             Demo = Demo,
+            BlotDepth = BlotDepth,
             Look = look,
             AlwaysStill = alwaysStill,
             Levels = ShellInk.LiveLevels,

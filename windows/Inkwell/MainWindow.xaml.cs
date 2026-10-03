@@ -61,6 +61,8 @@ public sealed partial class MainWindow : Window
     /// <summary>UI thread. The window's orb follows the shell's ink state; the edge glow follows the orb.</summary>
     internal void ShowInk(ShellInk ink)
     {
+        // Soft blotting: the window's orb, wide behind the text, stops partway (the Drop blots fully).
+        Orb.BlotDepth = 0.45;
         Orb.State = ink.State;
         ink.Changed += () =>
         {
