@@ -11,8 +11,10 @@
 // puts only that image on the clipboard (the PNG, and a bitmap for apps that take only that);
 // Save asks where with Windows' save picker.
 using System.Runtime.InteropServices.WindowsRuntime;
+using Inkwell.Core.Events;
 using Inkwell.Core.Glow;
 using Inkwell.Core.Screens;
+using Inkwell.Ink;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
@@ -73,9 +75,10 @@ internal sealed class StatsShareDialog
             Height = 160,
         };
         status = new TextBlock { Style = Parts.TextStyle("InkCaptionStyle"), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
-        save = new Button { Content = "Save…" };
+        // Off until there is an image to copy or save.
+        save = new Button { Content = "Save…", IsEnabled = false };
         save.Click += async (_, _) => await Save();
-        copy = new Button { Content = "Copy", Style = Parts.TextStyle("InkAccentButtonStyle") };
+        copy = new Button { Content = "Copy", Style = Parts.TextStyle("InkAccentButtonStyle"), IsEnabled = false };
         copy.Click += async (_, _) => await Copy();
 
         var heading = new TextBlock { Text = "Share card", Style = Parts.TextStyle("InkHeadingStyle") };
@@ -136,6 +139,9 @@ internal sealed class StatsShareDialog
 
     private void OnThemeChanged() => Rebuild();
 
+    /// <summary>What the ticks and the card were last made from: only new numbers, a new mode or new colours make them again (a reload that changes nothing would reset the ticks and the focus).</summary>
+    private (StatsCounted Counted, bool Dark, GlowColours Colours)? built;
+
     private IReadOnlyList<ShareLine> Lines() =>
         stats.Counted is { } counted ? ShareStats.Lines(counted, selected, stats.Culture) : [];
 
@@ -145,6 +151,12 @@ internal sealed class StatsShareDialog
         {
             return;
         }
+        var from = (counted, theme.Dark, theme.Colours);
+        if (built == from)
+        {
+            return;
+        }
+        built = from;
         ticks.Children.Clear();
         foreach (var stat in ShareStats.All)
         {
@@ -211,9 +223,6 @@ internal sealed class StatsShareDialog
             {
                 return;
             }
-            png = made;
-            save.IsEnabled = true;
-            copy.IsEnabled = true;
             var shown = new BitmapImage();
             using (var stream = new InMemoryRandomAccessStream())
             {
@@ -221,15 +230,23 @@ internal sealed class StatsShareDialog
                 stream.Seek(0);
                 await shown.SetSourceAsync(stream);
             }
-            if (mine == renders)
+            if (mine != renders)
             {
-                preview.Source = shown;
+                return;
             }
+            // Copy and Save once the preview shows what they would give.
+            preview.Source = shown;
+            png = made;
+            save.IsEnabled = true;
+            copy.IsEnabled = true;
         }
-        catch (Exception e) when (e is InvalidOperationException or ArgumentException or System.Runtime.InteropServices.COMException)
+        catch (Exception e)
         {
+            // Said, never an earlier card beside the new ticks; the cause is logged by name.
             if (mine == renders)
             {
+                preview.Source = null;
+                InkLog.Write($"couldn't make the share card: {e.GetType().Name}");
                 Report("Couldn't make the image.", failed: true);
             }
         }
@@ -318,7 +335,8 @@ internal sealed class StatsShareDialog
     {
         status.Text = text ?? "";
         status.Foreground = Parts.Brush(failed ? "InkAlertBrush" : "InkSecondaryTextBrush", status);
-        if (text is not null && FrameworkElementAutomationPeer.FromElement(copy) is { } peer)
+        // A peer made if none exists yet (no screen reader has asked for one): the line is read.
+        if (text is not null && (FrameworkElementAutomationPeer.FromElement(copy) ?? FrameworkElementAutomationPeer.CreatePeerForElement(copy)) is { } peer)
         {
             peer.RaiseNotificationEvent(AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.ImportantMostRecent, text, "stats-share");
         }
