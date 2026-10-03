@@ -77,6 +77,22 @@ final class DictationModelTests: XCTestCase {
         XCTAssertEqual(dictation.state, .live(key: "right_option", editKey: nil))
     }
 
+    /// Off because the core refused the key: the line says to pick another, and picking one turns
+    /// dictation on again with it (the core binds nothing until asked).
+    func testAKeyTheCoreRefusedIsReplacedByPickingAnother() {
+        let sent = Sent()
+        let dictation = DictationModel(send: sent.send, timeZone: { TimeZone(secondsFromGMT: 0)! })
+        dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
+        dictation.apply(event(#"{"type":"dictation.off","reason":"key_refused","message":"Inkwell doesn't know that key","ref":"dictation:1"}"#))
+        XCTAssertEqual(dictation.status, "That key can't be used here: Inkwell doesn't know that key. Pick another, or record a shortcut.")
+        dictation.setKey("right_option")
+        XCTAssertEqual(Array(sent.commands.suffix(2)), [.settingSet(.dictationKey, "right_option"), .dictationEnable(utcOffsetMinutes: 0, ref: "dictation:2")])
+        // Live: a new key only rebinds (the core does it on the setting).
+        dictation.apply(event(#"{"type":"dictation.ready","key":"right_option"}"#))
+        dictation.setKey("right_command")
+        XCTAssertEqual(sent.commands.last, .settingSet(.dictationKey, "right_command"))
+    }
+
     /// The edit picker offers every key but the dictation key, so its selection must never be
     /// that key, even when the stored settings collide before the core has answered.
     func testTheEditKeyIsNeverTheDictationKeyEvenBeforeTheCoreAnswers() {

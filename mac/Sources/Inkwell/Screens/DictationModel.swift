@@ -47,11 +47,12 @@ final class DictationModel {
     /// The quick picks (the core's tokens for modifiers held on their own). Any other key the core
     /// can watch is recorded instead ("Record a shortcut…", ShortcutRecorderModel).
     static let keys: [DictationKey] = ["fn", "right_option", "right_command", "right_control", "right_shift"]
-        .map(KeyNotation.describe)
+        .map { KeyNotation.describe($0) }
 
-    /// A token's key, for showing it: a quick pick, or any token in Mac notation (KeyNotation).
+    /// A token's key, for showing it: a quick pick, or any token in Mac notation, typing keys as the
+    /// user's keyboard layout labels them (KeyNotation).
     static func key(_ token: String?) -> DictationKey? {
-        token.map(KeyNotation.describe)
+        token.map { KeyNotation.display($0) }
     }
 
     private(set) var state: State = .starting
@@ -110,6 +111,8 @@ final class DictationModel {
 
     /// Turns dictation on (or, when on, rebinds its keys).
     func enable() {
+        // A shortcut is being recorded: the keys stay let go of until it ends, which enables then.
+        guard !suspendedForRecording else { return }
         nextRef += 1
         let minutes = timeZone().secondsFromGMT() / 60
         send(.dictationEnable(utcOffsetMinutes: minutes, ref: "\(Self.refPrefix)\(nextRef)"))
@@ -163,12 +166,14 @@ final class DictationModel {
     }
 
     /// A shortcut is being recorded: the keys are let go of, or the current key would start a take
-    /// and the core's tap would swallow it before the recorder saw it. Only when dictation is on
-    /// (or not read yet: then there is nothing to let go of either).
+    /// and the core's tap would swallow it before the recorder saw it. Nothing turns them on again
+    /// until the recording ends (enable() waits), whatever the switch says meanwhile.
     func suspendForRecording() {
-        guard !suspendedForRecording, wantsOn == true else { return }
+        guard !suspendedForRecording else { return }
         suspendedForRecording = true
-        disable()
+        if wantsOn == true {
+            disable()
+        }
     }
 
     /// The recording ended (saved, refused or cancelled): dictation comes back, on the key just
@@ -184,6 +189,11 @@ final class DictationModel {
     func setKey(_ token: String) {
         keyFailure = nil
         send(.settingSet(.dictationKey, token))
+        // Off because the key before was refused: the core binds nothing until asked, so a new
+        // key turns dictation on again (after the save, which the core runs first).
+        if case .off(.keyRefused, _) = state, wantsOn == true {
+            enable()
+        }
     }
 
     /// `nil` turns the edit key off.
@@ -240,7 +250,7 @@ final class DictationModel {
             case .needsAccessibility:
                 return "Dictation needs \u{201C}Type for you\u{201D} (Accessibility) to hold its key."
             case .keyRefused:
-                return "That key can't be used here\(message.map { ": \($0)" } ?? ".")"
+                return "That key can't be used here\(message.map { ": \($0)" } ?? ""). Pick another, or record a shortcut."
             case .unsupported:
                 return "Dictation isn't available in this build."
             case .workerStopped:
@@ -271,6 +281,9 @@ final class DictationModel {
         case .coreStopped:
             state = .starting
             wantsOn = nil
+            // The restarted core turns dictation on from its switch; a recording it cut short
+            // leaves nothing to resume.
+            suspendedForRecording = false
         case .dictationReady(let ready):
             state = .live(key: ready.key, editKey: ready.editKey)
             keyLost = false

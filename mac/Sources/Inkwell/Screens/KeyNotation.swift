@@ -4,21 +4,38 @@
 // this file only shows a token in Mac notation (⌃⇧Space, Right ⌥, fn, F13) with a name VoiceOver
 // reads ("Control-Shift-Space"), and names a pressed key for the recorder by its keyCode. Letters,
 // digits and punctuation are named by position on an ANSI keyboard, as the core watches them
-// (ink-platform-mac's binding.rs), so what is recorded is what the tap matches.
+// (ink-platform-mac's binding.rs), so what is recorded is what the tap matches; they are shown as
+// the user's own keyboard layout labels that key (display(_:)), so an AZERTY user who presses A
+// sees A, although the token says q.
 import Carbon.HIToolbox
 import Foundation
 
 enum KeyNotation {
-    /// How a token reads: its spoken name and its key cap. A token outside the core's grammar reads
-    /// as itself.
-    static func describe(_ token: String) -> DictationKey {
+    /// How a token reads, with the user's keyboard layout naming the keys that type a character.
+    @MainActor
+    static func display(_ token: String) -> DictationKey {
+        describe(token, layout: KeyboardLayout.character(forKeyCode:))
+    }
+
+    /// How a token reads: its spoken name and its key cap. `layout` names a typing key by what the
+    /// keyboard layout puts on it (nil: by its ANSI position). A token outside the core's grammar
+    /// reads as itself.
+    static func describe(_ token: String, layout: (Int) -> String? = { _ in nil }) -> DictationKey {
         if let alone = modifiersAlone[token] {
             return DictationKey(token: token, name: alone.name, cap: alone.cap)
         }
         let parts = token.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
-        guard let last = parts.last, let key = keys[last] else {
+        // Modifiers with no key (recorded, for the core to refuse): their glyphs.
+        if !parts.isEmpty, parts.allSatisfy({ chordModifiers[$0] != nil }) {
+            return DictationKey(
+                token: token,
+                name: parts.compactMap { chordModifiers[$0]?.name }.joined(separator: "-"),
+                cap: parts.compactMap { chordModifiers[$0]?.cap }.joined())
+        }
+        guard let last = parts.last, let ansi = keys[last] else {
             return DictationKey(token: token, name: token, cap: token)
         }
+        let key = ansi.typed ? ansi.labelled(layout(ansi.keyCode)) : ansi
         var names: [String] = []
         var cap = ""
         var hasFn = false
@@ -76,6 +93,19 @@ enum KeyNotation {
         /// Laptops set the Fn flag on these keys by themselves (the function row, the arrows and
         /// the keys Fn+arrow makes): the recorder does not count it as part of the shortcut.
         var setsFn = false
+        /// It types a character, which the keyboard layout may label otherwise.
+        var typed = false
+
+        /// This key as the layout labels it: `label`, when it is one visible character other than
+        /// its ANSI one, as both cap and name.
+        func labelled(_ label: String?) -> Key {
+            guard let label, label.count == 1,
+                  label.unicodeScalars.allSatisfy({ !CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains($0) })
+            else { return self }
+            let shown = label.uppercased()
+            guard shown != cap else { return self }
+            return Key(token: token, name: shown, cap: shown, keyCode: keyCode, setsFn: setsFn, typed: typed)
+        }
     }
 
     static let allKeys: [Key] = {
@@ -95,8 +125,8 @@ enum KeyNotation {
             kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
             kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20,
         ]
-        var all = letters.map { Key(token: $0.0, name: $0.0.uppercased(), cap: $0.0.uppercased(), keyCode: $0.1) }
-        all += digits.map { Key(token: $0.0, name: $0.0, cap: $0.0, keyCode: $0.1) }
+        var all = letters.map { Key(token: $0.0, name: $0.0.uppercased(), cap: $0.0.uppercased(), keyCode: $0.1, typed: true) }
+        all += digits.map { Key(token: $0.0, name: $0.0, cap: $0.0, keyCode: $0.1, typed: true) }
         all += functionKeys.enumerated().map { i, code in
             Key(token: "f\(i + 1)", name: "F\(i + 1)", cap: "F\(i + 1)", keyCode: code, setsFn: true)
         }
@@ -115,17 +145,19 @@ enum KeyNotation {
             Key(token: "end", name: "End", cap: "\u{2198}", keyCode: kVK_End, setsFn: true),
             Key(token: "page_up", name: "Page Up", cap: "\u{21DE}", keyCode: kVK_PageUp, setsFn: true),
             Key(token: "page_down", name: "Page Down", cap: "\u{21DF}", keyCode: kVK_PageDown, setsFn: true),
-            Key(token: "minus", name: "Minus", cap: "-", keyCode: kVK_ANSI_Minus),
-            Key(token: "equal", name: "Equals", cap: "=", keyCode: kVK_ANSI_Equal),
-            Key(token: "left_bracket", name: "Left Bracket", cap: "[", keyCode: kVK_ANSI_LeftBracket),
-            Key(token: "right_bracket", name: "Right Bracket", cap: "]", keyCode: kVK_ANSI_RightBracket),
-            Key(token: "backslash", name: "Backslash", cap: "\\", keyCode: kVK_ANSI_Backslash),
-            Key(token: "semicolon", name: "Semicolon", cap: ";", keyCode: kVK_ANSI_Semicolon),
-            Key(token: "quote", name: "Quote", cap: "'", keyCode: kVK_ANSI_Quote),
-            Key(token: "comma", name: "Comma", cap: ",", keyCode: kVK_ANSI_Comma),
-            Key(token: "period", name: "Period", cap: ".", keyCode: kVK_ANSI_Period),
-            Key(token: "slash", name: "Slash", cap: "/", keyCode: kVK_ANSI_Slash),
-            Key(token: "grave", name: "Grave Accent", cap: "`", keyCode: kVK_ANSI_Grave),
+            Key(token: "minus", name: "Minus", cap: "-", keyCode: kVK_ANSI_Minus, typed: true),
+            Key(token: "equal", name: "Equals", cap: "=", keyCode: kVK_ANSI_Equal, typed: true),
+            Key(token: "left_bracket", name: "Left Bracket", cap: "[", keyCode: kVK_ANSI_LeftBracket, typed: true),
+            Key(token: "right_bracket", name: "Right Bracket", cap: "]", keyCode: kVK_ANSI_RightBracket, typed: true),
+            Key(token: "backslash", name: "Backslash", cap: "\\", keyCode: kVK_ANSI_Backslash, typed: true),
+            Key(token: "semicolon", name: "Semicolon", cap: ";", keyCode: kVK_ANSI_Semicolon, typed: true),
+            Key(token: "quote", name: "Quote", cap: "'", keyCode: kVK_ANSI_Quote, typed: true),
+            Key(token: "comma", name: "Comma", cap: ",", keyCode: kVK_ANSI_Comma, typed: true),
+            Key(token: "period", name: "Period", cap: ".", keyCode: kVK_ANSI_Period, typed: true),
+            Key(token: "slash", name: "Slash", cap: "/", keyCode: kVK_ANSI_Slash, typed: true),
+            Key(token: "grave", name: "Grave Accent", cap: "`", keyCode: kVK_ANSI_Grave, typed: true),
+            // The key left of 1 on ISO keyboards.
+            Key(token: "section", name: "Section", cap: "\u{00A7}", keyCode: kVK_ISO_Section, typed: true),
         ]
         return all
     }()
@@ -136,13 +168,16 @@ enum KeyNotation {
     static let byKeyCode: [Int: Key] = Dictionary(uniqueKeysWithValues: allKeys.map { ($0.keyCode, $0) })
 
     /// What a shortcut the app knows macOS or most apps take would clash with, said once it is
-    /// saved. Known ones only: macOS has many more, and the user's own apps more still.
-    static func clash(_ token: String) -> String? {
-        let cap = describe(token).cap
-        if let what = systemShortcuts[token] {
+    /// saved. Known ones only: macOS has many more, and the user's own apps more still. `cap` is
+    /// how the shortcut is shown (display(_:)): shortcuts follow the characters on the keys, so
+    /// ⌘Q is Quit wherever the layout puts Q, and the match is by what is shown, not by position.
+    static func clash(_ token: String, cap: String? = nil) -> String? {
+        let cap = cap ?? describe(token).cap
+        let match = { (list: [String: String]) in list.first { describe($0.key).cap == cap }?.value }
+        if let what = match(systemShortcuts) {
             return "\(cap) is the shortcut for \(what), so the two may clash."
         }
-        if let what = appShortcuts[token] {
+        if let what = match(appShortcuts) {
             return "\(cap) is \(what) in most apps; while dictation is on, Inkwell takes it from them."
         }
         return nil
@@ -175,4 +210,30 @@ enum KeyNotation {
         "cmd+h": "Hide", "cmd+m": "Minimize", "cmd+n": "New", "cmd+o": "Open", "cmd+p": "Print",
         "cmd+f": "Find", "cmd+t": "New Tab", "cmd+comma": "Settings",
     ]
+}
+
+/// The user's keyboard layout, for showing a key as it is labelled. Text Input Sources asserts it
+/// runs on the main thread, hence the isolation.
+@MainActor
+enum KeyboardLayout {
+    /// What the key at `keyCode` types with no modifier in the current layout, or nil.
+    static func character(forKeyCode keyCode: Int) -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
+        else { return nil }
+        let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+        var deadKeys: UInt32 = 0
+        var length = 0
+        var chars = [UniChar](repeating: 0, count: 4)
+        let status = data.withUnsafeBytes { buffer -> OSStatus in
+            guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else {
+                return OSStatus(paramErr)
+            }
+            return UCKeyTranslate(
+                layout, UInt16(keyCode), UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+                OptionBits(1 << kUCKeyTranslateNoDeadKeysBit), &deadKeys, chars.count, &length, &chars)
+        }
+        guard status == noErr, length > 0 else { return nil }
+        return String(utf16CodeUnits: chars, count: length)
+    }
 }

@@ -393,7 +393,7 @@ final class ImportNoteModel {
         var lines: [String] = []
         switch note.outcome {
         case .combination:
-            lines.append("Inkwell 0.2 started dictation with \(old), a key combination that wasn\u{2019}t carried over, so Inkwell uses \(currentKey). To keep \(old), record it with \u{201C}Record a shortcut\u{2026}\u{201D} under Dictate, or pick another key.")
+            lines.append("Inkwell 0.2 started dictation with \(old), a key combination that wasn\u{2019}t carried over, so Inkwell uses \(currentKey). To keep \(old), try recording it with \u{201C}Record a shortcut\u{2026}\u{201D} under Dictate, or pick another key.")
         case .otherKey:
             lines.append("Inkwell 0.2\u{2019}s dictation key (\(old)) wasn\u{2019}t carried over, so Inkwell uses \(currentKey). Pick another under Dictate, or record a shortcut, if you like.")
         case .replaced:

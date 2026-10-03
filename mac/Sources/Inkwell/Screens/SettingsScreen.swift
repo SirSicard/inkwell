@@ -292,6 +292,8 @@ private struct DictationSection: View {
                 Toggle("Dictation", isOn: Binding(get: { dictation.isOn }, set: { dictation.setOn($0) }))
                     .toggleStyle(.switch)
                     .labelsHidden()
+                    // Turned on mid-recording, the core would hold the keys the recorder listens for.
+                    .disabled(shortcuts.recording != nil)
                 Text(dictation.isOn ? "The keys below are Inkwell's" : "Off: the keys do what they did before")
                     .foregroundStyle(Theme.secondaryText)
             }
@@ -305,8 +307,9 @@ private struct DictationSection: View {
                         Text(key.name).tag(key.token)
                     }
                     // A recorded key is not a quick pick: it is listed so the picker shows it.
-                    if !DictationModel.keys.contains(where: { $0.token == dictation.key }) {
-                        Text(KeyNotation.describe(dictation.key).cap).tag(dictation.key)
+                    if !DictationModel.keys.contains(where: { $0.token == dictation.key }),
+                       let recorded = DictationModel.key(dictation.key) {
+                        Text(recorded.cap).accessibilityLabel(recorded.name).tag(dictation.key)
                     }
                 }
                 .labelsHidden()
@@ -331,8 +334,9 @@ private struct DictationSection: View {
                     ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
                         Text(key.name).tag(key.token)
                     }
-                    if let edit = dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }) {
-                        Text(KeyNotation.describe(edit).cap).tag(edit)
+                    if let edit = dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }),
+                       let recorded = DictationModel.key(edit) {
+                        Text(recorded.cap).accessibilityLabel(recorded.name).tag(edit)
                     }
                 }
                 .labelsHidden()
@@ -394,19 +398,22 @@ private struct RecordShortcutButton: View {
     private var isChecking: Bool { recorder.checking?.target == target }
 
     var body: some View {
-        Button(isRecording ? "Press the keys\u{2026} (Esc cancels)" : isChecking ? "Checking\u{2026}" : "Record a shortcut\u{2026}") {
+        // Pressed while recording or checking, it cancels: a check the core never answers is
+        // given up after a few seconds anyway (ShortcutRecorderModel.checkTimeout).
+        Button(isRecording ? "Press the keys\u{2026} (Esc cancels)" : isChecking ? "Cancel" : "Record a shortcut\u{2026}") {
             recorder.toggle(target)
         }
-        .disabled(isChecking)
-        .accessibilityLabel(isRecording ? "Recording a shortcut for \(what)" : "Record a shortcut for \(what)")
+        .accessibilityLabel(isRecording
+            ? "Recording a shortcut for \(what)"
+            : isChecking ? "Cancel checking the shortcut for \(what)" : "Record a shortcut for \(what)")
         .accessibilityHint(isRecording
-            ? "Press the keys you want: a right-hand modifier alone, a function key, or modifiers and a key. Escape cancels."
-            : "Then press the keys you want to use.")
+            ? "Press the keys you want: a right-hand modifier alone, a function key, or modifiers and a key. Escape on its own cancels."
+            : isChecking ? "" : "Then press the keys you want to use.")
     }
 }
 
 /// What became of the last recording of a key: why it was refused, or a clash with a shortcut the
-/// app knows. Read out by VoiceOver when it appears.
+/// app knows. VoiceOver hears it from the recorder when it happens, not each time this appears.
 private struct ShortcutMessage: View {
     let recorder: ShortcutRecorderModel
     let target: ShortcutRecorderModel.Target
@@ -418,7 +425,6 @@ private struct ShortcutMessage: View {
                 .foregroundStyle(message.isProblem ? Theme.alert : Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 162)
-                .onAppear { AccessibilityNotification.Announcement(message.text).post() }
         }
     }
 }

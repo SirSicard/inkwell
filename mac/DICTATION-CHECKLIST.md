@@ -75,7 +75,11 @@ rules and the chord hold (`cargo test -p ink-platform-mac hotkey`), and the shel
       holding ⌘Space dictates or opens Spotlight (macOS may take it first). Pick **fn** again.
 - [ ] Edit a selection > Record a shortcut…, then press the dictation key: "… is the dictation
       key. Pick another." Record **⌥⌘E**: the consent dialog asks first, as picking a key does.
-- [ ] While recording, switch to another app (⌘Tab): recording stops and dictation is back on.
+- [ ] While recording, switch to another app (⌘Tab), or click another Inkwell window: recording
+      stops, dictation is back on, and keys typed in the other window reach it.
+- [ ] Switch the keyboard to a layout such as French (AZERTY), record ⌃ + the key labelled A: the
+      cap reads ⌃A, and holding that key dictates. Switch back.
+- [ ] On an ISO keyboard, record ⌃ + the key left of 1 (§): accepted.
 - [ ] VoiceOver: the button reads "Record a shortcut for the dictation key"; while recording,
       "Recording a shortcut for the dictation key" with the hint; a refusal is read out when it
       shows.

@@ -8,6 +8,7 @@
 // Escape cancels. While recording, dictation is off (dictation.disable), or the current key would
 // start a take, and the core's tap would swallow it before the recorder saw it; it comes back on
 // (dictation.enable, after the save) when recording ends, however it ends.
+import AppKit
 import Foundation
 import InkBridge
 import Observation
@@ -126,6 +127,14 @@ final class ShortcutRecorderModel {
     enum Target: Equatable, Sendable {
         case dictation
         case edit
+
+        /// For VoiceOver: "the dictation key".
+        var spoken: String {
+            switch self {
+            case .dictation: "the dictation key"
+            case .edit: "the edit key"
+            }
+        }
     }
 
     /// What shows under a key's row after a recording.
@@ -141,14 +150,27 @@ final class ShortcutRecorderModel {
     /// The latest message per key.
     private(set) var messages: [Target: Message] = [:]
 
-    @ObservationIgnored private var capture = ShortcutCapture()
-    @ObservationIgnored private var nextRef = 0
-    @ObservationIgnored private var ref: String?
-    @ObservationIgnored private let send: SendCommand
-    @ObservationIgnored private let dictation: DictationModel
+    /// How long the core has to answer a check before the recorder gives up on it (the queries
+    /// thread answers in milliseconds; a core that stopped or hung would not).
+    @ObservationIgnored var checkTimeout: Duration = .seconds(5)
+    /// How a token is shown: the user's keyboard layout labels the typing keys.
+    @ObservationIgnored var describe: @MainActor (String) -> DictationKey = { KeyNotation.display($0) }
+    /// Says something to VoiceOver, once, when it happens (never again when the view reappears).
+    @ObservationIgnored var announce: @MainActor (String) -> Void = { text in
+        NSAccessibility.post(
+            element: NSApp as Any, notification: .announcementRequested,
+            userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
     /// Saves a recorded edit key (ScreenModels.chooseEditKey: it asks for consent first when voice
     /// edit is not on yet).
     @ObservationIgnored var saveEditKey: @MainActor (String) -> Void
+
+    @ObservationIgnored private var capture = ShortcutCapture()
+    @ObservationIgnored private var nextRef = 0
+    @ObservationIgnored private var ref: String?
+    @ObservationIgnored private var timeout: Task<Void, Never>?
+    @ObservationIgnored private let send: SendCommand
+    @ObservationIgnored private let dictation: DictationModel
 
     static let refPrefix = "hotkey:"
 
@@ -160,24 +182,23 @@ final class ShortcutRecorderModel {
 
     func message(for target: Target) -> Message? { messages[target] }
 
-    /// Starts recording `target`'s key, or (pressed again) stops.
+    /// Starts recording `target`'s key, or (pressed again, while recording or checking) stops.
     func toggle(_ target: Target) {
-        if recording == target {
+        if recording == target || checking?.target == target {
             cancel()
+            announce("Recording cancelled. The key is unchanged.")
         } else {
             start(target)
         }
     }
 
     func start(_ target: Target) {
-        if recording == nil && checking == nil {
-            dictation.suspendForRecording()
-        }
+        dictation.suspendForRecording()
         recording = target
-        checking = nil
-        ref = nil
+        endCheck()
         capture = ShortcutCapture()
         messages[target] = nil
+        announce("Recording a shortcut for \(target.spoken). Press the keys. Escape on its own cancels.")
     }
 
     /// Escape, the button pressed again, the window gone or the app in the background: nothing
@@ -185,12 +206,11 @@ final class ShortcutRecorderModel {
     func cancel() {
         guard recording != nil || checking != nil else { return }
         recording = nil
-        checking = nil
-        ref = nil
+        endCheck()
         dictation.resumeAfterRecording()
     }
 
-    /// One key event while the window is key. Returns whether the recorder took it (the event
+    /// One key event in the recorder's window. Returns whether the recorder took it (the event
     /// then goes no further: Escape does not close the window, a letter types nothing).
     func feed(_ input: ShortcutCapture.Input) -> Bool {
         guard let target = recording else { return false }
@@ -199,9 +219,10 @@ final class ShortcutRecorderModel {
             break
         case .cancelled:
             cancel()
+            announce("Recording cancelled. The key is unchanged.")
         case .unknownKey:
             recording = nil
-            messages[target] = Message(text: "Inkwell doesn\u{2019}t know that key. Try another.", isProblem: true)
+            show("Inkwell doesn\u{2019}t know that key (keypad and media keys, for one). Try another.", for: target)
             dictation.resumeAfterRecording()
         case .captured(let token):
             recording = nil
@@ -209,7 +230,14 @@ final class ShortcutRecorderModel {
             nextRef += 1
             let ref = "\(Self.refPrefix)\(nextRef)"
             self.ref = ref
+            messages[target] = Message(text: "Checking \(describe(token).cap)\u{2026}", isProblem: false)
             send(.hotkeyCheck(binding: token, ref: ref))
+            let wait = checkTimeout
+            timeout = Task { [weak self] in
+                try? await Task.sleep(for: wait)
+                guard !Task.isCancelled else { return }
+                self?.timedOut(ref)
+            }
         }
         return true
     }
@@ -218,27 +246,24 @@ final class ShortcutRecorderModel {
         switch event {
         case .hotkeyChecked(let checked) where checked.ref != nil && checked.ref == ref:
             guard let (target, token) = checking else { return }
-            checking = nil
-            ref = nil
-            let cap = KeyNotation.describe(token).cap
+            endCheck()
             if checked.ok, let canonical = checked.canonical {
-                save(canonical, for: target, cap: cap)
+                save(canonical, for: target, shown: describe(canonical))
             } else {
-                messages[target] = Message(text: "Can\u{2019}t use \(cap): \(checked.reason ?? "this Mac can\u{2019}t watch it").", isProblem: true)
+                show("Can\u{2019}t use \(describe(token).cap): \(checked.reason ?? "this Mac can\u{2019}t watch it").", for: target)
             }
             dictation.resumeAfterRecording()
         case .commandFailed(let failed) where failed.id != nil && failed.id == ref:
             if let (target, _) = checking {
-                messages[target] = Message(text: "Couldn\u{2019}t check that shortcut. The key before still works.", isProblem: true)
+                endCheck()
+                show("Couldn\u{2019}t check that shortcut. The key before still works.", for: target)
             }
-            checking = nil
-            ref = nil
             dictation.resumeAfterRecording()
         case .coreStopped:
-            // Nothing will answer the check now; dictation is turned on again with the core.
+            // Nothing will answer the check now; the restarted core turns dictation on from its
+            // switch (DictationModel forgets the pause too).
             recording = nil
-            checking = nil
-            ref = nil
+            endCheck()
         default:
             break
         }
@@ -249,23 +274,54 @@ final class ShortcutRecorderModel {
         failed.id?.hasPrefix(Self.refPrefix) ?? false
     }
 
+    private func timedOut(_ ref: String) {
+        guard self.ref == ref, let (target, _) = checking else { return }
+        endCheck()
+        show("Couldn\u{2019}t check that shortcut in time. The key before still works.", for: target)
+        dictation.resumeAfterRecording()
+    }
+
+    /// Forgets the check in flight, and its "Checking…" line.
+    private func endCheck() {
+        if let (target, _) = checking, messages[target]?.isProblem == false {
+            messages[target] = nil
+        }
+        checking = nil
+        ref = nil
+        timeout?.cancel()
+        timeout = nil
+    }
+
+    private func show(_ text: String, for target: Target) {
+        messages[target] = Message(text: text, isProblem: true)
+        announce(text)
+    }
+
     /// The two keys are never one: the core would refuse the edit key, and a key that dictates and
     /// edits at once does neither well.
-    private func save(_ canonical: String, for target: Target, cap: String) {
+    private func save(_ canonical: String, for target: Target, shown key: DictationKey) {
         switch target {
         case .dictation:
             if canonical == dictation.editKey {
-                messages[target] = Message(text: "\(cap) is the edit key. Pick another, or change the edit key first.", isProblem: true)
+                show("\(key.cap) is the edit key. Pick another, or change the edit key first.", for: target)
                 return
             }
             dictation.setKey(canonical)
         case .edit:
             if canonical == dictation.key {
-                messages[target] = Message(text: "\(cap) is the dictation key. Pick another.", isProblem: true)
+                show("\(key.cap) is the dictation key. Pick another.", for: target)
                 return
             }
             saveEditKey(canonical)
         }
-        messages[target] = KeyNotation.clash(canonical).map { Message(text: $0, isProblem: true) }
+        // The edit key may still wait on the consent step, so it is "chosen", not set.
+        let saved = target == .dictation ? "Dictation key set to \(key.name)." : "Edit key chosen: \(key.name)."
+        if let clash = KeyNotation.clash(canonical, cap: key.cap) {
+            messages[target] = Message(text: clash, isProblem: true)
+            announce("\(saved) \(clash)")
+        } else {
+            messages[target] = nil
+            announce(saved)
+        }
     }
 }

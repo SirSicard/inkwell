@@ -313,7 +313,7 @@ final class ImportNoteTests: XCTestCase {
         let note = try? XCTUnwrap(model.note)
         XCTAssertEqual(
             note.map { ImportNoteModel.text($0, currentKey: "fn (Globe)") },
-            "Inkwell 0.2 started dictation with \u{2318}\u{21E7}Space, a key combination that wasn\u{2019}t carried over, so Inkwell uses fn (Globe). To keep \u{2318}\u{21E7}Space, record it with \u{201C}Record a shortcut\u{2026}\u{201D} under Dictate, or pick another key.")
+            "Inkwell 0.2 started dictation with \u{2318}\u{21E7}Space, a key combination that wasn\u{2019}t carried over, so Inkwell uses fn (Globe). To keep \u{2318}\u{21E7}Space, try recording it with \u{201C}Record a shortcut\u{2026}\u{201D} under Dictate, or pick another key.")
         model.dismiss()
         XCTAssertNil(model.note)
         XCTAssertEqual(sent.commands.last, .settingSet(.importKeyNote, "dismissed"))

@@ -3,6 +3,7 @@
 // accepts is saved, and dictation is off while recording. The real core's answers for every key
 // the recorder names are in DictationCoreContractTests; pressing keys in the running app is on
 // mac/DICTATION-CHECKLIST.md.
+import Carbon.HIToolbox
 import Foundation
 import InkBridge
 import XCTest
@@ -44,7 +45,27 @@ final class KeyNotationTests: XCTestCase {
         }
         // Outside the grammar: shown as it is, never dropped.
         XCTAssertEqual(KeyNotation.describe("hyper+x").cap, "hyper+x")
+        // Modifiers with no key (recorded, refused by the core): their glyphs.
+        XCTAssertEqual(KeyNotation.describe("ctrl+shift").cap, "\u{2303}\u{21E7}")
+        XCTAssertEqual(KeyNotation.describe("ctrl+shift").name, "Control-Shift")
+        XCTAssertEqual(KeyNotation.describe("ctrl+section").cap, "\u{2303}\u{00A7}")
         XCTAssertEqual(DictationModel.key("ctrl+shift+space")?.cap, "\u{2303}\u{21E7}Space")
+    }
+
+    /// A typing key shows as the layout labels it (an AZERTY Mac's A sits where ANSI has Q); the
+    /// token stays positional, as the core watches it. Keys that type nothing never change.
+    func testTypingKeysShowAsTheLayoutLabelsThem() {
+        let azerty: (Int) -> String? = { [kVK_ANSI_Q: "a", kVK_ANSI_A: "q", kVK_ANSI_Semicolon: "m", kVK_Space: " "][$0] }
+        let quit = KeyNotation.describe("cmd+q", layout: azerty)
+        XCTAssertEqual(quit.token, "cmd+q")
+        XCTAssertEqual(quit.cap, "\u{2318}A")
+        XCTAssertEqual(quit.name, "Command-A")
+        XCTAssertEqual(KeyNotation.describe("ctrl+semicolon", layout: azerty).cap, "\u{2303}M")
+        XCTAssertEqual(KeyNotation.describe("ctrl+space", layout: azerty).cap, "\u{2303}Space")
+        // A clash follows what is shown: ⌘A on that Mac is Select All, wherever it sits.
+        XCTAssertEqual(
+            KeyNotation.clash("cmd+q", cap: quit.cap),
+            "\u{2318}A is Select All in most apps; while dictation is on, Inkwell takes it from them.")
     }
 
     func testEveryKeyHasOneTokenAndOneKeyCode() {
@@ -129,12 +150,16 @@ final class ShortcutCaptureTests: XCTestCase {
         XCTAssertEqual(run([.keyDown(keyCode: 0x31, flags: F.control, isRepeat: true)]), .listening)
         XCTAssertEqual(run([.keyDown(keyCode: 0x52, flags: F.control, isRepeat: false)]), .unknownKey, "keypad 0")
         XCTAssertEqual(run([.flagsChanged(keyCode: 0x39, flags: 0x1_0000)]), .captured("caps_lock"))
+        XCTAssertEqual(run([.keyDown(keyCode: 0x0A, flags: F.control, isRepeat: false)]), .captured("ctrl+section"), "ISO \u{00A7}")
     }
 }
 
 @MainActor
 final class ShortcutRecorderTests: XCTestCase {
     /// Dictation live on fn, its switch on.
+    /// What the recorder said to VoiceOver.
+    private var heard: [String] = []
+
     private func live(_ sent: Sent) -> ScreenModels {
         let screens = ScreenModels(send: sent.send)
         screens.apply([
@@ -142,7 +167,15 @@ final class ShortcutRecorderTests: XCTestCase {
             event(#"{"type":"dictation.ready","key":"fn"}"#),
         ])
         sent.commands.removeAll()
+        // Keys by ANSI position, whatever layout the test Mac has; VoiceOver as a list.
+        screens.shortcuts.describe = { KeyNotation.describe($0) }
+        heard = []
+        screens.shortcuts.announce = { [unowned self] in self.heard.append($0) }
         return screens
+    }
+
+    private var enable: CoreCommand {
+        .dictationEnable(utcOffsetMinutes: TimeZone.current.secondsFromGMT() / 60, ref: "dictation:3")
     }
 
     private func press(_ recorder: ShortcutRecorderModel, _ keyCode: Int, _ flags: UInt) -> Bool {
@@ -254,6 +287,118 @@ final class ShortcutRecorderTests: XCTestCase {
         screens.apply([failure])
         XCTAssertEqual(recorder.message(for: .dictation)?.text, "Couldn\u{2019}t check that shortcut. The key before still works.")
         XCTAssertEqual(sent.commands.last, .dictationEnable(utcOffsetMinutes: TimeZone.current.secondsFromGMT() / 60, ref: "dictation:3"))
+    }
+
+    /// The core stopped mid-recording: nothing will answer, and the restarted core turns dictation
+    /// on from its switch, so nothing is left paused.
+    func testACoreThatStopsLeavesNothingPaused() {
+        let sent = Sent()
+        let screens = live(sent)
+        screens.shortcuts.start(.dictation)
+        XCTAssertTrue(screens.dictation.suspendedForRecording)
+        screens.apply([event(#"{"type":"core.stopped"}"#)])
+        XCTAssertNil(screens.shortcuts.recording)
+        XCTAssertFalse(screens.dictation.suspendedForRecording)
+        XCTAssertEqual(screens.dictation.status, "Starting\u{2026}")
+        XCTAssertFalse(screens.shortcuts.feed(.keyDown(keyCode: 0x00, flags: 0, isRepeat: false)))
+    }
+
+    /// Nothing turns dictation on while a shortcut is recorded: the switch, Try again, coming back
+    /// to the app. The end of the recording does, once.
+    func testNothingTurnsDictationOnWhileRecording() {
+        let sent = Sent()
+        let screens = live(sent)
+        screens.shortcuts.start(.dictation)
+        let paused = sent.commands.count
+        screens.dictation.enable()
+        screens.dictation.retry()
+        screens.dictation.appBecameActive()
+        screens.dictation.setKey("right_option")
+        XCTAssertFalse(sent.commands.dropFirst(paused).contains { if case .dictationEnable = $0 { true } else { false } })
+        screens.shortcuts.cancel()
+        XCTAssertEqual(sent.commands.filter { if case .dictationEnable = $0 { true } else { false } }.count, 1)
+    }
+
+    /// The switch not read yet when recording starts: still paused, so the first enable waits.
+    func testAPauseBeforeTheSwitchIsReadHoldsTheFirstEnable() {
+        let sent = Sent()
+        let screens = ScreenModels(send: sent.send)
+        screens.shortcuts.announce = { _ in }
+        screens.shortcuts.start(.dictation)
+        screens.apply([event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#)])
+        XCTAssertFalse(sent.commands.contains { if case .dictationEnable = $0 { true } else { false } })
+        screens.shortcuts.cancel()
+        XCTAssertTrue(sent.commands.contains { if case .dictationEnable = $0 { true } else { false } })
+    }
+
+    /// A check the core never answers is given up, and dictation comes back.
+    func testACheckThatIsNeverAnsweredTimesOut() async throws {
+        let sent = Sent()
+        let screens = live(sent)
+        let recorder = screens.shortcuts
+        recorder.checkTimeout = .milliseconds(20)
+        recorder.start(.dictation)
+        _ = press(recorder, 0x69, 0)
+        XCTAssertEqual(recorder.message(for: .dictation)?.text, "Checking F13\u{2026}")
+        XCTAssertEqual(recorder.message(for: .dictation)?.isProblem, false)
+        let until = Date().addingTimeInterval(5)
+        while recorder.checking != nil, Date() < until {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(recorder.checking)
+        XCTAssertEqual(recorder.message(for: .dictation)?.text, "Couldn\u{2019}t check that shortcut in time. The key before still works.")
+        XCTAssertEqual(sent.commands.last, enable)
+        // The answer, late: nothing is saved.
+        screens.apply([event(#"{"type":"hotkey.checked","binding":"f13","ok":true,"canonical":"f13","ref":"hotkey:1"}"#)])
+        XCTAssertFalse(sent.commands.contains(.settingSet(.dictationKey, "f13")))
+    }
+
+    /// The button pressed again while the core checks: cancelled, and a late answer saves nothing.
+    func testACheckCanBeCancelled() {
+        let sent = Sent()
+        let screens = live(sent)
+        let recorder = screens.shortcuts
+        recorder.start(.dictation)
+        _ = press(recorder, 0x69, 0)
+        recorder.toggle(.dictation)
+        XCTAssertNil(recorder.checking)
+        XCTAssertNil(recorder.message(for: .dictation), "the Checking line goes")
+        XCTAssertEqual(sent.commands.last, enable)
+        screens.apply([event(#"{"type":"hotkey.checked","binding":"f13","ok":true,"canonical":"f13","ref":"hotkey:1"}"#)])
+        XCTAssertFalse(sent.commands.contains(.settingSet(.dictationKey, "f13")))
+        XCTAssertEqual(heard.last, "Recording cancelled. The key is unchanged.")
+    }
+
+    /// VoiceOver hears the start, the outcome, and nothing for an answer that is not the
+    /// recorder's.
+    func testVoiceOverHearsEachStepOnce() {
+        let sent = Sent()
+        let screens = live(sent)
+        let recorder = screens.shortcuts
+        recorder.start(.dictation)
+        XCTAssertEqual(heard, ["Recording a shortcut for the dictation key. Press the keys. Escape on its own cancels."])
+        _ = press(recorder, 0x31, F.control | F.shift)
+        screens.apply([event(#"{"type":"hotkey.checked","binding":"ctrl+shift+space","ok":true,"canonical":"ctrl+shift+space","ref":"hotkey:1"}"#)])
+        XCTAssertEqual(heard.last, "Dictation key set to Control-Shift-Space.")
+        let count = heard.count
+        screens.apply([event(#"{"type":"hotkey.checked","binding":"x","ok":false,"reason":"no","ref":"hotkey:7"}"#)])
+        XCTAssertEqual(heard.count, count)
+        recorder.start(.dictation)
+        _ = press(recorder, 0x00, 0)
+        screens.apply([event(#"{"type":"hotkey.checked","binding":"a","ok":false,"reason":"why","ref":"hotkey:2"}"#)])
+        XCTAssertEqual(heard.last, "Can\u{2019}t use A: why.")
+    }
+
+    /// A key Inkwell has no name for (keypad, media keys) is said, and dictation comes back.
+    func testAKeyInkwellCannotNameIsSaid() {
+        let sent = Sent()
+        let screens = live(sent)
+        let recorder = screens.shortcuts
+        recorder.start(.dictation)
+        XCTAssertTrue(press(recorder, 0x52, F.control))
+        XCTAssertNil(recorder.recording)
+        XCTAssertTrue(recorder.message(for: .dictation)?.text.hasPrefix("Inkwell doesn\u{2019}t know that key") ?? false)
+        XCTAssertEqual(sent.commands.last, enable)
     }
 
     func testWithDictationOffRecordingTurnsNothingOnOrOff() {
