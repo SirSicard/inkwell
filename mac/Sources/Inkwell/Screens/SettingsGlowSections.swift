@@ -78,22 +78,112 @@ struct GeneralSection: View {
     }
 }
 
-/// A setting: its name on the left, its controls on the right.
+/// A setting: its name on the left, its controls on the right (above them in a narrow window:
+/// SettingColumns).
 struct SettingRow<Content: View>: View {
     let title: String
     @ViewBuilder var content: Content
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(title).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(title)
+        } controls: {
             VStack(alignment: .leading, spacing: 6) {
                 content
             }
-            Spacer(minLength: 0)
         }
         .font(Typography.body)
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// A Settings row's name and what goes with it: side by side, the name in a 150-pt column and its
+/// first line level with the controls' first line, where the row has room for both; narrower, the
+/// name above the controls, each as wide as the row. Settings sets the window's minimum width (the
+/// hosting controller sizes it from SwiftUI's), and a fixed name column beside fixed-width controls
+/// held that minimum above the window's 720.
+struct SettingColumns<Title: View, Controls: View>: View {
+    /// The name's column, side by side.
+    var titleWidth: CGFloat = SettingColumnsLayout.titleWidth
+    @ViewBuilder var title: Title
+    @ViewBuilder var controls: Controls
+
+    var body: some View {
+        // Each side one subview, whatever it holds.
+        SettingColumnsLayout(titleWidth: titleWidth) {
+            VStack(alignment: .leading, spacing: 0) { title }
+            controls
+        }
+    }
+}
+
+/// SettingColumns' arithmetic: the name and the controls side by side from `sideBySideWidth`,
+/// stacked under it.
+struct SettingColumnsLayout: Layout {
+    static let titleWidth: CGFloat = 150
+    static let spacing: CGFloat = 12
+    /// The least room the controls get beside the name: as much as the dictation keys' controls
+    /// need with their button stacked (KeyControls).
+    static let controlsMinimum: CGFloat = 240
+    /// Between the name and the controls under it.
+    static let stackedSpacing: CGFloat = 4
+
+    var titleWidth: CGFloat = Self.titleWidth
+    var sideBySideWidth: CGFloat { titleWidth + Self.spacing + Self.controlsMinimum }
+
+    private struct Arrangement {
+        var size: CGSize
+        var title: (origin: CGPoint, proposal: ProposedViewSize)
+        var controls: (origin: CGPoint, proposal: ProposedViewSize)
+    }
+
+    private func arrange(_ width: CGFloat?, _ subviews: Subviews) -> Arrangement? {
+        guard subviews.count == 2 else { return nil }
+        let (title, controls) = (subviews[0], subviews[1])
+        // No width proposed (the ideal size): side by side, as on a wide window.
+        if width.map({ $0 >= sideBySideWidth }) ?? true {
+            let titleProposal = ProposedViewSize(width: titleWidth, height: nil)
+            let room = width.map { $0 - titleWidth - Self.spacing }
+            let controlsProposal = ProposedViewSize(width: room, height: nil)
+            let titleSize = title.sizeThatFits(titleProposal)
+            let controlsSize = controls.sizeThatFits(controlsProposal)
+            // The first lines level: whichever's baseline sits lower sets where the other starts.
+            let titleBaseline = title.dimensions(in: titleProposal)[VerticalAlignment.firstTextBaseline]
+            let controlsBaseline = controls.dimensions(in: controlsProposal)[VerticalAlignment.firstTextBaseline]
+            let titleY = max(0, controlsBaseline - titleBaseline)
+            let controlsY = max(0, titleBaseline - controlsBaseline)
+            let natural = titleWidth + Self.spacing + controlsSize.width
+            return Arrangement(
+                size: CGSize(
+                    width: max(width ?? natural, natural),
+                    height: max(titleY + titleSize.height, controlsY + controlsSize.height)),
+                title: (CGPoint(x: 0, y: titleY), titleProposal),
+                controls: (CGPoint(x: titleWidth + Self.spacing, y: controlsY), controlsProposal))
+        }
+        let proposal = ProposedViewSize(width: width, height: nil)
+        let titleSize = title.sizeThatFits(proposal)
+        let controlsSize = controls.sizeThatFits(proposal)
+        let controlsY = titleSize.height + Self.stackedSpacing
+        // As wide as the row, or wider when the controls can't be narrower (the minimum size).
+        let natural = max(titleSize.width, controlsSize.width)
+        return Arrangement(
+            size: CGSize(width: max(width ?? natural, natural), height: controlsY + controlsSize.height),
+            title: (.zero, proposal),
+            controls: (CGPoint(x: 0, y: controlsY), proposal))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width, subviews)?.size ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let arrangement = arrange(bounds.width, subviews) else { return }
+        for (subview, place) in zip(subviews, [arrangement.title, arrangement.controls]) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + place.origin.x, y: bounds.minY + place.origin.y),
+                anchor: .topLeading, proposal: place.proposal)
+        }
     }
 }
 
@@ -116,13 +206,14 @@ struct AppearanceSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             SettingRow(title: "Mode") {
-                // Not fixed in size: at its full width (325 pt on macOS 26) beside the row's title it
-                // would set the Settings screen's minimum width above the window's.
-                Picker("Mode", selection: Binding(get: { theme.settings.mode }, set: { theme.setMode($0) })) {
-                    ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
+                // In a window a segmented control keeps its full width (325 pt on macOS 26), and
+                // that would set Settings' minimum width: a menu where the row is narrower.
+                SegmentsOrMenu {
+                    Picker("Mode", selection: Binding(get: { theme.settings.mode }, set: { theme.setMode($0) })) {
+                        ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             }
             SettingRow(title: "Dots") {
                 Text("\(modeName) keeps its own choice")
@@ -161,12 +252,12 @@ struct AppearanceSection: View {
                     .foregroundStyle(Theme.secondaryText)
             }
             SettingRow(title: "The ink moves") {
-                Picker("The ink moves", selection: Binding(get: { theme.settings.motion }, set: { theme.setMotion($0) })) {
-                    ForEach(GlowTheme.Motion.allCases) { Text($0.title).tag($0) }
+                SegmentsOrMenu {
+                    Picker("The ink moves", selection: Binding(get: { theme.settings.motion }, set: { theme.setMotion($0) })) {
+                        ForEach(GlowTheme.Motion.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
                 Text("Following the system, Reduce Motion holds the orb and the edge still.")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
@@ -177,6 +268,34 @@ struct AppearanceSection: View {
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+/// A row of fields and buttons on one line from `minWidth`, and narrower, one under another.
+/// Crossing the width rebuilds them, so a field being typed in loses the keyboard; what was typed
+/// is kept (it is the caller's state).
+struct LineOrStack<Content: View>: View {
+    let minWidth: CGFloat
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) { content }
+                .frame(minWidth: minWidth, idealWidth: minWidth, maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) { content }
+        }
+    }
+}
+
+/// A picker as segments where its row has room for all of them, else as a menu.
+struct SegmentsOrMenu<Content: View>: View {
+    @ViewBuilder var picker: Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            picker.pickerStyle(.segmented).fixedSize()
+            picker.pickerStyle(.menu).fixedSize()
         }
     }
 }

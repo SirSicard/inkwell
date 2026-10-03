@@ -72,7 +72,7 @@ struct SnippetsSection: View {
     }
 
     private var addForm: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        LineOrStack(minWidth: 480) {
             TextField("Trigger", text: $trigger).frame(width: 150)
             TextField("Text it becomes", text: $expansion, axis: .vertical).lineLimit(1...4)
             TextField("Category", text: $category).frame(width: 110)
@@ -101,28 +101,30 @@ private struct SnippetRow: View {
     let delete: @MainActor () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        SettingColumns {
             Text(verbatim: row.trigger)
                 .font(.system(.body, design: .monospaced, weight: .semibold))
                 .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
-                .frame(width: 150, alignment: .leading)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: row.expansion)
-                    .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
-                    .lineLimit(3)
-                if !row.category.isEmpty {
-                    Paper.Chip(text: row.category)
+        } controls: {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: row.expansion)
+                        .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
+                        .lineLimit(3)
+                    if !row.category.isEmpty {
+                        Paper.Chip(text: row.category)
+                    }
                 }
+                Spacer(minLength: 0)
+                // Plain closures around the model's calls: Swift 6.3 (the CI runner's) crashes on a
+                // main-actor function handed to Binding's setter.
+                Toggle("On", isOn: Binding(get: { row.enabled }, set: { setEnabled($0) }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .controlSize(.small)
+                Button("Edit") { edit() }
+                Button("Delete", role: .destructive) { delete() }
             }
-            Spacer(minLength: 0)
-            // Plain closures around the model's calls: Swift 6.3 (the CI runner's) crashes on a
-            // main-actor function handed to Binding's setter.
-            Toggle("On", isOn: Binding(get: { row.enabled }, set: { setEnabled($0) }))
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .controlSize(.small)
-            Button("Edit") { edit() }
-            Button("Delete", role: .destructive) { delete() }
         }
         .font(Typography.body)
         .padding(.vertical, 8)
@@ -147,29 +149,35 @@ struct VoiceCommandsSection: View {
             if let failure = commands.failure {
                 FailureLine(text: failure, canStartOver: commands.unreadable, startOver: { commands.startOver() })
             }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Voice commands").frame(width: 150, alignment: .leading)
-                Toggle("Voice commands", isOn: Binding(get: { commands.enabled }, set: { commands.setEnabled($0) }))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .disabled(!commands.loaded)
-                Text(commands.enabled
-                    ? "Say \u{201C}\(commands.wakePrefix)\u{201D}, then a command"
-                    : "Off: everything you say is dictated")
-                    .foregroundStyle(Theme.secondaryText)
+            SettingColumns {
+                Text("Voice commands")
+            } controls: {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Toggle("Voice commands", isOn: Binding(get: { commands.enabled }, set: { commands.setEnabled($0) }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!commands.loaded)
+                    Text(commands.enabled
+                        ? "Say \u{201C}\(commands.wakePrefix)\u{201D}, then a command"
+                        : "Off: everything you say is dictated")
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
             .font(Typography.body)
             .accessibilityElement(children: .contain)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Wake word").frame(width: 150, alignment: .leading)
-                TextField("Wake word", text: $wake)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 160)
-                    .onSubmit { commands.setWakePrefix(wake) }
-                    .disabled(!commands.loaded)
-                Button("Save") { commands.setWakePrefix(wake) }
-                    .disabled(!commands.loaded || wake.trimmingCharacters(in: .whitespaces).isEmpty
-                        || wake.trimmingCharacters(in: .whitespaces).lowercased() == commands.wakePrefix)
+            SettingColumns {
+                Text("Wake word")
+            } controls: {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    TextField("Wake word", text: $wake)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 160)
+                        .onSubmit { commands.setWakePrefix(wake) }
+                        .disabled(!commands.loaded)
+                    Button("Save") { commands.setWakePrefix(wake) }
+                        .disabled(!commands.loaded || wake.trimmingCharacters(in: .whitespaces).isEmpty
+                            || wake.trimmingCharacters(in: .whitespaces).lowercased() == commands.wakePrefix)
+                }
             }
             .font(Typography.body)
             .onAppear { wake = commands.wakePrefix }
@@ -190,7 +198,7 @@ struct VoiceCommandsSection: View {
     }
 
     private var addForm: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        LineOrStack(minWidth: 520) {
             TextField("Phrases, comma-separated", text: $triggers).frame(width: 200)
             Picker("Does", selection: $action) {
                 Text("Type text").tag(CommandAction.insertText)
@@ -221,27 +229,29 @@ private struct CommandRow: View {
     let delete: @MainActor () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        SettingColumns(titleWidth: 220) {
             Text(verbatim: row.triggers.joined(separator: " \u{00B7} "))
                 .font(.system(.body, design: .monospaced))
                 .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
-                .frame(width: 220, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: VoiceCommandsModel.describe(row))
-                    .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
-                    .lineLimit(2)
-                if !row.carriedOut {
-                    Text("Its action comes in a later version. While on, saying it types nothing.")
-                        .font(Typography.caption)
-                        .foregroundStyle(Theme.secondaryText)
+        } controls: {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: VoiceCommandsModel.describe(row))
+                        .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
+                        .lineLimit(2)
+                    if !row.carriedOut {
+                        Text("Its action comes in a later version. While on, saying it types nothing.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
                 }
+                Spacer(minLength: 0)
+                Toggle("On", isOn: Binding(get: { row.enabled }, set: { setEnabled($0) }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .controlSize(.small)
+                Button("Delete", role: .destructive) { delete() }
             }
-            Spacer(minLength: 0)
-            Toggle("On", isOn: Binding(get: { row.enabled }, set: { setEnabled($0) }))
-                .toggleStyle(.switch)
-                .labelsHidden()
-                .controlSize(.small)
-            Button("Delete", role: .destructive) { delete() }
         }
         .font(Typography.body)
         .padding(.vertical, 8)
