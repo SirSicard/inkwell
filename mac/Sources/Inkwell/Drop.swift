@@ -106,6 +106,8 @@ final class DropController {
     /// What is live comes first; then a note (for its few seconds); then an offer.
     func update() {
         if let theme {
+            // The theme's palette as it is: at rest (a note, an offer) the Drop's orb leans
+            // toward the preset too. It sits beside the text, not under it.
             content.inkView.palette = theme.palette
             content.inkView.motionStill = theme.motionStill
         }

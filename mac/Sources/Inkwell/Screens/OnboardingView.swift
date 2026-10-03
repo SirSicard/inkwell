@@ -103,10 +103,12 @@ struct OnboardingView: View {
     /// violet, a shade made for the other paper). Each mode's own is made to sit quietly behind
     /// text; beside it on the sheet the resting orb was all but invisible: about 1.3:1 at best in
     /// Light ("its orb didn't show"), and in Dark one bright speck with the disc around it under
-    /// 2:1.
+    /// 2:1. It rests untinted: leaning toward the dots, as the main window's orb does, lightens it
+    /// on Light's paper until the disc is gone again (Aurora and Lagoon at 0.15, a few pixels).
     static func orbPalette(_ palette: OrbPalette, dark: Bool) -> OrbPalette {
         var palette = palette
         palette.idle = SIMD3<Float>(GlowColours.rgb(Glow.mode(dark: !dark).idleOrb))
+        palette.restTint = 0
         return palette
     }
 

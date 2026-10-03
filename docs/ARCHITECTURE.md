@@ -44,8 +44,12 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
 8. **One event schema.** Events are defined once in `schema/`, and the Swift and C# types are
    generated from it.
 9. **Draw nothing when idle.** The ink renders only while something is live; idle is a still frame.
-   No polling timers. The live icon's recording pulse is a state animation, not polling: it runs
-   only while a meeting records and someone can see the screen, and stops the moment either ends.
+   One exception, always answering the user: the main window's orb glides to a new spot for 2.4 s
+   when the window comes on screen or is uncovered, when its screen changes, and when the window
+   becomes key after 2.5 min in one spot. No polling timers: a window left alone draws nothing
+   (the shell budget's idle phase never activates the window). The live icon's recording pulse is
+   a state animation, not polling: it runs only while a meeting records and someone can see the
+   screen, and stops the moment either ends.
 10. **Engines per job**, chosen by measurement (word error rate on public human-labelled sets:
     AMI meetings and FLEURS English). The models are listed in [MODEL-WEIGHTS.md](MODEL-WEIGHTS.md).
     - Dictation final and meeting final: Qwen3-ASR 1.7B via llama.cpp (Metal on the Mac, Vulkan or
