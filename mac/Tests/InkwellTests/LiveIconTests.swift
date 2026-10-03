@@ -43,6 +43,27 @@ final class StatusGlyphTests: XCTestCase {
         }
     }
 
+    /// While the overlay shows a coloured orb, the mark has none of its own: the breath then fades
+    /// the colour toward the menu bar, never toward the template's dot (which read as brown).
+    func testTheMarkGoesHollowUnderAColouredOrb() throws {
+        XCTAssertTrue(StatusGlyph.markHasOrb(under: .rest))
+        XCTAssertTrue(StatusGlyph.markHasOrb(under: .ring(0.5)), "the ring leaves the orb as it is")
+        XCTAssertFalse(StatusGlyph.markHasOrb(under: .glow(.you)))
+        XCTAssertFalse(StatusGlyph.markHasOrb(under: .pulse(.them)))
+        XCTAssertFalse(StatusGlyph.markHasOrb(under: .glow(.alert)))
+
+        let hollow = StatusGlyph.image(orb: false)
+        XCTAssertTrue(hollow.isTemplate)
+        XCTAssertEqual(Set(hollow.representations.map(\.pixelsWide)), [18, 36])
+        for scale in [1, 2] {
+            let rep = try XCTUnwrap(hollow.representations.first { $0.pixelsWide == 18 * scale } as? NSBitmapImageRep)
+            let side = 18 * scale
+            let g = StatusGlyph.geometry(scale: scale)
+            XCTAssertEqual(rep.colorAt(x: side / 2, y: side / 2)?.alphaComponent ?? -1, 0, accuracy: 0.001, "\(scale)x: no orb")
+            XCTAssertEqual(rep.colorAt(x: side / 2, y: g.inset)?.alphaComponent ?? -1, 1, accuracy: 0.001, "\(scale)x: the rim")
+        }
+    }
+
     /// The same mark at both scales: the rim spans the same points, as a symbol's weights do.
     func testBothScalesDrawTheSameMark() {
         let one = StatusGlyph.geometry(scale: 1)
@@ -597,7 +618,8 @@ final class LiveIconRenderTests: XCTestCase {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let looks: [(String, LiveIconLook, Double)] = [
             ("idle", .rest, 1), ("dictating", .glow(.you), 1), ("recording-breath-in", .pulse(.them), 1),
-            ("recording-breath-out", .pulse(.them), LiveIcon.breathLow), ("final-pass-indeterminate", .ring(nil), 1),
+            ("recording-mid-breath", .pulse(.them), 0.5), ("recording-breath-out", .pulse(.them), 0),
+            ("final-pass-indeterminate", .ring(nil), 1),
             ("final-pass-50", .ring(0.5), 1), ("problem", .glow(.alert), 1),
         ]
         // An item's cell on a 24 pt menu bar, at 2x. The menu bar's own material is approximated
@@ -625,21 +647,34 @@ final class LiveIconRenderTests: XCTestCase {
             appearance.performAsCurrentDrawingAppearance {
                 (bar == .darkAqua ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
                 NSRect(origin: .zero, size: strip.size).fill()
-                let mark = StatusGlyph.image()
-                let tinted = NSImage(size: mark.size, flipped: false) { rect in
-                    mark.draw(in: rect)
-                    NSColor.labelColor.setFill()
-                    rect.fill(using: .sourceAtop)
-                    return true
+                func tinted(_ mark: NSImage) -> NSImage {
+                    NSImage(size: mark.size, flipped: false) { rect in
+                        mark.draw(in: rect)
+                        NSColor.labelColor.setFill()
+                        rect.fill(using: .sourceAtop)
+                        return true
+                    }
                 }
                 for (i, look) in looks.enumerated() {
                     let origin = CGPoint(x: CGFloat(i) * cell.width, y: 0)
+                    let tinted = tinted(StatusGlyph.image(orb: StatusGlyph.markHasOrb(under: look.1)))
                     tinted.draw(in: StatusGlyphOverlay.glyphRect(in: NSRect(origin: .zero, size: cell)).offsetBy(dx: origin.x, dy: 0))
                     overlay.show(LiveIconFrame(look: look.1, colours: colours, strength: look.2))
                     guard !overlay.isHidden, let rep = overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds) else { continue }
+                    // The view's drawing alone; the breathing orb is laid over it below.
+                    overlay.breathing.removeFromSuperlayer()
                     overlay.cacheDisplay(in: overlay.bounds, to: rep)
+                    overlay.layer?.addSublayer(overlay.breathing)
                     rep.draw(in: NSRect(origin: origin, size: cell), from: .zero, operation: .sourceOver,
-                             fraction: look.2, respectFlipped: false, hints: nil)
+                             fraction: 1, respectFlipped: false, hints: nil)
+                    // The breathing orb, at the breath's opacity: 1 breathed in, 0 breathed out.
+                    if look.1.pulses, let cg = NSGraphicsContext.current?.cgContext {
+                        cg.saveGState()
+                        cg.translateBy(x: origin.x, y: origin.y)
+                        cg.setAlpha(look.2)
+                        overlay.breathing.render(in: cg)
+                        cg.restoreGState()
+                    }
                 }
             }
             NSGraphicsContext.restoreGraphicsState()
@@ -711,10 +746,21 @@ final class StatusGlyphOverlayTests: XCTestCase {
         let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
         XCTAssertTrue(overlay.breathesItself)
         overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
-        let breath = try XCTUnwrap(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey) as? CABasicAnimation)
+        let breath = try XCTUnwrap(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey) as? CABasicAnimation)
         XCTAssertEqual(breath.keyPath, "opacity")
         XCTAssertEqual(breath.fromValue as? Double, 1)
-        XCTAssertEqual(breath.toValue as? Double, LiveIcon.breathLow)
+        XCTAssertEqual(breath.toValue as? Double, 0, "the colour fades into its tint")
+        XCTAssertFalse(overlay.breathing.isHidden)
+        let fill = try XCTUnwrap(overlay.breathing.fillColor.flatMap { NSColor(cgColor: $0)?.usingColorSpace(.sRGB) })
+        XCTAssertLessThan(distance(GlowColours.RGB(fill.redComponent, fill.greenComponent, fill.blueComponent), colours.shown.them), 0.01)
+        // Beneath it, the tint: the colour lighter, never darker, so never brown. (Seen with the
+        // breathing orb taken off, as at the bottom of a breath; caching a view's display draws a
+        // hidden sublayer all the same.)
+        overlay.breathing.removeFromSuperlayer()
+        let (tint, _) = colour(try snapshot(overlay), at: CGPoint(x: 9, y: 9), in: overlay)
+        overlay.layer?.addSublayer(overlay.breathing)
+        XCTAssertLessThan(distance(tint, GlowColours.partner(colours.shown.them)), 0.05)
+        XCTAssertGreaterThan(GlowColours.luminance(tint), GlowColours.luminance(colours.shown.them))
         XCTAssertTrue(breath.autoreverses)
         XCTAssertEqual(breath.duration, LiveIcon.breathPeriod / 2)
         XCTAssertEqual(breath.repeatCount, .infinity)
@@ -725,11 +771,12 @@ final class StatusGlyphOverlayTests: XCTestCase {
         XCTAssertEqual(overlay.redraws, 1, "the same pulse again: nothing")
 
         overlay.show(LiveIconFrame(look: .glow(.them), colours: colours, strength: 1))
-        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey), "stopped with the recording")
+        XCTAssertNil(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey), "stopped with the recording")
+        XCTAssertTrue(overlay.breathing.isHidden)
         XCTAssertEqual(overlay.redraws, 2, "a new look is drawn")
         overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
         overlay.show(LiveIconFrame(look: .rest, colours: colours, strength: 1))
-        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey))
+        XCTAssertNil(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey))
     }
 
     /// Asleep or locked, the breath is taken off the layer; awake, it is put back.
@@ -737,11 +784,11 @@ final class StatusGlyphOverlayTests: XCTestCase {
         let overlay = StatusGlyphOverlay(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
         overlay.show(LiveIconFrame(look: .pulse(.them), colours: colours, strength: 1))
         overlay.setAwake(false)
-        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey))
+        XCTAssertNil(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey))
         overlay.show(LiveIconFrame(look: .pulse(.you), colours: colours, strength: 1))
-        XCTAssertNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey), "still asleep")
+        XCTAssertNil(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey), "still asleep")
         overlay.setAwake(true)
-        XCTAssertNotNil(overlay.layer?.animation(forKey: StatusGlyphOverlay.breathKey))
+        XCTAssertNotNil(overlay.breathing.animation(forKey: StatusGlyphOverlay.breathKey))
     }
 
     func testItTakesNoClicksAndSaysNothing() {

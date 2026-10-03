@@ -25,6 +25,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, LiveIconSurface {
     private let loginItem = NSMenuItem(title: "Open at Login", action: nil, keyEquivalent: "")
     /// The live state over the mark.
     private let overlay = StatusGlyphOverlay(frame: .zero)
+    /// The mark, and the mark without its orb (while the overlay colours the orb).
+    private let mark = StatusGlyph.image()
+    private let hollowMark = StatusGlyph.image(orb: false)
 
     /// `checkForUpdates`: the updater's item, nil when this build does not update itself.
     init(
@@ -40,7 +43,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, LiveIconSurface {
         super.init()
 
         if let button = item.button {
-            button.image = StatusGlyph.image()
+            button.image = mark
             button.toolTip = "Inkwell"
             overlay.frame = button.bounds
             overlay.autoresizingMask = [.width, .height]
@@ -85,6 +88,8 @@ final class StatusItemController: NSObject, NSMenuDelegate, LiveIconSurface {
     var breathesItself: Bool { overlay.breathesItself }
 
     func show(_ frame: LiveIconFrame) {
+        let image = StatusGlyph.markHasOrb(under: frame.look) ? mark : hollowMark
+        if let button = item.button, button.image !== image { button.image = image }
         overlay.show(frame)
     }
 

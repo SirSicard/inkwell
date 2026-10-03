@@ -38,18 +38,28 @@ enum StatusGlyph {
     /// The orb, in points: where a state colour is laid over it.
     static let orb = NSRect(x: 6, y: 6, width: 6, height: 6)
 
-    /// The template image, with a bitmap for each scale.
-    static func image() -> NSImage {
+    /// Whether the mark draws its own orb under `look`. Not while the overlay colours the orb: the
+    /// breath fades that colour, and over the template's dot it would fade toward the dot (a
+    /// brownish orb on a light menu bar); over nothing it fades toward the menu bar.
+    static func markHasOrb(under look: LiveIconLook) -> Bool {
+        switch look {
+        case .rest, .ring: true
+        case .glow, .pulse: false
+        }
+    }
+
+    /// The template image, with a bitmap for each scale; `orb: false` draws the rim alone.
+    static func image(orb: Bool = true) -> NSImage {
         let image = NSImage(size: NSSize(width: size, height: size))
         for scale in [1, 2] {
-            if let rep = draw(scale: scale) { image.addRepresentation(rep) }
+            if let rep = draw(scale: scale, orb: orb) { image.addRepresentation(rep) }
         }
         image.isTemplate = true
         image.accessibilityDescription = "Inkwell"
         return image
     }
 
-    private static func draw(scale: Int) -> NSBitmapImageRep? {
+    private static func draw(scale: Int, orb: Bool) -> NSBitmapImageRep? {
         let side = Int(size) * scale
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8, samplesPerPixel: 4,
@@ -69,8 +79,10 @@ enum StatusGlyph {
         rim.addRoundedRect(in: inner, cornerWidth: innerCorner, cornerHeight: innerCorner)
         cg.addPath(rim)
         cg.fillPath(using: .evenOdd)
-        let orbOrigin = (side - g.orb) / 2
-        cg.fillEllipse(in: CGRect(x: orbOrigin, y: orbOrigin, width: g.orb, height: g.orb))
+        if orb {
+            let orbOrigin = (side - g.orb) / 2
+            cg.fillEllipse(in: CGRect(x: orbOrigin, y: orbOrigin, width: g.orb, height: g.orb))
+        }
         context.flushGraphics()
         rep.size = NSSize(width: size, height: size)
         return rep
@@ -82,14 +94,19 @@ enum StatusGlyph {
 /// glyph, which would lose the template's tinting for the menu bar, the wallpaper and an inactive
 /// display:
 ///
-///   glow, pulse   the orb in the state's colour (the pulse is a layer animation of this view's
-///                 opacity, run by the render server: nothing redraws, the app never wakes)
+///   glow          the orb in the state's colour, the mark drawn hollow beneath it
+///   pulse         the same orb breathing between the colour and its lighter tint: a shape layer
+///                 in the colour over the tint, its opacity animated by the render server, so
+///                 nothing redraws and the app never wakes. It never fades toward the template's
+///                 dot or a dark menu bar, either of which turned the colour brown.
 ///   ring          the rim filled clockwise from the top with the final pass, in their colour
 ///
 /// It takes no clicks and is not an accessibility element: the button's label says the state.
 final class StatusGlyphOverlay: NSView {
-    /// The breath's animation, on the layer.
+    /// The breath's animation, on `breathing`.
     static let breathKey = "inkwell.breath"
+    /// The orb in the pulse's colour, over its tint: the layer the breath fades.
+    let breathing = CAShapeLayer()
 
     private var shown = LiveIconFrame(look: .rest, colours: .unset, strength: 1)
     /// Someone can see the screen: the breath runs only then.
@@ -101,6 +118,8 @@ final class StatusGlyphOverlay: NSView {
         super.init(frame: frame)
         // Layer-backed, so the pulse's opacity is composited, never redrawn.
         wantsLayer = true
+        breathing.isHidden = true
+        layer?.addSublayer(breathing)
         isHidden = true
         setAccessibilityElement(false)
     }
@@ -130,7 +149,31 @@ final class StatusGlyphOverlay: NSView {
             needsDisplay = true
         }
         isHidden = frame.look == .rest
+        placeBreathing()
         breathe(frame.look.pulses && awake)
+    }
+
+    override func layout() {
+        super.layout()
+        placeBreathing()
+    }
+
+    /// Puts the breathing orb over the drawn tint while a pulse shows, hidden otherwise; set
+    /// without the layer's implicit animations.
+    private func placeBreathing() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        guard case .pulse(let tone) = shown.look else {
+            breathing.isHidden = true
+            breathing.path = nil
+            return
+        }
+        let glyph = backingAlignedRect(Self.glyphRect(in: bounds), options: .alignAllEdgesNearest)
+        breathing.frame = bounds
+        breathing.path = CGPath(ellipseIn: StatusGlyph.orb.offsetBy(dx: glyph.minX, dy: glyph.minY), transform: nil)
+        breathing.fillColor = Self.colour(tone, shown.colours.shown).cgColor
+        breathing.isHidden = false
     }
 
     /// Asleep or locked, the breath comes off the layer, so the render server has nothing to run.
@@ -139,15 +182,16 @@ final class StatusGlyphOverlay: NSView {
         breathe(shown.look.pulses && awake)
     }
 
-    /// Starts or stops the breath: the layer's opacity from full to `breathLow` and back over a
-    /// breath, asking the render server for the pulse's low rate rather than the display's.
+    /// Starts or stops the breath: the coloured orb's opacity from full to nothing (the tint
+    /// beneath) and back over a breath, asking the render server for the pulse's low rate rather
+    /// than the display's.
     private func breathe(_ on: Bool) {
-        guard let layer else { return }
+        let layer = breathing
         let running = layer.animation(forKey: Self.breathKey) != nil
         if on && !running {
             let breath = CABasicAnimation(keyPath: "opacity")
             breath.fromValue = 1.0
-            breath.toValue = LiveIcon.breathLow
+            breath.toValue = 0.0
             breath.duration = LiveIcon.breathPeriod / 2
             breath.autoreverses = true
             breath.repeatCount = .infinity
@@ -170,10 +214,15 @@ final class StatusGlyphOverlay: NSView {
         switch shown.look {
         case .rest:
             break
-        case .glow(let tone), .pulse(let tone):
-            // Half a point over the template's orb all round, so no edge of it shows through.
-            let orb = StatusGlyph.orb.offsetBy(dx: glyph.minX, dy: glyph.minY).insetBy(dx: -0.5, dy: -0.5)
+        case .glow(let tone):
+            // In the orb's own place: the mark has none of its own meanwhile (markHasOrb).
+            let orb = StatusGlyph.orb.offsetBy(dx: glyph.minX, dy: glyph.minY)
             Self.colour(tone, shownColours).setFill()
+            NSBezierPath(ovalIn: orb).fill()
+        case .pulse(let tone):
+            // The tint the breath fades to; the colour itself is `breathing`, over it.
+            let orb = StatusGlyph.orb.offsetBy(dx: glyph.minX, dy: glyph.minY)
+            Self.tint(tone, shownColours).setFill()
             NSBezierPath(ovalIn: orb).fill()
         case .ring(let progress):
             // Exactly over the rim as this scale's bitmap draws it (2 pt at 1x, 1.5 pt at 2x).
@@ -203,6 +252,17 @@ final class StatusGlyphOverlay: NSView {
 
     /// The alert colour resolves against the menu bar's appearance as it draws, so it reads on a
     /// light or a dark menu bar; yours and theirs are the mode shown's, as every other dot.
+    /// The colour's lighter shade (the orb's second shade, GlowColours.partner): still the colour,
+    /// lighter, so the breath reads on a light and a dark menu bar alike.
+    static func tint(_ tone: LiveIconLook.Tone, _ pair: LiveIconColours.Pair) -> NSColor {
+        switch tone {
+        case .you: GlowColours.nsColor(GlowColours.partner(pair.you))
+        case .them: GlowColours.nsColor(GlowColours.partner(pair.them))
+        // The alert never breathes; were it to, it would hold its colour.
+        case .alert: colour(tone, pair)
+        }
+    }
+
     private static func colour(_ tone: LiveIconLook.Tone, _ pair: LiveIconColours.Pair) -> NSColor {
         switch tone {
         case .you: GlowColours.nsColor(pair.you)
