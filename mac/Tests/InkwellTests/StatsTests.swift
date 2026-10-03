@@ -358,3 +358,37 @@ final class StatsSettingsTests: XCTestCase {
         XCTAssertLessThanOrEqual(fitted.width, 680.5)
     }
 }
+
+/// A milestone's glow and line wait for the window to be on screen, and the glow never moves under
+/// "Always still" or Reduce Motion: only the line shows then.
+@MainActor
+final class MilestoneCelebrationTests: XCTestCase {
+    func testTheCelebrationWaitsForTheWindowAndStillMeansNoGlow() throws {
+        var sent: [CoreCommand] = []
+        let stats = StatsModel(send: { sent.append($0) })
+        stats.checkMilestones()
+        let ref = try XCTUnwrap(sent.last?.commandID)
+        stats.apply(event(#"{"type":"milestones.reached","ref":"\#(ref)","milestones":[{"id":"words_10000","kind":"words","threshold":10000,"reached":true}]}"#))
+        let pending = try XCTUnwrap(stats.celebration)
+        XCTAssertNil(MilestoneCelebration.showing(pending, onScreen: false), "nothing shows unseen")
+        XCTAssertEqual(MilestoneCelebration.showing(pending, onScreen: true), pending)
+        XCTAssertTrue(MilestoneCelebration.glows(still: false, reduceMotion: false))
+        XCTAssertFalse(MilestoneCelebration.glows(still: true, reduceMotion: false), "Always still")
+        XCTAssertFalse(MilestoneCelebration.glows(still: false, reduceMotion: true), "Reduce Motion")
+    }
+
+    /// The line and the glow lay out over the window without asking for room of their own.
+    func testTheNoteFitsTheNarrowestWindow() throws {
+        var sent: [CoreCommand] = []
+        let stats = StatsModel(send: { sent.append($0) })
+        stats.checkMilestones()
+        let ref = try XCTUnwrap(sent.last?.commandID)
+        stats.apply(event(#"{"type":"milestones.reached","ref":"\#(ref)","milestones":[{"id":"words_100000","kind":"words","threshold":100000,"reached":true}]}"#))
+        let celebration = try XCTUnwrap(stats.celebration)
+        let note = NSHostingController(rootView: MilestoneNote(celebration: celebration, stats: stats))
+        XCTAssertLessThanOrEqual(note.sizeThatFits(in: CGSize(width: 720, height: 200)).width, 520.5)
+        let glow = NSHostingController(rootView: MilestoneGlow(
+            serial: celebration.serial, you: .blue, them: .orange, placement: Glow.Orb.main, glows: true))
+        XCTAssertEqual(glow.sizeThatFits(in: .zero), .zero, "it takes whatever room the window has, and asks for none")
+    }
+}
