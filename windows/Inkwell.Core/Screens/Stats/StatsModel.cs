@@ -61,6 +61,17 @@ public sealed class StatsModel : ObservableModel
         ShellSetting.StatsTypingWpm.CommandId(),
     };
 
+    /// <summary>Settings > Stats' words (the Mac's StatsSettingsSection, in Windows terms).</summary>
+    public const string CelebrateTitle = "Celebrate milestones";
+    public const string CelebrateDetail = "A quiet glow on the orb and one line, once for each milestone: 1,000 to 100,000 words, and streaks of 7, 30 and 100 active days. With Always still or Windows' animation effects off, only the line.";
+    public const string TypingTitle = "Typing speed";
+    public const string TypingDetail = "Time saved is typing the same words at this speed, less the time spent speaking.";
+    public const string SettingsFailedText = "Couldn't read or save a Stats setting. It may not be what it shows.";
+    public const string WhereText = "Counted on this PC from your library. Nothing is sent, and nothing is compared with anyone.";
+
+    /// <summary>The typing speed as Narrator reads it.</summary>
+    public static string TypingSpoken(int wpm) => $"{wpm} words per minute";
+
     /// <summary>The prefix of stats.get's refs, and of milestones.check's.</summary>
     public const string StatsRefPrefix = "stats-";
     public const string MilestonesRefPrefix = "milestones-";

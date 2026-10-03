@@ -362,6 +362,18 @@ public class StatsModelTests
         Assert.Equal(["stats.get"], rig.Names());
     }
 
+    /// <summary>Settings > Stats says what each setting does, in Windows terms, and where the numbers are counted.</summary>
+    [Fact]
+    public void SettingsSaysWhatEachSettingDoes()
+    {
+        Assert.Equal("Celebrate milestones", StatsModel.CelebrateTitle);
+        Assert.EndsWith("With Always still or Windows' animation effects off, only the line.", StatsModel.CelebrateDetail, StringComparison.Ordinal);
+        Assert.Equal("Time saved is typing the same words at this speed, less the time spent speaking.", StatsModel.TypingDetail);
+        Assert.Equal("Counted on this PC from your library. Nothing is sent, and nothing is compared with anyone.", StatsModel.WhereText);
+        Assert.Equal("40 words per minute", StatsModel.TypingSpoken(40));
+        Assert.DoesNotContain("Mac", StatsModel.CelebrateDetail + StatsModel.WhereText, StringComparison.Ordinal);
+    }
+
     /// <summary>The hub routes the events to the model and lets it show its own failures.</summary>
     [Fact]
     public void TheScreensCarryStats()

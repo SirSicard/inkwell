@@ -112,6 +112,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("Voice commands", new VoiceCommandsSection(models.VoiceCommands)),
             new("AI", new AiSection(models.Ai, models.Cloud)),
             new("Meetings", new MeetingsSection(models.Meetings)),
+            new("Stats", new StatsSettingsSection(models.Stats)),
             new("Models", new ModelsSection(models.Catalogue)),
             new("Storage", new StorageSection(models.Storage, models.Meetings)),
             new("About", new AboutSection(models.About)),
