@@ -335,3 +335,26 @@ final class StatsLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(fitted.width, width + 0.5)
     }
 }
+
+/// Settings > Stats sits after Meetings, and says when a setting could not be read or saved.
+@MainActor
+final class StatsSettingsTests: XCTestCase {
+    func testSettingsHasAStatsSectionAfterMeetings() throws {
+        let all = SettingsSection.allCases
+        let meetings = try XCTUnwrap(all.firstIndex(of: .meetings))
+        XCTAssertEqual(all[meetings + 1], .stats)
+        XCTAssertEqual(SettingsSection.stats.title, "Stats")
+    }
+
+    func testTheSectionFitsSettingsColumnWithItsFailureLine() throws {
+        let stats = StatsModel(send: { _ in })
+        guard case .commandFailed(let failed) = event(#"{"type":"command.failed","command":"setting.get","id":"setting:stats.typing_wpm","message":"x"}"#) else {
+            return XCTFail("not a failure")
+        }
+        stats.apply(.commandFailed(failed))
+        XCTAssertTrue(stats.settingsFailed)
+        let hosting = NSHostingController(rootView: StatsSettingsSection(stats: stats))
+        let fitted = hosting.sizeThatFits(in: CGSize(width: 680, height: 10_000))
+        XCTAssertLessThanOrEqual(fitted.width, 680.5)
+    }
+}

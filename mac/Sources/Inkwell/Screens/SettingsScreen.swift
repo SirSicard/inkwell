@@ -1,8 +1,8 @@
 // Settings: General (open at login, updates, Inkwell 0.2's history), Appearance, permissions with
 // their live state, dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
-// language model you bring, local-only mode, polish, summaries and Ask), meetings, models (with
-// measured accuracy, and Download for those not on this Mac), storage, and About with every notice
-// the app ships.
+// language model you bring, local-only mode, polish, summaries and Ask), meetings, stats
+// (milestones and the typing speed), models (with measured accuracy, and Download for those not on
+// this Mac), storage, and About with every notice the app ships.
 import AppleEngines
 import InkBridge
 import SwiftUI
@@ -17,6 +17,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case voiceCommands
     case ai
     case meetings
+    case stats
     case models
     case storage
     case about
@@ -34,6 +35,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .voiceCommands: "Voice commands"
         case .ai: "AI"
         case .meetings: "Meetings"
+        case .stats: "Stats"
         case .models: "Models"
         case .storage: "Storage"
         case .about: "About"
@@ -81,6 +83,7 @@ struct SettingsScreen: View {
                             .id(SettingsSection.ai)
                         MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
                             .sectionStart().id(SettingsSection.meetings)
+                        StatsSettingsSection(stats: screens.stats).sectionStart().id(SettingsSection.stats)
                         ModelsSection(catalogue: screens.catalogue).sectionStart().id(SettingsSection.models)
                         StorageSection(storage: screens.storage, meetings: screens.meetings)
                             .sectionStart().id(SettingsSection.storage)
