@@ -2398,6 +2398,20 @@ final class OnboardingLayoutTests: XCTestCase {
         XCTAssertFalse(catalogue.firstRunModels.isEmpty, "the step still lists what came down")
     }
 
+    /// A listed model no choice names, not on this Mac, leaves the step all set: the step offers
+    /// only its choices, so nothing it could download is missing.
+    func testAModelOutsideTheChoicesNeverHoldsTheStepBack() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        let installed = listedAll.replacingOccurrences(of: #""installed":false"#, with: #""installed":true"#)
+        let extra = #"{"id":"another-model","licence":"MIT","size_bytes":1000000,"installed":false,"jobs":[]}"#
+        screens.catalogue.apply(event(installed.replacingOccurrences(of: #""models":["#, with: #""models":[\#(extra),"#)))
+        let catalogue = screens.catalogue
+        XCTAssertFalse(catalogue.firstRunModels.isEmpty, "the outside model is listed and missing")
+        XCTAssertEqual(catalogue.choices, CatalogueModel.Choice.allCases)
+        XCTAssertTrue(catalogue.allOnThisMac)
+        XCTAssertEqual(catalogue.bytesToDownload(Set(CatalogueModel.Choice.allCases)), 0)
+    }
+
     func testTheModelsStepFitsTheSheetWithADownloadsBar() {
         let screens = listed()
         let catalogue = screens.catalogue

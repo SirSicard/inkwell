@@ -293,8 +293,8 @@ struct FirstRunModelsStep: View {
             } else if !catalogue.listed {
                 Text("Checking which models are on this Mac…").foregroundStyle(Theme.secondaryText)
             } else {
-                // Everything on this Mac, before the step or since: the same rows, each reading On
-                // this Mac, so the step reads as done rather than empty (it was one line).
+                // Every choice on this Mac, before the step or since: the same rows, each reading
+                // On this Mac, so the step reads as done rather than empty (it was one line).
                 let allHere = catalogue.allOnThisMac
                 Text(Self.lead(allHere: allHere))
                     .fixedSize(horizontal: false, vertical: true)
@@ -311,11 +311,11 @@ struct FirstRunModelsStep: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The line over the choices: what they are, or, with every model on this Mac, that there is
+    /// The line over the choices: what they are, or, with every choice on this Mac, that there is
     /// nothing to do.
     static func lead(allHere: Bool) -> String {
         allHere
-            ? "All set: every model Inkwell uses is on this Mac already, so there is nothing to download."
+            ? "All set: the models below are on this Mac already, so there is nothing to download."
             : "Inkwell writes down speech with models that run on this Mac. Each is downloaded once, and only when you press Download."
     }
 
