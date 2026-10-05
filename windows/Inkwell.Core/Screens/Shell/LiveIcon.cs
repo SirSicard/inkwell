@@ -12,10 +12,10 @@
 //
 // LiveIcon decides what each surface shows and when it redraws. A still look is drawn once, when it
 // or its colours change. The recording's pulse is ticked by a timer that runs only while a pulse is
-// shown and someone can see the screen; locked or with the display off nothing ticks or draws, and
-// on waking the state as it is now is drawn once. Each surface draws the frames it is given. On
-// Windows the shell's icons take the still look for every state (LiveIconLook.OnShell): there,
-// every frame is a call into Explorer.
+// shown and someone can see the screen (LiveIconViewers); locked, disconnected or with the display
+// off nothing ticks or draws, and on waking the state as it is now is drawn once. Each surface
+// draws the frames it is given. On Windows the shell's icons take the still look for every state
+// (LiveIconLook.OnShell): there, every frame is a call into Explorer.
 using Inkwell.Core.Glow;
 
 namespace Inkwell.Core.Screens;
@@ -105,6 +105,39 @@ public interface ILiveIconTicker
     void Start(TimeSpan interval, Action tick);
 
     void Cancel();
+}
+
+/// <summary>
+/// Whether anyone can see the screen, from what Windows says of the session (WindowHook): locked,
+/// disconnected from its screen (another user switched to, a remote desktop closed or taken over
+/// at the console) or with its display off. Each holds the icon asleep until its own end: an
+/// unlock; a connect, at the console or remote (a session moves between them, so either ends a
+/// disconnect); the display on. The app coming to the front ends only the display's, which a missed
+/// notice could otherwise hold for good: the app can come forward while nobody is there (another
+/// launch, a notification), so it never ends a lock or a disconnect. UI thread.
+/// </summary>
+public sealed class LiveIconViewers
+{
+    public bool Locked { get; private set; }
+
+    public bool Disconnected { get; private set; }
+
+    public bool DisplayOff { get; private set; }
+
+    /// <summary>Someone can see the screen: LiveIcon.SetAwake.</summary>
+    public bool CanSee => !Locked && !Disconnected && !DisplayOff;
+
+    /// <summary>The session was locked (true) or unlocked.</summary>
+    public void Lock(bool locked) => Locked = locked;
+
+    /// <summary>The session was connected to a screen (true), at the console or remote, or disconnected from it.</summary>
+    public void Connect(bool connected) => Disconnected = !connected;
+
+    /// <summary>The session's display went on (true, dimmed counting as on) or off.</summary>
+    public void Display(bool on) => DisplayOff = !on;
+
+    /// <summary>The app came to the front: someone pressed something, so the display is on.</summary>
+    public void AppActive() => DisplayOff = false;
 }
 
 /// <summary>The icons' state and their redraws. UI thread.</summary>

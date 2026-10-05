@@ -1,9 +1,10 @@
 // The main window's messages the WinUI window does not hand on: the taskbar's (its button made,
-// a thumbnail button clicked) and the session's (the screen locked or unlocked, the display on or
-// off). A subclass of the window's procedure (SetWindowSubclass) on the UI thread; it raises an
-// event for each and passes every message on. The session's are asked for here
-// (WTSRegisterSessionNotification, RegisterPowerSettingNotification for the session's display),
-// so the live icon draws nothing while nobody can see the screen: nothing polls.
+// a thumbnail button clicked) and the session's (the screen locked or unlocked, the session
+// disconnected from its screen or connected again, the display on or off). A subclass of the
+// window's procedure (SetWindowSubclass) on the UI thread; it raises an event for each and passes
+// every message on. The session's are asked for here (WTSRegisterSessionNotification,
+// RegisterPowerSettingNotification for the session's display), so the live icon draws nothing
+// while nobody can see the screen: nothing polls.
 using System.Runtime.InteropServices;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -16,6 +17,10 @@ public sealed unsafe partial class WindowHook : IDisposable
     private const uint WmPowerBroadcast = 0x0218;
     private const uint WmWtsSessionChange = 0x02B1;
     private const uint PbtPowerSettingChange = 0x8013;
+    private const int WtsConsoleConnect = 1;
+    private const int WtsConsoleDisconnect = 2;
+    private const int WtsRemoteConnect = 3;
+    private const int WtsRemoteDisconnect = 4;
     private const int WtsSessionLock = 7;
     private const int WtsSessionUnlock = 8;
     private const int ThbnClicked = 0x1800;
@@ -65,6 +70,13 @@ public sealed unsafe partial class WindowHook : IDisposable
     /// <summary>The screen was locked (true) or unlocked.</summary>
     public event Action<bool>? Locked;
 
+    /// <summary>
+    /// This session was connected to a screen again (true), at the console or remote, or
+    /// disconnected from it: fast user switching to another user, or a remote desktop closed or
+    /// taken over at the console. Nobody sees a disconnected session, locked or not.
+    /// </summary>
+    public event Action<bool>? Connected;
+
     /// <summary>This session's display went off (false) or on again, dimmed counting as on.</summary>
     public event Action<bool>? DisplayOn;
 
@@ -107,6 +119,14 @@ public sealed unsafe partial class WindowHook : IDisposable
             else if (reason == WtsSessionUnlock)
             {
                 Locked?.Invoke(false);
+            }
+            else if (reason is WtsConsoleDisconnect or WtsRemoteDisconnect)
+            {
+                Connected?.Invoke(false);
+            }
+            else if (reason is WtsConsoleConnect or WtsRemoteConnect)
+            {
+                Connected?.Invoke(true);
             }
         }
         else if (message == WmPowerBroadcast && (nuint)wParam == PbtPowerSettingChange && lParam != 0)

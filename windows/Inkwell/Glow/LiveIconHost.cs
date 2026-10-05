@@ -2,9 +2,9 @@
 // taskbar button follow the Drop's state, the final pass's steps and the user's colours. Nothing
 // polls and nothing ticks: each follows an event (the Drop's change, the store's, the theme's), and
 // a recording is held still (LiveIconLook.OnShell), as each frame on these surfaces is a call into
-// Explorer. While the screen is locked or the display is off (WindowHook)
-// nothing draws; the app coming to the front means someone is there, so a missed unlock never
-// leaves the icon stale for good.
+// Explorer. While the session is locked or disconnected (another user switched to, a remote desktop
+// closed) or its display is off (WindowHook), nothing draws (LiveIconViewers): a lock or a
+// disconnect holds until its own unlock or connect, whatever comes to the front meanwhile.
 //
 //   the tray      the Halo rim mark with the state's dot or ring (TrayGlyph.Tray); Narrator reads
 //                 its tooltip, which says the state (or what stops the Drop)
@@ -35,8 +35,8 @@ internal sealed class LiveIconHost : IDisposable
     private readonly TaskbarButton taskbar;
     private readonly TraySurface traySurface;
     private readonly TaskbarSurface taskbarSurface;
-    private bool locked;
-    private bool displayOff;
+    /// <summary>Whether anyone can see the screen: locked, disconnected and the display, each until its own end.</summary>
+    private readonly LiveIconViewers viewers = new();
     private string? inkProblem;
     private string? tooltipShown;
     private bool disposed;
@@ -107,12 +107,17 @@ internal sealed class LiveIconHost : IDisposable
         };
         hook.Locked += value =>
         {
-            locked = value;
+            viewers.Lock(value);
+            Awake();
+        };
+        hook.Connected += value =>
+        {
+            viewers.Connect(value);
             Awake();
         };
         hook.DisplayOn += on =>
         {
-            displayOff = !on;
+            viewers.Display(on);
             Awake();
         };
     }
@@ -120,11 +125,10 @@ internal sealed class LiveIconHost : IDisposable
     /// <summary>Frames drawn since launch (the energy budget's count).</summary>
     public int Frames => icon.Frames;
 
-    /// <summary>The app came to the front: someone is at an unlocked, awake screen.</summary>
+    /// <summary>The app came to the front: the display is on (a lock or a disconnect still holds: LiveIconViewers).</summary>
     public void AppActive()
     {
-        locked = false;
-        displayOff = false;
+        viewers.AppActive();
         Awake();
     }
 
@@ -155,7 +159,7 @@ internal sealed class LiveIconHost : IDisposable
         }
     }
 
-    private void Awake() => icon.SetAwake(!locked && !displayOff);
+    private void Awake() => icon.SetAwake(viewers.CanSee);
 
     /// <summary>The look for the state now, in the colours shown: drawing only what changed (LiveIcon.Update).</summary>
     private void Follow()

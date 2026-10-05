@@ -333,6 +333,47 @@ public class LiveIconTests
         Assert.Equal([new LiveIconLook.Pulse(LiveIconTone.Them)], surface.Shown.Select(f => f.Look)); // shown on waking
     }
 
+    /// <summary>
+    /// A locked session, or one disconnected from its screen (another user switched to, a remote
+    /// desktop closed), holds the icon asleep until its own unlock or connect: the app coming to the
+    /// front meanwhile ends neither.
+    /// </summary>
+    [Fact]
+    public void ALockOrADisconnectHoldsUntilItsOwnEnd()
+    {
+        var viewers = new LiveIconViewers();
+        Assert.True(viewers.CanSee);
+        viewers.Connect(false);
+        Assert.False(viewers.CanSee);
+        viewers.AppActive();
+        Assert.False(viewers.CanSee); // brought forward while nobody is there
+        viewers.Connect(true);
+        Assert.True(viewers.CanSee);
+
+        viewers.Lock(true);
+        viewers.AppActive();
+        Assert.False(viewers.CanSee);
+        viewers.Connect(false);
+        viewers.Connect(true);
+        Assert.False(viewers.CanSee); // connected again, and still locked
+        viewers.Lock(false);
+        Assert.True(viewers.CanSee);
+    }
+
+    /// <summary>The display off holds it until the display is on, or the app comes to the front (someone pressed something).</summary>
+    [Fact]
+    public void TheDisplayOffHoldsUntilItIsOnOrTheAppComesForward()
+    {
+        var viewers = new LiveIconViewers();
+        viewers.Display(false);
+        Assert.False(viewers.CanSee);
+        viewers.Display(true);
+        Assert.True(viewers.CanSee);
+        viewers.Display(false);
+        viewers.AppActive();
+        Assert.True(viewers.CanSee);
+    }
+
     /// <summary>Narrator hears the state: the tray's name and the taskbar overlay's description.</summary>
     [Fact]
     public void TheSpokenLabelSaysTheState()
