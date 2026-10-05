@@ -2069,7 +2069,8 @@ final class LiveLayoutTests: XCTestCase {
 /// share of 720 beside the sidebar widens the window as it opens. Settings did, to 996 pt, while
 /// Settings measured on its own, outside a window and the split view, stayed under 720 (there a
 /// segmented control or a fixed-size picker compresses; in a window it does not). And SwiftUI's
-/// minimum replaced the window's 720 with less (413 on Today): the root holds 720 now.
+/// minimum replaced the window's 720 with less (413 on Today): the root holds 720 now, and 460 pt
+/// of height under the toolbar (the minimum had fallen to 154 pt on Today, toolbar included).
 @MainActor
 final class MainWindowWidthTests: XCTestCase {
     private final class NoEvents: UpcomingEvents {
@@ -2079,10 +2080,10 @@ final class MainWindowWidthTests: XCTestCase {
     /// Not a size the window would choose: the minimum SwiftUI writes replaces it.
     private let sentinel = NSSize(width: 100, height: 100)
 
-    /// The width `route` lays out at in the app's window asked for 720 by 700, and the window's
+    /// The width `route` lays out at in the app's window asked for 720 by 700, the window's
     /// minimum content size once SwiftUI has set it over the sentinel (nil if it never did, within
-    /// two seconds).
-    private func widths(_ route: Route, screens: ScreenModels) -> (laidOut: CGFloat, minimum: NSSize?) {
+    /// two seconds), and the height the toolbar covers at the top of the content.
+    private func widths(_ route: Route, screens: ScreenModels) -> (laidOut: CGFloat, minimum: NSSize?, toolbar: CGFloat) {
         let store = CoreStore()
         let router = Router()
         router.open(route)
@@ -2103,10 +2104,12 @@ final class MainWindowWidthTests: XCTestCase {
         // Settled, not a first pass's.
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         content?.layoutSubtreeIfNeeded()
-        return (content?.frame.width ?? 0, window.contentMinSize == sentinel ? nil : window.contentMinSize)
+        // A full-size content view runs under the toolbar; the content layout rect is what is left.
+        let toolbar = (content?.frame.height ?? 0) - window.contentLayoutRect.height
+        return (content?.frame.width ?? 0, window.contentMinSize == sentinel ? nil : window.contentMinSize, toolbar)
     }
 
-    func testEveryScreenLaysOutInA720PointWindowWhoseMinimumIs720() throws {
+    func testEveryScreenLaysOutInA720PointWindowWhoseMinimumIs720By460UnderTheToolbar() throws {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
         // The widest key rows: a recorded dictation key, and the edit key with the longest name.
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
@@ -2120,11 +2123,42 @@ final class MainWindowWidthTests: XCTestCase {
         screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
         XCTAssertTrue(Route.allCases.contains(.settings))
         for route in Route.allCases {
-            let (laidOut, minimum) = widths(route, screens: screens)
+            let (laidOut, minimum, toolbar) = widths(route, screens: screens)
             XCTAssertEqual(laidOut, 720, accuracy: 0.5, "\(route)")
             let set = try XCTUnwrap(minimum, "\(route): SwiftUI never set the window's minimum")
             XCTAssertEqual(set.width, 720, accuracy: 0.5, "\(route)")
+            // The toolbar is there to count (about 52 pt), and the minimum holds 460 under it.
+            XCTAssertGreaterThan(toolbar, 20, "\(route)")
+            XCTAssertEqual(set.height - toolbar, MainWindowController.minimumContentSize.height, accuracy: 0.5, "\(route)")
         }
+    }
+
+    /// A saved frame shorter than the minimum (one from before the minimum held, say) opens at the
+    /// minimum: the window is fitted as it is made, before SwiftUI has written its minimum, which
+    /// counts the toolbar, over the window's own.
+    func testAShortSavedFrameOpensAtTheMinimum() throws {
+        let name = "InkwellTests.shortFrame.\(UUID().uuidString)"
+        let key = "NSWindow Frame \(name)"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        UserDefaults.standard.set("100 100 900 300 0 0 1728 1080 ", forKey: key)
+        // A root with a toolbar, as the app's has (Today's own layout is not what is tested).
+        let root = Color.clear.toolbar { ToolbarItem(placement: .primaryAction) { Button("Go") {} } }
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        MainWindowController.place(window, autosaveName: name)
+        XCTAssertEqual(window.frame.width, 900, accuracy: 0.5, "the saved frame was restored")
+        let placed = window.frame.size
+        // SwiftUI's minimum, once written, and the room under the toolbar.
+        let deadline = Date().addingTimeInterval(2)
+        while window.contentMinSize.height <= MainWindowController.minimumContentSize.height, Date() < deadline {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        let toolbar = try XCTUnwrap(window.contentView).frame.height - window.contentLayoutRect.height
+        XCTAssertGreaterThan(toolbar, 20, "the root's toolbar is the window's")
+        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: window.contentMinSize)).size
+        XCTAssertGreaterThanOrEqual(placed.height, minimum.height - 0.5, "opened under SwiftUI's minimum")
+        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, MainWindowController.minimumContentSize.height - 0.5)
     }
 
     /// The Mode picker's segments, in the app's window, fit the room its row asks for beside its

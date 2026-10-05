@@ -38,27 +38,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // the rest, the lists' selection, while the user's is Multicolor.
             .tint(Theme.buttonFill)
         let window = Self.makeWindow(root: root)
-        window.center()
-        // After center(): a saved frame, when there is one, wins.
-        window.setFrameAutosaveName("Inkwell.main")
-        // AppKit restores a saved frame as it was saved, even from a larger display: wider than
-        // this screen, an edge sits off it and can't be grabbed. So can the default size on a
-        // small screen.
-        Self.fitToScreen(window)
+        Self.place(window, autosaveName: "Inkwell.main")
         super.init(window: window)
         window.delegate = self
     }
 
-    /// The window's smallest content size.
+    /// The window's smallest content size, under the toolbar (makeWindow).
     static let minimumContentSize = NSSize(width: 720, height: 460)
 
     /// The window around `root`, at its default size. SwiftUI sets the minimum size, and the user
     /// the rest; the hosting controller writes SwiftUI's minimum over the window's own, so the root
-    /// holds the minimum width too (without it the window's minimum fell to the screen's, 413 pt
-    /// wide on Today, measured offscreen). Not the height: SwiftUI's minimum counts the toolbar
-    /// over the content, so 460 there would be 512 here. Tests lay the screens out in this window.
+    /// holds the minimum size too (without it the window's minimum fell to the screen's, 413 pt
+    /// wide and 154 tall on Today, measured offscreen). The root sits under the toolbar, and
+    /// SwiftUI's minimum counts the toolbar over it: 460 here is 512 in contentMinSize, with 460 of
+    /// it under the toolbar. Tests lay the screens out in this window.
     static func makeWindow<Root: View>(root: Root) -> NSWindow {
-        let hosting = NSHostingController(rootView: root.frame(minWidth: minimumContentSize.width))
+        let hosting = NSHostingController(
+            rootView: root.frame(minWidth: minimumContentSize.width, minHeight: minimumContentSize.height))
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]
         hosting.sizingOptions = [.minSize]
@@ -72,6 +68,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.setContentSize(NSSize(width: 1040, height: 700))
         window.contentMinSize = minimumContentSize
         return window
+    }
+
+    /// Centres the window, then restores its saved frame, when there is one, and fits it to the
+    /// screen.
+    static func place(_ window: NSWindow, autosaveName: String) {
+        window.center()
+        // After center(): a saved frame, when there is one, wins.
+        window.setFrameAutosaveName(autosaveName)
+        // AppKit restores a saved frame as it was saved, even from a larger display: wider than
+        // this screen, an edge sits off it and can't be grabbed. So can the default size on a
+        // small screen.
+        fitToScreen(window)
     }
 
     @available(*, unavailable)
@@ -101,7 +109,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// window's minimum size.
     private static func fitToScreen(_ window: NSWindow) {
         guard let screen = window.screen ?? NSScreen.main else { return }
-        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: window.contentMinSize)).size
+        // As the window is made, before SwiftUI has laid it out, its minimum is still the one
+        // makeWindow set, which does not count the toolbar SwiftUI's will: 460 under the toolbar
+        // is the floor either way (a saved frame 300 high opened 460 high, under SwiftUI's 512).
+        let toolbar = window.contentView.map { $0.frame.height - window.contentLayoutRect.height } ?? 0
+        let content = NSSize(
+            width: window.contentMinSize.width,
+            height: max(window.contentMinSize.height, minimumContentSize.height + toolbar))
+        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: content)).size
         let fitted = WindowFrame.fitted(window.frame, in: screen.visibleFrame, minSize: minimum)
         if fitted != window.frame { window.setFrame(fitted, display: false) }
     }
