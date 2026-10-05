@@ -2678,6 +2678,17 @@ final class PresetTileTests: XCTestCase {
         // Two columns in the grid's widest frame (420), as before.
         XCTAssertLessThanOrEqual(2 * PresetButton.minimumWidth + 8, 420)
     }
+
+    /// The tile itself, not only the arithmetic: each preset's tile needs no more than the narrowest
+    /// tile to show its whole name. A Spacer after the name took the stack's 12 pt more, and
+    /// "Indigo & Coral" was cut in Settings' cards at the default window size.
+    func testEveryPresetsTileFitsTheNarrowestTile() {
+        for preset in Glow.presets {
+            let tile = PresetButton(preset: preset, selected: true) {}.fixedSize()
+            let width = NSHostingController(rootView: tile).sizeThatFits(in: .zero).width
+            XCTAssertLessThanOrEqual(width, PresetButton.minimumWidth + 0.5, preset.name)
+        }
+    }
 }
 
 /// Settings > Dictation's key rows, too narrow for their controls and hints at the window's smaller

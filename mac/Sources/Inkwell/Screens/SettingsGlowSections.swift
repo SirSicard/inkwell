@@ -421,8 +421,10 @@ struct PresetButton: View {
                     .font(.system(size: Self.nameSize))
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
-                Spacer(minLength: 0)
             }
+            // The tile's width, not a Spacer's: the stack's spacing before a Spacer took 12 pt
+            // from the name, and the longest ("Indigo & Coral") was cut in the narrowest tile.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .frame(minHeight: 46)
             .background(RoundedRectangle(cornerRadius: 14).fill(selected ? PaperPalette.chip : Color.clear))
