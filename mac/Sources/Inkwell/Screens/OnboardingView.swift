@@ -231,11 +231,9 @@ struct OnboardingView: View {
                     .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityHidden(true)
-                DisclosureGroup(isExpanded: $ownKey) {
+                LabelledDisclosure(title: "Use Groq's free model", isExpanded: $ownKey) {
                     GroqKeyRows(cloud: cloud, polish: polish)
                         .padding(.top, 6)
-                } label: {
-                    Text("Use Groq's free model")
                 }
             }
             .foregroundStyle(Theme.text)
@@ -272,6 +270,28 @@ struct OnboardingView: View {
         .font(Typography.body)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A disclosure opened and closed from its title's row as well as its arrow: on the Mac a
+/// DisclosureGroup answers only its arrow, and a click on the title did nothing. The title takes
+/// the click and adds no control of its own, so VoiceOver still reads the group's disclosure and
+/// whether it is open.
+struct LabelledDisclosure<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            content
+        } label: {
+            // The row's width past the words takes the click too.
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation { isExpanded.toggle() } }
+        }
     }
 }
 

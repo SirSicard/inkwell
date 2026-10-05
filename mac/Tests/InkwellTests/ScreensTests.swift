@@ -2383,6 +2383,81 @@ final class OnboardingLayoutTests: XCTestCase {
     }
 }
 
+/// The Polish step's "Use Groq's free model" opened only from its arrow: a click on its title did
+/// nothing (DisclosureGroup on the Mac). Clicks sent to a real window, on the title and the arrow.
+@MainActor
+final class LabelledDisclosureTests: XCTestCase {
+    @MainActor private final class Opened {
+        var value = false
+    }
+
+    private struct Host: View {
+        let opened: Opened
+        @State private var isExpanded = false
+
+        var body: some View {
+            LabelledDisclosure(title: "Use Groq's free model", isExpanded: $isExpanded) {
+                Text("The rows")
+            }
+            .padding(LabelledDisclosureTests.margin)
+            .frame(width: 400, height: 200, alignment: .topLeading)
+            .onChange(of: isExpanded) { opened.value = isExpanded }
+        }
+    }
+
+    fileprivate static let margin: CGFloat = 20
+
+    private func click(_ point: NSPoint, in window: NSWindow) {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            else { return XCTFail("no mouse event") }
+            window.sendEvent(event)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+    }
+
+    func testTheTitlesRowOpensAndClosesItAndTheArrowStillDoes() throws {
+        // Where the title and the arrow are: the closed row's width ends with the title's.
+        let title = NSHostingController(rootView: Text("Use Groq's free model").fixedSize())
+            .sizeThatFits(in: CGSize(width: 1000, height: 1000))
+        let row = NSHostingController(rootView: LabelledDisclosure(title: "Use Groq's free model", isExpanded: .constant(false)) {
+            Text("The rows")
+        }.fixedSize()).sizeThatFits(in: CGSize(width: 1000, height: 1000))
+        XCTAssertGreaterThan(row.width, title.width + 8, "an arrow before the title")
+
+        let opened = Opened()
+        let window = NSWindow(
+            contentRect: NSRect(x: 200, y: 200, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: Host(opened: opened))
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let height = try XCTUnwrap(window.contentView).bounds.height
+        let y = height - Self.margin - row.height / 2
+        let onTitle = NSPoint(x: Self.margin + row.width - title.width / 2, y: y)
+        // The rest of the row, past the title's end: the row is the label, not only its words.
+        let pastTitle = NSPoint(x: Self.margin + row.width + 100, y: y)
+        // The arrow answers only at the row's leading edge, a few points wide.
+        let onArrow = NSPoint(x: Self.margin + 3, y: y)
+
+        click(onTitle, in: window)
+        XCTAssertTrue(opened.value, "the title opens it")
+        click(onTitle, in: window)
+        XCTAssertFalse(opened.value, "and closes it")
+        click(pastTitle, in: window)
+        XCTAssertTrue(opened.value, "the row past the title opens it")
+        click(pastTitle, in: window)
+        XCTAssertFalse(opened.value, "and closes it")
+        click(onArrow, in: window)
+        XCTAssertTrue(opened.value, "the arrow opens it")
+        click(onArrow, in: window)
+        XCTAssertFalse(opened.value, "and closes it")
+    }
+}
+
 /// The core's own timeout event, as ink-ffi's llm test shows it sent (`dictation.warning` with kind
 /// `polish_timed_out` and no text), reaches the toggle through the path CoreController uses.
 @MainActor
