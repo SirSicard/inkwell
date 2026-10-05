@@ -112,10 +112,11 @@
                     OnContent=""
                     Toggled="OnPolishToggled" />
                 <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-                <!-- The own key as one choice (the Mac's): Groq's free model behind a disclosure, its
-                     key with Save (stored, nothing more), and Use Groq, which asks polish's consent
-                     before it chooses Groq (PolishModel.UseOwnKey). Another provider or model is
-                     behind "Other providers or models…": Settings > AI's rows, with the same consent. -->
+                <!-- The own key as one choice (the Mac's): Groq's free model behind a disclosure, how
+                     to get its key (GroqKeyGuideView), the key with Save (stored, nothing more), and
+                     Use Groq, which asks polish's consent before it chooses Groq
+                     (PolishModel.UseOwnKey). Another provider or model is behind "Other providers or
+                     models…": Settings > AI's rows, with the same consent. -->
                 <Expander
                     x:Name="OwnKeyExpander"
                     HorizontalAlignment="Stretch"
@@ -123,9 +124,7 @@
                     Expanding="OnOwnKeyExpanding">
                     <StackPanel Spacing="8">
                         <StackPanel x:Name="GroqRows" Spacing="8">
-                            <TextBlock Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap">
-                                <Run x:Name="OwnKeyLeadStart" /><Hyperlink x:Name="OwnKeyLink" /><Run x:Name="OwnKeyLeadEnd" />
-                            </TextBlock>
+                            <ContentPresenter x:Name="OwnKeyGuideHost" />
                             <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

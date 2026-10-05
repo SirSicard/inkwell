@@ -88,12 +88,7 @@ public sealed partial class OnboardingSheet : ContentDialog
         PolishNote.Text = OnboardingModel.PolishNote;
         AutomationProperties.SetName(PolishSwitch, OnboardingModel.PolishToggle);
         OwnKeyExpander.Header = OnboardingModel.OwnKeyTitle;
-        // The homepage's sentence, its host a link.
-        var link = OnboardingModel.OwnKeyLead.IndexOf(OnboardingModel.OwnKeyHost, StringComparison.Ordinal);
-        OwnKeyLeadStart.Text = OnboardingModel.OwnKeyLead[..link];
-        OwnKeyLink.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = OnboardingModel.OwnKeyHost });
-        OwnKeyLink.NavigateUri = new Uri(OnboardingModel.OwnKeyUrl);
-        OwnKeyLeadEnd.Text = OnboardingModel.OwnKeyLead[(link + OnboardingModel.OwnKeyHost.Length)..];
+        OwnKeyGuideHost.Content = new GroqKeyGuideView(GroqKeyGuidePlace.FirstRun);
         AutomationProperties.SetName(OwnKeyBox, OnboardingModel.OwnKeyBoxName);
         OwnKeyBox.PlaceholderText = OnboardingModel.OwnKeyPlaceholder;
         OwnKeySave.Content = OnboardingModel.OwnKeySave;
