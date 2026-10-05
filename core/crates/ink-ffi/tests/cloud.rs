@@ -15,6 +15,7 @@ use common::*;
 use ink_core::mock::MockPlatform;
 use ink_core::{CancelToken, Endpoint, HotkeyEvent, Llm, LlmError, LlmRequest};
 use ink_ffi::dictation::{Block, DictationInbox};
+use ink_ffi::queries::MODES_KEY;
 use ink_ffi::runtime::{Core, DictationParts};
 use ink_llm::{KeyStoreError, TransportError};
 use ink_pipeline::chain::DictationSettings;
@@ -849,13 +850,91 @@ fn a_mode_pinned_to_a_server_here_sends_nothing_once_it_points_elsewhere() {
     );
     // Confirmed there by the user: recorded as where it sends now.
     let listed = rig.ask(
-        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model": "provider:custom", "polish_model_confirm": true}}),
+        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model": "provider:custom", "polish_model_confirm": true,
+            "polish_model_confirm_to": {"to": "cloud", "endpoint": remote}}}),
         "s3",
     );
     assert_eq!(
         listed["modes"][0]["polish_model_state"], "ready",
         "{listed}"
     );
+    let (platform, inbox) = dictation_with(&rig, vec![consent]);
+    assert!(take_warnings(&rig, &inbox, 2, 2).is_empty());
+    assert_eq!(rig.net.calls(), 1);
+    assert_eq!(
+        platform.inserted().last().map(|s| s.trim().to_owned()),
+        Some("Polished synthetic words.".into())
+    );
+    rig.core.shutdown();
+    rig.events.assert_valid();
+}
+
+/// A mode pinned before destinations were recorded (no `polish_model_to`), on a model the core
+/// holds: listed `unrecorded`, its takes not sent (`polish_model_missing`) until the user confirms
+/// where it sends now, as the listing shows it. A confirm for a destination it does not send to
+/// is refused (`destination_changed`) and records nothing.
+#[test]
+fn a_mode_whose_destination_was_never_recorded_is_polished_only_once_confirmed() {
+    let rig = Rig::new("cloud-pin-unrecorded", &[test_row(ROW_ID)]);
+    let remote = "https://llm.example.com/v1";
+    let chosen = rig.ask(
+        json!({"cmd": "llm.choose", "provider": "custom", "base_url": remote, "local_only": "off"}),
+        "c1",
+    );
+    assert_eq!(chosen["to"], "cloud", "{chosen}");
+    rig.core
+        .shared()
+        .store
+        .set_setting(
+            MODES_KEY,
+            r#"{"default_id":"default","modes":[{"id":"default","name":"Everywhere else","polish_model":"provider:custom"}]}"#,
+        )
+        .unwrap();
+    let state = |listed: &serde_json::Value| listed["modes"][0]["polish_model_state"].clone();
+    let listed = rig.ask(json!({"cmd": "modes.list"}), "l1");
+    assert_eq!(state(&listed), "unrecorded", "{listed}");
+    let custom = listed["polish_models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "provider:custom")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (&custom["to"], &custom["endpoint"]),
+        (&json!("cloud"), &json!(remote))
+    );
+    let consent = LlmConsent::Cloud {
+        endpoint: remote.into(),
+        name: "custom".into(),
+    };
+    rig.net
+        .set(Ok((200, openai_answer("Polished synthetic words."))));
+    let (_, inbox) = dictation_with(&rig, vec![consent.clone()]);
+    assert_eq!(
+        take_warnings(&rig, &inbox, 1, 1),
+        ["polish_model_missing"],
+        "the consent covers the server, not the mode's choice of it"
+    );
+    assert_eq!(rig.net.calls(), 0, "nothing sent");
+
+    // Confirmed as on this machine, where it does not send: refused, nothing recorded.
+    let failed = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model_confirm": true,
+            "polish_model_confirm_to": {"to": "on_device"}}}),
+        "s1",
+    );
+    assert_eq!(failed["code"], "destination_changed", "{failed}");
+    let listed = rig.ask(json!({"cmd": "modes.list"}), "l2");
+    assert_eq!(state(&listed), "unrecorded", "{listed}");
+
+    // Confirmed where the listing shows it sends.
+    let listed = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model_confirm": true,
+            "polish_model_confirm_to": {"to": custom["to"], "endpoint": custom["endpoint"]}}}),
+        "s2",
+    );
+    assert_eq!(state(&listed), "ready", "{listed}");
     let (platform, inbox) = dictation_with(&rig, vec![consent]);
     assert!(take_warnings(&rig, &inbox, 2, 2).is_empty());
     assert_eq!(rig.net.calls(), 1);

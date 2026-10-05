@@ -349,13 +349,17 @@ without a value, and the shell reads it as its default (for appearance, `APPEARA
   the polish consents, checked on the model the call reaches). A save that names the model
   records where it sends then (`polish_model_to`). The contract: where it sends is recorded only
   when a save picks another model or name, or confirms the one it has (`polish_model_confirm`,
-  once the user agreed to where it sends now); a save that sends the same pin back (an editor
-  sends every field) keeps what was recorded. A mode whose model the core does not hold, or that
-  sends anywhere else than recorded (a custom server re-pointed from this machine to another), or
-  whose destination was never recorded, is not polished (`polish_model_missing`;
-  `polish_model_state` `missing`, `moved` or `unrecorded`) until the user confirms it, and never
-  sent to another model: that could be a destination the user did not pick for this mode. A mode on a model no
-  polish consent covers goes in as said (`polish_not_allowed`, naming that model's destination).
+  once the user agreed to where it sends now, with that destination as the listing showed it,
+  `polish_model_confirm_to`); a save that sends the same pin back (an editor sends every field)
+  keeps what was recorded. A confirm whose model sends elsewhere by the time the save is read is
+  refused (`destination_changed`): the user agreed to one destination, not to whatever the model
+  reaches now. A save that clears the pin wins over a confirm sent with it. A mode whose model the
+  core does not hold, or that sends anywhere else than recorded (a custom server re-pointed from
+  this machine to another), or whose destination was never recorded, is not polished
+  (`polish_model_missing`; `polish_model_state` `missing`, `moved` or `unrecorded`) until the user
+  confirms it, and never sent to another model: that could be a destination the user did not
+  pick for this mode. A mode on a model no polish consent covers goes in as said
+  (`polish_not_allowed`, naming that model's destination).
   While the stored modes cannot be read, nothing is polished, a voice command's "toggle polish"
   included: which model each mode would send to cannot be known. The polish consents are read
   again at each call, and only one both loaded and still stored counts, so a revoke reaches a take

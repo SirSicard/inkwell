@@ -1206,9 +1206,11 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
 /// with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language
 /// model the core holds has that id: modes.listed lists them), model_name_invalid (a
 /// polish_model_name that is over 128 characters or holds a control character, or one given for
-/// a model that is not a provider's, or without a model) and app_invalid (an app identity with
-/// a control character, of one character, or with no letter: as a substring of the frontmost
-/// app's identity it would match nearly every app).
+/// a model that is not a provider's, or without a model), destination_changed (a
+/// polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to,
+/// the destination the user agreed to: list the modes again and ask again; nothing was saved)
+/// and app_invalid (an app identity with a control character, of one character, or with no
+/// letter: as a substring of the frontmost app's identity it would match nearly every app).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
     case nameBlank = "name_blank"
@@ -1220,6 +1222,7 @@ public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case modeNotFound = "mode_not_found"
     case modelUnknown = "model_unknown"
     case modelNameInvalid = "model_name_invalid"
+    case destinationChanged = "destination_changed"
     case appInvalid = "app_invalid"
 }
 
@@ -1427,6 +1430,11 @@ public struct LanguageModelChoice: Codable, Sendable, Equatable {
     /// Local-only mode is on and this model is not on this machine: nothing goes to it,
     /// whatever the consent (turn local-only off in Settings > AI first).
     public let blockedLocalOnly: Bool?
+    /// For a cloud model, the endpoint it sends to, as consent.state names one. To confirm a
+    /// mode's model (polish_model_state moved or unrecorded), show where it sends and send that
+    /// back as polish_model_confirm_to: {"to":"on_device"} or
+    /// {"to":"cloud","endpoint":"<this>"}.
+    public let endpoint: String?
     /// Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered
     /// (engine:apple-foundation-models), provider:<id> for the chosen own-key provider. Show
     /// the name, never the id.
@@ -1442,6 +1450,7 @@ public struct LanguageModelChoice: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case allowed
         case blockedLocalOnly = "blocked_local_only"
+        case endpoint
         case id
         case model
         case name
@@ -2660,9 +2669,10 @@ public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
 /// go of, or another provider chosen; its takes go in as said with polish_model_missing) or
 /// moved (it sends somewhere else now than when the mode was saved, such as a custom server
 /// re-pointed from this machine to another: its takes go in as said with polish_model_missing
-/// until the user confirms it there: modes.save with polish_model_confirm) or unrecorded (where
-/// it sends was never recorded, as for a pin saved by an early build: the same until the user
-/// confirms it).
+/// until the user confirms it there: modes.save with polish_model_confirm and
+/// polish_model_confirm_to, where polish_models says it sends) or unrecorded (where it sends
+/// was never recorded, as for a pin saved by an early build: the same until the user confirms
+/// it).
 public enum PolishModelState: String, Codable, Sendable, Equatable, CaseIterable {
     case ready
     case missing

@@ -324,7 +324,7 @@
     },
     "FailureCode": {
       "type": "string",
-      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the editor says \"Shorten to 64 apps or fewer.\"), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language model the core holds has that id: modes.listed lists them), model_name_invalid (a polish_model_name that is over 128 characters or holds a control character, or one given for a model that is not a provider's, or without a model) and app_invalid (an app identity with a control character, of one character, or with no letter: as a substring of the frontmost app's identity it would match nearly every app).",
+      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the editor says \"Shorten to 64 apps or fewer.\"), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language model the core holds has that id: modes.listed lists them), model_name_invalid (a polish_model_name that is over 128 characters or holds a control character, or one given for a model that is not a provider's, or without a model), destination_changed (a polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to, the destination the user agreed to: list the modes again and ask again; nothing was saved) and app_invalid (an app identity with a control character, of one character, or with no letter: as a substring of the frontmost app's identity it would match nearly every app).",
       "enum": [
         "list_unreadable",
         "name_blank",
@@ -336,6 +336,7 @@
         "mode_not_found",
         "model_unknown",
         "model_name_invalid",
+        "destination_changed",
         "app_invalid"
       ]
     },
@@ -2643,6 +2644,10 @@
           "$ref": "#/$defs/LlmDestination",
           "description": "Where it sends a dictation."
         },
+        "endpoint": {
+          "type": "string",
+          "description": "For a cloud model, the endpoint it sends to, as consent.state names one. To confirm a mode's model (polish_model_state moved or unrecorded), show where it sends and send that back as polish_model_confirm_to: {\"to\":\"on_device\"} or {\"to\":\"cloud\",\"endpoint\":\"<this>\"}."
+        },
         "allowed": {
           "type": "boolean",
           "description": "Whether polish may use it now: one of the user's polish consents covers it (consent.state's consents) and local-only mode lets it (blocked_local_only false). False, a mode on it goes in as said (polish_not_allowed, or polish_failed while local-only mode refuses it) until that changes."
@@ -4560,7 +4565,7 @@
     },
     "PolishModelState": {
       "type": "string",
-      "description": "Whether a mode's own language model can polish its takes now: ready (the core holds it, and it sends where it did when the mode was saved), missing (the core does not hold it now: let go of, or another provider chosen; its takes go in as said with polish_model_missing) or moved (it sends somewhere else now than when the mode was saved, such as a custom server re-pointed from this machine to another: its takes go in as said with polish_model_missing until the user confirms it there: modes.save with polish_model_confirm) or unrecorded (where it sends was never recorded, as for a pin saved by an early build: the same until the user confirms it).",
+      "description": "Whether a mode's own language model can polish its takes now: ready (the core holds it, and it sends where it did when the mode was saved), missing (the core does not hold it now: let go of, or another provider chosen; its takes go in as said with polish_model_missing) or moved (it sends somewhere else now than when the mode was saved, such as a custom server re-pointed from this machine to another: its takes go in as said with polish_model_missing until the user confirms it there: modes.save with polish_model_confirm and polish_model_confirm_to, where polish_models says it sends) or unrecorded (where it sends was never recorded, as for a pin saved by an early build: the same until the user confirms it).",
       "enum": [
         "ready",
         "missing",

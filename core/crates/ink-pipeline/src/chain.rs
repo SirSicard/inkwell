@@ -1102,10 +1102,14 @@ impl DictationChain {
     /// task refuses one; this checks again rather than rely on it).
     ///
     /// **Consent.** The call goes out only when one of
-    /// [`polish_consents`](DictationSettings::polish_consents) covers the model it reaches, checked by that model at the call ([`Llm::complete_if`]), so a
-    /// model that changed destination since the user agreed never receives the text. Without it
-    /// the text goes out as written with [`Warning::PolishNotAllowed`], naming the consent needed.
-    /// That holds for a mode's own model as for the AI setting's ([`polish_model`](Self::polish_model)).
+    /// [`polish_consents`](DictationSettings::polish_consents) covers the model it reaches,
+    /// checked by that model at the call ([`Llm::complete_if`]), so a model that changed
+    /// destination since the user agreed never receives the text. The consents are read again from
+    /// the store at each call, and only one both loaded and still stored counts: a revoke reaches a
+    /// take already in flight, and a consent stored behind the settings' back widens nothing.
+    /// Without one the text goes out as written with [`Warning::PolishNotAllowed`], naming the
+    /// consent needed. That holds for a mode's own model as for the AI setting's
+    /// ([`polish_model`](Self::polish_model)).
     ///
     /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out.
     /// The budget is a deadline the token carries, so no thread or timer fires it: the model sees

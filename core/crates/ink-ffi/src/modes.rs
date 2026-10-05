@@ -27,8 +27,10 @@
 //! names the one a mode without its own uses (`setting_polish_model`). A save that picks the
 //! model, or another name at it, records where it sends then ([`ModelPin::to`]); one that sends
 //! the same pin back keeps what was recorded. A mode whose model sends elsewhere later (a custom
-//! server re-pointed) is not polished until the user confirms it there (`polish_model_confirm`;
-//! `polish_model_state` `moved`, or `unrecorded` for a pin saved before destinations were).
+//! server re-pointed) is not polished until the user confirms it there (`polish_model_confirm`,
+//! with `polish_model_confirm_to` the destination the editor showed, as `polish_models` gives it;
+//! `polish_model_state` `moved`, or `unrecorded` for a pin saved before destinations were). A
+//! confirm whose model sends elsewhere by then is refused (`destination_changed`).
 //! A save that picks a model the core does not hold is refused (`model_unknown`); one a mode
 //! already names is kept, so a mode whose model was let go of stays editable (its takes go out
 //! unpolished, and say so).
@@ -148,6 +150,7 @@ const MODE_FIELDS: &[&str] = &[
     "polish_model",
     "polish_model_name",
     "polish_model_confirm",
+    "polish_model_confirm_to",
 ];
 
 /// `modes.save`'s mode. Only a field's name is ever said, never its value.
@@ -196,6 +199,30 @@ fn read_edit(name: &str, mode: Option<&Value>) -> Result<ModeEdit, String> {
         "polish_model_name",
         "a model's name at the provider, or null for the one chosen in Settings > AI",
     )?;
+    // A confirm names the destination the user agreed to; one without it, or a destination
+    // without the confirm, is refused rather than guessed at. Null is none (an editor that sends
+    // every field sends it unset).
+    let polish_model_confirm = match (
+        flag("polish_model_confirm")?.unwrap_or(false),
+        m.get("polish_model_confirm_to").filter(|v| !v.is_null()),
+    ) {
+        (false, None) => None,
+        (true, Some(v)) => Some(Destination::from_value(v).ok_or_else(|| {
+            format!(
+                "{name}: the mode's \"polish_model_confirm_to\" is a destination as polish_models gives it"
+            )
+        })?),
+        (true, None) => {
+            return Err(format!(
+                "{name}: \"polish_model_confirm\" needs \"polish_model_confirm_to\", where the user agreed it sends"
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(format!(
+                "{name}: \"polish_model_confirm_to\" goes with \"polish_model_confirm\":true"
+            ));
+        }
+    };
     Ok(ModeEdit {
         id: text("id")?,
         name: text("name")?,
@@ -206,7 +233,7 @@ fn read_edit(name: &str, mode: Option<&Value>) -> Result<ModeEdit, String> {
         apps,
         polish_model,
         polish_model_name,
-        polish_model_confirm: flag("polish_model_confirm")?.unwrap_or(false),
+        polish_model_confirm,
     })
 }
 
@@ -275,7 +302,7 @@ pub fn answer(
             replace_unreadable,
         } => {
             let (modes, doc) = base(store, replace_unreadable)?;
-            let new_id = modes.fresh_id(shared.clock.unix_ms());
+            let new_id = modes.fresh_id(shared.clock.unix_ms(), &doc);
             // Where each model the core holds sends at this moment.
             let model_at = |id: &str, name: Option<&str>| {
                 let r = ModelRef::parse(id)?;
@@ -321,14 +348,19 @@ pub fn listed(
         .map(|(r, info)| {
             let (_, needed, name) = crate::consent::described(info.clone());
             let blocked = shared.local_only.check(&info.endpoint).is_err();
-            json!({
+            let mut item = json!({
                 "id": r.id(),
                 "name": name,
                 "model": info.model,
                 "to": needed.kind(),
                 "allowed": !blocked && consents.iter().any(|c| c.covers(info)),
                 "blocked_local_only": blocked,
-            })
+            });
+            // The editor shows it and sends it back to confirm (`polish_model_confirm_to`).
+            if let Destination::Cloud(endpoint) = Destination::of(info) {
+                item["endpoint"] = endpoint.into();
+            }
+            item
         })
         .collect();
     event(
@@ -430,7 +462,7 @@ mod tests {
                 apps: Some(vec!["com.example.mail".into()]),
                 polish_model: Some(None),
                 polish_model_name: None,
-                polish_model_confirm: false,
+                polish_model_confirm: None,
             }
         );
         let Some(Ok(ModesQuery::Save { edit, .. })) =
@@ -441,7 +473,30 @@ mod tests {
         assert_eq!(edit.id.as_deref(), Some("c"));
         assert_eq!(edit.name, None, "absent fields keep their value");
         assert_eq!(edit.polish_model, Some(Some("engine:x".into())));
+        let Some(Ok(ModesQuery::Save { edit, .. })) = p(
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":true,
+                "polish_model_confirm_to":{"to":"cloud","endpoint":"https://llm.example.com/v1"}}}"#,
+        ) else {
+            panic!("a confirm reads");
+        };
+        assert_eq!(
+            edit.polish_model_confirm,
+            Some(Destination::Cloud("https://llm.example.com/v1".into()))
+        );
+        let Some(Ok(ModesQuery::Save { edit, .. })) = p(
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":false,"polish_model_confirm_to":null}}"#,
+        ) else {
+            panic!("an unset destination reads as none");
+        };
+        assert_eq!(edit.polish_model_confirm, None);
         for bad in [
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":true,"polish_model_confirm_to":null}}"#,
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":true,"polish_model_confirm_to":{"to":"on_device","endpoint":"x"}}}"#,
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":true}}"#,
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm_to":{"to":"on_device"}}}"#,
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":false,"polish_model_confirm_to":{"to":"on_device"}}}"#,
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":true,"polish_model_confirm_to":"on_device"}}"#,
+            r#"{"cmd":"modes.save","mode":{"id":"c","polish_model_confirm":true,"polish_model_confirm_to":{"to":"cloud"}}}"#,
             r#"{"cmd":"modes.list","x":1}"#,
             r#"{"cmd":"modes.save"}"#,
             r#"{"cmd":"modes.save","mode":"Mail"}"#,

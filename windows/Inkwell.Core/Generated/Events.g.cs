@@ -1617,9 +1617,11 @@ public enum FailedStage
 /// with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language
 /// model the core holds has that id: modes.listed lists them), model_name_invalid (a
 /// polish_model_name that is over 128 characters or holds a control character, or one given for
-/// a model that is not a provider's, or without a model) and app_invalid (an app identity with
-/// a control character, of one character, or with no letter: as a substring of the frontmost
-/// app's identity it would match nearly every app).
+/// a model that is not a provider's, or without a model), destination_changed (a
+/// polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to,
+/// the destination the user agreed to: list the modes again and ask again; nothing was saved)
+/// and app_invalid (an app identity with a control character, of one character, or with no
+/// letter: as a substring of the frontmost app's identity it would match nearly every app).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
@@ -1644,6 +1646,8 @@ public enum FailureCode
     ModelUnknown,
     [JsonStringEnumMemberName("model_name_invalid")]
     ModelNameInvalid,
+    [JsonStringEnumMemberName("destination_changed")]
+    DestinationChanged,
     [JsonStringEnumMemberName("app_invalid")]
     AppInvalid,
 }
@@ -2027,6 +2031,15 @@ public sealed record LanguageModelChoice
     /// </summary>
     [JsonPropertyName("blocked_local_only")]
     public bool? BlockedLocalOnly { get; init; }
+
+    /// <summary>
+    /// For a cloud model, the endpoint it sends to, as consent.state names one. To confirm a
+    /// mode's model (polish_model_state moved or unrecorded), show where it sends and send that
+    /// back as polish_model_confirm_to: {"to":"on_device"} or
+    /// {"to":"cloud","endpoint":"&lt;this&gt;"}.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public string? Endpoint { get; init; }
 
     /// <summary>
     /// Its id, as a mode names it (polish_model): engine:&lt;id&gt; for a model the shell
@@ -4081,9 +4094,10 @@ public enum Phase
 /// go of, or another provider chosen; its takes go in as said with polish_model_missing) or
 /// moved (it sends somewhere else now than when the mode was saved, such as a custom server
 /// re-pointed from this machine to another: its takes go in as said with polish_model_missing
-/// until the user confirms it there: modes.save with polish_model_confirm) or unrecorded (where
-/// it sends was never recorded, as for a pin saved by an early build: the same until the user
-/// confirms it).
+/// until the user confirms it there: modes.save with polish_model_confirm and
+/// polish_model_confirm_to, where polish_models says it sends) or unrecorded (where it sends
+/// was never recorded, as for a pin saved by an early build: the same until the user confirms
+/// it).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<PolishModelState>))]
 public enum PolishModelState

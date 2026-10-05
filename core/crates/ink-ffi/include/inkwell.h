@@ -337,11 +337,13 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       own language model ("polish_model", absent for the AI setting's; "polish_model_name", a
  *       model at that provider; "polish_model_state": ready, missing (not held now), moved
  *       (sends elsewhere than where it was recorded) or unrecorded (never recorded): for the
- *       last two, ask the user, then save with "polish_model_confirm":true).
+ *       last two, show where its model sends, ask the user, then save with
+ *       "polish_model_confirm":true and that destination as "polish_model_confirm_to").
  *       "polish_models" lists every model a mode can pick now (engine:<id> for one the shell
  *       registered, provider:<id> for the chosen own-key provider), each with where it sends
- *       ("to"), the model it asks for ("model"), whether polish may use it now ("allowed": a
- *       polish consent covers it and local-only mode lets it) and "blocked_local_only";
+ *       ("to", and for a cloud model its "endpoint"), the model it asks for ("model"), whether
+ *       polish may use it now ("allowed": a polish consent covers it and local-only mode lets
+ *       it) and "blocked_local_only";
  *       "setting_polish_model" is the AI setting's. Ask again after llm.choose, consent.state
  *       or an engine (un)registering.
  *       Carries the user's words: never log it.
@@ -349,7 +351,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *    "polish":true,"remove_fillers":true,"polish_prompt":"...","apps":["..."],
  *    "polish_model":"<an id from polish_models, or null for the AI setting's>",
  *    "polish_model_name":"<provider: only; a model at it, or null for the one chosen in AI>",
- *    "polish_model_confirm":false},
+ *    "polish_model_confirm":false,
+ *    "polish_model_confirm_to":{"to":"on_device|cloud","endpoint":"<for cloud>"}},
  *    "take_apps":false,"replace_unreadable":false,"id":"<ref>"}
  *   {"cmd":"modes.delete","mode":"<mode id>","id":"<ref>"}
  *       Settings' mode editor. A save without "id" adds a mode (the core gives it an id); with
@@ -358,19 +361,23 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       the "id" (a save's with "saved", the mode's id) and reaches a running dictation at once
  *       (a voice command's pin to a deleted mode is dropped). Where a mode's model sends is
  *       recorded when a save picks another model or name, or confirms it
- *       ("polish_model_confirm":true, after the user agreed to where it sends now); a save that
- *       sends the same pin back keeps what was recorded. A refusal is command.failed with a "code":
- *       name_blank, name_taken (another name sounds the same), name_is_style, too_long (a name
- *       over 64 characters, instructions over 2000, over 64 apps or an app over 256, over 50
+ *       ("polish_model_confirm":true, after the user agreed to where it sends now, with
+ *       "polish_model_confirm_to" that destination; each needs the other, and null is none); a
+ *       save that sends the same pin back keeps what was recorded, and one that clears the model
+ *       ("polish_model":null) ignores a confirm sent with it. A refusal is command.failed with a
+ *       "code": name_blank, name_taken (another name sounds the same), name_is_style, too_long (a
+ *       name over 64 characters, instructions over 2000, over 64 apps or an app over 256, over 50
  *       modes; an imported mode over 64 apps: "Shorten to 64 apps or fewer."), default_mode (it
- *       cannot be deleted or given apps), app_taken (send again with "take_apps":true to move
- *       it), app_invalid (a control character, one character, or no letter), mode_not_found,
+ *       cannot be deleted or given apps), app_taken (send again with "take_apps":true to move it),
+ *       app_invalid (a control character, one character, or no letter), mode_not_found,
  *       model_unknown (not in polish_models), model_name_invalid (over 128 characters, a control
- *       character, or not for a provider:), and list_unreadable as for snippets.save. Each rule
- *       is checked on what the save changes. A mode whose model the core does not hold at a take,
- *       or that sends elsewhere than when it was saved, goes in as said (dictation.warning
- *       polish_model_missing): never to another model, and its polish needs a polish consent for
- *       that model's destination. While the stored modes cannot be read, nothing is polished.
+ *       character, or not for a provider:), destination_changed (a confirmed model sends elsewhere
+ *       than "polish_model_confirm_to" now: list again, and ask again), and list_unreadable as for
+ *       snippets.save. Each rule is checked on what the save changes. A mode whose model the core
+ *       does not hold at a take, or that sends elsewhere than when it was saved, goes in as said
+ *       (dictation.warning polish_model_missing): never to another model, and its polish needs a
+ *       polish consent for that model's destination. While the stored modes cannot be read, nothing
+ *       is polished.
  *   {"cmd":"snippets.list","id":"<ref>"}
  *   {"cmd":"snippets.save","snippets":[{"id":"...","trigger":"...","expansion":"...",
  *    "category":"...","enabled":true}],"id":"<ref>"}
@@ -484,7 +491,9 @@ int32_t ink_far_bands_read(InkBands *out);
  *     says false. "context_tokens" (optional, at least 256) is how many tokens its context holds,
  *     prompt and answer together: a meeting's summary and Ask are sized to fit it (4096 when not
  *     said). Registered language models do dictation polish, meeting summaries, commitments and
- *     Ask.
+ *     Ask. The id and "model" are the shell's word, which the core cannot check: a cloud engine
+ *     ("local":false) is named in a consent by both, so a consent given for it holds for an
+ *     engine the shell later registers under the same id and model name.
  * Ids are unique across every kind.
  *
  * ANSWERS. Every call below that takes a `call` id is answered with ink_engine_complete(call,

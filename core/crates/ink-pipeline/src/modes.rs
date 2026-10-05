@@ -218,10 +218,13 @@ pub struct ModeEdit {
     /// A model at the pinned provider ([`ModelPin::model`]): `Some(None)` (or blank) for the one
     /// chosen in Settings > AI. Named without `polish_model`, it changes the pin the mode has.
     pub polish_model_name: Option<Option<String>>,
-    /// The user confirmed the mode's model where it sends now: record that again, though the
-    /// model and its name are the same (a model that moved, or one saved before destinations were
-    /// recorded). Refused without a model ([`ModeError::ModelUnknown`]).
-    pub polish_model_confirm: bool,
+    /// The user confirmed the mode's model as sending here, the destination the editor showed:
+    /// record it again, though the model and its name are the same (a model that moved, or one
+    /// saved before destinations were recorded). Refused without a model
+    /// ([`ModeError::ModelUnknown`]), and when the model sends anywhere else by the time the save
+    /// is read ([`ModeError::DestinationChanged`]): the user agreed to that destination, not to
+    /// whatever it is now. A save that clears the model ignores it.
+    pub polish_model_confirm: Option<Destination>,
 }
 
 /// Which limit a change went over.
@@ -266,6 +269,9 @@ pub enum ModeError {
     /// character, or one given for a model that is not a provider's (`engine:`), or without a
     /// model to name one at.
     ModelNameInvalid,
+    /// A confirmed model sends elsewhere than the destination the user confirmed
+    /// ([`ModeEdit::polish_model_confirm`]): it moved between the listing and the save.
+    DestinationChanged,
     /// An app identity holding a control character (a line break), or one of a single character
     /// or with no letter: as a substring it would match nearly every app.
     AppInvalid,
@@ -284,6 +290,7 @@ impl ModeError {
             Self::NotFound => "mode_not_found",
             Self::ModelUnknown => "model_unknown",
             Self::ModelNameInvalid => "model_name_invalid",
+            Self::DestinationChanged => "destination_changed",
             Self::AppInvalid => "app_invalid",
         }
     }
@@ -320,6 +327,9 @@ impl std::fmt::Display for ModeError {
             Self::ModelNameInvalid => write!(
                 f,
                 "a model's name is up to {MAX_MODEL_NAME_CHARS} printable characters, given only for a provider's model"
+            ),
+            Self::DestinationChanged => f.write_str(
+                "the model sends somewhere else now than where it was confirmed: list the modes and ask again",
             ),
             Self::AppInvalid => f.write_str(
                 "an app's identity is printable, at least two characters long and has a letter in it",
@@ -475,13 +485,30 @@ impl ModeStore {
         Value::Object(top)
     }
 
-    /// An id for a new mode: `m` and the time in milliseconds, past any id taken (a mode's, or
-    /// the default's while it names no mode, so a new mode never becomes the default by its id).
-    pub fn fresh_id(&self, now_unix_ms: i64) -> String {
+    /// An id for a new mode: `m` and the time in milliseconds, past any id taken: a mode's, the
+    /// default's while it names no mode (so a new mode never becomes the default by its id), or
+    /// one a mode of `doc` is read with, the stored document the save is written into (so a new
+    /// mode never takes a stored object's unknown fields, see [`write_into`](Self::write_into)).
+    /// A `doc` that does not read takes no id ([`write_into`](Self::write_into) refuses it).
+    pub fn fresh_id(&self, now_unix_ms: i64, doc: &str) -> String {
+        let doc = serde_json::from_str::<Value>(doc).ok();
+        let stored: HashSet<String> = doc
+            .as_ref()
+            .and_then(|v| v.get("modes")?.as_array())
+            .map(|list| {
+                own_ids(list.iter().map(|m| m.get("id").and_then(Value::as_str)))
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut ms = now_unix_ms.max(0);
         loop {
             let id = format!("m{ms}");
-            if id != self.default_id && !self.modes.iter().any(|m| m.id == id) {
+            if id != self.default_id
+                && !self.modes.iter().any(|m| m.id == id)
+                && !stored.contains(&id)
+            {
                 return id;
             }
             ms = ms.saturating_add(1);
@@ -837,15 +864,17 @@ fn model_name(n: Option<&str>) -> Result<Option<String>, ModeError> {
 /// name changes, or when the edit confirms it ([`ModeEdit::polish_model_confirm`]); a save that
 /// names the same model and name again (an editor sends every field back) keeps what was
 /// recorded, so a model that moved since stays refused until the user says so. Refused when the
-/// core holds no such model and it is to be recorded ([`ModeError::ModelUnknown`]).
+/// core holds no such model and it is to be recorded ([`ModeError::ModelUnknown`]), and when a
+/// confirmed one sends elsewhere than confirmed ([`ModeError::DestinationChanged`]).
 fn pin_after(
     edit: &ModeEdit,
     before: Option<&ModelPin>,
     model_at: &dyn Fn(&str, Option<&str>) -> Option<Destination>,
 ) -> Result<Option<ModelPin>, ModeError> {
     let name = |n: &Option<String>| model_name(n.as_deref());
+    let confirmed = edit.polish_model_confirm.as_ref();
     let (id, model) = match (&edit.polish_model, &edit.polish_model_name) {
-        (None, None) if !edit.polish_model_confirm => return Ok(before.cloned()),
+        (None, None) if confirmed.is_none() => return Ok(before.cloned()),
         (None, None) => (
             before.map(|p| p.id.clone()),
             before.and_then(|p| p.model.clone()),
@@ -863,10 +892,14 @@ fn pin_after(
         (None, Some(model)) => (before.map(|p| p.id.clone()), name(model)?),
     };
     let Some(id) = id else {
-        // The AI setting's model: no name to give it, and nothing to confirm.
+        // The AI setting's model: no name to give it. A confirm sent with a clear (an editor
+        // sends every field) has nothing left to confirm, so the clear wins; one alone, on a mode
+        // without a model of its own, is refused.
         return match model {
             Some(_) => Err(ModeError::ModelNameInvalid),
-            None if edit.polish_model_confirm => Err(ModeError::ModelUnknown),
+            None if confirmed.is_some() && edit.polish_model.is_none() => {
+                Err(ModeError::ModelUnknown)
+            }
             None => Ok(None),
         };
     };
@@ -874,10 +907,14 @@ fn pin_after(
         return Err(ModeError::ModelNameInvalid);
     }
     let same = before.is_some_and(|b| b.id == id && b.model == model);
-    let to = if same && !edit.polish_model_confirm {
+    let to = if same && confirmed.is_none() {
         before.and_then(|b| b.to.clone())
     } else {
-        Some(model_at(&id, model.as_deref()).ok_or(ModeError::ModelUnknown)?)
+        let now = model_at(&id, model.as_deref()).ok_or(ModeError::ModelUnknown)?;
+        if confirmed.is_some_and(|seen| *seen != now) {
+            return Err(ModeError::DestinationChanged);
+        }
+        Some(now)
     };
     Ok(Some(ModelPin { id, model, to }))
 }
@@ -1611,10 +1648,10 @@ mod edit_tests {
             ],
             ..ModeStore::default()
         };
-        assert_eq!(s.fresh_id(4), "m4");
-        assert_eq!(s.fresh_id(5), "m7");
+        assert_eq!(s.fresh_id(4, ""), "m4");
+        assert_eq!(s.fresh_id(5, ""), "m7");
         assert_eq!(
-            s.fresh_id(-3),
+            s.fresh_id(-3, ""),
             "m0",
             "a clock before 1970 still gives an id"
         );
@@ -1631,6 +1668,9 @@ mod edit_tests {
             ModeError::AppTaken,
             ModeError::NotFound,
             ModeError::ModelUnknown,
+            ModeError::ModelNameInvalid,
+            ModeError::AppInvalid,
+            ModeError::DestinationChanged,
         ];
         let codes: HashSet<_> = all.iter().map(|e| e.code()).collect();
         assert_eq!(codes.len(), all.len());
@@ -1776,7 +1816,7 @@ mod edit_tests {
             modes: vec![with_apps_mode("a", &[]), with_apps_mode("b", &["slack"])],
         };
         assert_eq!(
-            dangling.fresh_id(5),
+            dangling.fresh_id(5, ""),
             "m6",
             "the default's id is never given"
         );
@@ -1951,7 +1991,7 @@ mod edit_tests {
         );
         assert_eq!(
             recorded(ModeEdit {
-                polish_model_confirm: true,
+                polish_model_confirm: moved.clone(),
                 ..pin(Some("provider:anthropic"), Some("model-b"))
             }),
             moved,
@@ -1959,12 +1999,28 @@ mod edit_tests {
         );
         assert_eq!(
             recorded(ModeEdit {
-                polish_model_confirm: true,
+                polish_model_confirm: moved.clone(),
                 ..edit("c")
             }),
             moved,
             "confirmed without naming it"
         );
+        // Confirmed where the user saw it send, which it no longer does: refused, nothing
+        // recorded.
+        for confirmed in [was.clone(), Some(Destination::OnDevice)] {
+            assert_eq!(
+                named.save(
+                    &ModeEdit {
+                        polish_model_confirm: confirmed,
+                        ..edit("c")
+                    },
+                    false,
+                    "m1",
+                    &elsewhere
+                ),
+                Err(ModeError::DestinationChanged)
+            );
+        }
         assert_eq!(
             recorded(pin(Some("provider:anthropic"), Some("model-c"))),
             moved,
@@ -1975,7 +2031,7 @@ mod edit_tests {
             save(
                 &s,
                 ModeEdit {
-                    polish_model_confirm: true,
+                    polish_model_confirm: Some(Destination::OnDevice),
                     ..edit("d")
                 }
             ),
@@ -1985,7 +2041,7 @@ mod edit_tests {
         assert_eq!(
             named.save(
                 &ModeEdit {
-                    polish_model_confirm: true,
+                    polish_model_confirm: was,
                     ..edit("c")
                 },
                 false,
@@ -2014,6 +2070,68 @@ mod edit_tests {
             )
             .unwrap();
         assert_eq!(mode(&cleared, "x").polish_model, None);
+    }
+
+    /// A save that clears the pin and also confirms it (an editor sends every field): the clear
+    /// wins, whether or not the core still holds the model, and wherever it sends now.
+    #[test]
+    fn clearing_a_pin_wins_over_a_confirm_sent_with_it() {
+        let s = imported();
+        let none = |_: &str, _: Option<&str>| None;
+        let elsewhere =
+            |_: &str, _: Option<&str>| Some(Destination::Cloud("https://b.example".into()));
+        for model_at in [
+            &known as &dyn Fn(&str, Option<&str>) -> _,
+            &none,
+            &elsewhere,
+        ] {
+            for clear in [None, Some("  ".to_owned())] {
+                let (cleared, _) = s
+                    .save(
+                        &ModeEdit {
+                            polish_model: Some(clear),
+                            polish_model_confirm: Some(Destination::OnDevice),
+                            ..edit("x")
+                        },
+                        false,
+                        "m1",
+                        model_at,
+                    )
+                    .unwrap();
+                assert_eq!(mode(&cleared, "x").polish_model, None);
+            }
+        }
+    }
+
+    /// A new mode never gets an id a mode of the stored document has, though the store does not
+    /// have it: it would take that mode's unknown fields. A safeguard: a save reads its store from
+    /// the same document, so this case is built by hand here.
+    #[test]
+    fn a_new_mode_never_takes_the_id_of_a_mode_still_stored() {
+        const STORED: &str = r#"{"default_id":"d","modes":[
+            {"id":"d","name":"Everywhere else"},
+            {"id":"m5","name":"Gone","later":{"x":1}},
+            {"id":"m6","name":"Twin"},{"id":"m6","name":"Twin too"}]}"#;
+        let s = ModeStore::from_json(STORED)
+            .unwrap()
+            .delete("m5")
+            .unwrap()
+            .delete("m6")
+            .unwrap()
+            .delete("m6~2")
+            .unwrap();
+        assert_eq!(s.fresh_id(5, STORED), "m7", "m5 and m6 are stored");
+        assert_eq!(s.fresh_id(5, "not a document"), "m5");
+        let id = s.fresh_id(5, STORED);
+        let (after, _) = s.save(&named("New"), false, &id, &known).unwrap();
+        let v: Value = serde_json::from_str(&after.write_into(STORED).unwrap()).unwrap();
+        let new = v["modes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "New")
+            .unwrap();
+        assert_eq!(new.get("later"), None, "{v}");
     }
 
     /// Deleting the first of two modes the import gave one id leaves the other its own stored
