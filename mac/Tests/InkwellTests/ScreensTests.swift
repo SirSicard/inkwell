@@ -2133,6 +2133,34 @@ final class MainWindowWidthTests: XCTestCase {
         }
     }
 
+    /// A saved frame shorter than the minimum (one from before the minimum held, say) opens at the
+    /// minimum: the window is fitted as it is made, before SwiftUI has written its minimum, which
+    /// counts the toolbar, over the window's own.
+    func testAShortSavedFrameOpensAtTheMinimum() throws {
+        let name = "InkwellTests.shortFrame.\(UUID().uuidString)"
+        let key = "NSWindow Frame \(name)"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        UserDefaults.standard.set("100 100 900 300 0 0 1728 1080 ", forKey: key)
+        // A root with a toolbar, as the app's has (Today's own layout is not what is tested).
+        let root = Color.clear.toolbar { ToolbarItem(placement: .primaryAction) { Button("Go") {} } }
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        MainWindowController.place(window, autosaveName: name)
+        XCTAssertEqual(window.frame.width, 900, accuracy: 0.5, "the saved frame was restored")
+        let placed = window.frame.size
+        // SwiftUI's minimum, once written, and the room under the toolbar.
+        let deadline = Date().addingTimeInterval(2)
+        while window.contentMinSize.height <= MainWindowController.minimumContentSize.height, Date() < deadline {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        let toolbar = try XCTUnwrap(window.contentView).frame.height - window.contentLayoutRect.height
+        XCTAssertGreaterThan(toolbar, 20, "the root's toolbar is the window's")
+        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: window.contentMinSize)).size
+        XCTAssertGreaterThanOrEqual(placed.height, minimum.height - 0.5, "opened under SwiftUI's minimum")
+        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, MainWindowController.minimumContentSize.height - 0.5)
+    }
+
     /// The Mode picker's segments, in the app's window, fit the room its row asks for beside its
     /// name, so as the window widens the picker turns from a menu to segments once
     /// (SettingColumnsLayout.segmentedModeRoom); the ink-motion picker's fit the default room.
