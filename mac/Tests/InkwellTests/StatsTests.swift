@@ -517,7 +517,8 @@ final class MilestoneCelebrationTests: XCTestCase {
         try await Task.sleep(for: .seconds(0.6))
         XCTAssertTrue(view.isAnimating, "part way to the next spot")
         let partWay = view.orbCentre
-        let centre = await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main)
+        let glow = Task { await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main) }
+        let centre = try await bounded(glow, "the glow's centre")
         XCTAssertFalse(view.isAnimating, "the glide finished before the glow's centre was read")
         XCTAssertEqual(centre, view.orbCentre, "the glow's centre is the orb's")
         XCTAssertNotEqual(centre, partWay, "where it arrived, not where it was held")
@@ -543,13 +544,12 @@ final class MilestoneCelebrationTests: XCTestCase {
         let orb = OrbHold()
         orb.attach(view)
         let before = view.orbCentre
-        _ = try InkPipelineLoader.shared.wait().get()
-        try await Task.sleep(for: .seconds(0.05))
+        try await pipelineReady()
         let glow = Task { await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main) }
         try await Task.sleep(for: .seconds(0.1))
         view.assumeOnScreen = true
         XCTAssertTrue(view.isAnimating, "held, coming on screen still glides")
-        let centre = await glow.value
+        let centre = try await bounded(glow, "the glow's centre")
         XCTAssertFalse(view.isAnimating)
         XCTAssertEqual(centre, view.orbCentre)
         XCTAssertNotEqual(centre, before, "the new spot, once there")
@@ -564,7 +564,7 @@ final class MilestoneCelebrationTests: XCTestCase {
         let orb = OrbHold()
         orb.attach(view)
         try await show(view)
-        let spot = await orb.hold()
+        let spot = try await bounded(Task { await orb.hold() }, "the orb's spot")
         XCTAssertEqual(spot, view.orbCentre)
         view.assumeOnScreen = false
         view.assumeOnScreen = true
@@ -576,6 +576,27 @@ final class MilestoneCelebrationTests: XCTestCase {
         XCTAssertTrue(view.isAnimating, "let go: coming on screen glides again")
     }
 
+    /// The orb arrives on the display link's ticks, which stop while the display sleeps: a wait for
+    /// it then fails within its bound instead of hanging the suite, and the cancelled hold lets go.
+    func testAWaitForAnOrbThatNeverArrivesFailsInsteadOfHanging() async throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let view = wanderingOrb()
+        let orb = OrbHold()
+        orb.attach(view)
+        try await show(view)
+        XCTAssertTrue(view.isAnimating, "gliding")
+        // No tick reaches it from now on, as with the display asleep: the glide never ends.
+        InkClock.shared.remove(view)
+        do {
+            let spot = try await bounded(Task { await orb.hold() }, "the orb's spot", within: .milliseconds(300))
+            XCTFail("arrived with no tick: \(String(describing: spot))")
+        } catch let late as Unsettled {
+            XCTAssertEqual(late.description, "the orb's spot: not within 0.3 seconds")
+        }
+        orb.release()
+        XCTAssertFalse(view.holdsStill)
+    }
+
     /// A glow cancelled while it waits for the orb lets go at once, without waiting for a glide.
     func testAGlowCancelledWhileItWaitsLetsGoAtOnce() async throws {
         let view = wanderingOrb()
@@ -584,13 +605,13 @@ final class MilestoneCelebrationTests: XCTestCase {
         let glow = Task { await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main) }
         try await Task.sleep(for: .seconds(0.1))
         glow.cancel()
-        _ = await glow.value
+        _ = try await bounded(glow, "the cancelled glow")
         orb.release()
         XCTAssertFalse(view.holdsStill)
     }
 
     /// Holds are counted: a glow ending after the next has begun never lets go of the next one's.
-    func testAnEarlierGlowLettingGoKeepsTheNextOnesHold() async {
+    func testAnEarlierGlowLettingGoKeepsTheNextOnesHold() async throws {
         let view = InkView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
         let orb = OrbHold()
         let unattached = await orb.hold()
@@ -614,7 +635,8 @@ final class MilestoneCelebrationTests: XCTestCase {
         XCTAssertFalse(view.holdsStill, "an extra release changes nothing")
         first.cancel()
         second.cancel()
-        _ = await (first.value, second.value)
+        _ = try await bounded(first, "the first glow's hold")
+        _ = try await bounded(second, "the second glow's hold")
         let home = await MilestoneGlow.holdCentre(nil, home: Glow.Orb.main)
         XCTAssertEqual(home, SIMD2(Glow.Orb.main.x, Glow.Orb.main.yFromTop))
     }
@@ -631,9 +653,46 @@ final class MilestoneCelebrationTests: XCTestCase {
 
     /// Puts the view on screen once the pipeline is ready: it glides to a new spot.
     private func show(_ view: InkView) async throws {
-        _ = try InkPipelineLoader.shared.wait().get()
-        try await Task.sleep(for: .seconds(0.05))
+        try await pipelineReady()
         view.assumeOnScreen = true
+    }
+
+    /// Waits for the shared pipeline's compile, at most `limit` (a cold one is slower under TSan),
+    /// then a turn of the main queue, in which a view made before it adopts it.
+    private func pipelineReady(within limit: Duration = .seconds(60)) async throws {
+        let loader = InkPipelineLoader.shared
+        loader.warm()
+        let start = ContinuousClock.now
+        while loader.outcome == nil {
+            guard ContinuousClock.now - start < limit else { throw Unsettled(what: "the pipeline", limit: limit) }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        _ = try XCTUnwrap(loader.outcome).get()
+        try await Task.sleep(for: .seconds(0.05))
+    }
+
+    /// Waits for `task`, at most `limit`; past it, cancels it and throws. The orb arrives on the
+    /// display link's ticks, which stop while the display sleeps, and an unbounded wait for it once
+    /// hung the suite for 40 minutes. Every wait here ends on cancellation (InkView.settled), so
+    /// the cancelled task returns at once.
+    private func bounded<T>(
+        _ task: Task<T, Never>, _ what: String, within limit: Duration = .seconds(10)
+    ) async throws -> T {
+        let timer = Task {
+            try await Task.sleep(for: limit)
+            task.cancel()
+        }
+        let value = await task.value
+        timer.cancel()
+        // The timer ran to its end only if it cancelled the task.
+        if (try? await timer.value) != nil { throw Unsettled(what: what, limit: limit) }
+        return value
+    }
+
+    private struct Unsettled: Error, CustomStringConvertible {
+        let what: String
+        let limit: Duration
+        var description: String { "\(what): not within \(limit)" }
     }
 }
 
