@@ -111,10 +111,11 @@ public interface ILiveIconTicker
 /// Whether anyone can see the screen, from what Windows says of the session (WindowHook): locked,
 /// disconnected from its screen (another user switched to, a remote desktop closed or taken over
 /// at the console) or with its display off. Each holds the icon asleep until its own end: an
-/// unlock; a connect, at the console or remote (a session moves between them, so either ends a
-/// disconnect); the display on. The app coming to the front ends only the display's, which a missed
-/// notice could otherwise hold for good: the app can come forward while nobody is there (another
-/// launch, a notification), so it never ends a lock or a disconnect. UI thread.
+/// unlock (or a connect, which comes once someone has signed in); a connect, at the console or
+/// remote (a session moves between them, so either ends a disconnect); the display on. The app
+/// coming to the front ends only the display's itself: it can come forward while nobody is there
+/// (another launch, a notification). Instead, at launch and when it comes forward, the session is
+/// asked how it is now (Sync), so a missed lock, unlock or connect can't freeze the icon. UI thread.
 /// </summary>
 public sealed class LiveIconViewers
 {
@@ -130,14 +131,37 @@ public sealed class LiveIconViewers
     /// <summary>The session was locked (true) or unlocked.</summary>
     public void Lock(bool locked) => Locked = locked;
 
-    /// <summary>The session was connected to a screen (true), at the console or remote, or disconnected from it.</summary>
-    public void Connect(bool connected) => Disconnected = !connected;
+    /// <summary>The session was connected to a screen (true), at the console or remote, or disconnected from it. A connect ends a lock too.</summary>
+    public void Connect(bool connected)
+    {
+        Disconnected = !connected;
+        if (connected)
+        {
+            Locked = false;
+        }
+    }
 
     /// <summary>The session's display went on (true, dimmed counting as on) or off.</summary>
     public void Display(bool on) => DisplayOff = !on;
 
     /// <summary>The app came to the front: someone pressed something, so the display is on.</summary>
     public void AppActive() => DisplayOff = false;
+
+    /// <summary>What the session says it is now (FromSession): it replaces what the events left. Null: not known, left as it is.</summary>
+    public void Sync(bool? locked, bool? disconnected)
+    {
+        Locked = locked ?? Locked;
+        Disconnected = disconnected ?? Disconnected;
+    }
+
+    /// <summary>
+    /// A session's answer (WTSINFOEX_LEVEL1's SessionState and SessionFlags): disconnected is
+    /// WTSDisconnected (4); the flags say locked (WTS_SESSIONSTATE_LOCK, 0), unlocked (_UNLOCK, 1),
+    /// or anything else not known (_UNKNOWN is -1). Windows 7 and Server 2008 R2 swapped the two
+    /// flags; Inkwell needs Windows 11.
+    /// </summary>
+    public static (bool? Locked, bool Disconnected) FromSession(int connectState, int sessionFlags) =>
+        (sessionFlags switch { 0 => true, 1 => false, _ => null }, connectState == 4);
 }
 
 /// <summary>The icons' state and their redraws. UI thread.</summary>

@@ -139,6 +139,40 @@ public sealed unsafe partial class WindowHook : IDisposable
         }
     }
 
+    /// <summary>A session as Windows says it is: its id, its WTS_CONNECTSTATE_CLASS and its lock flags (WTSINFOEX_LEVEL1).</summary>
+    public readonly record struct SessionNow(uint Id, int State, int Flags);
+
+    private const uint WtsCurrentSession = uint.MaxValue;
+    private const int WtsSessionInfoEx = 25;
+
+    /// <summary>This process's session now (WTSQuerySessionInformation, WTSSessionInfoEx), or null if Windows can't say.</summary>
+    public static SessionNow? QuerySession()
+    {
+        if (!WTSQuerySessionInformationW(0, WtsCurrentSession, WtsSessionInfoEx, out var buffer, out var bytes) || buffer == 0)
+        {
+            return null;
+        }
+        try
+        {
+            // WTSINFOEXW: Level (1), then its WTSINFOEX_LEVEL1_W at 8 (the union holds
+            // LARGE_INTEGERs): SessionId, SessionState, SessionFlags. Nothing else is read.
+            return bytes >= 20 && Marshal.ReadInt32(buffer) == 1
+                ? new SessionNow((uint)Marshal.ReadInt32(buffer, 8), Marshal.ReadInt32(buffer, 12), Marshal.ReadInt32(buffer, 16))
+                : null;
+        }
+        finally
+        {
+            WTSFreeMemory(buffer);
+        }
+    }
+
+    [LibraryImport("wtsapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WTSQuerySessionInformationW(nint server, uint session, int infoClass, out nint buffer, out uint bytes);
+
+    [LibraryImport("wtsapi32.dll")]
+    private static partial void WTSFreeMemory(nint memory);
+
     [LibraryImport("wtsapi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool WTSRegisterSessionNotification(nint window, uint flags);

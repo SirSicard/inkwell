@@ -1,13 +1,14 @@
 // The main window's message hook (WindowHook), on a hidden window of the test's own: the messages it
 // hears are sent to it as Windows would, and a handler that fails is logged by its type only (an
 // exception's message can carry what the log must never hold), while the message goes on.
+using System.Runtime.InteropServices;
 using TerraFX.Interop.Windows;
 using Xunit;
 using static TerraFX.Interop.Windows.Windows;
 
 namespace Inkwell.Ink.Tests;
 
-public sealed unsafe class WindowHookTests
+public sealed unsafe partial class WindowHookTests
 {
     /// <summary>A hidden top-level window on this thread (never shown).</summary>
     private static HWND Window()
@@ -59,6 +60,21 @@ public sealed unsafe class WindowHookTests
             DestroyWindow(window);
         }
     }
+
+    /// <summary>This process's session, asked of Windows (WTSSessionInfoEx): read at the right offsets, its id is this process's.</summary>
+    [Fact]
+    public void TheSessionCanBeAsked()
+    {
+        var now = WindowHook.QuerySession();
+        Assert.NotNull(now);
+        Assert.True(ProcessIdToSessionId((uint)Environment.ProcessId, out var id));
+        Assert.Equal(id, now.Value.Id);
+        Assert.InRange(now.Value.State, 0, 9); // a WTS_CONNECTSTATE_CLASS
+    }
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ProcessIdToSessionId(uint process, out uint session);
 
     [Fact]
     public void AHandlerThatFailsIsLoggedByItsTypeOnly()

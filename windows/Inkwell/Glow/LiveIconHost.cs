@@ -4,7 +4,8 @@
 // a recording is held still (LiveIconLook.OnShell), as each frame on these surfaces is a call into
 // Explorer. While the session is locked or disconnected (another user switched to, a remote desktop
 // closed) or its display is off (WindowHook), nothing draws (LiveIconViewers): a lock or a
-// disconnect holds until its own unlock or connect, whatever comes to the front meanwhile.
+// disconnect holds until its own unlock or connect, or until the session, asked at launch and when
+// the app comes to the front, says it is over.
 //
 //   the tray      the Halo rim mark with the state's dot or ring (TrayGlyph.Tray); Narrator reads
 //                 its tooltip, which says the state (or what stops the Drop)
@@ -78,6 +79,8 @@ internal sealed class LiveIconHost : IDisposable
         {
             ShowButton();
         }
+        Resync();
+        Awake();
         icon.Attach(traySurface);
         icon.Attach(taskbarSurface);
         drop.Changed += Follow;
@@ -125,11 +128,22 @@ internal sealed class LiveIconHost : IDisposable
     /// <summary>Frames drawn since launch (the energy budget's count).</summary>
     public int Frames => icon.Frames;
 
-    /// <summary>The app came to the front: the display is on (a lock or a disconnect still holds: LiveIconViewers).</summary>
+    /// <summary>The app came to the front: the display is on, and the session is asked how it is (a lock or a disconnect it confirms still holds: LiveIconViewers).</summary>
     public void AppActive()
     {
+        Resync();
         viewers.AppActive();
         Awake();
+    }
+
+    /// <summary>The session as Windows says it is now: a lock, unlock or connect missed (or before launch) can't freeze the icon.</summary>
+    private void Resync()
+    {
+        if (WindowHook.QuerySession() is { } now)
+        {
+            var (locked, disconnected) = LiveIconViewers.FromSession(now.State, now.Flags);
+            viewers.Sync(locked, disconnected);
+        }
     }
 
     /// <summary>What stops the Drop working now, or null: the tray's tooltip says it.</summary>

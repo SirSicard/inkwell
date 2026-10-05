@@ -353,11 +353,50 @@ public class LiveIconTests
         viewers.Lock(true);
         viewers.AppActive();
         Assert.False(viewers.CanSee);
-        viewers.Connect(false);
-        viewers.Connect(true);
-        Assert.False(viewers.CanSee); // connected again, and still locked
         viewers.Lock(false);
         Assert.True(viewers.CanSee);
+    }
+
+    /// <summary>A connect ends a lock too: whoever connects has signed in, so a missed unlock can't hold the icon asleep.</summary>
+    [Fact]
+    public void AConnectEndsALockToo()
+    {
+        var viewers = new LiveIconViewers();
+        viewers.Lock(true);
+        viewers.Connect(false);
+        viewers.Connect(true);
+        Assert.True(viewers.CanSee);
+    }
+
+    /// <summary>
+    /// The session asked now (at launch, and when the app comes forward) replaces what the events
+    /// left, so a missed one can't freeze the icon; what it can't say is left as it was.
+    /// </summary>
+    [Fact]
+    public void TheSessionAskedNowReplacesWhatTheEventsLeft()
+    {
+        var viewers = new LiveIconViewers();
+        viewers.Lock(true);
+        viewers.Connect(false);
+        viewers.Sync(locked: false, disconnected: false);
+        Assert.True(viewers.CanSee);
+        viewers.Sync(locked: null, disconnected: true);
+        Assert.False(viewers.CanSee);
+        Assert.False(viewers.Locked);
+        viewers.Lock(true);
+        viewers.Sync(null, null);
+        Assert.True(viewers.Locked);
+        Assert.True(viewers.Disconnected);
+    }
+
+    /// <summary>The session's answer (WTSINFOEX_LEVEL1): disconnected is WTSDisconnected (4); its flags say locked (0), unlocked (1) or not known (anything else).</summary>
+    [Fact]
+    public void TheSessionsAnswerIsRead()
+    {
+        Assert.Equal<(bool?, bool)>((true, false), LiveIconViewers.FromSession(0, 0));
+        Assert.Equal<(bool?, bool)>((false, false), LiveIconViewers.FromSession(0, 1));
+        Assert.Equal<(bool?, bool)>((null, true), LiveIconViewers.FromSession(4, -1));
+        Assert.Equal<(bool?, bool)>((null, false), LiveIconViewers.FromSession(1, 7));
     }
 
     /// <summary>The display off holds it until the display is on, or the app comes to the front (someone pressed something).</summary>
