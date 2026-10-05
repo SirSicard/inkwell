@@ -257,7 +257,15 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "library.swept" says how many), "import.key_note" (dismissed: import.notes stops
  *       saying what became of 0.2's hotkey), "stats.typing_wpm" (a whole number from 10 to 200,
  *       written plainly: the typing speed stats.get measures time saved against; 40 unless set)
- *       and "stats.celebrate" (on|off: milestones are celebrated; on unless set). A change to the keys or to dictation.polish reaches a
+ *       "stats.celebrate" (on|off: milestones and bests are celebrated; on unless set),
+ *       "stats.rest_days" (none, or ISO weekdays ascending and comma-separated, e.g. 6,7, never
+ *       all seven: days the streak rests on, which neither count nor break it, a dictation on one
+ *       included; a change applies to all of history; none unless set), "stats.streak" (shown|hidden: a
+ *       hidden streak is shown nowhere and its milestones are not celebrated; shown unless set),
+ *       "stats.share_heatmap" (on|off: the share card may carry the heatmap; off unless set; the
+ *       core does nothing with it) and "stats.review_dismissed" (a YYYY-MM-DD date: the first day
+ *       of the week whose review the user dismissed: send week_review's "week" as it came; it
+ *       stays dismissed when the week's first day changes). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
  *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
@@ -375,7 +383,15 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       words dictated, speed against the user's own past, time saved against stats.typing_wpm,
  *       the streak and a heatmap of words per day; meetings' hours, talk time (mic is the user,
  *       far end the others), longest monologue and the user's lines ending in a question mark
- *       (?, ？ or ؟); promises kept, open and overdue; and which milestones are reached. Days are
+ *       (?, ？ or ؟); promises kept, open and overdue; which milestones are reached, each with a
+ *       name to word; the personal bests, from takes made here only (longest and fastest
+ *       dictation, most words in a day, best week, longest meeting, longest monologue); what time
+ *       saved is about (a key and a count, within a fifth); and last week's review until it is
+ *       dismissed (gains and plain facts only). A take the stuck-key watchdog stopped is no best
+ *       and counts in no speed or time saved (its words count).
+ *       A rest day (stats.rest_days) neither counts nor breaks a streak; a pause carries it over
+ *       days without a dictation; ended, it is shown by its latest and longest, never as lost.
+ *       Days are
  *       the user's: "utc_offsets" is the zone's UTC offset over time, oldest first, each from the
  *       moment it took effect (the first also covers everything before it; 1 to 400 of them,
  *       minutes -840 to 840), and "week_start" the ISO weekday weeks start on (1 Monday to 7
@@ -386,6 +402,16 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       once ever, remembered in the library. A library's first check reports none and notes
  *       what is already reached; with stats.celebrate off a milestone is noted, never reported.
  *       Send it at launch and after a dictation or a meeting ends. Takes stats.get's calendar.
+ *       Its "best" is a best the newest take (or today, or this week) just set, with the old value
+ *       and the new, for a short note: at most one a day, none on a library's first check or with
+ *       stats.celebrate off, and only once five earlier entries were beaten. A day's or a week's
+ *       best is reported once, when it first passes the old one, and grows on the shelf after.
+ *   {"cmd":"streak.pause","utc_offsets":[...],"week_start":1,"id":"<ref>"}
+ *   {"cmd":"streak.resume","utc_offsets":[...],"week_start":1,"id":"<ref>"}
+ *       Pause the streak from today (days without a dictation do not count against it, for up to
+ *       90 days unless resumed sooner), or end the running pause (it ends yesterday; one started
+ *       today goes). Either changes nothing when already so. "stats.counted" answers, with the
+ *       "id" as "ref"; the pauses are kept in the library. Takes stats.get's calendar.
  *
  * Returns INK_OK once the command is queued; its outcome arrives as events. A command the core
  * cannot read returns INK_ERR_INVALID_ARGUMENT and queues nothing.

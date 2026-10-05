@@ -164,6 +164,52 @@ fn a_digest_kept_under_other_rules_is_counted_again() {
     assert_eq!(kept, (i64::from(ink_core::stats::DIGEST_VERSION), 3));
 }
 
+/// A library from before the stuck mark (schema 5, digests kept under version 3) keeps its
+/// records: they read as not stuck, their digests are counted again under the current rules
+/// rather than lost, and the mark set after the upgrade reaches the digest.
+#[test]
+fn a_library_from_schema_5_gains_the_stuck_mark_and_keeps_its_digests() {
+    let db = TempDb::new("migrate-v5");
+    let id = {
+        let store = db.open();
+        let id = meeting(&store, 1);
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "kept through the upgrade")])
+            .unwrap();
+        store.digests().unwrap();
+        id
+    };
+    // Schema 5 as it was: no stuck columns, the trigger without them, a digest kept under the
+    // rules of version 3.
+    db.raw()
+        .execute_batch(
+            "DROP TRIGGER record_digest_on_record;
+             ALTER TABLE record DROP COLUMN stuck;
+             ALTER TABLE record_digest DROP COLUMN stuck;
+             UPDATE record_digest SET version = 3;
+             CREATE TRIGGER record_digest_on_record AFTER UPDATE OF
+                 kind, started_at_unix_ms, ended_at_unix_ms, revision, imported ON record BEGIN
+                 DELETE FROM record_digest WHERE record_id = new.id;
+             END;
+             PRAGMA user_version = 5;",
+        )
+        .unwrap();
+    let store = db.open();
+    assert_eq!(user_version(&db.raw()), SCHEMA_VERSION);
+    assert!(!store.record(&id).unwrap().unwrap().stuck);
+    let all = store.digests().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].transcript.mic.words, 4, "counted again, not lost");
+    assert!(!all[0].stuck);
+    let version: i64 = db
+        .raw()
+        .query_row("SELECT version FROM record_digest", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, i64::from(ink_core::stats::DIGEST_VERSION));
+    store.mark_stuck(&id).unwrap();
+    assert!(store.digests().unwrap()[0].stuck);
+}
+
 /// The first read after an upgrade counts the whole library, a batch at a time, so the store's
 /// lock is let go between batches; every record still gets its digest.
 #[test]
@@ -209,7 +255,8 @@ fn a_database_from_before_digests_is_counted_after_the_upgrade() {
         .execute_batch(
             "DROP TRIGGER record_digest_on_insert; DROP TRIGGER record_digest_on_delete;
              DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
-             DROP TABLE record_digest; PRAGMA user_version = 4;",
+             DROP TABLE record_digest; ALTER TABLE record DROP COLUMN stuck;
+             PRAGMA user_version = 4;",
         )
         .unwrap();
     let store = db.open();
@@ -228,7 +275,7 @@ fn migrations_from_empty_reach_the_current_version() {
     drop(db.open());
     let raw = db.raw();
     assert_eq!(user_version(&raw), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 5);
+    assert_eq!(SCHEMA_VERSION, 6);
 
     let mut stmt = raw
         .prepare(
@@ -297,7 +344,8 @@ fn a_database_from_before_removed_lines_is_brought_up_to_date() {
              DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
              DROP TABLE record_digest; DROP TABLE removed_line; DROP TABLE summary_item;
              DROP TABLE commitment_done_evidence; ALTER TABLE commitment DROP COLUMN recipient;
-             ALTER TABLE record DROP COLUMN imported; PRAGMA user_version = 1;",
+             ALTER TABLE record DROP COLUMN imported; ALTER TABLE record DROP COLUMN stuck;
+             PRAGMA user_version = 1;",
         )
         .unwrap();
     }
@@ -352,7 +400,7 @@ fn a_database_from_before_summary_items_is_brought_up_to_date() {
              DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
              DROP TABLE record_digest; DROP TABLE summary_item; DROP TABLE commitment_done_evidence;
              ALTER TABLE commitment DROP COLUMN recipient; ALTER TABLE record DROP COLUMN imported;
-             PRAGMA user_version = 2;",
+             ALTER TABLE record DROP COLUMN stuck; PRAGMA user_version = 2;",
         )
         .unwrap();
     }
@@ -400,7 +448,8 @@ fn a_database_from_before_imports_were_marked_is_brought_up_to_date() {
         raw.execute_batch(
             "DROP TRIGGER record_digest_on_insert; DROP TRIGGER record_digest_on_delete;
              DROP TRIGGER record_digest_on_update; DROP TRIGGER record_digest_on_record;
-             DROP TABLE record_digest; ALTER TABLE record DROP COLUMN imported; PRAGMA user_version = 3;
+             DROP TABLE record_digest; ALTER TABLE record DROP COLUMN imported;
+             ALTER TABLE record DROP COLUMN stuck; PRAGMA user_version = 3;
              INSERT INTO record (id, kind, started_at_unix_ms) VALUES ('from-v3', 'dictation', 2);",
         )
         .unwrap();

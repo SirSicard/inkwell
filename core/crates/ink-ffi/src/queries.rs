@@ -96,13 +96,29 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // The typing speed the Stats screen measures time saved against (crate::stats): whole words
     // a minute, 40 unless set.
     (crate::stats::TYPING_WPM_KEY, &[TYPING_WPM]),
-    // Whether a milestone reached is celebrated (crate::stats). On unless turned off.
+    // Whether a milestone reached, or a best set, is celebrated (crate::stats). On unless turned
+    // off.
     (crate::stats::CELEBRATE_KEY, &["on", "off"]),
+    // The weekdays the streak rests on (crate::stats::rest_days): none unless set.
+    (crate::stats::REST_DAYS_KEY, &["none", REST_DAYS]),
+    // Whether the streak shows anywhere: shown unless hidden.
+    (crate::stats::STREAK_KEY, &["shown", "hidden"]),
+    // Whether the share card may carry the heatmap. Off unless turned on; the shells read it.
+    (crate::stats::SHARE_HEATMAP_KEY, &["on", "off"]),
+    // The week whose review the user dismissed, by its first day.
+    (crate::stats::REVIEW_DISMISSED_KEY, &[DATE]),
 ];
 
 /// In a value list of [`SHELL_SETTINGS`]: a typing speed, a whole number of words a minute in
 /// [`crate::stats::TYPING_WPM_RANGE`], written plainly (`40`).
 pub const TYPING_WPM: &str = "<wpm>";
+
+/// In a value list of [`SHELL_SETTINGS`]: ISO weekdays ascending and comma-separated (`6,7`), as
+/// [`crate::stats::rest_days`] reads them.
+pub const REST_DAYS: &str = "<weekdays, e.g. 6,7>";
+
+/// In a value list of [`SHELL_SETTINGS`]: a date, `YYYY-MM-DD`.
+pub const DATE: &str = "<YYYY-MM-DD>";
 
 /// In a value list of [`SHELL_SETTINGS`]: any colour written `#rrggbb`, in lowercase hex.
 pub const HEX_COLOUR: &str = "#rrggbb";
@@ -534,6 +550,10 @@ fn accepts(allowed: &str, value: &str) -> bool {
             && value
                 .parse::<u32>()
                 .is_ok_and(|w| crate::stats::TYPING_WPM_RANGE.contains(&w))
+    } else if allowed == REST_DAYS {
+        crate::stats::rest_days(value).is_some()
+    } else if allowed == DATE {
+        crate::stats::Calendar::parse_date(value).is_some()
     } else if allowed == HEX_COLOUR {
         // `#` and six lowercase hex digits; the pattern itself is not a colour.
         value.len() == 7

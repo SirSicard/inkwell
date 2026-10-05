@@ -547,6 +547,7 @@ impl ink_core::Store for FailingStore {
         records(query: &ink_core::RecordQuery) -> Vec<ink_core::Record>;
         set_title(id: &ink_core::RecordId, title: &str) -> ();
         finish_record(id: &ink_core::RecordId, ended_at_unix_ms: i64) -> ();
+        mark_stuck(id: &ink_core::RecordId) -> ();
         delete_record(id: &ink_core::RecordId) -> ();
         append_segments(id: &ink_core::RecordId, segments: &[ink_core::Segment]) -> ();
         segments(id: &ink_core::RecordId) -> Vec<ink_core::Segment>;

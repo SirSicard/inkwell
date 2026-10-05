@@ -454,6 +454,56 @@ public enum AudioTimeline: String, Codable, Sendable, Equatable, CaseIterable {
     case estimated
 }
 
+/// A personal best: the dictation held longest, the fastest held at least 30 s (neither a take
+/// the stuck-key watchdog stopped), the most words in a day, the best week, the longest
+/// meeting, the longest monologue.
+public enum BestId: String, Codable, Sendable, Equatable, CaseIterable {
+    case longestDictation = "longest_dictation"
+    case fastestDictation = "fastest_dictation"
+    case mostWordsDay = "most_words_day"
+    case bestWeek = "best_week"
+    case longestMeeting = "longest_meeting"
+    case longestMonologue = "longest_monologue"
+}
+
+/// A best just set, for a short note in the Drop (a dictation's) or at the meeting's end (a
+/// meeting's).
+public struct BestNews: Codable, Sendable, Equatable {
+    /// When, as a BestRow's date.
+    public let date: String
+    /// Which.
+    public let id: BestId
+    /// The best now.
+    public let new: Int64
+    /// The best before.
+    public let old: Int64
+    /// The take holding it, as a BestRow's record.
+    public let record: String?
+    /// What old and new count.
+    public let unit: BestUnit
+}
+
+/// A personal best held.
+public struct BestRow: Codable, Sendable, Equatable {
+    /// When, YYYY-MM-DD: the take's local day, the day, or the week's first day.
+    public let date: String
+    /// Which.
+    public let id: BestId
+    /// The take holding it, for a take's best; absent for a day's or a week's.
+    public let record: String?
+    /// What value counts.
+    public let unit: BestUnit
+    /// The best, in its unit.
+    public let value: Int64
+}
+
+/// What a best's value counts: ms, words a minute, or words.
+public enum BestUnit: String, Codable, Sendable, Equatable, CaseIterable {
+    case ms
+    case wpm
+    case words
+}
+
 /// A model in the catalogue that runs on this OS.
 public struct CatalogueEntry: Codable, Sendable, Equatable {
     /// Its id.
@@ -876,6 +926,8 @@ public struct DictationStarted: Codable, Sendable, Equatable {
 /// The user's dictation, counted on this computer: finished dictations by the local day they
 /// started. Speed and time saved count only dictations that know how long the key was held.
 public struct DictationStats: Codable, Sendable, Equatable {
+    /// Local days with a dictation since the month started.
+    public let activeDaysMonth: Int64?
     /// Dictations, all time.
     public let dictationsAll: Int64
     /// The heatmap's first local day, YYYY-MM-DD: the first day of the week eleven weeks before
@@ -883,16 +935,35 @@ public struct DictationStats: Codable, Sendable, Equatable {
     public let heatmapFirstDay: String
     /// Words dictated per local day, from heatmap_first_day to today.
     public let heatmapWords: [Int64]
+    /// The latest streak, running or ended: what it reached. Once a streak has ended, the shell
+    /// shows this and the longest, never a streak as lost.
+    public let latestStreakDays: Int64?
     /// The longest streak, all time.
     public let longestStreakDays: Int64
+    /// The weekdays the streak rests on (stats.rest_days), ISO: 1 Monday to 7 Sunday; empty for
+    /// none. A rest day neither counts nor breaks the streak.
+    public let restDays: [Int64]?
+    /// What saved_ms_all is about, as saved_about_week.
+    public let savedAboutAll: [TimeEquivalent]?
+    /// What saved_ms_week is about, largest first ("about two feature films"). Absent when
+    /// there is nothing to picture: time lost, under about 12 minutes, or between two counts.
+    public let savedAboutWeek: [TimeEquivalent]?
     /// Time saved all time, ms, as saved_ms_week.
     public let savedMsAll: Int64
     /// Time saved this week, ms: the same words typed at typing_wpm less the time spent
     /// speaking. Negative when speaking took longer.
     public let savedMsWeek: Int64
     /// The current streak: local days with a dictation in a row, one missed day forgiven, two
-    /// ending it. Running while the last such day is today, yesterday, or the day before.
+    /// ending it. A rest day neither counts nor breaks it, with a dictation or without; a
+    /// paused day without a dictation is not missed, and one with a dictation counts. Running
+    /// while at most one day was missed since the last active one (today is never missed).
     public let streakDays: Int64
+    /// Whether the user hid the streak (stats.streak): show no streak line and offer none on
+    /// the share card. The numbers are still counted.
+    public let streakHidden: Bool?
+    /// The first day of the pause running today (streak.pause), YYYY-MM-DD. Absent while none
+    /// runs; a pause ends by itself after 90 days.
+    public let streakPausedSince: String?
     /// Words dictated, all time.
     public let wordsAll: Int64
     /// Words dictated today.
@@ -907,13 +978,20 @@ public struct DictationStats: Codable, Sendable, Equatable {
     public let wpmWeek: Int64?
 
     private enum CodingKeys: String, CodingKey {
+        case activeDaysMonth = "active_days_month"
         case dictationsAll = "dictations_all"
         case heatmapFirstDay = "heatmap_first_day"
         case heatmapWords = "heatmap_words"
+        case latestStreakDays = "latest_streak_days"
         case longestStreakDays = "longest_streak_days"
+        case restDays = "rest_days"
+        case savedAboutAll = "saved_about_all"
+        case savedAboutWeek = "saved_about_week"
         case savedMsAll = "saved_ms_all"
         case savedMsWeek = "saved_ms_week"
         case streakDays = "streak_days"
+        case streakHidden = "streak_hidden"
+        case streakPausedSince = "streak_paused_since"
         case wordsAll = "words_all"
         case wordsToday = "words_today"
         case wordsWeek = "words_week"
@@ -2212,6 +2290,19 @@ public enum MilestoneKind: String, Codable, Sendable, Equatable, CaseIterable {
     case streak
 }
 
+/// A milestone's name, a key the shells word: first_page (1,000 words), notebook (10,000),
+/// short_novel (50,000), novels_worth (100,000), seven_days, thirty_days and hundred_days
+/// (streaks).
+public enum MilestoneName: String, Codable, Sendable, Equatable, CaseIterable {
+    case firstPage = "first_page"
+    case notebook
+    case shortNovel = "short_novel"
+    case novelsWorth = "novels_worth"
+    case sevenDays = "seven_days"
+    case thirtyDays = "thirty_days"
+    case hundredDays = "hundred_days"
+}
+
 /// A milestone and whether the library has reached it.
 public struct MilestoneRow: Codable, Sendable, Equatable {
     /// Its id: words_1000, words_10000, words_50000, words_100000, streak_7, streak_30,
@@ -2219,16 +2310,24 @@ public struct MilestoneRow: Codable, Sendable, Equatable {
     public let id: String
     /// What it counts.
     public let kind: MilestoneKind
+    /// Its name, worded by the shell: the same on the chip, in the celebration and on the share
+    /// card's seal.
+    public let name: MilestoneName?
     /// Whether it is reached.
     public let reached: Bool
     /// The count that reaches it.
     public let threshold: Int64
 }
 
-/// In answer to milestones.check: the milestones reached since the last check, to celebrate.
-/// Each is reported once ever; a library's first check, and any check while stats.celebrate is
-/// off, reports none (what is reached is noted all the same).
+/// In answer to milestones.check: the milestones reached since the last check, to celebrate,
+/// and a best the take just set, for a short note. Each milestone is reported once ever; a
+/// library's first check, and any check while stats.celebrate is off, reports none (what is
+/// reached is noted all the same). A hidden streak's milestones are noted, not reported.
 public struct MilestonesReached: Codable, Sendable, Equatable {
+    /// A best the newest take, today or this week just set: at most one a day, never on a
+    /// library's first check or with stats.celebrate off, and only once it beat at least five
+    /// earlier entries. Absent otherwise.
+    public let best: BestNews?
     /// The newly reached milestones, in the fixed order of stats.counted's; usually none.
     public let milestones: [MilestoneRow]
     /// The id of the command this answers, echoed so the shell can match the answer to its
@@ -2863,16 +2962,21 @@ public struct SpeakerNamed: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// The Stats screen's numbers, in answer to stats.get: counted on this computer from the
-/// library, on the user's calendar. Nothing here is sent anywhere or drawn from what was said.
+/// The Stats screen's numbers, in answer to stats.get, streak.pause or streak.resume: counted
+/// on this computer from the library, on the user's calendar. Nothing here is sent anywhere or
+/// drawn from what was said.
 public struct StatsCounted: Codable, Sendable, Equatable {
+    /// The user's personal bests, from takes made here (never an import's), in a fixed order:
+    /// longest_dictation, fastest_dictation, most_words_day, best_week, longest_meeting,
+    /// longest_monologue. A best not held yet is absent: nothing to show, never a zero.
+    public let bests: [BestRow]?
     /// Dictation.
     public let dictation: DictationStats
     /// Meetings, all time.
     public let meetingsAll: MeetingStats
     /// Meetings that started this month.
     public let meetingsMonth: MeetingStats
-    /// Every milestone, in a fixed order.
+    /// Every milestone, in a fixed order; with the streak hidden, the words milestones only.
     public let milestones: [MilestoneRow]
     /// Promises, all time.
     public let promisesAll: PromiseStats
@@ -2887,8 +2991,13 @@ public struct StatsCounted: Codable, Sendable, Equatable {
     public let type: String
     /// The typing speed time saved is measured against (stats.typing_wpm, 40 unless set).
     public let typingWpm: Int64
+    /// Last week, reviewed, to lead the screen with until the user dismisses it
+    /// (stats.review_dismissed, its week's first day). Absent when last week had no dictation
+    /// and no meeting, or once dismissed.
+    public let weekReview: WeekReview?
 
     private enum CodingKeys: String, CodingKey {
+        case bests
         case dictation
         case meetingsAll = "meetings_all"
         case meetingsMonth = "meetings_month"
@@ -2899,6 +3008,7 @@ public struct StatsCounted: Codable, Sendable, Equatable {
         case today
         case type
         case typingWpm = "typing_wpm"
+        case weekReview = "week_review"
     }
 }
 
@@ -2916,6 +3026,25 @@ public struct SummaryItemRow: Codable, Sendable, Equatable {
     public let span: Span
     /// The item as the summary states it. The library's words: never log it.
     public let text: String
+}
+
+/// Time saved, pictured: about count of key, the nearest whole number, within a fifth of the
+/// time. Always said with "about".
+public struct TimeEquivalent: Codable, Sendable, Equatable {
+    /// How many: 1 to 5, or any number of the largest (working_week).
+    public let count: Int64
+    /// What it is about.
+    public let key: TimeEquivalentKey
+}
+
+/// Something time saved is about, as long as: working_week 40 h, working_day 8 h, feature_film
+/// 2 h, lunch_hour 1 h, coffee_break 15 min.
+public enum TimeEquivalentKey: String, Codable, Sendable, Equatable, CaseIterable {
+    case workingWeek = "working_week"
+    case workingDay = "working_day"
+    case featureFilm = "feature_film"
+    case lunchHour = "lunch_hour"
+    case coffeeBreak = "coffee_break"
 }
 
 /// Why no voice detection model is in use.
@@ -2975,5 +3104,48 @@ public struct VoiceCommandsListed: Codable, Sendable, Equatable {
         case ref
         case type
         case wakePrefix = "wake_prefix"
+    }
+}
+
+/// Last week, reviewed: gains and plain facts only, nothing said to be down.
+public struct WeekReview: Codable, Sendable, Equatable {
+    /// The day with the most words, YYYY-MM-DD (the earliest on a tie). Absent without words.
+    public let bestDay: String?
+    /// Its words.
+    public let bestDayWords: Int64?
+    /// Their length, ms.
+    public let meetingMs: Int64
+    /// Meetings recorded here.
+    public let meetings: Int64
+    /// Of the promises made in its meetings, those done now (no time is kept for when one was
+    /// done). Absent when none.
+    public let promisesKept: Int64?
+    /// What saved_ms is about, as saved_about_week.
+    public let savedAbout: [TimeEquivalent]?
+    /// Time saved, ms, as saved_ms_week. Absent unless there was some.
+    public let savedMs: Int64?
+    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it (kept
+    /// dismissed if the week's first day changes later).
+    public let week: String
+    /// Words dictated.
+    public let words: Int64
+    /// Words per minute, with at least a minute of speech.
+    public let wpm: Int64?
+    /// How many words a minute faster than the four weeks before it. Absent unless it was
+    /// faster: a slower week is never compared.
+    public let wpmGain: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case bestDay = "best_day"
+        case bestDayWords = "best_day_words"
+        case meetingMs = "meeting_ms"
+        case meetings
+        case promisesKept = "promises_kept"
+        case savedAbout = "saved_about"
+        case savedMs = "saved_ms"
+        case week
+        case words
+        case wpm
+        case wpmGain = "wpm_gain"
     }
 }

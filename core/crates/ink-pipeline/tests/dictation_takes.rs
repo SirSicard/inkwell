@@ -129,6 +129,25 @@ fn a_hold_past_the_stuck_limit_is_stopped_and_processed() {
     rig.release();
     rig.silence(0.5);
     assert_eq!(rig.inserted().len(), 1);
+    // The record says the watchdog ended it, so the Stats screen counts no speed or best from
+    // it; the next take, released as usual, is not marked.
+    let stuck = |rig: &Rig| -> Vec<bool> {
+        rig.store
+            .records(&RecordQuery {
+                kind: Some(RecordKind::Dictation),
+                before: None,
+                limit: 10,
+            })
+            .unwrap()
+            .iter()
+            .map(|r| r.stuck)
+            .collect()
+    };
+    assert_eq!(stuck(&rig), [true]);
+    rig.dictate(&speech_48k(1.0, -25.0, 9));
+    rig.silence(0.6);
+    assert_eq!(rig.inserted().len(), 2);
+    assert_eq!(stuck(&rig), [false, true], "newest first");
 }
 
 /// The watchdog wakes by the worker's deadline alone: with the mic stalled as well (no audio at

@@ -184,6 +184,7 @@ fn every_field_round_trips() {
             // Set directly: no pass had to run.
             revision: 3,
             imported: true,
+            stuck: false,
         }
     );
     assert_eq!(store.segments(id).unwrap(), want.segments);

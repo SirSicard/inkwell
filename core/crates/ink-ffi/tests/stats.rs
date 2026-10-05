@@ -306,3 +306,276 @@ fn celebrations_turned_off_celebrate_nothing_later_either() {
     core.shutdown();
     events.assert_valid();
 }
+
+const DAY: i64 = 24 * 60 * MINUTE;
+
+/// The ISO weekday of a UTC day (1970-01-01 was a Thursday).
+fn weekday(day: i64) -> i64 {
+    (day + 3).rem_euclid(7) + 1
+}
+
+fn date(day: i64) -> String {
+    ink_ffi::stats::Calendar::date(day)
+}
+
+fn set(core: &Core, events: &Recorder, key: &str, value: &str) {
+    core.command(&json!({"cmd": "setting.set", "key": key, "value": value}).to_string())
+        .unwrap();
+    events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == key && v["value"] == value
+        })
+        .unwrap_or_else(|| panic!("{key} = {value} not echoed"));
+}
+
+fn get(core: &Core, events: &Recorder, week_start: i64, id: &str) -> Value {
+    let answer = ask(
+        core,
+        events,
+        json!({"cmd": "stats.get", "utc_offsets": utc(), "week_start": week_start}),
+        id,
+    );
+    assert_eq!(answer["type"], "stats.counted", "{answer}");
+    answer
+}
+
+/// The streak's and the share card's settings are the core's to judge: each takes its values in
+/// one spelling, and anything else is refused where it is sent. The pauses and the bests noted
+/// are the core's own.
+#[test]
+fn the_streak_and_share_settings_are_judged_by_the_core() {
+    let dir = TempDir::new("stats-settings");
+    let (core, events) = core(&dir);
+    for (key, value) in [
+        ("stats.rest_days", "6,7"),
+        ("stats.rest_days", "3"),
+        ("stats.rest_days", "none"),
+        ("stats.streak", "hidden"),
+        ("stats.streak", "shown"),
+        ("stats.share_heatmap", "on"),
+        ("stats.share_heatmap", "off"),
+        ("stats.review_dismissed", "2026-09-28"),
+    ] {
+        set(&core, &events, key, value);
+    }
+    for (key, value) in [
+        ("stats.rest_days", "7,6"),
+        ("stats.rest_days", "1,2,3,4,5,6,7"),
+        ("stats.rest_days", ""),
+        ("stats.rest_days", "sat"),
+        ("stats.streak", "off"),
+        ("stats.share_heatmap", "yes"),
+        ("stats.review_dismissed", "2026-02-30"),
+        ("stats.review_dismissed", "last week"),
+        ("stats.streak_pauses", "[]"),
+        ("stats.bests", "{}"),
+    ] {
+        let refused = core
+            .command(&json!({"cmd": "setting.set", "key": key, "value": value}).to_string())
+            .unwrap_err();
+        assert!(refused.contains(key), "{key} = {value}: {refused}");
+    }
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// Rest days and a pause carry a streak over days without a dictation. The pause starts and
+/// ends from the Stats screen, answered with the numbers it changes.
+#[test]
+fn rest_days_and_a_pause_keep_the_streak_going() {
+    let dir = TempDir::new("stats-streak");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    let now = core.shared().clock.unix_ms();
+    let today = now.div_euclid(DAY);
+
+    // Today and three days ago: the two days missed between end a streak.
+    dictate(store.as_ref(), now - 3 * DAY, 10);
+    dictate(store.as_ref(), now, 10);
+    assert_eq!(
+        get(&core, &events, 1, "plain")["dictation"]["streak_days"],
+        1
+    );
+
+    // Those two days' weekdays as rest days: one streak of two.
+    let mut rest = [weekday(today - 1), weekday(today - 2)];
+    rest.sort_unstable();
+    set(
+        &core,
+        &events,
+        "stats.rest_days",
+        &format!("{},{}", rest[0], rest[1]),
+    );
+    let rested = get(&core, &events, 1, "rested");
+    assert_eq!(rested["dictation"]["streak_days"], 2);
+    assert_eq!(rested["dictation"]["rest_days"], json!(rest));
+    set(&core, &events, "stats.rest_days", "none");
+    assert_eq!(
+        get(&core, &events, 1, "unrested")["dictation"]["streak_days"],
+        1
+    );
+
+    // A pause from today: the answer is the summary, saying since when.
+    let paused = ask(
+        &core,
+        &events,
+        json!({"cmd": "streak.pause", "utc_offsets": utc(), "week_start": 1}),
+        "pause",
+    );
+    assert_eq!(paused["type"], "stats.counted", "{paused}");
+    assert_eq!(paused["dictation"]["streak_paused_since"], date(today));
+    assert_eq!(
+        get(&core, &events, 1, "still-paused")["dictation"]["streak_paused_since"],
+        date(today)
+    );
+    // Resumed the day it began: as if it never was.
+    let resumed = ask(
+        &core,
+        &events,
+        json!({"cmd": "streak.resume", "utc_offsets": utc(), "week_start": 1}),
+        "resume",
+    );
+    assert!(resumed["dictation"].get("streak_paused_since").is_none());
+
+    // A pause over the two missed days (as one ended yesterday is kept): one streak again.
+    store
+        .set_setting(
+            "stats.streak_pauses",
+            &json!([{"from": date(today - 2), "until": date(today - 1)}]).to_string(),
+        )
+        .unwrap();
+    assert_eq!(
+        get(&core, &events, 1, "paused")["dictation"]["streak_days"],
+        2
+    );
+
+    // A pause command reads the calendar as stats.get does, and refuses what stats.get refuses.
+    let refused = core
+        .command(&json!({"cmd": "streak.pause", "utc_offsets": [], "week_start": 1}).to_string())
+        .unwrap_err();
+    assert!(refused.contains("utc_offsets"), "{refused}");
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// A take that sets a best says so once, in the milestone check sent after it: which best, the
+/// old value and the new. The library's first check only takes note, and one note a day is all.
+#[test]
+fn a_best_is_news_after_the_take_that_set_it() {
+    let dir = TempDir::new("stats-bests");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    let now = core.shared().clock.unix_ms();
+    let take = |start: i64, held_ms: u64| {
+        add(
+            store.as_ref(),
+            RecordKind::Dictation,
+            start,
+            1,
+            &[line(Channel::Mic, 0, held_ms, &"word ".repeat(50))],
+        )
+    };
+    let check_best = |id: &str| {
+        ask(
+            &core,
+            &events,
+            json!({"cmd": "milestones.check", "utc_offsets": utc(), "week_start": 1}),
+            id,
+        )
+    };
+    assert!(check_best("first").get("best").is_none());
+    // Six takes of 20 s: the shelf's first values, noted without news.
+    // Seconds apart, so the test does not straddle midnight but in its first few seconds.
+    for i in 0..6 {
+        take(now - 20_000 + i * 1_000, 20_000);
+    }
+    assert!(check_best("baseline").get("best").is_none());
+
+    // A longer one: news.
+    let longer = take(now - 10_000, 40_000);
+    let news = check_best("longer");
+    assert_eq!(news["type"], "milestones.reached");
+    let best = &news["best"];
+    assert_eq!(best["id"], "longest_dictation", "{news}");
+    assert_eq!(best["unit"], "ms");
+    assert_eq!(best["old"], 20_000);
+    assert_eq!(best["new"], 40_000);
+    assert_eq!(best["record"], longer.0.as_str());
+    assert_eq!(best["date"], date((now - 10_000).div_euclid(DAY)));
+    assert!(check_best("again").get("best").is_none(), "once");
+
+    // Longer still, the same day: on the shelf, without a second note.
+    take(now - 5_000, 50_000);
+    assert!(check_best("same-day").get("best").is_none());
+    let shelf = get(&core, &events, 1, "shelf");
+    assert_eq!(shelf["bests"][0]["id"], "longest_dictation");
+    assert_eq!(shelf["bests"][0]["value"], 50_000);
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// Last week's review is offered until the user dismisses it, and stays dismissed for that week.
+#[test]
+fn the_week_review_stays_dismissed_for_its_week() {
+    let dir = TempDir::new("stats-review");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    let now = core.shared().clock.unix_ms();
+    let today = now.div_euclid(DAY);
+    // Weeks start on today's weekday, so last week is the seven days before today.
+    let week_start = weekday(today);
+    dictate(store.as_ref(), now - 3 * DAY, 120);
+
+    let review = get(&core, &events, week_start, "review");
+    assert_eq!(review["week_review"]["week"], date(today - 7), "{review}");
+    assert_eq!(review["week_review"]["words"], 120);
+    set(&core, &events, "stats.review_dismissed", &date(today - 7));
+    assert!(
+        get(&core, &events, week_start, "dismissed")
+            .get("week_review")
+            .is_none()
+    );
+    core.shutdown();
+    events.assert_valid();
+}
+
+/// A dictation on a rest day neither counts toward the streak nor breaks it.
+#[test]
+fn a_dictation_on_a_rest_day_neither_counts_nor_breaks() {
+    let dir = TempDir::new("stats-rest-dictation");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    let now = core.shared().clock.unix_ms();
+    let today = now.div_euclid(DAY);
+
+    // Two days ago, yesterday and today: three days in a row.
+    for days_back in [2, 1, 0] {
+        dictate(store.as_ref(), now - days_back * DAY, 10);
+    }
+    assert_eq!(
+        get(&core, &events, 1, "plain")["dictation"]["streak_days"],
+        3
+    );
+    // Yesterday a rest day: its dictation does not count, and the streak runs on through it.
+    set(
+        &core,
+        &events,
+        "stats.rest_days",
+        &weekday(today - 1).to_string(),
+    );
+    let rested = get(&core, &events, 1, "rested");
+    assert_eq!(rested["dictation"]["streak_days"], 2);
+    // Still an active day for the month's count and the heatmap: only the streak rests.
+    assert_eq!(
+        rested["dictation"]["heatmap_words"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>(),
+        [&json!(10), &json!(10)]
+    );
+    core.shutdown();
+    events.assert_valid();
+}

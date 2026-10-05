@@ -370,6 +370,121 @@ public enum AudioTimeline
 }
 
 /// <summary>
+/// A personal best: the dictation held longest, the fastest held at least 30 s (neither a take
+/// the stuck-key watchdog stopped), the most words in a day, the best week, the longest
+/// meeting, the longest monologue.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<BestId>))]
+public enum BestId
+{
+    [JsonStringEnumMemberName("longest_dictation")]
+    LongestDictation,
+    [JsonStringEnumMemberName("fastest_dictation")]
+    FastestDictation,
+    [JsonStringEnumMemberName("most_words_day")]
+    MostWordsDay,
+    [JsonStringEnumMemberName("best_week")]
+    BestWeek,
+    [JsonStringEnumMemberName("longest_meeting")]
+    LongestMeeting,
+    [JsonStringEnumMemberName("longest_monologue")]
+    LongestMonologue,
+}
+
+/// <summary>
+/// A best just set, for a short note in the Drop (a dictation's) or at the meeting's end (a
+/// meeting's).
+/// </summary>
+public sealed record BestNews
+{
+    /// <summary>
+    /// When, as a BestRow's date.
+    /// </summary>
+    [JsonPropertyName("date")]
+    public required string Date { get; init; }
+
+    /// <summary>
+    /// Which.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required BestId Id { get; init; }
+
+    /// <summary>
+    /// The best now.
+    /// </summary>
+    [JsonPropertyName("new")]
+    public required long New { get; init; }
+
+    /// <summary>
+    /// The best before.
+    /// </summary>
+    [JsonPropertyName("old")]
+    public required long Old { get; init; }
+
+    /// <summary>
+    /// The take holding it, as a BestRow's record.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public string? Record { get; init; }
+
+    /// <summary>
+    /// What old and new count.
+    /// </summary>
+    [JsonPropertyName("unit")]
+    public required BestUnit Unit { get; init; }
+}
+
+/// <summary>
+/// A personal best held.
+/// </summary>
+public sealed record BestRow
+{
+    /// <summary>
+    /// When, YYYY-MM-DD: the take's local day, the day, or the week's first day.
+    /// </summary>
+    [JsonPropertyName("date")]
+    public required string Date { get; init; }
+
+    /// <summary>
+    /// Which.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required BestId Id { get; init; }
+
+    /// <summary>
+    /// The take holding it, for a take's best; absent for a day's or a week's.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public string? Record { get; init; }
+
+    /// <summary>
+    /// What value counts.
+    /// </summary>
+    [JsonPropertyName("unit")]
+    public required BestUnit Unit { get; init; }
+
+    /// <summary>
+    /// The best, in its unit.
+    /// </summary>
+    [JsonPropertyName("value")]
+    public required long Value { get; init; }
+}
+
+/// <summary>
+/// What a best's value counts: ms, words a minute, or words.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<BestUnit>))]
+public enum BestUnit
+{
+    [JsonStringEnumMemberName("ms")]
+    Ms,
+    [JsonStringEnumMemberName("wpm")]
+    Wpm,
+    [JsonStringEnumMemberName("words")]
+    Words,
+}
+
+/// <summary>
 /// A model in the catalogue that runs on this OS.
 /// </summary>
 public sealed record CatalogueEntry
@@ -1068,6 +1183,12 @@ public sealed record DictationStarted : InkEvent
 public sealed record DictationStats
 {
     /// <summary>
+    /// Local days with a dictation since the month started.
+    /// </summary>
+    [JsonPropertyName("active_days_month")]
+    public long? ActiveDaysMonth { get; init; }
+
+    /// <summary>
     /// Dictations, all time.
     /// </summary>
     [JsonPropertyName("dictations_all")]
@@ -1087,10 +1208,37 @@ public sealed record DictationStats
     public required global::System.Collections.Generic.IReadOnlyList<long> HeatmapWords { get; init; }
 
     /// <summary>
+    /// The latest streak, running or ended: what it reached. Once a streak has ended, the shell
+    /// shows this and the longest, never a streak as lost.
+    /// </summary>
+    [JsonPropertyName("latest_streak_days")]
+    public long? LatestStreakDays { get; init; }
+
+    /// <summary>
     /// The longest streak, all time.
     /// </summary>
     [JsonPropertyName("longest_streak_days")]
     public required long LongestStreakDays { get; init; }
+
+    /// <summary>
+    /// The weekdays the streak rests on (stats.rest_days), ISO: 1 Monday to 7 Sunday; empty for
+    /// none. A rest day neither counts nor breaks the streak.
+    /// </summary>
+    [JsonPropertyName("rest_days")]
+    public global::System.Collections.Generic.IReadOnlyList<long>? RestDays { get; init; }
+
+    /// <summary>
+    /// What saved_ms_all is about, as saved_about_week.
+    /// </summary>
+    [JsonPropertyName("saved_about_all")]
+    public global::System.Collections.Generic.IReadOnlyList<TimeEquivalent>? SavedAboutAll { get; init; }
+
+    /// <summary>
+    /// What saved_ms_week is about, largest first ("about two feature films"). Absent when
+    /// there is nothing to picture: time lost, under about 12 minutes, or between two counts.
+    /// </summary>
+    [JsonPropertyName("saved_about_week")]
+    public global::System.Collections.Generic.IReadOnlyList<TimeEquivalent>? SavedAboutWeek { get; init; }
 
     /// <summary>
     /// Time saved all time, ms, as saved_ms_week.
@@ -1107,10 +1255,26 @@ public sealed record DictationStats
 
     /// <summary>
     /// The current streak: local days with a dictation in a row, one missed day forgiven, two
-    /// ending it. Running while the last such day is today, yesterday, or the day before.
+    /// ending it. A rest day neither counts nor breaks it, with a dictation or without; a
+    /// paused day without a dictation is not missed, and one with a dictation counts. Running
+    /// while at most one day was missed since the last active one (today is never missed).
     /// </summary>
     [JsonPropertyName("streak_days")]
     public required long StreakDays { get; init; }
+
+    /// <summary>
+    /// Whether the user hid the streak (stats.streak): show no streak line and offer none on
+    /// the share card. The numbers are still counted.
+    /// </summary>
+    [JsonPropertyName("streak_hidden")]
+    public bool? StreakHidden { get; init; }
+
+    /// <summary>
+    /// The first day of the pause running today (streak.pause), YYYY-MM-DD. Absent while none
+    /// runs; a pause ends by itself after 90 days.
+    /// </summary>
+    [JsonPropertyName("streak_paused_since")]
+    public string? StreakPausedSince { get; init; }
 
     /// <summary>
     /// Words dictated, all time.
@@ -3349,6 +3513,30 @@ public enum MilestoneKind
 }
 
 /// <summary>
+/// A milestone's name, a key the shells word: first_page (1,000 words), notebook (10,000),
+/// short_novel (50,000), novels_worth (100,000), seven_days, thirty_days and hundred_days
+/// (streaks).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<MilestoneName>))]
+public enum MilestoneName
+{
+    [JsonStringEnumMemberName("first_page")]
+    FirstPage,
+    [JsonStringEnumMemberName("notebook")]
+    Notebook,
+    [JsonStringEnumMemberName("short_novel")]
+    ShortNovel,
+    [JsonStringEnumMemberName("novels_worth")]
+    NovelsWorth,
+    [JsonStringEnumMemberName("seven_days")]
+    SevenDays,
+    [JsonStringEnumMemberName("thirty_days")]
+    ThirtyDays,
+    [JsonStringEnumMemberName("hundred_days")]
+    HundredDays,
+}
+
+/// <summary>
 /// A milestone and whether the library has reached it.
 /// </summary>
 public sealed record MilestoneRow
@@ -3367,6 +3555,13 @@ public sealed record MilestoneRow
     public required MilestoneKind Kind { get; init; }
 
     /// <summary>
+    /// Its name, worded by the shell: the same on the chip, in the celebration and on the share
+    /// card's seal.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public MilestoneName? Name { get; init; }
+
+    /// <summary>
     /// Whether it is reached.
     /// </summary>
     [JsonPropertyName("reached")]
@@ -3380,12 +3575,21 @@ public sealed record MilestoneRow
 }
 
 /// <summary>
-/// In answer to milestones.check: the milestones reached since the last check, to celebrate.
-/// Each is reported once ever; a library's first check, and any check while stats.celebrate is
-/// off, reports none (what is reached is noted all the same).
+/// In answer to milestones.check: the milestones reached since the last check, to celebrate,
+/// and a best the take just set, for a short note. Each milestone is reported once ever; a
+/// library's first check, and any check while stats.celebrate is off, reports none (what is
+/// reached is noted all the same). A hidden streak's milestones are noted, not reported.
 /// </summary>
 public sealed record MilestonesReached : InkEvent
 {
+    /// <summary>
+    /// A best the newest take, today or this week just set: at most one a day, never on a
+    /// library's first check or with stats.celebrate off, and only once it beat at least five
+    /// earlier entries. Absent otherwise.
+    /// </summary>
+    [JsonPropertyName("best")]
+    public BestNews? Best { get; init; }
+
     /// <summary>
     /// The newly reached milestones, in the fixed order of stats.counted's; usually none.
     /// </summary>
@@ -4435,11 +4639,20 @@ public sealed record SpeakerNamed : InkEvent
 }
 
 /// <summary>
-/// The Stats screen's numbers, in answer to stats.get: counted on this computer from the
-/// library, on the user's calendar. Nothing here is sent anywhere or drawn from what was said.
+/// The Stats screen's numbers, in answer to stats.get, streak.pause or streak.resume: counted
+/// on this computer from the library, on the user's calendar. Nothing here is sent anywhere or
+/// drawn from what was said.
 /// </summary>
 public sealed record StatsCounted : InkEvent
 {
+    /// <summary>
+    /// The user's personal bests, from takes made here (never an import's), in a fixed order:
+    /// longest_dictation, fastest_dictation, most_words_day, best_week, longest_meeting,
+    /// longest_monologue. A best not held yet is absent: nothing to show, never a zero.
+    /// </summary>
+    [JsonPropertyName("bests")]
+    public global::System.Collections.Generic.IReadOnlyList<BestRow>? Bests { get; init; }
+
     /// <summary>
     /// Dictation.
     /// </summary>
@@ -4459,7 +4672,7 @@ public sealed record StatsCounted : InkEvent
     public required MeetingStats MeetingsMonth { get; init; }
 
     /// <summary>
-    /// Every milestone, in a fixed order.
+    /// Every milestone, in a fixed order; with the streak hidden, the words milestones only.
     /// </summary>
     [JsonPropertyName("milestones")]
     public required global::System.Collections.Generic.IReadOnlyList<MilestoneRow> Milestones { get; init; }
@@ -4494,6 +4707,14 @@ public sealed record StatsCounted : InkEvent
     /// </summary>
     [JsonPropertyName("typing_wpm")]
     public required long TypingWpm { get; init; }
+
+    /// <summary>
+    /// Last week, reviewed, to lead the screen with until the user dismisses it
+    /// (stats.review_dismissed, its week's first day). Absent when last week had no dictation
+    /// and no meeting, or once dismissed.
+    /// </summary>
+    [JsonPropertyName("week_review")]
+    public WeekReview? WeekReview { get; init; }
 }
 
 /// <summary>
@@ -4530,6 +4751,44 @@ public sealed record SummaryItemRow
     /// </summary>
     [JsonPropertyName("text")]
     public required string Text { get; init; }
+}
+
+/// <summary>
+/// Time saved, pictured: about count of key, the nearest whole number, within a fifth of the
+/// time. Always said with "about".
+/// </summary>
+public sealed record TimeEquivalent
+{
+    /// <summary>
+    /// How many: 1 to 5, or any number of the largest (working_week).
+    /// </summary>
+    [JsonPropertyName("count")]
+    public required long Count { get; init; }
+
+    /// <summary>
+    /// What it is about.
+    /// </summary>
+    [JsonPropertyName("key")]
+    public required TimeEquivalentKey Key { get; init; }
+}
+
+/// <summary>
+/// Something time saved is about, as long as: working_week 40 h, working_day 8 h, feature_film
+/// 2 h, lunch_hour 1 h, coffee_break 15 min.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<TimeEquivalentKey>))]
+public enum TimeEquivalentKey
+{
+    [JsonStringEnumMemberName("working_week")]
+    WorkingWeek,
+    [JsonStringEnumMemberName("working_day")]
+    WorkingDay,
+    [JsonStringEnumMemberName("feature_film")]
+    FeatureFilm,
+    [JsonStringEnumMemberName("lunch_hour")]
+    LunchHour,
+    [JsonStringEnumMemberName("coffee_break")]
+    CoffeeBreak,
 }
 
 /// <summary>
@@ -4627,4 +4886,79 @@ public sealed record VoiceCommandsListed : InkEvent
     /// </summary>
     [JsonPropertyName("wake_prefix")]
     public required string WakePrefix { get; init; }
+}
+
+/// <summary>
+/// Last week, reviewed: gains and plain facts only, nothing said to be down.
+/// </summary>
+public sealed record WeekReview
+{
+    /// <summary>
+    /// The day with the most words, YYYY-MM-DD (the earliest on a tie). Absent without words.
+    /// </summary>
+    [JsonPropertyName("best_day")]
+    public string? BestDay { get; init; }
+
+    /// <summary>
+    /// Its words.
+    /// </summary>
+    [JsonPropertyName("best_day_words")]
+    public long? BestDayWords { get; init; }
+
+    /// <summary>
+    /// Their length, ms.
+    /// </summary>
+    [JsonPropertyName("meeting_ms")]
+    public required long MeetingMs { get; init; }
+
+    /// <summary>
+    /// Meetings recorded here.
+    /// </summary>
+    [JsonPropertyName("meetings")]
+    public required long Meetings { get; init; }
+
+    /// <summary>
+    /// Of the promises made in its meetings, those done now (no time is kept for when one was
+    /// done). Absent when none.
+    /// </summary>
+    [JsonPropertyName("promises_kept")]
+    public long? PromisesKept { get; init; }
+
+    /// <summary>
+    /// What saved_ms is about, as saved_about_week.
+    /// </summary>
+    [JsonPropertyName("saved_about")]
+    public global::System.Collections.Generic.IReadOnlyList<TimeEquivalent>? SavedAbout { get; init; }
+
+    /// <summary>
+    /// Time saved, ms, as saved_ms_week. Absent unless there was some.
+    /// </summary>
+    [JsonPropertyName("saved_ms")]
+    public long? SavedMs { get; init; }
+
+    /// <summary>
+    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it (kept
+    /// dismissed if the week's first day changes later).
+    /// </summary>
+    [JsonPropertyName("week")]
+    public required string Week { get; init; }
+
+    /// <summary>
+    /// Words dictated.
+    /// </summary>
+    [JsonPropertyName("words")]
+    public required long Words { get; init; }
+
+    /// <summary>
+    /// Words per minute, with at least a minute of speech.
+    /// </summary>
+    [JsonPropertyName("wpm")]
+    public long? Wpm { get; init; }
+
+    /// <summary>
+    /// How many words a minute faster than the four weeks before it. Absent unless it was
+    /// faster: a slower week is never compared.
+    /// </summary>
+    [JsonPropertyName("wpm_gain")]
+    public long? WpmGain { get; init; }
 }

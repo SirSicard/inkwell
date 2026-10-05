@@ -70,6 +70,8 @@ pub struct RecordDigest {
     pub ended_at_unix_ms: Option<i64>,
     /// Whether an import wrote it (see [`Record::imported`](crate::Record::imported)).
     pub imported: bool,
+    /// Whether the stuck-key watchdog ended it (see [`Record::stuck`](crate::Record::stuck)).
+    pub stuck: bool,
     /// Its current transcript, counted.
     pub transcript: TranscriptDigest,
 }
@@ -99,7 +101,9 @@ pub struct CommitmentState {
 /// - 1: the first rules.
 /// - 2: the Arabic question mark (`؟`) ends a question.
 /// - 3: direction marks after a question mark are trimmed ([`DIRECTION_MARKS`]).
-pub const DIGEST_VERSION: u32 = 3;
+/// - 4: a digest carries its record's stuck mark ([`RecordDigest::stuck`]). The transcript's
+///   counts are as in 3; a store recounts its kept digests once, to carry the mark.
+pub const DIGEST_VERSION: u32 = 4;
 
 /// Counts `segments` (one record's current transcript).
 pub fn digest(segments: &[Segment]) -> TranscriptDigest {
@@ -218,11 +222,11 @@ mod tests {
         seg(Channel::Far, start_ms, end_ms, text)
     }
 
-    /// Pins what version 3 of the rules counts for one transcript. If this fails, the rules
-    /// changed: raise [`DIGEST_VERSION`] (so kept digests are recounted), then update the numbers.
+    /// Pins what version 4 of the rules counts for one transcript (as 3 did). If this fails, the
+    /// rules changed: raise [`DIGEST_VERSION`] (so kept digests are recounted), then update the numbers.
     #[test]
-    fn digest_version_3_counts_this_transcript_so() {
-        assert_eq!(DIGEST_VERSION, 3);
+    fn digest_version_4_counts_this_transcript_so() {
+        assert_eq!(DIGEST_VERSION, 4);
         let d = digest(&[
             mic(0, 4_000, "shall we start?"),
             mic(6_500, 9_000, "one two  three"),

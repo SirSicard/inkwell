@@ -26,7 +26,8 @@
 //!   not saved to the library, and never go through voice commands, cleanup, style or snippets.
 //! - **A missed release** (the stuck-key watchdog): a push-to-talk or edit hold longer than
 //!   [`DEFAULT_STUCK_AFTER`] (180 s) is stopped there and processed, with
-//!   [`Warning::ReleaseMissed`]. A toggle take is exempt: a long one is deliberate.
+//!   [`Warning::ReleaseMissed`], and its record is marked stuck, so the Stats screen counts no
+//!   speed, time saved or best from it. A toggle take is exempt: a long one is deliberate.
 //! - **A second press never wipes the take.** A press of the key already held changes nothing in
 //!   push to talk (it is a lost release or a repeat), and is the stop in toggle mode; the take in
 //!   progress is always kept (Inkwell 0.2 once cleared its buffer on such a press).
@@ -329,6 +330,9 @@ pub struct DictationChain {
     live: Option<Live>,
     /// Takes confirmed so far: the next take's number.
     takes_started: u64,
+    /// The stuck-key watchdog stopped the open take: its record is marked stuck when saved
+    /// ([`Store::mark_stuck`](ink_core::Store::mark_stuck)). Cleared at each press.
+    stopped_stuck: bool,
 }
 
 fn detection(vad: &Vad) -> VoiceDetection {
@@ -363,6 +367,7 @@ impl DictationChain {
             live_engine: None,
             live: None,
             takes_started: 0,
+            stopped_stuck: false,
         }
     }
 
@@ -577,6 +582,7 @@ impl DictationChain {
                     self.settings.stuck_after.as_secs()
                 );
                 self.emit(DictationEvent::Warning(Warning::ReleaseMissed));
+                self.stopped_stuck = true;
                 if matches!(self.hold, Hold::Pending { .. }) {
                     self.confirm();
                     if !self.is_recording() {
@@ -633,6 +639,7 @@ impl DictationChain {
             return;
         }
         self.tail.begin(self.recorder.position());
+        self.stopped_stuck = false;
         self.open = Some(Open {
             started_unix_ms: self.services.clock.unix_ms(),
             lost_frames: 0,
@@ -1144,9 +1151,9 @@ impl DictationChain {
         }
     }
 
-    /// Stage 10: one dictation record with one mic segment. A record left half-written is
-    /// deleted, so the library never shows an empty dictation: by a drop guard, so a store that
-    /// panics half way is cleaned up too.
+    /// Stage 10: one dictation record with one mic segment, marked stuck when the watchdog stopped
+    /// the take. A record left half-written is deleted, so the library never shows an empty
+    /// dictation: by a drop guard, so a store that panics half way is cleaned up too.
     fn save(
         &self,
         written: &str,
@@ -1179,7 +1186,14 @@ impl DictationChain {
             }],
         )?;
         store.finish_record(&half.id, self.services.clock.unix_ms())?;
-        Ok(half.keep())
+        let id = half.keep();
+        // Only the Stats screen reads the mark: a store that refuses it costs that, never the take.
+        if self.stopped_stuck
+            && let Err(error) = store.mark_stuck(&id)
+        {
+            log::warn!("dictation: the take the watchdog stopped could not be marked: {error}");
+        }
+        Ok(id)
     }
 
     /// The chain's part of a voice command: style, polish and fixed text
