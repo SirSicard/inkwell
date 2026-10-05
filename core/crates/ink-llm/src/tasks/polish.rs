@@ -261,6 +261,14 @@ fn is_number_word(word: &str) -> bool {
 /// The words a model opens with when it introduces its answer ("Sure! Here you go:").
 const INTRODUCTIONS: &[&str] = &["here", "sure", "certainly", "okay"];
 
+/// Whether `answer` speaks of the model itself or of the request rather than giving back `given`,
+/// the words the model was handed, rewritten: [`talks_about_itself`] for any task whose answer
+/// replaces the user's text. Voice edit uses it: an edit may rewrite every word, so this is the
+/// only check its answer gets.
+pub(crate) fn speaks_of_itself(given: &str, answer: &str) -> bool {
+    talks_about_itself(&words(given), answer, &words(answer))
+}
+
 /// Whether `answer` speaks of itself or the request: a [`SELF_TALK`] phrase the dictation did not
 /// say, or an opening that introduces what follows: a first line that starts with one of the
 /// [`INTRODUCTIONS`] and has a clause ending in a colon with words the dictation did not say
