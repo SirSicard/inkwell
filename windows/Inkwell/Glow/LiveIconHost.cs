@@ -4,8 +4,8 @@
 // a recording is held still (LiveIconLook.OnShell), as each frame on these surfaces is a call into
 // Explorer. While the session is locked or disconnected (another user switched to, a remote desktop
 // closed) or its display is off (WindowHook), nothing draws (LiveIconViewers): a lock or a
-// disconnect holds until its own unlock or connect, or until the session, asked at launch and when
-// the app comes to the front, says it is over.
+// disconnect holds until its own unlock or connect, or until the session, asked at launch, on each
+// connect and when the app comes to the front, says it is over.
 //
 //   the tray      the Halo rim mark with the state's dot or ring (TrayGlyph.Tray); Narrator reads
 //                 its tooltip, which says the state (or what stops the Drop)
@@ -116,6 +116,12 @@ internal sealed class LiveIconHost : IDisposable
         hook.Connected += value =>
         {
             viewers.Connect(value);
+            // Back on a screen, maybe still locked (a remote desktop reconnecting, a switch back to
+            // a locked user): the session says, rather than the connect.
+            if (value)
+            {
+                Resync();
+            }
             Awake();
         };
         hook.DisplayOn += on =>

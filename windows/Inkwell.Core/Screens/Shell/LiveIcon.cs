@@ -111,11 +111,12 @@ public interface ILiveIconTicker
 /// Whether anyone can see the screen, from what Windows says of the session (WindowHook): locked,
 /// disconnected from its screen (another user switched to, a remote desktop closed or taken over
 /// at the console) or with its display off. Each holds the icon asleep until its own end: an
-/// unlock (or a connect, which comes once someone has signed in); a connect, at the console or
-/// remote (a session moves between them, so either ends a disconnect); the display on. The app
-/// coming to the front ends only the display's itself: it can come forward while nobody is there
-/// (another launch, a notification). Instead, at launch and when it comes forward, the session is
-/// asked how it is now (Sync), so a missed lock, unlock or connect can't freeze the icon. UI thread.
+/// unlock; a connect, at the console or remote (a session moves between them, so either ends a
+/// disconnect); the display on. A session can come back to a screen still locked, so a connect
+/// leaves a lock as it is. The app coming to the front ends only the display's itself: it can come
+/// forward while nobody is there (another launch, a notification). Instead, at launch, on each
+/// connect and when it comes forward, the session is asked how it is now (Sync), so a missed lock,
+/// unlock or connect can't freeze the icon. UI thread.
 /// </summary>
 public sealed class LiveIconViewers
 {
@@ -131,15 +132,8 @@ public sealed class LiveIconViewers
     /// <summary>The session was locked (true) or unlocked.</summary>
     public void Lock(bool locked) => Locked = locked;
 
-    /// <summary>The session was connected to a screen (true), at the console or remote, or disconnected from it. A connect ends a lock too.</summary>
-    public void Connect(bool connected)
-    {
-        Disconnected = !connected;
-        if (connected)
-        {
-            Locked = false;
-        }
-    }
+    /// <summary>The session was connected to a screen (true), at the console or remote, or disconnected from it. A lock is left as it is: the session says (Sync).</summary>
+    public void Connect(bool connected) => Disconnected = !connected;
 
     /// <summary>The session's display went on (true, dimmed counting as on) or off.</summary>
     public void Display(bool on) => DisplayOff = !on;

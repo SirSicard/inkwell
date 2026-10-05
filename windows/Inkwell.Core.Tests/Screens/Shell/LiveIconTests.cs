@@ -357,15 +357,17 @@ public class LiveIconTests
         Assert.True(viewers.CanSee);
     }
 
-    /// <summary>A connect ends a lock too: whoever connects has signed in, so a missed unlock can't hold the icon asleep.</summary>
+    /// <summary>A connect ends a disconnect only: a session can come back to a screen still locked (a remote desktop reconnecting, a switch back to a locked user); the session is asked then (Sync).</summary>
     [Fact]
-    public void AConnectEndsALockToo()
+    public void AConnectLeavesALockAsItIs()
     {
         var viewers = new LiveIconViewers();
         viewers.Lock(true);
         viewers.Connect(false);
         viewers.Connect(true);
-        Assert.True(viewers.CanSee);
+        Assert.False(viewers.Disconnected);
+        Assert.True(viewers.Locked);
+        Assert.False(viewers.CanSee);
     }
 
     /// <summary>
