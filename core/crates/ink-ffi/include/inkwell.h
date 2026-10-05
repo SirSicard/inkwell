@@ -165,7 +165,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       never made ("meeting.stopped", then "meeting.discarded"). Later it is refused with code
  *       "delete_window_over": stop it, then delete it from the library. Its answer is what
  *       happens: refused when the meeting had already stopped and is being finished, or had
- *       failed, so no "meeting.discarded" is waited for that cannot come.
+ *       failed. A delete granted ends with "meeting.discarded", or, should the meeting fail on
+ *       its way, with "meeting.failed" or "meeting.worker_failed" (what it had recorded is
+ *       deleted at the next launch).
  *   {"cmd":"meeting.dismiss","app":"<app id>"}
  *       "Not this one": the offer ends ("meeting.detection_ended" with "dismissed") and that app
  *       is not offered again until it releases the microphone.

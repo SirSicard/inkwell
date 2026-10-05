@@ -64,17 +64,42 @@ impl From<String> for NotStarted {
     }
 }
 
-/// `signal` with its app's identity as the core keeps it ([`crate::calls::identity`]: lowercased
-/// on Windows), so detection, the policies and every event compare and say it one way.
+/// `signal` with its app as the core keeps it ([`kept`]), so detection, the policies and every
+/// event compare and say it one way.
 fn identified(signal: MeetingSignal) -> MeetingSignal {
-    let keep = |app: AppRef| AppRef {
-        id: crate::calls::identity(&app.id),
-        ..app
-    };
     match signal {
-        MeetingSignal::MicInUse { app } => MeetingSignal::MicInUse { app: keep(app) },
-        MeetingSignal::MicReleased { app } => MeetingSignal::MicReleased { app: keep(app) },
-        other => other,
+        MeetingSignal::MicInUse { app } => MeetingSignal::MicInUse { app: kept(app) },
+        MeetingSignal::MicReleased { app } => MeetingSignal::MicReleased { app: kept(app) },
+        MeetingSignal::Lost { reason } => MeetingSignal::Lost { reason },
+    }
+}
+
+/// What an app is called when neither its name nor its identity shows anything.
+const NAMELESS: &str = "an app";
+
+/// `app` as the core keeps it: its identity as [`crate::calls::identity`] says (lowercased on
+/// Windows), its name as the shell may show it ([`crate::calls::clean_name`]: no invisible
+/// characters, one line, cut to length), else its identity cleaned the same way, else
+/// [`NAMELESS`]: the consent Drop never shows what the cleaning would drop.
+fn kept(app: AppRef) -> AppRef {
+    let id = crate::calls::identity(&app.id);
+    let name = crate::calls::clean_name(&app.name)
+        .or_else(|| crate::calls::clean_name(&id))
+        .unwrap_or_else(|| NAMELESS.to_owned());
+    AppRef { id, name, ..app }
+}
+
+/// The app `meeting.start` names: as detection offered it (its name for the shell), or as the
+/// command names it, kept as a signal's app is.
+fn start_app(app_id: &str, offered: Option<&AppRef>) -> AppRef {
+    let id = crate::calls::identity(app_id);
+    match offered {
+        Some(offered) if offered.id == id => offered.clone(),
+        _ => kept(AppRef {
+            name: app_id.to_owned(),
+            id,
+            pid: None,
+        }),
     }
 }
 
@@ -309,10 +334,7 @@ impl State {
 
     fn handle(&mut self, msg: Msg) {
         match msg {
-            Msg::Start { id, app, title } => {
-                let app = app.as_deref().map(crate::calls::identity);
-                self.start(id.as_deref(), app, title);
-            }
+            Msg::Start { id, app, title } => self.start(id.as_deref(), app, title),
             Msg::Stop { id } => self.stop(id.as_deref()),
             Msg::Discard { id } => self.discard(id.as_deref()),
             Msg::Dismiss { id, app } => {
@@ -515,14 +537,28 @@ impl State {
             );
         }
         let mut next = self.policies.clone();
-        let lowered = match next.choose(app, policy) {
-            Ok(lowered) => lowered,
+        let started_over = match next.choose(app, policy) {
+            Ok(started_over) => started_over,
             Err(e) => return self.failed(NAME, id, &e),
         };
-        // The default is the queries thread's to write: lowered here only while the store still
-        // says Always, so a default the user set meanwhile stands (its reload follows this).
-        let lowered = lowered
-            && crate::calls::read_default(self.shared.store.as_ref()) == Ok(CallPolicy::Always);
+        // Starting over under Always lowers the default to Ask, decided from the store alone
+        // (the default is the queries thread's: what this thread last read may be stale). Lowered
+        // unless the store positively says Ask or Never; a read that fails lowers too. No
+        // compare-and-set: a default the user sets between this read and the write below is lost
+        // to Ask (a Never just set becomes Ask: offered, never recorded). Its reload follows.
+        let stored = started_over.then(|| crate::calls::read_default(self.shared.store.as_ref()));
+        let lowered = match stored {
+            None => false,
+            // What the store says stands, here at once (this thread's may be a stale Always).
+            Some(Ok(stored_default @ (CallPolicy::Ask | CallPolicy::Never))) => {
+                next.set_default(stored_default);
+                false
+            }
+            Some(_) => {
+                next.set_default(CallPolicy::Ask);
+                true
+            }
+        };
         let list = next.to_json();
         // The list and, when starting over lowered it, the default: both or neither.
         let mut writes = vec![(crate::calls::APPS_KEY, list.as_str())];
@@ -545,7 +581,8 @@ impl State {
         if lowered {
             log::info!("call policies: started over under Always; the default is Ask now");
             answer["message"] = "the stored choices could not be read and were started over; the \
-                default was Always and is Ask now: set it to Always again to record every app"
+                default is Ask now (it was Always, or could not be read): set it to Always again \
+                to record every app"
                 .into();
             // For a screen that shows the default (the queries thread answers it the same way).
             self.shared.events.emit(event(
@@ -620,15 +657,7 @@ impl State {
     }
 
     fn start(&mut self, id: Option<&str>, app: Option<String>, title: Option<String>) {
-        // The app as detection knows it (its name for the shell), or as the command names it.
-        let app: Option<AppRef> = app.map(|app_id| match self.detection.offered() {
-            Some(offered) if offered.id == app_id => offered.clone(),
-            _ => AppRef {
-                name: app_id.clone(),
-                id: app_id,
-                pid: None,
-            },
-        });
+        let app = app.map(|app_id| start_app(&app_id, self.detection.offered()));
         match self.open_and_start(app, title, false) {
             Ok(()) => {}
             // Never for a start the user made: only a policy's start is refused for its scope.
@@ -885,7 +914,8 @@ mod tests {
     use super::*;
 
     /// Where an identity enters the core it is kept one way: lowercased on Windows, as Windows
-    /// compares executables, and as given elsewhere; the name always as given.
+    /// compares executables, and as given elsewhere; the name as given, but what the shell must
+    /// never show.
     #[test]
     fn a_signals_identity_is_kept_as_the_core_compares_it() {
         let app = AppRef {
@@ -893,7 +923,7 @@ mod tests {
             name: "Zoom Workplace".into(),
             pid: Some(7),
         };
-        let MeetingSignal::MicInUse { app: kept } = identified(MeetingSignal::MicInUse { app })
+        let MeetingSignal::MicInUse { app: held } = identified(MeetingSignal::MicInUse { app })
         else {
             panic!("the same signal");
         };
@@ -902,12 +932,67 @@ mod tests {
         } else {
             "Zoom.EXE"
         };
-        assert_eq!(kept.id, id);
-        assert_eq!(kept.name, "Zoom Workplace");
-        assert_eq!(kept.pid, Some(7));
+        assert_eq!(held.id, id);
+        assert_eq!(held.name, "Zoom Workplace");
+        assert_eq!(held.pid, Some(7));
         let lost = MeetingSignal::Lost {
             reason: "gone".into(),
         };
-        assert!(matches!(identified(lost), MeetingSignal::Lost { .. }));
+        assert_eq!(identified(lost.clone()), lost);
+        // A name the shell would show spoofed, or blank: cleaned, else the identity.
+        let MeetingSignal::MicReleased { app: spoofed } = identified(MeetingSignal::MicReleased {
+            app: AppRef {
+                id: "chat.exe".into(),
+                name: "Zo\u{202E}om\u{200B}\nMeetings\u{00A0}".into(),
+                pid: None,
+            },
+        }) else {
+            panic!("the same signal");
+        };
+        assert_eq!(spoofed.name, "ZoomMeetings");
+        let blank = kept(AppRef {
+            id: "chat.exe".into(),
+            name: "\u{200B}\u{3164}".into(),
+            pid: None,
+        });
+        assert_eq!(blank.name, "chat.exe");
+        // A blank name and an identity that would spoof one: the identity cleaned, never raw.
+        let hostile = kept(AppRef {
+            id: "us.zoom.xos\u{202E}\u{200B}".into(),
+            name: String::new(),
+            pid: None,
+        });
+        assert_eq!(hostile.name, "us.zoom.xos");
+        assert_eq!(
+            hostile.id, "us.zoom.xos\u{202E}\u{200B}",
+            "the identity as given"
+        );
+        let nothing = kept(AppRef {
+            id: "\u{200B}".into(),
+            name: "\u{3164}".into(),
+            pid: None,
+        });
+        assert_eq!(nothing.name, NAMELESS);
+    }
+
+    /// `meeting.start`'s app, folded as a signal's is, so it finds the offer it answers (and
+    /// takes its name) whatever case the shell sent; one never offered is named by its identity.
+    #[test]
+    fn a_started_app_is_found_by_its_identity_as_kept() {
+        let offered = kept(AppRef {
+            id: "Zoom.exe".into(),
+            name: "Zoom".into(),
+            pid: Some(3),
+        });
+        let started = start_app("ZOOM.EXE", Some(&offered));
+        if cfg!(windows) {
+            assert_eq!(started, offered, "the offer, by its identity in lowercase");
+        } else {
+            assert_eq!(started.id, "ZOOM.EXE", "bundle ids keep their case");
+            assert_eq!(started.pid, None, "not the offer");
+        }
+        let unoffered = start_app("chat\u{200B}.exe", None);
+        assert_eq!(unoffered.name, "chat.exe", "the name cleaned");
+        assert_eq!(unoffered.pid, None);
     }
 }

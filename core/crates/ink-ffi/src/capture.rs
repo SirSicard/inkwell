@@ -428,13 +428,10 @@ mod win {
 
     impl MeetingCapture for WinMeetingCapture {
         fn planned_far(&self, app: &AppRef) -> Option<FarScope> {
-            // The plan's own list, compared as it compares it: any other app is heard by device
-            // loopback, whatever runs. One on the list is known only once opened (not running:
-            // everything instead).
-            let alone = ink_platform_win::capture::PROCESS_LOOPBACK_APPS
-                .iter()
-                .any(|exe| exe.eq_ignore_ascii_case(&app.id));
-            (!alone).then_some(FarScope::Everything)
+            // The plan's own test: any other app is heard by device loopback, whatever runs. One
+            // on the list is known only once opened (not running: everything instead).
+            (!ink_platform_win::capture::is_process_loopback_app(&app.id))
+                .then_some(FarScope::Everything)
         }
 
         fn open(&self, app: Option<&AppRef>, headset_mic: bool) -> Result<Opened, String> {

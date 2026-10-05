@@ -695,6 +695,22 @@ mod tests {
         assert_eq!(d.tick(3 * S), vec![Action::Record(app("meet"))]);
     }
 
+    /// The hold is judged by the clock, not by whether a tick has seen it yet: an app made Always
+    /// after its hold passed, with no tick in between (so not yet reported seen), is asked about,
+    /// never recorded by the click.
+    #[test]
+    fn an_app_made_always_after_its_hold_by_the_clock_is_asked_about_though_no_tick_saw_it() {
+        let mut d = with(CallPolicy::Never, &[]);
+        d.signal(uses("zoom"), 0);
+        assert!(d.take_seen().is_empty(), "no tick yet: not seen");
+        assert_eq!(
+            d.set_policies(policies(CallPolicy::Always, &[]), 5 * S),
+            vec![Action::Offer(app("zoom"))]
+        );
+        assert_eq!(d.take_seen(), vec![app("zoom")], "seen by the judging");
+        assert!(d.tick(10 * S).is_empty(), "offered, not recorded");
+    }
+
     #[test]
     fn an_always_app_queued_behind_a_recording_is_still_recorded_after_an_unrelated_change() {
         let mut d = with(CallPolicy::Ask, &[("zoom", CallPolicy::Always)]);

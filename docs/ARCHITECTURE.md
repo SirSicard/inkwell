@@ -425,7 +425,9 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   deletes it at the next launch. After the minute only Stop is left (`delete_window_over`); the
   record can be deleted from the library once it is finished. A meeting already being finished,
   or whose worker failed, refuses it at once: which of the user and the worker decides is settled
-  once (`DiscardGate`), so the answer is what happens.
+  once (`DiscardGate`), so the answer is what happens. A delete granted just before the meeting
+  fails ends with that failure (`meeting.failed`, `meeting.worker_failed`) rather than
+  `meeting.discarded`, and its marker deletes what it had recorded at the next launch.
 - **Capture.** On the Mac: the routed mic's own IOProc (the built-in mic with Bluetooth output,
   unless `meetings.headset_mic`) and a process tap of the meeting's app, else of everything this
   Mac plays except Inkwell. On Windows: the routed mic (WASAPI), and for the far end process

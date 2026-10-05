@@ -466,8 +466,10 @@ impl MeetingRun {
     /// it (then it is kept, and finished). Decided once, with the worker ([`DiscardGate`]), so the
     /// answer is what happens. The intent is written beside the audio at once, so a crash from
     /// here deletes it at the next launch rather than finishing it.
-    /// A worker that is over (it failed, panicked or finished) never deletes: false, so the shell
-    /// never waits for a `meeting.discarded` that cannot come.
+    /// A worker that is over (it failed, panicked or finished) never deletes: false, and the shell
+    /// is told so at once. A delete granted just before the worker fails ends with that failure
+    /// (`meeting.failed` or `meeting.worker_failed`) instead of `meeting.discarded`; if it had
+    /// started to record, its marker still says to delete, so the next launch does.
     pub fn discard(&self) -> bool {
         if self.is_over() || !self.discard.ask() {
             return false;
@@ -1272,8 +1274,8 @@ mod tests {
     }
 
     /// A meeting whose worker is over (here: nothing to capture, so it ends at once and its pass
-    /// finishes or fails) refuses Stop and delete: the shell is told at once, never left waiting
-    /// for a `meeting.discarded` that cannot come. The worker decided before it was over, so the
+    /// finishes or fails) refuses Stop and delete: the shell is told at once, not left waiting for a
+    /// `meeting.discarded` that cannot come. The worker decided before it was over, so the
     /// gate refuses too, whatever the order.
     #[test]
     fn a_meeting_whose_worker_is_over_refuses_to_be_deleted() {

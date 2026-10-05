@@ -2390,7 +2390,7 @@ fn an_always_app_that_cannot_be_recorded_alone_is_offered_instead() {
 }
 
 /// A meeting whose worker failed (its record could not be made, so it never started) refuses
-/// Stop and delete at once: the shell is never left waiting for a meeting.discarded that cannot
+/// Stop and delete at once: the shell is not left waiting for a meeting.discarded that cannot
 /// come.
 #[test]
 fn a_meeting_that_failed_to_start_refuses_to_be_deleted() {
@@ -2418,4 +2418,61 @@ fn a_meeting_that_failed_to_start_refuses_to_be_deleted() {
     assert_eq!(r.events.count("meeting.discarded"), 0);
     r.events.assert_valid();
     r.core.shutdown();
+}
+
+/// Starting an unreadable list over lowers the default from what the store says, not what the
+/// meetings thread last read: a Never the store holds stands; a store that cannot be read lowers
+/// it (fail closed: never Always on a guess).
+#[test]
+fn starting_over_lowers_the_default_from_what_the_store_says() {
+    for (label, after_load, lowered) in [
+        ("store-never", "never", false),
+        ("store-ask", "ask", false),
+        ("store-fails", "", true),
+    ] {
+        let store = FailingStore::new(memory_store());
+        store
+            .set_setting(ink_ffi::calls::DEFAULT_KEY, "always")
+            .unwrap();
+        store
+            .set_setting(ink_ffi::calls::APPS_KEY, "{\"apps\": 7}")
+            .unwrap();
+        let d = Driven::new(label, store.clone());
+        d.listening(true);
+        // Behind the meetings thread's back: no reload says so.
+        if after_load.is_empty() {
+            store.fail(&["setting"]);
+        } else {
+            store
+                .inner
+                .set_setting(ink_ffi::calls::DEFAULT_KEY, after_load)
+                .unwrap();
+        }
+        d.command(
+            r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"never","replace_unreadable":true,"id":"r"}"#,
+        );
+        let listed = d.answer("meetings.calls", "r");
+        store.heal();
+        let stored = store.inner.setting(ink_ffi::calls::DEFAULT_KEY).unwrap();
+        if lowered {
+            assert_eq!(stored.as_deref(), Some("ask"), "{label}");
+            assert_eq!(listed["default"], "ask", "{listed}: this thread's too");
+            assert!(
+                listed["message"].as_str().unwrap().contains("Ask now"),
+                "{listed}"
+            );
+        } else {
+            assert_eq!(
+                stored.as_deref(),
+                Some(after_load),
+                "{label}: the store's stands"
+            );
+            assert!(listed.get("message").is_none(), "{listed}");
+            // And is this thread's at once: never the stale Always it last read.
+            assert_eq!(listed["default"], after_load, "{listed}");
+        }
+        assert_eq!(listed["apps"][0]["policy"], "never", "{listed}");
+        d.r.events.assert_valid();
+        d.r.core.shutdown();
+    }
 }
