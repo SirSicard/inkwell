@@ -608,6 +608,7 @@ fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store)
     let ghost = RecordId("nope".into());
     let nf = Err(StoreError::NotFound);
     assert_eq!(store.finish_record(&ghost, 1), nf);
+    assert_eq!(store.mark_stuck(&ghost), nf);
     assert_eq!(
         store.append_segments(&ghost, &[seg(Channel::Mic, 0, "x")]),
         nf
@@ -1080,6 +1081,7 @@ fn fields_round_trip(store: &dyn Store) {
             revision: 1,
             // Made here, from a file: no importer wrote it.
             imported: false,
+            stuck: false,
         }
     );
 
@@ -1502,6 +1504,51 @@ fn commitment_states_cover_every_commitment(store: &dyn Store) {
     );
 }
 
+/// The stuck-key watchdog's mark: kept on the record it is set on, never on another, and in the
+/// record's digest, also when the digest was counted before the mark was set.
+fn a_stuck_mark_is_kept_and_reaches_the_digest(store: &dyn Store) {
+    let take = |start: i64| {
+        let id = store
+            .create_record(NewRecord {
+                kind: RecordKind::Dictation,
+                title: None,
+                started_at_unix_ms: start,
+                source_app: None,
+                audio_dir: None,
+            })
+            .unwrap();
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "held and held")])
+            .unwrap();
+        store.finish_record(&id, start + 180_000).unwrap();
+        id
+    };
+    let (stuck, fine) = (take(10), take(20));
+    assert!(
+        !store.record(&stuck).unwrap().unwrap().stuck,
+        "unmarked at first"
+    );
+    // Counted (and, by the SQLite store, kept) before the mark.
+    assert!(store.digests().unwrap().iter().all(|d| !d.stuck));
+    store.mark_stuck(&stuck).unwrap();
+    assert!(store.record(&stuck).unwrap().unwrap().stuck);
+    assert!(!store.record(&fine).unwrap().unwrap().stuck);
+    let all = store.digests().unwrap();
+    let marked = |id: &RecordId| all.iter().find(|d| &d.record == id).unwrap().stuck;
+    assert!(marked(&stuck), "the kept digest follows the mark");
+    assert!(!marked(&fine));
+    assert_eq!(
+        all.iter()
+            .find(|d| d.record == stuck)
+            .unwrap()
+            .transcript
+            .mic
+            .words,
+        3,
+        "its words are kept"
+    );
+}
+
 macro_rules! contract {
     ($($scenario:ident),* $(,)?) => {
         mod mem {
@@ -1528,6 +1575,7 @@ macro_rules! contract {
 
 contract!(
     digests_follow_every_record_and_its_current_transcript,
+    a_stuck_mark_is_kept_and_reaches_the_digest,
     commitment_states_cover_every_commitment,
     a_batch_of_commitments_and_its_merges_is_saved_whole_or_not_at_all,
     summary_items_round_trip_and_are_replaced_with_their_summary,

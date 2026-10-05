@@ -16,7 +16,8 @@
 //!   transcript, by the local day it started. Polished text is what was saved, so it is what is
 //!   counted. File imports and meetings are not dictation.
 //! - **Words per minute**: words over how long the key was held (a dictation's one line runs from
-//!   0 to the release of the key), over every timed dictation in the window: this week, and the
+//!   0 to the release of the key), over every timed dictation in the window (one the stuck-key
+//!   watchdog stopped is not timed: the hold was not the user's): this week, and the
 //!   last 30 days. A window with less than [`WPM_MIN_SPOKEN_MS`] of speech has no figure: too
 //!   little to say anything. Only ever against the user's own past.
 //! - **Time saved**: typing the same words at the typing speed (`stats.typing_wpm`, 40 unless set)
@@ -48,8 +49,9 @@
 //!   best week, the longest meeting and the longest monologue, from takes made here only. A record
 //!   an import brought (Inkwell 0.2's dictations, another app's meetings) is history from
 //!   elsewhere: it counts in words and the streak as before, never in a best. The fastest needs a
-//!   take held [`FASTEST_MIN_HELD_MS`], and a take the stuck-key watchdog stopped is no best
-//!   ([`stopped_by_watchdog`]).
+//!   take held [`FASTEST_MIN_HELD_MS`]. A take the stuck-key watchdog stopped
+//!   ([`RecordDigest::stuck`]: its key was most likely stuck) is no best, and counts in no speed
+//!   or time saved either; its words count as any others.
 //! - **Last week** ([`WeekReview`]): its words, time saved, best day, speed against the four weeks
 //!   before it, meetings and promises kept, until the user dismisses it for that week. Gains and
 //!   plain facts only: nothing is said to be down.
@@ -98,8 +100,9 @@ pub const STREAK_KEY: &str = "stats.streak";
 /// The store setting that lets the share card carry the heatmap (`on`). Off unless set: the grid
 /// shows the days worked and the days away. The shells read it; the core does nothing with it.
 pub const SHARE_HEATMAP_KEY: &str = "stats.share_heatmap";
-/// The store setting noting the week whose review the user dismissed: its first day, as
-/// `YYYY-MM-DD`.
+/// The store setting noting the week whose review the user dismissed: the review's `week` (its
+/// first day, `YYYY-MM-DD`), sent as it came. It dismisses the week holding most of the seven days
+/// from it, so it stays dismissed when the user changes the week's first day.
 pub const REVIEW_DISMISSED_KEY: &str = "stats.review_dismissed";
 /// The store setting holding the streak's pauses ([`pauses_note`]). The core's own: the shells
 /// pause and resume with `streak.pause` and `streak.resume`.
@@ -130,16 +133,6 @@ pub const FASTEST_MIN_HELD_MS: u64 = 30_000;
 /// second take ever is always the longest yet, which is not worth a note. Every take counts as an
 /// entry, a short one too: a best is the user's own, and five takes is little to ask.
 pub const BEST_AFTER: u64 = 5;
-/// The hold, ms, at which the stuck-key watchdog stops a push-to-talk take whose release was
-/// lost and processes it ([`DEFAULT_STUCK_AFTER`](ink_pipeline::chain::DEFAULT_STUCK_AFTER):
-/// the shells never change it).
-pub const STUCK_HOLD_MS: u64 = ink_pipeline::chain::DEFAULT_STUCK_AFTER.as_millis() as u64;
-/// How far short of [`STUCK_HOLD_MS`] a stopped take's hold can read: the press and the stop are
-/// placed on the audio's samples, a few ms either way.
-pub const STUCK_BEFORE_MS: u64 = 1_000;
-/// How far past it: the worker wakes for the watchdog's deadline, and may wake a little late.
-pub const STUCK_AFTER_MS: u64 = 10_000;
-
 /// The weeks before last week its speed is compared with.
 pub const REVIEW_AVERAGE_WEEKS: i64 = 4;
 /// The most of one picture [`about`] says ("about five coffee breaks"), but for the largest.
@@ -340,17 +333,6 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
-}
-
-/// Whether a dictation held `held_ms` is one the stuck-key watchdog stopped: a key that was
-/// likely stuck, so the take is no best (its words still count). The store keeps no mark of the
-/// watchdog, so this is read from the hold: a push-to-talk hold never lasts longer, since the
-/// watchdog stops it there. A toggle take is exempt from the watchdog and may be held any time:
-/// one of about the same length (3 min, give or take [`STUCK_BEFORE_MS`] and [`STUCK_AFTER_MS`])
-/// is taken for a stopped one, and a longer one counts.
-pub fn stopped_by_watchdog(held_ms: u64) -> bool {
-    (STUCK_HOLD_MS.saturating_sub(STUCK_BEFORE_MS)..=STUCK_HOLD_MS + STUCK_AFTER_MS)
-        .contains(&held_ms)
 }
 
 /// The rest days a [`REST_DAYS_KEY`] value names: `none`, or ISO weekdays (1 Monday to 7 Sunday)
@@ -625,7 +607,8 @@ pub fn about(saved_ms: i64) -> Vec<(&'static str, u64)> {
 pub enum BestId {
     /// The dictation held longest, ms.
     LongestDictation,
-    /// The fastest dictation held at least [`FASTEST_MIN_HELD_MS`], words a minute.
+    /// The fastest dictation held at least [`FASTEST_MIN_HELD_MS`], words a minute. Neither this
+    /// nor the longest is ever a take the stuck-key watchdog stopped.
     FastestDictation,
     /// The most words dictated in a local day.
     MostWordsDay,
@@ -982,8 +965,8 @@ pub fn count(
                     *per_day.entry(day).or_default() += words;
                 }
                 // Only dictations that know how long the key was held go into speed and time saved,
-                // on both sides of the sum.
-                if spoken > 0 {
+                // on both sides of the sum; not one the watchdog stopped, held by a stuck key.
+                if spoken > 0 && !r.stuck {
                     let add = |t: &mut (u64, u64)| {
                         t.0 += words;
                         t.1 += spoken;
@@ -1007,11 +990,10 @@ pub fn count(
                         newest_dictation = Some(take);
                     }
                     // A take the watchdog stopped (a key likely stuck) is no best.
-                    let stuck = stopped_by_watchdog(spoken);
-                    if spoken > 0 && !stuck {
+                    if spoken > 0 && !r.stuck {
                         longest.offer(spoken, r.started_at_unix_ms, &r.record);
                     }
-                    if spoken >= FASTEST_MIN_HELD_MS && words > 0 && !stuck {
+                    if spoken >= FASTEST_MIN_HELD_MS && words > 0 && !r.stuck {
                         fastest.offer(rate(words, spoken), r.started_at_unix_ms, &r.record);
                     }
                     if words > 0 {
@@ -1124,8 +1106,9 @@ pub fn count(
     }
 
     let words_last: u64 = per_day.range(last_week..week).map(|(_, w)| w).sum();
-    // A dismissal names its week by its first day; its midpoint finds the week again after the
-    // user changes the week's first day, earlier or later.
+    // A dismissal names the seven days from its date, and dismisses the week holding most of
+    // them: the week it is the first day of, also after the week's first day changes, earlier or
+    // later; or the week a date early in it (to its fourth day) belongs to.
     let dismissed = settings
         .review_dismissed
         .is_some_and(|day| calendar.week_start_of(day.saturating_add(3)) == last_week);
@@ -1686,6 +1669,7 @@ mod tests {
             started_at_unix_ms: started,
             ended_at_unix_ms: Some(started + held_ms as i64 + 500),
             imported: false,
+            stuck: false,
             transcript: TranscriptDigest {
                 mic: ChannelDigest {
                     words,
@@ -1955,6 +1939,7 @@ mod tests {
             started_at_unix_ms: started,
             ended_at_unix_ms: Some(started + minutes * 60_000),
             imported: false,
+            stuck: false,
             transcript,
         }
     }
@@ -2332,6 +2317,44 @@ mod tests {
                 "day {today}"
             );
         }
+    }
+
+    /// Rest days and pauses side by side: a rest day between two pauses keeps the gap closed, and
+    /// a rest day inside a pause is still a rest day, so a dictation on it does not count.
+    #[test]
+    fn a_rest_day_between_or_inside_pauses() {
+        let days = |d: &[i64]| d.iter().copied().collect::<BTreeSet<i64>>();
+        let two = [
+            Pause {
+                from: 93,
+                until: Some(95),
+            },
+            Pause {
+                from: 98,
+                until: Some(99),
+            },
+        ];
+        let paused = |day: i64| two.iter().any(|p| p.covers(day));
+        let rest = |day: i64| day == 96 || day == 97;
+        // Days 96 and 97, rest days, close the gap between the pauses; without them they are two
+        // missed days.
+        assert_eq!(streaks(&days(&[92, 100]), 100, rest, paused).current, 2);
+        assert_eq!(
+            streaks(&days(&[92, 100]), 100, |_| false, paused).current,
+            1
+        );
+        // A pause over the rest day, with a dictation on it: the rest day wins, so it does not
+        // count; the paused days still carry the streak.
+        let long = [Pause {
+            from: 93,
+            until: Some(99),
+        }];
+        let away = |day: i64| long.iter().any(|p| p.covers(day));
+        assert_eq!(streaks(&days(&[92, 96, 100]), 100, rest, away).current, 2);
+        assert_eq!(
+            streaks(&days(&[92, 96, 100]), 100, |_| false, away).current,
+            3
+        );
     }
 
     /// Digests come in no promised order: any order counts the same, and two takes that start
@@ -2971,35 +2994,66 @@ mod tests {
         // The week before is not this one, on either.
         assert!(review(&monday, Some("2026-09-13")).is_some());
         assert!(review(&sunday, Some("2026-09-14")).is_some());
+        // A date to the fourth day of the week dismisses that week too, on either calendar.
+        for date in ["2026-09-22", "2026-09-23", "2026-09-24"] {
+            assert_eq!(review(&monday, Some(date)), None, "{date}");
+        }
+        for date in ["2026-09-21", "2026-09-22", "2026-09-23"] {
+            assert_eq!(review(&sunday, Some(date)), None, "{date}");
+        }
+        // One late in it names more of the week after (which is why the shells send the
+        // review's own week): not this one.
+        assert!(review(&monday, Some("2026-09-25")).is_some());
     }
 
-    /// A take the stuck-key watchdog stopped (held its 3 minutes: a key likely stuck) is no best;
-    /// its words still count. A longer take (only a toggle take can be) is one.
+    /// A take the stuck-key watchdog stopped (its key most likely stuck) is no best and counts in
+    /// no speed or time saved, last week's included; its words count in the totals, the streak
+    /// and the heatmap.
     #[test]
-    fn a_take_the_watchdog_stopped_is_no_best() {
-        assert_eq!(STUCK_HOLD_MS, 180_000, "the chain's DEFAULT_STUCK_AFTER");
-        assert!(stopped_by_watchdog(STUCK_HOLD_MS));
-        assert!(stopped_by_watchdog(STUCK_HOLD_MS - STUCK_BEFORE_MS));
-        assert!(stopped_by_watchdog(STUCK_HOLD_MS + STUCK_AFTER_MS));
-        assert!(!stopped_by_watchdog(STUCK_HOLD_MS - STUCK_BEFORE_MS - 1));
-        assert!(!stopped_by_watchdog(STUCK_HOLD_MS + STUCK_AFTER_MS + 1));
-
+    fn a_take_the_watchdog_stopped_is_no_best_and_not_timed() {
         let cal = utc();
         let best = |c: &Counted, id: BestId| c.bests.iter().find(|b| b.id == id).map(|b| b.value);
-        let mut digests = vec![
-            // 2 minutes at 100 wpm.
-            dictation(NOON - DAY, 200, 120_000),
-            // Stopped by the watchdog a few ms past its limit: 133 wpm, but no best.
-            dictation(NOON, 400, STUCK_HOLD_MS + 40),
+        let stuck = |started: i64, words: u64, held_ms: u64| RecordDigest {
+            stuck: true,
+            ..dictation(started, words, held_ms)
+        };
+        let digests = [
+            // Two minutes at 100 wpm, today.
+            dictation(NOON, 200, 120_000),
+            // Stopped by the watchdog at 3 minutes: 133 wpm and the longest, but neither.
+            stuck(NOON - HOUR, 400, 180_000),
+            // Last week, stopped too: the review counts its words only.
+            stuck(NOON - 7 * DAY, 300, 180_000),
         ];
         let c = count(&digests, &[], NOON, &cal, &Settings::default());
         assert_eq!(best(&c, BestId::LongestDictation), Some(120_000));
         assert_eq!(best(&c, BestId::FastestDictation), Some(100));
-        assert_eq!(c.dictation.words_all, 600, "its words count");
-        // A toggle take of ten minutes is the longest.
-        digests.push(dictation(NOON - 2 * DAY, 900, 600_000));
-        let c = count(&digests, &[], NOON, &cal, &Settings::default());
-        assert_eq!(best(&c, BestId::LongestDictation), Some(600_000));
+        // Speed and time saved from the 2-minute take alone: 200 words at 40 wpm is 5 minutes.
+        assert_eq!(c.dictation.wpm_week, Some(100));
+        assert_eq!(c.dictation.saved_ms_week, 3 * 60_000);
+        assert_eq!(c.dictation.saved_ms_all, 3 * 60_000);
+        // Its words count, and its day is active.
+        assert_eq!(c.dictation.words_today, 600);
+        assert_eq!(c.dictation.words_all, 900);
+        assert_eq!(*c.dictation.heatmap_words.last().unwrap(), 600);
+        assert_eq!(c.dictation.streak_days, 1);
+        let review = c.week_review.unwrap();
+        assert_eq!(
+            (review.words, review.saved_ms, review.wpm),
+            (300, None, None)
+        );
+        // Unmarked, the same hold is a take like any other (a toggle take may run that long).
+        let plain = count(
+            &[
+                dictation(NOON, 200, 120_000),
+                dictation(NOON - HOUR, 400, 180_000),
+            ],
+            &[],
+            NOON,
+            &cal,
+            &Settings::default(),
+        );
+        assert_eq!(best(&plain, BestId::LongestDictation), Some(180_000));
     }
 
     #[test]

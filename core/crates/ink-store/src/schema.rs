@@ -22,7 +22,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::codec::Fail;
 
 /// Every migration, in order. The database's `user_version` counts how many have run.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
 
 /// The schema version this build writes: the number of migrations. A database with a higher
 /// `user_version` came from a newer build and is refused rather than guessed at.
@@ -253,6 +253,20 @@ CREATE TRIGGER record_digest_on_update AFTER UPDATE ON segment BEGIN
 END;
 CREATE TRIGGER record_digest_on_record AFTER UPDATE OF
     kind, started_at_unix_ms, ended_at_unix_ms, revision, imported ON record BEGIN
+    DELETE FROM record_digest WHERE record_id = new.id;
+END;
+";
+
+/// Whether the stuck-key watchdog ended a dictation (`ink_core::Record::stuck`), on the record and
+/// copied into its digest. Records and digests from before this migration read as 0: nothing
+/// marked them, and a take the watchdog ended before then counts as any other. The trigger that
+/// drops a record's digest when the record changes now watches the mark too.
+const V6: &str = "
+ALTER TABLE record ADD COLUMN stuck INTEGER NOT NULL DEFAULT 0 CHECK (stuck IN (0, 1));
+ALTER TABLE record_digest ADD COLUMN stuck INTEGER NOT NULL DEFAULT 0 CHECK (stuck IN (0, 1));
+DROP TRIGGER record_digest_on_record;
+CREATE TRIGGER record_digest_on_record AFTER UPDATE OF
+    kind, started_at_unix_ms, ended_at_unix_ms, revision, imported, stuck ON record BEGIN
     DELETE FROM record_digest WHERE record_id = new.id;
 END;
 ";

@@ -264,7 +264,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       hidden streak is shown nowhere and its milestones are not celebrated; shown unless set),
  *       "stats.share_heatmap" (on|off: the share card may carry the heatmap; off unless set; the
  *       core does nothing with it) and "stats.review_dismissed" (a YYYY-MM-DD date: the first day
- *       of the week whose review the user dismissed, as week_review's "week"). A change to the keys or to dictation.polish reaches a
+ *       of the week whose review the user dismissed: send week_review's "week" as it came; it
+ *       stays dismissed when the week's first day changes). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
  *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
@@ -386,7 +387,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       name to word; the personal bests, from takes made here only (longest and fastest
  *       dictation, most words in a day, best week, longest meeting, longest monologue); what time
  *       saved is about (a key and a count, within a fifth); and last week's review until it is
- *       dismissed (gains and plain facts only). A take the stuck-key watchdog stopped is no best.
+ *       dismissed (gains and plain facts only). A take the stuck-key watchdog stopped is no best
+ *       and counts in no speed or time saved (its words count).
  *       A rest day (stats.rest_days) neither counts nor breaks a streak; a pause carries it over
  *       days without a dictation; ended, it is shown by its latest and longest, never as lost.
  *       Days are

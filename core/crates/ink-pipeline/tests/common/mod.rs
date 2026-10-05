@@ -497,6 +497,9 @@ impl Store for FaultyStore {
         }
         self.inner.finish_record(id, at)
     }
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.inner.mark_stuck(id)
+    }
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
         self.inner.delete_record(id)
     }

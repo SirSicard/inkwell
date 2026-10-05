@@ -452,7 +452,7 @@ fn put_setting(conn: &Connection, key: &str, value: &str) -> Result<(), Fail> {
 macro_rules! record_columns {
     () => {
         "id, kind, title, started_at_unix_ms, ended_at_unix_ms, source_app, audio_dir, revision, \
-         imported"
+         imported, stuck"
     };
 }
 
@@ -467,6 +467,7 @@ fn record_at(row: &Row<'_>) -> rusqlite::Result<Record> {
         audio_dir: row.get(6)?,
         revision: row.get(7)?,
         imported: row.get(8)?,
+        stuck: row.get(9)?,
     })
 }
 
@@ -852,6 +853,12 @@ impl Store for SqliteStore {
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError> {
         self.with("finish_record", |conn| {
             set_ended(conn, &id.0, ended_at_unix_ms)
+        })
+    }
+
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.with("mark_stuck", |conn| {
+            changed(conn.execute("UPDATE record SET stuck = 1 WHERE id = ?1", [&id.0])?)
         })
     }
 

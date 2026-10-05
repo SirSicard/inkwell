@@ -82,6 +82,11 @@ pub struct Record {
     /// dictations, another app's meetings), which retention never deletes. Every record made
     /// here, a [`RecordKind::FileImport`] too, is `false`.
     pub imported: bool,
+    /// Whether the stuck-key watchdog ended it: a dictation whose key was held to the limit with
+    /// no release ([`Store::mark_stuck`]). Its words are kept; the Stats screen counts no speed,
+    /// time saved or best from it. `false` for every other record, and for records from before
+    /// the mark.
+    pub stuck: bool,
 }
 
 /// The largest time or position, in ms, a store accepts: SQLite integers are signed 64-bit.
@@ -291,6 +296,10 @@ pub trait Store: Send + Sync {
     /// Marks a record as ended.
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError>;
 
+    /// Marks a record as one the stuck-key watchdog ended ([`Record::stuck`]). Refused with
+    /// [`StoreError::NotFound`] for an unknown record.
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError>;
+
     /// Deletes a record with its transcript, removed lines, notes, summary, speakers and
     /// commitments.
     ///
@@ -478,6 +487,7 @@ pub trait Store: Send + Sync {
                     started_at_unix_ms: r.started_at_unix_ms,
                     ended_at_unix_ms: r.ended_at_unix_ms,
                     imported: r.imported,
+                    stuck: r.stuck,
                     transcript: crate::stats::digest(&self.segments(&r.id)?),
                 });
             }

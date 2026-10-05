@@ -538,3 +538,44 @@ fn the_week_review_stays_dismissed_for_its_week() {
     core.shutdown();
     events.assert_valid();
 }
+
+/// A dictation on a rest day neither counts toward the streak nor breaks it.
+#[test]
+fn a_dictation_on_a_rest_day_neither_counts_nor_breaks() {
+    let dir = TempDir::new("stats-rest-dictation");
+    let (core, events) = core(&dir);
+    let store = core.shared().store.clone();
+    let now = core.shared().clock.unix_ms();
+    let today = now.div_euclid(DAY);
+
+    // Two days ago, yesterday and today: three days in a row.
+    for days_back in [2, 1, 0] {
+        dictate(store.as_ref(), now - days_back * DAY, 10);
+    }
+    assert_eq!(
+        get(&core, &events, 1, "plain")["dictation"]["streak_days"],
+        3
+    );
+    // Yesterday a rest day: its dictation does not count, and the streak runs on through it.
+    set(
+        &core,
+        &events,
+        "stats.rest_days",
+        &weekday(today - 1).to_string(),
+    );
+    let rested = get(&core, &events, 1, "rested");
+    assert_eq!(rested["dictation"]["streak_days"], 2);
+    // Still an active day for the month's count and the heatmap: only the streak rests.
+    assert_eq!(
+        rested["dictation"]["heatmap_words"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .take(2)
+            .collect::<Vec<_>>(),
+        [&json!(10), &json!(10)]
+    );
+    core.shutdown();
+    events.assert_valid();
+}

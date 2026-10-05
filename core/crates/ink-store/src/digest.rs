@@ -54,7 +54,8 @@ fn missing(conn: &Connection) -> Result<i64, Fail> {
 fn count_missing(conn: &Connection) -> Result<Vec<RecordDigest>, Fail> {
     let mut select = conn.prepare(
         "SELECT id, kind, started_at_unix_ms, ended_at_unix_ms, imported, revision,
-             (SELECT count(*) FROM segment AS s WHERE s.record_id = r.id AND s.revision = r.revision)
+             (SELECT count(*) FROM segment AS s WHERE s.record_id = r.id AND s.revision = r.revision),
+             stuck
          FROM record AS r
          WHERE NOT EXISTS (
              SELECT 1 FROM record_digest AS d WHERE d.record_id = r.id AND d.version = ?1)
@@ -76,6 +77,7 @@ fn count_missing(conn: &Connection) -> Result<Vec<RecordDigest>, Fail> {
                 started_at_unix_ms: row.get(2)?,
                 ended_at_unix_ms: row.get(3)?,
                 imported: row.get(4)?,
+                stuck: row.get(7)?,
                 transcript: TranscriptDigest::default(),
             },
             row.get::<_, u32>(5)?,
@@ -101,8 +103,8 @@ fn fill_batch(conn: &Connection) -> Result<usize, Fail> {
     let mut insert = conn.prepare(
         "INSERT OR REPLACE INTO record_digest (record_id, version, kind, started_at_unix_ms,
              ended_at_unix_ms, imported, mic_words, mic_speech_ms, mic_lines, far_words,
-             far_speech_ms, far_lines, longest_monologue_ms, mic_questions)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             far_speech_ms, far_lines, longest_monologue_ms, mic_questions, stuck)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
     )?;
     // Counts and milliseconds of one record: far inside i64.
     let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
@@ -123,6 +125,7 @@ fn fill_batch(conn: &Connection) -> Result<usize, Fail> {
             n(t.far.lines),
             n(t.longest_monologue_ms),
             n(t.mic_questions),
+            d.stuck,
         ])?;
     }
     Ok(counted.len())
@@ -145,7 +148,7 @@ fn read_all(conn: &Connection) -> Result<Option<Vec<RecordDigest>>, Fail> {
     let mut select = conn.prepare(
         "SELECT record_id, kind, started_at_unix_ms, ended_at_unix_ms, imported, mic_words,
              mic_speech_ms, mic_lines, far_words, far_speech_ms, far_lines, longest_monologue_ms,
-             mic_questions
+             mic_questions, stuck
          FROM record_digest WHERE version = ?1",
     )?;
     let mut out = select
@@ -156,6 +159,7 @@ fn read_all(conn: &Connection) -> Result<Option<Vec<RecordDigest>>, Fail> {
                 started_at_unix_ms: row.get(2)?,
                 ended_at_unix_ms: row.get(3)?,
                 imported: row.get(4)?,
+                stuck: row.get(13)?,
                 transcript: TranscriptDigest {
                     mic: ChannelDigest {
                         words: u64_at(row, 5)?,
