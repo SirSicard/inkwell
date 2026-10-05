@@ -2280,6 +2280,191 @@ final class MainWindowWidthTests: XCTestCase {
     }
 }
 
+/// Today in a short window, with the always-shown (legacy) scrollers a Mac with a mouse attached
+/// gets. Its two columns were fixed widths taken from the ScrollView's measured width, which
+/// counts the scroller the content does not get: the columns overflowed by the scroller's width,
+/// the ScrollView widened to hold them, and its new width widened the columns again, 17 pt a pass
+/// without end once the content needed scrolling (600 pt tall and less with nothing on Today, the
+/// default 700 with Needs you showing). The main run loop never came back. A stuck main thread
+/// cannot time itself out, so the window is laid out in a child process, this test re-run on its
+/// own, and the child is killed if it overruns.
+@MainActor
+final class TodayShortWindowTests: XCTestCase {
+    private final class NoEvents: UpcomingEvents {
+        func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? { nil }
+    }
+
+    /// Set in the child: the content size to lay Today out at ("720x520"; "+banner" puts two
+    /// notices in Needs you), and the file to report to.
+    private static let probeSize = "INKWELL_TODAY_PROBE_SIZE"
+    private static let probeReport = "INKWELL_TODAY_PROBE_REPORT"
+    /// Far longer than a healthy child takes: a second or two, about four under the thread sanitizer.
+    private static let timeout: TimeInterval = 30
+
+    func testTodayLaysOutInAShortWindowAndNarrowsWithIt() throws {
+        let environment = ProcessInfo.processInfo.environment
+        if let size = environment[Self.probeSize], let report = environment[Self.probeReport] {
+            let banner = size.hasSuffix("+banner")
+            let sides = size.prefix { $0 != "+" }.split(separator: "x").compactMap { Double($0) }.map { CGFloat($0) }
+            try probe(NSSize(width: try XCTUnwrap(sides.first), height: try XCTUnwrap(sides.last)), banner: banner, report: report)
+            return
+        }
+        // 720 by 520 and 600 hung; by 700 it did not, but kept the width Today first had at 1040.
+        // With Needs you showing, the window's default size hung too.
+        for size in ["720x520", "720x600", "720x700", "1040x700+banner"] {
+            let report = FileManager.default.temporaryDirectory
+                .appendingPathComponent("inkwell-today-probe-\(UUID().uuidString)")
+            let errors = report.appendingPathExtension("stderr")
+            FileManager.default.createFile(atPath: errors.path, contents: nil)
+            defer {
+                try? FileManager.default.removeItem(at: report)
+                try? FileManager.default.removeItem(at: errors)
+            }
+            let child = Process()
+            child.executableURL = try XCTUnwrap(Bundle.main.executableURL, "the test runner")
+            child.arguments = ["-XCTest", "InkwellTests.TodayShortWindowTests/\(#function.prefix { $0 != "(" })",
+                               Bundle(for: Self.self).bundlePath]
+            // Not Xcode's session keys: with them the child would join the IDE's run.
+            child.environment = environment.filter { !$0.key.hasPrefix("XCTest") }.merging(
+                [Self.probeSize: size, Self.probeReport: report.path]) { $1 }
+            // Under the thread sanitizer, its runtime takes itself out of this process's
+            // DYLD_INSERT_LIBRARIES, and the child aborts without it: given back.
+            if let sanitizer = Self.threadSanitizerLibrary {
+                child.environment?["DYLD_INSERT_LIBRARIES"] = sanitizer
+            }
+            child.standardOutput = FileHandle.nullDevice
+            child.standardError = try FileHandle(forWritingTo: errors)
+            let exited = DispatchSemaphore(value: 0)
+            child.terminationHandler = { _ in exited.signal() }
+            try child.run()
+            if exited.wait(timeout: .now() + Self.timeout) == .timedOut {
+                kill(child.processIdentifier, SIGKILL)
+                child.waitUntilExit()
+                XCTFail("\(size): Today never finished laying out (killed after \(Int(Self.timeout)) s)")
+                continue
+            }
+            let line = (try? String(contentsOf: report, encoding: .utf8)) ?? ""
+            let numbers = line.split(separator: " ").compactMap { Double($0) }
+            guard child.terminationStatus == 0, numbers.count == 2 else {
+                let said = ((try? String(contentsOf: errors, encoding: .utf8)) ?? "").suffix(600)
+                XCTFail("\(size): the child exited \(child.terminationStatus) and reported \"\(line)\": \(said)")
+                continue
+            }
+            // Today's ScrollView spans the window under the sidebar's glass: never wider than it.
+            XCTAssertLessThanOrEqual(numbers[0], numbers[1] + 0.5, "\(size): Today is wider than the window")
+        }
+    }
+
+    /// The thread sanitizer's runtime, when this process runs under it.
+    private static var threadSanitizerLibrary: String? {
+        // -2 is RTLD_DEFAULT, which Swift does not import: every image loaded.
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "__tsan_init") else { return nil }
+        var info = Dl_info()
+        guard dladdr(symbol, &info) != 0, let name = info.dli_fname else { return nil }
+        return String(cString: name)
+    }
+
+    /// The cards side by side, 1.3 : 1, from 624 pt of content, and under one another below it,
+    /// each column filled; read from the width proposed, so the same in or out of a ScrollView.
+    func testTodaysCardsShareTwoColumnsFrom624PointsAndStackBelow() {
+        @MainActor final class Frames { var all: [Int: CGRect] = [:] }
+        for width in [623, 624, 900] as [CGFloat] {
+            let frames = Frames()
+            let cards = TodayColumnsLayout {
+                ForEach(0..<3) { index in
+                    Color.clear.frame(maxWidth: .infinity).frame(height: 100)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("cards")) } action: {
+                            frames.all[index] = $0
+                        }
+                }
+            }
+            .frame(width: width, alignment: .topLeading)
+            .coordinateSpace(.named("cards"))
+            let host = NSHostingView(rootView: cards)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 400)
+            let deadline = Date().addingTimeInterval(1)
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            } while frames.all.count < 3 && Date() < deadline
+            guard let first = frames.all[0], let second = frames.all[1], let third = frames.all[2] else {
+                XCTFail("\(width): not every card was laid out")
+                continue
+            }
+            if width >= TodayColumnsLayout.twoColumns {
+                XCTAssertEqual(first.width / second.width, 1.3, accuracy: 0.01, "\(width)")
+                XCTAssertEqual(first.width + 18 + second.width, width, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(second.minX, first.maxX + 18, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(second.minY, first.minY, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(third.minX, second.minX, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(third.minY, second.maxY + 18, accuracy: 0.5, "\(width)")
+            } else {
+                for card in [first, second, third] {
+                    XCTAssertEqual(card.minX, 0, accuracy: 0.5, "\(width)")
+                    XCTAssertEqual(card.width, width, accuracy: 0.5, "\(width)")
+                }
+                XCTAssertEqual(second.minY, first.maxY + 18, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(third.minY, second.maxY + 18, accuracy: 0.5, "\(width)")
+            }
+        }
+    }
+
+    /// In the child: the app's window on Today, laid out at its default 1040 x 700 and then made
+    /// `size`, as a user would; the widest scroll view in it and the window's width go to `report`.
+    private func probe(_ size: NSSize, banner: Bool, report: String) throws {
+        // Its own end too, should the parent die first: a global queue's timer fires while the main
+        // thread is stuck.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2 * Self.timeout) { _exit(2) }
+        // Legacy scrollers whatever this Mac uses. NSScroller asks the class for the style each
+        // new scroll view takes; only this child process is changed.
+        let styleGetter = try XCTUnwrap(
+            class_getClassMethod(NSScroller.self, #selector(getter: NSScroller.preferredScrollerStyle)))
+        let legacy: @convention(block) (AnyObject) -> Int = { _ in NSScroller.Style.legacy.rawValue }
+        method_setImplementation(styleGetter, imp_implementationWithBlock(legacy))
+        XCTAssertEqual(NSScroller.preferredScrollerStyle, .legacy)
+
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        let store = CoreStore()
+        if banner {
+            store.apply([
+                event(#"{"type":"meeting.warning","record":"r1","kind":"captured_only_zeros","phase":"final"}"#),
+                event(#"{"type":"dictation.hotkey_lost"}"#),
+            ])
+        }
+        let router = Router()
+        router.open(.today)
+        let root = ShellView(router: router).environment(store).environment(ShellInk(store: store))
+            .environment(Updates(infoDictionary: nil)).environment(screens).environment(LibraryModel(send: { _ in }))
+            .environment(UpNextModel(access: FakeCalendar(), events: NoEvents())).environment(router)
+            .environment(WindowPresence()).environment(screens.theme).tint(Theme.buttonFill)
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        settle(window)
+        window.setContentSize(size)
+        settle(window)
+        let content = try XCTUnwrap(window.contentViewController?.view)
+        // Today's ScrollView among them, with the style forced: else the report would prove nothing.
+        let scrollViews = descendants(of: content, as: NSScrollView.self)
+        guard !scrollViews.isEmpty, scrollViews.allSatisfy({ $0.scrollerStyle == .legacy }) else {
+            try "no legacy scroll views".write(toFile: report, atomically: true, encoding: .utf8)
+            return
+        }
+        let widest = scrollViews.map(\.frame.width).max() ?? 0
+        try "\(widest) \(content.frame.width)".write(toFile: report, atomically: true, encoding: .utf8)
+    }
+
+    private func settle(_ window: NSWindow) {
+        for _ in 0..<8 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+    }
+
+    private func descendants<T: NSView>(of view: NSView, as type: T.Type) -> [T] {
+        view.subviews.flatMap { ([$0 as? T].compactMap { $0 }) + descendants(of: $0, as: type) }
+    }
+}
+
 /// Settings > Appearance's dot presets: at 720 their names broke inside a word ("Lago / on") in
 /// two columns too narrow for them. A column is never narrower than PresetButton.minimumWidth,
 /// which holds every name on one line beside the dots.
