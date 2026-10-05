@@ -122,15 +122,20 @@ internal sealed class StatsShareDialog
         };
         // As wide as the Mac's sheet: the preview beside the ticks.
         dialog.Resources["ContentDialogMaxWidth"] = 720.0;
-        // The ticks, or new numbers counted while it is open; the mode; your colours.
-        stats.PropertyChanged += OnStatsChanged;
-        theme.Changed += OnThemeChanged;
+        // The ticks, or new numbers counted while it is open; the mode; your colours. Followed only
+        // while it is open: a dialog that never opens (another one is up) never hears them, so
+        // the model and the theme never hold on to it.
+        dialog.Opened += (_, _) =>
+        {
+            stats.PropertyChanged += OnStatsChanged;
+            theme.Changed += OnThemeChanged;
+            Rebuild();
+        };
         dialog.Closed += (_, _) =>
         {
             stats.PropertyChanged -= OnStatsChanged;
             theme.Changed -= OnThemeChanged;
         };
-        dialog.Opened += (_, _) => Rebuild();
     }
 
     public Windows.Foundation.IAsyncOperation<ContentDialogResult> ShowAsync() => dialog.ShowAsync();
