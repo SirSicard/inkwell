@@ -2294,9 +2294,32 @@ final class SettingsCardsLayoutTests: XCTestCase {
 
     /// The cards and the sections inside them, in the window's coordinates (top left), as the
     /// overlay over the root last resolved them.
-    @MainActor private final class Seen {
+    private final class Seen {
         var cards: [SettingsSection: CGRect] = [:]
         var sections: [SettingsSection: CGRect] = [:]
+    }
+
+    /// Over the root: resolves the cards' anchors into `seen` each time it is drawn. A method, not
+    /// a closure called in place, which the CI's Swift 6.3 has crashed on.
+    private struct Probe: View {
+        let parts: [SettingsCardBounds.Part]
+        let seen: Seen
+
+        var body: some View {
+            GeometryReader { proxy in
+                let _ = record(proxy)
+                Color.clear
+            }
+            .allowsHitTesting(false)
+        }
+
+        private func record(_ proxy: GeometryProxy) {
+            let origin = proxy.frame(in: .global).origin
+            for part in parts {
+                let rect = proxy[part.bounds].offsetBy(dx: origin.x, dy: origin.y)
+                if part.isCard { seen.cards[part.section] = rect } else { seen.sections[part.section] = rect }
+            }
+        }
     }
 
     private struct Laid {
@@ -2338,19 +2361,7 @@ final class SettingsCardsLayoutTests: XCTestCase {
         router.open(.settings)
         let seen = Seen()
         let root = ShellView(router: router)
-            .overlayPreferenceValue(SettingsCardBounds.self) { parts in
-                GeometryReader { proxy in
-                    let origin = proxy.frame(in: .global).origin
-                    let _ = {
-                        for part in parts {
-                            let rect = proxy[part.bounds].offsetBy(dx: origin.x, dy: origin.y)
-                            if part.isCard { seen.cards[part.section] = rect } else { seen.sections[part.section] = rect }
-                        }
-                    }()
-                    Color.clear
-                }
-                .allowsHitTesting(false)
-            }
+            .overlayPreferenceValue(SettingsCardBounds.self) { Probe(parts: $0, seen: seen) }
             .environment(store).environment(ShellInk(store: store))
             .environment(Updates(infoDictionary: nil)).environment(screens).environment(LibraryModel(send: { _ in }))
             .environment(UpNextModel(access: FakeCalendar(), events: NoEvents())).environment(router)
@@ -2358,9 +2369,15 @@ final class SettingsCardsLayoutTests: XCTestCase {
         let window = MainWindowController.makeWindow(root: root)
         defer { window.close() }
         window.setContentSize(NSSize(width: width, height: 700))
-        for _ in 0..<10 {
+        // Settled: two passes in a row resolve the same rects (a card can still grow once the
+        // screen's models have answered), within two seconds.
+        var last: [CGRect] = []
+        for pass in 0..<40 {
             window.contentViewController?.view.layoutSubtreeIfNeeded()
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            let now = SettingsSection.allCases.flatMap { [seen.cards[$0], seen.sections[$0]].compactMap { $0 } }
+            if pass >= 3, now.count == 2 * SettingsSection.allCases.count, now == last { break }
+            last = now
         }
         let content = try XCTUnwrap(window.contentView)
         func topLeft(_ view: NSView) -> CGRect {

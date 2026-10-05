@@ -213,9 +213,7 @@ extension View {
     /// A group inside a section's card (the permission rows, Inkwell 0.2's import): a hairline
     /// round it and no card of its own, whose material would lie over the card's.
     func cardGroup() -> some View {
-        clipShape(RoundedRectangle(cornerRadius: CardGroup.radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: CardGroup.radius, style: .continuous)
-                .strokeBorder(PaperPalette.border, lineWidth: 1))
+        modifier(CardGroup())
     }
 }
 
@@ -236,9 +234,21 @@ struct SettingsCardBounds: PreferenceKey {
     }
 }
 
-enum CardGroup {
-    /// As a dot preset's tile.
+/// cardGroup's hairline: the stronger border a card has under Increase Contrast or Reduce
+/// Transparency (GlowCard), so the group keeps its edge there as the card it replaced did.
+struct CardGroup: ViewModifier {
+    /// Inside the card's 22 pt corner, a smaller one.
     static let radius: CGFloat = 14
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let solid = reduceTransparency || contrast == .increased
+        let shape = RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+        content
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(solid ? Theme.text.opacity(0.35) : PaperPalette.border, lineWidth: 1))
+    }
 }
 
 /// A section's heading.
@@ -305,21 +315,24 @@ private struct PermissionRow: View {
     /// The least room the words get beside the state: narrower, the state goes under them (the
     /// Permissions card in the window at its smallest, where "Checking…" broke).
     static let wordsMinimum: CGFloat = 150
+    /// The icon's width, and the room between it and the words.
+    private static let iconWidth: CGFloat = 22
+    private static let gap: CGFloat = 14
 
     var body: some View {
         // Chosen from the ideal widths, the words' set to their minimum: no width is measured.
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
-                icon.frame(width: 22, height: 22).accessibilityHidden(true)
+            HStack(spacing: Self.gap) {
+                icon.frame(width: Self.iconWidth, height: Self.iconWidth).accessibilityHidden(true)
                 words.frame(minWidth: Self.wordsMinimum, idealWidth: Self.wordsMinimum, maxWidth: .infinity, alignment: .leading)
                 trailing.fixedSize()
             }
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 14) {
-                    icon.frame(width: 22, height: 22).accessibilityHidden(true)
+                HStack(spacing: Self.gap) {
+                    icon.frame(width: Self.iconWidth, height: Self.iconWidth).accessibilityHidden(true)
                     words.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                trailing.fixedSize().padding(.leading, 22 + 14)
+                trailing.fixedSize().padding(.leading, Self.iconWidth + Self.gap)
             }
         }
         .padding(.horizontal, 16)
