@@ -37,8 +37,11 @@ use crate::runtime::{Runs, Shared, lock, start_meeting};
 /// The setting that turns detection on or off (`on`, the default, or `off`).
 pub const DETECT_KEY: &str = "meetings.detect";
 
-/// The setting: record the Bluetooth headset's own mic, not the built-in one (`on` or `off`, the
-/// default).
+/// Retired: the setting that recorded the Bluetooth headset's own mic in meetings (`on` or `off`).
+/// The user now picks any mic, the headset's included, for dictation and meetings alike
+/// (`audio.input`, [`crate::devices`]), and the core reads this nowhere. It stays a shell setting
+/// only so the shells' Meetings switch keeps answering until their Sound section replaces it (the
+/// Mac and Windows device branches remove both).
 pub const HEADSET_MIC_KEY: &str = "meetings.headset_mic";
 
 /// A message to the meetings thread.
@@ -395,18 +398,12 @@ impl State {
                 pid: None,
             },
         });
-        let headset_mic = self
-            .shared
-            .store
-            .setting(HEADSET_MIC_KEY)
-            .ok()
-            .flatten()
-            .as_deref()
-            == Some("on");
-        let opened = match self.capture.open(app.as_ref(), headset_mic) {
+        let choices = crate::devices::Choices::new(self.shared.store.clone());
+        let opened = match self.capture.open(app.as_ref(), &choices) {
             Ok(opened) => opened,
             Err(e) => return self.failed(NAME, id, &e),
         };
+        let mic = opened.mic.clone();
         let info = MeetingInfo {
             title,
             app: app.as_ref().map(|a| (a.id.clone(), a.name.clone())),
@@ -420,6 +417,10 @@ impl State {
         });
         match start_meeting(&self.shared, &self.runs, opened.sides, info, Some(ended)) {
             Ok(()) => {
+                if let Some(mic) = &mic {
+                    // A stand-in for a chosen mic that is not connected, said once per spell.
+                    self.shared.sound.opened_on(&self.shared.events, mic);
+                }
                 self.by_hand = false;
                 let now = self.shared.clock.now_ns();
                 self.detection

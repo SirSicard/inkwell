@@ -844,6 +844,21 @@ impl CaptureControl for FlakyCapture {
     fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError> {
         self.inner.open_far_end(target)
     }
+    fn output_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError> {
+        self.inner.output_devices()
+    }
+    fn automatic_input(&self) -> Result<Option<ink_core::AutoInput>, PlatformError> {
+        self.inner.automatic_input()
+    }
+    fn watch_devices(
+        &self,
+        on_change: ink_core::EventSink<ink_core::DeviceChange>,
+    ) -> Result<(), PlatformError> {
+        self.inner.watch_devices(on_change)
+    }
+    fn unwatch_devices(&self) {
+        self.inner.unwatch_devices();
+    }
 }
 
 /// The mic failing in the middle of a take (its format changed under it) is said

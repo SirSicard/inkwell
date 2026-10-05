@@ -104,6 +104,9 @@
       "$ref": "#/$defs/MeetingFarEndFallback"
     },
     {
+      "$ref": "#/$defs/MeetingMicSwitched"
+    },
+    {
       "$ref": "#/$defs/MeetingDetected"
     },
     {
@@ -215,6 +218,24 @@
       "$ref": "#/$defs/SettingValue"
     },
     {
+      "$ref": "#/$defs/AudioDevices"
+    },
+    {
+      "$ref": "#/$defs/AudioDevicesChanged"
+    },
+    {
+      "$ref": "#/$defs/AudioInputFallback"
+    },
+    {
+      "$ref": "#/$defs/AudioTestStarted"
+    },
+    {
+      "$ref": "#/$defs/AudioTestLevel"
+    },
+    {
+      "$ref": "#/$defs/AudioTested"
+    },
+    {
       "$ref": "#/$defs/HotkeyChecked"
     },
     {
@@ -324,9 +345,10 @@
     },
     "FailureCode": {
       "type": "string",
-      "description": "A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save refused because the stored list cannot be read; send it again with replace_unreadable to start over).",
+      "description": "A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save refused because the stored list cannot be read; send it again with replace_unreadable to start over); meeting_recording (an audio.test refused because a meeting records: the mic test waits until it ends).",
       "enum": [
-        "list_unreadable"
+        "list_unreadable",
+        "meeting_recording"
       ]
     },
     "Refusal": {
@@ -1433,6 +1455,47 @@
       ],
       "additionalProperties": false
     },
+    "MeetingMicSwitched": {
+      "type": "object",
+      "description": "A recording meeting's mic went (unplugged, switched off) and the meeting records with another now: the choice as it is now, else Automatic. A meeting never moves to a mic that was plugged in or made the default mid-call; only its own mic going moves it. The mic_* fields are meeting.started's, for the mic now.",
+      "properties": {
+        "type": {
+          "const": "meeting.mic_switched"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "from_name": {
+          "type": "string",
+          "description": "The mic that went, as the OS named it, when known."
+        },
+        "from_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How that mic connected, when known."
+        },
+        "mic_name": {
+          "type": "string",
+          "description": "The mic it records now."
+        },
+        "mic_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How that mic connects."
+        },
+        "mic_reason": {
+          "$ref": "#/$defs/MicReason",
+          "description": "Why that mic."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "mic_name",
+        "mic_transport",
+        "mic_reason"
+      ],
+      "additionalProperties": false
+    },
     "MeetingDetected": {
       "type": "object",
       "description": "An app has held the microphone long enough to be a call, and no meeting is being recorded: the shell offers to record it (the consent Drop), and records only if the user says so (meeting.start with this app).",
@@ -1595,7 +1658,7 @@
     },
     "MicTransport": {
       "type": "string",
-      "description": "How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user is silent), USB, a virtual or aggregate device, or anything else.",
+      "description": "How a device connects: built in, Bluetooth (call-quality audio, and zeros while its user is silent), USB, a virtual or aggregate device, or anything else.",
       "enum": [
         "built_in",
         "bluetooth",
@@ -1606,8 +1669,10 @@
     },
     "MicReason": {
       "type": "string",
-      "description": "Why a meeting records this microphone: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be the one kept); the headset's own mic because the user's setting says so; the default because this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because no default is set; it was named; the LE Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the core does not name (unknown).",
+      "description": "Why Inkwell records this microphone: the one the user chose in Settings > Sound (chosen, found by its id or by its name and transport); Automatic standing in for a chosen mic that is not connected (chosen_missing); or Automatic's reason: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be the one kept); the headset's own mic because a platform's retired headset-mic switch is on; the default because this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because no default is set; it was named; the LE Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the core does not name (unknown).",
       "enum": [
+        "chosen",
+        "chosen_missing",
         "default_input",
         "built_in_for_bluetooth_output",
         "headset_mic_setting",
@@ -2884,6 +2949,379 @@
         "key"
       ],
       "additionalProperties": false
+    },
+    "AudioDevices": {
+      "type": "object",
+      "description": "The answer to audio.devices: the devices, the user's choice, and what Inkwell records with now.",
+      "properties": {
+        "type": {
+          "const": "audio.devices"
+        },
+        "inputs": {
+          "type": "array",
+          "description": "The connected microphones, the default first.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "A microphone."
+          }
+        },
+        "input": {
+          "type": "string",
+          "description": "The mic choice (audio.input): auto, or the chosen device's id."
+        },
+        "wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen mic as remembered, when input is a device: Settings shows its name even while it is not connected."
+        },
+        "automatic": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "What Automatic records now (\"Automatic (<name>)\"); absent when there is no microphone."
+        },
+        "using": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or Automatic (chosen_missing when it stands in for a chosen mic that is not connected). Absent when there is no microphone. A meeting already recording keeps its own mic (meeting.started, meeting.mic_switched)."
+        },
+        "outputs": {
+          "type": "array",
+          "description": "The connected outputs, the default first, where there is an output picker (Windows); absent on macOS, whose far end is tapped from its app wherever it plays.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "An output."
+          }
+        },
+        "output": {
+          "type": "string",
+          "description": "The output choice (audio.output), with outputs: default, or the chosen device's id."
+        },
+        "output_wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen output as remembered, when output is a device."
+        },
+        "output_using": {
+          "$ref": "#/$defs/AudioOutput",
+          "description": "The output a meeting's far end would record now, and why; absent when there is no output."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "inputs",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "AudioDevicesChanged": {
+      "type": "object",
+      "description": "Devices came or went, a default changed, or the choice did: the same as audio.devices, once a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent only where the platform tells the core of changes, and after a setting.set of audio.input or audio.output.",
+      "properties": {
+        "type": {
+          "const": "audio.devices_changed"
+        },
+        "inputs": {
+          "type": "array",
+          "description": "The connected microphones, the default first.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "A microphone."
+          }
+        },
+        "input": {
+          "type": "string",
+          "description": "The mic choice (audio.input): auto, or the chosen device's id."
+        },
+        "wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen mic as remembered, when input is a device: Settings shows its name even while it is not connected."
+        },
+        "automatic": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "What Automatic records now (\"Automatic (<name>)\"); absent when there is no microphone."
+        },
+        "using": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or Automatic (chosen_missing when it stands in for a chosen mic that is not connected). Absent when there is no microphone. A meeting already recording keeps its own mic (meeting.started, meeting.mic_switched)."
+        },
+        "outputs": {
+          "type": "array",
+          "description": "The connected outputs, the default first, where there is an output picker (Windows); absent on macOS, whose far end is tapped from its app wherever it plays.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "An output."
+          }
+        },
+        "output": {
+          "type": "string",
+          "description": "The output choice (audio.output), with outputs: default, or the chosen device's id."
+        },
+        "output_wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen output as remembered, when output is a device."
+        },
+        "output_using": {
+          "$ref": "#/$defs/AudioOutput",
+          "description": "The output a meeting's far end would record now, and why; absent when there is no output."
+        }
+      },
+      "required": [
+        "type",
+        "inputs",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "AudioInputFallback": {
+      "type": "object",
+      "description": "The mic the user chose is not connected, and a mic just opened on Automatic in its place (a take, a meeting, a meeting's mic that went, a test): said once until the chosen mic is seen again or the choice changes. The shell says \"<wanted> isn't connected. Inkwell is using <mic> until it is.\"",
+      "properties": {
+        "type": {
+          "const": "audio.input_fallback"
+        },
+        "wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen mic."
+        },
+        "mic_name": {
+          "type": "string",
+          "description": "The mic recording instead, as the OS names it."
+        },
+        "mic_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How that mic connects."
+        }
+      },
+      "required": [
+        "type",
+        "wanted",
+        "mic_name",
+        "mic_transport"
+      ],
+      "additionalProperties": false
+    },
+    "AudioTestStarted": {
+      "type": "object",
+      "description": "A mic test has opened the mic (audio.test): the one dictation and meetings would use now. audio.test_level follows about ten times a second, then audio.tested.",
+      "properties": {
+        "type": {
+          "const": "audio.test_started"
+        },
+        "mic_name": {
+          "type": "string",
+          "description": "The mic, as the OS names it."
+        },
+        "mic_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "mic_reason": {
+          "$ref": "#/$defs/MicReason",
+          "description": "Why that mic."
+        },
+        "seconds": {
+          "type": "integer",
+          "description": "How long the test runs at most, in seconds."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "mic_name",
+        "mic_transport",
+        "mic_reason",
+        "seconds"
+      ],
+      "additionalProperties": false
+    },
+    "AudioTestLevel": {
+      "type": "object",
+      "description": "The mic test's level over the last 100 ms: the loudest moment, from the ink's band analyzer with no gain applied, on a meter scale.",
+      "properties": {
+        "type": {
+          "const": "audio.test_level"
+        },
+        "level": {
+          "type": "number",
+          "description": "0 at -60 dBFS and below, 1 at full scale, linear in dB between."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "level"
+      ],
+      "additionalProperties": false
+    },
+    "AudioTested": {
+      "type": "object",
+      "description": "The mic test is over. Nothing it heard was kept.",
+      "properties": {
+        "type": {
+          "const": "audio.tested"
+        },
+        "ended": {
+          "$ref": "#/$defs/AudioTestEnd",
+          "description": "How it ended."
+        },
+        "heard": {
+          "type": "boolean",
+          "description": "Whether the mic heard anything louder than a quiet room (-50 dBFS) at any moment: false is the screen's cue for \"Not hearing you?\"."
+        },
+        "peak": {
+          "type": "number",
+          "description": "The loudest moment, on audio.test_level's scale."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why it failed, naming the device, when ended is failed."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "ended",
+        "heard",
+        "peak"
+      ],
+      "additionalProperties": false
+    },
+    "AudioDevice": {
+      "type": "object",
+      "description": "A connected input or output device.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it (a Core Audio UID, a WASAPI endpoint id): what audio.input and audio.output take. Opaque: never shown."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name as the OS shows it."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "is_default": {
+          "type": "boolean",
+          "description": "Whether it is the system default for its direction."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "transport",
+        "is_default"
+      ],
+      "additionalProperties": false
+    },
+    "AudioWanted": {
+      "type": "object",
+      "description": "A device the user chose, as the core remembers it from when it was chosen (it may not be connected now).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name when it was chosen; absent for a choice stored without one."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connected when it was chosen; absent likewise."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "AudioInput": {
+      "type": "object",
+      "description": "A microphone Inkwell picks, and why.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name as the OS shows it."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "reason": {
+          "$ref": "#/$defs/MicReason",
+          "description": "Why it is the one."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "transport",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "AudioOutput": {
+      "type": "object",
+      "description": "The output a meeting's far end records (Windows), and why.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name as the OS shows it."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "reason": {
+          "$ref": "#/$defs/OutputReason",
+          "description": "Why it is the one."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "transport",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "OutputReason": {
+      "type": "string",
+      "description": "Why a meeting's far end records this output (Windows): the one the user chose (chosen), the default because the chosen one is not connected (chosen_missing), or the default output, chosen (default_output).",
+      "enum": [
+        "chosen",
+        "chosen_missing",
+        "default_output"
+      ]
+    },
+    "AudioTestEnd": {
+      "type": "string",
+      "description": "How a mic test ended: its time was up (done), audio.test_stop or the core's shutdown ended it (stopped), a meeting started recording (meeting), or the mic failed or went away (failed, with a message).",
+      "enum": [
+        "done",
+        "stopped",
+        "meeting",
+        "failed"
+      ]
     },
     "HotkeyChecked": {
       "type": "object",

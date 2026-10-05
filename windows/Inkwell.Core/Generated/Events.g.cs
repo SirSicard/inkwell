@@ -76,6 +76,7 @@ public abstract record InkEvent
                 "dictation.mic_failed" => root.Deserialize(InkEventsJson.Default.DictationMicFailed)!,
                 "meeting.started" => root.Deserialize(InkEventsJson.Default.MeetingStarted)!,
                 "meeting.far_end_fallback" => root.Deserialize(InkEventsJson.Default.MeetingFarEndFallback)!,
+                "meeting.mic_switched" => root.Deserialize(InkEventsJson.Default.MeetingMicSwitched)!,
                 "meeting.detected" => root.Deserialize(InkEventsJson.Default.MeetingDetected)!,
                 "meeting.detection_ended" => root.Deserialize(InkEventsJson.Default.MeetingDetectionEnded)!,
                 "meeting.detection" => root.Deserialize(InkEventsJson.Default.MeetingDetection)!,
@@ -113,6 +114,12 @@ public abstract record InkEvent
                 "record.deleted" => root.Deserialize(InkEventsJson.Default.RecordDeleted)!,
                 "models.listed" => root.Deserialize(InkEventsJson.Default.ModelsListed)!,
                 "setting.value" => root.Deserialize(InkEventsJson.Default.SettingValue)!,
+                "audio.devices" => root.Deserialize(InkEventsJson.Default.AudioDevices)!,
+                "audio.devices_changed" => root.Deserialize(InkEventsJson.Default.AudioDevicesChanged)!,
+                "audio.input_fallback" => root.Deserialize(InkEventsJson.Default.AudioInputFallback)!,
+                "audio.test_started" => root.Deserialize(InkEventsJson.Default.AudioTestStarted)!,
+                "audio.test_level" => root.Deserialize(InkEventsJson.Default.AudioTestLevel)!,
+                "audio.tested" => root.Deserialize(InkEventsJson.Default.AudioTested)!,
                 "hotkey.checked" => root.Deserialize(InkEventsJson.Default.HotkeyChecked)!,
                 "consent.state" => root.Deserialize(InkEventsJson.Default.ConsentState)!,
                 "llm.providers" => root.Deserialize(InkEventsJson.Default.LlmProviders)!,
@@ -215,6 +222,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(DictationMicFailed))]
 [JsonSerializable(typeof(MeetingStarted))]
 [JsonSerializable(typeof(MeetingFarEndFallback))]
+[JsonSerializable(typeof(MeetingMicSwitched))]
 [JsonSerializable(typeof(MeetingDetected))]
 [JsonSerializable(typeof(MeetingDetectionEnded))]
 [JsonSerializable(typeof(MeetingDetection))]
@@ -252,6 +260,12 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(RecordDeleted))]
 [JsonSerializable(typeof(ModelsListed))]
 [JsonSerializable(typeof(SettingValue))]
+[JsonSerializable(typeof(AudioDevices))]
+[JsonSerializable(typeof(AudioDevicesChanged))]
+[JsonSerializable(typeof(AudioInputFallback))]
+[JsonSerializable(typeof(AudioTestStarted))]
+[JsonSerializable(typeof(AudioTestLevel))]
+[JsonSerializable(typeof(AudioTested))]
 [JsonSerializable(typeof(HotkeyChecked))]
 [JsonSerializable(typeof(ConsentState))]
 [JsonSerializable(typeof(LlmProviders))]
@@ -323,6 +337,181 @@ public sealed record AudioChunk
 }
 
 /// <summary>
+/// A connected input or output device.
+/// </summary>
+public sealed record AudioDevice
+{
+    /// <summary>
+    /// The OS's id for it (a Core Audio UID, a WASAPI endpoint id): what audio.input and
+    /// audio.output take. Opaque: never shown.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Whether it is the system default for its direction.
+    /// </summary>
+    [JsonPropertyName("is_default")]
+    public required bool IsDefault { get; init; }
+
+    /// <summary>
+    /// Its name as the OS shows it.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public required MicTransport Transport { get; init; }
+}
+
+/// <summary>
+/// The answer to audio.devices: the devices, the user's choice, and what Inkwell records with
+/// now.
+/// </summary>
+public sealed record AudioDevices : InkEvent
+{
+    /// <summary>
+    /// What Automatic records now ("Automatic (&lt;name&gt;)"); absent when there is no
+    /// microphone.
+    /// </summary>
+    [JsonPropertyName("automatic")]
+    public AudioInput? Automatic { get; init; }
+
+    /// <summary>
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("input")]
+    public required string Input { get; init; }
+
+    /// <summary>
+    /// The connected microphones, the default first.
+    /// </summary>
+    [JsonPropertyName("inputs")]
+    public required global::System.Collections.Generic.IReadOnlyList<AudioDevice> Inputs { get; init; }
+
+    /// <summary>
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("output")]
+    public string? Output { get; init; }
+
+    /// <summary>
+    /// The output a meeting's far end would record now, and why; absent when there is no
+    /// output.
+    /// </summary>
+    [JsonPropertyName("output_using")]
+    public AudioOutput? OutputUsing { get; init; }
+
+    /// <summary>
+    /// The chosen output as remembered, when output is a device.
+    /// </summary>
+    [JsonPropertyName("output_wanted")]
+    public AudioWanted? OutputWanted { get; init; }
+
+    /// <summary>
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    /// </summary>
+    [JsonPropertyName("outputs")]
+    public global::System.Collections.Generic.IReadOnlyList<AudioDevice>? Outputs { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    /// </summary>
+    [JsonPropertyName("using")]
+    public AudioInput? Using { get; init; }
+
+    /// <summary>
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    /// </summary>
+    [JsonPropertyName("wanted")]
+    public AudioWanted? Wanted { get; init; }
+}
+
+/// <summary>
+/// Devices came or went, a default changed, or the choice did: the same as audio.devices, once
+/// a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent
+/// only where the platform tells the core of changes, and after a setting.set of audio.input or
+/// audio.output.
+/// </summary>
+public sealed record AudioDevicesChanged : InkEvent
+{
+    /// <summary>
+    /// What Automatic records now ("Automatic (&lt;name&gt;)"); absent when there is no
+    /// microphone.
+    /// </summary>
+    [JsonPropertyName("automatic")]
+    public AudioInput? Automatic { get; init; }
+
+    /// <summary>
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("input")]
+    public required string Input { get; init; }
+
+    /// <summary>
+    /// The connected microphones, the default first.
+    /// </summary>
+    [JsonPropertyName("inputs")]
+    public required global::System.Collections.Generic.IReadOnlyList<AudioDevice> Inputs { get; init; }
+
+    /// <summary>
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("output")]
+    public string? Output { get; init; }
+
+    /// <summary>
+    /// The output a meeting's far end would record now, and why; absent when there is no
+    /// output.
+    /// </summary>
+    [JsonPropertyName("output_using")]
+    public AudioOutput? OutputUsing { get; init; }
+
+    /// <summary>
+    /// The chosen output as remembered, when output is a device.
+    /// </summary>
+    [JsonPropertyName("output_wanted")]
+    public AudioWanted? OutputWanted { get; init; }
+
+    /// <summary>
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    /// </summary>
+    [JsonPropertyName("outputs")]
+    public global::System.Collections.Generic.IReadOnlyList<AudioDevice>? Outputs { get; init; }
+
+    /// <summary>
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    /// </summary>
+    [JsonPropertyName("using")]
+    public AudioInput? Using { get; init; }
+
+    /// <summary>
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    /// </summary>
+    [JsonPropertyName("wanted")]
+    public AudioWanted? Wanted { get; init; }
+}
+
+/// <summary>
 /// The pump dropped capture blocks because a chain's queue was full (the chain fell behind).
 /// Sent once per stretch, when the queue takes audio again or closes.
 /// </summary>
@@ -355,6 +544,204 @@ public sealed record AudioDropped : InkEvent
 }
 
 /// <summary>
+/// A microphone Inkwell picks, and why.
+/// </summary>
+public sealed record AudioInput
+{
+    /// <summary>
+    /// The OS's id for it.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Its name as the OS shows it.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Why it is the one.
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public required MicReason Reason { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public required MicTransport Transport { get; init; }
+}
+
+/// <summary>
+/// The mic the user chose is not connected, and a mic just opened on Automatic in its place (a
+/// take, a meeting, a meeting's mic that went, a test): said once until the chosen mic is seen
+/// again or the choice changes. The shell says "&lt;wanted&gt; isn't connected. Inkwell is
+/// using &lt;mic&gt; until it is."
+/// </summary>
+public sealed record AudioInputFallback : InkEvent
+{
+    /// <summary>
+    /// The mic recording instead, as the OS names it.
+    /// </summary>
+    [JsonPropertyName("mic_name")]
+    public required string MicName { get; init; }
+
+    /// <summary>
+    /// How that mic connects.
+    /// </summary>
+    [JsonPropertyName("mic_transport")]
+    public required MicTransport MicTransport { get; init; }
+
+    /// <summary>
+    /// The chosen mic.
+    /// </summary>
+    [JsonPropertyName("wanted")]
+    public required AudioWanted Wanted { get; init; }
+}
+
+/// <summary>
+/// The output a meeting's far end records (Windows), and why.
+/// </summary>
+public sealed record AudioOutput
+{
+    /// <summary>
+    /// The OS's id for it.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Its name as the OS shows it.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Why it is the one.
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public required OutputReason Reason { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public required MicTransport Transport { get; init; }
+}
+
+/// <summary>
+/// How a mic test ended: its time was up (done), audio.test_stop or the core's shutdown ended
+/// it (stopped), a meeting started recording (meeting), or the mic failed or went away (failed,
+/// with a message).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<AudioTestEnd>))]
+public enum AudioTestEnd
+{
+    [JsonStringEnumMemberName("done")]
+    Done,
+    [JsonStringEnumMemberName("stopped")]
+    Stopped,
+    [JsonStringEnumMemberName("meeting")]
+    Meeting,
+    [JsonStringEnumMemberName("failed")]
+    Failed,
+}
+
+/// <summary>
+/// The mic test's level over the last 100 ms: the loudest moment, from the ink's band analyzer
+/// with no gain applied, on a meter scale.
+/// </summary>
+public sealed record AudioTestLevel : InkEvent
+{
+    /// <summary>
+    /// 0 at -60 dBFS and below, 1 at full scale, linear in dB between.
+    /// </summary>
+    [JsonPropertyName("level")]
+    public required double Level { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
+/// A mic test has opened the mic (audio.test): the one dictation and meetings would use now.
+/// audio.test_level follows about ten times a second, then audio.tested.
+/// </summary>
+public sealed record AudioTestStarted : InkEvent
+{
+    /// <summary>
+    /// The mic, as the OS names it.
+    /// </summary>
+    [JsonPropertyName("mic_name")]
+    public required string MicName { get; init; }
+
+    /// <summary>
+    /// Why that mic.
+    /// </summary>
+    [JsonPropertyName("mic_reason")]
+    public required MicReason MicReason { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("mic_transport")]
+    public required MicTransport MicTransport { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// How long the test runs at most, in seconds.
+    /// </summary>
+    [JsonPropertyName("seconds")]
+    public required long Seconds { get; init; }
+}
+
+/// <summary>
+/// The mic test is over. Nothing it heard was kept.
+/// </summary>
+public sealed record AudioTested : InkEvent
+{
+    /// <summary>
+    /// How it ended.
+    /// </summary>
+    [JsonPropertyName("ended")]
+    public required AudioTestEnd Ended { get; init; }
+
+    /// <summary>
+    /// Whether the mic heard anything louder than a quiet room (-50 dBFS) at any moment: false
+    /// is the screen's cue for "Not hearing you?".
+    /// </summary>
+    [JsonPropertyName("heard")]
+    public required bool Heard { get; init; }
+
+    /// <summary>
+    /// Why it failed, naming the device, when ended is failed.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    /// <summary>
+    /// The loudest moment, on audio.test_level's scale.
+    /// </summary>
+    [JsonPropertyName("peak")]
+    public required double Peak { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
 /// How a record's chunks were placed on its timeline: recorded (from the start the meeting
 /// wrote beside them) or estimated (from its earliest chunk, because that start is missing: an
 /// older record, or one whose write failed). Estimated: the two sides may be out of step, and
@@ -367,6 +754,31 @@ public enum AudioTimeline
     Recorded,
     [JsonStringEnumMemberName("estimated")]
     Estimated,
+}
+
+/// <summary>
+/// A device the user chose, as the core remembers it from when it was chosen (it may not be
+/// connected now).
+/// </summary>
+public sealed record AudioWanted
+{
+    /// <summary>
+    /// The OS's id for it.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Its name when it was chosen; absent for a choice stored without one.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// How it connected when it was chosen; absent likewise.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public MicTransport? Transport { get; init; }
 }
 
 /// <summary>
@@ -1566,13 +1978,16 @@ public enum FailedStage
 /// <summary>
 /// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
 /// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over).
+/// start over); meeting_recording (an audio.test refused because a meeting records: the mic
+/// test waits until it ends).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
 {
     [JsonStringEnumMemberName("list_unreadable")]
     ListUnreadable,
+    [JsonStringEnumMemberName("meeting_recording")]
+    MeetingRecording,
 }
 
 /// <summary>
@@ -2781,6 +3196,51 @@ public sealed record MeetingLooksDone : InkEvent
 }
 
 /// <summary>
+/// A recording meeting's mic went (unplugged, switched off) and the meeting records with
+/// another now: the choice as it is now, else Automatic. A meeting never moves to a mic that
+/// was plugged in or made the default mid-call; only its own mic going moves it. The mic_*
+/// fields are meeting.started's, for the mic now.
+/// </summary>
+public sealed record MeetingMicSwitched : InkEvent
+{
+    /// <summary>
+    /// The mic that went, as the OS named it, when known.
+    /// </summary>
+    [JsonPropertyName("from_name")]
+    public string? FromName { get; init; }
+
+    /// <summary>
+    /// How that mic connected, when known.
+    /// </summary>
+    [JsonPropertyName("from_transport")]
+    public MicTransport? FromTransport { get; init; }
+
+    /// <summary>
+    /// The mic it records now.
+    /// </summary>
+    [JsonPropertyName("mic_name")]
+    public required string MicName { get; init; }
+
+    /// <summary>
+    /// Why that mic.
+    /// </summary>
+    [JsonPropertyName("mic_reason")]
+    public required MicReason MicReason { get; init; }
+
+    /// <summary>
+    /// How that mic connects.
+    /// </summary>
+    [JsonPropertyName("mic_transport")]
+    public required MicTransport MicTransport { get; init; }
+
+    /// <summary>
+    /// The meeting's record id.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+}
+
+/// <summary>
 /// Provisional live text; each replaces the last and none is saved. Carries the meeting's
 /// words: never log it.
 /// </summary>
@@ -3289,16 +3749,23 @@ public sealed record MeetingsRecovered : InkEvent
 }
 
 /// <summary>
-/// Why a meeting records this microphone: the system default input; the built-in mic because
-/// the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be
-/// the one kept); the headset's own mic because the user's setting says so; the default because
-/// this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because
-/// no default is set; it was named; the LE Audio headset's own mic, which keeps full quality
-/// (Windows); or a reason this build of the core does not name (unknown).
+/// Why Inkwell records this microphone: the one the user chose in Settings &gt; Sound (chosen,
+/// found by its id or by its name and transport); Automatic standing in for a chosen mic that
+/// is not connected (chosen_missing); or Automatic's reason: the system default input; the
+/// built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on
+/// Windows a USB mic may be the one kept); the headset's own mic because a platform's retired
+/// headset-mic switch is on; the default because this Mac has no built-in mic (on Windows:
+/// every mic is Bluetooth); the first input because no default is set; it was named; the LE
+/// Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the
+/// core does not name (unknown).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<MicReason>))]
 public enum MicReason
 {
+    [JsonStringEnumMemberName("chosen")]
+    Chosen,
+    [JsonStringEnumMemberName("chosen_missing")]
+    ChosenMissing,
     [JsonStringEnumMemberName("default_input")]
     DefaultInput,
     [JsonStringEnumMemberName("built_in_for_bluetooth_output")]
@@ -3318,8 +3785,8 @@ public enum MicReason
 }
 
 /// <summary>
-/// How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user
-/// is silent), USB, a virtual or aggregate device, or anything else.
+/// How a device connects: built in, Bluetooth (call-quality audio, and zeros while its user is
+/// silent), USB, a virtual or aggregate device, or anything else.
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<MicTransport>))]
 public enum MicTransport
@@ -3713,6 +4180,22 @@ public sealed record NoteUpdated : InkEvent
     /// </summary>
     [JsonPropertyName("ref")]
     public string? Ref { get; init; }
+}
+
+/// <summary>
+/// Why a meeting's far end records this output (Windows): the one the user chose (chosen), the
+/// default because the chosen one is not connected (chosen_missing), or the default output,
+/// chosen (default_output).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<OutputReason>))]
+public enum OutputReason
+{
+    [JsonStringEnumMemberName("chosen")]
+    Chosen,
+    [JsonStringEnumMemberName("chosen_missing")]
+    ChosenMissing,
+    [JsonStringEnumMemberName("default_output")]
+    DefaultOutput,
 }
 
 /// <summary>

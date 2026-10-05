@@ -68,7 +68,8 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
 headphones there is none, and running it anyway deletes words). The "you" transcript reads AEC3's
 linear output behind a gate that drops words where the full output says echo only: in measured
 double talk the full output cost about 10 WER points and the linear output under 1. With Bluetooth
-output, the built-in mic is recorded, because a headset mic is 16 kHz call audio.
+output, Automatic records the built-in mic, because a headset mic is 16 kHz call audio; the user
+can pick the headset's mic (or any other) in Settings > Sound.
 
 ## Crates
 
@@ -311,7 +312,9 @@ whitelist of settings the shell owns (`SHELL_SETTINGS` in
 [`queries.rs`](../core/crates/ink-ffi/src/queries.rs), each with the values it takes):
 `onboarding.done`, `dictation.polish` and `meetings.llm` (only ever set to off: they turn on
 through `consent.allow`), `dictation.key`, `dictation.edit_key`, `dictation.enabled`,
-`meetings.detect`, `meetings.headset_mic`, `llm.local_only`, `retention.days`, `import.key_note`,
+`meetings.detect`, `audio.input` and `audio.output` (Sound, below), `llm.local_only`,
+`retention.days`, `import.key_note`, `meetings.headset_mic` (retired: read nowhere, accepted
+until the shells' Sound section replaces its switch),
 and the appearance settings: `appearance.mode` (`light`, `dark` or `system`),
 `appearance.dots.light` and `appearance.dots.dark` (a preset from
 [`design/tokens.json`](../design/tokens.json)), `appearance.you.light`, `appearance.them.light`,
@@ -383,6 +386,28 @@ show an empty library.
 - **Words.** These answers carry the library's words (transcripts, notes, summaries, search
   snippets). As with every event that does, they never reach a log.
 
+## Sound
+
+One mic choice serves dictation, meetings and the mic test (`audio.input`: `auto`, or a device's
+id), and on Windows one output choice the far end records (`audio.output`: `default`, or an
+output's id). [`devices.rs`](../core/crates/ink-ffi/src/devices.rs) resolves them;
+[`sound.rs`](../core/crates/ink-ffi/src/sound.rs) runs the rest on one thread, `ink-sound`.
+
+- **The rule.** The chosen device by id; else a connected one with its remembered name and
+  transport (Windows gives a USB mic a new id on another port); else Automatic, the platform's
+  routing (`CaptureControl::automatic_input`), said as `chosen_missing`; else no mic, an error and
+  never a stream of silence. A device is set only while it is connected, and the core remembers
+  its name and transport beside it.
+- **Changes.** The platform tells the core when devices come or go or a default changes
+  (`watch_devices`, OS notifications, never a poll); a burst is read once it has been quiet for
+  300 ms (at most 1 s after it began): `audio.devices_changed`, and dictation's idle mic is let go
+  of when the mic it would open now is another (the next take loses its 300 ms lead). A take in
+  progress finishes on its device; a meeting keeps its mic until that mic goes. A chosen mic that
+  is not connected is said once per spell (`audio.input_fallback`), when a mic opens in its place.
+- **The test** (`audio.test`) opens the chosen mic for up to 15 s and reports its level ten times
+  a second from the band analyzer, ungained; refused while a meeting records, and ended by one
+  that starts. Nothing it hears is kept.
+
 ## Meetings
 
 A meeting records the mic and the far end from this machine (`meeting.start`), or replays two WAV
@@ -397,16 +422,18 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   stopped. The rules are a pure state machine (`ink-ffi/src/detection.rs`); the thread wakes only
   while something is pending. The platform's detector polls the audio server once a second while
   detection is on (`meetings.detect`).
-- **Capture.** On the Mac: the routed mic's own IOProc (the built-in mic with Bluetooth output,
-  unless `meetings.headset_mic`) and a process tap of the meeting's app, else of everything this
-  Mac plays except Inkwell. On Windows: the routed mic (WASAPI), and for the far end process
+- **Capture.** On the Mac: the chosen mic's own IOProc (Sound, below; Automatic is the built-in
+  mic with Bluetooth output) and a process tap of the meeting's app, else of everything this
+  Mac plays except Inkwell. On Windows: the chosen mic (WASAPI), and for the far end process
   loopback of Zoom and the browsers (the app alone) or device loopback of the output any other app
   plays to (everything that device plays, said as such), else of the default output. Device
   loopback moves with the call: the pump asks every 2 s whether its output went or the app plays
   elsewhere, and hands the side's ring to the new source. A side left with no source (it ended by
   itself, or could not be opened again) must deliver from then on, so the watchdog says its
-  silence. `meeting.started` names the title (the calendar's event on now, from the shell), the
-  app and the mic.
+  silence. The mic moves only when it goes: a mic plugged in or made the default mid-call changes
+  nothing, and when the meeting's own mic goes (its source ends by itself) it opens again from the
+  choice as it is then (`meeting.mic_switched`). `meeting.started` names the title (the
+  calendar's event on now, from the shell), the app and the mic.
 - **What it runs on.** The VAD (Silero), loaded at the start; the far end's diarizer (Nemotron),
   loaded only for the final pass and let go of after it; and the language model the shell
   registered, for the summary, commitments and Ask, sized to its context (`context_tokens`: the

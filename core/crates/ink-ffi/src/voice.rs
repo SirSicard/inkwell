@@ -33,9 +33,9 @@ use std::time::Duration;
 
 use ink_audio::{BandAnalyzer, Bands, capture_ring};
 use ink_core::{
-    AsrEvent, AudioSource, CaptureControl, Channel, EngineError, EngineInfo, EngineStream,
-    EventSink, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, Job, Llm, Permission,
-    PlatformError, Store, StreamingEngine, TextInserter,
+    AsrEvent, AudioSource, CaptureControl, Channel, DeviceId, EngineError, EngineInfo,
+    EngineStream, EventSink, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, Job, Llm,
+    Permission, PlatformError, Store, StreamingEngine, TextInserter,
 };
 use ink_engines::{ExternalEngine, ModelDir, Route};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
@@ -358,6 +358,25 @@ pub fn vad_installed(shared: &Shared) {
     }
 }
 
+/// **Any worker.** The capture the shell's platform gave (dictation's mic), which Settings > Sound
+/// lists and tests too; `None` before the platform is set, or on a build without one.
+pub(crate) fn capture(shared: &Shared) -> Option<Arc<dyn CaptureControl>> {
+    lock(&shared.voice)
+        .platform
+        .as_ref()
+        .map(|p| p.capture.clone())
+}
+
+/// **Any worker.** A device came or went, a default changed, or the mic choice did: an idle open
+/// mic is looked at again at the mic thread's next pass, and let go of when the mic it would open
+/// now is another (the next press opens that one, without its 300 ms lead). A take in progress
+/// finishes on its device first.
+pub(crate) fn devices_changed(shared: &Shared) {
+    if let Some(voice) = lock(&shared.voice).running.as_ref() {
+        voice.activity.stale.store(true, Ordering::Release);
+    }
+}
+
 /// **Shutdown.** Stops dictation, joining every thread that can hold an engine.
 pub fn shutdown(shared: &Shared) {
     let running = lock(&shared.voice).running.take();
@@ -562,6 +581,9 @@ struct Activity {
     busy: AtomicBool,
     /// Host time of the latest press or take ending.
     last_ns: AtomicU64,
+    /// The devices or the mic choice changed since the open mic was picked
+    /// ([`devices_changed`]).
+    stale: AtomicBool,
 }
 
 impl Activity {
@@ -933,15 +955,28 @@ fn mic_failed(message: &str) -> Value {
     event("dictation.mic_failed", &[("message", Some(message.into()))])
 }
 
-/// The open mic: its source, its ring, and its path to 16 kHz.
+/// The open mic: its source, its ring, its path to 16 kHz, and the device it records.
 struct OpenMic {
     source: Box<dyn AudioSource>,
     ring: ink_audio::CaptureConsumer,
     path: MicPath,
+    device: DeviceId,
 }
 
-fn open_mic(capture: &dyn CaptureControl) -> Result<OpenMic, String> {
-    let mut source = capture.open_mic(None).map_err(|e| e.to_string())?;
+/// Opens the mic the user chose, else Automatic ([`crate::devices::pick_mic`]), and says once
+/// per spell when it stands in for a chosen mic that is not connected.
+fn open_mic(
+    shared: &Shared,
+    capture: &dyn CaptureControl,
+    activity: &Activity,
+) -> Result<OpenMic, String> {
+    // Cleared first: a change from here on is looked at again once the mic is open. (Never
+    // through the voice slot: its holder may be joining this thread.)
+    activity.stale.store(false, Ordering::Release);
+    let picked = pick(shared, capture)?;
+    let mut source = capture
+        .open_mic(Some(&picked.device.id))
+        .map_err(|e| e.to_string())?;
     let format = source.format();
     let (producer, ring) =
         capture_ring(format, ink_audio::DEFAULT_RING_DURATION).map_err(|e| e.to_string())?;
@@ -949,7 +984,23 @@ fn open_mic(capture: &dyn CaptureControl) -> Result<OpenMic, String> {
     source
         .start(Box::new(producer))
         .map_err(|e| e.to_string())?;
-    Ok(OpenMic { source, ring, path })
+    shared
+        .sound
+        .opened_on(&shared.events, &picked.mic_info(picked.device.transport));
+    Ok(OpenMic {
+        source,
+        ring,
+        path,
+        device: picked.device.id,
+    })
+}
+
+/// The mic dictation would open now.
+fn pick(shared: &Shared, capture: &dyn CaptureControl) -> Result<crate::devices::Picked, String> {
+    crate::devices::pick_mic(
+        capture,
+        &crate::devices::input_choice(shared.store.as_ref()),
+    )
 }
 
 /// How a stretch of open mic ended.
@@ -976,7 +1027,7 @@ fn controller(
             }
             Ok(Ctl::Stop) | Err(_) => return,
         }
-        let mut mic = match open_mic(platform.capture.as_ref()) {
+        let mut mic = match open_mic(shared, platform.capture.as_ref(), activity) {
             Ok(mic) => mic,
             Err(message) => {
                 log::warn!("dictation: the mic could not be opened: {message}");
@@ -1076,6 +1127,24 @@ fn pump(
             shared.publish_bands(Bands::default());
         }
         publishing = busy;
+        // A device or the choice changed: between takes, the mic it would open now is picked
+        // again, and this one let go of when that is another (or none). A take finishes first.
+        if !busy && activity.stale.swap(false, Ordering::AcqRel) {
+            match pick(shared, platform.capture.as_ref()) {
+                Ok(next) if next.device.id == mic.device => {}
+                Ok(next) => {
+                    log::info!(
+                        "dictation: the mic is let go of; the next take opens {}",
+                        next.device.name
+                    );
+                    return Closed::Idle;
+                }
+                Err(e) => {
+                    log::warn!("dictation: the mic is let go of: {e}");
+                    return Closed::Idle;
+                }
+            }
+        }
         let last = activity.last_ns.load(Ordering::Acquire);
         if !busy && shared.clock.now_ns().saturating_sub(last) >= idle_ns {
             log::info!(
