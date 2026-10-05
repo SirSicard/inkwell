@@ -44,7 +44,6 @@ use ink_pipeline::dictionary::Dictionary;
 use ink_pipeline::events::DictationEvent;
 use ink_pipeline::mic::MicPath;
 use ink_pipeline::modes::{Mode, ModeStore};
-use ink_pipeline::style::Style;
 use ink_pipeline::warm::{EngineWarmer, WARM_AFTER_IDLE, WarmHandle};
 use serde_json::Value;
 
@@ -380,64 +379,11 @@ pub fn default_modes() -> ModeStore {
     }
 }
 
-/// The user's modes, as `modes.list` shows them: the stored document
-/// ([`MODES_KEY`](crate::queries::MODES_KEY)), else the imported one, else [`default_modes`]. A
-/// document that cannot be read is an error, never quietly the default.
+/// The user's modes, as `modes.list` shows them ([`crate::modes::load`]): the stored document,
+/// else the imported one, else [`default_modes`]. A document that cannot be read is an error,
+/// never quietly the default.
 pub fn load_modes(store: &dyn Store) -> Result<ModeStore, String> {
-    let stored = match store
-        .setting(crate::queries::MODES_KEY)
-        .map_err(|e| e.to_string())?
-    {
-        Some(doc) => Some(doc),
-        None => store
-            .setting(ink_store::import::MODES_KEY)
-            .map_err(|e| e.to_string())?,
-    };
-    let Some(doc) = stored else {
-        return Ok(default_modes());
-    };
-    const UNREADABLE: &str = "the stored modes cannot be read";
-    let v: Value = serde_json::from_str(&doc).map_err(|_| UNREADABLE.to_owned())?;
-    let default_id = v
-        .get("default_id")
-        .and_then(Value::as_str)
-        .ok_or(UNREADABLE)?
-        .to_owned();
-    let list = v.get("modes").and_then(Value::as_array).ok_or(UNREADABLE)?;
-    let mut modes = Vec::with_capacity(list.len());
-    for m in list {
-        let s = |k: &str| m.get(k).and_then(Value::as_str);
-        let flag = |k: &str, default: bool| match m.get(k) {
-            None => Some(default),
-            Some(b) => b.as_bool(),
-        };
-        let apps: Vec<String> = match m.get("apps") {
-            None => Vec::new(),
-            Some(Value::Array(apps)) => apps
-                .iter()
-                .map(|a| a.as_str().map(str::to_owned))
-                .collect::<Option<_>>()
-                .ok_or(UNREADABLE)?,
-            Some(_) => return Err(UNREADABLE.into()),
-        };
-        modes.push(Mode {
-            id: s("id").ok_or(UNREADABLE)?.to_owned(),
-            name: s("name").ok_or(UNREADABLE)?.to_owned(),
-            // A style this build does not know writes as the default mode does; Settings shows it
-            // as its own style.
-            style: s("style")
-                .and_then(Style::parse)
-                .unwrap_or(Mode::builtin_default().style),
-            model: s("model")
-                .filter(|m| !m.trim().is_empty())
-                .map(str::to_owned),
-            polish_prompt: s("polish_prompt").unwrap_or_default().to_owned(),
-            polish_enabled: flag("polish_enabled", false).ok_or(UNREADABLE)?,
-            apps,
-            remove_fillers: flag("remove_fillers", true).ok_or(UNREADABLE)?,
-        });
-    }
-    Ok(ModeStore { default_id, modes })
+    crate::modes::load(store).map(|loaded| loaded.modes)
 }
 
 /// The dictionary: the one saved in 1.0, else the one imported from 0.2 (an array of
@@ -701,6 +647,11 @@ impl Voice {
         chain.set_live(Some(Arc::new(RoutedLive {
             shared: shared.clone(),
         })));
+        // A mode's own language model, found at each take, behind the same local-only switch.
+        chain.set_mode_models(Some(crate::llms::mode_models(
+            shared.llms.clone(),
+            shared.local_only.clone(),
+        )));
         let worker = DictationWorker::spawn(
             chain,
             shared.clock.clone(),

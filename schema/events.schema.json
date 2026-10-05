@@ -324,9 +324,17 @@
     },
     "FailureCode": {
       "type": "string",
-      "description": "A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save refused because the stored list cannot be read; send it again with replace_unreadable to start over).",
+      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) and model_unknown (no language model the core holds has that id: modes.listed lists them).",
       "enum": [
-        "list_unreadable"
+        "list_unreadable",
+        "name_blank",
+        "name_taken",
+        "name_is_style",
+        "too_long",
+        "default_mode",
+        "app_taken",
+        "mode_not_found",
+        "model_unknown"
       ]
     },
     "Refusal": {
@@ -397,7 +405,7 @@
     },
     "DictationWarning": {
       "type": "string",
-      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed. polish_not_allowed: polish is on, but the user has not agreed to send dictations where its model goes now (never agreed, or the model changed destination since): nothing was sent, the text went in as said, and message names the model; consent.get says more.",
+      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed. polish_not_allowed: polish is on, but the user has not agreed to send dictations where its model goes now (never agreed, or the model changed destination since): nothing was sent, the text went in as said, and message names the model; consent.get says more. polish_model_missing: polish is on for this mode, and the mode names a language model of its own that the core does not hold now (let go of, or another provider chosen in Settings > AI): nothing was sent anywhere and the text went in as said; polish never falls back to another model.",
       "enum": [
         "vad_failed",
         "audio_lost",
@@ -407,6 +415,7 @@
         "polish_failed",
         "polish_timed_out",
         "polish_not_allowed",
+        "polish_model_missing",
         "no_mode_for_style",
         "save_failed",
         "deleted_text_not_scrubbed",
@@ -2558,7 +2567,7 @@
     },
     "ModeInfo": {
       "type": "object",
-      "description": "A mode: how dictation writes in the apps it names.",
+      "description": "A mode: how dictation writes in the apps it names. Carries the user's words (its name, polish instructions and apps): never log it.",
       "properties": {
         "id": {
           "type": "string",
@@ -2575,6 +2584,14 @@
         "polish": {
           "type": "boolean",
           "description": "Whether its dictations are polished (when a language model can)."
+        },
+        "polish_prompt": {
+          "type": "string",
+          "description": "Its polish instructions, as the user wrote them; blank for the default (modes.listed's default_polish_prompt). The user's words: never log them."
+        },
+        "polish_model": {
+          "type": "string",
+          "description": "The language model it is polished on, by its id in polish_models; absent for the AI setting's (setting_polish_model). An id polish_models does not list is a model the core does not hold now: the mode's dictations go in as said (polish_model_missing)."
         },
         "remove_fillers": {
           "type": "boolean",
@@ -2595,7 +2612,37 @@
         "style",
         "polish",
         "remove_fillers",
-        "apps"
+        "apps",
+        "polish_prompt"
+      ],
+      "additionalProperties": false
+    },
+    "LanguageModelChoice": {
+      "type": "object",
+      "description": "A language model a mode can be polished on: one the shell registered, or the own-key provider chosen in Settings > AI.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered (engine:apple-foundation-models), provider:<id> for the chosen own-key provider. Show the name, never the id."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name, as consent.state names a model (a shell may name its own engine better)."
+        },
+        "to": {
+          "$ref": "#/$defs/LlmDestination",
+          "description": "Where it sends a dictation."
+        },
+        "allowed": {
+          "type": "boolean",
+          "description": "Whether the user's polish consent covers it: false, a mode on it goes in as said (polish_not_allowed) until the user agrees to that destination."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "to",
+        "allowed"
       ],
       "additionalProperties": false
     },
@@ -3134,7 +3181,7 @@
     },
     "ModesListed": {
       "type": "object",
-      "description": "The user's modes, in answer to modes.list, in the order they are matched: the first mode naming the frontmost app wins, else the default.",
+      "description": "The user's modes, in answer to modes.list, modes.save and modes.delete, in the order they are matched: the first mode naming the frontmost app wins, else the default. Carries the user's words: never log it.",
       "properties": {
         "type": {
           "const": "modes.listed"
@@ -3150,12 +3197,34 @@
             "$ref": "#/$defs/ModeInfo",
             "description": "A mode."
           }
+        },
+        "default_polish_prompt": {
+          "type": "string",
+          "description": "The polish instructions a mode with blank ones uses: the editor's placeholder."
+        },
+        "polish_models": {
+          "type": "array",
+          "description": "Every language model a mode can be polished on now, the AI setting's first. Empty when the core holds none.",
+          "items": {
+            "$ref": "#/$defs/LanguageModelChoice",
+            "description": "A model."
+          }
+        },
+        "setting_polish_model": {
+          "type": "string",
+          "description": "The id (in polish_models) of the model a mode without one of its own is polished on now: the AI setting's. Absent when there is none."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
         }
       },
       "required": [
         "type",
         "default_id",
-        "modes"
+        "modes",
+        "default_polish_prompt",
+        "polish_models"
       ],
       "additionalProperties": false
     },

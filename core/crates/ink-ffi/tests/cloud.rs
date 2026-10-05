@@ -282,6 +282,53 @@ fn summaries_and_ask_are_sized_for_the_chosen_providers_context() {
     rig.events.assert_valid();
 }
 
+/// The chosen own-key provider is a model a mode can pick (`provider:<id>`), and the AI setting's;
+/// another provider chosen, the mode still names it, the core no longer holds it, and a save that
+/// picks it is refused.
+#[test]
+fn the_chosen_provider_is_a_model_a_mode_can_pick_until_another_is_chosen() {
+    let rig = Rig::new("cloud-modes", &[]);
+    rig.choose_openai("c1");
+    let listed = rig.ask(json!({"cmd": "modes.list"}), "l1");
+    assert_eq!(
+        listed["setting_polish_model"], "provider:openai",
+        "{listed}"
+    );
+    assert_eq!(listed["polish_models"][0]["id"], "provider:openai");
+    assert_eq!(listed["polish_models"][0]["to"], "cloud");
+    assert_eq!(
+        listed["polish_models"][0]["allowed"], false,
+        "no polish consent yet"
+    );
+    let saved = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model": "provider:openai"}}),
+        "s1",
+    );
+    assert_eq!(
+        saved["modes"][0]["polish_model"], "provider:openai",
+        "{saved}"
+    );
+
+    rig.ask(
+        json!({"cmd": "llm.choose", "provider": "anthropic", "local_only": "off"}),
+        "c2",
+    );
+    let after = rig.ask(json!({"cmd": "modes.list"}), "l2");
+    assert_eq!(after["setting_polish_model"], "provider:anthropic");
+    assert_eq!(after["polish_models"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        after["modes"][0]["polish_model"], "provider:openai",
+        "still named"
+    );
+    let refused = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"name": "Mail", "polish_model": "provider:openai"}}),
+        "s2",
+    );
+    assert_eq!(refused["code"], "model_unknown", "{refused}");
+    rig.core.shutdown();
+    rig.events.assert_valid();
+}
+
 fn request(user: &str) -> LlmRequest {
     LlmRequest {
         system: "Synthetic instructions.".into(),

@@ -24,7 +24,6 @@ use ink_core::{
     PlatformError, RecordId, SpeakerId, Store,
 };
 use ink_engines::{ModelDir, Os, Route};
-use ink_pipeline::style::Style;
 use serde_json::{Map, Value, json};
 
 use crate::events::{self, event};
@@ -34,10 +33,10 @@ use crate::runtime::Shared;
 /// never runs the tone probe, because the probe would make macOS show its prompt.
 pub const SYSTEM_AUDIO_ASKED_KEY: &str = "permissions.system_audio_asked";
 
-/// The store setting holding the user's modes, as a JSON document:
-/// `{"default_id", "modes": [{"id", "name", "style", "polish_enabled", "remove_fillers", "apps"}]}`
-/// (the shape the 0.2 import writes). Until it is set, `modes.list` reads the imported modes, and
-/// without those the built-in default. The dictation chain reads the same key (S2.7).
+/// The store setting holding the user's modes, as a JSON document (the shape the 0.2 import
+/// writes, read by `ink_pipeline::modes::ModeStore::from_json`). Until it is set, the modes are
+/// the imported ones, and without those the built-in default; the first `modes.save` or
+/// `modes.delete` writes it ([`modes`](crate::modes)). The dictation chain reads the same key.
 pub const MODES_KEY: &str = "dictation.modes";
 
 /// The settings a shell may read and write through `setting.get` and `setting.set`, with the values
@@ -222,8 +221,6 @@ pub enum Query {
         /// One of the values it accepts.
         value: String,
     },
-    /// `modes.list`: the user's modes.
-    ModesList,
     /// `hotkey.check`: whether this computer can watch a key binding ([`crate::hotkey`]).
     HotkeyCheck {
         /// The binding, as the shell spelled it.
@@ -244,6 +241,8 @@ pub enum Query {
     Library(crate::library::LibraryQuery),
     /// Snippets, voice commands and the import's key note ([`phrases`](crate::phrases)).
     Phrases(crate::phrases::PhrasesQuery),
+    /// Dictation modes: listed, saved and deleted ([`modes`](crate::modes)).
+    Modes(crate::modes::ModesQuery),
     /// Own-key language model providers and their keys ([`cloud`](crate::cloud)).
     Cloud(crate::cloud::CloudQuery),
     /// Inkwell 0.2's data: looked for, or imported ([`import02`](crate::import02)).
@@ -262,7 +261,7 @@ struct Job {
 /// The fields each query takes besides `cmd` and `id`; `None` when `name` is not a query.
 fn fields(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "permissions.check" | "models.list" | "modes.list" => &[],
+        "permissions.check" | "models.list" => &[],
         "engine.route" => &["job"],
         "permission.request" => &["permission"],
         "commitments.list" => &["limit"],
@@ -315,6 +314,9 @@ pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     }
     if let Some(query) = crate::phrases::parse(name, v) {
         return Some(query.map(Query::Phrases));
+    }
+    if let Some(query) = crate::modes::parse(name, v) {
+        return Some(query.map(Query::Modes));
     }
     if let Some(query) = crate::cloud::parse(name, v) {
         return Some(query.map(Query::Cloud));
@@ -442,7 +444,6 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             }
             Query::SettingSet { key, value }
         }
-        "modes.list" => Query::ModesList,
         "hotkey.check" => Query::HotkeyCheck {
             binding: text("binding")?,
         },
@@ -879,10 +880,6 @@ impl Ctx<'_> {
                 crate::hotkey::check(&binding),
                 id.as_deref(),
             )),
-            Query::ModesList => match modes(store) {
-                Ok(e) => emit(e),
-                Err(e) => fail(e),
-            },
             Query::DictationEnable { utc_offset_minutes } => {
                 crate::voice::enable(self.shared, self.models, utc_offset_minutes, id.as_deref())
             }
@@ -908,6 +905,19 @@ impl Ctx<'_> {
                     Ok(e) => {
                         emit(e);
                         // A running dictation takes the new list at once.
+                        if saves {
+                            crate::voice::settings_changed(self.shared);
+                        }
+                    }
+                    Err(e) => fail_coded(e.message, e.code),
+                }
+            }
+            Query::Modes(query) => {
+                let saves = query.saves();
+                match crate::modes::answer(self.shared, query, id.as_deref()) {
+                    Ok(e) => {
+                        emit(e);
+                        // A running dictation takes the change at once (a deleted mode's pin too).
                         if saves {
                             crate::voice::settings_changed(self.shared);
                         }
@@ -1120,80 +1130,6 @@ fn owed(
             .map(|e| crate::library::done_evidence(store, e)),
     );
     Value::Object(item)
-}
-
-/// `modes.listed`, from [`MODES_KEY`], else the modes the 0.2 import brought, else the built-in
-/// default. A stored document that cannot be read is an error, never quietly the default.
-fn modes(store: &dyn Store) -> Result<Value, String> {
-    let stored = match store.setting(MODES_KEY).map_err(|e| e.to_string())? {
-        Some(doc) => Some(doc),
-        None => store
-            .setting(ink_store::import::MODES_KEY)
-            .map_err(|e| e.to_string())?,
-    };
-    let (default_id, modes) = match stored {
-        Some(doc) => read_modes(&doc)?,
-        None => {
-            // The same default dictation writes in (polished whenever the switch is on).
-            let mode = crate::voice::default_modes().modes.remove(0);
-            (
-                mode.id.clone(),
-                vec![json!({
-                    "id": mode.id,
-                    "name": mode.name,
-                    "style": mode.style.as_str(),
-                    "polish": mode.polish_enabled,
-                    "remove_fillers": mode.remove_fillers,
-                    "apps": mode.apps,
-                })],
-            )
-        }
-    };
-    Ok(event(
-        "modes.listed",
-        &[
-            ("default_id", Some(default_id.into())),
-            ("modes", Some(Value::Array(modes))),
-        ],
-    ))
-}
-
-fn read_modes(doc: &str) -> Result<(String, Vec<Value>), String> {
-    const UNREADABLE: &str = "the stored modes cannot be read";
-    let v: Value = serde_json::from_str(doc).map_err(|_| UNREADABLE.to_owned())?;
-    let default_id = v
-        .get("default_id")
-        .and_then(Value::as_str)
-        .ok_or(UNREADABLE)?
-        .to_owned();
-    let list = v.get("modes").and_then(Value::as_array).ok_or(UNREADABLE)?;
-    let mut out = Vec::with_capacity(list.len());
-    for m in list {
-        let s = |k: &str| m.get(k).and_then(Value::as_str);
-        let flag = |k: &str, default: bool| match m.get(k) {
-            None => Some(default),
-            Some(b) => b.as_bool(),
-        };
-        let apps: Vec<&str> = match m.get("apps") {
-            None => Vec::new(),
-            Some(Value::Array(apps)) => apps
-                .iter()
-                .map(Value::as_str)
-                .collect::<Option<_>>()
-                .ok_or(UNREADABLE)?,
-            Some(_) => return Err(UNREADABLE.into()),
-        };
-        out.push(json!({
-            "id": s("id").ok_or(UNREADABLE)?,
-            "name": s("name").ok_or(UNREADABLE)?,
-            // A style this build does not know is shown as such, never as another style.
-            "style": s("style").and_then(Style::parse).map_or("other", Style::as_str),
-            "polish": flag("polish_enabled", false).ok_or(UNREADABLE)?,
-            "remove_fillers": flag("remove_fillers", true).ok_or(UNREADABLE)?,
-            "apps": apps,
-        }));
-    }
-    Ok((default_id, out))
 }
 
 #[cfg(test)]
@@ -1439,63 +1375,5 @@ mod tests {
             .map(|preset| preset["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, DOT_PRESETS);
-    }
-
-    /// What Settings lists is what dictation writes in: both read the same document the same way
-    /// (a style this build does not know aside, which Settings shows as its own).
-    #[test]
-    fn dictation_and_settings_read_the_modes_alike() {
-        use ink_core::mock::MemStore;
-        let doc = r#"{"default_id":"d","modes":[
-            {"id":"d","name":"Everywhere else","style":"formal","polish_enabled":true,"apps":[]},
-            {"id":"c","name":"Chat","style":"casual","apps":["com.example.chat"],"remove_fillers":false,"polish_prompt":"Keep it short."}]}"#;
-        let store = MemStore::new();
-        store.set_setting(MODES_KEY, doc).unwrap();
-        let (default_id, listed) = read_modes(doc).unwrap();
-        let used = crate::voice::load_modes(&store).unwrap();
-        assert_eq!(used.default_id, default_id);
-        assert_eq!(used.modes.len(), listed.len());
-        for (mode, shown) in used.modes.iter().zip(&listed) {
-            assert_eq!(shown["id"], mode.id.as_str());
-            assert_eq!(shown["name"], mode.name.as_str());
-            assert_eq!(shown["style"], mode.style.as_str());
-            assert_eq!(shown["polish"], mode.polish_enabled);
-            assert_eq!(shown["remove_fillers"], mode.remove_fillers);
-            assert_eq!(shown["apps"], json!(mode.apps));
-        }
-        assert_eq!(used.modes[1].polish_prompt, "Keep it short.");
-        // Nothing stored: the default mode, polished whenever the switch is on, in both.
-        let empty = MemStore::new();
-        assert!(crate::voice::load_modes(&empty).unwrap().modes[0].polish_enabled);
-        let listed = modes(&empty).unwrap();
-        assert_eq!(listed["modes"][0]["polish"], true);
-        // A damaged document is an error in both, never quietly the default.
-        store.set_setting(MODES_KEY, "not json").unwrap();
-        assert!(crate::voice::load_modes(&store).is_err());
-        assert!(modes(&store).is_err());
-    }
-
-    #[test]
-    fn stored_modes_are_read_and_a_damaged_document_is_an_error() {
-        let doc = r#"{"default_id":"d","modes":[
-            {"id":"d","name":"Everywhere else","style":"formal","polish_enabled":true,"apps":[]},
-            {"id":"c","name":"Chat","style":"casual","apps":["com.example.chat"],"remove_fillers":false},
-            {"id":"x","name":"Odd","style":"shouting"}]}"#;
-        let (default_id, modes) = read_modes(doc).unwrap();
-        assert_eq!(default_id, "d");
-        assert_eq!(modes[0]["polish"], true);
-        assert_eq!(modes[0]["remove_fillers"], true, "the 0.2 default");
-        assert_eq!(modes[1]["apps"], json!(["com.example.chat"]));
-        assert_eq!(modes[1]["polish"], false);
-        assert_eq!(modes[2]["style"], "other");
-        for bad in [
-            "not json",
-            r#"{"modes":[]}"#,
-            r#"{"default_id":"d","modes":[{"name":"x","style":"formal"}]}"#,
-            r#"{"default_id":"d","modes":[{"id":"x","name":"x","apps":[3]}]}"#,
-            r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_enabled":"yes"}]}"#,
-        ] {
-            assert!(read_modes(bad).is_err(), "{bad}");
-        }
     }
 }

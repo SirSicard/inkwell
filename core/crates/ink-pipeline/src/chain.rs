@@ -8,7 +8,7 @@
 //! | 4 transcribe | the [`OfflineEngine`] the caller routed to [`Job::DictationFinal`](ink_core::Job) |
 //! | 5 voice commands | [`VoiceCommandStore::detect`](crate::voicecommand::VoiceCommandStore::detect) |
 //! | 6–8 cleanup, style, dictionary, snippets | [`text::write`], under the resolved [mode](crate::modes) |
-//! | 9 polish | `ink-llm`'s polish task, when the mode asks for it and the user [consented](crate::consent) to where the model sends it |
+//! | 9 polish | `ink-llm`'s polish task, when the mode asks for it and the user [consented](crate::consent) to where the model sends it: the mode's own model ([`ModeModels`]) or the AI setting's |
 //! | 10 persist | a [`RecordKind::Dictation`] record in the [`Store`] |
 //! | 11 output | the platform's [`TextInserter`] |
 //!
@@ -183,6 +183,11 @@ impl Default for DictationSettings {
     }
 }
 
+/// **Worker.** Finds the language model a mode names ([`Mode::polish_model`]) when one of its
+/// takes is polished: the model, or `None` when the core holds no model by that id now. Asked at
+/// each take, so a model registered or let go of since is seen at once.
+pub type ModeModels = Arc<dyn Fn(&str) -> Option<Arc<dyn Llm>> + Send + Sync>;
+
 /// What the chain calls.
 #[derive(Clone)]
 pub struct Services {
@@ -325,6 +330,8 @@ pub struct DictationChain {
     polish_override: Option<bool>,
     /// The live-partials engine, when one is set.
     live_engine: Option<Arc<dyn StreamingEngine>>,
+    /// The models modes name, when the owner set them up.
+    mode_models: Option<ModeModels>,
     /// The held take's live words.
     live: Option<Live>,
     /// Takes confirmed so far: the next take's number.
@@ -361,6 +368,7 @@ impl DictationChain {
             polish_override: None,
             completed_takes: 0,
             live_engine: None,
+            mode_models: None,
             live: None,
             takes_started: 0,
         }
@@ -370,6 +378,12 @@ impl DictationChain {
     /// engine), or none. Takes from the next one on use it.
     pub fn set_live(&mut self, engine: Option<Arc<dyn StreamingEngine>>) {
         self.live_engine = engine;
+    }
+
+    /// Sets how a mode's own language model is found ([`ModeModels`]), or none: then a mode that
+    /// names one is not polished.
+    pub fn set_mode_models(&mut self, models: Option<ModeModels>) {
+        self.mode_models = models;
     }
 
     fn emit(&self, event: DictationEvent) {
@@ -385,8 +399,15 @@ impl DictationChain {
         }
     }
 
-    /// Replaces the settings. A take in progress finishes under the new ones.
+    /// Replaces the settings. A take in progress finishes under the new ones. A voice command's pin
+    /// to a mode the new settings no longer have is dropped, so a mode added later under its id is
+    /// never picked by it.
     pub fn set_settings(&mut self, settings: DictationSettings) {
+        if let Some(pin) = &self.pinned_mode
+            && !settings.modes.modes.iter().any(|m| &m.id == pin)
+        {
+            self.pinned_mode = None;
+        }
         self.settings = settings;
     }
 
@@ -1073,6 +1094,7 @@ impl DictationChain {
     /// covers the model it reaches, checked by that model at the call ([`Llm::complete_if`]), so a
     /// model that changed destination since the user agreed never receives the text. Without it
     /// the text goes out as written with [`Warning::PolishNotAllowed`], naming the consent needed.
+    /// That holds for a mode's own model as for the AI setting's ([`polish_model`](Self::polish_model)).
     ///
     /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out.
     /// The budget is a deadline the token carries, so no thread or timer fires it: the model sees
@@ -1089,8 +1111,7 @@ impl DictationChain {
         if !self.polish_override.unwrap_or(wanted) {
             return written;
         }
-        let Some(llm) = &self.services.llm else {
-            self.emit(DictationEvent::Warning(Warning::PolishUnavailable));
+        let Some(llm) = self.polish_model(mode) else {
             return written;
         };
         // Without a consent every model is refused at the call (nothing is sent); the model
@@ -1142,6 +1163,28 @@ impl DictationChain {
                 written
             }
         }
+    }
+
+    /// The model `mode` is polished on: its own ([`Mode::polish_model`], through
+    /// [`ModeModels`]), else the AI setting's. `None`, said, when there is none: a mode whose own
+    /// model the core does not hold now gets no other model in its place
+    /// ([`Warning::PolishModelMissing`]), since that could send the words somewhere the user did
+    /// not pick for this mode.
+    fn polish_model(&self, mode: &Mode) -> Option<Arc<dyn Llm>> {
+        let Some(id) = &mode.polish_model else {
+            if self.services.llm.is_none() {
+                self.emit(DictationEvent::Warning(Warning::PolishUnavailable));
+            }
+            return self.services.llm.clone();
+        };
+        let found = self.mode_models.as_ref().and_then(|find| find(id));
+        if found.is_none() {
+            log::warn!(
+                "dictation: this mode's language model is not set up now; the text goes out as written"
+            );
+            self.emit(DictationEvent::Warning(Warning::PolishModelMissing));
+        }
+        found
     }
 
     /// Stage 10: one dictation record with one mic segment. A record left half-written is

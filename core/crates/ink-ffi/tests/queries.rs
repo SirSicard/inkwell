@@ -695,6 +695,156 @@ fn modes_come_from_the_store_then_the_import_then_the_default() {
     rig.finish();
 }
 
+/// Settings edits the modes: the first save adopts the import's document, patched in place so
+/// what this build does not read (0.2's `model`, a transcription model's name) survives; each
+/// refusal the editor shows carries its code; the stored modes reach the listing.
+#[test]
+fn modes_are_saved_in_place_and_each_refusal_says_which_by_its_code() {
+    let rig = rig("modes-save");
+    let imported = json!({"default_id": "d", "modes": [
+        {"id": "d", "name": "Everywhere else", "style": "formal", "model": "", "polish_enabled": true, "apps": []},
+        {"id": "c", "name": "Chat", "style": "casual", "model": "ggml-base.en", "apps": ["com.example.chat"]},
+        {"id": "x", "name": "Odd", "style": "shouting"}]})
+    .to_string();
+    rig.store
+        .set_setting(ink_store::import::MODES_KEY, &imported)
+        .unwrap();
+    let saved = rig.ask(
+        json!({"cmd": "modes.save", "id": "s1", "mode": {"id": "c", "polish": true, "polish_prompt": "Short."}}),
+        "modes.listed",
+        1,
+    );
+    assert_eq!(saved["ref"], "s1");
+    assert_eq!(saved["modes"][1]["polish"], true);
+    assert_eq!(saved["modes"][1]["polish_prompt"], "Short.");
+    assert_eq!(
+        saved["modes"][1]["name"], "Chat",
+        "absent fields keep their value"
+    );
+    assert_eq!(
+        saved["modes"][2]["style"], "other",
+        "a style this build does not know"
+    );
+    assert!(
+        saved["default_polish_prompt"]
+            .as_str()
+            .is_some_and(|p| !p.is_empty())
+    );
+    assert_eq!(
+        saved["polish_models"],
+        json!([]),
+        "no language model registered"
+    );
+    assert!(saved.get("setting_polish_model").is_none());
+    let stored: Value =
+        serde_json::from_str(&rig.store.setting(MODES_KEY).unwrap().unwrap()).unwrap();
+    assert_eq!(
+        stored["modes"][1]["model"], "ggml-base.en",
+        "0.2's field survives"
+    );
+    assert_eq!(
+        stored["modes"][2]["style"], "shouting",
+        "kept until the user picks one"
+    );
+    assert_eq!(
+        rig.store
+            .setting(ink_store::import::MODES_KEY)
+            .unwrap()
+            .as_deref(),
+        Some(imported.as_str()),
+        "the import's document is left as written"
+    );
+
+    let long = "x".repeat(2_001);
+    let refusals = [
+        (
+            json!({"cmd": "modes.save", "mode": {"name": " chat "}}),
+            "name_taken",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "Formal"}}),
+            "name_is_style",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "  "}}),
+            "name_blank",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"id": "c", "polish_prompt": long}}),
+            "too_long",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "Mail", "apps": ["com.example.chat"]}}),
+            "app_taken",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"id": "d", "apps": ["com.example.mail"]}}),
+            "default_mode",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"id": "gone", "name": "x"}}),
+            "mode_not_found",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "Mail", "polish_model": "engine:none"}}),
+            "model_unknown",
+        ),
+        (json!({"cmd": "modes.delete", "mode": "d"}), "default_mode"),
+        (
+            json!({"cmd": "modes.delete", "mode": "gone"}),
+            "mode_not_found",
+        ),
+    ];
+    for (n, (cmd, code)) in refusals.iter().enumerate() {
+        let failed = rig.ask(cmd.clone(), "command.failed", n + 1);
+        assert_eq!(failed["code"], *code, "{cmd}: {failed}");
+        let message = failed["message"].as_str().unwrap();
+        assert!(
+            !message.contains("Chat") && !message.contains("com.example"),
+            "{failed}"
+        );
+    }
+    let failures = refusals.len();
+
+    // Moving an app is asked for; then the mode it left matches no more.
+    let moved = rig.ask(
+        json!({"cmd": "modes.save", "take_apps": true, "mode": {"name": "Mail", "apps": ["com.example.chat"]}}),
+        "modes.listed",
+        2,
+    );
+    assert_eq!(moved["modes"][1]["apps"], json!([]));
+    let mail = moved["modes"][3]["id"].as_str().unwrap().to_owned();
+    assert!(mail.starts_with('m'), "{mail}");
+    let left = rig.ask(
+        json!({"cmd": "modes.delete", "mode": mail, "id": "d1"}),
+        "modes.listed",
+        3,
+    );
+    assert_eq!(left["ref"], "d1");
+    assert_eq!(left["modes"].as_array().unwrap().len(), 3);
+
+    // A document that cannot be read is never saved over unless the user starts over.
+    rig.store.set_setting(MODES_KEY, "{broken").unwrap();
+    let refused = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"name": "Mail"}}),
+        "command.failed",
+        failures + 1,
+    );
+    assert_eq!(refused["code"], "list_unreadable");
+    assert_eq!(
+        rig.store.setting(MODES_KEY).unwrap().as_deref(),
+        Some("{broken")
+    );
+    let fresh = rig.ask(
+        json!({"cmd": "modes.save", "replace_unreadable": true, "mode": {"name": "Mail"}}),
+        "modes.listed",
+        4,
+    );
+    assert_eq!(fresh["default_id"], "default");
+    assert_eq!(fresh["modes"][1]["name"], "Mail");
+    rig.finish();
+}
+
 #[test]
 fn a_save_refused_over_an_unreadable_list_says_so_by_its_code() {
     let rig = rig("list-unreadable");

@@ -201,6 +201,7 @@ pub fn dictation(e: &DictationEvent) -> Value {
                 Warning::PolishUnavailable => ("polish_unavailable", None, None),
                 Warning::PolishFailed(e) => ("polish_failed", None, some(e.to_string())),
                 Warning::PolishTimedOut => ("polish_timed_out", None, None),
+                Warning::PolishModelMissing => ("polish_model_missing", None, None),
                 Warning::PolishNotAllowed(needs) => {
                     ("polish_not_allowed", None, some(destination_name(needs)))
                 }
@@ -803,6 +804,7 @@ mod tests {
             DictationEvent::Warning(Warning::AudioLost { frames: 480 }),
             DictationEvent::Warning(Warning::PolishFailed(LlmError::NoKey)),
             DictationEvent::Warning(Warning::PolishTimedOut),
+            DictationEvent::Warning(Warning::PolishModelMissing),
             DictationEvent::Warning(Warning::PolishNotAllowed(LlmConsent::OnDevice)),
             DictationEvent::Warning(Warning::SaveFailed(StoreError::NotFound)),
             DictationEvent::Warning(Warning::DeletedTextNotScrubbed),

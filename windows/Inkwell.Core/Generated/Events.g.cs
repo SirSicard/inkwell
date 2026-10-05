@@ -1178,7 +1178,10 @@ public sealed record DictationVoiceDetection : InkEvent
 /// there and processed. polish_not_allowed: polish is on, but the user has not agreed to send
 /// dictations where its model goes now (never agreed, or the model changed destination since):
 /// nothing was sent, the text went in as said, and message names the model; consent.get says
-/// more.
+/// more. polish_model_missing: polish is on for this mode, and the mode names a language model
+/// of its own that the core does not hold now (let go of, or another provider chosen in
+/// Settings &gt; AI): nothing was sent anywhere and the text went in as said; polish never
+/// falls back to another model.
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<DictationWarning>))]
 public enum DictationWarning
@@ -1199,6 +1202,8 @@ public enum DictationWarning
     PolishTimedOut,
     [JsonStringEnumMemberName("polish_not_allowed")]
     PolishNotAllowed,
+    [JsonStringEnumMemberName("polish_model_missing")]
+    PolishModelMissing,
     [JsonStringEnumMemberName("no_mode_for_style")]
     NoModeForStyle,
     [JsonStringEnumMemberName("save_failed")]
@@ -1564,15 +1569,38 @@ public enum FailedStage
 }
 
 /// <summary>
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over).
+/// A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save,
+/// modes.save or modes.delete refused because the stored list cannot be read (send a save again
+/// with replace_unreadable to start over). For modes.save and modes.delete: name_blank (a mode
+/// needs a name), name_taken (another mode's name sounds the same: case and spacing aside),
+/// name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long
+/// (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or
+/// an app identity over 256 characters, or more than 50 modes), default_mode (the default mode
+/// can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send
+/// the save again with take_apps to move it), mode_not_found (no mode has that id) and
+/// model_unknown (no language model the core holds has that id: modes.listed lists them).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
 {
     [JsonStringEnumMemberName("list_unreadable")]
     ListUnreadable,
+    [JsonStringEnumMemberName("name_blank")]
+    NameBlank,
+    [JsonStringEnumMemberName("name_taken")]
+    NameTaken,
+    [JsonStringEnumMemberName("name_is_style")]
+    NameIsStyle,
+    [JsonStringEnumMemberName("too_long")]
+    TooLong,
+    [JsonStringEnumMemberName("default_mode")]
+    DefaultMode,
+    [JsonStringEnumMemberName("app_taken")]
+    AppTaken,
+    [JsonStringEnumMemberName("mode_not_found")]
+    ModeNotFound,
+    [JsonStringEnumMemberName("model_unknown")]
+    ModelUnknown,
 }
 
 /// <summary>
@@ -1931,6 +1959,40 @@ public sealed record KindStats
     /// </summary>
     [JsonPropertyName("words")]
     public required long Words { get; init; }
+}
+
+/// <summary>
+/// A language model a mode can be polished on: one the shell registered, or the own-key
+/// provider chosen in Settings &gt; AI.
+/// </summary>
+public sealed record LanguageModelChoice
+{
+    /// <summary>
+    /// Whether the user's polish consent covers it: false, a mode on it goes in as said
+    /// (polish_not_allowed) until the user agrees to that destination.
+    /// </summary>
+    [JsonPropertyName("allowed")]
+    public required bool Allowed { get; init; }
+
+    /// <summary>
+    /// Its id, as a mode names it (polish_model): engine:&lt;id&gt; for a model the shell
+    /// registered (engine:apple-foundation-models), provider:&lt;id&gt; for the chosen own-key
+    /// provider. Show the name, never the id.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Its name, as consent.state names a model (a shell may name its own engine better).
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Where it sends a dictation.
+    /// </summary>
+    [JsonPropertyName("to")]
+    public required LlmDestination To { get; init; }
 }
 
 /// <summary>
@@ -3401,7 +3463,8 @@ public sealed record MilestonesReached : InkEvent
 }
 
 /// <summary>
-/// A mode: how dictation writes in the apps it names.
+/// A mode: how dictation writes in the apps it names. Carries the user's words (its name,
+/// polish instructions and apps): never log it.
 /// </summary>
 public sealed record ModeInfo
 {
@@ -3429,6 +3492,21 @@ public sealed record ModeInfo
     /// </summary>
     [JsonPropertyName("polish")]
     public required bool Polish { get; init; }
+
+    /// <summary>
+    /// The language model it is polished on, by its id in polish_models; absent for the AI
+    /// setting's (setting_polish_model). An id polish_models does not list is a model the core
+    /// does not hold now: the mode's dictations go in as said (polish_model_missing).
+    /// </summary>
+    [JsonPropertyName("polish_model")]
+    public string? PolishModel { get; init; }
+
+    /// <summary>
+    /// Its polish instructions, as the user wrote them; blank for the default (modes.listed's
+    /// default_polish_prompt). The user's words: never log them.
+    /// </summary>
+    [JsonPropertyName("polish_prompt")]
+    public required string PolishPrompt { get; init; }
 
     /// <summary>
     /// Whether fillers and stutters are removed.
@@ -3628,8 +3706,9 @@ public sealed record ModelsListed : InkEvent
 }
 
 /// <summary>
-/// The user's modes, in answer to modes.list, in the order they are matched: the first mode
-/// naming the frontmost app wins, else the default.
+/// The user's modes, in answer to modes.list, modes.save and modes.delete, in the order they
+/// are matched: the first mode naming the frontmost app wins, else the default. Carries the
+/// user's words: never log it.
 /// </summary>
 public sealed record ModesListed : InkEvent
 {
@@ -3640,10 +3719,36 @@ public sealed record ModesListed : InkEvent
     public required string DefaultId { get; init; }
 
     /// <summary>
+    /// The polish instructions a mode with blank ones uses: the editor's placeholder.
+    /// </summary>
+    [JsonPropertyName("default_polish_prompt")]
+    public required string DefaultPolishPrompt { get; init; }
+
+    /// <summary>
     /// The modes.
     /// </summary>
     [JsonPropertyName("modes")]
     public required global::System.Collections.Generic.IReadOnlyList<ModeInfo> Modes { get; init; }
+
+    /// <summary>
+    /// Every language model a mode can be polished on now, the AI setting's first. Empty when
+    /// the core holds none.
+    /// </summary>
+    [JsonPropertyName("polish_models")]
+    public required global::System.Collections.Generic.IReadOnlyList<LanguageModelChoice> PolishModels { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The id (in polish_models) of the model a mode without one of its own is polished on now:
+    /// the AI setting's. Absent when there is none.
+    /// </summary>
+    [JsonPropertyName("setting_polish_model")]
+    public string? SettingPolishModel { get; init; }
 }
 
 /// <summary>

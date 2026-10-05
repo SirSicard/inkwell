@@ -35,7 +35,7 @@ public partial class ModesModelTests
     ];
 
     private static string Listed() =>
-        $$"""{"type":"modes.listed","default_id":"d","modes":[{"id":"chat","name":"Chat","style":"casual","polish":false,"remove_fillers":true,"apps":{{JsonSerializer.Serialize(Identities)}}},{"id":"d","name":"Default","style":"formal","polish":true,"remove_fillers":true,"apps":[]}]}""";
+        $$"""{"type":"modes.listed","default_id":"d","modes":[{"id":"chat","name":"Chat","style":"casual","polish":false,"remove_fillers":true,"polish_prompt":"","apps":{{JsonSerializer.Serialize(Identities)}}},{"id":"d","name":"Default","style":"formal","polish":true,"remove_fillers":true,"polish_prompt":"","apps":[]}],"default_polish_prompt":"Fix it.","polish_models":[]}""";
 
     /// <summary>
     /// Verify: no mode shows a raw exe name where a name is known, and an unknown one reads as its

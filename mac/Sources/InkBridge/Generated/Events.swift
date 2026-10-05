@@ -945,7 +945,10 @@ public struct DictationVoiceDetection: Codable, Sendable, Equatable {
 /// there and processed. polish_not_allowed: polish is on, but the user has not agreed to send
 /// dictations where its model goes now (never agreed, or the model changed destination since):
 /// nothing was sent, the text went in as said, and message names the model; consent.get says
-/// more.
+/// more. polish_model_missing: polish is on for this mode, and the mode names a language model
+/// of its own that the core does not hold now (let go of, or another provider chosen in
+/// Settings > AI): nothing was sent anywhere and the text went in as said; polish never falls
+/// back to another model.
 public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case audioLost = "audio_lost"
@@ -955,6 +958,7 @@ public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable
     case polishFailed = "polish_failed"
     case polishTimedOut = "polish_timed_out"
     case polishNotAllowed = "polish_not_allowed"
+    case polishModelMissing = "polish_model_missing"
     case noModeForStyle = "no_mode_for_style"
     case saveFailed = "save_failed"
     case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
@@ -1171,11 +1175,26 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over).
+/// A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save,
+/// modes.save or modes.delete refused because the stored list cannot be read (send a save again
+/// with replace_unreadable to start over). For modes.save and modes.delete: name_blank (a mode
+/// needs a name), name_taken (another mode's name sounds the same: case and spacing aside),
+/// name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long
+/// (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or
+/// an app identity over 256 characters, or more than 50 modes), default_mode (the default mode
+/// can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send
+/// the save again with take_apps to move it), mode_not_found (no mode has that id) and
+/// model_unknown (no language model the core holds has that id: modes.listed lists them).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
+    case nameBlank = "name_blank"
+    case nameTaken = "name_taken"
+    case nameIsStyle = "name_is_style"
+    case tooLong = "too_long"
+    case defaultMode = "default_mode"
+    case appTaken = "app_taken"
+    case modeNotFound = "mode_not_found"
+    case modelUnknown = "model_unknown"
 }
 
 /// What a meeting records as the other side: the sound of its app alone (a call recorded from
@@ -1369,6 +1388,22 @@ public struct KindStats: Codable, Sendable, Equatable {
         case records
         case words
     }
+}
+
+/// A language model a mode can be polished on: one the shell registered, or the own-key
+/// provider chosen in Settings > AI.
+public struct LanguageModelChoice: Codable, Sendable, Equatable {
+    /// Whether the user's polish consent covers it: false, a mode on it goes in as said
+    /// (polish_not_allowed) until the user agrees to that destination.
+    public let allowed: Bool
+    /// Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered
+    /// (engine:apple-foundation-models), provider:<id> for the chosen own-key provider. Show
+    /// the name, never the id.
+    public let id: String
+    /// Its name, as consent.state names a model (a shell may name its own engine better).
+    public let name: String
+    /// Where it sends a dictation.
+    public let to: LlmDestination
 }
 
 /// One record whole, in answer to record.open. Carries the library's words: never log it.
@@ -2238,7 +2273,8 @@ public struct MilestonesReached: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// A mode: how dictation writes in the apps it names.
+/// A mode: how dictation writes in the apps it names. Carries the user's words (its name,
+/// polish instructions and apps): never log it.
 public struct ModeInfo: Codable, Sendable, Equatable {
     /// The apps it is picked for, matched against the frontmost app's identity. Never shown to
     /// the user as they are: a shell names each app.
@@ -2249,6 +2285,13 @@ public struct ModeInfo: Codable, Sendable, Equatable {
     public let name: String
     /// Whether its dictations are polished (when a language model can).
     public let polish: Bool
+    /// The language model it is polished on, by its id in polish_models; absent for the AI
+    /// setting's (setting_polish_model). An id polish_models does not list is a model the core
+    /// does not hold now: the mode's dictations go in as said (polish_model_missing).
+    public let polishModel: String?
+    /// Its polish instructions, as the user wrote them; blank for the default (modes.listed's
+    /// default_polish_prompt). The user's words: never log them.
+    public let polishPrompt: String
     /// Whether fillers and stutters are removed.
     public let removeFillers: Bool
     /// How it writes.
@@ -2259,6 +2302,8 @@ public struct ModeInfo: Codable, Sendable, Equatable {
         case id
         case name
         case polish
+        case polishModel = "polish_model"
+        case polishPrompt = "polish_prompt"
         case removeFillers = "remove_fillers"
         case style
     }
@@ -2377,19 +2422,34 @@ public struct ModelsListed: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// The user's modes, in answer to modes.list, in the order they are matched: the first mode
-/// naming the frontmost app wins, else the default.
+/// The user's modes, in answer to modes.list, modes.save and modes.delete, in the order they
+/// are matched: the first mode naming the frontmost app wins, else the default. Carries the
+/// user's words: never log it.
 public struct ModesListed: Codable, Sendable, Equatable {
     /// The mode used when no other matches.
     public let defaultId: String
+    /// The polish instructions a mode with blank ones uses: the editor's placeholder.
+    public let defaultPolishPrompt: String
     /// The modes.
     public let modes: [ModeInfo]
+    /// Every language model a mode can be polished on now, the AI setting's first. Empty when
+    /// the core holds none.
+    public let polishModels: [LanguageModelChoice]
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// The id (in polish_models) of the model a mode without one of its own is polished on now:
+    /// the AI setting's. Absent when there is none.
+    public let settingPolishModel: String?
     /// Always `modes.listed`.
     public let type: String
 
     private enum CodingKeys: String, CodingKey {
         case defaultId = "default_id"
+        case defaultPolishPrompt = "default_polish_prompt"
         case modes
+        case polishModels = "polish_models"
+        case ref
+        case settingPolishModel = "setting_polish_model"
         case type
     }
 }

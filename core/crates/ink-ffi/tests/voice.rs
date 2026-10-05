@@ -777,6 +777,166 @@ fn modes_listed_and_dictation_agree_on_the_default_mode_polishing() {
     assert_eq!(listed["modes"][0]["polish"], true, "{listed}");
 }
 
+// --- Modes edited in Settings (feat/core-modes-edit) ------------------------------------------
+
+impl VoiceRig {
+    /// Sends a `modes.save` or `modes.delete` (with id `id`) while dictation runs, and waits for
+    /// its answer and for the running dictation to take the change.
+    fn change_modes(&self, json: &str, id: &str) -> Value {
+        let ready = self.events.count("dictation.ready");
+        let answer = self.ask(json, id);
+        assert_eq!(answer["type"], "modes.listed", "{answer}");
+        assert!(
+            self.events.wait_count("dictation.ready", ready + 1, WAIT),
+            "the running dictation never took the change"
+        );
+        answer
+    }
+
+    /// The default mode on `model` (a `polish_model` id), while dictation runs.
+    fn default_on(&self, model: &str, id: &str) -> Value {
+        self.change_modes(
+            &format!(
+                r#"{{"cmd":"modes.save","mode":{{"id":"default","polish_model":"{model}"}},"id":"{id}"}}"#
+            ),
+            id,
+        )
+    }
+
+    fn focus_on(&self, app: &str) {
+        self.platform.set_focus(ink_core::FocusInfo {
+            app: Some(ink_core::AppRef {
+                id: app.into(),
+                pid: Some(1),
+                name: "An app".into(),
+            }),
+            secure_input: false,
+        });
+    }
+}
+
+/// A mode saved in Settings writes the next take in the app it names; deleted, its app goes back
+/// to the default mode. The first save writes 1.0's own document.
+#[test]
+fn a_saved_mode_reaches_a_running_dictation_at_once() {
+    let rig = VoiceRig::new("modes-save");
+    rig.enable();
+    rig.focus_on("com.example.chat");
+    assert_eq!(rig.dictate(1.0, 61)["text"], "Hello world.");
+    let listed = rig.change_modes(
+        r#"{"cmd":"modes.save","mode":{"name":"Chat","style":"relaxed","apps":["com.example.chat"]},"id":"s1"}"#,
+        "s1",
+    );
+    let chat = listed["modes"][1]["id"].as_str().unwrap().to_owned();
+    assert!(rig.setting(ink_ffi::queries::MODES_KEY).is_some());
+    assert_eq!(rig.dictate(1.0, 62)["text"], "hello world");
+    rig.change_modes(
+        &format!(r#"{{"cmd":"modes.delete","mode":"{chat}","id":"d1"}}"#),
+        "d1",
+    );
+    assert_eq!(rig.dictate(1.0, 63)["text"], "Hello world.");
+    rig.events.assert_valid();
+}
+
+/// A mode polishes on its own model, found at each take: one on this machine, under on-device
+/// consent; a cloud one that consent does not cover gets nothing; one let go of gets nothing and
+/// the take says so. The AI setting's model is never used in a mode's place. The listing names
+/// every model a mode can pick, where it sends and whether the consent covers it.
+#[test]
+fn a_mode_polishes_on_its_own_model_only_where_the_consent_covers_it() {
+    let rig = VoiceRig::new("modes-model");
+    let setting = rig.register_local();
+    let own = rig.register_model("other-llm", "other", true, "Polished by the mode's model.");
+    let remote = rig.register_remote();
+    rig.allow_on_device("c1");
+
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l1"}"#, "l1");
+    assert_eq!(
+        listed["setting_polish_model"], "engine:local-llm",
+        "{listed}"
+    );
+    let models = listed["polish_models"].as_array().unwrap();
+    let ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        ids,
+        ["engine:local-llm", "engine:other-llm", "engine:remote-llm"]
+    );
+    assert_eq!(models[1]["to"], "on_device");
+    assert_eq!(models[1]["allowed"], true);
+    assert_eq!(models[2]["to"], "cloud");
+    assert_eq!(models[2]["name"], "remote");
+    assert_eq!(
+        models[2]["allowed"], false,
+        "on-device consent does not cover it"
+    );
+
+    rig.enable();
+    let unknown = rig.fails(
+        r#"{"cmd":"modes.save","mode":{"id":"default","polish_model":"engine:nope"},"id":"u1"}"#,
+        "u1",
+    );
+    assert_eq!(unknown["code"], "model_unknown");
+
+    rig.default_on("engine:other-llm", "s1");
+    assert_eq!(
+        rig.dictate(1.0, 64)["text"],
+        "Polished by the mode's model."
+    );
+    assert_eq!(own.calls.load(Ordering::SeqCst), 1);
+
+    rig.default_on("engine:remote-llm", "s2");
+    assert_eq!(rig.dictate(1.0, 65)["text"], "Hello world.");
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    let refused = rig.warnings("polish_not_allowed");
+    assert_eq!(refused.len(), 1);
+    assert_eq!(
+        refused[0]["message"], "remote",
+        "names the model's destination"
+    );
+
+    rig.default_on("engine:other-llm", "s3");
+    rig.unregister("other-llm");
+    assert_eq!(rig.dictate(1.0, 66)["text"], "Hello world.");
+    assert_eq!(rig.warnings("polish_model_missing").len(), 1);
+    assert_eq!(own.calls.load(Ordering::SeqCst), 1, "let go of: not called");
+    assert_eq!(
+        setting.calls.load(Ordering::SeqCst),
+        0,
+        "never the AI setting's model in a mode's place"
+    );
+    // The mode still names it, and the listing no longer lists it.
+    let after = rig.ask(r#"{"cmd":"modes.list","id":"l2"}"#, "l2");
+    assert_eq!(after["modes"][0]["polish_model"], "engine:other-llm");
+    assert_eq!(after["polish_models"].as_array().unwrap().len(), 2);
+    rig.events.assert_valid();
+}
+
+/// A mode's own model goes through local-only mode like every call: a cloud model the user did
+/// agree to is still refused while local-only is on.
+#[test]
+fn a_mode_s_cloud_model_is_refused_while_local_only_is_on() {
+    let rig = VoiceRig::new("modes-local-only");
+    let remote = rig.register_remote();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"a1"}"#,
+        "a1",
+    );
+    assert_eq!(state["allowed"], true, "{state}");
+    rig.enable();
+    rig.default_on("engine:remote-llm", "s1");
+    assert_eq!(rig.dictate(1.0, 67)["text"], "Hello world.");
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "never called");
+    let failed = rig.warnings("polish_failed");
+    assert!(
+        failed
+            .last()
+            .and_then(|w| w["message"].as_str())
+            .is_some_and(|m| m.contains("local-only")),
+        "{failed:?}"
+    );
+    rig.events.assert_valid();
+}
+
 /// A mic that changes format mid-stream once `flip` is set (a USB mic unplugged and replaced by
 /// the built-in one, a Bluetooth headset switching profile): the mic path cannot go on with it.
 struct FlakyCapture {
