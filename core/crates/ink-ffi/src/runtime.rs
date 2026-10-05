@@ -973,7 +973,7 @@ fn read_meeting_command(json: &str) -> Result<Option<MeetingCommand>, String> {
         "meeting.start" => &["app", "title"],
         "meeting.stop" | "meeting.discard" | "meetings.recover" | "meetings.calls.list" => &[],
         "meeting.dismiss" => &["app"],
-        "meetings.calls.set" => &["app", "policy"],
+        "meetings.calls.set" => &["app", "policy", "replace_unreadable"],
         "meeting.ask" => &["question"],
         _ => return Ok(None),
     };
@@ -1014,7 +1014,19 @@ fn read_meeting_command(json: &str) -> Result<Option<MeetingCommand>, String> {
             crate::calls::check_app(&app).map_err(|e| format!("{name}: {e}"))?;
             let policy = crate::calls::parse_choice(&needed("policy")?)
                 .map_err(|e| format!("{name}: {e}"))?;
-            MeetingCommand::Control(Msg::CallsSet { id, app, policy })
+            let replace_unreadable = match v.get("replace_unreadable") {
+                None => false,
+                Some(Value::Bool(b)) => *b,
+                Some(_) => {
+                    return Err(format!("{name}: \"replace_unreadable\" is true or false"));
+                }
+            };
+            MeetingCommand::Control(Msg::CallsSet {
+                id,
+                app,
+                policy,
+                replace_unreadable,
+            })
         }
         "meeting.dismiss" => MeetingCommand::Control(Msg::Dismiss {
             id,

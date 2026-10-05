@@ -99,6 +99,8 @@ pub enum Msg {
         app: String,
         /// Its policy; `None` follows the default.
         policy: Option<CallPolicy>,
+        /// Start over a stored list that cannot be read (refused without it).
+        replace_unreadable: bool,
     },
     /// A platform signal, from its callback thread.
     Signal(MeetingSignal),
@@ -141,6 +143,9 @@ struct State {
     policies: CallPolicies,
     /// Why an Always app's start failed, said with the offer that follows it.
     auto_failure: Option<String>,
+    /// Whether `policies` was read from the store; until then (or after a read that failed) a
+    /// choice is refused, so it never overwrites a list the core could not read.
+    policies_read: bool,
     listening: bool,
     /// Whether the shell has been told if detection listens: the first state is always said,
     /// off included, so the shell never guesses.
@@ -170,6 +175,7 @@ impl Control {
             // Until the store is read (the first message): nothing offered or recorded.
             policies: CallPolicies::new(CallPolicy::Never),
             auto_failure: None,
+            policies_read: false,
             listening: false,
             announced: false,
             by_hand: false,
@@ -293,7 +299,12 @@ impl State {
                 .shared
                 .events
                 .emit(crate::calls::listing(&self.policies, id.as_deref())),
-            Msg::CallsSet { id, app, policy } => self.choose(id.as_deref(), &app, policy),
+            Msg::CallsSet {
+                id,
+                app,
+                policy,
+                replace_unreadable,
+            } => self.choose(id.as_deref(), &app, policy, replace_unreadable),
             Msg::Signal(signal) => {
                 let now = self.shared.clock.now_ns();
                 let actions = self.detection.signal(signal, now);
@@ -410,6 +421,7 @@ impl State {
         match crate::calls::load(self.shared.store.as_ref()) {
             Ok(policies) => {
                 self.policies = policies;
+                self.policies_read = true;
                 let now = self.shared.clock.now_ns();
                 let actions = self.detection.set_policies(self.policies.clone(), now);
                 self.listen(self.policies.listens(), None);
@@ -425,6 +437,7 @@ impl State {
             Err(e) => {
                 log::warn!("the detection setting could not be read ({e}); detection stays off");
                 self.policies = CallPolicies::new(CallPolicy::Never);
+                self.policies_read = false;
                 let now = self.shared.clock.now_ns();
                 let actions = self.detection.set_policies(self.policies.clone(), now);
                 self.act(actions);
@@ -436,9 +449,32 @@ impl State {
         }
     }
 
-    /// `meetings.calls.set`: saved first, then applied; a save that fails changes nothing.
-    fn choose(&mut self, id: Option<&str>, app: &str, policy: Option<CallPolicy>) {
+    /// `meetings.calls.set`: saved first, then applied; a save that fails changes nothing. Refused
+    /// while the policies could not be read, and over a stored list set aside unless the command
+    /// says to start it over (`list_unreadable`).
+    fn choose(
+        &mut self,
+        id: Option<&str>,
+        app: &str,
+        policy: Option<CallPolicy>,
+        replace_unreadable: bool,
+    ) {
         const NAME: &str = "meetings.calls.set";
+        if !self.policies_read {
+            return self.failed(
+                NAME,
+                id,
+                "the call policies could not be read; change the default to try again",
+            );
+        }
+        if self.policies.unreadable().is_some() && !replace_unreadable {
+            return self.failed_coded(
+                NAME,
+                id,
+                "the apps' stored choices cannot be read: send it again with replace_unreadable to start the list over",
+                Some("list_unreadable"),
+            );
+        }
         let mut next = self.policies.clone();
         if let Err(e) = next.choose(app, policy) {
             return self.failed(NAME, id, &e);
@@ -592,8 +628,10 @@ impl State {
         let ended = Box::new(move || {
             let _ = lock(&tx).send(Msg::CaptureEnded { by_hand: false });
         });
-        let now = self.shared.clock.now_ns();
         start_meeting(&self.shared, &self.runs, opened.sides, info, Some(ended))?;
+        // After the start, and after `delete_until_unix_ms` was read: the core's window closes a
+        // moment after the time the shell was given, never before it.
+        let now = self.shared.clock.now_ns();
         self.by_hand = false;
         self.detection
             .started(app.as_ref().map(|a| a.id.as_str()), now);
@@ -617,18 +655,20 @@ impl State {
                 Some("delete_window_over"),
             );
         }
-        let ended = lock(&self.runs).meeting.as_ref().map(|m| m.discard());
-        match ended {
-            Some(Ending::Ended) => {
+        // The answer is what happens: deleted, or (its worker already finishing it) kept.
+        let deleted = lock(&self.runs).meeting.as_ref().map(|m| m.discard());
+        match deleted {
+            Some(true) => {
                 log::info!("meeting: stopped to be deleted, by the user");
+                // However its capture ends now, its app is not recorded again this call.
                 self.by_hand = true;
             }
-            Some(Ending::AlreadyEnding) => {
-                self.failed(NAME, id, "the meeting is already stopping");
-            }
-            Some(Ending::NotCapturing) | None => {
-                self.failed(NAME, id, "no meeting is being recorded");
-            }
+            Some(false) => self.failed(
+                NAME,
+                id,
+                "the meeting had already stopped and is being finished: delete it from the library",
+            ),
+            None => self.failed(NAME, id, "no meeting is being recorded"),
         }
     }
 

@@ -188,14 +188,9 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
         match crate::retention::discard(shared, Some(hold), record, dir) {
             Ok(gone) => {
                 log::info!("meeting recovery: a meeting stopped to be deleted was deleted");
-                shared.events.emit(event(
-                    "meeting.discarded",
-                    &[
-                        ("record", Some(record.0.as_str().into())),
-                        ("audio_left", Some(gone.audio_left.into())),
-                        ("scrubbed", Some(gone.scrubbed.into())),
-                    ],
-                ));
+                shared
+                    .events
+                    .emit(crate::retention::discarded(record, gone));
             }
             Err(e) => fail(format!(
                 "a meeting stopped to be deleted could not be deleted: {e}; the next launch tries again"
@@ -391,5 +386,23 @@ mod tests {
         assert!(!marker_goes(false, false), "the next launch ends it");
         assert!(!marker_goes(true, true), "the next launch runs the pass");
         assert!(!marker_goes(false, true));
+    }
+
+    #[test]
+    fn a_marker_says_to_delete_only_when_written_so() {
+        let dir =
+            std::env::temp_dir().join(format!("ink-ffi-discard-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = RecordId("r1".into());
+        assert!(!marked_discard(&dir), "no marker");
+        mark_live(&dir, &record).unwrap();
+        assert!(!marked_discard(&dir));
+        mark_discard(&dir, &record).unwrap();
+        assert!(marked_discard(&dir));
+        assert_eq!(read_marker(&dir), Some(record), "still names its record");
+        std::fs::write(dir.join(LIVE_FILE), "not json").unwrap();
+        assert!(!marked_discard(&dir), "unreadable is not a delete");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

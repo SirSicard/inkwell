@@ -11,15 +11,17 @@
 //!
 //! - **Keyed by identity.** An app is the identity detection reports ([`AppRef::id`]: the bundle
 //!   id on the Mac, the executable on Windows), never its name, which only labels it. An identity
-//!   is 1 to [`MAX_APP_ID_BYTES`] bytes, without control characters or white space at either end.
+//!   is 1 to [`MAX_APP_ID_BYTES`] bytes, without control or invisible format characters (bidi
+//!   overrides, zero-width marks) or white space at either end; names lose the same characters.
 //! - **Bounded.** At most [`MAX_APPS`] apps. A newly seen app beyond that takes the place of the
 //!   least recently seen app the user has not chosen for; one the user chose for is never pushed
 //!   out, and a choice for a new app when every place holds a choice is refused.
 //! - **Fails safe.** A list that cannot be read is set aside (logged by what failed, never
 //!   overwritten by what detection sees, and said in `meetings.calls`), and every app follows the
 //!   default with Always lowered to Ask: nothing records without a choice the core could read. A
-//!   choice made then starts a new list. A default that cannot be read stops detection, as the
-//!   switch it replaces did.
+//!   choice then is refused (`list_unreadable`) unless it says to start the list over
+//!   (`replace_unreadable`), so no choice is lost without the user agreeing. A default that cannot
+//!   be read stops detection, as the switch it replaces did.
 //! - **The switch it replaces.** `meetings.detect` ("Offer to record calls") is the default now:
 //!   off is Never, on is Ask. [`migrate`] writes its stored value into [`DEFAULT_KEY`] once, at
 //!   launch, and the default is read from it while [`DEFAULT_KEY`] is unset. Until the shells move
@@ -362,21 +364,37 @@ pub fn check_app(app: &str) -> Result<(), String> {
             "an app's identity is 1 to {MAX_APP_ID_BYTES} bytes"
         ));
     }
-    if app.chars().any(char::is_control) || app.trim() != app {
+    if app.chars().any(hidden) || app.trim() != app {
         return Err(
-            "an app's identity has no control characters and no white space at either end".into(),
+            "an app's identity has no control or invisible characters and no white space at either end"
+                .into(),
         );
     }
     Ok(())
 }
 
+/// A character that reads as nothing or reorders what follows: a control character, a line or
+/// paragraph separator, a bidi mark or override, a zero-width mark, a soft hyphen. Kept out of
+/// identities and names, so two apps never look alike in the list.
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{206F}'
+                | '\u{FEFF}'
+        )
+}
+
 /// A name as the list keeps it: one line, trimmed, at most [`MAX_APP_NAME_CHARS`]; `None` when
 /// nothing is left.
 fn clean_name(name: &str) -> Option<String> {
-    let one_line: String = name
-        .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '\u{2028}' | '\u{2029}'))
-        .collect();
+    let one_line: String = name.chars().filter(|c| !hidden(*c)).collect();
     let trimmed: String = one_line.trim().chars().take(MAX_APP_NAME_CHARS).collect();
     let trimmed = trimmed.trim_end();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
@@ -584,7 +602,15 @@ mod tests {
     #[test]
     fn identities_are_validated_and_refusals_never_quote_them() {
         let mut p = CallPolicies::default();
-        for bad in ["", " zoom", "zoom\n", "a\u{7}b", &"x".repeat(256)] {
+        for bad in [
+            "",
+            " zoom",
+            "zoom\n",
+            "a\u{7}b",
+            "zo\u{202E}om",
+            "zo\u{200B}om",
+            &"x".repeat(256),
+        ] {
             let e = p.choose(bad, Some(CallPolicy::Always)).unwrap_err();
             if !bad.trim().is_empty() {
                 assert!(!e.contains(bad.trim()), "{e}");
@@ -609,7 +635,7 @@ mod tests {
     #[test]
     fn names_are_one_trimmed_line_and_cut_to_the_limit() {
         let mut p = CallPolicies::default();
-        p.seen(&app("a", "  Zo\nom\u{2028} "), 1);
+        p.seen(&app("a", "  Zo\nom\u{2028}\u{202E}\u{200B} "), 1);
         p.seen(&app("b", &"n".repeat(200)), 1);
         p.seen(&app("c", " \t "), 1);
         let names: Vec<Option<String>> = p.apps().iter().map(|a| a.name.clone()).collect();

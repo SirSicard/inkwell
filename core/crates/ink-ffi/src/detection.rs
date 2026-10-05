@@ -17,8 +17,9 @@
 //! | A meeting started without an app ("Record now") never ends by itself | there is nothing to watch |
 //! | Past the hold, an app's policy decides: Always records it at once ([`Action::Record`]), Ask offers it, Never does neither | the user chose for this app, in the Drop or in Settings |
 //! | An Always start goes through the same start as Record | so it shows, records and ends as a meeting the user started: nothing records unseen |
-//! | An Always app is offered instead, until it releases the mic, after the user stopped a recording by hand while it held the mic, or when its start failed | recording again by itself would undo the user's stop; a failed start is said, and Record can try again |
-//! | A policy changed applies at once: the offered app set to Never is withdrawn as if dismissed; one set to Always stays offered; a held app that was Never is judged afresh | the choice takes effect on this call; an offer being answered is the user's |
+//! | An Always app is offered instead, until it releases the mic, after the user stopped a recording by hand while it held the mic, when its start failed, when its recording ended by itself while it still held the mic, or when it already held the mic past the hold as its policy changed | recording again by itself would undo the user's stop, or start over and over; a failed start is said, and Record can try again; a click in Settings never starts a recording |
+//! | An Always app past its hold is recorded even while another app is offered: that offer is withdrawn first | an unanswered question never keeps a call the user chose to record from being recorded |
+//! | A policy changed applies at once: the offered app set to Never is withdrawn as if dismissed; one set to Always stays offered; a held app that was Never is judged afresh (offered, never recorded) | the choice takes effect on this call; an offer being answered is the user's |
 //! | A policy never stops a recording | only the user, or its app letting go, does |
 //! | Every app that holds the mic for [`DETECT_HOLD`] is reported seen ([`Detection::take_seen`]), once per hold, whatever its policy | Settings lists the apps there are to choose for |
 //! | A meeting started here may be stopped and deleted for [`DELETE_WINDOW`] after its start, however it started | a call recorded by mistake (an Always the user forgot, a wrong tap) goes as if never made; after a minute it is a meeting, deleted from the library like any other |
@@ -51,7 +52,8 @@ pub enum Action {
     /// Record does and answers with [`Detection::started`], or [`Detection::start_failed`],
     /// before it calls anything else here.
     Record(AppRef),
-    /// The offered app released the mic before the user chose: take the offer back.
+    /// The offered app released the mic before the user chose, or gives way to an Always app's
+    /// recording: take the offer back.
     Withdraw(AppRef),
     /// The offered app's policy became Never: the offer goes, as by "Not this one".
     Declined(AppRef),
@@ -87,8 +89,8 @@ pub struct Detection {
     held: BTreeMap<String, Held>,
     /// Apps the user said "not this one" to, until they release the mic.
     dismissed: BTreeSet<String>,
-    /// Always apps offered rather than recorded, until they release the mic: the user stopped a
-    /// recording by hand while they held it, or their start failed.
+    /// Apps offered rather than recorded by an Always policy, until they release the mic (see the
+    /// module docs). Kept when detection stops or is lost: a stale entry only asks.
     asked_instead: BTreeSet<String>,
     /// The app offered now.
     offered: Option<AppRef>,
@@ -131,15 +133,17 @@ impl Detection {
         std::mem::take(&mut self.seen)
     }
 
-    /// The policies now: each app's, and the default.
-    pub fn policies(&self) -> &CallPolicies {
-        &self.policies
-    }
-
     /// The policies changed at `now_ns` (see the module docs: they apply at once, and never stop
     /// a recording).
     pub fn set_policies(&mut self, policies: CallPolicies, now_ns: u64) -> Vec<Action> {
         self.policies = policies;
+        // A call already past its hold is asked about, never recorded by the change.
+        self.asked_instead.extend(
+            self.held
+                .values()
+                .filter(|h| h.seen)
+                .map(|h| h.app.id.clone()),
+        );
         let mut actions = Vec::new();
         if let Some(offered) = &self.offered
             && self.policies.policy(&offered.id) == CallPolicy::Never
@@ -188,7 +192,6 @@ impl Detection {
                 // and a recorded meeting is left for the user to stop.
                 self.held.clear();
                 self.dismissed.clear();
-                self.asked_instead.clear();
                 if let Some(app) = self.offered.take() {
                     actions.push(Action::Withdraw(app));
                 }
@@ -220,29 +223,46 @@ impl Detection {
                 self.seen.push(held.app.clone());
             }
         }
-        if self.recording.is_none()
-            && self.offered.is_none()
+        if self.recording.is_some() {
+            return actions;
+        }
+        if let Some(held) = self.next_record(now_ns) {
+            let app = held.app.clone();
+            if let Some(offered) = self.offered.take() {
+                actions.push(Action::Withdraw(offered));
+            }
+            // Taken as starting at once, so nothing else is offered or recorded meanwhile; the
+            // owner's `started` or `start_failed` answers it.
+            self.recording = Some(Recording {
+                app: Some(app.id.clone()),
+                released_ns: None,
+                started_ns: now_ns,
+            });
+            actions.push(Action::Record(app));
+        } else if self.offered.is_none()
             && let Some(held) = self.next_offer()
             && now_ns >= held.since_ns.saturating_add(ns(DETECT_HOLD))
         {
             let app = held.app.clone();
-            if self.policies.policy(&app.id) == CallPolicy::Always
-                && !self.asked_instead.contains(&app.id)
-            {
-                // Taken as starting at once, so nothing else is offered or recorded meanwhile;
-                // the owner's `started` or `start_failed` answers it.
-                self.recording = Some(Recording {
-                    app: Some(app.id.clone()),
-                    released_ns: None,
-                    started_ns: now_ns,
-                });
-                actions.push(Action::Record(app));
-            } else {
-                self.offered = Some(app.clone());
-                actions.push(Action::Offer(app));
-            }
+            self.offered = Some(app.clone());
+            actions.push(Action::Offer(app));
         }
         actions
+    }
+
+    /// Whether `held` would be recorded by its policy, not offered.
+    fn records(&self, held: &Held) -> bool {
+        self.policies.policy(&held.app.id) == CallPolicy::Always
+            && !self.asked_instead.contains(&held.app.id)
+            && !self.dismissed.contains(&held.app.id)
+    }
+
+    /// The first Always app, by when it took the mic, whose hold has passed at `now_ns`.
+    fn next_record(&self, now_ns: u64) -> Option<&Held> {
+        self.held
+            .values()
+            .filter(|h| self.records(h) && now_ns >= h.since_ns.saturating_add(ns(DETECT_HOLD)))
+            .min_by_key(|h| h.since_ns)
     }
 
     /// The first app, by when it took the mic, that could be offered or recorded.
@@ -263,8 +283,19 @@ impl Detection {
             .as_ref()
             .and_then(|r| r.released_ns)
             .map(|t| t.saturating_add(ns(STOP_GRACE)));
-        let offer = (self.recording.is_none() && self.offered.is_none())
-            .then(|| self.next_offer())
+        // Nothing offered: the next app to offer or record; one offered: only an Always app can
+        // take its place.
+        let offer = self
+            .recording
+            .is_none()
+            .then(|| match self.offered {
+                None => self.next_offer(),
+                Some(_) => self
+                    .held
+                    .values()
+                    .filter(|h| self.records(h))
+                    .min_by_key(|h| h.since_ns),
+            })
             .flatten()
             .map(|h| h.since_ns.saturating_add(ns(DETECT_HOLD)));
         let seen = self
@@ -322,12 +353,19 @@ impl Detection {
 
     /// The meeting's capture ended. `by_hand`: the user stopped it, so its app, if it still holds
     /// the mic, is dismissed until it releases the mic (the Drop does not ask again mid-call), and
-    /// every app holding the mic then is asked about rather than recorded by itself.
+    /// every app holding the mic then is asked about rather than recorded by itself. Not by hand
+    /// (its app let go, or its capture ended by itself), an app that still holds the mic is asked
+    /// about rather than recorded again: a capture that keeps failing never loops.
     pub fn ended(&mut self, by_hand: bool) {
         let Some(r) = self.recording.take() else {
             return;
         };
         if !by_hand {
+            if let Some(app) = r.app
+                && self.held.contains_key(&app)
+            {
+                self.asked_instead.insert(app);
+            }
             return;
         }
         self.asked_instead.extend(self.held.keys().cloned());
@@ -342,7 +380,6 @@ impl Detection {
     pub fn reset(&mut self) {
         self.held.clear();
         self.dismissed.clear();
-        self.asked_instead.clear();
         self.offered = None;
         if let Some(r) = &mut self.recording {
             r.released_ns = None;
@@ -633,13 +670,66 @@ mod tests {
             "judged afresh, its hold long passed"
         );
 
+        // Always, chosen while the call goes on: asked about, never recorded by the click.
         let mut d = with(CallPolicy::Never, &[]);
         d.signal(uses("zoom"), 0);
         d.tick(30 * S);
         assert_eq!(
             d.set_policies(policies(CallPolicy::Always, &[]), 31 * S),
-            vec![Action::Record(app("zoom"))],
-            "a default of Always applies to the call going on"
+            vec![Action::Offer(app("zoom"))]
+        );
+        // An app still inside its hold is the policy's first decision: recorded.
+        let mut d = with(CallPolicy::Never, &[]);
+        d.signal(uses("meet"), 0);
+        assert!(
+            d.set_policies(policies(CallPolicy::Always, &[]), S)
+                .is_empty()
+        );
+        assert_eq!(d.tick(3 * S), vec![Action::Record(app("meet"))]);
+    }
+
+    #[test]
+    fn a_recording_that_ends_by_itself_while_its_app_holds_the_mic_is_not_started_again() {
+        let mut d = with(CallPolicy::Always, &[]);
+        d.signal(uses("zoom"), 0);
+        assert_eq!(d.tick(3 * S), vec![Action::Record(app("zoom"))]);
+        d.started(Some("zoom"), 3 * S);
+        // Its capture ended by itself (a device gone), the app still in its call.
+        d.ended(false);
+        assert_eq!(
+            d.tick(4 * S),
+            vec![Action::Offer(app("zoom"))],
+            "asked, never a loop of starts"
+        );
+    }
+
+    #[test]
+    fn an_always_app_takes_the_place_of_an_unanswered_offer() {
+        let mut d = with(CallPolicy::Ask, &[("zoom", CallPolicy::Always)]);
+        d.signal(uses("voice"), 0);
+        assert_eq!(d.tick(3 * S), vec![Action::Offer(app("voice"))]);
+        d.signal(uses("zoom"), 10 * S);
+        assert_eq!(d.deadline_ns(), Some(13 * S), "woken for the Always app");
+        assert_eq!(
+            d.tick(13 * S),
+            vec![Action::Withdraw(app("voice")), Action::Record(app("zoom"))]
+        );
+        assert_eq!(d.offered(), None);
+    }
+
+    #[test]
+    fn a_stop_by_hand_is_remembered_when_detection_restarts_mid_call() {
+        let mut d = with(CallPolicy::Ask, &[("zoom", CallPolicy::Always)]);
+        d.signal(uses("zoom"), 0);
+        d.tick(3 * S);
+        d.started(Some("zoom"), 3 * S);
+        d.ended(true);
+        d.reset();
+        d.signal(uses("zoom"), 10 * S);
+        assert_eq!(
+            d.tick(13 * S),
+            vec![Action::Offer(app("zoom"))],
+            "the stop stands: asked, not recorded"
         );
     }
 

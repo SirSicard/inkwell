@@ -1213,10 +1213,11 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over); delete_window_over (a meeting.discard after the meeting's first minute: only
-/// Stop is left, and the record can be deleted from the library once it is finished).
+/// A command.failed a shell acts on: list_unreadable (a snippets.save, voice_commands.save or
+/// meetings.calls.set refused because the stored list cannot be read; send it again with
+/// replace_unreadable to start over); delete_window_over (a meeting.discard after the meeting's
+/// first minute: only Stop is left, and the record can be deleted from the library once it is
+/// finished).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
     case deleteWindowOver = "delete_window_over"
@@ -2268,7 +2269,8 @@ public struct MeetingsCalls: Codable, Sendable, Equatable {
     /// The policy for apps not chosen for (meetings.calls.default; ask unless set).
     public let `default`: CallPolicy
     /// Why the stored choices could not be read, while they are set aside: every app follows
-    /// the default then, with Always lowered to Ask, and the next choice starts the list over.
+    /// the default then, with Always lowered to Ask, and meetings.calls.set is refused
+    /// (list_unreadable) unless it says replace_unreadable, which starts the list over.
     public let message: String?
     /// The command's "id", when it had one, so the shell can match the answer to what it sent.
     public let ref: String?

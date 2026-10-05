@@ -2229,3 +2229,81 @@ fn recovery_deletes_a_meeting_stopped_to_be_deleted() {
     r.events.assert_valid();
     r.core.shutdown();
 }
+
+/// A stop by hand during an Always call is the user's: the call, its app still on the mic, is not
+/// recorded again by itself (it is offered); Stop and delete is a stop by hand too.
+#[test]
+fn a_stopped_always_call_is_offered_not_recorded_again() {
+    let d = Driven::new("always-stop", memory_store());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"always"}"#);
+    d.hold("com.example.call", "Example Call");
+    d.r.events.wait_type("meeting.started", WAIT);
+    assert!(d.r.capture.wait_delivered(4_000, WAIT));
+    d.command(r#"{"cmd":"meeting.discard","id":"d"}"#);
+    d.r.events.wait_type("meeting.discarded", WAIT);
+    d.clock.advance_ns(5_000_000_000);
+    d.poke();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(d.r.events.count("meeting.started"), 1, "not recorded again");
+    assert_eq!(
+        d.r.events.count("meeting.detected"),
+        0,
+        "dismissed for this call, as Not this one"
+    );
+    // The next call is recorded again.
+    d.signal(MeetingSignal::MicReleased {
+        app: app("com.example.call", "Example Call"),
+    });
+    d.hold("com.example.call", "Example Call");
+    assert!(d.r.events.wait_count("meeting.started", 2, WAIT));
+    d.command(r#"{"cmd":"meeting.stop"}"#);
+    d.r.events.wait_type("meeting.finished", WAIT);
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+/// Stored choices the core cannot read: every app is at most asked about, the list says why, and
+/// a choice is refused until it says to start the list over.
+#[test]
+fn unreadable_choices_are_set_aside_and_only_replaced_when_asked() {
+    let store = memory_store();
+    store
+        .set_setting(ink_ffi::calls::DEFAULT_KEY, "always")
+        .unwrap();
+    store
+        .set_setting(
+            ink_ffi::calls::APPS_KEY,
+            "{\"apps\": [{\"app\": \"x\", \"policy\": 7}]}",
+        )
+        .unwrap();
+    let d = Driven::new("calls-unreadable", store.clone());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.list","id":"l"}"#);
+    let listed = d.answer("meetings.calls", "l");
+    assert!(listed["message"].is_string(), "{listed}");
+    // Always lowered to Ask: offered, not recorded.
+    d.hold("com.example.call", "Example Call");
+    d.r.events.wait_type("meeting.detected", WAIT);
+    assert_eq!(d.r.events.count("meeting.started"), 0);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"never","id":"n"}"#);
+    let refused = failed_with(&d.r.events, "n");
+    assert_eq!(refused["code"], "list_unreadable", "{refused}");
+    assert!(
+        store
+            .setting(ink_ffi::calls::APPS_KEY)
+            .unwrap()
+            .unwrap()
+            .contains("\"policy\": 7"),
+        "the stored text is untouched"
+    );
+    d.command(
+        r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"never","replace_unreadable":true,"id":"r"}"#,
+    );
+    let listed = d.answer("meetings.calls", "r");
+    assert!(listed.get("message").is_none(), "{listed}");
+    assert_eq!(listed["apps"][0]["policy"], "never");
+    d.r.events.wait_type("meeting.detection_ended", WAIT);
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}

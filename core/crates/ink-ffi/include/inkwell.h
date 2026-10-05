@@ -163,7 +163,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "Stop and delete", within a minute of a start made here (until "delete_until_unix_ms"):
  *       the recording ends, no final pass runs, and the record and its audio are deleted as if
  *       never made ("meeting.stopped", then "meeting.discarded"). Later it is refused with code
- *       "delete_window_over": stop it, then delete it from the library.
+ *       "delete_window_over": stop it, then delete it from the library. Its answer is what
+ *       happens: refused when the meeting had already stopped and is being finished.
  *   {"cmd":"meeting.dismiss","app":"<app id>"}
  *       "Not this one": the offer ends ("meeting.detection_ended" with "dismissed") and that app
  *       is not offered again until it releases the microphone.
@@ -186,7 +187,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       the default again). Saved and applied at once: an offered app set to never is withdrawn
  *       ("meeting.detection_ended", dismissed), a held app set to ask is offered. An app offered
  *       and set to always stays offered: send meeting.start for it ("Always for this app").
- *       Answers "meetings.calls" with the "id" as "ref".
+ *       Answers "meetings.calls" with the "id" as "ref". While the stored choices cannot be read
+ *       ("meetings.calls" has a "message"), it is refused with code "list_unreadable" unless it
+ *       says "replace_unreadable":true, which starts the list over with this choice.
  *   Detection listens while any app could be offered or recorded (the default call policy,
  *   "meetings.calls.default", is not never, or an app is chosen always or ask): "meeting.detection"
  *   says whether it listens. An app that has held the microphone for 3 s is offered

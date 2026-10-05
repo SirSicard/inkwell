@@ -482,6 +482,18 @@ pub struct Discarded {
     pub scrubbed: bool,
 }
 
+/// `meeting.discarded`: `record` is gone, as [`discard`] left it.
+pub(crate) fn discarded(record: &RecordId, gone: Discarded) -> serde_json::Value {
+    event(
+        "meeting.discarded",
+        &[
+            ("record", Some(record.0.as_str().into())),
+            ("audio_left", Some(gone.audio_left.into())),
+            ("scrubbed", Some(gone.scrubbed.into())),
+        ],
+    )
+}
+
 /// **Worker** (the meeting's, or recovery's). Deletes the meeting `record`, whose chunks are in
 /// `dir` (a directory under the library's `meetings`), for "Stop and delete": as `record.delete`
 /// deletes, but with no final pass to wait for and with or without an end. `hold`, this process's

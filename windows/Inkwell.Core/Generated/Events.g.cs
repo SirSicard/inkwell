@@ -1623,10 +1623,11 @@ public enum FailedStage
 }
 
 /// <summary>
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over); delete_window_over (a meeting.discard after the meeting's first minute: only
-/// Stop is left, and the record can be deleted from the library once it is finished).
+/// A command.failed a shell acts on: list_unreadable (a snippets.save, voice_commands.save or
+/// meetings.calls.set refused because the stored list cannot be read; send it again with
+/// replace_unreadable to start over); delete_window_over (a meeting.discard after the meeting's
+/// first minute: only Stop is left, and the record can be deleted from the library once it is
+/// finished).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
@@ -3413,7 +3414,8 @@ public sealed record MeetingsCalls : InkEvent
 
     /// <summary>
     /// Why the stored choices could not be read, while they are set aside: every app follows
-    /// the default then, with Always lowered to Ask, and the next choice starts the list over.
+    /// the default then, with Always lowered to Ask, and meetings.calls.set is refused
+    /// (list_unreadable) unless it says replace_unreadable, which starts the list over.
     /// </summary>
     [JsonPropertyName("message")]
     public string? Message { get; init; }
