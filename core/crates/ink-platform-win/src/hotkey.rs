@@ -134,10 +134,10 @@ fn modifiers_after_release(released: u32) -> u8 {
     bits
 }
 
-/// Whether the key state reads `key` as down before the key-down the hook is deciding (the hook
-/// runs before the state takes the event in). True for a repeat of a key the hook passed on; a key
-/// it swallows reads as up at its repeats too (see `machine`). Reads key state only. **Hook
-/// thread.**
+/// Whether the key state reads `key` as down before the event the hook is deciding (the hook runs
+/// before the state takes the event in): the OS saw the key go down and has not seen it come up.
+/// A key the hook swallows reads as up at its repeats and key-up too (see `machine`). Reads key
+/// state only. **Hook thread.**
 fn reads_down(key: u32) -> bool {
     // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
     let state = unsafe { GetAsyncKeyState(key as i32) };
@@ -266,21 +266,24 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
         HEARTBEAT_SEEN.set(true);
         return true; // ours alone: no app sees it
     }
+    let Some(mut machine) = MACHINE.with(Cell::get) else {
+        return false;
+    };
+    // The key state is read for the hotkey's own key only: the callback runs on every keystroke.
+    let ours = event.vkCode == machine.key_vk();
     let input = match message {
         WM_KEYDOWN | WM_SYSKEYDOWN => HookInput::KeyDown {
             vk: event.vkCode,
             modifiers: modifiers_down(),
-            reads_down: reads_down(event.vkCode),
+            reads_down: ours && reads_down(event.vkCode),
             at_ms: event.time,
         },
         WM_KEYUP | WM_SYSKEYUP => HookInput::KeyUp {
             vk: event.vkCode,
             modifiers: modifiers_after_release(event.vkCode),
+            reads_down: ours && reads_down(event.vkCode),
         },
         _ => return false,
-    };
-    let Some(mut machine) = MACHINE.with(Cell::get) else {
-        return false;
     };
     let verdict = machine.on(input);
     MACHINE.with(|m| m.set(Some(machine)));
