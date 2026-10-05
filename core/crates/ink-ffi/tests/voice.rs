@@ -945,9 +945,10 @@ impl VoiceRig {
         )
     }
 
-    /// Registers a model on this machine, as the Mac registers Apple's on-device model.
+    /// Registers a model on this machine, as the Mac registers Apple's on-device model. Its answer
+    /// is a cleanup of what the rig dictates ("hello world"), as polish's answer must be.
     fn register_local(&self) -> &'static RemoteModel {
-        self.register_model("local-llm", "on-device", true, "Polished on this machine.")
+        self.register_model("local-llm", "on-device", true, "Hello, world!")
     }
 
     fn register_model(
@@ -1163,7 +1164,7 @@ fn polish_allow_records_the_consent_and_turns_polish_on() {
         rig.platform
             .inserted()
             .last()
-            .is_some_and(|s| s.contains("Polished on this machine")),
+            .is_some_and(|s| s.contains("Hello, world!")),
         "{:?}",
         rig.platform.inserted()
     );
