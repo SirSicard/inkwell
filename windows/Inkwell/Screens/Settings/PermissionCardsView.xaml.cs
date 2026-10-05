@@ -22,7 +22,6 @@ public sealed partial class PermissionCardsView : UserControl
         if (inSettings)
         {
             Frame.Style = (Style)Application.Current.Resources["InkInsetCardStyle"];
-            Frame.Padding = new Thickness(0);
         }
         var all = PermissionCards.All;
         for (var i = 0; i < all.Count; i++)

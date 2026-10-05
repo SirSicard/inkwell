@@ -143,7 +143,7 @@ public sealed partial class VoiceSection : UserControl
             Fill(EditKeyBox, editTokens, edits);
             EditKeyBox.SelectedIndex = editTokens.IndexOf(edit);
             var showEditCap = edit is not null && dictation.EditKeyProblem is null;
-            EditKeyCapBorder.Visibility = Visible(showEditCap);
+            EditKeyCapHost.Visibility = Visible(showEditCap);
             EditKeyCap.Text = edit is null ? "" : recorder.Describe(edit).Cap;
 
             RecordKeyButton.Content = recorder.ButtonTitle(ShortcutTarget.Dictation);

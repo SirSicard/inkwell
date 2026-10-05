@@ -78,8 +78,10 @@
                 <local:WrapPanel RowSpacing="8" Spacing="12">
                     <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Edit a selection" SelectionChanged="OnEditKeyChosen" />
                     <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
-                    <Grid Height="32">
-                        <Border x:Name="EditKeyCapBorder" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
+                    <!-- The wrapper is what collapses: WrapPanel counts a 0 x 32 slot, which would leave
+                         a gap or an empty line when the edit key is off. -->
+                    <Grid x:Name="EditKeyCapHost" Height="32">
+                        <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
                             <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
                         </Border>
                     </Grid>
