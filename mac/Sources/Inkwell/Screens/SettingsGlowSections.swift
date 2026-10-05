@@ -59,7 +59,7 @@ struct GeneralSection: View {
             if screens.import02.offered || screens.import02.checkFailed {
                 Import02Card(model: screens.import02)
                     .padding(14)
-                    .paperCard()
+                    .cardGroup()
             }
         }
         .onAppear { login = LoginItem.state }
@@ -500,6 +500,9 @@ struct LanguageModelRows: View {
     @State private var groqGuide = false
     /// The key's button, which Settings' guide names (GroqKeyGuide.steps).
     static let saveKeyTitle = "Save key"
+    /// The width from which the key's field shares its line with Save key and Delete: 160 pt of
+    /// field beside the buttons' widest (about 200 pt with a provider's name in Delete).
+    static let keyLineWidth: CGFloat = 380
 
     /// Use: in the first run, polish's consent step first; in Settings, the choice itself.
     private func use() {
@@ -530,20 +533,25 @@ struct LanguageModelRows: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 340)
                     }
-                    HStack(spacing: 8) {
+                    // The key and its buttons on one line where the field keeps room for a key,
+                    // else the buttons under it: beside them in a narrow card, the field was 72 pt.
+                    LineOrStack(minWidth: Self.keyLineWidth) {
                         // Short enough to fit the field: a longer one was cut off ("Paste a new key to replace t…").
                         SecureField(provider.hasKey ? "Paste a new key" : "Paste your API key", text: $key)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 340)
                             .accessibilityLabel("API key")
-                        Button(Self.saveKeyTitle) {
-                            // Sent once, then gone from the field.
-                            let typed = key
-                            key = ""
-                            cloud.saveKey(typed)
+                        HStack(spacing: 8) {
+                            Button(Self.saveKeyTitle) {
+                                // Sent once, then gone from the field.
+                                let typed = key
+                                key = ""
+                                cloud.saveKey(typed)
+                            }
+                            Button(cloud.deleteKeyLabel) { deleting = provider.id }
+                                .disabled(!provider.hasKey)
                         }
-                        Button(cloud.deleteKeyLabel) { deleting = provider.id }
-                            .disabled(!provider.hasKey)
+                        .fixedSize()
                     }
                     Text(cloud.keyStatus)
                         .font(Typography.caption)

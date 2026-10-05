@@ -2280,6 +2280,202 @@ final class MainWindowWidthTests: XCTestCase {
     }
 }
 
+/// Settings' sections, each on its own card (Today's, sectionCard), in the app's window: at its
+/// 720-pt minimum, at its default 1040, and wide enough that the cards stop at their widest. Each
+/// section lies inside its card's padding, so a row too narrow for its name beside its controls
+/// stacks them inside the card (SettingColumns, LineOrStack) rather than run past its edge; every
+/// control the page draws in AppKit lies inside one card's padding; and the cards are one column,
+/// in the list's order, as far apart as Today's.
+@MainActor
+final class SettingsCardsLayoutTests: XCTestCase {
+    private final class NoEvents: UpcomingEvents {
+        func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? { nil }
+    }
+
+    /// The cards and the sections inside them, in the window's coordinates (top left), as the
+    /// overlay over the root last resolved them.
+    @MainActor private final class Seen {
+        var cards: [SettingsSection: CGRect] = [:]
+        var sections: [SettingsSection: CGRect] = [:]
+    }
+
+    private struct Laid {
+        let cards: [SettingsSection: CGRect]
+        let sections: [SettingsSection: CGRect]
+        /// The AppKit controls on the Settings page, in the window's coordinates (top left).
+        let controls: [(name: String, frame: CGRect)]
+        /// The page's scroll view, in the window's coordinates (top left).
+        let page: CGRect
+        /// The page's column: its scroll view less an always-shown scroller.
+        let column: CGFloat
+        /// The window's content width, laid out: the width asked for unless the page widened it.
+        let window: CGFloat
+    }
+
+    /// The widest rows: a recorded dictation key, the edit key with the longest name, a provider
+    /// with its server, key and model fields, a snippet and a voice command, and models
+    /// downloading, waiting and failed with the core's words.
+    private func screens() -> ScreenModels {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))
+        screens.dictation.apply(event(#"{"type":"dictation.ready","key":"ctrl+shift+space","edit_key":"right_command"}"#))
+        screens.cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"custom","default_model":"a-model-with-a-long-name","endpoint":"","custom_url":true,"needs_key":true,"has_key":true}]}"#))
+        screens.cloud.select("custom")
+        screens.catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]}]}"#))
+        screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
+        screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
+        screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
+        return screens
+    }
+
+    /// `render`: a folder to draw the window into, as `<name>-window.png`, and the whole page, every
+    /// card, as `<name>-page.png` (INK_SETTINGS_RENDER).
+    private func layOut(width: CGFloat, screens: ScreenModels, render: (folder: URL, name: String)? = nil) throws -> Laid {
+        let store = CoreStore()
+        let router = Router()
+        router.open(.settings)
+        let seen = Seen()
+        let root = ShellView(router: router)
+            .overlayPreferenceValue(SettingsCardBounds.self) { parts in
+                GeometryReader { proxy in
+                    let origin = proxy.frame(in: .global).origin
+                    let _ = {
+                        for part in parts {
+                            let rect = proxy[part.bounds].offsetBy(dx: origin.x, dy: origin.y)
+                            if part.isCard { seen.cards[part.section] = rect } else { seen.sections[part.section] = rect }
+                        }
+                    }()
+                    Color.clear
+                }
+                .allowsHitTesting(false)
+            }
+            .environment(store).environment(ShellInk(store: store))
+            .environment(Updates(infoDictionary: nil)).environment(screens).environment(LibraryModel(send: { _ in }))
+            .environment(UpNextModel(access: FakeCalendar(), events: NoEvents())).environment(router)
+            .environment(WindowPresence()).environment(screens.theme).tint(Theme.buttonFill)
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        window.setContentSize(NSSize(width: width, height: 700))
+        for _ in 0..<10 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        let content = try XCTUnwrap(window.contentView)
+        func topLeft(_ view: NSView) -> CGRect {
+            let rect = view.convert(view.bounds, to: content)
+            return content.isFlipped ? rect : CGRect(x: rect.minX, y: content.bounds.height - rect.maxY, width: rect.width, height: rect.height)
+        }
+        // The page: the scroll view with the tallest document (the sidebar's and the section
+        // list's are short).
+        let page = try XCTUnwrap(descendants(of: content, as: NSScrollView.self)
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
+        let controls = descendants(of: try XCTUnwrap(page.documentView), as: NSControl.self)
+            .filter { !$0.isHiddenOrHasHiddenAncestor && $0.bounds.width > 0 && $0.bounds.height > 0 }
+            .map { (name: "\(type(of: $0)) \(($0 as? NSTextField)?.placeholderString ?? $0.accessibilityLabel() ?? "")", frame: topLeft($0)) }
+        if let render {
+            try draw(content, to: render.folder.appendingPathComponent("\(render.name)-window.png"))
+            try draw(try XCTUnwrap(page.documentView), to: render.folder.appendingPathComponent("\(render.name)-page.png"))
+        }
+        return Laid(cards: seen.cards, sections: seen.sections, controls: controls, page: topLeft(page),
+                    column: page.contentView.bounds.width, window: content.frame.width)
+    }
+
+    private func draw(_ view: NSView, to url: URL) throws {
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: url)
+    }
+
+    /// Not a check: Settings drawn offscreen in Light and Dark at 720 and 1040 for the eye, when
+    /// INK_SETTINGS_RENDER names a folder. AppKit's cache draws neither the orb (Metal) nor the
+    /// cards' blur: what it shows is the layout, the cards' fill and borders over the mode's ground.
+    func testRenderSettings() throws {
+        guard let folder = ProcessInfo.processInfo.environment["INK_SETTINGS_RENDER"] else {
+            throw XCTSkip("INK_SETTINGS_RENDER is not set")
+        }
+        let out = URL(fileURLWithPath: folder, isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let screens = screens()
+        defer { NSApp.appearance = nil }
+        for mode in [GlowTheme.Mode.light, .dark] {
+            screens.theme.setMode(mode)
+            for width in [720, 1040] as [CGFloat] {
+                _ = try layOut(width: width, screens: screens, render: (out, "settings-\(mode.rawValue)-\(Int(width))"))
+            }
+        }
+    }
+
+    func testEverySectionIsLaidOutInsideItsCardAt720AndWider() throws {
+        let screens = screens()
+        for width in [MainWindowController.minimumContentSize.width, 1040, 1700] as [CGFloat] {
+            let laid = try layOut(width: width, screens: screens)
+            let label = "at \(Int(width))"
+            XCTAssertEqual(laid.window, width, accuracy: 0.5, "\(label): the page widened the window")
+            // A card wider than its column widens the page's scroll view, past the window.
+            XCTAssertLessThanOrEqual(laid.page.width, laid.window + 0.5, "\(label): the page is wider than the window")
+            XCTAssertEqual(Set(laid.cards.keys), Set(SettingsSection.allCases), "\(label): a card for every section")
+            XCTAssertEqual(Set(laid.sections.keys), Set(SettingsSection.allCases), label)
+            let cards = SettingsSection.allCases.compactMap { laid.cards[$0] }
+            guard cards.count == SettingsSection.allCases.count else { continue }
+            // One column: each card the page's column less its margins (up to the cards' widest),
+            // in the list's order, Today's spacing apart.
+            let margin = SettingsMarginsLayout.margin(laid.column)
+            let column = min(laid.column - 2 * margin, SettingsScreen.maxCardWidth)
+            for (section, card) in zip(SettingsSection.allCases, cards) {
+                XCTAssertEqual(card.minX, laid.page.minX + margin, accuracy: 0.5, "\(label): \(section)")
+                XCTAssertEqual(card.width, column, accuracy: 0.5, "\(label): \(section) is wider than its column")
+            }
+            for (above, below) in zip(cards, cards.dropFirst()) {
+                XCTAssertEqual(below.minY - above.maxY, TodayColumnsLayout.spacing, accuracy: 0.5, label)
+            }
+            if width >= 1700 {
+                XCTAssertEqual(column, SettingsScreen.maxCardWidth, accuracy: 0.5, "\(label): at their widest")
+            }
+            // Each section inside its card's padding, never wider than the room it leaves.
+            for section in SettingsSection.allCases {
+                guard let card = laid.cards[section], let inside = laid.sections[section] else { continue }
+                XCTAssertEqual(inside.minX, card.minX + SectionCard.horizontal, accuracy: 0.5, "\(label): \(section)")
+                XCTAssertEqual(inside.minY, card.minY + SectionCard.vertical, accuracy: 0.5, "\(label): \(section)")
+                XCTAssertLessThanOrEqual(inside.maxX, card.maxX - SectionCard.horizontal + 0.5, "\(label): \(section) runs past its card")
+                XCTAssertLessThanOrEqual(inside.maxY, card.maxY - SectionCard.vertical + 0.5, "\(label): \(section)")
+            }
+            // Every control on the page in one card's padding (a focus ring's point aside).
+            XCTAssertGreaterThan(laid.controls.count, 10, "\(label): the page's controls were found")
+            for control in laid.controls {
+                let home = laid.cards.first { $0.value.insetBy(dx: 0, dy: -1).contains(CGPoint(x: control.frame.midX, y: control.frame.midY)) }
+                guard let (section, card) = home else {
+                    XCTFail("\(label): \(control.name) at \(control.frame) is on no card")
+                    continue
+                }
+                let room = card.insetBy(dx: SectionCard.horizontal - 1, dy: SectionCard.vertical - 1)
+                XCTAssertTrue(room.contains(control.frame), "\(label): \(control.name) at \(control.frame) is outside \(section)'s padding \(room)")
+            }
+            // From the window's default width, the snippet and voice command forms keep their one
+            // line in their cards, as they did before them.
+            if width >= 1040 {
+                for fields in [["Trigger", "Text it becomes", "Category"], ["Phrases, comma-separated", "Text to type"]] {
+                    let rows = fields.compactMap { name in laid.controls.first { $0.name.hasSuffix(" " + name) }?.frame.midY }
+                    XCTAssertEqual(rows.count, fields.count, "\(label): \(fields)")
+                    XCTAssertLessThanOrEqual((rows.max() ?? 0) - (rows.min() ?? 0), 2, "\(label): \(fields) on one line")
+                }
+            }
+            // The language model's key keeps a field wide enough to paste into: its buttons go under it
+            // in a narrow card (beside them it was 72 pt at 720).
+            let keyFields = laid.controls.filter { $0.name.contains("SecureTextField") }
+            XCTAssertEqual(keyFields.count, 1, label)
+            for field in keyFields {
+                XCTAssertGreaterThanOrEqual(field.frame.width, 150, label)
+            }
+        }
+    }
+
+    private func descendants<T: NSView>(of view: NSView, as type: T.Type) -> [T] {
+        view.subviews.flatMap { ([$0 as? T].compactMap { $0 }) + descendants(of: $0, as: type) }
+    }
+}
+
 /// Today in a short window, with the always-shown (legacy) scrollers a Mac with a mouse attached
 /// gets. Its two columns were fixed widths taken from the ScrollView's measured width, which
 /// counts the scroller the content does not get: the columns overflowed by the scroller's width,
