@@ -115,7 +115,8 @@ fn strip_tags(answer: &str) -> &str {
 ///   France": "is" and "Paris" in six);
 /// - at least a quarter of what was said must be kept: an answer that drops the question
 ///   ("Paris.", "1989") keeps nothing of it. Below four words nothing need be kept, so "okay"
-///   may become "OK"; so an answer of one word to a question of three gets through;
+///   may become "OK" (and an answer of one word to a question of three gets through), nor in a
+///   dictation that is only a number ("five five five one two three four" as "555-1234");
 /// - the answer may not be longer than what was said by more than a quarter (and three words):
 ///   cleanup shortens, and an answer that repeats the question and then answers it is longer.
 ///
@@ -167,7 +168,10 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
             "the answer was not a cleanup of the dictation",
         ));
     }
-    if kept < said_words.len() / 4 {
+    // A dictation that is only a number ("five five five one two three four") written as
+    // digits keeps none of its words, and loses nothing.
+    let only_a_number = !said_words.is_empty() && said_words.iter().all(|w| is_number_word(w));
+    if kept < said_words.len() / 4 && !only_a_number {
         return Err(bad(
             "polish",
             "the answer kept almost nothing of the dictation",
@@ -209,12 +213,57 @@ const SELF_TALK: &[&str] = &[
     "the corrected text",
 ];
 
+/// Whether `word` is an English number word, as a dictation of a number says it.
+fn is_number_word(word: &str) -> bool {
+    const NUMBERS: &[&str] = &[
+        "zero",
+        "oh",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+        "twenty",
+        "thirty",
+        "forty",
+        "fifty",
+        "sixty",
+        "seventy",
+        "eighty",
+        "ninety",
+        "hundred",
+        "thousand",
+        "million",
+        "billion",
+        "point",
+        "dot",
+        "and",
+    ];
+    NUMBERS.contains(&word)
+}
+
 /// The words a model opens with when it introduces its answer ("Sure! Here you go:").
 const INTRODUCTIONS: &[&str] = &["here", "sure", "certainly", "okay", "ok"];
 
 /// Whether `answer` speaks of itself or the request: a [`SELF_TALK`] phrase the dictation did not
-/// say, or an opening that introduces what follows: a colon in its first line after one of the
-/// [`INTRODUCTIONS`] (one that ends a clause), when the dictation did not start with that word.
+/// say, or an opening that introduces what follows: a first line that starts with one of the
+/// [`INTRODUCTIONS`] and has a clause ending in a colon with words the dictation did not say
+/// ("Sure! Here you go:"). A clause that was said is the user's, colon and all: "um okay so the
+/// plan is" cleaned up is "Okay, the plan is:".
 fn talks_about_itself(said_words: &[String], answer: &str, answer_words: &[String]) -> bool {
     let said = format!(" {} ", said_words.join(" "));
     let spoken = format!(" {} ", answer_words.join(" "));
@@ -223,13 +272,17 @@ fn talks_about_itself(said_words: &[String], answer: &str, answer_words: &[Strin
         spoken.contains(&p) && !said.contains(&p)
     });
     let opening = answer_words.first().map(String::as_str);
+    let first = answer.lines().next().unwrap_or("");
     // A colon that ends a clause, not one in a time ("Here at 3:30.").
-    let introduces = answer
-        .lines()
-        .next()
-        .is_some_and(|l| l.contains(": ") || l.trim_end().ends_with(':'))
-        && opening.is_some_and(|w| INTRODUCTIONS.contains(&w))
-        && said_words.first().map(String::as_str) != opening;
+    let clause = first
+        .find(": ")
+        .or_else(|| first.trim_end().strip_suffix(':').map(str::len))
+        .map(|end| words(&first[..end]));
+    let introduces = opening.is_some_and(|w| INTRODUCTIONS.contains(&w))
+        && clause.is_some_and(|clause| {
+            let said: Vec<&String> = said_words.iter().collect();
+            kept(&said, &clause.iter().collect::<Vec<_>>()) < clause.len()
+        });
     phrase || introduces
 }
 
@@ -247,13 +300,14 @@ fn words(text: &str) -> Vec<String> {
         if is_ideograph(c) {
             push_word(&mut out, &std::mem::take(&mut word));
             out.push(c.to_string());
-        } else if c.is_alphanumeric() {
-            word.push(c);
-        } else if c == '\'' || c == '\u{2019}' {
+        } else if matches!(c, '\'' | '\u{2019}' | '\u{2bc}') {
             // Inside a word only: a quotation mark around one is punctuation.
             if !word.is_empty() {
                 word.push('\'');
             }
+        } else if c.is_alphanumeric() {
+            // After the apostrophes: U+02BC, an apostrophe in some keyboards' output, is a letter.
+            word.push(c);
         } else {
             push_word(&mut out, &std::mem::take(&mut word));
         }
@@ -536,6 +590,25 @@ mod tests {
             ("so here at 3:30 then", "Here at 3:30, then."),
             ("I have 2 kids and 3 dogs", "I have 2 kids and 3 dogs."),
             ("19 dollars and 99 cents", "$19.99"),
+            // A number spoken, and nothing else.
+            ("five five five one two three four", "555-1234"),
+            (
+                "one two three four five six seven eight",
+                "1, 2, 3, 4, 5, 6, 7, 8",
+            ),
+            // A clause the user said, ending in a colon the cleanup added.
+            (
+                "um okay so the plan is first we ship then we test",
+                "Okay, the plan is: first we ship, then we test.",
+            ),
+            (
+                "so um here's the thing we ship on friday",
+                "Here's the thing: we ship on Friday.",
+            ),
+            (
+                "yeah sure I can do that I'll send it tomorrow",
+                "Sure, I can do that: I'll send it tomorrow.",
+            ),
             // An apology dictated is the user's words, not the model's.
             (
                 "sorry I can't make it as an AI researcher I'm busy that week",
