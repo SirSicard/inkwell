@@ -157,6 +157,7 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
         return Err(bad("polish", "the answer was longer than the dictation"));
     }
     let has_digit = |w: &&String| w.chars().any(|c| c.is_ascii_digit());
+    let wrote_digits = answer_words.iter().any(|w| has_digit(&w));
     let said_words: Vec<&String> = said_words.iter().filter(|w| !has_digit(w)).collect();
     let answer_words: Vec<&String> = answer_words.iter().filter(|w| !has_digit(w)).collect();
     let kept = kept(&said_words, &answer_words);
@@ -170,7 +171,8 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
     }
     // A dictation that is only a number ("five five five one two three four") written as
     // digits keeps none of its words, and loses nothing.
-    let only_a_number = !said_words.is_empty() && said_words.iter().all(|w| is_number_word(w));
+    let only_a_number =
+        wrote_digits && !said_words.is_empty() && said_words.iter().all(|w| is_number_word(w));
     if kept < said_words.len() / 4 && !only_a_number {
         return Err(bad(
             "polish",
@@ -257,7 +259,7 @@ fn is_number_word(word: &str) -> bool {
 }
 
 /// The words a model opens with when it introduces its answer ("Sure! Here you go:").
-const INTRODUCTIONS: &[&str] = &["here", "sure", "certainly", "okay", "ok"];
+const INTRODUCTIONS: &[&str] = &["here", "sure", "certainly", "okay"];
 
 /// Whether `answer` speaks of itself or the request: a [`SELF_TALK`] phrase the dictation did not
 /// say, or an opening that introduces what follows: a first line that starts with one of the
@@ -273,9 +275,10 @@ fn talks_about_itself(said_words: &[String], answer: &str, answer_words: &[Strin
     });
     let opening = answer_words.first().map(String::as_str);
     let first = answer.lines().next().unwrap_or("");
-    // A colon that ends a clause, not one in a time ("Here at 3:30.").
+    // A colon that ends a clause, not one in a time ("Here at 3:30."); or a fullwidth one.
     let clause = first
         .find(": ")
+        .or_else(|| first.find('\u{ff1a}'))
         .or_else(|| first.trim_end().strip_suffix(':').map(str::len))
         .map(|end| words(&first[..end]));
     let introduces = opening.is_some_and(|w| INTRODUCTIONS.contains(&w))
@@ -329,6 +332,7 @@ fn push_word(out: &mut Vec<String>, raw: &str) {
         "cannot" | "can't" => &["can", "not"],
         "won't" => &["will", "not"],
         "i'm" => &["i", "am"],
+        "ok" => &["okay"],
         _ => &[],
     };
     if !spoken.is_empty() {
@@ -506,6 +510,12 @@ mod tests {
             "1989"
         )));
         assert!(refused(polished("", "what is two plus two", "4")));
+        // A number dictated may come back as digits, not as anything else.
+        assert!(refused(polished(
+            "",
+            "five five five one two three four",
+            "Sorry."
+        )));
     }
 
     #[test]
@@ -609,6 +619,14 @@ mod tests {
                 "yeah sure I can do that I'll send it tomorrow",
                 "Sure, I can do that: I'll send it tomorrow.",
             ),
+            (
+                "um ok so the plan is first we ship then we test",
+                "Okay, the plan is: first we ship, then we test.",
+            ),
+            (
+                "okay so the plan is first we ship",
+                "OK: the plan is first we ship.",
+            ),
             // An apology dictated is the user's words, not the model's.
             (
                 "sorry I can't make it as an AI researcher I'm busy that week",
@@ -672,6 +690,7 @@ mod tests {
             "I'm sorry, but I can't assist with that.",
             "Sure! Here you go: Hi Sam, I'm running late.",
             "Certainly! Here's a polite version: Hi Sam, I'm running late.",
+            "Sure\u{ff01}Here you go\u{ff1a}Hi Sam, I'm running late.",
         ] {
             assert!(
                 refused(polished("Rewrite as a short, polite email.", said, answer)),
