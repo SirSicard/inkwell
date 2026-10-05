@@ -187,6 +187,8 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
 /// dictated apology or a mention of AI is the user's. Kept to phrases a rewrite of someone's
 /// words has no reason to produce ("I'm sorry" is not one: a formal rewrite of "sorry" produces
 /// it), so most say "I": "we cannot assist" is a business's words, "I cannot assist" a model's.
+/// The exemption is coarse: a selection that says "fulfill this request" lets a refusal that says
+/// it too through, and so does one in another language.
 const SELF_TALK: &[&str] = &[
     "foundation model",
     "language model",
@@ -261,6 +263,14 @@ fn is_number_word(word: &str) -> bool {
 /// The words a model opens with when it introduces its answer ("Sure! Here you go:").
 const INTRODUCTIONS: &[&str] = &["here", "sure", "certainly", "okay"];
 
+/// Whether `answer` speaks of the model itself or of the request rather than giving back `given`,
+/// the words the model was handed, rewritten: [`talks_about_itself`] for any task whose answer
+/// replaces the user's text. Voice edit uses it: an edit may rewrite every word, so this is the
+/// only check its answer gets.
+pub(crate) fn speaks_of_itself(given: &str, answer: &str) -> bool {
+    talks_about_itself(&words(given), answer, &words(answer))
+}
+
 /// Whether `answer` speaks of itself or the request: a [`SELF_TALK`] phrase the dictation did not
 /// say, or an opening that introduces what follows: a first line that starts with one of the
 /// [`INTRODUCTIONS`] and has a clause ending in a colon with words the dictation did not say
@@ -269,9 +279,15 @@ const INTRODUCTIONS: &[&str] = &["here", "sure", "certainly", "okay"];
 fn talks_about_itself(said_words: &[String], answer: &str, answer_words: &[String]) -> bool {
     let said = format!(" {} ", said_words.join(" "));
     let spoken = format!(" {} ", answer_words.join(" "));
+    // A phrase is the user's when they said its words, with or without the article, the last
+    // one as the start of a word: "dictation is slow" written "The dictation is slow", "language
+    // models" written "a language model".
     let phrase = SELF_TALK.iter().any(|p| {
-        let p = format!(" {p} ");
-        spoken.contains(&p) && !said.contains(&p)
+        let core = ["the ", "a ", "an "]
+            .iter()
+            .find_map(|article| p.strip_prefix(article))
+            .unwrap_or(p);
+        spoken.contains(&format!(" {p} ")) && !said.contains(&format!(" {core}"))
     });
     let opening = answer_words.first().map(String::as_str);
     let first = answer.lines().next().unwrap_or("");
@@ -626,6 +642,11 @@ mod tests {
             (
                 "okay so the plan is first we ship",
                 "OK: the plan is first we ship.",
+            ),
+            // Words about dictation, dictated.
+            (
+                "dictation is slow on my mac today",
+                "The dictation is slow on my Mac today.",
             ),
             // An apology dictated is the user's words, not the model's.
             (
