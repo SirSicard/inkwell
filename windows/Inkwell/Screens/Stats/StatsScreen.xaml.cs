@@ -80,7 +80,16 @@ public sealed partial class StatsScreen : UserControl
         {
             return;
         }
-        await new StatsShareDialog(stats, theme, windowHandle, XamlRoot, ActualTheme).ShowAsync();
+        try
+        {
+            await new StatsShareDialog(stats, theme, windowHandle, XamlRoot, ActualTheme).ShowAsync();
+        }
+        catch (Exception failure)
+        {
+            // Another dialog is open (only one can be: a second click while it opens, say), the card
+            // could not be made, or it failed while open: nothing more is shared, and the app goes on.
+            ScreenLog.System.Write($"the share card failed ({failure.GetType().Name})");
+        }
     }
 
     private void Render()
