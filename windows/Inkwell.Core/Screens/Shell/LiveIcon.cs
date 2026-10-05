@@ -12,8 +12,10 @@
 //
 // LiveIcon decides what each surface shows and when it redraws. A still look is drawn once, when it
 // or its colours change. The recording's pulse is ticked by a timer that runs only while a pulse is
-// shown and someone can see the screen; locked or with the display off nothing ticks or draws, and
-// on waking the state as it is now is drawn once. Each surface draws the frames it is given.
+// shown and someone can see the screen (LiveIconViewers); locked, disconnected or with the display
+// off nothing ticks or draws, and on waking the state as it is now is drawn once. Each surface
+// draws the frames it is given. On Windows the shell's icons take the still look for every state
+// (LiveIconLook.OnShell): there, every frame is a call into Explorer.
 using Inkwell.Core.Glow;
 
 namespace Inkwell.Core.Screens;
@@ -57,6 +59,15 @@ public abstract record LiveIconLook
         _ => new Rest(),
     };
 
+    /// <summary>
+    /// The look for <paramref name="state"/> on Windows' shell icons, the tray icon and the taskbar
+    /// button's badge (LiveIconHost): always still, a recording in their colour. Each frame there is
+    /// a call into Explorer on the UI thread (Shell_NotifyIcon, ITaskbarList3.SetOverlayIcon), seven
+    /// a second for a breath, and a hung Explorer would stall the app with it; held still, they
+    /// change only with the state, and no timer runs. The window's own ink still moves.
+    /// </summary>
+    public static LiveIconLook OnShell(DropInk state, double? progress) => For(state, progress, still: true);
+
     /// <summary>Whether it moves (the only look that runs a timer).</summary>
     public bool Pulses => this is Pulse;
 }
@@ -96,9 +107,63 @@ public interface ILiveIconTicker
     void Cancel();
 }
 
+/// <summary>
+/// Whether anyone can see the screen, from what Windows says of the session (WindowHook): locked,
+/// disconnected from its screen (another user switched to, a remote desktop closed or taken over
+/// at the console) or with its display off. Each holds the icon asleep until its own end: an
+/// unlock; a connect, at the console or remote (a session moves between them, so either ends a
+/// disconnect); the display on. A session can come back to a screen still locked, so a connect
+/// leaves a lock as it is. The app coming to the front ends only the display's itself: it can come
+/// forward while nobody is there (another launch, a notification). Instead, at launch, on each
+/// connect and when it comes forward, the session is asked how it is now (Sync), so a missed lock,
+/// unlock or connect can't freeze the icon. UI thread.
+/// </summary>
+public sealed class LiveIconViewers
+{
+    public bool Locked { get; private set; }
+
+    public bool Disconnected { get; private set; }
+
+    public bool DisplayOff { get; private set; }
+
+    /// <summary>Someone can see the screen: LiveIcon.SetAwake.</summary>
+    public bool CanSee => !Locked && !Disconnected && !DisplayOff;
+
+    /// <summary>The session was locked (true) or unlocked.</summary>
+    public void Lock(bool locked) => Locked = locked;
+
+    /// <summary>The session was connected to a screen (true), at the console or remote, or disconnected from it. A lock is left as it is: the session says (Sync).</summary>
+    public void Connect(bool connected) => Disconnected = !connected;
+
+    /// <summary>The session's display went on (true, dimmed counting as on) or off.</summary>
+    public void Display(bool on) => DisplayOff = !on;
+
+    /// <summary>The app came to the front: someone pressed something, so the display is on.</summary>
+    public void AppActive() => DisplayOff = false;
+
+    /// <summary>What the session says it is now (FromSession): it replaces what the events left. Null: not known, left as it is.</summary>
+    public void Sync(bool? locked, bool? disconnected)
+    {
+        Locked = locked ?? Locked;
+        Disconnected = disconnected ?? Disconnected;
+    }
+
+    /// <summary>
+    /// A session's answer (WTSINFOEX_LEVEL1's SessionState and SessionFlags): disconnected is
+    /// WTSDisconnected (4); the flags say locked (WTS_SESSIONSTATE_LOCK, 0), unlocked (_UNLOCK, 1),
+    /// or anything else not known (_UNKNOWN is -1). Windows 7 and Server 2008 R2 swapped the two
+    /// flags; Inkwell needs Windows 11.
+    /// </summary>
+    public static (bool? Locked, bool Disconnected) FromSession(int connectState, int sessionFlags) =>
+        (sessionFlags switch { 0 => true, 1 => false, _ => null }, connectState == 4);
+}
+
 /// <summary>The icons' state and their redraws. UI thread.</summary>
 public sealed class LiveIcon(ILiveIconTicker ticker)
 {
+    // The pulse (Pulse, Breath, the ticker) is the Mac's LiveIcon, ported with its tests: kept so
+    // the looks stay one decision (For), though Windows' shell never shows it (OnShell).
+
     /// <summary>The pulse's frame rate: a breath reads as smooth at 7 fps, at a fraction of a display's rate.</summary>
     public const double PulseFps = 7;
 

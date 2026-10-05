@@ -1,9 +1,11 @@
 // The live icon on Windows (LiveIcon decides; this shows): the tray icon and the main window's
-// taskbar button follow the Drop's state, the final pass's steps, the user's colours and the motion
-// settings. Nothing polls: each follows an event (the Drop's change, the store's, the theme's,
-// Windows' animation setting), and the pulse's timer runs only while LiveIcon asks for it. While
-// the screen is locked or the display is off (WindowHook) nothing ticks or draws; the app coming to
-// the front means someone is there, so a missed unlock never leaves the icon still for good.
+// taskbar button follow the Drop's state, the final pass's steps and the user's colours. Nothing
+// polls and nothing ticks: each follows an event (the Drop's change, the store's, the theme's), and
+// a recording is held still (LiveIconLook.OnShell), as each frame on these surfaces is a call into
+// Explorer. While the session is locked or disconnected (another user switched to, a remote desktop
+// closed) or its display is off (WindowHook), nothing draws (LiveIconViewers): a lock or a
+// disconnect holds until its own unlock or connect, or until the session, asked at launch, on each
+// connect and when the app comes to the front, says it is over.
 //
 //   the tray      the Halo rim mark with the state's dot or ring (TrayGlyph.Tray); Narrator reads
 //                 its tooltip, which says the state (or what stops the Drop)
@@ -11,14 +13,12 @@
 //                 for the final pass (indeterminate until its first step) and the error state for
 //                 a problem; the thumbnail toolbar's Record / Stop
 //
-// The pictures are made once per look, colour and step of the breath, and kept (fourteen for a
-// breath), so a recording's 7 frames a second make no new icons after its first two seconds.
+// The pictures are made once per look and colour, and kept.
 using Inkwell.Core;
 using Inkwell.Core.Glow;
 using Inkwell.Core.Screens;
 using Inkwell.Ink;
 using Microsoft.UI;
-using Microsoft.UI.Dispatching;
 using WinUIEx;
 
 namespace Inkwell;
@@ -31,28 +31,28 @@ internal sealed class LiveIconHost : IDisposable
     private readonly GlowTheme theme;
     private readonly TrayIcon tray;
     private readonly string iconPath;
-    /// <summary>The window's messages (null if the window could not be watched: no thumbnail clicks, and the pulse cannot hear the lock).</summary>
+    /// <summary>The window's messages (null if the window could not be watched: no thumbnail clicks, and the live icon cannot hear the lock).</summary>
     private readonly WindowHook? hook;
     private readonly TaskbarButton taskbar;
     private readonly TraySurface traySurface;
     private readonly TaskbarSurface taskbarSurface;
-    private bool locked;
-    private bool displayOff;
+    /// <summary>Whether anyone can see the screen: locked, disconnected and the display, each until its own end.</summary>
+    private readonly LiveIconViewers viewers = new();
     private string? inkProblem;
     private string? tooltipShown;
     private bool disposed;
     private readonly System.ComponentModel.PropertyChangedEventHandler storeChanged;
-    /// <summary>Failures logged, by what failed: each once, however often a frame retries it (the pulse, 7 a second).</summary>
+    /// <summary>Failures logged, by what failed: each once, however often a frame retries it.</summary>
     private readonly HashSet<string> logged = [];
 
-    public LiveIconHost(nint window, DropModel drop, CoreStore store, GlowTheme theme, TrayIcon tray, string iconPath, DispatcherQueue ui, Action<bool> record)
+    public LiveIconHost(nint window, DropModel drop, CoreStore store, GlowTheme theme, TrayIcon tray, string iconPath, Action<bool> record)
     {
         this.drop = drop;
         this.store = store;
         this.theme = theme;
         this.tray = tray;
         this.iconPath = iconPath;
-        icon = new LiveIcon(new DispatcherTicker(ui));
+        icon = new LiveIcon(new NoTicker());
         try
         {
             hook = new WindowHook(window);
@@ -79,12 +79,13 @@ internal sealed class LiveIconHost : IDisposable
         {
             ShowButton();
         }
+        Resync();
+        Awake();
         icon.Attach(traySurface);
         icon.Attach(taskbarSurface);
         drop.Changed += Follow;
         store.PropertyChanged += storeChanged;
         theme.Changed += Follow;
-        SystemMotion.Changed += Follow;
         Follow();
     }
 
@@ -109,12 +110,23 @@ internal sealed class LiveIconHost : IDisposable
         };
         hook.Locked += value =>
         {
-            locked = value;
+            viewers.Lock(value);
+            Awake();
+        };
+        hook.Connected += value =>
+        {
+            viewers.Connect(value);
+            // Back on a screen, maybe still locked (a remote desktop reconnecting, a switch back to
+            // a locked user): the session says, rather than the connect.
+            if (value)
+            {
+                Resync();
+            }
             Awake();
         };
         hook.DisplayOn += on =>
         {
-            displayOff = !on;
+            viewers.Display(on);
             Awake();
         };
     }
@@ -122,12 +134,22 @@ internal sealed class LiveIconHost : IDisposable
     /// <summary>Frames drawn since launch (the energy budget's count).</summary>
     public int Frames => icon.Frames;
 
-    /// <summary>The app came to the front: someone is at an unlocked, awake screen.</summary>
+    /// <summary>The app came to the front: the display is on, and the session is asked how it is (a lock or a disconnect it confirms still holds: LiveIconViewers).</summary>
     public void AppActive()
     {
-        locked = false;
-        displayOff = false;
+        Resync();
+        viewers.AppActive();
         Awake();
+    }
+
+    /// <summary>The session as Windows says it is now: a lock, unlock or connect missed (or before launch) can't freeze the icon.</summary>
+    private void Resync()
+    {
+        if (WindowHook.QuerySession() is { } now)
+        {
+            var (locked, disconnected) = LiveIconViewers.FromSession(now.State, now.Flags);
+            viewers.Sync(locked, disconnected);
+        }
     }
 
     /// <summary>What stops the Drop working now, or null: the tray's tooltip says it.</summary>
@@ -152,11 +174,12 @@ internal sealed class LiveIconHost : IDisposable
     {
         if (logged.Add($"{what}:{e.GetType().Name}"))
         {
-            InkLog.Write($"the live icon couldn't {what}: {e.GetType().Name}: {e.Message}");
+            // By its type only: an exception's message never reaches the log.
+            InkLog.Write($"the live icon couldn't {what}: {e.GetType().Name}");
         }
     }
 
-    private void Awake() => icon.SetAwake(!locked && !displayOff);
+    private void Awake() => icon.SetAwake(viewers.CanSee);
 
     /// <summary>The look for the state now, in the colours shown: drawing only what changed (LiveIcon.Update).</summary>
     private void Follow()
@@ -171,8 +194,12 @@ internal sealed class LiveIconHost : IDisposable
         var progress = state != DropInk.Blotting ? null
             : store.Meeting is null && icon.Frame.Look is LiveIconLook.Ring shown ? shown.Progress
             : LiveIcon.FinalPassProgress(store.Meeting);
-        var still = theme.AlwaysStill || !SystemMotion.AnimationsEnabled;
-        icon.Update(LiveIconLook.For(state, progress, still), Colours());
+        // Still in every state, so the badge and the tray icon change only with the state: a
+        // breath would be seven calls a second into Explorer (SetOverlayIcon; Shell_NotifyIcon,
+        // which TrayIcon.SetIcon makes on every call) on this thread, and a hung Explorer would
+        // stall the app. Neither can move without them, so nothing on them breathes and no timer
+        // runs (Always still and Windows' animation setting have nothing left to hold still here).
+        icon.Update(LiveIconLook.OnShell(state, progress), Colours());
         Tooltip(App.TrayTooltip(inkProblem, state));
     }
 
@@ -203,7 +230,6 @@ internal sealed class LiveIconHost : IDisposable
         drop.Changed -= Follow;
         store.PropertyChanged -= storeChanged;
         theme.Changed -= Follow;
-        SystemMotion.Changed -= Follow;
         icon.Detach(traySurface);
         icon.Detach(taskbarSurface);
         traySurface.Dispose();
@@ -369,27 +395,20 @@ internal sealed class LiveIconHost : IDisposable
         }
     }
 
-    /// <summary>The pulse's clock: a dispatcher timer on the UI thread, made only while it runs.</summary>
-    private sealed class DispatcherTicker(DispatcherQueue ui) : ILiveIconTicker
+    /// <summary>
+    /// No clock: the shell's icons are held still (LiveIconLook.OnShell), so LiveIcon never wants
+    /// one here. A pulse handed in by mistake would show its first frame and stay still.
+    /// </summary>
+    private sealed class NoTicker : ILiveIconTicker
     {
-        private DispatcherQueueTimer? timer;
-
-        public bool Running => timer is not null;
+        public bool Running => false;
 
         public void Start(TimeSpan interval, Action tick)
         {
-            Cancel();
-            timer = ui.CreateTimer();
-            timer.Interval = interval;
-            timer.IsRepeating = true;
-            timer.Tick += (_, _) => tick();
-            timer.Start();
         }
 
         public void Cancel()
         {
-            timer?.Stop();
-            timer = null;
         }
     }
 }

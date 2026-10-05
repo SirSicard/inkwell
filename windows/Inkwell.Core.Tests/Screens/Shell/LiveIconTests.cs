@@ -207,6 +207,25 @@ public class LiveIconTests
         Assert.Empty(ticker.Starts);
     }
 
+    /// <summary>
+    /// Windows' shell icons change only with the state: each of their frames is a call into
+    /// Explorer, so a recording is one still frame in their colour and no timer runs.
+    /// </summary>
+    [Fact]
+    public void TheShellsIconsChangeOnlyWithTheState()
+    {
+        Assert.All(Enum.GetValues<DropInk>(), state => Assert.False(LiveIconLook.OnShell(state, null).Pulses));
+        var ticker = new HandTicker();
+        var icon = new LiveIcon(ticker);
+        var surface = new RecordingSurface();
+        icon.Attach(surface);
+        icon.Update(LiveIconLook.OnShell(DropInk.Meeting, null), Colours);
+        icon.Update(LiveIconLook.OnShell(DropInk.Meeting, null), Colours);
+        ticker.Fire((int)(LiveIcon.PulseFps * LiveIcon.BreathPeriod));
+        Assert.Empty(ticker.Starts);
+        Assert.Equal([new LiveIconLook.Rest(), new LiveIconLook.Glow(LiveIconTone.Them)], surface.Shown.Select(f => f.Look));
+    }
+
     /// <summary>With nothing to draw on, nothing ticks; the pulse resumes on the next surface.</summary>
     [Fact]
     public void NoSurfaceMeansNoTimer()
@@ -312,6 +331,88 @@ public class LiveIconTests
         Assert.False(icon.IsPulsing);
         icon.SetAwake(true);
         Assert.Equal([new LiveIconLook.Pulse(LiveIconTone.Them)], surface.Shown.Select(f => f.Look)); // shown on waking
+    }
+
+    /// <summary>
+    /// A locked session, or one disconnected from its screen (another user switched to, a remote
+    /// desktop closed), holds the icon asleep until its own unlock or connect: the app coming to the
+    /// front meanwhile ends neither.
+    /// </summary>
+    [Fact]
+    public void ALockOrADisconnectHoldsUntilItsOwnEnd()
+    {
+        var viewers = new LiveIconViewers();
+        Assert.True(viewers.CanSee);
+        viewers.Connect(false);
+        Assert.False(viewers.CanSee);
+        viewers.AppActive();
+        Assert.False(viewers.CanSee); // brought forward while nobody is there
+        viewers.Connect(true);
+        Assert.True(viewers.CanSee);
+
+        viewers.Lock(true);
+        viewers.AppActive();
+        Assert.False(viewers.CanSee);
+        viewers.Lock(false);
+        Assert.True(viewers.CanSee);
+    }
+
+    /// <summary>A connect ends a disconnect only: a session can come back to a screen still locked (a remote desktop reconnecting, a switch back to a locked user); the session is asked then (Sync).</summary>
+    [Fact]
+    public void AConnectLeavesALockAsItIs()
+    {
+        var viewers = new LiveIconViewers();
+        viewers.Lock(true);
+        viewers.Connect(false);
+        viewers.Connect(true);
+        Assert.False(viewers.Disconnected);
+        Assert.True(viewers.Locked);
+        Assert.False(viewers.CanSee);
+    }
+
+    /// <summary>
+    /// The session asked now (at launch, and when the app comes forward) replaces what the events
+    /// left, so a missed one can't freeze the icon; what it can't say is left as it was.
+    /// </summary>
+    [Fact]
+    public void TheSessionAskedNowReplacesWhatTheEventsLeft()
+    {
+        var viewers = new LiveIconViewers();
+        viewers.Lock(true);
+        viewers.Connect(false);
+        viewers.Sync(locked: false, disconnected: false);
+        Assert.True(viewers.CanSee);
+        viewers.Sync(locked: null, disconnected: true);
+        Assert.False(viewers.CanSee);
+        Assert.False(viewers.Locked);
+        viewers.Lock(true);
+        viewers.Sync(null, null);
+        Assert.True(viewers.Locked);
+        Assert.True(viewers.Disconnected);
+    }
+
+    /// <summary>The session's answer (WTSINFOEX_LEVEL1): disconnected is WTSDisconnected (4); its flags say locked (0), unlocked (1) or not known (anything else).</summary>
+    [Fact]
+    public void TheSessionsAnswerIsRead()
+    {
+        Assert.Equal<(bool?, bool)>((true, false), LiveIconViewers.FromSession(0, 0));
+        Assert.Equal<(bool?, bool)>((false, false), LiveIconViewers.FromSession(0, 1));
+        Assert.Equal<(bool?, bool)>((null, true), LiveIconViewers.FromSession(4, -1));
+        Assert.Equal<(bool?, bool)>((null, false), LiveIconViewers.FromSession(1, 7));
+    }
+
+    /// <summary>The display off holds it until the display is on, or the app comes to the front (someone pressed something).</summary>
+    [Fact]
+    public void TheDisplayOffHoldsUntilItIsOnOrTheAppComesForward()
+    {
+        var viewers = new LiveIconViewers();
+        viewers.Display(false);
+        Assert.False(viewers.CanSee);
+        viewers.Display(true);
+        Assert.True(viewers.CanSee);
+        viewers.Display(false);
+        viewers.AppActive();
+        Assert.True(viewers.CanSee);
     }
 
     /// <summary>Narrator hears the state: the tray's name and the taskbar overlay's description.</summary>
