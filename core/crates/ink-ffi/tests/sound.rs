@@ -23,6 +23,10 @@ use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(10);
 const MS: u64 = 1_000_000;
+/// The most mock time [`Rig::released`] moves on: past the grace after a press, never near
+/// [`MIC_IDLE`](ink_ffi::voice::MIC_IDLE).
+const RELEASE_BUDGET: u64 = 5_000 * MS;
+const _: () = assert!(RELEASE_BUDGET < ink_ffi::voice::MIC_IDLE.as_nanos() as u64 / 10);
 
 fn device(id: &str, name: &str, transport: Transport, is_default: bool) -> DeviceInfo {
     DeviceInfo {
@@ -184,15 +188,22 @@ impl Rig {
 
     /// Moves the mock clock on (past [`STALE_GRACE`](ink_ffi::voice::STALE_GRACE) after the last
     /// press) until dictation has let go of its idle mic.
+    ///
+    /// At most [`RELEASE_BUDGET`] of mock time, far short of the minute without a take that lets
+    /// an idle mic go anyway: what lets it go here is the device change.
     fn released(&self) {
         let until = Instant::now() + WAIT;
+        let mut moved = 0;
         while self.mic_open() {
             assert!(
                 Instant::now() < until,
                 "the idle mic is never let go of: {:?}",
                 self.events.types()
             );
-            self.platform.clock().advance_ns(200 * MS);
+            if moved < RELEASE_BUDGET {
+                self.platform.clock().advance_ns(200 * MS);
+                moved += 200 * MS;
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -443,31 +454,60 @@ fn a_missing_chosen_mic_is_said_once_per_spell() {
     rig.released();
     rig.tap();
     assert_eq!(rig.opens(), ["built-in", "desk", "buds"]);
-    // Gone again: a new spell.
+    // Gone again, within a second of that press: the dead mic opens again at once on the
+    // stand-in, and that is a new spell.
     rig.platform.unplug("buds");
-    rig.settled(4);
-    rig.released();
-    rig.tap();
     assert!(rig.events.wait_count("audio.input_fallback", 2, WAIT));
+    assert_eq!(rig.opens(), ["built-in", "desk", "buds", "desk"]);
     rig.events.assert_valid();
 }
 
-/// A mic whose device goes is noticed by dictation itself, without the watcher: between takes it
-/// is let go of quietly and the next press opens another; in a take it ends the take, said.
+/// A mic whose device goes is noticed by dictation itself, without the watcher (no clock is moved
+/// past a burst's quiet time here, so this is the source's own end). Between takes it is let go
+/// of quietly: opened again at once only for a press just made, once per press; a take's end is no
+/// press. In a take it ends the take, said.
 #[test]
 fn dictation_notices_its_mic_going_by_itself() {
     let rig = Rig::new("sound-dead-mic", windows_like(), true);
     rig.enable_dictation();
+    let after = |n: usize| {
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(rig.opens().len(), n, "{:?}", rig.opens());
+        assert_eq!(
+            rig.events.count("dictation.mic_failed"),
+            0,
+            "nothing to say"
+        );
+    };
+
+    // More than a second after the last press, nothing held: let go of quietly, not opened
+    // again; the next press opens the other mic.
     rig.tap();
-    // No clock moved: the watcher's burst is never read, so this is the source's own end.
+    rig.until("the press is over", || {
+        rig.events.count("dictation.short_press_ignored") > 0
+    });
+    rig.platform.clock().advance_ns(1_500 * MS);
     assert!(rig.platform.unplug("built-in"));
+    after(1);
     rig.tap();
     assert_eq!(rig.opens(), ["built-in", "usb"]);
-    assert_eq!(
-        rig.events.count("dictation.mic_failed"),
-        0,
-        "nothing to say"
-    );
+
+    // While a key is held: opened again at once, on what the choice picks now, once.
+    rig.platform
+        .plug(device("desk", "Desk Microphone", Transport::Usb, false));
+    rig.platform.clock().advance_ns(1_500 * MS);
+    assert!(rig.platform.press());
+    assert!(rig.platform.unplug("usb"));
+    rig.until("opened again", || rig.opens().len() == 3);
+    assert!(rig.platform.release());
+    assert_eq!(rig.opens()[2], "desk");
+    // Its new device ends too, within the same press's grace: not opened again (no loop), and
+    // with no mic left nothing is said until a press needs one.
+    assert!(rig.platform.unplug("desk"));
+    after(3);
+    rig.platform.plug(usb("usb"));
+    rig.tap();
+    assert_eq!(rig.opens()[3], "usb");
 
     // In a take: hold, speak until the take has started, then pull the mic.
     let speech: Vec<f32> = ink_audio::synth::speech_like(3.0, -25.0, 5)
@@ -497,6 +537,118 @@ fn dictation_notices_its_mic_going_by_itself() {
         "{failed}"
     );
     rig.platform.release();
+    rig.events.assert_valid();
+}
+
+/// The rig's mock behind a gate: dictation's mic thread (`ink-voice`) blocks in its next
+/// `input_devices` once armed, until opened. Everything else passes straight through.
+struct Gated {
+    inner: Arc<MockPlatform>,
+    armed: std::sync::atomic::AtomicBool,
+    blocked: std::sync::atomic::AtomicBool,
+    open: (std::sync::Mutex<bool>, std::sync::Condvar),
+}
+
+impl Gated {
+    fn new(inner: Arc<MockPlatform>) -> Self {
+        Self {
+            inner,
+            armed: Default::default(),
+            blocked: Default::default(),
+            open: Default::default(),
+        }
+    }
+
+    fn release_gate(&self) {
+        *self.open.0.lock().unwrap() = true;
+        self.open.1.notify_all();
+    }
+}
+
+impl CaptureControl for Gated {
+    fn input_devices(&self) -> Result<Vec<DeviceInfo>, ink_core::PlatformError> {
+        use std::sync::atomic::Ordering;
+        if std::thread::current().name() == Some("ink-voice")
+            && self.armed.swap(false, Ordering::AcqRel)
+        {
+            self.blocked.store(true, Ordering::Release);
+            let mut open = self.open.0.lock().unwrap();
+            while !*open {
+                open = self.open.1.wait(open).unwrap();
+            }
+        }
+        self.inner.input_devices()
+    }
+    fn output_devices(&self) -> Result<Vec<DeviceInfo>, ink_core::PlatformError> {
+        self.inner.output_devices()
+    }
+    fn default_output(&self) -> Result<Option<DeviceInfo>, ink_core::PlatformError> {
+        self.inner.default_output()
+    }
+    fn automatic_input(&self) -> Result<Option<ink_core::AutoInput>, ink_core::PlatformError> {
+        self.inner.automatic_input()
+    }
+    fn open_mic(
+        &self,
+        device: Option<&DeviceId>,
+    ) -> Result<Box<dyn AudioSource>, ink_core::PlatformError> {
+        self.inner.open_mic(device)
+    }
+    fn open_far_end(
+        &self,
+        target: &ink_core::FarEndTarget,
+    ) -> Result<Box<dyn AudioSource>, ink_core::PlatformError> {
+        self.inner.open_far_end(target)
+    }
+    fn watch_devices(
+        &self,
+        on_change: ink_core::EventSink<ink_core::DeviceChange>,
+    ) -> Result<(), ink_core::PlatformError> {
+        self.inner.watch_devices(on_change)
+    }
+    fn unwatch_devices(&self) {
+        self.inner.unwatch_devices();
+    }
+}
+
+/// A press that arrives while the idle mic is being picked again keeps the mic (its lead with
+/// it), and the change is looked at again: once the key is let go of and the grace has passed,
+/// the mic gives way to the new pick.
+#[test]
+fn a_press_during_the_pick_keeps_the_mic_and_looks_again_later() {
+    use std::sync::atomic::Ordering;
+    let rig = Rig::new("sound-press-in-pick", windows_like(), false);
+    let gated = Arc::new(Gated::new(rig.platform.clone()));
+    rig.core().set_voice_platform(VoicePlatform {
+        capture: gated.clone(),
+        keys: rig.platform.clone(),
+        edit_keys: Arc::new(MockPlatform::new()),
+        inserter: rig.platform.clone(),
+        focus: rig.platform.clone(),
+    });
+    rig.enable_dictation();
+    rig.tap();
+    rig.platform.clock().advance_ns(1_500 * MS);
+    gated.armed.store(true, Ordering::Release);
+    rig.set("audio.input", "usb", "s1");
+    rig.until("the pick is under way", || {
+        gated.blocked.load(Ordering::Acquire)
+    });
+    // The press lands during the pick.
+    assert!(rig.platform.press());
+    gated.release_gate();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(rig.mic_open(), "the press keeps the mic");
+    assert_eq!(rig.opens(), ["built-in"]);
+    // Still held: nothing changes however long it is held.
+    rig.platform.clock().advance_ns(1_500 * MS);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(rig.mic_open(), "never while a key is held");
+    assert!(rig.platform.release());
+    // Looked at again (the flag was set again): let go of, and the next press opens the choice.
+    rig.released();
+    rig.tap();
+    assert_eq!(rig.opens(), ["built-in", "usb"]);
     rig.events.assert_valid();
 }
 

@@ -39,7 +39,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use ink_audio::{BandAnalyzer, Bands, capture_ring};
-use ink_core::{AudioSource, CaptureControl, DeviceChange, DeviceId, PlatformError};
+use ink_core::{AudioSource, CaptureControl, DeviceChange, DeviceId, EventSink, PlatformError};
 use ink_pipeline::mic::MicPath;
 use serde_json::Value;
 
@@ -433,6 +433,18 @@ impl SoundThread {
     }
 }
 
+/// **Callback thread.** The platform's device callback: it only enqueues, and at most one change
+/// waits in the queue (`pending` is set until the thread takes it), however hard the OS calls.
+fn change_sink(tx: Sender<Msg>, pending: Arc<AtomicBool>) -> EventSink<DeviceChange> {
+    let tx = Mutex::new(tx);
+    Arc::new(move |change: DeviceChange| {
+        if !pending.swap(true, Ordering::AcqRel) {
+            // Refused only once the thread has gone: nothing is left to tell.
+            let _ = lock(&tx).send(Msg::Changed(Some(change)));
+        }
+    })
+}
+
 /// A mic test in progress.
 struct Test {
     id: Option<String>,
@@ -537,14 +549,7 @@ impl Worker<'_> {
                 if let Some(old) = self.capture.take() {
                     old.unwatch_devices();
                 }
-                let tx = Mutex::new(self.tx.clone());
-                let pending = Arc::clone(&self.pending);
-                let sink = Arc::new(move |change: DeviceChange| {
-                    if !pending.swap(true, Ordering::AcqRel) {
-                        // Refused only once the thread has gone: nothing is left to tell.
-                        let _ = lock(&tx).send(Msg::Changed(Some(change)));
-                    }
-                });
+                let sink = change_sink(self.tx.clone(), Arc::clone(&self.pending));
                 match capture.watch_devices(sink) {
                     Ok(()) => log::info!("watching the audio devices"),
                     Err(PlatformError::Unsupported(what)) => log::info!(
@@ -785,6 +790,30 @@ mod tests {
             high: 0.1,
         };
         assert!((level_db(each) + 15.23).abs() < 0.01, "{}", level_db(each));
+    }
+
+    /// A storm of OS notifications queues one message while that one waits; once the thread has
+    /// taken it (and cleared `pending`), the next notification queues one more.
+    #[test]
+    fn the_device_callback_keeps_at_most_one_change_queued() {
+        let (tx, rx) = mpsc::channel();
+        let pending = Arc::new(AtomicBool::new(false));
+        let sink = change_sink(tx, pending.clone());
+        for _ in 0..1_000 {
+            sink(DeviceChange::Devices);
+        }
+        let queued: Vec<Msg> = rx.try_iter().collect();
+        assert_eq!(queued.len(), 1);
+        assert!(matches!(
+            queued[0],
+            Msg::Changed(Some(DeviceChange::Devices))
+        ));
+        sink(DeviceChange::DefaultInput);
+        assert_eq!(rx.try_iter().count(), 0, "still pending");
+        pending.store(false, Ordering::Release);
+        sink(DeviceChange::DefaultOutput);
+        sink(DeviceChange::DefaultOutput);
+        assert_eq!(rx.try_iter().count(), 1);
     }
 
     #[test]
