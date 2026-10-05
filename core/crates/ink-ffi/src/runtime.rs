@@ -383,6 +383,9 @@ pub struct Shared {
     pub(crate) cloud: crate::cloud::Cloud,
     /// Inkwell 0.2's import, once the shell's platform gave it ([`Core::set_import02`]).
     pub(crate) import02: std::sync::OnceLock<Import02>,
+    /// Settings > Sound: the chosen mic's fallback spell and the sound thread's mailbox
+    /// ([`sound`](crate::sound)).
+    pub(crate) sound: crate::sound::Sound,
 }
 
 pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -564,6 +567,7 @@ pub struct Core {
     asking: Asking,
     retention: Sweeper,
     tester: crate::cloud::Tester,
+    sound: crate::sound::SoundThread,
 }
 
 impl Core {
@@ -602,6 +606,7 @@ impl Core {
             voice: Mutex::default(),
             cloud: crate::cloud::Cloud::default(),
             import02: std::sync::OnceLock::new(),
+            sound: crate::sound::Sound::default(),
         });
         // The chosen own-key provider, if any, before anything can call a model.
         crate::cloud::load(&shared);
@@ -627,6 +632,7 @@ impl Core {
         let _ = shared.control.set(Mutex::new(control.sender()));
         let asking = Asking::start(shared.clone(), runs.clone())?;
         let tester = crate::cloud::Tester::start(shared.clone())?;
+        let sound = crate::sound::SoundThread::start(shared.clone(), runs.clone())?;
         shared.events.emit(events::ready());
         // Detection follows the user's setting (on unless turned off); what it finds is offered
         // only once the shell is listening, after `core.ready`.
@@ -661,6 +667,7 @@ impl Core {
             asking,
             retention,
             tester,
+            sound,
         })
     }
 
@@ -794,6 +801,8 @@ impl Core {
     /// Gives dictation its platform (keys, mic, insertion, focus): `dictation.enable` refuses
     /// until this is set. The C ABI sets the Mac's at `ink_init`; tests set mocks.
     pub fn set_voice_platform(&self, platform: crate::voice::VoicePlatform) {
+        // Settings > Sound lists, watches and tests the devices through the same capture.
+        self.sound.watch(&self.shared, platform.capture.clone());
         lock(&self.shared.voice).set_platform(platform);
     }
 
@@ -863,6 +872,7 @@ impl Core {
             asking,
             retention,
             tester,
+            sound,
         } = self;
         shared.shutdown.cancel();
         drop(commands);
@@ -876,6 +886,8 @@ impl Core {
         asking.stop();
         // After the queries thread, which hands it tests.
         tester.stop();
+        // Likewise: its test ends and the devices are no longer watched.
+        sound.stop();
         control.stop();
         retention.stop();
         // Dictation's keys, mic, worker and warm-up: every thread that can hold an engine.
@@ -1419,7 +1431,8 @@ mod tests {
     #[ignore = "talks to the Windows audio service"]
     fn windows_record_now_opens_the_real_devices_without_starting_them() {
         let platform = MeetingPlatform::production().expect("the platform");
-        let mut opened = platform.capture.open(None, false).expect("opened");
+        let choices = crate::devices::Choices::new(Arc::new(ink_core::mock::MemStore::default()));
+        let mut opened = platform.capture.open(None, &choices).expect("opened");
         let channels: Vec<_> = opened.sides.iter().map(|s| s.source.channel()).collect();
         assert_eq!(channels, [ink_core::Channel::Mic, ink_core::Channel::Far]);
         assert_eq!(opened.far, crate::capture::FarScope::Everything);

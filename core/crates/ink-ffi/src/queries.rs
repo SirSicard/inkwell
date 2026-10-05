@@ -65,8 +65,23 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // Whether the app watches for calls and offers to record them (the consent Drop). On unless
     // turned off; the meetings thread starts or stops detection when it changes.
     (crate::control::DETECT_KEY, &["on", "off"]),
-    // Record the Bluetooth headset's own mic instead of the built-in one (call-quality audio).
+    // Retired (crate::control::HEADSET_MIC_KEY): the core reads it nowhere; accepted until the
+    // shells' Meetings switch gives way to Settings > Sound.
     (crate::control::HEADSET_MIC_KEY, &["on", "off"]),
+    // The mic for dictation, meetings and the mic test (crate::devices): Automatic, or a device
+    // connected when it is set (by the id audio.devices lists). A change lets go of dictation's
+    // idle mic when it is another.
+    (
+        crate::devices::INPUT_KEY,
+        &[crate::devices::AUTO, ANY_DEVICE],
+    ),
+    // The output a meeting's far end is to record (Windows): the default output, or a device
+    // connected when it is set. Only `default` where the platform has no output picker (macOS).
+    // Stored and shown; the far end follows the default until the Windows device branch pins it.
+    (
+        crate::devices::OUTPUT_KEY,
+        &[crate::devices::DEFAULT, ANY_DEVICE],
+    ),
     // Local-only mode (architecture rule 6): on unless turned off; while on, a language model
     // that is not on this machine is never called (crate::llms::PolishModel).
     (crate::llms::LOCAL_ONLY_KEY, &["on", "off"]),
@@ -108,6 +123,10 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // The week whose review the user dismissed, by its first day.
     (crate::stats::REVIEW_DISMISSED_KEY, &[DATE]),
 ];
+
+/// In a value list of [`SHELL_SETTINGS`]: a device's id as `audio.devices` lists it
+/// ([`crate::devices::is_device_token`]); setting it also checks that it is connected now.
+pub const ANY_DEVICE: &str = "<device>";
 
 /// In a value list of [`SHELL_SETTINGS`]: a typing speed, a whole number of words a minute in
 /// [`crate::stats::TYPING_WPM_RANGE`], written plainly (`40`).
@@ -266,6 +285,8 @@ pub enum Query {
     Import02(crate::import02::Import02Query),
     /// The Stats screen's numbers ([`stats`](crate::stats)).
     Stats(crate::stats::StatsQuery),
+    /// Settings > Sound: the devices and the mic test ([`sound`](crate::sound)).
+    Sound(crate::sound::SoundQuery),
 }
 
 /// A query with the command's name and id, for its events.
@@ -340,6 +361,9 @@ pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     }
     if let Some(query) = crate::stats::parse(name, v) {
         return Some(query.map(Query::Stats));
+    }
+    if let Some(query) = crate::sound::parse(name, v) {
+        return Some(query.map(Query::Sound));
     }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
@@ -540,7 +564,9 @@ fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, 
 
 /// Whether `allowed`, one entry of a value list in [`SHELL_SETTINGS`], accepts `value`.
 fn accepts(allowed: &str, value: &str) -> bool {
-    if allowed == ANY_KEY {
+    if allowed == ANY_DEVICE {
+        crate::devices::is_device_token(value)
+    } else if allowed == ANY_KEY {
         crate::hotkey::stored_value(value).is_ok()
     } else if allowed == TYPING_WPM {
         // Digits only, so the stored text reads back as the number it is ("040" and "+40" are
@@ -866,6 +892,12 @@ impl Ctx<'_> {
                     Some(feature) if value == "off" => {
                         crate::consent::turn_off(self.shared, feature)
                     }
+                    // A device is checked against those connected now, and remembered.
+                    _ if [crate::devices::INPUT_KEY, crate::devices::OUTPUT_KEY]
+                        .contains(&key.as_str()) =>
+                    {
+                        crate::sound::set_choice(self.shared, &key, &value)
+                    }
                     _ => store.set_setting(&key, &value).map_err(|e| e.to_string()),
                 } {
                     Ok(()) => {
@@ -889,6 +921,11 @@ impl Ctx<'_> {
                         }
                         if crate::voice::DICTATION_SETTINGS.contains(&key.as_str()) {
                             crate::voice::settings_changed(self.shared);
+                        }
+                        if [crate::devices::INPUT_KEY, crate::devices::OUTPUT_KEY]
+                            .contains(&key.as_str())
+                        {
+                            crate::sound::choice_changed(self.shared, &key);
                         }
                     }
                     Err(e) => fail(e),
@@ -943,6 +980,12 @@ impl Ctx<'_> {
             },
             Query::Stats(query) => match crate::stats::answer(self.shared, query, id.as_deref()) {
                 Ok(e) => emit(e),
+                Err(e) => fail(e),
+            },
+            Query::Sound(query) => match crate::sound::answer(self.shared, query, id.as_deref()) {
+                Ok(Some(e)) => emit(e),
+                // audio.test, audio.test_stop: the sound thread answers.
+                Ok(None) => {}
                 Err(e) => fail(e),
             },
             // A store call and a read of 0.2's files: about a second for a long history, and

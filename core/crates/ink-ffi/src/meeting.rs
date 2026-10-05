@@ -21,11 +21,13 @@
 //!   ([`capture`](crate::capture)). A side has ended when its source drops the sink it was given,
 //!   which a replay does after its last block; a device's meeting ends when it is told to
 //!   ([`MeetingRun::end`]).
-//! - **A device that changes** under a meeting: a side that can move ([`Follow`], Windows' device
-//!   loopback) is asked every [`FOLLOW_INTERVAL`] whether it should, and opened again where it
-//!   should be; its ring's sink passes from the old source to the new one, so the side goes on in
-//!   the same chunks. A source that ends by itself ([`AudioSource::ended`]) is opened again at once
-//!   when its side can move, and said when it cannot. A side left with no source is lost
+//! - **A device that changes** under a meeting: a side that can move ([`Follow`]: Windows' device
+//!   loopback, and the mic, which moves only when it goes) is asked every [`FOLLOW_INTERVAL`]
+//!   whether it should, and opened again where it should be; its ring's sink passes from the old
+//!   source to the new one, so the side goes on in the same chunks. A mic opened again on another
+//!   device is said (`meeting.mic_switched`), and the watchdog judges it by its own transport. A
+//!   source that ends by itself ([`AudioSource::ended`]) is opened again at once when its side
+//!   can move, and said when it cannot. A side left with no source is lost
 //!   (`Input::Lost`): the watchdog then expects audio from it, so its silence is said within
 //!   seconds, never taken for quiet.
 //! - **What it runs on** besides the speech engines ([`engines`](crate::engines)): the installed
@@ -44,7 +46,7 @@ use std::time::{Duration, Instant};
 use ink_audio::{BandAnalyzer, Bands, ChunkStore, FileReplaySource, Pacing, StartAt, capture_ring};
 use ink_core::{
     AudioBlock, AudioSink, AudioSource, CancelToken, Channel, EventSink, Job, RecordId,
-    StreamingEngine,
+    StreamingEngine, Transport,
 };
 use ink_engines::{ExternalEngine, Route};
 use ink_pipeline::capture::{CanonicalBlock, CaptureIssue, SideCapture, SideSummary};
@@ -162,8 +164,9 @@ impl Replay {
 enum Input {
     Issue(Channel, CaptureIssue),
     /// A side's source was replaced (it moved to another device, or came back): a new echo path,
-    /// and the side is judged as it was routed at the start again.
-    Moved(Channel),
+    /// and the side is judged as it was routed at the start again; a mic by the transport of the
+    /// mic it records now, when its side says.
+    Moved(Channel, Option<Transport>),
     /// A side has no source any more (it ended by itself, or could not start or be opened
     /// again): from now on the watchdog expects audio from it, so its silence is said.
     Lost(Channel),
@@ -181,6 +184,8 @@ struct Source {
     follow: Option<Following>,
     /// It has no working source, and the worker was told (`Input::Lost`).
     lost: bool,
+    /// The mic side's mic, as the shell was last told (`meeting.started`, `meeting.mic_switched`).
+    mic: Option<MicInfo>,
 }
 
 /// A side that can move ([`Follow`]).
@@ -316,12 +321,16 @@ impl MeetingRun {
                     next: Instant::now() + FOLLOW_INTERVAL,
                 }
             });
+            let mic = (channel == Channel::Mic)
+                .then(|| info.mic.clone())
+                .flatten();
             sources.push(Source {
                 source,
                 done,
                 start_at,
                 follow,
                 lost: false,
+                mic,
             });
         }
 
@@ -631,6 +640,7 @@ fn look_after(
         source,
         follow,
         lost,
+        mic,
         ..
     } = s;
     let channel = source.channel();
@@ -673,8 +683,12 @@ fn look_after(
                 log::info!("meeting: the {} is back", side_name(channel));
             }
             log::info!("meeting: the {} now records {what}", side_name(channel));
+            let now = f.follow.mic().cloned();
+            if let Some(now) = &now {
+                mic_switched(shared, record, mic.replace(now.clone()), now);
+            }
             // Refused only when the worker has failed.
-            let _ = mailbox.push(Input::Moved(channel));
+            let _ = mailbox.push(Input::Moved(channel, now.map(|m| m.transport)));
         }
         Err(e) => {
             // Said once; tried again every interval until it opens.
@@ -688,6 +702,38 @@ fn look_after(
             }
         }
     }
+}
+
+/// A meeting's mic was opened again: when on another device (or by another name), the shell is
+/// told (`meeting.mic_switched`, the mic now under meeting.started's names); a stand-in for a
+/// chosen mic that left is said once per spell (`audio.input_fallback`).
+fn mic_switched(
+    shared: &Shared,
+    record: &OnceLock<RecordId>,
+    from: Option<MicInfo>,
+    now: &MicInfo,
+) {
+    shared.sound.opened_on(&shared.events, now);
+    if from
+        .as_ref()
+        .is_some_and(|f| f.name == now.name && f.transport == now.transport)
+    {
+        return;
+    }
+    shared.events.emit(event(
+        "meeting.mic_switched",
+        &[
+            ("record", record.get().map(|r| r.0.as_str().into())),
+            ("from_name", from.as_ref().map(|f| f.name.as_str().into())),
+            (
+                "from_transport",
+                from.as_ref().map(|f| transport_name(f.transport).into()),
+            ),
+            ("mic_name", Some(now.name.as_str().into())),
+            ("mic_transport", Some(transport_name(now.transport).into())),
+            ("mic_reason", Some(now.reason.into())),
+        ],
+    ));
 }
 
 /// Replaces a movable side's `source` with `next`, which records `what`: the old source stops
@@ -891,9 +937,14 @@ fn worker(
                 Pop::Item(Item::Other(Input::Issue(channel, issue))) => {
                     chain.capture_issue(channel, issue);
                 }
-                Pop::Item(Item::Other(Input::Moved(channel))) => {
-                    if channel == Channel::Far {
-                        routing.far = routed.far;
+                Pop::Item(Item::Other(Input::Moved(channel, transport))) => {
+                    match channel {
+                        Channel::Far => routing.far = routed.far,
+                        Channel::Mic => {
+                            if let Some(t) = transport {
+                                routing.mic = t;
+                            }
+                        }
                     }
                     chain.set_routing(routing);
                 }

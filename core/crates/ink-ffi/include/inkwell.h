@@ -148,8 +148,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   Meetings run on their own thread (starting one never waits behind a model download), and
  *   questions about one on another. A failure is "command.failed" with the "id".
  *   {"cmd":"meeting.start","app":"<app id>","title":"..."}
- *       Records a meeting from this machine: the mic (with Bluetooth output, the built-in one
- *       unless "meetings.headset_mic" is on) and the far end ("app", when the start answers a
+ *       Records a meeting from this machine: the mic ("audio.input"; Automatic records the
+ *       built-in one with Bluetooth output) and the far end ("app", when the start answers a
  *       "meeting.detected" offer: that app; otherwise everything this machine plays). Both
  *       optional. "meeting.started" (with the title, the app's name and the mic), then the live
  *       events. Only when the user asks: detection offers, it never starts a recording.
@@ -246,7 +246,13 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       that consent in the same write, answering "consent.state" too; an edit key set without a
  *       consent edits nothing),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
- *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
+ *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off; retired,
+ *       read nowhere: the headset's mic is picked in audio.input),
+ *       "audio.input" (auto|a device id from audio.devices: the mic for dictation, meetings and
+ *       the test; a device must be connected when set), "audio.output" (default|an output's id,
+ *       where audio.devices lists outputs: the output a meeting's far end is to record on
+ *       Windows; stored and shown now, and until the far end is pinned to it meetings follow
+ *       the default output),
  *       "meetings.llm" (on|off: a meeting's summary and Ask; as for dictation.polish, setting.set
  *       takes only off, which also withdraws their consent, and consent.allow turns it on),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a
@@ -268,6 +274,22 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       stays dismissed when the week's first day changes). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
+ *   {"cmd":"audio.devices","id":"<ref>"}
+ *       "audio.devices": the connected inputs (and outputs, where there is an output picker), the
+ *       choice, what Automatic records now and the mic Inkwell opens now, with why ("chosen",
+ *       "chosen_missing" when Automatic stands in for a chosen mic that is not connected, or
+ *       Automatic's reason). Where the platform reports changes, "audio.devices_changed" says the
+ *       same unasked, once a burst of changes has been quiet for 300 ms; "audio.input_fallback"
+ *       says once when a mic opens in place of a chosen one that is not connected.
+ *   {"cmd":"audio.test","seconds":15,"id":"<ref>"}
+ *   {"cmd":"audio.test_stop","id":"<ref>"}
+ *       Opens the chosen mic for "seconds" (1 to 15, 15 when absent): "audio.test_started" names
+ *       it, "audio.test_level" reports its level about ten times a second (0-1, -60 dBFS to full
+ *       scale), "audio.tested" ends it (done, stopped, meeting or failed; "heard" says whether
+ *       anything above a quiet room came in). One at a time; refused while a meeting records
+ *       ("code":"meeting_recording"), and ended by a meeting that starts. audio.test_stop is
+ *       answered by the test's own "audio.tested" (its "ref" is the test's id, "ended":"stopped"),
+ *       or "command.failed" with the stop's id when no test runs. Nothing is kept.
  *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
  *       Whether this computer can watch a key binding as the dictation or edit key, before the
  *       shell stores one the user recorded: "hotkey.checked" with "ok", and either "canonical"

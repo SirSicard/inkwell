@@ -20,6 +20,7 @@ use ink_core::{
 };
 use ink_engines::{ModelDir, Registry};
 use ink_ffi::capture::{FarScope, MeetingCapture, MicInfo, Opened};
+use ink_ffi::devices::Choices;
 use ink_ffi::external::{InkEngineVTable, KIND_LLM, Registration};
 use ink_ffi::meeting::CaptureSide;
 use ink_ffi::runtime::{Core, MeetingPlatform, Parts};
@@ -104,7 +105,7 @@ impl ink_core::AudioSource for Counted {
 }
 
 impl MeetingCapture for ReplayCapture {
-    fn open(&self, app: Option<&AppRef>, _: bool) -> Result<Opened, String> {
+    fn open(&self, app: Option<&AppRef>, _: &Choices) -> Result<Opened, String> {
         self.opened_for
             .lock()
             .unwrap()
@@ -135,6 +136,7 @@ impl MeetingCapture for ReplayCapture {
                 name: "Test Mic".into(),
                 transport: Transport::BuiltIn,
                 reason: "default_input",
+                wanted: None,
             }),
             far: match app {
                 None => FarScope::Everything,

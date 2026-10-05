@@ -20,6 +20,19 @@
 //! and showed the microphone indicator all day); the chain is told, so nothing heard before is a
 //! later take's lead. The first take after that starts when the device does, without a lead.
 //!
+//! **The mic's device.** It is the mic the user chose in Settings > Sound, else Automatic
+//! ([`crate::devices`]). When a device comes or goes, a default changes, or the choice does
+//! ([`crate::sound`]), the open mic is picked again between takes and let go of only when the pick
+//! is another device (the next take then loses its lead). Never while a key is held, nor within
+//! [`STALE_GRACE`] of the last press: the chain starts a take only once it has heard the minimum
+//! hold, so for a moment after a press neither the key nor the take says one is under way, and a
+//! mic let go of then would cut its first words. A press during the new pick keeps the mic, and
+//! it is looked at again later. A take always finishes on its device. A mic whose source ends by
+//! itself (its device went) ends a take in progress, said (`dictation.mic_failed`); between takes
+//! it is let go of quietly, and opened again at once only for a press still held or made within
+//! the grace (that press's wake may already have been taken), at most once per press, so a device
+//! that opens and ends at once cannot loop: a second end for the same press ends the press, said.
+//!
 //! **Threads.** `ink-voice` exists while dictation is enabled; it blocks on its channel while the
 //! mic is closed and wakes every [`PUMP_INTERVAL`] while it is open. The key sinks run on the
 //! platform's tap thread and only enqueue. `ink-warm` is the engine warmer's
@@ -33,9 +46,9 @@ use std::time::Duration;
 
 use ink_audio::{BandAnalyzer, Bands, capture_ring};
 use ink_core::{
-    AsrEvent, AudioSource, CaptureControl, Channel, EngineError, EngineInfo, EngineStream,
-    EventSink, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, Job, Llm, Permission,
-    PlatformError, Store, StreamingEngine, TextInserter,
+    AsrEvent, AudioSource, CaptureControl, Channel, DeviceId, EngineError, EngineInfo,
+    EngineStream, EventSink, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, Job, Llm,
+    Permission, PlatformError, Store, StreamingEngine, TextInserter,
 };
 use ink_engines::{ExternalEngine, ModelDir, Route};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
@@ -60,6 +73,12 @@ use crate::runtime::Shared;
 /// How long the mic stays open after a take before it is let go of: one minute, so the
 /// microphone indicator goes out soon after the user stops dictating.
 pub const MIC_IDLE: Duration = Duration::from_secs(60);
+
+/// How long after the last press a device change may let go of the open mic, and a dead mic is
+/// still opened again for it. Needed beside the held key: the chain starts a take (`busy`) only
+/// once it has heard the minimum hold, and a press released or toggled before that leaves neither
+/// the key nor the take saying a take is under way.
+pub const STALE_GRACE: Duration = Duration::from_secs(1);
 
 /// The store setting naming the dictation key.
 pub const KEY_SETTING: &str = "dictation.key";
@@ -562,11 +581,44 @@ struct Activity {
     busy: AtomicBool,
     /// Host time of the latest press or take ending.
     last_ns: AtomicU64,
+    /// Host time of the latest press alone, not a take's end: whether a press was just made.
+    /// Read only once [`presses`](Self::presses) is above 0 (host time may start at 0).
+    pressed_ns: AtomicU64,
+    /// Presses so far, of either key: which press is which (two may carry one host time).
+    presses: AtomicU64,
+    /// Each key down now (pressed, not yet released, cancelled or lost): the dictation key, then
+    /// the edit key, apart, so letting go of one while the other is down leaves that one held.
+    held: [AtomicBool; 2],
 }
 
 impl Activity {
     fn touch(&self, at_ns: u64) {
         self.last_ns.fetch_max(at_ns, Ordering::AcqRel);
+    }
+
+    fn pressed(&self, at_ns: u64) {
+        self.touch(at_ns);
+        self.pressed_ns.fetch_max(at_ns, Ordering::AcqRel);
+        self.presses.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// **Callback thread.** A key's edge: whether it is held from now, and its press noted.
+    fn key(&self, edit: bool, e: HotkeyEvent) {
+        let held = &self.held[usize::from(edit)];
+        match e {
+            HotkeyEvent::Pressed { at_ns } => {
+                held.store(true, Ordering::Release);
+                self.pressed(at_ns);
+            }
+            HotkeyEvent::Released { .. } | HotkeyEvent::Cancelled | HotkeyEvent::Lost => {
+                held.store(false, Ordering::Release);
+            }
+        }
+    }
+
+    /// Whether either key is down.
+    fn any_held(&self) -> bool {
+        self.held.iter().any(|h| h.load(Ordering::Acquire))
     }
 }
 
@@ -880,8 +932,8 @@ fn key_sink(
     edit: bool,
 ) -> EventSink<HotkeyEvent> {
     Arc::new(move |e| {
-        if let HotkeyEvent::Pressed { at_ns } = e {
-            activity.touch(at_ns);
+        activity.key(edit, e);
+        if let HotkeyEvent::Pressed { .. } = e {
             wake(&ctl);
         }
         // After the worker stopped, refused (the keys are let go of then).
@@ -933,15 +985,24 @@ fn mic_failed(message: &str) -> Value {
     event("dictation.mic_failed", &[("message", Some(message.into()))])
 }
 
-/// The open mic: its source, its ring, and its path to 16 kHz.
+/// The open mic: its source, its ring, its path to 16 kHz, and the device it records.
 struct OpenMic {
     source: Box<dyn AudioSource>,
     ring: ink_audio::CaptureConsumer,
     path: MicPath,
+    device: DeviceId,
+    name: String,
 }
 
-fn open_mic(capture: &dyn CaptureControl) -> Result<OpenMic, String> {
-    let mut source = capture.open_mic(None).map_err(|e| e.to_string())?;
+/// Opens the mic the user chose, else Automatic ([`crate::devices::pick_mic`]), and says once
+/// per spell when it stands in for a chosen mic that is not connected.
+fn open_mic(shared: &Shared, capture: &dyn CaptureControl) -> Result<OpenMic, String> {
+    // Cleared first: a change from here on is looked at again once the mic is open.
+    shared.sound.take_stale();
+    let picked = pick(shared, capture)?;
+    let mut source = capture
+        .open_mic(Some(&picked.device.id))
+        .map_err(|e| e.to_string())?;
     let format = source.format();
     let (producer, ring) =
         capture_ring(format, ink_audio::DEFAULT_RING_DURATION).map_err(|e| e.to_string())?;
@@ -949,12 +1010,32 @@ fn open_mic(capture: &dyn CaptureControl) -> Result<OpenMic, String> {
     source
         .start(Box::new(producer))
         .map_err(|e| e.to_string())?;
-    Ok(OpenMic { source, ring, path })
+    shared
+        .sound
+        .opened_on(&shared.events, &picked.mic_info(picked.device.transport));
+    Ok(OpenMic {
+        source,
+        ring,
+        path,
+        device: picked.device.id,
+        name: picked.device.name,
+    })
+}
+
+/// The mic dictation would open now.
+fn pick(shared: &Shared, capture: &dyn CaptureControl) -> Result<crate::devices::Picked, String> {
+    crate::devices::pick_mic(
+        capture,
+        &crate::devices::input_choice(shared.store.as_ref()),
+    )
 }
 
 /// How a stretch of open mic ended.
 enum Closed {
     Idle,
+    /// Let go of between takes, with a press just made (its wake may already have been taken):
+    /// open the mic again at once rather than wait for one.
+    Reopen,
     Failed,
     Stop,
 }
@@ -967,16 +1048,22 @@ fn controller(
     rx: &Receiver<Ctl>,
     activity: &Activity,
 ) {
+    let mut reopen = false;
+    // The press (by count) a dead mic was last opened again for: at most once per press, so a
+    // device that opens and ends at once cannot loop.
+    let mut reopened_for = None;
     loop {
-        match rx.recv() {
-            Ok(Ctl::Wake) => {}
-            Ok(Ctl::WorkerGone) => {
-                worker_gone(shared, platform);
-                continue;
+        if !std::mem::take(&mut reopen) {
+            match rx.recv() {
+                Ok(Ctl::Wake) => {}
+                Ok(Ctl::WorkerGone) => {
+                    worker_gone(shared, platform);
+                    continue;
+                }
+                Ok(Ctl::Stop) | Err(_) => return,
             }
-            Ok(Ctl::Stop) | Err(_) => return,
         }
-        let mut mic = match open_mic(platform.capture.as_ref()) {
+        let mut mic = match open_mic(shared, platform.capture.as_ref()) {
             Ok(mic) => mic,
             Err(message) => {
                 log::warn!("dictation: the mic could not be opened: {message}");
@@ -988,14 +1075,22 @@ fn controller(
                 continue;
             }
         };
-        let closed = pump(shared, platform, inbox, rx, activity, &mut mic);
+        let closed = pump(
+            shared,
+            platform,
+            inbox,
+            rx,
+            activity,
+            &mut mic,
+            &mut reopened_for,
+        );
         if let Err(e) = mic.source.stop() {
             // The device may still be held (the microphone indicator stays on); the next press opens
             // a new stream either way. The error names the device, never audio.
             log::warn!("dictation: the mic did not stop cleanly: {e}");
         }
         match closed {
-            Closed::Idle | Closed::Stop => {
+            Closed::Idle | Closed::Reopen | Closed::Stop => {
                 let _ = inbox.send(Input::MicClosed);
             }
             // A take in progress ends with what it has; nothing heard leads the next.
@@ -1006,10 +1101,21 @@ fn controller(
         }
         // Idle is a still frame (architecture rule 9).
         shared.publish_bands(Bands::default());
+        reopen = matches!(closed, Closed::Reopen);
         if matches!(closed, Closed::Stop) {
             return;
         }
     }
+}
+
+/// Whether the last press was within [`STALE_GRACE`] (never, before the first).
+fn press_recent(shared: &Shared, activity: &Activity) -> bool {
+    if activity.presses.load(Ordering::Acquire) == 0 {
+        return false;
+    }
+    let grace_ns = u64::try_from(STALE_GRACE.as_nanos()).unwrap_or(u64::MAX);
+    let pressed = activity.pressed_ns.load(Ordering::Acquire);
+    shared.clock.now_ns().saturating_sub(pressed) < grace_ns
 }
 
 /// The worker stopped for good: let go of the keys (presses would reach nothing) and say so.
@@ -1030,6 +1136,7 @@ fn pump(
     rx: &Receiver<Ctl>,
     activity: &Activity,
     mic: &mut OpenMic,
+    reopened_for: &mut Option<u64>,
 ) -> Closed {
     let mut analyzer = BandAnalyzer::new();
     let mut publishing = false;
@@ -1076,8 +1183,65 @@ fn pump(
             shared.publish_bands(Bands::default());
         }
         publishing = busy;
+        // Its device went: between takes it is let go of quietly (the next press opens the mic
+        // the choice picks then); a take ends with what it heard, and says why.
+        if mic.source.ended() {
+            // Read again: a take may have started since this pass's first read.
+            if activity.busy.load(Ordering::Acquire) {
+                let message = format!("the microphone {} stopped delivering", mic.name);
+                log::warn!("dictation: {message}");
+                shared.events.emit(mic_failed(&message));
+                return Closed::Failed;
+            }
+            // Opened again only for a press held or just made (never a take's end), once per press.
+            let press = activity.presses.load(Ordering::Acquire);
+            let wanted = activity.any_held() || press_recent(shared, activity);
+            if !wanted {
+                log::info!("dictation: the mic's device went; it is let go of");
+                return Closed::Idle;
+            }
+            if *reopened_for != Some(press) {
+                log::info!("dictation: the mic's device went; it is opened again for the press");
+                *reopened_for = Some(press);
+                return Closed::Reopen;
+            }
+            // Its press already had its one reopen: the press ends here, said, rather than wait
+            // with no audio.
+            let message = format!("the microphone {} stopped delivering", mic.name);
+            log::warn!("dictation: {message}");
+            shared.events.emit(mic_failed(&message));
+            return Closed::Failed;
+        }
+        // A device or the choice changed ([`crate::sound`]): between takes, with no key held and
+        // not within [`STALE_GRACE`] of a press, the mic it would open now is picked again, and
+        // this one let go of when that is another (or none). A take finishes first. A press during
+        // the pick keeps the mic, and it is looked at again later.
+        if !busy && shared.sound.take_stale() {
+            let seen = activity.presses.load(Ordering::Acquire);
+            let settled = !activity.any_held() && !press_recent(shared, activity);
+            let next = settled.then(|| pick(shared, platform.capture.as_ref()));
+            let pressed = activity.busy.load(Ordering::Acquire)
+                || activity.any_held()
+                || activity.presses.load(Ordering::Acquire) != seen;
+            match next {
+                None => shared.sound.mark_stale(),
+                Some(_) if pressed => shared.sound.mark_stale(),
+                Some(Ok(next)) if next.device.id == mic.device => {}
+                Some(Ok(next)) => {
+                    log::info!(
+                        "dictation: the mic is let go of; the next take opens {}",
+                        next.device.name
+                    );
+                    return Closed::Idle;
+                }
+                Some(Err(e)) => {
+                    log::warn!("dictation: the mic is let go of: {e}");
+                    return Closed::Idle;
+                }
+            }
+        }
         let last = activity.last_ns.load(Ordering::Acquire);
-        if !busy && shared.clock.now_ns().saturating_sub(last) >= idle_ns {
+        if !busy && !activity.any_held() && shared.clock.now_ns().saturating_sub(last) >= idle_ns {
             log::info!(
                 "dictation: the mic is let go of after {} s without a take",
                 MIC_IDLE.as_secs()
@@ -1139,6 +1303,33 @@ mod tests {
         // Stopping keys that were never bound is a no-op.
         platform.keys.stop();
         platform.edit_keys.stop();
+    }
+
+    /// Each key is held on its own: letting go of the edit key while the dictation key is down
+    /// leaves a key held, and either one's press is noted.
+    #[test]
+    fn the_two_keys_are_held_apart() {
+        let a = Activity::default();
+        assert!(!a.any_held());
+        a.key(false, HotkeyEvent::Pressed { at_ns: 5 });
+        a.key(true, HotkeyEvent::Pressed { at_ns: 7 });
+        a.key(true, HotkeyEvent::Released { at_ns: 8 });
+        assert!(a.any_held(), "the dictation key is still down");
+        assert_eq!(a.pressed_ns.load(Ordering::Acquire), 7);
+        assert_eq!(a.presses.load(Ordering::Acquire), 2);
+        a.key(false, HotkeyEvent::Cancelled);
+        assert!(!a.any_held());
+        a.key(true, HotkeyEvent::Pressed { at_ns: 9 });
+        a.key(true, HotkeyEvent::Lost);
+        assert!(!a.any_held());
+        // Two presses at one host time are two presses; a press at time 0 is a press.
+        let b = Activity::default();
+        assert_eq!(b.presses.load(Ordering::Acquire), 0, "none yet");
+        b.key(false, HotkeyEvent::Pressed { at_ns: 0 });
+        b.key(false, HotkeyEvent::Released { at_ns: 0 });
+        b.key(false, HotkeyEvent::Pressed { at_ns: 0 });
+        assert_eq!(b.presses.load(Ordering::Acquire), 2);
+        assert_eq!(b.pressed_ns.load(Ordering::Acquire), 0);
     }
 
     /// The tap's thread never waits on the mic thread: a burst of presses with nobody receiving

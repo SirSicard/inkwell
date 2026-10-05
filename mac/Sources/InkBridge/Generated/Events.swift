@@ -75,6 +75,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case meetingStarted(MeetingStarted)
     /// `meeting.far_end_fallback`
     case meetingFarEndFallback(MeetingFarEndFallback)
+    /// `meeting.mic_switched`
+    case meetingMicSwitched(MeetingMicSwitched)
     /// `meeting.detected`
     case meetingDetected(MeetingDetected)
     /// `meeting.detection_ended`
@@ -149,6 +151,18 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case modelsListed(ModelsListed)
     /// `setting.value`
     case settingValue(SettingValue)
+    /// `audio.devices`
+    case audioDevices(AudioDevices)
+    /// `audio.devices_changed`
+    case audioDevicesChanged(AudioDevicesChanged)
+    /// `audio.input_fallback`
+    case audioInputFallback(AudioInputFallback)
+    /// `audio.test_started`
+    case audioTestStarted(AudioTestStarted)
+    /// `audio.test_level`
+    case audioTestLevel(AudioTestLevel)
+    /// `audio.tested`
+    case audioTested(AudioTested)
     /// `hotkey.checked`
     case hotkeyChecked(HotkeyChecked)
     /// `consent.state`
@@ -239,6 +253,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "dictation.mic_failed": self = .dictationMicFailed(try DictationMicFailed(from: decoder))
             case "meeting.started": self = .meetingStarted(try MeetingStarted(from: decoder))
             case "meeting.far_end_fallback": self = .meetingFarEndFallback(try MeetingFarEndFallback(from: decoder))
+            case "meeting.mic_switched": self = .meetingMicSwitched(try MeetingMicSwitched(from: decoder))
             case "meeting.detected": self = .meetingDetected(try MeetingDetected(from: decoder))
             case "meeting.detection_ended": self = .meetingDetectionEnded(try MeetingDetectionEnded(from: decoder))
             case "meeting.detection": self = .meetingDetection(try MeetingDetection(from: decoder))
@@ -276,6 +291,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "record.deleted": self = .recordDeleted(try RecordDeleted(from: decoder))
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
+            case "audio.devices": self = .audioDevices(try AudioDevices(from: decoder))
+            case "audio.devices_changed": self = .audioDevicesChanged(try AudioDevicesChanged(from: decoder))
+            case "audio.input_fallback": self = .audioInputFallback(try AudioInputFallback(from: decoder))
+            case "audio.test_started": self = .audioTestStarted(try AudioTestStarted(from: decoder))
+            case "audio.test_level": self = .audioTestLevel(try AudioTestLevel(from: decoder))
+            case "audio.tested": self = .audioTested(try AudioTested(from: decoder))
             case "hotkey.checked": self = .hotkeyChecked(try HotkeyChecked(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
             case "llm.providers": self = .llmProviders(try LlmProviders(from: decoder))
@@ -335,6 +356,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .dictationMicFailed(let event): try event.encode(to: encoder)
         case .meetingStarted(let event): try event.encode(to: encoder)
         case .meetingFarEndFallback(let event): try event.encode(to: encoder)
+        case .meetingMicSwitched(let event): try event.encode(to: encoder)
         case .meetingDetected(let event): try event.encode(to: encoder)
         case .meetingDetectionEnded(let event): try event.encode(to: encoder)
         case .meetingDetection(let event): try event.encode(to: encoder)
@@ -372,6 +394,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .recordDeleted(let event): try event.encode(to: encoder)
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
+        case .audioDevices(let event): try event.encode(to: encoder)
+        case .audioDevicesChanged(let event): try event.encode(to: encoder)
+        case .audioInputFallback(let event): try event.encode(to: encoder)
+        case .audioTestStarted(let event): try event.encode(to: encoder)
+        case .audioTestLevel(let event): try event.encode(to: encoder)
+        case .audioTested(let event): try event.encode(to: encoder)
         case .hotkeyChecked(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
         case .llmProviders(let event): try event.encode(to: encoder)
@@ -429,6 +457,121 @@ public struct AudioChunk: Codable, Sendable, Equatable {
     }
 }
 
+/// A connected input or output device.
+public struct AudioDevice: Codable, Sendable, Equatable {
+    /// The OS's id for it (a Core Audio UID, a WASAPI endpoint id): what audio.input and
+    /// audio.output take. Opaque: never shown.
+    public let id: String
+    /// Whether it is the system default for its direction.
+    public let isDefault: Bool
+    /// Its name as the OS shows it.
+    public let name: String
+    /// How it connects.
+    public let transport: MicTransport
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case isDefault = "is_default"
+        case name
+        case transport
+    }
+}
+
+/// The answer to audio.devices: the devices, the user's choice, and what Inkwell records with
+/// now.
+public struct AudioDevices: Codable, Sendable, Equatable {
+    /// What Automatic records now ("Automatic (<name>)"); absent when there is no microphone.
+    public let automatic: AudioInput?
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    public let input: String
+    /// The connected microphones, the default first.
+    public let inputs: [AudioDevice]
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    public let output: String?
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
+    /// until then follow the default output.
+    public let outputUsing: AudioOutput?
+    /// The chosen output as remembered, when output is a device.
+    public let outputWanted: AudioWanted?
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    public let outputs: [AudioDevice]?
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// Always `audio.devices`.
+    public let type: String
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    public let using: AudioInput?
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    public let wanted: AudioWanted?
+
+    private enum CodingKeys: String, CodingKey {
+        case automatic
+        case input
+        case inputs
+        case output
+        case outputUsing = "output_using"
+        case outputWanted = "output_wanted"
+        case outputs
+        case ref
+        case type
+        case using
+        case wanted
+    }
+}
+
+/// Devices came or went, a default changed, or the choice did: the same as audio.devices, once
+/// a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent
+/// after a setting.set of audio.input or audio.output, and on a device change where the
+/// platform tells the core of them.
+public struct AudioDevicesChanged: Codable, Sendable, Equatable {
+    /// What Automatic records now ("Automatic (<name>)"); absent when there is no microphone.
+    public let automatic: AudioInput?
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    public let input: String
+    /// The connected microphones, the default first.
+    public let inputs: [AudioDevice]
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    public let output: String?
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
+    /// until then follow the default output.
+    public let outputUsing: AudioOutput?
+    /// The chosen output as remembered, when output is a device.
+    public let outputWanted: AudioWanted?
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    public let outputs: [AudioDevice]?
+    /// Always `audio.devices_changed`.
+    public let type: String
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    public let using: AudioInput?
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    public let wanted: AudioWanted?
+
+    private enum CodingKeys: String, CodingKey {
+        case automatic
+        case input
+        case inputs
+        case output
+        case outputUsing = "output_using"
+        case outputWanted = "output_wanted"
+        case outputs
+        case type
+        case using
+        case wanted
+    }
+}
+
 /// The pump dropped capture blocks because a chain's queue was full (the chain fell behind).
 /// Sent once per stretch, when the queue takes audio again or closes.
 public struct AudioDropped: Codable, Sendable, Equatable {
@@ -445,6 +588,118 @@ public struct AudioDropped: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A microphone Inkwell picks, and why.
+public struct AudioInput: Codable, Sendable, Equatable {
+    /// The OS's id for it.
+    public let id: String
+    /// Its name as the OS shows it.
+    public let name: String
+    /// Why it is the one.
+    public let reason: MicReason
+    /// How it connects.
+    public let transport: MicTransport
+}
+
+/// The mic the user chose is not connected, and a mic just opened on Automatic in its place (a
+/// take, a meeting, a meeting's mic that went, a test): said once until the chosen mic is seen
+/// again or the choice changes. The shell says "<wanted> isn't connected. Inkwell is using
+/// <mic> until it is."
+public struct AudioInputFallback: Codable, Sendable, Equatable {
+    /// The mic recording instead, as the OS names it.
+    public let micName: String
+    /// How that mic connects.
+    public let micTransport: MicTransport
+    /// Always `audio.input_fallback`.
+    public let type: String
+    /// The chosen mic.
+    public let wanted: AudioWanted
+
+    private enum CodingKeys: String, CodingKey {
+        case micName = "mic_name"
+        case micTransport = "mic_transport"
+        case type
+        case wanted
+    }
+}
+
+/// The output a meeting's far end is to record (Windows), and why. Stored and shown now;
+/// meetings record it once the Windows far end is pinned to it, and until then follow the
+/// default output.
+public struct AudioOutput: Codable, Sendable, Equatable {
+    /// The OS's id for it.
+    public let id: String
+    /// Its name as the OS shows it.
+    public let name: String
+    /// Why it is the one.
+    public let reason: OutputReason
+    /// How it connects.
+    public let transport: MicTransport
+}
+
+/// How a mic test ended: its time was up (done), audio.test_stop or the core's shutdown ended
+/// it (stopped), a meeting started recording (meeting), or the mic failed or went away (failed,
+/// with a message).
+public enum AudioTestEnd: String, Codable, Sendable, Equatable, CaseIterable {
+    case done
+    case stopped
+    case meeting
+    case failed
+}
+
+/// The mic test's level over the last 100 ms: the loudest moment, from the ink's band analyzer
+/// with no gain applied, on a meter scale.
+public struct AudioTestLevel: Codable, Sendable, Equatable {
+    /// 0 at -60 dBFS and below, 1 at full scale, linear in dB between.
+    public let level: Double
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// Always `audio.test_level`.
+    public let type: String
+}
+
+/// A mic test has opened the mic (audio.test): the one dictation and meetings would use now.
+/// audio.test_level follows about ten times a second, then audio.tested.
+public struct AudioTestStarted: Codable, Sendable, Equatable {
+    /// The mic, as the OS names it.
+    public let micName: String
+    /// Why that mic.
+    public let micReason: MicReason
+    /// How it connects.
+    public let micTransport: MicTransport
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// How long the test runs at most, in seconds.
+    public let seconds: Int64
+    /// Always `audio.test_started`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case micName = "mic_name"
+        case micReason = "mic_reason"
+        case micTransport = "mic_transport"
+        case ref
+        case seconds
+        case type
+    }
+}
+
+/// The mic test is over. Nothing it heard was kept.
+public struct AudioTested: Codable, Sendable, Equatable {
+    /// How it ended.
+    public let ended: AudioTestEnd
+    /// Whether the mic heard anything louder than a quiet room (-50 dBFS) at any moment: false
+    /// is the screen's cue for "Not hearing you?".
+    public let heard: Bool
+    /// Why it failed, naming the device, when ended is failed.
+    public let message: String?
+    /// The loudest moment, on audio.test_level's scale.
+    public let peak: Double
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// Always `audio.tested`.
+    public let type: String
+}
+
 /// How a record's chunks were placed on its timeline: recorded (from the start the meeting
 /// wrote beside them) or estimated (from its earliest chunk, because that start is missing: an
 /// older record, or one whose write failed). Estimated: the two sides may be out of step, and
@@ -452,6 +707,17 @@ public struct AudioDropped: Codable, Sendable, Equatable {
 public enum AudioTimeline: String, Codable, Sendable, Equatable, CaseIterable {
     case recorded
     case estimated
+}
+
+/// A device the user chose, as the core remembers it from when it was chosen (it may not be
+/// connected now).
+public struct AudioWanted: Codable, Sendable, Equatable {
+    /// The OS's id for it.
+    public let id: String
+    /// Its name when it was chosen; absent for a choice stored without one.
+    public let name: String?
+    /// How it connected when it was chosen; absent likewise.
+    public let transport: MicTransport?
 }
 
 /// A personal best: the dictation held longest, the fastest held at least 30 s (neither a take
@@ -1251,9 +1517,11 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
 
 /// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
 /// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over).
+/// start over); meeting_recording (an audio.test refused because a meeting records: the mic
+/// test waits until it ends).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
+    case meetingRecording = "meeting_recording"
 }
 
 /// What a meeting records as the other side: the sound of its app alone (a call recorded from
@@ -1959,6 +2227,37 @@ public struct MeetingLooksDone: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A recording meeting's mic went (unplugged, switched off) and the meeting records with
+/// another now: the choice as it is now, else Automatic. A meeting never moves to a mic that
+/// was plugged in or made the default mid-call; only its own mic going moves it. The mic_*
+/// fields are meeting.started's, for the mic now.
+public struct MeetingMicSwitched: Codable, Sendable, Equatable {
+    /// The mic that went, as the OS named it, when known.
+    public let fromName: String?
+    /// How that mic connected, when known.
+    public let fromTransport: MicTransport?
+    /// The mic it records now.
+    public let micName: String
+    /// Why that mic.
+    public let micReason: MicReason
+    /// How that mic connects.
+    public let micTransport: MicTransport
+    /// The meeting's record id.
+    public let record: String
+    /// Always `meeting.mic_switched`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case fromName = "from_name"
+        case fromTransport = "from_transport"
+        case micName = "mic_name"
+        case micReason = "mic_reason"
+        case micTransport = "mic_transport"
+        case record
+        case type
+    }
+}
+
 /// Provisional live text; each replaces the last and none is saved. Carries the meeting's
 /// words: never log it.
 public struct MeetingPartial: Codable, Sendable, Equatable {
@@ -2257,13 +2556,18 @@ public struct MeetingsRecovered: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// Why a meeting records this microphone: the system default input; the built-in mic because
-/// the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be
-/// the one kept); the headset's own mic because the user's setting says so; the default because
-/// this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because
-/// no default is set; it was named; the LE Audio headset's own mic, which keeps full quality
-/// (Windows); or a reason this build of the core does not name (unknown).
+/// Why Inkwell records this microphone: the one the user chose in Settings > Sound (chosen,
+/// found by its id or by its name and transport); Automatic standing in for a chosen mic that
+/// is not connected (chosen_missing); or Automatic's reason: the system default input; the
+/// built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on
+/// Windows a USB mic may be the one kept); the headset's own mic because a platform's retired
+/// headset-mic switch is on; the default because this Mac has no built-in mic (on Windows:
+/// every mic is Bluetooth); the first input because no default is set; it was named; the LE
+/// Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the
+/// core does not name (unknown).
 public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case chosen
+    case chosenMissing = "chosen_missing"
     case defaultInput = "default_input"
     case builtInForBluetoothOutput = "built_in_for_bluetooth_output"
     case headsetMicSetting = "headset_mic_setting"
@@ -2274,8 +2578,8 @@ public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
     case unknown
 }
 
-/// How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user
-/// is silent), USB, a virtual or aggregate device, or anything else.
+/// How a device connects: built in, Bluetooth (call-quality audio, and zeros while its user is
+/// silent), USB, a virtual or aggregate device, or anything else.
 public enum MicTransport: String, Codable, Sendable, Equatable, CaseIterable {
     case builtIn = "built_in"
     case bluetooth
@@ -2536,6 +2840,15 @@ public struct NoteUpdated: Codable, Sendable, Equatable {
     public let ref: String?
     /// Always `note.updated`.
     public let type: String
+}
+
+/// Why a meeting's far end records this output (Windows): the one the user chose (chosen), the
+/// default because the chosen one is not connected (chosen_missing), or the default output,
+/// chosen (default_output).
+public enum OutputReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case chosen
+    case chosenMissing = "chosen_missing"
+    case defaultOutput = "default_output"
 }
 
 /// An open commitment: not done, and not merged into another.

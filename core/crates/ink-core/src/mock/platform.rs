@@ -7,9 +7,10 @@ use crate::audio::{AudioBlock, AudioSink, AudioSource, Channel, SourceStats, Str
 use crate::clock::Clock;
 use crate::error::PlatformError;
 use crate::platform::{
-    CaptureControl, DeviceId, DeviceInfo, FarEndTarget, FocusInfo, FocusReader, HotkeyBinding,
-    HotkeyEvent, HotkeySource, InsertOutcome, MeetingDetector, MeetingSignal, Permission,
-    PermissionProbe, PermissionState, Platform, TextInserter, Transport,
+    AutoInput, AutoReason, CaptureControl, DeviceChange, DeviceId, DeviceInfo, FarEndTarget,
+    FocusInfo, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, InsertOutcome,
+    MeetingDetector, MeetingSignal, Permission, PermissionProbe, PermissionState, Platform,
+    TextInserter, Transport,
 };
 use crate::threading::EventSink;
 
@@ -56,6 +57,11 @@ struct SinkSlot {
     format: StreamFormat,
     sink: Option<Box<dyn AudioSink>>,
     frames: u64,
+    /// The input it records (mic sources only).
+    device: Option<DeviceId>,
+    /// Its device went away ([`MockPlatform::unplug`]): nothing more is delivered, `ended` says
+    /// so and `stop` says why.
+    ended: bool,
 }
 
 type Slot = Arc<Mutex<SinkSlot>>;
@@ -92,10 +98,18 @@ impl AudioSource for MockSource {
         } else {
             0
         };
+        if slot.ended {
+            let id = slot.device.as_ref().map_or("the device", |d| d.0.as_str());
+            return Err(PlatformError::Device(format!("{id} went away")));
+        }
         Ok(SourceStats {
             frames,
             discontinuities: 0,
         })
+    }
+
+    fn ended(&self) -> bool {
+        lock(&self.slot).ended
     }
 }
 
@@ -105,13 +119,24 @@ impl AudioSource for MockSource {
 /// 48 kHz stereo far end (so resampling and downmixing get exercised), every permission
 /// `NotDetermined`, insertion answering `Pasted`. A permission set to `Denied` makes the calls that
 /// need it fail with [`PlatformError::PermissionDenied`], as the real platforms do.
+///
+/// Devices are scripted: [`plug`](Self::plug), [`unplug`](Self::unplug) (an open mic on that
+/// device ends, as a real one does) and the defaults' changes tell the watcher
+/// ([`CaptureControl::watch_devices`]) at once, on the caller's thread. Automatic is the default
+/// input, else the first; the routing rules are the platforms' own and tested there.
 pub struct MockPlatform {
     clock: Arc<MockClock>,
     mic_format: StreamFormat,
     far_format: StreamFormat,
     inputs: Mutex<Vec<DeviceInfo>>,
-    output: Mutex<Option<DeviceInfo>>,
+    /// Outputs, the default marked; `None`: the platform has no output picker (macOS).
+    outputs: Mutex<Option<Vec<DeviceInfo>>>,
     slots: Mutex<HashMap<Channel, Slot>>,
+    /// Every mic source opened so far (an unplug ends those on its device).
+    mic_slots: Mutex<Vec<Slot>>,
+    /// The device of every mic opened so far, in order.
+    mic_opens: Mutex<Vec<DeviceId>>,
+    watcher: Mutex<Option<EventSink<DeviceChange>>>,
     far_targets: Mutex<Vec<FarEndTarget>>,
     meetings: Mutex<Option<EventSink<MeetingSignal>>>,
     hotkey: Mutex<Option<BoundHotkey>>,
@@ -150,12 +175,15 @@ impl Default for MockPlatform {
                 "Built-in Microphone",
                 Transport::BuiltIn,
             )]),
-            output: Mutex::new(Some(device(
+            outputs: Mutex::new(Some(vec![device(
                 "mock-speakers",
                 "Built-in Speakers",
                 Transport::BuiltIn,
-            ))),
+            )])),
             slots: Mutex::default(),
+            mic_slots: Mutex::default(),
+            mic_opens: Mutex::default(),
+            watcher: Mutex::default(),
             far_targets: Mutex::default(),
             meetings: Mutex::default(),
             hotkey: Mutex::default(),
@@ -176,11 +204,122 @@ impl MockPlatform {
         Self::default()
     }
 
-    /// Replaces the device list and the default output.
+    /// Replaces the device list and the default output (the only output).
     pub fn with_devices(self, inputs: Vec<DeviceInfo>, output: Option<DeviceInfo>) -> Self {
         *lock(&self.inputs) = inputs;
-        *lock(&self.output) = output;
+        *lock(&self.outputs) = Some(output.into_iter().collect());
         self
+    }
+
+    /// Replaces the outputs (the default among them marked `is_default`); `None`: no output
+    /// picker, as on macOS.
+    pub fn with_outputs(self, outputs: Option<Vec<DeviceInfo>>) -> Self {
+        *lock(&self.outputs) = outputs;
+        self
+    }
+
+    /// Tells the watcher, if one is watching. Returns whether one was. The lock is held across the
+    /// call, so once `unwatch_devices` returns the callback cannot be running, as the trait
+    /// promises (the core's callback only enqueues).
+    pub fn notify_devices(&self, change: DeviceChange) -> bool {
+        let watcher = lock(&self.watcher);
+        watcher.as_ref().map(|s| s(change)).is_some()
+    }
+
+    /// Whether a watcher is watching.
+    pub fn watching_devices(&self) -> bool {
+        lock(&self.watcher).is_some()
+    }
+
+    /// Connects an input (last in the list, or first and the default when it `is_default`), and
+    /// tells the watcher.
+    pub fn plug(&self, input: DeviceInfo) {
+        {
+            let mut inputs = lock(&self.inputs);
+            inputs.retain(|d| d.id != input.id);
+            if input.is_default {
+                for d in inputs.iter_mut() {
+                    d.is_default = false;
+                }
+                inputs.insert(0, input);
+            } else {
+                inputs.push(input);
+            }
+        }
+        self.notify_devices(DeviceChange::Devices);
+    }
+
+    /// Disconnects the input or output `id`: it leaves the lists, every open mic on it ends (no
+    /// more audio; `ended` is true and `stop` says why), and the watcher is told. Returns whether
+    /// it was connected.
+    pub fn unplug(&self, id: &str) -> bool {
+        let id = DeviceId(id.to_owned());
+        let removed = {
+            let mut inputs = lock(&self.inputs);
+            let before = inputs.len();
+            inputs.retain(|d| d.id != id);
+            let mut removed = inputs.len() != before;
+            if let Some(outputs) = lock(&self.outputs).as_mut() {
+                let before = outputs.len();
+                outputs.retain(|d| d.id != id);
+                removed |= outputs.len() != before;
+            }
+            removed
+        };
+        for slot in lock(&self.mic_slots).iter() {
+            let mut slot = lock(slot);
+            if slot.device.as_ref() == Some(&id) {
+                slot.ended = true;
+            }
+        }
+        if removed {
+            self.notify_devices(DeviceChange::Devices);
+        }
+        removed
+    }
+
+    /// Makes the input `id` the default, and tells the watcher. Returns whether it is connected.
+    pub fn set_default_input(&self, id: &str) -> bool {
+        let found = {
+            let mut inputs = lock(&self.inputs);
+            let found = inputs.iter().any(|d| d.id.0 == id);
+            if found {
+                for d in inputs.iter_mut() {
+                    d.is_default = d.id.0 == id;
+                }
+                inputs.sort_by_key(|d| !d.is_default);
+            }
+            found
+        };
+        if found {
+            self.notify_devices(DeviceChange::DefaultInput);
+        }
+        found
+    }
+
+    /// Makes `output` the default output (added when it is new), and tells the watcher.
+    pub fn set_default_output(&self, output: DeviceInfo) {
+        {
+            let mut outputs = lock(&self.outputs);
+            let list = outputs.get_or_insert_with(Vec::new);
+            list.retain(|d| d.id != output.id);
+            for d in list.iter_mut() {
+                d.is_default = false;
+            }
+            list.insert(
+                0,
+                DeviceInfo {
+                    is_default: true,
+                    ..output
+                },
+            );
+        }
+        self.notify_devices(DeviceChange::DefaultOutput);
+    }
+
+    /// The device of every mic opened so far, in order.
+    pub fn mic_opens(&self) -> Vec<DeviceId> {
+        lock(&self.mic_opens).clone()
     }
 
     /// Every service as trait objects over this one mock.
@@ -202,7 +341,8 @@ impl MockPlatform {
     }
 
     /// Delivers `samples` to the most recently opened source on `channel`, stamped
-    /// `host_time_ns`, as a capture callback would. Returns whether a started source took it.
+    /// `host_time_ns`, as a capture callback would. Returns whether a started source took it (one
+    /// whose device was unplugged takes nothing).
     pub fn feed(&self, channel: Channel, samples: &[f32], host_time_ns: u64) -> bool {
         let Some(slot) = lock(&self.slots).get(&channel).cloned() else {
             return false;
@@ -211,6 +351,9 @@ impl MockPlatform {
         // return while a push is running, which is what `AudioSource::stop` promises.
         let mut slot = lock(&slot);
         let format = slot.format;
+        if slot.ended {
+            return false;
+        }
         let Some(sink) = slot.sink.as_mut() else {
             return false;
         };
@@ -338,13 +481,23 @@ impl MockPlatform {
         }
     }
 
-    fn open(&self, channel: Channel, format: StreamFormat) -> Box<dyn AudioSource> {
+    fn open(
+        &self,
+        channel: Channel,
+        format: StreamFormat,
+        device: Option<DeviceId>,
+    ) -> Box<dyn AudioSource> {
         let slot = Arc::new(Mutex::new(SinkSlot {
             format,
             sink: None,
             frames: 0,
+            device,
+            ended: false,
         }));
         lock(&self.slots).insert(channel, slot.clone());
+        if channel == Channel::Mic {
+            lock(&self.mic_slots).push(slot.clone());
+        }
         Box::new(MockSource { channel, slot })
     }
 }
@@ -354,24 +507,65 @@ impl CaptureControl for MockPlatform {
         Ok(lock(&self.inputs).clone())
     }
 
+    fn output_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError> {
+        lock(&self.outputs)
+            .clone()
+            .ok_or(PlatformError::Unsupported("an output picker"))
+    }
+
     fn default_output(&self) -> Result<Option<DeviceInfo>, PlatformError> {
-        Ok(lock(&self.output).clone())
+        Ok(lock(&self.outputs)
+            .as_ref()
+            .and_then(|o| o.iter().find(|d| d.is_default).cloned()))
+    }
+
+    fn automatic_input(&self) -> Result<Option<AutoInput>, PlatformError> {
+        let inputs = lock(&self.inputs);
+        Ok(match inputs.iter().find(|d| d.is_default) {
+            Some(d) => Some(AutoInput {
+                device: d.clone(),
+                reason: AutoReason::DefaultInput,
+            }),
+            None => inputs.first().map(|d| AutoInput {
+                device: d.clone(),
+                reason: AutoReason::FirstInput,
+            }),
+        })
     }
 
     fn open_mic(&self, device: Option<&DeviceId>) -> Result<Box<dyn AudioSource>, PlatformError> {
         self.require(Permission::Microphone)?;
-        if let Some(id) = device
-            && !lock(&self.inputs).iter().any(|d| &d.id == id)
-        {
-            return Err(PlatformError::Device(format!("no input device {}", id.0)));
-        }
-        Ok(self.open(Channel::Mic, self.mic_format))
+        let id = match device {
+            Some(id) => {
+                if !lock(&self.inputs).iter().any(|d| &d.id == id) {
+                    return Err(PlatformError::Device(format!("no input device {}", id.0)));
+                }
+                id.clone()
+            }
+            None => {
+                self.automatic_input()?
+                    .ok_or_else(|| PlatformError::Device("no input device".into()))?
+                    .device
+                    .id
+            }
+        };
+        lock(&self.mic_opens).push(id.clone());
+        Ok(self.open(Channel::Mic, self.mic_format, Some(id)))
     }
 
     fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError> {
         self.require(Permission::SystemAudio)?;
         lock(&self.far_targets).push(target.clone());
-        Ok(self.open(Channel::Far, self.far_format))
+        Ok(self.open(Channel::Far, self.far_format, None))
+    }
+
+    fn watch_devices(&self, on_change: EventSink<DeviceChange>) -> Result<(), PlatformError> {
+        *lock(&self.watcher) = Some(on_change);
+        Ok(())
+    }
+
+    fn unwatch_devices(&self) {
+        *lock(&self.watcher) = None;
     }
 }
 
