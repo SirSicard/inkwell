@@ -86,9 +86,9 @@ public sealed partial class StatsScreen : UserControl
         }
         catch (Exception failure)
         {
-            // Another dialog is open (only one can be: a second click while it opens, say), or the
-            // card could not be made: nothing is shared, and the app goes on.
-            ScreenLog.System.Write($"the share card could not open ({failure.GetType().Name})");
+            // Another dialog is open (only one can be: a second click while it opens, say), the card
+            // could not be made, or it failed while open: nothing more is shared, and the app goes on.
+            ScreenLog.System.Write($"the share card failed ({failure.GetType().Name})");
         }
     }
 
