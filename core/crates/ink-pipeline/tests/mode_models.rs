@@ -424,3 +424,115 @@ fn two_modes_on_two_destinations_each_polish_under_their_own_consent() {
         "nothing sent where no consent covered"
     );
 }
+
+/// The stored modes could not be read: nothing is polished, and a "toggle polish" voice command
+/// cannot turn it on either (it would polish on the AI setting's model, which may be somewhere a
+/// mode of the user's was set up not to send).
+#[test]
+fn with_unreadable_modes_even_toggle_polish_polishes_nothing() {
+    let imported = r#"{"enabled":true,"wake_prefix":"inkwell","commands":[
+        {"id":"p","triggers":["toggle polish"],"action":{"type":"toggle_polish"},"enabled":true}]}"#;
+    let commands = ink_pipeline::voicecommand::VoiceCommandStore::from_json(imported).unwrap();
+    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, setting."));
+    for wish in [false, true] {
+        let rig = Rig::builder()
+            .llm(setting.clone())
+            .settings(|s| {
+                s.commands = commands.clone();
+                s.modes_unreadable = true;
+                s.polish_wish = wish;
+                s.polish_consents = vec![LlmConsent::OnDevice];
+            })
+            .build();
+        rig.dictate_fixture("as said", 1.5, -25.0);
+        rig.dictate_fixture("inkwell toggle polish", 2.0, -30.0);
+        rig.dictate_fixture("as said", 1.5, -25.0);
+        assert!(rig.events().iter().any(|e| matches!(
+            e,
+            DictationEvent::Command(ink_pipeline::voicecommand::CommandAction::TogglePolish)
+        )));
+        assert_eq!(rig.inserted(), ["As said. ", "As said. "], "wish {wish}");
+    }
+    assert_eq!(setting.calls(), 0, "nothing sent");
+}
+
+/// A focus reader that revokes polish's consent in the store when the take reads the frontmost
+/// app, as Settings would between a take's start and its polish.
+struct RevokesOnFocus {
+    store: std::sync::Mutex<Option<Arc<dyn ink_core::Store>>>,
+}
+
+impl ink_core::FocusReader for RevokesOnFocus {
+    fn focus(&self) -> Result<FocusInfo, ink_core::PlatformError> {
+        if let Some(store) = self.store.lock().unwrap().take() {
+            store
+                .set_setting(
+                    ink_pipeline::consent::Feature::Polish.setting_key(),
+                    ink_pipeline::consent::NO_CONSENT,
+                )
+                .unwrap();
+        }
+        Ok(FocusInfo {
+            app: None,
+            secure_input: false,
+        })
+    }
+
+    fn selected_text(&self) -> Result<Option<String>, ink_core::PlatformError> {
+        Ok(None)
+    }
+}
+
+/// Revoked between a take's start and its polish: the chain reads the store at the call, so that
+/// very take is refused before the model is called, though the settings it holds still say given.
+/// And a consent stored without the settings loaded again never widens what is allowed.
+#[test]
+fn a_consent_revoked_during_a_take_stops_its_polish() {
+    let model = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, setting."));
+    let store: Arc<dyn ink_core::Store> = Arc::new(ink_core::mock::MemStore::new());
+    store
+        .set_setting(
+            ink_pipeline::consent::Feature::Polish.setting_key(),
+            &ink_pipeline::consent::consents_to_setting(&[LlmConsent::OnDevice]),
+        )
+        .unwrap();
+    let focus = Arc::new(RevokesOnFocus {
+        store: std::sync::Mutex::new(None),
+    });
+    let rig = Rig::builder()
+        .llm(model.clone())
+        .store(store.clone())
+        .focus(focus.clone())
+        .settings(|s| {
+            s.modes = polishing_on(None);
+            s.polish_consents = vec![LlmConsent::OnDevice];
+        })
+        .build();
+    let speech = rig.dictate_fixture("as said", 1.5, -25.0);
+    assert_eq!(rig.inserted(), ["As said, setting. "]);
+    // Taught already: from here the takes run on the rig alone (teaching runs a probe rig).
+    *focus.store.lock().unwrap() = Some(store.clone());
+    rig.dictate(&speech);
+    assert_eq!(rig.inserted(), ["As said, setting. ", "As said. "]);
+    assert_eq!(model.calls(), 1, "nothing sent after the revoke");
+    assert!(
+        warnings(&rig)
+            .iter()
+            .any(|w| matches!(w, Warning::PolishNotAllowed(LlmConsent::OnDevice)))
+    );
+    store
+        .set_setting(
+            ink_pipeline::consent::Feature::Polish.setting_key(),
+            &ink_pipeline::consent::consents_to_setting(&[LlmConsent::Cloud {
+                endpoint: "https://api.example.com/v1".into(),
+                name: "x".into(),
+            }]),
+        )
+        .unwrap();
+    rig.dictate(&speech);
+    assert_eq!(
+        model.calls(),
+        1,
+        "a consent the settings do not hold counts for nothing"
+    );
+}

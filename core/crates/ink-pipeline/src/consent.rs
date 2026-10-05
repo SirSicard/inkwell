@@ -153,6 +153,12 @@ impl Destination {
     }
 }
 
+/// How a cloud engine the shell registered is named as an endpoint: this, then its id. The shell
+/// gives no address, so the id is all the endpoint says, and another cloud engine could register
+/// under the same id later: a consent for one is kept to the model it was given for by name too
+/// ([`LlmConsent::covers`]).
+pub const SHELL_ENGINE_ENDPOINT: &str = "shell engine ";
+
 /// The setting's value when no consent is given (or it was withdrawn).
 pub const NO_CONSENT: &str = "none";
 
@@ -181,9 +187,16 @@ impl LlmConsent {
     }
 
     /// Whether this consent lets the feature send to `info`'s model. On-device consent covers any
-    /// model on this machine; a cloud consent covers only models at the same endpoint.
+    /// model on this machine; a cloud consent covers only models at the same endpoint, and for a
+    /// cloud engine the shell registered ([`SHELL_ENGINE_ENDPOINT`]: an id, not an address) only
+    /// the model of the name agreed to.
     pub fn covers(&self, info: &LlmInfo) -> bool {
-        self.destination().covers(info)
+        match self {
+            Self::Cloud { endpoint, name } if endpoint.starts_with(SHELL_ENGINE_ENDPOINT) => {
+                self.destination().covers(info) && *name == display_name(info)
+            }
+            _ => self.destination().covers(info),
+        }
     }
 
     /// Where it lets the words go.
@@ -387,6 +400,30 @@ mod tests {
             !c.covers(&info("shell", "on-device", Endpoint::InProcess)),
             "consent for a provider is not consent for this machine either"
         );
+    }
+
+    /// Another cloud engine registered under an id a consent was given for is not the one agreed
+    /// to: the shell's endpoint is only its id, so the name agreed to must match too. A provider's
+    /// consent (an address) covers any model there: a mode may pick another model at it.
+    #[test]
+    fn a_cloud_shell_engine_consent_is_kept_to_the_model_agreed_to() {
+        let c = LlmConsent::for_model(&cloud("shell engine cloud-a"));
+        assert!(c.covers(&cloud("shell engine cloud-a")));
+        assert!(!c.covers(&info(
+            "shell",
+            "Another model",
+            Endpoint::Remote("shell engine cloud-a".into())
+        )));
+        let provider = LlmConsent::for_model(&info(
+            "anthropic",
+            "model-a",
+            Endpoint::Remote("https://api.anthropic.com".into()),
+        ));
+        assert!(provider.covers(&info(
+            "anthropic",
+            "model-b",
+            Endpoint::Remote("https://api.anthropic.com".into())
+        )));
     }
 
     #[test]

@@ -218,6 +218,10 @@ pub struct ModeEdit {
     /// A model at the pinned provider ([`ModelPin::model`]): `Some(None)` (or blank) for the one
     /// chosen in Settings > AI. Named without `polish_model`, it changes the pin the mode has.
     pub polish_model_name: Option<Option<String>>,
+    /// The user confirmed the mode's model where it sends now: record that again, though the
+    /// model and its name are the same (a model that moved, or one saved before destinations were
+    /// recorded). Refused without a model ([`ModeError::ModelUnknown`]).
+    pub polish_model_confirm: bool,
 }
 
 /// Which limit a change went over.
@@ -388,7 +392,14 @@ impl ModeStore {
             .and_then(Value::as_array)
             .ok_or(ModesUnreadable)?;
         let mut modes: Vec<Mode> = list.iter().map(read_mode).collect::<Result<_, _>>()?;
-        let renamed = give_each_its_own_id(&mut modes);
+        let own = own_ids(modes.iter().map(|m| Some(m.id.as_str())));
+        let mut renamed = 0;
+        for (m, id) in modes.iter_mut().zip(own) {
+            if let Some(id) = id.filter(|id| *id != m.id) {
+                m.id = id;
+                renamed += 1;
+            }
+        }
         if renamed > 0 {
             // By count only: ids can be the user's words in a document an older build wrote.
             log::warn!("modes: {renamed} modes shared an id with another; each now has its own");
@@ -418,33 +429,31 @@ impl ModeStore {
     }
 
     /// `top` with this store's `default_id` and modes, each written over its stored object in
-    /// `stored`: the first one by its id not used yet, else (for a mode [`from_json`] gave an id
-    /// of its own, `<id>~2`) the first by the id it was read with, so two modes the import gave
-    /// one id keep their own fields.
+    /// `stored`: the one whose id, as [`from_json`](Self::from_json) reads it (each its own, by
+    /// [`own_ids`] on the document's order), is the mode's. So two modes the import gave one id
+    /// keep their own fields, whichever of them is deleted or moved.
     fn fill(&self, mut top: Map<String, Value>, stored: Vec<Value>) -> Value {
-        let mut stored: Vec<Option<Map<String, Value>>> = stored
+        let read_ids = own_ids(stored.iter().map(|v| v.get("id").and_then(Value::as_str)));
+        let mut stored: Vec<Option<(String, Map<String, Value>)>> = stored
             .into_iter()
-            .map(|v| match v {
-                Value::Object(o) => Some(o),
+            .zip(read_ids)
+            .map(|(v, id)| match (v, id) {
+                (Value::Object(o), Some(id)) => Some((id, o)),
                 _ => None,
             })
             .collect();
         let mut take = |id: &str| {
             stored
                 .iter_mut()
-                .find(|o| {
-                    o.as_ref()
-                        .is_some_and(|o| o.get("id").and_then(Value::as_str) == Some(id))
-                })
+                .find(|o| o.as_ref().is_some_and(|(read, _)| read == id))
                 .and_then(Option::take)
+                .map(|(_, o)| o)
         };
         let modes = self
             .modes
             .iter()
             .map(|m| {
-                let mut item = take(&m.id)
-                    .or_else(|| read_as(&m.id).and_then(&mut take))
-                    .unwrap_or_default();
+                let mut item = take(&m.id).unwrap_or_default();
                 item.insert("id".into(), m.id.clone().into());
                 item.insert("name".into(), m.name.clone().into());
                 if !m.style_unknown {
@@ -739,7 +748,12 @@ fn read_mode(m: &Value) -> Result<Mode, ModesUnreadable> {
         None => None,
         Some(id) => Some(ModelPin {
             id: id.trim().to_owned(),
-            model: text("polish_model_name")?.map(str::to_owned),
+            // Held to the rules a save holds it to: a name only at a provider, printable and
+            // short. One that breaks them is a document this build did not write.
+            model: match model_name(text("polish_model_name")?).map_err(|_| ModesUnreadable)? {
+                Some(_) if !id.trim().starts_with("provider:") => return Err(ModesUnreadable),
+                name => name,
+            },
             to: match m.get("polish_model_to") {
                 None | Some(Value::Null) => None,
                 Some(v) => Some(Destination::from_value(v).ok_or(ModesUnreadable)?),
@@ -760,35 +774,31 @@ fn read_mode(m: &Value) -> Result<Mode, ModesUnreadable> {
     })
 }
 
-/// Gives every mode with an id an earlier one has an id of its own, `<id>~2` (or the next number
-/// no mode has). Says how many it renamed.
-fn give_each_its_own_id(modes: &mut [Mode]) -> usize {
+/// Each mode's own id, from the ids in document order (`None` for one without): an id an earlier
+/// mode has becomes `<id>~2` (or the next number no mode has), the rest stay. The same document
+/// always gives the same ids, which is how [`ModeStore::fill`] finds a mode's stored object.
+fn own_ids<'a>(ids: impl Iterator<Item = Option<&'a str>>) -> Vec<Option<String>> {
+    let ids: Vec<Option<&str>> = ids.collect();
+    let all: HashSet<&str> = ids.iter().flatten().copied().collect();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut renamed = 0;
-    for i in 0..modes.len() {
-        if seen.insert(modes[i].id.clone()) {
-            continue;
-        }
-        let base = modes[i].id.clone();
-        let mut n = 2u32;
-        let id = loop {
-            let id = format!("{base}~{n}");
-            if !seen.contains(&id) && !modes.iter().any(|m| m.id == id) {
-                break id;
+    ids.iter()
+        .map(|id| {
+            let id = (*id)?;
+            if seen.insert(id.to_owned()) {
+                return Some(id.to_owned());
             }
-            n = n.saturating_add(1);
-        };
-        seen.insert(id.clone());
-        modes[i].id = id;
-        renamed += 1;
-    }
-    renamed
-}
-
-/// The id a mode [`give_each_its_own_id`] renamed was read with: `c` for `c~2`.
-fn read_as(id: &str) -> Option<&str> {
-    let (base, n) = id.rsplit_once('~')?;
-    n.parse::<u32>().is_ok_and(|n| n >= 2).then_some(base)
+            let mut n = 2u32;
+            let own = loop {
+                let own = format!("{id}~{n}");
+                if !seen.contains(&own) && !all.contains(own.as_str()) {
+                    break own;
+                }
+                n = n.saturating_add(1);
+            };
+            seen.insert(own.clone());
+            Some(own)
+        })
+        .collect()
 }
 
 /// Writes `pin` into a stored mode: its three fields, or none of them.
@@ -810,27 +820,36 @@ fn write_pin(item: &mut Map<String, Value>, pin: Option<&ModelPin>) {
     };
 }
 
+/// A model name at a provider, as a pin holds it: trimmed, `None` when blank; refused over
+/// [`MAX_MODEL_NAME_CHARS`] or with a control character.
+fn model_name(n: Option<&str>) -> Result<Option<String>, ModeError> {
+    let Some(n) = n.map(str::trim).filter(|n| !n.is_empty()) else {
+        return Ok(None);
+    };
+    if n.chars().count() > MAX_MODEL_NAME_CHARS || n.chars().any(char::is_control) {
+        return Err(ModeError::ModelNameInvalid);
+    }
+    Ok(Some(n.to_owned()))
+}
+
 /// The mode's [`ModelPin`] after `edit`, from `before`'s. Unnamed in the edit, it stays as it was.
-/// Named, the pin is the edit's, with where it sends recorded again from `model_at`: refused when
-/// the core holds no such model and the pin changed ([`ModeError::ModelUnknown`]); kept as it was
-/// recorded when the pin is the same and its model is gone (so the mode stays editable, and its
-/// takes still say the model is missing).
+/// Named, the pin is the edit's. Where it sends is recorded from `model_at` when the model or its
+/// name changes, or when the edit confirms it ([`ModeEdit::polish_model_confirm`]); a save that
+/// names the same model and name again (an editor sends every field back) keeps what was
+/// recorded, so a model that moved since stays refused until the user says so. Refused when the
+/// core holds no such model and it is to be recorded ([`ModeError::ModelUnknown`]).
 fn pin_after(
     edit: &ModeEdit,
     before: Option<&ModelPin>,
     model_at: &dyn Fn(&str, Option<&str>) -> Option<Destination>,
 ) -> Result<Option<ModelPin>, ModeError> {
-    let name = |n: &Option<String>| -> Result<Option<String>, ModeError> {
-        let Some(n) = n.as_deref().map(str::trim).filter(|n| !n.is_empty()) else {
-            return Ok(None);
-        };
-        if n.chars().count() > MAX_MODEL_NAME_CHARS || n.chars().any(char::is_control) {
-            return Err(ModeError::ModelNameInvalid);
-        }
-        Ok(Some(n.to_owned()))
-    };
+    let name = |n: &Option<String>| model_name(n.as_deref());
     let (id, model) = match (&edit.polish_model, &edit.polish_model_name) {
-        (None, None) => return Ok(before.cloned()),
+        (None, None) if !edit.polish_model_confirm => return Ok(before.cloned()),
+        (None, None) => (
+            before.map(|p| p.id.clone()),
+            before.and_then(|p| p.model.clone()),
+        ),
         (Some(id), model) => (
             id.as_deref()
                 .map(str::trim)
@@ -844,9 +863,10 @@ fn pin_after(
         (None, Some(model)) => (before.map(|p| p.id.clone()), name(model)?),
     };
     let Some(id) = id else {
-        // The AI setting's model: no name to give it.
+        // The AI setting's model: no name to give it, and nothing to confirm.
         return match model {
             Some(_) => Err(ModeError::ModelNameInvalid),
+            None if edit.polish_model_confirm => Err(ModeError::ModelUnknown),
             None => Ok(None),
         };
     };
@@ -854,10 +874,10 @@ fn pin_after(
         return Err(ModeError::ModelNameInvalid);
     }
     let same = before.is_some_and(|b| b.id == id && b.model == model);
-    let to = match model_at(&id, model.as_deref()) {
-        Some(to) => Some(to),
-        None if same => before.and_then(|b| b.to.clone()),
-        None => return Err(ModeError::ModelUnknown),
+    let to = if same && !edit.polish_model_confirm {
+        before.and_then(|b| b.to.clone())
+    } else {
+        Some(model_at(&id, model.as_deref()).ok_or(ModeError::ModelUnknown)?)
     };
     Ok(Some(ModelPin { id, model, to }))
 }
@@ -1903,36 +1923,163 @@ mod edit_tests {
             ("provider:anthropic", Some("model-c"))
         );
 
-        // The model now sends elsewhere: a save that names it records that; one that does not
-        // keeps what was recorded (the take then refuses it).
+        // The model now sends elsewhere. A save that does not name it, or names the same model
+        // and name again (an editor sends every field back), keeps what was recorded, so the take
+        // still refuses it; a save that confirms it, or changes the model, records where it sends.
         let elsewhere =
             |_: &str, _: Option<&str>| Some(Destination::Cloud("https://b.example".into()));
-        let (kept, _) = named
-            .save(
+        let recorded = |edit: ModeEdit| {
+            named.save(&edit, false, "m1", &elsewhere).unwrap().0.modes[1]
+                .polish_model
+                .clone()
+                .unwrap()
+                .to
+        };
+        let was = Some(Destination::Cloud(ANTHROPIC.into()));
+        let moved = Some(Destination::Cloud("https://b.example".into()));
+        assert_eq!(
+            recorded(ModeEdit {
+                polish_enabled: Some(true),
+                ..edit("c")
+            }),
+            was
+        );
+        assert_eq!(
+            recorded(pin(Some("provider:anthropic"), Some("model-b"))),
+            was,
+            "the same pin sent back"
+        );
+        assert_eq!(
+            recorded(ModeEdit {
+                polish_model_confirm: true,
+                ..pin(Some("provider:anthropic"), Some("model-b"))
+            }),
+            moved,
+            "confirmed"
+        );
+        assert_eq!(
+            recorded(ModeEdit {
+                polish_model_confirm: true,
+                ..edit("c")
+            }),
+            moved,
+            "confirmed without naming it"
+        );
+        assert_eq!(
+            recorded(pin(Some("provider:anthropic"), Some("model-c"))),
+            moved,
+            "another model"
+        );
+        // Nothing to confirm on the AI setting's model, nor a model the core does not hold.
+        assert_eq!(
+            save(
+                &s,
+                ModeEdit {
+                    polish_model_confirm: true,
+                    ..edit("d")
+                }
+            ),
+            Err(ModeError::ModelUnknown)
+        );
+        let none = |_: &str, _: Option<&str>| None;
+        assert_eq!(
+            named.save(
                 &ModeEdit {
-                    polish_enabled: Some(true),
+                    polish_model_confirm: true,
                     ..edit("c")
                 },
                 false,
                 "m1",
-                &elsewhere,
-            )
-            .unwrap();
-        assert_eq!(
-            mode(&kept, "c").polish_model.as_ref().unwrap().to,
-            Some(Destination::Cloud(ANTHROPIC.into()))
+                &none
+            ),
+            Err(ModeError::ModelUnknown)
         );
-        let (again, _) = named
+    }
+
+    /// A pin on a model the core no longer holds can be cleared (back to the AI setting's).
+    #[test]
+    fn a_pin_on_a_model_that_is_gone_can_be_cleared() {
+        let s = imported();
+        assert_eq!(pin_id(mode(&s, "x")), Some("engine:local"));
+        let none = |_: &str, _: Option<&str>| None;
+        let (cleared, _) = s
             .save(
-                &pin(Some("provider:anthropic"), Some("model-b")),
+                &ModeEdit {
+                    polish_model: Some(None),
+                    ..edit("x")
+                },
                 false,
                 "m1",
-                &elsewhere,
+                &none,
             )
             .unwrap();
+        assert_eq!(mode(&cleared, "x").polish_model, None);
+    }
+
+    /// Deleting the first of two modes the import gave one id leaves the other its own stored
+    /// fields: the stored objects are matched by the id each was read with, in document order.
+    #[test]
+    fn deleting_the_first_twin_keeps_the_second_its_own_fields() {
+        const TWINS: &str = r#"{"default_id":"d","modes":[
+            {"id":"d","name":"Everywhere else"},
+            {"id":"c","name":"Chat","mine":1},
+            {"id":"c","name":"Mail","mine":2},
+            {"id":"c~2","name":"Odd","mine":3}]}"#;
+        let s = ModeStore::from_json(TWINS).unwrap();
+        let ids: Vec<&str> = s.modes.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(
-            mode(&again, "c").polish_model.as_ref().unwrap().to,
-            Some(Destination::Cloud("https://b.example".into()))
+            ids,
+            ["d", "c", "c~3", "c~2"],
+            "an id the document has is never given"
+        );
+        let after = s.delete("c").unwrap();
+        let v: Value = serde_json::from_str(&after.write_into(TWINS).unwrap()).unwrap();
+        let by_name = |name: &str| {
+            v["modes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["name"] == name)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(by_name("Mail")["mine"], 2, "{v}");
+        assert_eq!(by_name("Mail")["id"], "c~3");
+        assert_eq!(by_name("Odd")["mine"], 3, "{v}");
+        let written = after.write_into(TWINS).unwrap();
+        assert_eq!(ModeStore::from_json(&written).unwrap(), after, "reads back");
+    }
+
+    /// A stored pin is held to the rules a save holds it to; one that breaks them does not read.
+    #[test]
+    fn a_stored_pin_that_breaks_the_rules_does_not_read() {
+        let doc =
+            |pin: &str| format!(r#"{{"default_id":"d","modes":[{{"id":"d","name":"D",{pin}}}]}}"#);
+        for bad in [
+            format!(
+                r#""polish_model":"provider:openai","polish_model_name":"{}""#,
+                "m".repeat(MAX_MODEL_NAME_CHARS + 1)
+            ),
+            r#""polish_model":"provider:openai","polish_model_name":"m
+b""#
+            .to_owned(),
+            r#""polish_model":"engine:local","polish_model_name":"m""#.to_owned(),
+            r#""polish_model":"","polish_model_name":"m""#.to_owned(),
+        ] {
+            assert_eq!(
+                ModeStore::from_json(&doc(&bad)),
+                Err(ModesUnreadable),
+                "{bad}"
+            );
+        }
+        let ok = ModeStore::from_json(&doc(
+            r#""polish_model":"provider:openai","polish_model_name":"  ""#,
+        ))
+        .unwrap();
+        assert_eq!(
+            ok.modes[0].polish_model.as_ref().unwrap().model,
+            None,
+            "blank: none"
         );
     }
 }

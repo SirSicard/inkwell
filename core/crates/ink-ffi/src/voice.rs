@@ -380,7 +380,8 @@ pub fn default_modes() -> ModeStore {
 }
 
 /// The modes dictation writes in while the stored ones cannot be read: the built-in default,
-/// never polished. The user's modes may send each to a model of its own, or to none, and which
+/// never polished (and the settings say the modes are unreadable, so a voice command cannot turn
+/// polish on either). The user's modes may send each to a model of its own, or to none, and which
 /// cannot be known now: polishing on the AI setting's model could send words somewhere the user
 /// set a mode up not to, so nothing is polished until they read again (`dictation.ready` names
 /// the modes as unreadable).
@@ -464,11 +465,14 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
     let edit_consent = consents(Feature::Edit, "the voice edit consent")
         .into_iter()
         .next();
-    let modes = load_modes(store).unwrap_or_else(|e| {
-        log::error!("dictation: the modes could not be read: {e}; nothing is polished");
-        unreadable.push("the modes");
-        unreadable_modes()
-    });
+    let (modes, modes_unreadable) = match load_modes(store) {
+        Ok(modes) => (modes, false),
+        Err(e) => {
+            log::error!("dictation: the modes could not be read: {e}; nothing is polished");
+            unreadable.push("the modes");
+            (unreadable_modes(), true)
+        }
+    };
     let dictionary = load_dictionary(store).unwrap_or_else(|e| {
         log::error!("dictation: the dictionary could not be read: {e}");
         unreadable.push("the dictionary");
@@ -482,6 +486,7 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
             dictionary,
             polish_wish,
             polish_consents,
+            modes_unreadable,
             edit_consent,
             utc_offset_minutes,
             ..DictationSettings::default()

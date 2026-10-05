@@ -24,9 +24,11 @@
 //! the shell registered, or the chosen own-key provider), and `polish_model_name` optionally a
 //! model at that provider; `modes.listed` lists the models (`polish_models`), each with where it
 //! sends and whether polish may use it now (a consent covers it and local-only mode lets it), and
-//! names the one a mode without its own uses (`setting_polish_model`). A save that names the
-//! model records where it sends then ([`ModelPin::to`]); a mode whose model sends elsewhere later
-//! (a custom server re-pointed) is not polished until saved again (`polish_model_state`: `moved`).
+//! names the one a mode without its own uses (`setting_polish_model`). A save that picks the
+//! model, or another name at it, records where it sends then ([`ModelPin::to`]); one that sends
+//! the same pin back keeps what was recorded. A mode whose model sends elsewhere later (a custom
+//! server re-pointed) is not polished until the user confirms it there (`polish_model_confirm`;
+//! `polish_model_state` `moved`, or `unrecorded` for a pin saved before destinations were).
 //! A save that picks a model the core does not hold is refused (`model_unknown`); one a mode
 //! already names is kept, so a mode whose model was let go of stays editable (its takes go out
 //! unpolished, and say so).
@@ -145,6 +147,7 @@ const MODE_FIELDS: &[&str] = &[
     "apps",
     "polish_model",
     "polish_model_name",
+    "polish_model_confirm",
 ];
 
 /// `modes.save`'s mode. Only a field's name is ever said, never its value.
@@ -203,6 +206,7 @@ fn read_edit(name: &str, mode: Option<&Value>) -> Result<ModeEdit, String> {
         apps,
         polish_model,
         polish_model_name,
+        polish_model_confirm: flag("polish_model_confirm")?.unwrap_or(false),
     })
 }
 
@@ -371,10 +375,11 @@ fn mode_item(shared: &Shared, m: &Mode) -> Value {
         // As a take would find it: held now, and sending where it did when the mode was saved.
         let now =
             ModelRef::parse(&pin.id).and_then(|r| shared.llms.info_of(&r, pin.model.as_deref()));
-        let state = match now {
-            None => "missing",
-            Some(info) if pin.to.as_ref().is_some_and(|to| to.covers(&info)) => "ready",
-            Some(_) => "moved",
+        let state = match (now, &pin.to) {
+            (None, _) => "missing",
+            (Some(_), None) => "unrecorded",
+            (Some(info), Some(to)) if to.covers(&info) => "ready",
+            (Some(_), Some(_)) => "moved",
         };
         item.insert("polish_model_state".into(), state.into());
     }
@@ -425,6 +430,7 @@ mod tests {
                 apps: Some(vec!["com.example.mail".into()]),
                 polish_model: Some(None),
                 polish_model_name: None,
+                polish_model_confirm: false,
             }
         );
         let Some(Ok(ModesQuery::Save { edit, .. })) =

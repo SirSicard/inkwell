@@ -196,6 +196,7 @@ fn dictation_polish_goes_to_the_registered_model_and_never_fakes_an_answer() {
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
     settings.polish_consents = vec![LlmConsent::OnDevice];
+    store_polish_consents(&core, &settings.polish_consents);
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),
@@ -314,6 +315,7 @@ fn polishing(
     settings.modes.modes[0].polish_enabled = true;
     settings.polish_consents = vec![LlmConsent::OnDevice];
     settings.polish_budget = budget;
+    store_polish_consents(&core, &settings.polish_consents);
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),
@@ -489,6 +491,7 @@ fn dictation_polish_never_calls_a_model_that_is_not_local_while_local_only_is_on
         endpoint: "shell engine remote-model".into(),
         name: "remote".into(),
     }];
+    store_polish_consents(&core, &settings.polish_consents);
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),

@@ -472,6 +472,7 @@ fn dictation_polish_goes_to_the_chosen_provider_only_with_its_consent() {
         let mut settings = DictationSettings::default();
         settings.modes.modes[0].polish_enabled = true;
         settings.polish_consents = consent.into_iter().collect();
+        store_polish_consents(&rig.core, &settings.polish_consents);
         let inbox = rig
             .core
             .start_dictation(DictationParts {
@@ -535,6 +536,7 @@ fn an_own_key_provider_that_never_answers_costs_a_take_its_polish_budget() {
         name: "gpt-4o-mini (openai)".into(),
     }];
     settings.polish_budget = Duration::from_millis(300);
+    store_polish_consents(&rig.core, &settings.polish_consents);
     let inbox = rig
         .core
         .start_dictation(DictationParts {
@@ -760,6 +762,7 @@ fn dictation_with(rig: &Rig, consents: Vec<LlmConsent>) -> (Arc<MockPlatform>, D
         ..DictationSettings::default()
     };
     settings.modes.modes[0].polish_enabled = true;
+    store_polish_consents(&rig.core, &settings.polish_consents);
     let inbox = rig
         .core
         .start_dictation(DictationParts {
@@ -797,8 +800,8 @@ fn take_warnings(rig: &Rig, inbox: &DictationInbox, seed: u64, takes: usize) -> 
 
 /// A mode pinned to the custom server while it ran on this machine: re-pointed to a server
 /// elsewhere (and agreed to there, for the AI setting), the mode's takes are not sent to it
-/// (`polish_model_missing`, `polish_model_state` `moved`) until the user saves the mode again,
-/// which records where it sends now.
+/// (`polish_model_missing`, `polish_model_state` `moved`), and a save sending the same pin back
+/// changes nothing, until the user confirms it there, which records where it sends now.
 #[test]
 fn a_mode_pinned_to_a_server_here_sends_nothing_once_it_points_elsewhere() {
     let rig = Rig::new("cloud-pin-moved", &[test_row(ROW_ID)]);
@@ -838,8 +841,17 @@ fn a_mode_pinned_to_a_server_here_sends_nothing_once_it_points_elsewhere() {
     );
     assert_eq!(rig.net.calls(), 0, "nothing sent");
 
-    // Saved again: recorded as where it sends now.
+    // Sent back as it is (an editor sends every field): still refused.
     let listed = rig.ask(pin, "s2");
+    assert_eq!(
+        listed["modes"][0]["polish_model_state"], "moved",
+        "{listed}"
+    );
+    // Confirmed there by the user: recorded as where it sends now.
+    let listed = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model": "provider:custom", "polish_model_confirm": true}}),
+        "s3",
+    );
     assert_eq!(
         listed["modes"][0]["polish_model_state"], "ready",
         "{listed}"

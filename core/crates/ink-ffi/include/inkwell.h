@@ -300,7 +300,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       shell asks again. For polish, the destination may be any model's in "modes.listed"'s
  *       "polish_models" (ask for it the first time a mode on that model needs it), and it is
  *       added to the others; for edit and meetings, the AI setting's, and it replaces the one
- *       there was. Answers "consent.state" with the "id".
+ *       there was. Polish's turns "dictation.polish" on in the same write even for a destination
+ *       only a mode uses: a mode polishes only while that switch is on. Answers "consent.state"
+ *       with the "id".
  *   {"cmd":"consent.revoke","feature":"polish","to":"on_device|cloud","endpoint":"<for cloud>","id":"<ref>"}
  *       Takes polish's consent for that destination away (Settings lists each, from
  *       "consent.state"'s "consents"); the others stay. Revoking the last turns polish off in
@@ -333,8 +335,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are), each
  *       mode's polish instructions ("polish_prompt", blank for "default_polish_prompt") and its
  *       own language model ("polish_model", absent for the AI setting's; "polish_model_name", a
- *       model at that provider; "polish_model_state": ready, missing (not held now) or moved
- *       (sends elsewhere than when the mode was saved: save the mode again to use it)).
+ *       model at that provider; "polish_model_state": ready, missing (not held now), moved
+ *       (sends elsewhere than where it was recorded) or unrecorded (never recorded): for the
+ *       last two, ask the user, then save with "polish_model_confirm":true).
  *       "polish_models" lists every model a mode can pick now (engine:<id> for one the shell
  *       registered, provider:<id> for the chosen own-key provider), each with where it sends
  *       ("to"), the model it asks for ("model"), whether polish may use it now ("allowed": a
@@ -345,15 +348,18 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"modes.save","mode":{"id":"<absent to add>","name":"...","style":"formal|casual|relaxed",
  *    "polish":true,"remove_fillers":true,"polish_prompt":"...","apps":["..."],
  *    "polish_model":"<an id from polish_models, or null for the AI setting's>",
- *    "polish_model_name":"<provider: only; a model at it, or null for the one chosen in AI>"},
+ *    "polish_model_name":"<provider: only; a model at it, or null for the one chosen in AI>",
+ *    "polish_model_confirm":false},
  *    "take_apps":false,"replace_unreadable":false,"id":"<ref>"}
  *   {"cmd":"modes.delete","mode":"<mode id>","id":"<ref>"}
  *       Settings' mode editor. A save without "id" adds a mode (the core gives it an id); with
  *       one it changes only the fields it names, and keeps the stored fields it does not know.
  *       A delete gives the mode's apps back to the default mode. Each answers "modes.listed" with
  *       the "id" (a save's with "saved", the mode's id) and reaches a running dictation at once
- *       (a voice command's pin to a deleted mode is dropped). A save that names "polish_model"
- *       records where that model sends now. A refusal is command.failed with a "code":
+ *       (a voice command's pin to a deleted mode is dropped). Where a mode's model sends is
+ *       recorded when a save picks another model or name, or confirms it
+ *       ("polish_model_confirm":true, after the user agreed to where it sends now); a save that
+ *       sends the same pin back keeps what was recorded. A refusal is command.failed with a "code":
  *       name_blank, name_taken (another name sounds the same), name_is_style, too_long (a name
  *       over 64 characters, instructions over 2000, over 64 apps or an app over 256, over 50
  *       modes; an imported mode over 64 apps: "Shorten to 64 apps or fewer."), default_mode (it

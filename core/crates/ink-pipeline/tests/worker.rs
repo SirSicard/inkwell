@@ -505,11 +505,19 @@ fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
     settings.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
+    // Stored too: the chain reads polish's consents again at the call.
+    let store = Arc::new(MemStore::new());
+    ink_core::Store::set_setting(
+        store.as_ref(),
+        ink_pipeline::consent::Feature::Polish.setting_key(),
+        &ink_pipeline::consent::consents_to_setting(&settings.polish_consents),
+    )
+    .unwrap();
     let sink_events = events.clone();
     let chain = DictationChain::new(
         Services {
             engine: Arc::new(answering("sent from the worker")),
-            store: Arc::new(MemStore::new()),
+            store,
             inserter: platform.clone(),
             focus: platform.clone(),
             clock: platform.clock(),

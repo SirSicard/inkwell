@@ -4081,7 +4081,9 @@ public enum Phase
 /// go of, or another provider chosen; its takes go in as said with polish_model_missing) or
 /// moved (it sends somewhere else now than when the mode was saved, such as a custom server
 /// re-pointed from this machine to another: its takes go in as said with polish_model_missing
-/// until the user saves the mode again).
+/// until the user confirms it there: modes.save with polish_model_confirm) or unrecorded (where
+/// it sends was never recorded, as for a pin saved by an early build: the same until the user
+/// confirms it).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<PolishModelState>))]
 public enum PolishModelState
@@ -4092,6 +4094,8 @@ public enum PolishModelState
     Missing,
     [JsonStringEnumMemberName("moved")]
     Moved,
+    [JsonStringEnumMemberName("unrecorded")]
+    Unrecorded,
 }
 
 /// <summary>

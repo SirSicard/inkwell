@@ -1103,6 +1103,12 @@ fn the_single_polish_consent_an_older_build_stored_is_kept() {
     let state = rig.polish_state("g1");
     assert_eq!(state["allowed"], true, "{state}");
     assert_eq!(state["consents"].as_array().map(Vec::len), Some(1));
+    // Agreed again for the same destination: the old object becomes a list of one.
+    rig.allow_on_device("a0");
+    assert_eq!(
+        rig.setting("llm.consent.polish").as_deref(),
+        Some(r#"[{"to":"on_device"}]"#)
+    );
     rig.enable();
     assert_eq!(rig.dictate(1.0, 85)["text"], "Hello, world!");
     assert_eq!(local.calls.load(Ordering::SeqCst), 1);
@@ -1136,6 +1142,61 @@ fn a_model_local_only_refuses_is_listed_as_not_allowed() {
     let listed = rig.ask(r#"{"cmd":"modes.list","id":"l2"}"#, "l2");
     assert_eq!(listed["polish_models"][0]["allowed"], true, "{listed}");
     assert_eq!(listed["polish_models"][0]["blocked_local_only"], false);
+    rig.events.assert_valid();
+}
+
+/// Over polish consents that cannot be read, a revoke fails and writes nothing: the user could
+/// not see what they would be revoking.
+#[test]
+fn a_revoke_over_unreadable_consents_fails_and_writes_nothing() {
+    let rig = VoiceRig::new("consent-revoke-unreadable");
+    rig.register_local();
+    let store = &rig.core().shared().store;
+    store.set_setting("dictation.polish", "on").unwrap();
+    store
+        .set_setting("llm.consent.polish", "[{not json")
+        .unwrap();
+    let failed = rig.fails(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","id":"r1"}"#,
+        "r1",
+    );
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("couldn't read")),
+        "{failed}"
+    );
+    assert_eq!(
+        rig.setting("llm.consent.polish").as_deref(),
+        Some("[{not json")
+    );
+    assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
+    rig.events.assert_valid();
+}
+
+/// Local-only mode is asked before the consent: the AI setting's cloud model, with a consent that
+/// covers it, is refused as local-only (polish_failed), never as a consent the user could give.
+#[test]
+fn local_only_refuses_a_consented_cloud_model_as_local_only() {
+    let rig = VoiceRig::new("local-only-first");
+    let remote = rig.register_remote();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"a1"}"#,
+        "a1",
+    );
+    assert_eq!(state["allowed"], true, "{state}");
+    rig.enable();
+    assert_eq!(rig.dictate(1.0, 86)["text"], "Hello world.");
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0);
+    assert!(rig.warnings("polish_not_allowed").is_empty());
+    assert!(
+        rig.warnings("polish_failed")
+            .last()
+            .and_then(|w| w["message"].as_str())
+            .is_some_and(|m| m.contains("local-only")),
+        "{:?}",
+        rig.warnings("polish_failed")
+    );
     rig.events.assert_valid();
 }
 

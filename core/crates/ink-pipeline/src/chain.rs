@@ -59,7 +59,7 @@ use ink_core::{
     StoreError, StreamingEngine, TextInserter, TranscribeOptions,
 };
 
-use crate::consent::{Consented, LlmConsent};
+use crate::consent::{Consented, Feature, LlmConsent};
 
 use crate::dictionary::Dictionary;
 use crate::events::{DictationEvent, Discard, EditFailure, TakeFailure, VoiceDetection, Warning};
@@ -145,10 +145,16 @@ pub struct DictationSettings {
     /// that polish do. A voice command overrides both until the chain restarts.
     pub polish_wish: bool,
     /// Where the user agreed polish may send their words: one [`LlmConsent`] per destination
-    /// ([`Feature::per_destination`](crate::consent::Feature::per_destination)). Nothing is
-    /// polished without one that covers the model a call reaches, whatever the switch, the mode or
-    /// a voice command says. Empty (the default) polishes nothing.
+    /// ([`Feature::per_destination`](crate::consent::Feature::per_destination)), as loaded with
+    /// these settings. Nothing is polished without one that covers the model a call reaches,
+    /// whatever the switch, the mode or a voice command says. At each call the store is read
+    /// again and only a consent both here and still stored counts, so a revoke reaches a take
+    /// already in flight. Empty (the default) polishes nothing.
     pub polish_consents: Vec<LlmConsent>,
+    /// The stored modes could not be read (these settings carry a stand-in): nothing is polished,
+    /// whatever the switch or a voice command says, since which model each of the user's modes
+    /// would send to cannot be known.
+    pub modes_unreadable: bool,
     /// Where the user agreed voice edit may send the selection and the instruction. No edit
     /// reaches a model without a consent that covers it. `None` (the default) edits nothing.
     pub edit_consent: Option<LlmConsent>,
@@ -177,6 +183,7 @@ impl Default for DictationSettings {
             polish_budget: POLISH_BUDGET,
             polish_wish: true,
             polish_consents: Vec::new(),
+            modes_unreadable: false,
             edit_consent: None,
             edit_budget: EDIT_BUDGET,
             stuck_after: DEFAULT_STUCK_AFTER,
@@ -1111,6 +1118,9 @@ impl DictationChain {
     /// queue holds tens of seconds of it) and at most starts later, while cancelling would cost a
     /// working polish every time someone presses again quickly, which is how push-to-talk is used.
     fn polish(&self, written: String, mode: &Mode) -> String {
+        if self.settings.modes_unreadable {
+            return written;
+        }
         let wanted = self.settings.polish_wish && mode.polish_enabled;
         if !self.polish_override.unwrap_or(wanted) {
             return written;
@@ -1118,11 +1128,21 @@ impl DictationChain {
         let Some(llm) = self.polish_model(mode) else {
             return written;
         };
+        // Read again now: a consent revoked since these settings were loaded counts no more,
+        // and one stored since counts only once the settings are loaded again.
+        let stored = crate::consent::stored(self.services.store.as_ref(), Feature::Polish);
+        let consents: Vec<LlmConsent> = self
+            .settings
+            .polish_consents
+            .iter()
+            .filter(|c| stored.contains(c))
+            .cloned()
+            .collect();
         // Without a consent every model is refused at the call (nothing is sent); the model
         // itself says first if there is none at all.
         let consented = Consented {
             inner: llm.as_ref(),
-            consents: &self.settings.polish_consents,
+            consents: &consents,
         };
         let prompt = if mode.polish_prompt.trim().is_empty() {
             &self.settings.polish_prompt
