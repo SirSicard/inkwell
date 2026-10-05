@@ -4,20 +4,35 @@
 //! the core does not hold now is not polished at all: never on another model in its place, which
 //! could send the words somewhere the user did not pick for this mode.
 //!
+//! Polish holds one consent per destination (owner decision, 2026-10-05), so modes on models in
+//! different places each polish under their own.
+//!
 //! Also: a voice command's pin to a mode the user then deleted is dropped with the new settings.
 
 mod common;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{Rig, speech_48k};
 use ink_core::mock::MockLlm;
-use ink_core::{Endpoint, Llm};
+use ink_core::{
+    AppRef, CancelToken, Endpoint, FocusInfo, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse,
+};
 use ink_pipeline::chain::ModeModels;
 use ink_pipeline::consent::LlmConsent;
 use ink_pipeline::events::{DictationEvent, Warning};
-use ink_pipeline::modes::{Mode, ModeStore};
+use ink_pipeline::modes::{Mode, ModeStore, ModelPin};
+
+/// A pin to `id`, as Settings saves one (where it sends is the core's to check, not the chain's).
+fn pin(id: &str) -> ModelPin {
+    ModelPin {
+        id: id.into(),
+        model: None,
+        to: None,
+    }
+}
 
 /// The default mode, polishing, on `model` (`None`: the AI setting's).
 fn polishing_on(model: Option<&str>) -> ModeStore {
@@ -25,7 +40,7 @@ fn polishing_on(model: Option<&str>) -> ModeStore {
         default_id: "default".into(),
         modes: vec![Mode {
             polish_enabled: true,
-            polish_model: model.map(str::to_owned),
+            polish_model: model.map(pin),
             ..Mode::builtin_default()
         }],
     }
@@ -33,11 +48,19 @@ fn polishing_on(model: Option<&str>) -> ModeStore {
 
 /// A lookup holding `models` by id, as the core's registry of language models would.
 fn lookup(models: &[(&str, Arc<MockLlm>)]) -> ModeModels {
+    counted(models, Arc::default())
+}
+
+/// [`lookup`], counting each time the chain asks.
+fn counted(models: &[(&str, Arc<MockLlm>)], asked: Arc<AtomicUsize>) -> ModeModels {
     let by_id: HashMap<String, Arc<dyn Llm>> = models
         .iter()
         .map(|(id, m)| ((*id).to_owned(), m.clone() as Arc<dyn Llm>))
         .collect();
-    Arc::new(move |id: &str| by_id.get(id).cloned())
+    Arc::new(move |pin: &ModelPin| {
+        asked.fetch_add(1, Ordering::SeqCst);
+        by_id.get(&pin.id).cloned()
+    })
 }
 
 fn warnings(rig: &Rig) -> Vec<Warning> {
@@ -63,7 +86,7 @@ fn a_mode_s_own_model_polishes_its_dictations() {
         .llm(setting.clone())
         .settings(|s| {
             s.modes = polishing_on(Some("engine:own"));
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
         })
         .build();
     rig.chain
@@ -83,7 +106,7 @@ fn a_mode_without_a_model_uses_the_ai_setting_s() {
         .llm(setting.clone())
         .settings(|s| {
             s.modes = polishing_on(None);
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
         })
         .build();
     rig.chain
@@ -107,7 +130,7 @@ fn a_mode_s_cloud_model_needs_consent_for_its_own_destination() {
         .llm(setting.clone())
         .settings(|s| {
             s.modes = polishing_on(Some("provider:example"));
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
         })
         .build();
     rig.chain
@@ -164,7 +187,7 @@ fn cloud_consent_covers_a_mode_s_model_only_at_that_provider() {
             .llm(setting.clone())
             .settings(|s| {
                 s.modes = polishing_on(Some(id));
-                s.polish_consent = Some(consent.clone());
+                s.polish_consents = vec![consent.clone()];
             })
             .build();
         rig.chain.borrow_mut().set_mode_models(Some(models.clone()));
@@ -202,7 +225,7 @@ fn a_mode_whose_model_is_gone_is_not_polished_and_says_so() {
             .llm(setting.clone())
             .settings(|s| {
                 s.modes = polishing_on(Some("engine:gone"));
-                s.polish_consent = Some(LlmConsent::OnDevice);
+                s.polish_consents = vec![LlmConsent::OnDevice];
             })
             .build();
         rig.chain.borrow_mut().set_mode_models(models);
@@ -221,15 +244,17 @@ fn a_mode_s_model_is_not_looked_up_when_the_mode_does_not_polish() {
         .settings(|s| {
             s.modes = polishing_on(Some("engine:own"));
             s.modes.modes[0].polish_enabled = false;
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
         })
         .build();
+    let asked = Arc::new(AtomicUsize::new(0));
     rig.chain
         .borrow_mut()
-        .set_mode_models(Some(lookup(&[("engine:own", own.clone())])));
+        .set_mode_models(Some(counted(&[("engine:own", own.clone())], asked.clone())));
     rig.dictate_fixture("as said", 1.5, -25.0);
     assert_eq!(rig.inserted(), ["As said. "]);
     assert_eq!(own.calls(), 0);
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "never looked up");
     assert!(warnings(&rig).is_empty());
 }
 
@@ -278,5 +303,124 @@ fn a_pin_to_a_deleted_mode_is_dropped_with_the_new_settings() {
         rig.chain.borrow().pinned_mode(),
         None,
         "not picked up again"
+    );
+}
+
+/// A model that was there at the lookup and is gone at the call (let go of, or sending elsewhere
+/// than its pin recorded): the core's lookup answers [`LlmError::Unavailable`] then.
+struct GoneAtTheCall;
+
+impl Llm for GoneAtTheCall {
+    fn info(&self) -> LlmInfo {
+        LlmInfo {
+            provider: "shell".into(),
+            model: "gone".into(),
+            endpoint: Endpoint::InProcess,
+        }
+    }
+
+    fn complete(&self, _: &LlmRequest, _: &CancelToken) -> Result<LlmResponse, LlmError> {
+        Err(LlmError::Unavailable)
+    }
+}
+
+/// The race between the lookup and the call says what happened (the mode's model is missing),
+/// never that polish failed.
+#[test]
+fn a_mode_s_model_gone_between_the_lookup_and_the_call_is_missing() {
+    let rig = Rig::builder()
+        .settings(|s| {
+            s.modes = polishing_on(Some("engine:own"));
+            s.polish_consents = vec![LlmConsent::OnDevice];
+        })
+        .build();
+    rig.chain
+        .borrow_mut()
+        .set_mode_models(Some(Arc::new(|_: &ModelPin| {
+            Some(Arc::new(GoneAtTheCall) as Arc<dyn Llm>)
+        })));
+    rig.dictate_fixture("as said", 1.5, -25.0);
+    assert_eq!(rig.inserted(), ["As said. "]);
+    assert_eq!(warnings(&rig), [Warning::PolishModelMissing]);
+}
+
+/// The owner's case: the AI setting's model in the cloud, the Notes mode on this machine. With a
+/// consent for each, both polish; revoke one and only that one stops (and says which consent it
+/// needs); the other goes on.
+#[test]
+fn two_modes_on_two_destinations_each_polish_under_their_own_consent() {
+    let a = "https://api.a.example/v1";
+    let setting = Arc::new(MockLlm::new(cloud(a), "As said, setting."));
+    let local = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, locally."));
+    let cloud_ok = LlmConsent::Cloud {
+        endpoint: a.into(),
+        name: "A".into(),
+    };
+    let notes = Mode {
+        id: "notes".into(),
+        name: "Notes".into(),
+        apps: vec!["com.example.notes".into()],
+        polish_enabled: true,
+        polish_model: Some(pin("engine:local")),
+        ..Mode::builtin_default()
+    };
+    let modes = ModeStore {
+        default_id: "default".into(),
+        modes: vec![
+            Mode {
+                polish_enabled: true,
+                ..Mode::builtin_default()
+            },
+            notes,
+        ],
+    };
+    let run = |consents: Vec<LlmConsent>| {
+        let rig = Rig::builder()
+            .llm(setting.clone())
+            .settings(|s| {
+                s.modes = modes.clone();
+                s.polish_consents = consents;
+            })
+            .build();
+        rig.chain
+            .borrow_mut()
+            .set_mode_models(Some(lookup(&[("engine:local", local.clone())])));
+        let focus = |app: &str| {
+            rig.platform.set_focus(FocusInfo {
+                app: Some(AppRef {
+                    id: app.into(),
+                    pid: Some(1),
+                    name: "An app".into(),
+                }),
+                secure_input: false,
+            });
+        };
+        focus("com.example.notes");
+        rig.dictate_fixture("as said", 1.5, -25.0);
+        focus("com.example.mail");
+        rig.dictate_fixture("as said", 1.5, -25.0);
+        (rig.inserted(), warnings(&rig))
+    };
+
+    let (inserted, warned) = run(vec![cloud_ok.clone(), LlmConsent::OnDevice]);
+    assert_eq!(inserted, ["As said, locally. ", "As said, setting. "]);
+    assert!(warned.is_empty(), "{warned:?}");
+    assert_eq!((local.calls(), setting.calls()), (1, 1));
+
+    // On-device revoked: Notes goes in as said and asks for that consent; the cloud one polishes.
+    let (inserted, warned) = run(vec![cloud_ok.clone()]);
+    assert_eq!(inserted, ["As said. ", "As said, setting. "]);
+    assert_eq!(warned, [Warning::PolishNotAllowed(LlmConsent::OnDevice)]);
+    // The cloud one revoked instead: the reverse.
+    let (inserted, warned) = run(vec![LlmConsent::OnDevice]);
+    assert_eq!(inserted, ["As said, locally. ", "As said. "]);
+    assert!(matches!(
+        warned.as_slice(),
+        [Warning::PolishNotAllowed(LlmConsent::Cloud { endpoint, .. })] if endpoint == a
+    ));
+    assert_eq!(
+        (local.calls(), setting.calls()),
+        (2, 2),
+        "nothing sent where no consent covered"
     );
 }

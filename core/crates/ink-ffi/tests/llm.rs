@@ -195,7 +195,7 @@ fn dictation_polish_goes_to_the_registered_model_and_never_fakes_an_answer() {
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
-    settings.polish_consent = Some(LlmConsent::OnDevice);
+    settings.polish_consents = vec![LlmConsent::OnDevice];
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),
@@ -312,7 +312,7 @@ fn polishing(
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
-    settings.polish_consent = Some(LlmConsent::OnDevice);
+    settings.polish_consents = vec![LlmConsent::OnDevice];
     settings.polish_budget = budget;
     let inbox = core
         .start_dictation(DictationParts {
@@ -485,10 +485,10 @@ fn dictation_polish_never_calls_a_model_that_is_not_local_while_local_only_is_on
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
     // The user agreed to this provider: what refuses it here is local-only mode alone.
-    settings.polish_consent = Some(LlmConsent::Cloud {
+    settings.polish_consents = vec![LlmConsent::Cloud {
         endpoint: "shell engine remote-model".into(),
         name: "remote".into(),
-    });
+    }];
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),

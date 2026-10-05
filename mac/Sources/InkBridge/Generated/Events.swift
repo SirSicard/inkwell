@@ -619,18 +619,35 @@ public struct CommitmentsListed: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// One destination the user agreed a feature may send to.
+public struct ConsentEntry: Codable, Sendable, Equatable {
+    /// For cloud, its destination: what consent.revoke names to take it away.
+    public let endpoint: String?
+    /// For cloud, the provider's name the user agreed to.
+    public let name: String?
+    /// Where.
+    public let to: LlmDestination
+}
+
 /// A feature that sends the user's words to a language model: its switch, where the model it
 /// would use now sends them, and where the user agreed it may. The feature runs only when on
-/// and allowed. In answer to consent.get and consent.allow, and after the feature's switch is
-/// set to off.
+/// and allowed. In answer to consent.get, consent.allow and consent.revoke, and after the
+/// feature's switch is set to off.
 public struct ConsentState: Codable, Sendable, Equatable {
-    /// Whether that consent covers the model now: false while the feature is on means it is
-    /// paused until the user agrees again.
+    /// Whether a consent covers the model it would use now: false while the feature is on means
+    /// it is paused until the user agrees again. For polish, a mode on its own model is judged
+    /// on that model (modes.listed's polish_models).
     public let allowed: Bool
     /// For a cloud consent, the provider's name the user agreed to.
     public let allowedName: String?
-    /// Where the user agreed it may send; absent when never agreed (or turned off since).
+    /// Where the user agreed it may send: for polish, the consent covering the model it would
+    /// use now, else the first (all of them are consents); absent when never agreed (or turned
+    /// off since).
     public let allowedTo: LlmDestination?
+    /// Every destination the user agreed the feature may send to. Polish holds one per
+    /// destination (a mode may polish on a model elsewhere than the AI setting's: consent.allow
+    /// adds one, consent.revoke takes one away); voice edit and meetings hold one at most.
+    public let consents: [ConsentEntry]?
     /// For cloud, the destination consent.allow must name; absent otherwise.
     public let endpoint: String?
     /// Why part of this could not be read (the switch or the consent), as a sentence starting
@@ -653,6 +670,7 @@ public struct ConsentState: Codable, Sendable, Equatable {
         case allowed
         case allowedName = "allowed_name"
         case allowedTo = "allowed_to"
+        case consents
         case endpoint
         case error
         case feature
@@ -1181,10 +1199,16 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
 /// needs a name), name_taken (another mode's name sounds the same: case and spacing aside),
 /// name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long
 /// (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or
-/// an app identity over 256 characters, or more than 50 modes), default_mode (the default mode
-/// can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send
-/// the save again with take_apps to move it), mode_not_found (no mode has that id) and
-/// model_unknown (no language model the core holds has that id: modes.listed lists them).
+/// an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought
+/// with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the
+/// editor says "Shorten to 64 apps or fewer."), default_mode (the default mode can't be deleted
+/// or given apps), app_taken (an app the mode is given is another mode's: send the save again
+/// with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language
+/// model the core holds has that id: modes.listed lists them), model_name_invalid (a
+/// polish_model_name that is over 128 characters or holds a control character, or one given for
+/// a model that is not a provider's, or without a model) and app_invalid (an app identity with
+/// a control character, of one character, or with no letter: as a substring of the frontmost
+/// app's identity it would match nearly every app).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
     case nameBlank = "name_blank"
@@ -1195,6 +1219,8 @@ public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case appTaken = "app_taken"
     case modeNotFound = "mode_not_found"
     case modelUnknown = "model_unknown"
+    case modelNameInvalid = "model_name_invalid"
+    case appInvalid = "app_invalid"
 }
 
 /// What a meeting records as the other side: the sound of its app alone (a call recorded from
@@ -1393,17 +1419,34 @@ public struct KindStats: Codable, Sendable, Equatable {
 /// A language model a mode can be polished on: one the shell registered, or the own-key
 /// provider chosen in Settings > AI.
 public struct LanguageModelChoice: Codable, Sendable, Equatable {
-    /// Whether the user's polish consent covers it: false, a mode on it goes in as said
-    /// (polish_not_allowed) until the user agrees to that destination.
+    /// Whether polish may use it now: one of the user's polish consents covers it
+    /// (consent.state's consents) and local-only mode lets it (blocked_local_only false).
+    /// False, a mode on it goes in as said (polish_not_allowed, or polish_failed while
+    /// local-only mode refuses it) until that changes.
     public let allowed: Bool
+    /// Local-only mode is on and this model is not on this machine: nothing goes to it,
+    /// whatever the consent (turn local-only off in Settings > AI first).
+    public let blockedLocalOnly: Bool?
     /// Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered
     /// (engine:apple-foundation-models), provider:<id> for the chosen own-key provider. Show
     /// the name, never the id.
     public let id: String
+    /// The model it asks for: for the own-key provider, the one chosen in Settings > AI, which
+    /// a mode's polish_model_name replaces (the editor's placeholder).
+    public let model: String?
     /// Its name, as consent.state names a model (a shell may name its own engine better).
     public let name: String
     /// Where it sends a dictation.
     public let to: LlmDestination
+
+    private enum CodingKeys: String, CodingKey {
+        case allowed
+        case blockedLocalOnly = "blocked_local_only"
+        case id
+        case model
+        case name
+        case to
+    }
 }
 
 /// One record whole, in answer to record.open. Carries the library's words: never log it.
@@ -2286,9 +2329,14 @@ public struct ModeInfo: Codable, Sendable, Equatable {
     /// Whether its dictations are polished (when a language model can).
     public let polish: Bool
     /// The language model it is polished on, by its id in polish_models; absent for the AI
-    /// setting's (setting_polish_model). An id polish_models does not list is a model the core
-    /// does not hold now: the mode's dictations go in as said (polish_model_missing).
+    /// setting's (setting_polish_model). Whether a take can use it now is polish_model_state.
     public let polishModel: String?
+    /// A model at the provider polish_model names (provider: ids only), sent as the request's
+    /// model on the same endpoint; absent for the model chosen with the provider in Settings >
+    /// AI. Free text the user typed: never log it.
+    public let polishModelName: String?
+    /// With polish_model: whether its takes can use it now.
+    public let polishModelState: PolishModelState?
     /// Its polish instructions, as the user wrote them; blank for the default (modes.listed's
     /// default_polish_prompt). The user's words: never log them.
     public let polishPrompt: String
@@ -2303,6 +2351,8 @@ public struct ModeInfo: Codable, Sendable, Equatable {
         case name
         case polish
         case polishModel = "polish_model"
+        case polishModelName = "polish_model_name"
+        case polishModelState = "polish_model_state"
         case polishPrompt = "polish_prompt"
         case removeFillers = "remove_fillers"
         case style
@@ -2437,6 +2487,9 @@ public struct ModesListed: Codable, Sendable, Equatable {
     public let polishModels: [LanguageModelChoice]
     /// The command's "id", when it had one.
     public let ref: String?
+    /// In answer to modes.save: the id of the mode saved (a new mode's id is the core's), so
+    /// the editor can select it.
+    public let saved: String?
     /// The id (in polish_models) of the model a mode without one of its own is polished on now:
     /// the AI setting's. Absent when there is none.
     public let settingPolishModel: String?
@@ -2449,6 +2502,7 @@ public struct ModesListed: Codable, Sendable, Equatable {
         case modes
         case polishModels = "polish_models"
         case ref
+        case saved
         case settingPolishModel = "setting_polish_model"
         case type
     }
@@ -2599,6 +2653,18 @@ public struct PermissionsChecked: Codable, Sendable, Equatable {
 public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
     case live
     case `final`
+}
+
+/// Whether a mode's own language model can polish its takes now: ready (the core holds it, and
+/// it sends where it did when the mode was saved), missing (the core does not hold it now: let
+/// go of, or another provider chosen; its takes go in as said with polish_model_missing) or
+/// moved (it sends somewhere else now than when the mode was saved, such as a custom server
+/// re-pointed from this machine to another: its takes go in as said with polish_model_missing
+/// until the user saves the mode again).
+public enum PolishModelState: String, Codable, Sendable, Equatable, CaseIterable {
+    case ready
+    case missing
+    case moved
 }
 
 /// Promises from meetings (commitments not merged into another), in Owed's states.

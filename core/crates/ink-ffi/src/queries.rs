@@ -237,6 +237,11 @@ pub enum Query {
     ConsentGet(ink_pipeline::consent::Feature),
     /// `consent.allow`: the user agreed a feature may send where its model goes now.
     ConsentAllow(crate::consent::Allow),
+    /// `consent.revoke`: polish may no longer send to one destination ([`crate::consent::revoke`]).
+    ConsentRevoke(
+        ink_pipeline::consent::Feature,
+        ink_pipeline::consent::LlmConsent,
+    ),
     /// The library's records, a search, one record, or counts ([`library`](crate::library)).
     Library(crate::library::LibraryQuery),
     /// Snippets, voice commands and the import's key note ([`phrases`](crate::phrases)).
@@ -279,6 +284,7 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "dictation.disable" => &[],
         "consent.get" => &["feature"],
         "consent.allow" => &["feature", "to", "endpoint", "key"],
+        "consent.revoke" => &["feature", "to", "endpoint"],
         _ => return None,
     })
 }
@@ -462,23 +468,13 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         },
         "dictation.disable" => Query::DictationDisable,
         "consent.get" => Query::ConsentGet(feature(name, &text("feature")?)?),
+        "consent.revoke" => Query::ConsentRevoke(
+            feature(name, &text("feature")?)?,
+            destination(name, obj, &text)?,
+        ),
         "consent.allow" => {
             let feature = feature(name, &text("feature")?)?;
-            let asked = match text("to")?.as_str() {
-                "on_device" if !obj.contains_key("endpoint") => {
-                    ink_pipeline::consent::LlmConsent::OnDevice
-                }
-                "cloud" => ink_pipeline::consent::LlmConsent::Cloud {
-                    endpoint: text("endpoint")?,
-                    // Not needed to compare: what is recorded is the model's own name.
-                    name: String::new(),
-                },
-                _ => {
-                    return Err(format!(
-                        "{name}: \"to\" is on_device, or cloud with the \"endpoint\" consent.state gave"
-                    ));
-                }
-            };
+            let asked = destination(name, obj, &text)?;
             let key = match obj.get("key") {
                 None => None,
                 Some(_) => Some(text("key")?),
@@ -514,6 +510,28 @@ fn speaker_name(command: &str, raw: &str) -> Result<Option<String>, String> {
         ));
     }
     Ok((!name.is_empty()).then(|| name.to_owned()))
+}
+
+/// The destination a consent command names: `"to":"on_device"`, or `"to":"cloud"` with the
+/// `"endpoint"` `consent.state` (or `modes.listed`) gave. Its name is not needed to compare: what
+/// is recorded is the model's own.
+fn destination(
+    name: &str,
+    obj: &serde_json::Map<String, Value>,
+    text: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<ink_pipeline::consent::LlmConsent, String> {
+    match text("to")?.as_str() {
+        "on_device" if !obj.contains_key("endpoint") => {
+            Ok(ink_pipeline::consent::LlmConsent::OnDevice)
+        }
+        "cloud" => Ok(ink_pipeline::consent::LlmConsent::Cloud {
+            endpoint: text("endpoint")?,
+            name: String::new(),
+        }),
+        _ => Err(format!(
+            "{name}: \"to\" is on_device, or cloud with the \"endpoint\" consent.state gave"
+        )),
+    }
 }
 
 /// A feature the consent commands serve: one with a switch ([`crate::consent::switch`]).
@@ -893,6 +911,12 @@ impl Ctx<'_> {
                     Err(e) => fail(e),
                 }
             }
+            Query::ConsentRevoke(feature, asked) => {
+                match crate::consent::revoke(self.shared, feature, &asked, id.as_deref()) {
+                    Ok(e) => emit(e),
+                    Err(e) => fail(e),
+                }
+            }
             Query::Library(query) => {
                 match crate::library::answer(self.shared, query, id.as_deref()) {
                     Ok(e) => emit(e),
@@ -1228,6 +1252,34 @@ mod tests {
             p(r#"{"cmd":"consent.get","feature":"edit"}"#),
             Some(Ok(Query::ConsentGet(Feature::Edit)))
         );
+        assert_eq!(
+            p(
+                r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud","endpoint":"shell engine x"}"#
+            ),
+            Some(Ok(Query::ConsentRevoke(
+                Feature::Polish,
+                LlmConsent::Cloud {
+                    endpoint: "shell engine x".into(),
+                    name: String::new()
+                }
+            )))
+        );
+        assert_eq!(
+            p(r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device"}"#),
+            Some(Ok(Query::ConsentRevoke(
+                Feature::Polish,
+                LlmConsent::OnDevice
+            )))
+        );
+        for bad in [
+            r#"{"cmd":"consent.revoke","feature":"polish"}"#,
+            r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud"}"#,
+            r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","endpoint":"x"}"#,
+            r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","key":"fn"}"#,
+            r#"{"cmd":"consent.revoke","feature":"summary","to":"on_device"}"#,
+        ] {
+            assert!(matches!(p(bad), Some(Err(_))), "{bad} must be refused");
+        }
         assert_eq!(
             p(r#"{"cmd":"consent.allow","feature":"meetings","to":"on_device"}"#),
             Some(Ok(Query::ConsentAllow(Allow {

@@ -289,12 +289,16 @@ Each table is one kind:
 - Polish sends a dictation, voice edit the selection and the instruction, and a meeting's summary
   (with its commitments) and Ask the meeting's transcript, to that model, so each runs only with
   the user's consent for where it goes: this machine, or one named cloud provider
-  (`ink_pipeline::consent`, one consent per feature). The core keeps each consent
-  (`llm.consent.polish`, `llm.consent.edit`, `llm.consent.meetings`); `consent.allow` records it,
-  for the destination the model has at that moment, and turns the feature on (polish's switch,
-  edit's key, the meetings switch) in the same write; turning the feature off withdraws it in the
-  same write. Each call checks the consent against the model that call reaches
-  (`Llm::complete_if`), so a model that moved from this machine to a cloud provider, or between
+  (`ink_pipeline::consent`). The core keeps each feature's consents (`llm.consent.polish`,
+  `llm.consent.edit`, `llm.consent.meetings`); `consent.allow` records one, for the destination a
+  model the feature can use has at that moment, and turns the feature on (polish's switch, edit's
+  key, the meetings switch) in the same write; turning the feature off withdraws them in the same
+  write. Polish holds one consent per destination (a dictation mode may polish on a model of its
+  own, below): `consent.allow` adds one, `consent.revoke` takes one away (the last one turns
+  polish off with it), and a polish call passes when any of them covers the model it reaches. The
+  single consent an earlier build stored reads as a list of one. Voice edit and meetings send only
+  to the AI setting's model, so each keeps one consent. Each call checks local-only mode, then the
+  consent, against the model that call reaches (`Llm::complete_if`), so a model that moved from this machine to a cloud provider, or between
   providers, gets nothing until the user agrees again: a polish goes in as said with
   `polish_not_allowed`, an edit changes nothing (`not_allowed`), a meeting finishes with no
   summary or commitments (`summary_not_allowed`), and Ask answers that it needs the user's OK. The
@@ -306,7 +310,7 @@ Each table is one kind:
 The screens read and change the library and the permissions through commands too
 ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): permission checks and
 requests, the open commitments ("owed"), a live meeting's notes, the model catalogue, the user's
-modes (listed and edited), each language-model feature's state and consent (`consent.get`, `consent.allow`), and a
+modes (listed and edited), each language-model feature's state and consent (`consent.get`, `consent.allow`, `consent.revoke`), and a
 whitelist of settings the shell owns (`SHELL_SETTINGS` in
 [`queries.rs`](../core/crates/ink-ffi/src/queries.rs), each with the values it takes):
 `onboarding.done`, `dictation.polish` and `meetings.llm` (only ever set to off: they turn on
@@ -338,13 +342,22 @@ without a value, and the shell reads it as its default (for appearance, `APPEARA
   code) and are checked on what a save changes, so a mode the import brought that breaks one
   stays editable.
 - **A mode may have its own language model** (`polish_model`): one the core holds, an engine the
-  shell registered (`engine:<id>`) or the chosen own-key provider (`provider:<id>`), found again
-  at each take through the same path as the AI setting's model (`PolishModel`: the polish consent
-  checked on the model the call reaches, then local-only mode). A mode whose model the core does
-  not hold then is not polished (`polish_model_missing`), never sent to another model: that could
-  be a destination the user did not pick for this mode. One polish consent covers one
-  destination, so a mode on a model elsewhere than the consent's goes in as said
-  (`polish_not_allowed`, naming that model's destination).
+  shell registered (`engine:<id>`) or the chosen own-key provider (`provider:<id>`), and for a
+  provider optionally a model at it (`polish_model_name`: the same client asked for that model,
+  at the same endpoint, so the same consent covers it). It is found again at each take and at
+  the call through the same path as the AI setting's model (`PolishModel`: local-only mode, then
+  the polish consents, checked on the model the call reaches). A save that names the model
+  records where it sends then (`polish_model_to`); a mode whose model the core does not hold,
+  or that sends anywhere else now (a custom server re-pointed from this machine to another), is
+  not polished (`polish_model_missing`) until the user saves it again, and never sent to another
+  model: that could be a destination the user did not pick for this mode. A mode on a model no
+  polish consent covers goes in as said (`polish_not_allowed`, naming that model's destination).
+  While the stored modes cannot be read, nothing is polished: which model each mode would send
+  to cannot be known.
+- **Ids and apps.** Every mode has its own id once read (the 0.2 import can give two one id; the
+  second is read as `<id>~2`), and the rules tell modes apart by place. An app is a substring of
+  the frontmost app's identity, so one of a single character or with no letter, or with a
+  control character, is refused when it is given (`app_invalid`).
 - Replies carry the user's words only where the screen asked for them (a commitment's text); a
   note's words are never echoed back, and errors never quote them.
 

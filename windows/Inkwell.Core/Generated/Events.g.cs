@@ -666,16 +666,41 @@ public sealed record CommitmentsListed : InkEvent
 }
 
 /// <summary>
+/// One destination the user agreed a feature may send to.
+/// </summary>
+public sealed record ConsentEntry
+{
+    /// <summary>
+    /// For cloud, its destination: what consent.revoke names to take it away.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public string? Endpoint { get; init; }
+
+    /// <summary>
+    /// For cloud, the provider's name the user agreed to.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// Where.
+    /// </summary>
+    [JsonPropertyName("to")]
+    public required LlmDestination To { get; init; }
+}
+
+/// <summary>
 /// A feature that sends the user's words to a language model: its switch, where the model it
 /// would use now sends them, and where the user agreed it may. The feature runs only when on
-/// and allowed. In answer to consent.get and consent.allow, and after the feature's switch is
-/// set to off.
+/// and allowed. In answer to consent.get, consent.allow and consent.revoke, and after the
+/// feature's switch is set to off.
 /// </summary>
 public sealed record ConsentState : InkEvent
 {
     /// <summary>
-    /// Whether that consent covers the model now: false while the feature is on means it is
-    /// paused until the user agrees again.
+    /// Whether a consent covers the model it would use now: false while the feature is on means
+    /// it is paused until the user agrees again. For polish, a mode on its own model is judged
+    /// on that model (modes.listed's polish_models).
     /// </summary>
     [JsonPropertyName("allowed")]
     public required bool Allowed { get; init; }
@@ -687,10 +712,20 @@ public sealed record ConsentState : InkEvent
     public string? AllowedName { get; init; }
 
     /// <summary>
-    /// Where the user agreed it may send; absent when never agreed (or turned off since).
+    /// Where the user agreed it may send: for polish, the consent covering the model it would
+    /// use now, else the first (all of them are consents); absent when never agreed (or turned
+    /// off since).
     /// </summary>
     [JsonPropertyName("allowed_to")]
     public LlmDestination? AllowedTo { get; init; }
+
+    /// <summary>
+    /// Every destination the user agreed the feature may send to. Polish holds one per
+    /// destination (a mode may polish on a model elsewhere than the AI setting's: consent.allow
+    /// adds one, consent.revoke takes one away); voice edit and meetings hold one at most.
+    /// </summary>
+    [JsonPropertyName("consents")]
+    public global::System.Collections.Generic.IReadOnlyList<ConsentEntry>? Consents { get; init; }
 
     /// <summary>
     /// For cloud, the destination consent.allow must name; absent otherwise.
@@ -1575,10 +1610,16 @@ public enum FailedStage
 /// needs a name), name_taken (another mode's name sounds the same: case and spacing aside),
 /// name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long
 /// (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or
-/// an app identity over 256 characters, or more than 50 modes), default_mode (the default mode
-/// can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send
-/// the save again with take_apps to move it), mode_not_found (no mode has that id) and
-/// model_unknown (no language model the core holds has that id: modes.listed lists them).
+/// an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought
+/// with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the
+/// editor says "Shorten to 64 apps or fewer."), default_mode (the default mode can't be deleted
+/// or given apps), app_taken (an app the mode is given is another mode's: send the save again
+/// with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language
+/// model the core holds has that id: modes.listed lists them), model_name_invalid (a
+/// polish_model_name that is over 128 characters or holds a control character, or one given for
+/// a model that is not a provider's, or without a model) and app_invalid (an app identity with
+/// a control character, of one character, or with no letter: as a substring of the frontmost
+/// app's identity it would match nearly every app).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
@@ -1601,6 +1642,10 @@ public enum FailureCode
     ModeNotFound,
     [JsonStringEnumMemberName("model_unknown")]
     ModelUnknown,
+    [JsonStringEnumMemberName("model_name_invalid")]
+    ModelNameInvalid,
+    [JsonStringEnumMemberName("app_invalid")]
+    AppInvalid,
 }
 
 /// <summary>
@@ -1968,11 +2013,20 @@ public sealed record KindStats
 public sealed record LanguageModelChoice
 {
     /// <summary>
-    /// Whether the user's polish consent covers it: false, a mode on it goes in as said
-    /// (polish_not_allowed) until the user agrees to that destination.
+    /// Whether polish may use it now: one of the user's polish consents covers it
+    /// (consent.state's consents) and local-only mode lets it (blocked_local_only false).
+    /// False, a mode on it goes in as said (polish_not_allowed, or polish_failed while
+    /// local-only mode refuses it) until that changes.
     /// </summary>
     [JsonPropertyName("allowed")]
     public required bool Allowed { get; init; }
+
+    /// <summary>
+    /// Local-only mode is on and this model is not on this machine: nothing goes to it,
+    /// whatever the consent (turn local-only off in Settings &gt; AI first).
+    /// </summary>
+    [JsonPropertyName("blocked_local_only")]
+    public bool? BlockedLocalOnly { get; init; }
 
     /// <summary>
     /// Its id, as a mode names it (polish_model): engine:&lt;id&gt; for a model the shell
@@ -1981,6 +2035,13 @@ public sealed record LanguageModelChoice
     /// </summary>
     [JsonPropertyName("id")]
     public required string Id { get; init; }
+
+    /// <summary>
+    /// The model it asks for: for the own-key provider, the one chosen in Settings &gt; AI,
+    /// which a mode's polish_model_name replaces (the editor's placeholder).
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
 
     /// <summary>
     /// Its name, as consent.state names a model (a shell may name its own engine better).
@@ -3495,11 +3556,24 @@ public sealed record ModeInfo
 
     /// <summary>
     /// The language model it is polished on, by its id in polish_models; absent for the AI
-    /// setting's (setting_polish_model). An id polish_models does not list is a model the core
-    /// does not hold now: the mode's dictations go in as said (polish_model_missing).
+    /// setting's (setting_polish_model). Whether a take can use it now is polish_model_state.
     /// </summary>
     [JsonPropertyName("polish_model")]
     public string? PolishModel { get; init; }
+
+    /// <summary>
+    /// A model at the provider polish_model names (provider: ids only), sent as the request's
+    /// model on the same endpoint; absent for the model chosen with the provider in Settings
+    /// &gt; AI. Free text the user typed: never log it.
+    /// </summary>
+    [JsonPropertyName("polish_model_name")]
+    public string? PolishModelName { get; init; }
+
+    /// <summary>
+    /// With polish_model: whether its takes can use it now.
+    /// </summary>
+    [JsonPropertyName("polish_model_state")]
+    public PolishModelState? PolishModelState { get; init; }
 
     /// <summary>
     /// Its polish instructions, as the user wrote them; blank for the default (modes.listed's
@@ -3742,6 +3816,13 @@ public sealed record ModesListed : InkEvent
     /// </summary>
     [JsonPropertyName("ref")]
     public string? Ref { get; init; }
+
+    /// <summary>
+    /// In answer to modes.save: the id of the mode saved (a new mode's id is the core's), so
+    /// the editor can select it.
+    /// </summary>
+    [JsonPropertyName("saved")]
+    public string? Saved { get; init; }
 
     /// <summary>
     /// The id (in polish_models) of the model a mode without one of its own is polished on now:
@@ -3992,6 +4073,25 @@ public enum Phase
     Live,
     [JsonStringEnumMemberName("final")]
     Final,
+}
+
+/// <summary>
+/// Whether a mode's own language model can polish its takes now: ready (the core holds it, and
+/// it sends where it did when the mode was saved), missing (the core does not hold it now: let
+/// go of, or another provider chosen; its takes go in as said with polish_model_missing) or
+/// moved (it sends somewhere else now than when the mode was saved, such as a custom server
+/// re-pointed from this machine to another: its takes go in as said with polish_model_missing
+/// until the user saves the mode again).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<PolishModelState>))]
+public enum PolishModelState
+{
+    [JsonStringEnumMemberName("ready")]
+    Ready,
+    [JsonStringEnumMemberName("missing")]
+    Missing,
+    [JsonStringEnumMemberName("moved")]
+    Moved,
 }
 
 /// <summary>

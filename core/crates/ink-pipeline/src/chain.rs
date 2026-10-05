@@ -144,10 +144,11 @@ pub struct DictationSettings {
     /// The user's switch for polish ("Polish my words"). Off, nothing is polished; on, the modes
     /// that polish do. A voice command overrides both until the chain restarts.
     pub polish_wish: bool,
-    /// Where the user agreed polish may send their words ([`LlmConsent`]). Nothing is polished
-    /// without a consent that covers the model a call reaches, whatever the switch, the mode or a
-    /// voice command says. `None` (the default) polishes nothing.
-    pub polish_consent: Option<LlmConsent>,
+    /// Where the user agreed polish may send their words: one [`LlmConsent`] per destination
+    /// ([`Feature::per_destination`](crate::consent::Feature::per_destination)). Nothing is
+    /// polished without one that covers the model a call reaches, whatever the switch, the mode or
+    /// a voice command says. Empty (the default) polishes nothing.
+    pub polish_consents: Vec<LlmConsent>,
     /// Where the user agreed voice edit may send the selection and the instruction. No edit
     /// reaches a model without a consent that covers it. `None` (the default) edits nothing.
     pub edit_consent: Option<LlmConsent>,
@@ -175,7 +176,7 @@ impl Default for DictationSettings {
             tail: TailConfig::default(),
             polish_budget: POLISH_BUDGET,
             polish_wish: true,
-            polish_consent: None,
+            polish_consents: Vec::new(),
             edit_consent: None,
             edit_budget: EDIT_BUDGET,
             stuck_after: DEFAULT_STUCK_AFTER,
@@ -185,8 +186,11 @@ impl Default for DictationSettings {
 
 /// **Worker.** Finds the language model a mode names ([`Mode::polish_model`]) when one of its
 /// takes is polished: the model, or `None` when the core holds no model by that id now. Asked at
-/// each take, so a model registered or let go of since is seen at once.
-pub type ModeModels = Arc<dyn Fn(&str) -> Option<Arc<dyn Llm>> + Send + Sync>;
+/// each take, so a model registered or let go of since is seen at once. The model given checks
+/// again at the call: one let go of meanwhile, or sending elsewhere than the pin recorded
+/// ([`ModelPin::to`](crate::modes::ModelPin::to)), answers [`LlmError::Unavailable`], and the take
+/// says [`Warning::PolishModelMissing`].
+pub type ModeModels = Arc<dyn Fn(&crate::modes::ModelPin) -> Option<Arc<dyn Llm>> + Send + Sync>;
 
 /// What the chain calls.
 #[derive(Clone)]
@@ -947,7 +951,7 @@ impl DictationChain {
         // every model is refused.
         let consented = Consented {
             inner: llm.as_ref(),
-            consent: self.settings.edit_consent.as_ref(),
+            consents: self.settings.edit_consent.as_slice(),
         };
         let budget = self.settings.edit_budget;
         let deadline = Instant::now().checked_add(budget);
@@ -1090,8 +1094,8 @@ impl DictationChain {
     /// as written, and says so. A blank answer is a failure, never an empty dictation (ink-llm's
     /// task refuses one; this checks again rather than rely on it).
     ///
-    /// **Consent.** The call goes out only when [`polish_consent`](DictationSettings::polish_consent)
-    /// covers the model it reaches, checked by that model at the call ([`Llm::complete_if`]), so a
+    /// **Consent.** The call goes out only when one of
+    /// [`polish_consents`](DictationSettings::polish_consents) covers the model it reaches, checked by that model at the call ([`Llm::complete_if`]), so a
     /// model that changed destination since the user agreed never receives the text. Without it
     /// the text goes out as written with [`Warning::PolishNotAllowed`], naming the consent needed.
     /// That holds for a mode's own model as for the AI setting's ([`polish_model`](Self::polish_model)).
@@ -1118,7 +1122,7 @@ impl DictationChain {
         // itself says first if there is none at all.
         let consented = Consented {
             inner: llm.as_ref(),
-            consent: self.settings.polish_consent.as_ref(),
+            consents: &self.settings.polish_consents,
         };
         let prompt = if mode.polish_prompt.trim().is_empty() {
             &self.settings.polish_prompt
@@ -1147,6 +1151,15 @@ impl DictationChain {
                 )));
                 written
             }
+            Err(LlmError::Unavailable) => {
+                // The mode's own model was let go of, or sends elsewhere now, between the lookup
+                // and the call: nothing was sent, and no other model is called in its place.
+                log::warn!(
+                    "dictation: this mode's language model is not set up now; the text goes out as written"
+                );
+                self.emit(DictationEvent::Warning(Warning::PolishModelMissing));
+                written
+            }
             Err(error) => {
                 if error == LlmError::Cancelled && deadline.is_some_and(|d| Instant::now() >= d) {
                     log::warn!(
@@ -1171,13 +1184,13 @@ impl DictationChain {
     /// ([`Warning::PolishModelMissing`]), since that could send the words somewhere the user did
     /// not pick for this mode.
     fn polish_model(&self, mode: &Mode) -> Option<Arc<dyn Llm>> {
-        let Some(id) = &mode.polish_model else {
+        let Some(pin) = &mode.polish_model else {
             if self.services.llm.is_none() {
                 self.emit(DictationEvent::Warning(Warning::PolishUnavailable));
             }
             return self.services.llm.clone();
         };
-        let found = self.mode_models.as_ref().and_then(|find| find(id));
+        let found = self.mode_models.as_ref().and_then(|find| find(pin));
         if found.is_none() {
             log::warn!(
                 "dictation: this mode's language model is not set up now; the text goes out as written"

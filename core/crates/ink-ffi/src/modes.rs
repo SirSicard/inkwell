@@ -3,7 +3,7 @@
 //! | Command | Answer |
 //! |---|---|
 //! | `modes.list` | `modes.listed`: the modes in the order they are matched, the default polish prompt, and the language models a mode can pick |
-//! | `modes.save {"mode":{...}, "take_apps"?, "replace_unreadable"?}` | `modes.listed`, as saved: a mode added (no `id`) or changed (only the fields it names) |
+//! | `modes.save {"mode":{...}, "take_apps"?, "replace_unreadable"?}` | `modes.listed`, as saved, with the mode's id as `saved`: a mode added (no `id`) or changed (only the fields it names) |
 //! | `modes.delete {"mode":"<id>"}` | `modes.listed`, without it |
 //!
 //! Each answer echoes the command's `id` as `ref`; a failure is `command.failed` with that id,
@@ -21,18 +21,22 @@
 //! (`replace_unreadable`).
 //!
 //! **A mode's language model.** `polish_model` names one the core holds ([`ModelRef`]: an engine
-//! the shell registered, or the chosen own-key provider); `modes.listed` lists them
-//! (`polish_models`), each with where it sends and whether the user's polish consent covers it,
-//! and names the one a mode without its own uses (`setting_polish_model`). A save that picks a
-//! model the core does not hold is refused (`model_unknown`); one a mode already names is kept, so
-//! a mode whose model was let go of stays editable (its takes go out unpolished, and say so).
+//! the shell registered, or the chosen own-key provider), and `polish_model_name` optionally a
+//! model at that provider; `modes.listed` lists the models (`polish_models`), each with where it
+//! sends and whether polish may use it now (a consent covers it and local-only mode lets it), and
+//! names the one a mode without its own uses (`setting_polish_model`). A save that names the
+//! model records where it sends then ([`ModelPin::to`]); a mode whose model sends elsewhere later
+//! (a custom server re-pointed) is not polished until saved again (`polish_model_state`: `moved`).
+//! A save that picks a model the core does not hold is refused (`model_unknown`); one a mode
+//! already names is kept, so a mode whose model was let go of stays editable (its takes go out
+//! unpolished, and say so).
 //!
 //! **Words travel here.** Names, prompts and apps are the user's own: they reach the shell only in
 //! `modes.listed`, and errors say what is wrong, never them (I5).
 
 use ink_core::Store;
-use ink_pipeline::consent::{self, Feature, LlmConsent};
-use ink_pipeline::modes::{ModeEdit, ModeError, ModeStore};
+use ink_pipeline::consent::{self, Destination, Feature};
+use ink_pipeline::modes::{Mode, ModeEdit, ModeError, ModeStore};
 use ink_pipeline::style::Style;
 use serde_json::{Map, Value, json};
 
@@ -77,16 +81,29 @@ impl ModesQuery {
 
 /// Reads `v` as one of this module's commands: `None` when `name` is none of them.
 pub fn parse(name: &str, v: &Value) -> Option<Result<ModesQuery, String>> {
-    let fields: &[&str] = match name {
-        "modes.list" => &[],
-        "modes.save" => &["mode", "take_apps", "replace_unreadable"],
-        "modes.delete" => &["mode"],
+    let kind = match name {
+        "modes.list" => Kind::List,
+        "modes.save" => Kind::Save,
+        "modes.delete" => Kind::Delete,
         _ => return None,
     };
-    Some(parse_known(name, fields, v))
+    Some(parse_known(name, kind, v))
 }
 
-fn parse_known(name: &str, fields: &[&str], v: &Value) -> Result<ModesQuery, String> {
+/// Which command [`parse`] read the name of.
+#[derive(Clone, Copy)]
+enum Kind {
+    List,
+    Save,
+    Delete,
+}
+
+fn parse_known(name: &str, kind: Kind, v: &Value) -> Result<ModesQuery, String> {
+    let fields: &[&str] = match kind {
+        Kind::List => &[],
+        Kind::Save => &["mode", "take_apps", "replace_unreadable"],
+        Kind::Delete => &["mode"],
+    };
     let obj = v.as_object().ok_or("command: not an object")?;
     if let Some(k) = obj
         .keys()
@@ -100,21 +117,20 @@ fn parse_known(name: &str, fields: &[&str], v: &Value) -> Result<ModesQuery, Str
             .as_bool()
             .ok_or_else(|| format!("{name}: \"{k}\" is true or false")),
     };
-    Ok(match name {
-        "modes.list" => ModesQuery::List,
-        "modes.save" => ModesQuery::Save {
+    Ok(match kind {
+        Kind::List => ModesQuery::List,
+        Kind::Save => ModesQuery::Save {
             edit: read_edit(name, obj.get("mode"))?,
             take_apps: flag("take_apps")?,
             replace_unreadable: flag("replace_unreadable")?,
         },
-        "modes.delete" => ModesQuery::Delete {
+        Kind::Delete => ModesQuery::Delete {
             mode: obj
                 .get("mode")
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("{name}: needs a string \"mode\", the mode's id"))?
                 .to_owned(),
         },
-        _ => unreachable!("parse() lists every command"),
     })
 }
 
@@ -128,6 +144,7 @@ const MODE_FIELDS: &[&str] = &[
     "polish_prompt",
     "apps",
     "polish_model",
+    "polish_model_name",
 ];
 
 /// `modes.save`'s mode. Only a field's name is ever said, never its value.
@@ -165,16 +182,17 @@ fn read_edit(name: &str, mode: Option<&Value>) -> Result<ModeEdit, String> {
         ),
         Some(_) => return Err(format!("{name}: the mode's \"apps\" is a list of text")),
     };
-    let polish_model = match m.get("polish_model") {
-        None => None,
-        Some(Value::Null) => Some(None),
-        Some(Value::String(id)) => Some(Some(id.clone())),
-        Some(_) => {
-            return Err(format!(
-                "{name}: the mode's \"polish_model\" is a model's id, or null for the AI setting's"
-            ));
-        }
+    let nullable = |k: &str, what: &str| match m.get(k) {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(id)) => Ok(Some(Some(id.clone()))),
+        Some(_) => Err(format!("{name}: the mode's \"{k}\" is {what}")),
     };
+    let polish_model = nullable("polish_model", "a model's id, or null for the AI setting's")?;
+    let polish_model_name = nullable(
+        "polish_model_name",
+        "a model's name at the provider, or null for the one chosen in Settings > AI",
+    )?;
     Ok(ModeEdit {
         id: text("id")?,
         name: text("name")?,
@@ -184,15 +202,8 @@ fn read_edit(name: &str, mode: Option<&Value>) -> Result<ModeEdit, String> {
         polish_prompt: text("polish_prompt")?,
         apps,
         polish_model,
+        polish_model_name,
     })
-}
-
-/// The modes as stored, read.
-pub struct Loaded {
-    /// The modes.
-    pub modes: ModeStore,
-    /// The document they were read from (1.0's own, else the import's), or none: the default.
-    pub doc: Option<String>,
 }
 
 /// The stored document: 1.0's own, else the one the 0.2 import brought.
@@ -207,13 +218,11 @@ fn stored_doc(store: &dyn Store) -> Result<Option<String>, String> {
 
 /// **Worker.** The user's modes: 1.0's own, else the import's, else [`default_modes`]. A document
 /// that cannot be read is an error, never quietly the default.
-pub fn load(store: &dyn Store) -> Result<Loaded, String> {
-    let doc = stored_doc(store)?;
-    let modes = match &doc {
-        Some(doc) => ModeStore::from_json(doc).map_err(|e| e.to_string())?,
-        None => default_modes(),
-    };
-    Ok(Loaded { modes, doc })
+pub fn load(store: &dyn Store) -> Result<ModeStore, String> {
+    match stored_doc(store)? {
+        Some(doc) => ModeStore::from_json(&doc).map_err(|e| e.to_string()),
+        None => Ok(default_modes()),
+    }
 }
 
 /// What a save or a delete starts from: the stored modes and their document, or (when they cannot
@@ -254,8 +263,8 @@ pub fn answer(
     reference: Option<&str>,
 ) -> Result<Value, Failure> {
     let store = shared.store.as_ref();
-    let (after, doc) = match query {
-        ModesQuery::List => return Ok(listed(shared, &load(store)?.modes, reference)),
+    let (after, doc, saved) = match query {
+        ModesQuery::List => return Ok(listed(shared, &load(store)?, None, reference)),
         ModesQuery::Save {
             edit,
             take_apps,
@@ -263,17 +272,22 @@ pub fn answer(
         } => {
             let (modes, doc) = base(store, replace_unreadable)?;
             let new_id = modes.fresh_id(shared.clock.unix_ms());
-            // Known now: the models the core holds at this moment.
-            let known =
-                |id: &str| ModelRef::parse(id).is_some_and(|r| shared.llms.get(&r).is_some());
-            let (after, _) = modes
-                .save(&edit, take_apps, &new_id, &known)
+            // Where each model the core holds sends at this moment.
+            let model_at = |id: &str, name: Option<&str>| {
+                let r = ModelRef::parse(id)?;
+                shared
+                    .llms
+                    .info_of(&r, name)
+                    .map(|info| Destination::of(&info))
+            };
+            let (after, id) = modes
+                .save(&edit, take_apps, &new_id, &model_at)
                 .map_err(refused)?;
-            (after, doc)
+            (after, doc, Some(id))
         }
         ModesQuery::Delete { mode } => {
             let (modes, doc) = base(store, false)?;
-            (modes.delete(&mode).map_err(refused)?, doc)
+            (modes.delete(&mode).map_err(refused)?, doc, None)
         }
     };
     let written = after.write_into(&doc).map_err(|e| e.to_string())?;
@@ -281,55 +295,35 @@ pub fn answer(
         log::error!("modes: the change could not be saved: {e}");
         "couldn't save the modes, so they stay as they were".to_owned()
     })?;
-    Ok(listed(shared, &after, reference))
+    Ok(listed(shared, &after, saved.as_deref(), reference))
 }
 
-/// `modes.listed`: the modes, the default polish prompt, and the models a mode can pick. It carries
-/// the user's words (names, prompts, apps): never log it.
-pub fn listed(shared: &Shared, modes: &ModeStore, reference: Option<&str>) -> Value {
-    let items: Vec<Value> = modes
-        .modes
+/// **Queries thread.** `modes.listed`: the modes, the default polish prompt, and the models a mode can pick; `saved`
+/// is the id of the mode a save saved. It carries the user's words (names, prompts, apps): never
+/// log it.
+pub fn listed(
+    shared: &Shared,
+    modes: &ModeStore,
+    saved: Option<&str>,
+    reference: Option<&str>,
+) -> Value {
+    let items: Vec<Value> = modes.modes.iter().map(|m| mode_item(shared, m)).collect();
+    // Read once each, so every model is judged against the same consents and the same models.
+    // Consents that cannot be read are none (logged by name): nothing is shown as allowed.
+    let consents = consent::stored(shared.store.as_ref(), Feature::Polish);
+    let choices = shared.llms.choices();
+    let models: Vec<Value> = choices
         .iter()
-        .map(|m| {
-            let mut item = Map::new();
-            item.insert("id".into(), m.id.clone().into());
-            item.insert("name".into(), m.name.clone().into());
-            // A style this build does not know is shown as such, never as another style.
-            let style = if m.style_unknown {
-                "other"
-            } else {
-                m.style.as_str()
-            };
-            item.insert("style".into(), style.into());
-            item.insert("polish".into(), m.polish_enabled.into());
-            item.insert("remove_fillers".into(), m.remove_fillers.into());
-            item.insert("polish_prompt".into(), m.polish_prompt.clone().into());
-            item.insert("apps".into(), json!(m.apps));
-            if let Some(model) = &m.polish_model {
-                item.insert("polish_model".into(), model.clone().into());
-            }
-            Value::Object(item)
-        })
-        .collect();
-    // Read once, so every model is judged against the same consent. One that cannot be read is
-    // none (logged by name): nothing is shown as allowed.
-    let consent = consent::stored(shared.store.as_ref(), Feature::Polish);
-    let models: Vec<Value> = shared
-        .llms
-        .choices()
-        .into_iter()
-        .map(|(r, llm)| {
-            let info = llm.info();
-            let needed = LlmConsent::for_model(&info);
-            let name = match &needed {
-                LlmConsent::Cloud { name, .. } => name.clone(),
-                LlmConsent::OnDevice => info.model.clone(),
-            };
+        .map(|(r, info)| {
+            let (_, needed, name) = crate::consent::described(info.clone());
+            let blocked = shared.local_only.check(&info.endpoint).is_err();
             json!({
                 "id": r.id(),
                 "name": name,
+                "model": info.model,
                 "to": needed.kind(),
-                "allowed": consent.as_ref().is_some_and(|c| c.covers(&info)),
+                "allowed": !blocked && consents.iter().any(|c| c.covers(info)),
+                "blocked_local_only": blocked,
             })
         })
         .collect();
@@ -345,11 +339,46 @@ pub fn listed(shared: &Shared, modes: &ModeStore, reference: Option<&str>) -> Va
             ("polish_models", Some(Value::Array(models))),
             (
                 "setting_polish_model",
-                shared.llms.setting_ref().map(|r| r.id().into()),
+                choices.first().map(|(r, _)| r.id().into()),
             ),
+            ("saved", saved.map(Into::into)),
             ("ref", reference.map(Into::into)),
         ],
     )
+}
+
+/// One mode as `modes.listed` lists it.
+fn mode_item(shared: &Shared, m: &Mode) -> Value {
+    let mut item = Map::new();
+    item.insert("id".into(), m.id.clone().into());
+    item.insert("name".into(), m.name.clone().into());
+    // A style this build does not know is shown as such, never as another style.
+    let style = if m.style_unknown {
+        "other"
+    } else {
+        m.style.as_str()
+    };
+    item.insert("style".into(), style.into());
+    item.insert("polish".into(), m.polish_enabled.into());
+    item.insert("remove_fillers".into(), m.remove_fillers.into());
+    item.insert("polish_prompt".into(), m.polish_prompt.clone().into());
+    item.insert("apps".into(), json!(m.apps));
+    if let Some(pin) = &m.polish_model {
+        item.insert("polish_model".into(), pin.id.clone().into());
+        if let Some(name) = &pin.model {
+            item.insert("polish_model_name".into(), name.clone().into());
+        }
+        // As a take would find it: held now, and sending where it did when the mode was saved.
+        let now =
+            ModelRef::parse(&pin.id).and_then(|r| shared.llms.info_of(&r, pin.model.as_deref()));
+        let state = match now {
+            None => "missing",
+            Some(info) if pin.to.as_ref().is_some_and(|to| to.covers(&info)) => "ready",
+            Some(_) => "moved",
+        };
+        item.insert("polish_model_state".into(), state.into());
+    }
+    Value::Object(item)
 }
 
 #[cfg(test)]
@@ -395,6 +424,7 @@ mod tests {
                 polish_prompt: Some("Short.".into()),
                 apps: Some(vec!["com.example.mail".into()]),
                 polish_model: Some(None),
+                polish_model_name: None,
             }
         );
         let Some(Ok(ModesQuery::Save { edit, .. })) =

@@ -1151,7 +1151,7 @@ impl EndedMeeting {
         let consent = stored(store.as_ref(), Feature::Meetings);
         let consented = Consented {
             inner: llm.as_ref(),
-            consent: consent.as_ref(),
+            consents: &consent,
         };
         let llm = &consented;
         let ctx = RecordContext {

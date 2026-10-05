@@ -13,12 +13,17 @@
 //! # The stored document
 //!
 //! The modes are one JSON document, `{"default_id", "modes": [{"id", "name", "style",
-//! "polish_enabled", "remove_fillers", "polish_prompt", "apps", "polish_model"}]}` (the shape the
-//! 0.2 import writes, plus `polish_model`). [`ModeStore::from_json`] is its one reader, for
-//! dictation and Settings alike; [`ModeStore::write_into`] writes a store back into the stored
-//! document, changing only the fields this build knows. A field it does not know survives a save:
-//! 0.2's `model` (which named a transcription model, never a language model, so 1.0 does not read
-//! it), or a newer build's; and so does a style it does not know, until the user picks another.
+//! "polish_enabled", "remove_fillers", "polish_prompt", "apps", "polish_model",
+//! "polish_model_name", "polish_model_to"}]}` (the shape the 0.2 import writes, plus the three
+//! `polish_model` fields: [`ModelPin`]). [`ModeStore::from_json`] is its one reader, for dictation
+//! and Settings alike; [`ModeStore::write_into`] writes a store back into the stored document,
+//! changing only the fields this build knows. A field it does not know survives a save: 0.2's
+//! `model` (which named a transcription model, never a language model, so 1.0 does not read it),
+//! or a newer build's; and so does a style it does not know, until the user picks another.
+//!
+//! Every mode has its own id once read: the 0.2 import can give two modes one id, and the second
+//! (and any after it) is read as `<id>~2` (`~3`, …), so Settings can address each and a rule never
+//! mistakes one for the other. The next save writes the new ids.
 //!
 //! # Editing
 //!
@@ -29,17 +34,20 @@
 //!
 //! # A mode's language model
 //!
-//! [`Mode::polish_model`] names the model a mode's dictations are polished on, by the id the core
-//! gives it (the chain finds it at each take: [`ModeModels`](crate::chain::ModeModels)), or `None`
-//! for the model Settings > AI chose. A mode whose model the core does not hold at that moment is
-//! not polished at all, never polished on another model in its place: that could send the words
-//! somewhere the user did not pick for this mode.
+//! [`Mode::polish_model`] names the model a mode's dictations are polished on ([`ModelPin`]: by
+//! the id the core gives it, optionally a model at that provider, and where it sent when the user
+//! picked it; the chain finds it at each take: [`ModeModels`](crate::chain::ModeModels)), or
+//! `None` for the model Settings > AI chose. A mode whose model the core does not hold at that
+//! moment, or that sends somewhere else now than when the mode was saved, is not polished at all,
+//! never polished on another model in its place: that could send the words somewhere the user did
+//! not pick for this mode.
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
 
+use crate::consent::Destination;
 use crate::style::Style;
 
 /// The most modes a store holds.
@@ -57,6 +65,27 @@ pub const MAX_APPS: usize = 64;
 /// The longest app identity, in characters.
 pub const MAX_APP_CHARS: usize = 256;
 
+/// The longest model name a mode pins at a provider ([`ModelPin::model`]), in characters.
+pub const MAX_MODEL_NAME_CHARS: usize = 128;
+
+/// A mode's own language model, as the user picked it in Settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelPin {
+    /// The model, by the id the core gives it: `engine:<id>` (one the shell registered) or
+    /// `provider:<id>` (the own-key provider chosen in Settings > AI). Blank in a stored document
+    /// is a model that never resolves (the mode is not polished), never the AI setting's model.
+    pub id: String,
+    /// A model at that provider (`provider:` only), sent as the request's model on the same
+    /// endpoint; `None` for the model chosen with the provider in Settings > AI. Free text: the
+    /// provider is the judge, and one it refuses fails the take's polish.
+    pub model: Option<String>,
+    /// Where the model sent when the user saved the mode, or `None` if that was never recorded.
+    /// A model that sends anywhere else now (a custom server re-pointed from this machine to
+    /// another), or one with nothing recorded, is not called: the mode is not polished until the
+    /// user saves it again.
+    pub to: Option<Destination>,
+}
+
 /// One mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mode {
@@ -70,16 +99,19 @@ pub struct Mode {
     /// [`style`](Self::style) says (the built-in default's), Settings shows it as its own, and a
     /// save keeps the stored one until the user picks a style.
     pub style_unknown: bool,
-    /// The language model this mode is polished on, by the id the core gives it, or `None` for the
-    /// model Settings > AI chose. When the core holds no model by this id, the mode's dictations go
-    /// out unpolished and say so; never to another model.
-    pub polish_model: Option<String>,
+    /// The language model this mode is polished on ([`ModelPin`]), or `None` for the model
+    /// Settings > AI chose. When the core holds no such model, or it sends elsewhere than when the
+    /// mode was saved, the mode's dictations go out unpolished and say so; never to another model.
+    pub polish_model: Option<ModelPin>,
     /// This mode's polish prompt; blank means the global prompt.
     pub polish_prompt: String,
     /// Whether dictations in this mode are polished (when a model is available).
     pub polish_enabled: bool,
-    /// Substrings matched, without case, against the frontmost app's identity: the bundle id on
-    /// macOS (`com.example.mail`), the executable name on Windows.
+    /// Substrings matched, without case or the spaces around them, against the frontmost app's
+    /// identity: the bundle id on macOS (`com.example.mail`), the executable name on Windows. A
+    /// substring, as 0.2 matched: `mail` matches `com.example.mail` and `com.example.mailbox`
+    /// alike, so a save refuses an app of one character or with no letter in it
+    /// ([`ModeError::AppInvalid`]), which would match nearly everything.
     pub apps: Vec<String>,
     /// Whether fillers and stutters are removed.
     pub remove_fillers: bool,
@@ -104,10 +136,11 @@ impl Mode {
     /// Whether the mode activates in the app identified by `app_id`. A mode with no apps never
     /// matches by identity, or the default mode would shadow every other one.
     pub fn matches_app(&self, app_id: &str) -> bool {
-        let app = app_id.to_lowercase();
-        self.apps
-            .iter()
-            .any(|a| !a.trim().is_empty() && app.contains(&a.to_lowercase()))
+        let app = app_id.trim().to_lowercase();
+        self.apps.iter().any(|a| {
+            let a = a.trim();
+            !a.is_empty() && app.contains(&a.to_lowercase())
+        })
     }
 }
 
@@ -161,12 +194,12 @@ impl std::error::Error for ModesUnreadable {}
 
 /// One mode added or changed (Settings' editor). `None` keeps what the mode has (for a new mode,
 /// the default: formal, fillers removed, no polish, no apps, the AI setting's model); the name is
-/// needed for a new mode.
+/// needed for a new mode. Text is taken as sent: [`ModeStore::save`] trims it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModeEdit {
     /// The mode changed, or `None` to add one.
     pub id: Option<String>,
-    /// Its name, trimmed.
+    /// Its name.
     pub name: Option<String>,
     /// How it writes.
     pub style: Option<Style>,
@@ -178,8 +211,13 @@ pub struct ModeEdit {
     pub polish_prompt: Option<String>,
     /// Its apps, the whole list. Blank entries are dropped, and an app named twice is kept once.
     pub apps: Option<Vec<String>>,
-    /// Its language model: `Some(None)` (or a blank id) for the AI setting's.
+    /// Its language model, by id: `Some(None)` (or a blank id) for the AI setting's. Named, the
+    /// pin is replaced whole: its model name is then [`polish_model_name`](Self::polish_model_name)
+    /// (none when absent), and where it sends is recorded again.
     pub polish_model: Option<Option<String>>,
+    /// A model at the pinned provider ([`ModelPin::model`]): `Some(None)` (or blank) for the one
+    /// chosen in Settings > AI. Named without `polish_model`, it changes the pin the mode has.
+    pub polish_model_name: Option<Option<String>>,
 }
 
 /// Which limit a change went over.
@@ -220,6 +258,13 @@ pub enum ModeError {
     NotFound,
     /// The core holds no language model by that id.
     ModelUnknown,
+    /// A model name that is blank, longer than [`MAX_MODEL_NAME_CHARS`] or holds a control
+    /// character, or one given for a model that is not a provider's (`engine:`), or without a
+    /// model to name one at.
+    ModelNameInvalid,
+    /// An app identity holding a control character (a line break), or one of a single character
+    /// or with no letter: as a substring it would match nearly every app.
+    AppInvalid,
 }
 
 impl ModeError {
@@ -234,6 +279,8 @@ impl ModeError {
             Self::AppTaken => "app_taken",
             Self::NotFound => "mode_not_found",
             Self::ModelUnknown => "model_unknown",
+            Self::ModelNameInvalid => "model_name_invalid",
+            Self::AppInvalid => "app_invalid",
         }
     }
 }
@@ -252,7 +299,10 @@ impl std::fmt::Display for ModeError {
             Self::TooLong(Limit::PolishPrompt) => {
                 write!(f, "polish instructions are at most {MAX_PROMPT_CHARS} characters")
             }
-            Self::TooLong(Limit::Apps) => write!(f, "a mode names at most {MAX_APPS} apps"),
+            Self::TooLong(Limit::Apps) => write!(
+                f,
+                "a mode names at most {MAX_APPS} apps: shorten its list to {MAX_APPS} or fewer"
+            ),
             Self::TooLong(Limit::App) => {
                 write!(f, "an app's identity is at most {MAX_APP_CHARS} characters")
             }
@@ -263,6 +313,13 @@ impl std::fmt::Display for ModeError {
             Self::AppTaken => f.write_str("an app this mode is given is in another mode"),
             Self::NotFound => f.write_str("no mode has that id"),
             Self::ModelUnknown => f.write_str("there is no language model by that id"),
+            Self::ModelNameInvalid => write!(
+                f,
+                "a model's name is up to {MAX_MODEL_NAME_CHARS} printable characters, given only for a provider's model"
+            ),
+            Self::AppInvalid => f.write_str(
+                "an app's identity is printable, at least two characters long and has a letter in it",
+            ),
         }
     }
 }
@@ -272,11 +329,17 @@ impl std::error::Error for ModeError {}
 impl ModeStore {
     /// The default mode: the one named by `default_id`, else the first, else the built-in one.
     pub fn default_mode(&self) -> &Mode {
+        self.default_index()
+            .map_or(&BUILTIN_DEFAULT, |i| &self.modes[i])
+    }
+
+    /// Where the default mode is: the one named by `default_id`, else the first; `None` with no
+    /// modes at all.
+    fn default_index(&self) -> Option<usize> {
         self.modes
             .iter()
-            .find(|m| m.id == self.default_id)
-            .or_else(|| self.modes.first())
-            .unwrap_or(&BUILTIN_DEFAULT)
+            .position(|m| m.id == self.default_id)
+            .or_else(|| (!self.modes.is_empty()).then_some(0))
     }
 
     /// The mode for the frontmost app. See [`resolve_with_override`](Self::resolve_with_override).
@@ -306,9 +369,13 @@ impl ModeStore {
 
     /// Reads the stored document. `default_id`, and each mode's `id` and `name`, are needed;
     /// `polish_enabled` defaults to off, `remove_fillers` to on, the prompt to blank, the apps to
-    /// none and `polish_model` (absent, `null` or blank) to the AI setting's model. A style that is
-    /// absent or unknown writes as the default's ([`Mode::style_unknown`]). Fields this build does
-    /// not know are ignored here and kept by [`write_into`](Self::write_into).
+    /// none and `polish_model` (absent or `null`) to the AI setting's model. A field of the wrong
+    /// type does not read (a prompt that is not text would otherwise read as blank and be
+    /// overwritten by the next save), and a blank `polish_model` is a model that never resolves,
+    /// not the AI setting's ([`ModelPin::id`]). A style that is absent or unknown writes as the
+    /// default's ([`Mode::style_unknown`]). A mode with an id an earlier one has gets one of its
+    /// own (`<id>~2`: see the module docs). Fields this build does not know are ignored here and
+    /// kept by [`write_into`](Self::write_into).
     pub fn from_json(text: &str) -> Result<Self, ModesUnreadable> {
         let v: Value = serde_json::from_str(text).map_err(|_| ModesUnreadable)?;
         let default_id = v
@@ -320,7 +387,12 @@ impl ModeStore {
             .get("modes")
             .and_then(Value::as_array)
             .ok_or(ModesUnreadable)?;
-        let modes = list.iter().map(read_mode).collect::<Result<_, _>>()?;
+        let mut modes: Vec<Mode> = list.iter().map(read_mode).collect::<Result<_, _>>()?;
+        let renamed = give_each_its_own_id(&mut modes);
+        if renamed > 0 {
+            // By count only: ids can be the user's words in a document an older build wrote.
+            log::warn!("modes: {renamed} modes shared an id with another; each now has its own");
+        }
         Ok(Self { default_id, modes })
     }
 
@@ -346,8 +418,9 @@ impl ModeStore {
     }
 
     /// `top` with this store's `default_id` and modes, each written over its stored object in
-    /// `stored` (the first one by its id not used yet, so two modes the import gave one id keep
-    /// their own fields).
+    /// `stored`: the first one by its id not used yet, else (for a mode [`from_json`] gave an id
+    /// of its own, `<id>~2`) the first by the id it was read with, so two modes the import gave
+    /// one id keep their own fields.
     fn fill(&self, mut top: Map<String, Value>, stored: Vec<Value>) -> Value {
         let mut stored: Vec<Option<Map<String, Value>>> = stored
             .into_iter()
@@ -356,17 +429,21 @@ impl ModeStore {
                 _ => None,
             })
             .collect();
+        let mut take = |id: &str| {
+            stored
+                .iter_mut()
+                .find(|o| {
+                    o.as_ref()
+                        .is_some_and(|o| o.get("id").and_then(Value::as_str) == Some(id))
+                })
+                .and_then(Option::take)
+        };
         let modes = self
             .modes
             .iter()
             .map(|m| {
-                let mut item = stored
-                    .iter_mut()
-                    .find(|o| {
-                        o.as_ref()
-                            .is_some_and(|o| o.get("id").and_then(Value::as_str) == Some(&m.id))
-                    })
-                    .and_then(Option::take)
+                let mut item = take(&m.id)
+                    .or_else(|| read_as(&m.id).and_then(&mut take))
                     .unwrap_or_default();
                 item.insert("id".into(), m.id.clone().into());
                 item.insert("name".into(), m.name.clone().into());
@@ -380,14 +457,7 @@ impl ModeStore {
                     "apps".into(),
                     Value::Array(m.apps.iter().map(|a| a.clone().into()).collect()),
                 );
-                match &m.polish_model {
-                    Some(model) => {
-                        item.insert("polish_model".into(), model.clone().into());
-                    }
-                    None => {
-                        item.remove("polish_model");
-                    }
-                }
+                write_pin(&mut item, m.polish_model.as_ref());
                 Value::Object(item)
             })
             .collect();
@@ -396,43 +466,62 @@ impl ModeStore {
         Value::Object(top)
     }
 
-    /// An id for a new mode: `m` and the time in milliseconds, past any id taken.
+    /// An id for a new mode: `m` and the time in milliseconds, past any id taken (a mode's, or
+    /// the default's while it names no mode, so a new mode never becomes the default by its id).
     pub fn fresh_id(&self, now_unix_ms: i64) -> String {
         let mut ms = now_unix_ms.max(0);
         loop {
             let id = format!("m{ms}");
-            if !self.modes.iter().any(|m| m.id == id) {
+            if id != self.default_id && !self.modes.iter().any(|m| m.id == id) {
                 return id;
             }
             ms = ms.saturating_add(1);
         }
     }
 
+    /// This store with a default mode it names: with no modes, the built-in default; with a
+    /// `default_id` that names none, the first mode (the one resolution already uses). So a mode
+    /// a save adds is never the default by accident, and the default's rules hold for the mode
+    /// that is one.
+    fn with_a_default(&self) -> Self {
+        let mut store = self.clone();
+        if store.modes.is_empty() {
+            let default = Mode::builtin_default();
+            store.default_id.clone_from(&default.id);
+            store.modes.push(default);
+        } else if !store.modes.iter().any(|m| m.id == store.default_id) {
+            store.default_id.clone_from(&store.modes[0].id);
+        }
+        store
+    }
+
     /// The store after `edit`, and the id of the mode saved. `new_id` is a new mode's id
     /// ([`fresh_id`](Self::fresh_id)); `take_apps` moves an app another mode names to this one
-    /// (otherwise [`ModeError::AppTaken`]); `model_known` says whether the core holds a language
-    /// model by an id. Each rule is checked only on what the edit changes.
+    /// (otherwise [`ModeError::AppTaken`]); `model_at` says where a language model the core holds
+    /// sends now, by its id and a model name at it ([`ModelPin`]), or `None` when the core holds
+    /// none. Each rule is checked only on what the edit changes. A store without a default mode
+    /// it names gets one first (see [`default_mode`](Self::default_mode)).
     pub fn save(
         &self,
         edit: &ModeEdit,
         take_apps: bool,
         new_id: &str,
-        model_known: &dyn Fn(&str) -> bool,
+        model_at: &dyn Fn(&str, Option<&str>) -> Option<Destination>,
     ) -> Result<(Self, String), ModeError> {
-        let (index, before) = match &edit.id {
-            Some(id) => {
-                let i = self
-                    .modes
+        let base = self.with_a_default();
+        let index = match &edit.id {
+            Some(id) => Some(
+                base.modes
                     .iter()
                     .position(|m| &m.id == id)
-                    .ok_or(ModeError::NotFound)?;
-                (Some(i), Some(&self.modes[i]))
-            }
-            None if self.modes.len() >= MAX_MODES => {
+                    .ok_or(ModeError::NotFound)?,
+            ),
+            None if base.modes.len() >= MAX_MODES => {
                 return Err(ModeError::TooLong(Limit::Modes));
             }
-            None => (None, None),
+            None => None,
         };
+        let before = index.map(|i| &base.modes[i]);
         let mut mode = before.cloned().unwrap_or_else(|| Mode {
             id: new_id.to_owned(),
             name: String::new(),
@@ -468,19 +557,19 @@ impl ModeStore {
                 .map(str::to_owned)
                 .collect();
         }
-        if let Some(model) = &edit.polish_model {
-            mode.polish_model = model
-                .as_deref()
-                .map(str::trim)
-                .filter(|m| !m.is_empty())
-                .map(str::to_owned);
-        }
+        mode.polish_model =
+            pin_after(edit, before.and_then(|b| b.polish_model.as_ref()), model_at)?;
 
-        let added = self.check(&mode, before, take_apps, model_known)?;
+        let added = base.check(&mode, index, take_apps)?;
 
-        let mut after = self.clone();
+        let mut after = base.clone();
         if take_apps && !added.is_empty() {
-            for other in after.modes.iter_mut().filter(|m| m.id != mode.id) {
+            for (_, other) in after
+                .modes
+                .iter_mut()
+                .enumerate()
+                .filter(|(i, _)| Some(*i) != index)
+            {
                 other.apps.retain(|a| !added.contains(&app_key(a)));
             }
         }
@@ -492,15 +581,22 @@ impl ModeStore {
         Ok((after, id))
     }
 
-    /// The rules, on what `mode` changes from `before` (all of it for a new mode). Gives the apps
-    /// the mode is given that it did not name before, by [`app_key`].
+    /// The rules, on what `mode` (at `index`, or new) changes from the mode it was (all of it for
+    /// a new mode). Other modes are told apart by place, never by id. Gives the apps the mode is
+    /// given that it did not name before, by [`app_key`].
     fn check(
         &self,
         mode: &Mode,
-        before: Option<&Mode>,
+        index: Option<usize>,
         take_apps: bool,
-        model_known: &dyn Fn(&str) -> bool,
     ) -> Result<HashSet<String>, ModeError> {
+        let before = index.map(|i| &self.modes[i]);
+        let mut others = self
+            .modes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != index)
+            .map(|(_, m)| m);
         if before.is_none_or(|b| b.name != mode.name) {
             if mode.name.is_empty() {
                 return Err(ModeError::NameBlank);
@@ -512,11 +608,7 @@ impl ModeStore {
                 return Err(ModeError::NameIsStyle);
             }
             let spoken = spoken_name(&mode.name);
-            if self
-                .modes
-                .iter()
-                .any(|m| m.id != mode.id && spoken_name(&m.name) == spoken)
-            {
+            if others.clone().any(|m| spoken_name(&m.name) == spoken) {
                 return Err(ModeError::NameTaken);
             }
         }
@@ -543,38 +635,31 @@ impl ModeStore {
             }
         }
         if !added.is_empty() {
-            if mode.id == self.default_mode().id {
+            if added.iter().any(|a| !valid_app(a)) {
+                return Err(ModeError::AppInvalid);
+            }
+            if index.is_some() && index == self.default_index() {
                 return Err(ModeError::DefaultMode);
             }
-            let taken = self
-                .modes
-                .iter()
-                .filter(|m| m.id != mode.id)
-                .any(|m| m.apps.iter().any(|a| added.contains(&app_key(a))));
+            let taken = others.any(|m| m.apps.iter().any(|a| added.contains(&app_key(a))));
             if taken && !take_apps {
                 return Err(ModeError::AppTaken);
             }
-        }
-        if before.and_then(|b| b.polish_model.as_deref()) != mode.polish_model.as_deref()
-            && let Some(model) = &mode.polish_model
-            && !model_known(model)
-        {
-            return Err(ModeError::ModelUnknown);
         }
         Ok(added)
     }
 
     /// The store without mode `id`. Its apps go back to the default mode, which cannot be deleted.
     pub fn delete(&self, id: &str) -> Result<Self, ModeError> {
-        let i = self
+        let mut after = self.with_a_default();
+        let i = after
             .modes
             .iter()
             .position(|m| m.id == id)
             .ok_or(ModeError::NotFound)?;
-        if self.modes[i].id == self.default_mode().id {
+        if Some(i) == after.default_index() {
             return Err(ModeError::DefaultMode);
         }
-        let mut after = self.clone();
         after.modes.remove(i);
         Ok(after)
     }
@@ -632,6 +717,12 @@ fn read_mode(m: &Value) -> Result<Mode, ModesUnreadable> {
         None => Ok(default),
         Some(b) => b.as_bool().ok_or(ModesUnreadable),
     };
+    // Text that may be absent or null, but is text when it is there.
+    let text = |k: &str| match m.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(t)) => Ok(Some(t.as_str())),
+        Some(_) => Err(ModesUnreadable),
+    };
     let apps = match m.get("apps") {
         None => Vec::new(),
         Some(Value::Array(apps)) => apps
@@ -642,11 +733,18 @@ fn read_mode(m: &Value) -> Result<Mode, ModesUnreadable> {
         Some(_) => return Err(ModesUnreadable),
     };
     // A model that does not read is refused with the document rather than read as none: none is
-    // the AI setting's model, which may send somewhere this mode was set up not to.
-    let polish_model = match m.get("polish_model") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(id)) => Some(id.trim()).filter(|id| !id.is_empty()),
-        Some(_) => return Err(ModesUnreadable),
+    // the AI setting's model, which may send somewhere this mode was set up not to. For the same
+    // reason a blank one is kept blank (a model that never resolves), never read as none.
+    let polish_model = match text("polish_model")? {
+        None => None,
+        Some(id) => Some(ModelPin {
+            id: id.trim().to_owned(),
+            model: text("polish_model_name")?.map(str::to_owned),
+            to: match m.get("polish_model_to") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(Destination::from_value(v).ok_or(ModesUnreadable)?),
+            },
+        }),
     };
     let style = s("style").and_then(Style::parse);
     Ok(Mode {
@@ -654,12 +752,122 @@ fn read_mode(m: &Value) -> Result<Mode, ModesUnreadable> {
         name: s("name").ok_or(ModesUnreadable)?.to_owned(),
         style: style.unwrap_or(Mode::builtin_default().style),
         style_unknown: style.is_none(),
-        polish_model: polish_model.map(str::to_owned),
-        polish_prompt: s("polish_prompt").unwrap_or_default().to_owned(),
+        polish_model,
+        polish_prompt: text("polish_prompt")?.unwrap_or_default().to_owned(),
         polish_enabled: flag("polish_enabled", false)?,
         apps,
         remove_fillers: flag("remove_fillers", true)?,
     })
+}
+
+/// Gives every mode with an id an earlier one has an id of its own, `<id>~2` (or the next number
+/// no mode has). Says how many it renamed.
+fn give_each_its_own_id(modes: &mut [Mode]) -> usize {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut renamed = 0;
+    for i in 0..modes.len() {
+        if seen.insert(modes[i].id.clone()) {
+            continue;
+        }
+        let base = modes[i].id.clone();
+        let mut n = 2u32;
+        let id = loop {
+            let id = format!("{base}~{n}");
+            if !seen.contains(&id) && !modes.iter().any(|m| m.id == id) {
+                break id;
+            }
+            n = n.saturating_add(1);
+        };
+        seen.insert(id.clone());
+        modes[i].id = id;
+        renamed += 1;
+    }
+    renamed
+}
+
+/// The id a mode [`give_each_its_own_id`] renamed was read with: `c` for `c~2`.
+fn read_as(id: &str) -> Option<&str> {
+    let (base, n) = id.rsplit_once('~')?;
+    n.parse::<u32>().is_ok_and(|n| n >= 2).then_some(base)
+}
+
+/// Writes `pin` into a stored mode: its three fields, or none of them.
+fn write_pin(item: &mut Map<String, Value>, pin: Option<&ModelPin>) {
+    let Some(pin) = pin else {
+        for k in ["polish_model", "polish_model_name", "polish_model_to"] {
+            item.remove(k);
+        }
+        return;
+    };
+    item.insert("polish_model".into(), pin.id.clone().into());
+    match &pin.model {
+        Some(model) => item.insert("polish_model_name".into(), model.clone().into()),
+        None => item.remove("polish_model_name"),
+    };
+    match &pin.to {
+        Some(to) => item.insert("polish_model_to".into(), to.to_value()),
+        None => item.remove("polish_model_to"),
+    };
+}
+
+/// The mode's [`ModelPin`] after `edit`, from `before`'s. Unnamed in the edit, it stays as it was.
+/// Named, the pin is the edit's, with where it sends recorded again from `model_at`: refused when
+/// the core holds no such model and the pin changed ([`ModeError::ModelUnknown`]); kept as it was
+/// recorded when the pin is the same and its model is gone (so the mode stays editable, and its
+/// takes still say the model is missing).
+fn pin_after(
+    edit: &ModeEdit,
+    before: Option<&ModelPin>,
+    model_at: &dyn Fn(&str, Option<&str>) -> Option<Destination>,
+) -> Result<Option<ModelPin>, ModeError> {
+    let name = |n: &Option<String>| -> Result<Option<String>, ModeError> {
+        let Some(n) = n.as_deref().map(str::trim).filter(|n| !n.is_empty()) else {
+            return Ok(None);
+        };
+        if n.chars().count() > MAX_MODEL_NAME_CHARS || n.chars().any(char::is_control) {
+            return Err(ModeError::ModelNameInvalid);
+        }
+        Ok(Some(n.to_owned()))
+    };
+    let (id, model) = match (&edit.polish_model, &edit.polish_model_name) {
+        (None, None) => return Ok(before.cloned()),
+        (Some(id), model) => (
+            id.as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            match model {
+                Some(model) => name(model)?,
+                None => None,
+            },
+        ),
+        (None, Some(model)) => (before.map(|p| p.id.clone()), name(model)?),
+    };
+    let Some(id) = id else {
+        // The AI setting's model: no name to give it.
+        return match model {
+            Some(_) => Err(ModeError::ModelNameInvalid),
+            None => Ok(None),
+        };
+    };
+    if model.is_some() && !id.starts_with("provider:") {
+        return Err(ModeError::ModelNameInvalid);
+    }
+    let same = before.is_some_and(|b| b.id == id && b.model == model);
+    let to = match model_at(&id, model.as_deref()) {
+        Some(to) => Some(to),
+        None if same => before.and_then(|b| b.to.clone()),
+        None => return Err(ModeError::ModelUnknown),
+    };
+    Ok(Some(ModelPin { id, model, to }))
+}
+
+/// Whether `app` (as [`app_key`] gives it) is an identity a mode may be given: no control
+/// character, at least two characters, and a letter.
+fn valid_app(app: &str) -> bool {
+    !app.chars().any(char::is_control)
+        && app.chars().count() >= 2
+        && app.chars().any(char::is_alphabetic)
 }
 
 fn capitalise(s: &str) -> String {
@@ -879,8 +1087,20 @@ mod edit_tests {
         ModeStore::from_json(IMPORTED).unwrap()
     }
 
-    fn known(id: &str) -> bool {
-        ["engine:local", "provider:anthropic"].contains(&id)
+    /// Where the models the tests' core holds send: one on this machine, one provider (which
+    /// takes a model name, the engine none).
+    fn known(id: &str, name: Option<&str>) -> Option<Destination> {
+        match (id, name) {
+            ("engine:local", None) => Some(Destination::OnDevice),
+            ("provider:anthropic", _) => Some(Destination::Cloud(ANTHROPIC.into())),
+            _ => None,
+        }
+    }
+
+    const ANTHROPIC: &str = "https://api.anthropic.com";
+
+    fn pin_id(m: &Mode) -> Option<&str> {
+        m.polish_model.as_ref().map(|p| p.id.as_str())
     }
 
     fn save(store: &ModeStore, edit: ModeEdit) -> Result<(ModeStore, String), ModeError> {
@@ -922,16 +1142,36 @@ mod edit_tests {
         let odd = mode(&s, "x");
         assert!(odd.style_unknown, "a newer build's style");
         assert_eq!(odd.style, Style::Formal, "writes as the default's");
-        assert_eq!(odd.polish_model.as_deref(), Some("engine:local"));
+        assert_eq!(pin_id(odd), Some("engine:local"));
+        assert_eq!(
+            odd.polish_model.as_ref().unwrap().to,
+            None,
+            "nothing recorded: never called until saved again"
+        );
         assert!(odd.remove_fillers, "0.2's default");
         assert!(!odd.polish_enabled);
-        for blank in [r#""polish_model":null"#, r#""polish_model":"  ""#] {
-            let doc = format!(r#"{{"default_id":"d","modes":[{{"id":"d","name":"D",{blank}}}]}}"#);
-            assert_eq!(
-                ModeStore::from_json(&doc).unwrap().modes[0].polish_model,
-                None
-            );
-        }
+        let read = |field: &str| {
+            let doc = format!(r#"{{"default_id":"d","modes":[{{"id":"d","name":"D",{field}}}]}}"#);
+            ModeStore::from_json(&doc).unwrap().modes.remove(0)
+        };
+        assert_eq!(read(r#""polish_model":null"#).polish_model, None);
+        assert_eq!(
+            pin_id(&read(r#""polish_model":"  ""#)),
+            Some(""),
+            "a blank stored model fails closed: never the AI setting's"
+        );
+        assert_eq!(read(r#""polish_prompt":null"#).polish_prompt, "");
+        let pinned = read(
+            r#""polish_model":"provider:anthropic","polish_model_name":"model-b","polish_model_to":{"to":"cloud","endpoint":"https://api.anthropic.com"}"#,
+        );
+        assert_eq!(
+            pinned.polish_model,
+            Some(ModelPin {
+                id: "provider:anthropic".into(),
+                model: Some("model-b".into()),
+                to: Some(Destination::Cloud(ANTHROPIC.into())),
+            })
+        );
     }
 
     #[test]
@@ -947,6 +1187,11 @@ mod edit_tests {
             r#"{"default_id":"d","modes":[{"id":"x","name":"x","apps":"slack"}]}"#,
             r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_enabled":"yes"}]}"#,
             r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_model":5}]}"#,
+            r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_prompt":5}]}"#,
+            r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_prompt":["a"]}]}"#,
+            r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_model":"engine:x","polish_model_name":3}]}"#,
+            r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_model":"engine:x","polish_model_to":"on_device"}]}"#,
+            r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_model":"engine:x","polish_model_to":{"to":"cloud"}}]}"#,
         ] {
             assert_eq!(ModeStore::from_json(bad), Err(ModesUnreadable), "{bad}");
         }
@@ -1303,11 +1548,16 @@ mod edit_tests {
         assert_eq!(save(&s, model("anthropic")), Err(ModeError::ModelUnknown));
         let (picked, _) = save(&s, model(" provider:anthropic ")).unwrap();
         assert_eq!(
-            mode(&picked, "c").polish_model.as_deref(),
-            Some("provider:anthropic")
+            mode(&picked, "c").polish_model,
+            Some(ModelPin {
+                id: "provider:anthropic".into(),
+                model: None,
+                to: Some(Destination::Cloud(ANTHROPIC.into())),
+            }),
+            "trimmed, and where it sends recorded"
         );
         // A model let go of since stays named, so the mode can still be edited (and says it is gone).
-        let none_known = |_: &str| false;
+        let none_known = |_: &str, _: Option<&str>| None;
         let resent = ModeEdit {
             polish_model: Some(Some("engine:local".into())),
             name: Some("Odder".into()),
@@ -1390,5 +1640,299 @@ mod edit_tests {
                 "{e}"
             );
         }
+    }
+
+    /// The 0.2 import can give two modes one id. Each is read with its own, so a save tells them
+    /// apart by place: a name or an app the other has is still refused, and each keeps its own
+    /// stored fields.
+    #[test]
+    fn modes_that_shared_an_id_each_get_their_own_and_stay_apart() {
+        const TWINS: &str = r#"{"default_id":"d","modes":[
+            {"id":"d","name":"Everywhere else"},
+            {"id":"c","name":"Chat","apps":["com.example.chat"],"mine":1},
+            {"id":"c","name":"Mail","apps":["com.example.mail"],"mine":2}]}"#;
+        let s = ModeStore::from_json(TWINS).unwrap();
+        let ids: Vec<&str> = s.modes.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["d", "c", "c~2"]);
+        let rename = |id: &str, name: &str| ModeEdit {
+            name: Some(name.into()),
+            ..edit(id)
+        };
+        assert_eq!(save(&s, rename("c~2", "chat")), Err(ModeError::NameTaken));
+        assert_eq!(save(&s, rename("c", "MAIL")), Err(ModeError::NameTaken));
+        let give = |id: &str, app: &str| ModeEdit {
+            apps: Some(vec![app.into()]),
+            ..edit(id)
+        };
+        assert_eq!(
+            save(&s, give("c~2", "com.example.chat")),
+            Err(ModeError::AppTaken)
+        );
+        let (moved, _) = s
+            .save(&give("c~2", "com.example.chat"), true, "m1", &known)
+            .unwrap();
+        assert!(mode(&moved, "c").apps.is_empty(), "taken from the other");
+        // Written back: the new id, and each mode's own unknown field.
+        let (renamed, _) = save(&s, rename("c~2", "Letters")).unwrap();
+        let v: Value = serde_json::from_str(&renamed.write_into(TWINS).unwrap()).unwrap();
+        assert_eq!(v["modes"][1]["mine"], 1);
+        assert_eq!(v["modes"][2]["id"], "c~2");
+        assert_eq!(v["modes"][2]["mine"], 2);
+        assert_eq!(v["modes"][2]["name"], "Letters");
+        let deleted = s.delete("c~2").unwrap();
+        assert_eq!(deleted.modes.len(), 2);
+        assert_eq!(mode(&deleted, "c").name, "Chat", "the other one stays");
+        // An id an earlier mode was given already is skipped.
+        let three = r#"{"default_id":"d","modes":[{"id":"d","name":"D"},{"id":"d~2","name":"E"},{"id":"d","name":"F"}]}"#;
+        let ids: Vec<String> = ModeStore::from_json(three)
+            .unwrap()
+            .modes
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(ids, ["d", "d~2", "d~3"]);
+    }
+
+    /// Moving an app compares identities without case or padding, as matching does.
+    #[test]
+    fn take_apps_moves_an_app_however_it_is_cased() {
+        let s = imported();
+        let (moved, id) = s
+            .save(
+                &ModeEdit {
+                    apps: Some(vec!["  Com.Example.CHAT ".into()]),
+                    ..named("Talk")
+                },
+                true,
+                "m1",
+                &known,
+            )
+            .unwrap();
+        assert!(mode(&moved, "c").apps.is_empty());
+        assert_eq!(mode(&moved, &id).apps, ["Com.Example.CHAT"]);
+        assert_eq!(moved.resolve(Some(" com.example.chat ")).id, id);
+    }
+
+    #[test]
+    fn a_stored_document_that_is_not_an_object_is_never_written_into() {
+        let s = imported();
+        for bad in [
+            "[]",
+            "3",
+            r#""modes""#,
+            r#"{"modes":{}}"#,
+            r#"{"modes":"x"}"#,
+            "not json",
+        ] {
+            assert_eq!(s.write_into(bad), Err(ModesUnreadable), "{bad}");
+        }
+    }
+
+    /// With no modes, or a default_id that names none, the mode a save adds never becomes the
+    /// default, so it can hold apps; and the mode that is the default (the first) holds the
+    /// default's rules.
+    #[test]
+    fn a_new_mode_never_becomes_the_default_by_accident() {
+        let with_apps = ModeEdit {
+            apps: Some(vec!["com.example.mail".into()]),
+            ..named("Mail")
+        };
+        let empty = ModeStore {
+            default_id: "gone".into(),
+            modes: Vec::new(),
+        };
+        let (after, id) = empty.save(&with_apps, false, "m1", &known).unwrap();
+        assert_eq!(
+            after.modes.len(),
+            2,
+            "the built-in default, then the new one"
+        );
+        assert_ne!(after.default_mode().id, id);
+        assert_eq!(after.resolve(Some("com.example.mail")).id, id);
+        assert_eq!(after.default_id, after.default_mode().id, "names it now");
+
+        let dangling = ModeStore {
+            default_id: "m5".into(),
+            modes: vec![with_apps_mode("a", &[]), with_apps_mode("b", &["slack"])],
+        };
+        assert_eq!(
+            dangling.fresh_id(5),
+            "m6",
+            "the default's id is never given"
+        );
+        let (after, id) = dangling.save(&with_apps, false, "m6", &known).unwrap();
+        assert_eq!(after.default_mode().id, "a");
+        assert_ne!(id, "a");
+        assert_eq!(
+            save(
+                &dangling,
+                ModeEdit {
+                    apps: Some(vec!["com.example.notes".into()]),
+                    ..edit("a")
+                }
+            ),
+            Err(ModeError::DefaultMode),
+            "the first is the default, so it holds the default's rules"
+        );
+        assert_eq!(dangling.delete("a"), Err(ModeError::DefaultMode));
+        assert!(dangling.delete("b").is_ok());
+    }
+
+    fn with_apps_mode(id: &str, apps: &[&str]) -> Mode {
+        Mode {
+            id: id.into(),
+            name: id.to_uppercase(),
+            apps: apps.iter().map(|a| (*a).into()).collect(),
+            ..Mode::builtin_default()
+        }
+    }
+
+    /// An app is a substring of the frontmost app's identity: one that would match nearly
+    /// everything, or holds a line break, is refused when it is given (and one the import brought
+    /// stays editable).
+    #[test]
+    fn an_app_identity_is_printable_and_specific_enough() {
+        let s = imported();
+        let apps = |app: &str| ModeEdit {
+            apps: Some(vec!["com.example.chat".into(), app.into()]),
+            ..edit("c")
+        };
+        for bad in [
+            "a",
+            "é",
+            "42",
+            "1.2.3",
+            "com.example\nmail",
+            "mail\u{7}",
+            ".-",
+        ] {
+            assert_eq!(save(&s, apps(bad)), Err(ModeError::AppInvalid), "{bad:?}");
+        }
+        for good in ["ab", "Slack.exe", "com.example.mail"] {
+            assert!(save(&s, apps(good)).is_ok(), "{good}");
+        }
+        let imported_short = ModeStore {
+            modes: vec![Mode::builtin_default(), with_apps_mode("x", &["x"])],
+            ..ModeStore::default()
+        };
+        assert!(
+            save(
+                &imported_short,
+                ModeEdit {
+                    apps: Some(vec!["x".into()]),
+                    polish_enabled: Some(true),
+                    ..edit("x")
+                }
+            )
+            .is_ok(),
+            "kept, not given: no refusal"
+        );
+    }
+
+    /// A mode may pin a model at a provider: printable, at most 128 characters, a provider's
+    /// only; blank is the provider's chosen one. Where it sends is recorded at each save that
+    /// names the model, and kept by one that does not.
+    #[test]
+    fn a_mode_pins_a_model_at_a_provider_and_where_it_sends() {
+        let s = imported();
+        let pin = |id: Option<&str>, name: Option<&str>| ModeEdit {
+            polish_model: Some(id.map(Into::into)),
+            polish_model_name: Some(name.map(Into::into)),
+            ..edit("c")
+        };
+        let (named, _) = save(&s, pin(Some("provider:anthropic"), Some(" model-b "))).unwrap();
+        assert_eq!(
+            mode(&named, "c").polish_model,
+            Some(ModelPin {
+                id: "provider:anthropic".into(),
+                model: Some("model-b".into()),
+                to: Some(Destination::Cloud(ANTHROPIC.into())),
+            })
+        );
+        let doc = named.write_into(IMPORTED).unwrap();
+        assert_eq!(ModeStore::from_json(&doc).unwrap(), named, "reads back");
+        assert_eq!(
+            save(&s, pin(Some("provider:anthropic"), Some("  ")))
+                .unwrap()
+                .0
+                .modes[1]
+                .polish_model
+                .as_ref()
+                .unwrap()
+                .model,
+            None,
+            "blank: the provider's chosen model"
+        );
+        for bad in [
+            pin(Some("engine:local"), Some("model-b")),
+            pin(None, Some("model-b")),
+            pin(
+                Some("provider:anthropic"),
+                Some(&"m".repeat(MAX_MODEL_NAME_CHARS + 1)),
+            ),
+            pin(Some("provider:anthropic"), Some("model\nb")),
+            ModeEdit {
+                polish_model_name: Some(Some("model-b".into())),
+                ..edit("d")
+            },
+        ] {
+            assert_eq!(save(&s, bad), Err(ModeError::ModelNameInvalid));
+        }
+        assert!(
+            save(
+                &s,
+                pin(
+                    Some("provider:anthropic"),
+                    Some(&"é".repeat(MAX_MODEL_NAME_CHARS))
+                )
+            )
+            .is_ok()
+        );
+        // Only the name, on a mode that has a pin: the pin's model changes.
+        let (renamed, _) = save(
+            &named,
+            ModeEdit {
+                polish_model_name: Some(Some("model-c".into())),
+                ..edit("c")
+            },
+        )
+        .unwrap();
+        let p = mode(&renamed, "c").polish_model.clone().unwrap();
+        assert_eq!(
+            (p.id.as_str(), p.model.as_deref()),
+            ("provider:anthropic", Some("model-c"))
+        );
+
+        // The model now sends elsewhere: a save that names it records that; one that does not
+        // keeps what was recorded (the take then refuses it).
+        let elsewhere =
+            |_: &str, _: Option<&str>| Some(Destination::Cloud("https://b.example".into()));
+        let (kept, _) = named
+            .save(
+                &ModeEdit {
+                    polish_enabled: Some(true),
+                    ..edit("c")
+                },
+                false,
+                "m1",
+                &elsewhere,
+            )
+            .unwrap();
+        assert_eq!(
+            mode(&kept, "c").polish_model.as_ref().unwrap().to,
+            Some(Destination::Cloud(ANTHROPIC.into()))
+        );
+        let (again, _) = named
+            .save(
+                &pin(Some("provider:anthropic"), Some("model-b")),
+                false,
+                "m1",
+                &elsewhere,
+            )
+            .unwrap();
+        assert_eq!(
+            mode(&again, "c").polish_model.as_ref().unwrap().to,
+            Some(Destination::Cloud("https://b.example".into()))
+        );
     }
 }

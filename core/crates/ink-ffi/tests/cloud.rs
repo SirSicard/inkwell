@@ -351,9 +351,10 @@ fn nothing_is_sent_without_the_features_consent_for_that_endpoint() {
     assert_eq!(llm.info().endpoint, Endpoint::Remote(OPENAI.into()));
     let words = request("synthetic meeting words");
     let send = |consent: Option<&LlmConsent>| {
+        let consents: Vec<LlmConsent> = consent.into_iter().cloned().collect();
         Consented {
             inner: llm.as_ref(),
-            consent,
+            consents: &consents,
         }
         .complete(&words, &CancelToken::new())
     };
@@ -377,7 +378,7 @@ fn nothing_is_sent_without_the_features_consent_for_that_endpoint() {
     );
     assert_eq!(allowed["allowed"], true, "{allowed}");
     let meetings = consent::stored(store.as_ref(), Feature::Meetings);
-    assert_eq!(send(meetings.as_ref()).map(|r| r.text), Ok("OK".to_owned()));
+    assert_eq!(send(meetings.first()).map(|r| r.text), Ok("OK".to_owned()));
     assert_eq!(rig.net.calls(), 1);
     let seen = rig.net.seen.lock().unwrap()[0].clone();
     assert_eq!(seen.url, format!("{OPENAI}/chat/completions"));
@@ -389,7 +390,7 @@ fn nothing_is_sent_without_the_features_consent_for_that_endpoint() {
     assert!(!seen.loopback_only);
     for feature in [Feature::Polish, Feature::Edit] {
         let other = consent::stored(store.as_ref(), feature);
-        assert!(not_allowed(send(other.as_ref())), "{feature:?}");
+        assert!(not_allowed(send(other.first())), "{feature:?}");
     }
     assert_eq!(rig.net.calls(), 1);
 
@@ -405,7 +406,7 @@ fn nothing_is_sent_without_the_features_consent_for_that_endpoint() {
     );
     let paused = Consented {
         inner: anthropic.as_ref(),
-        consent: meetings.as_ref(),
+        consents: &meetings,
     }
     .complete(&words, &CancelToken::new());
     assert!(not_allowed(paused));
@@ -420,11 +421,11 @@ fn nothing_is_sent_without_the_features_consent_for_that_endpoint() {
     // Back to OpenAI, but local-only mode turned on again by the user: even with consent,
     // nothing is sent.
     rig.choose_openai("c3");
-    assert!(send(meetings.as_ref()).is_ok());
+    assert!(send(meetings.first()).is_ok());
     assert_eq!(rig.net.calls(), 2);
     rig.set_local_only("on");
     assert!(matches!(
-        send(meetings.as_ref()),
+        send(meetings.first()),
         Err(LlmError::LocalOnly { .. })
     ));
     assert_eq!(rig.net.calls(), 2);
@@ -470,7 +471,7 @@ fn dictation_polish_goes_to_the_chosen_provider_only_with_its_consent() {
         let platform = Arc::new(MockPlatform::new());
         let mut settings = DictationSettings::default();
         settings.modes.modes[0].polish_enabled = true;
-        settings.polish_consent = consent;
+        settings.polish_consents = consent.into_iter().collect();
         let inbox = rig
             .core
             .start_dictation(DictationParts {
@@ -529,10 +530,10 @@ fn an_own_key_provider_that_never_answers_costs_a_take_its_polish_budget() {
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
-    settings.polish_consent = Some(LlmConsent::Cloud {
+    settings.polish_consents = vec![LlmConsent::Cloud {
         endpoint: OPENAI.into(),
         name: "gpt-4o-mini (openai)".into(),
-    });
+    }];
     settings.polish_budget = Duration::from_millis(300);
     let inbox = rig
         .core
@@ -748,4 +749,161 @@ fn a_test_in_flight_does_not_hold_up_shutdown() {
     let types = events.types();
     assert_eq!(types.last().map(String::as_str), Some("core.stopped"));
     events.assert_valid();
+}
+
+/// Starts a dictation the way the shell's would read it: the stored modes, with `consents`.
+fn dictation_with(rig: &Rig, consents: Vec<LlmConsent>) -> (Arc<MockPlatform>, DictationInbox) {
+    let platform = Arc::new(MockPlatform::new());
+    let mut settings = DictationSettings {
+        modes: ink_ffi::modes::load(rig.core.shared().store.as_ref()).unwrap(),
+        polish_consents: consents,
+        ..DictationSettings::default()
+    };
+    settings.modes.modes[0].polish_enabled = true;
+    let inbox = rig
+        .core
+        .start_dictation(DictationParts {
+            inserter: platform.clone(),
+            focus: platform.clone(),
+            llm: None,
+            settings,
+            vad: Vad::Unavailable(VadUnavailable::ModelMissing),
+        })
+        .unwrap();
+    (platform, inbox)
+}
+
+/// A take, and the warnings it gave (`kind`s, in order).
+fn take_warnings(rig: &Rig, inbox: &DictationInbox, seed: u64, takes: usize) -> Vec<String> {
+    let before = rig
+        .events
+        .all()
+        .iter()
+        .filter(|v| v["type"] == "dictation.warning")
+        .count();
+    take(&rig.core, inbox, seed);
+    assert!(
+        rig.events
+            .wait_count("dictation.inserted", takes, Duration::from_secs(20))
+    );
+    rig.events
+        .all()
+        .into_iter()
+        .filter(|v| v["type"] == "dictation.warning")
+        .skip(before)
+        .map(|v| v["kind"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// A mode pinned to the custom server while it ran on this machine: re-pointed to a server
+/// elsewhere (and agreed to there, for the AI setting), the mode's takes are not sent to it
+/// (`polish_model_missing`, `polish_model_state` `moved`) until the user saves the mode again,
+/// which records where it sends now.
+#[test]
+fn a_mode_pinned_to_a_server_here_sends_nothing_once_it_points_elsewhere() {
+    let rig = Rig::new("cloud-pin-moved", &[test_row(ROW_ID)]);
+    let local =
+        json!({"cmd": "llm.choose", "provider": "custom", "base_url": "http://127.0.0.1:11434/v1"});
+    assert_eq!(rig.ask(local, "c1")["to"], "on_device");
+    let pin =
+        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model": "provider:custom"}});
+    let listed = rig.ask(pin.clone(), "s1");
+    assert_eq!(
+        listed["modes"][0]["polish_model_state"], "ready",
+        "{listed}"
+    );
+
+    let remote = "https://llm.example.com/v1";
+    let chosen = rig.ask(
+        json!({"cmd": "llm.choose", "provider": "custom", "base_url": remote, "local_only": "off"}),
+        "c2",
+    );
+    assert_eq!(chosen["to"], "cloud", "{chosen}");
+    let listed = rig.ask(json!({"cmd": "modes.list"}), "l1");
+    assert_eq!(
+        listed["modes"][0]["polish_model_state"], "moved",
+        "{listed}"
+    );
+    let consent = LlmConsent::Cloud {
+        endpoint: remote.into(),
+        name: "custom".into(),
+    };
+    rig.net
+        .set(Ok((200, openai_answer("Polished synthetic words."))));
+    let (_, inbox) = dictation_with(&rig, vec![consent.clone()]);
+    assert_eq!(
+        take_warnings(&rig, &inbox, 1, 1),
+        ["polish_model_missing"],
+        "the consent covers the server, not the mode's choice of it"
+    );
+    assert_eq!(rig.net.calls(), 0, "nothing sent");
+
+    // Saved again: recorded as where it sends now.
+    let listed = rig.ask(pin, "s2");
+    assert_eq!(
+        listed["modes"][0]["polish_model_state"], "ready",
+        "{listed}"
+    );
+    let (platform, inbox) = dictation_with(&rig, vec![consent]);
+    assert!(take_warnings(&rig, &inbox, 2, 2).is_empty());
+    assert_eq!(rig.net.calls(), 1);
+    assert_eq!(
+        platform.inserted().last().map(|s| s.trim().to_owned()),
+        Some("Polished synthetic words.".into())
+    );
+    rig.core.shutdown();
+    rig.events.assert_valid();
+}
+
+/// A mode may pin a model at the chosen provider: the request asks the provider for it, at the
+/// same endpoint (so the provider's consent covers it). A name the provider refuses fails the
+/// take's polish with the provider's error, which quotes nothing the user said.
+#[test]
+fn a_mode_s_own_model_name_goes_to_the_provider_it_names() {
+    let rig = Rig::new("cloud-pin-name", &[test_row(ROW_ID)]);
+    rig.save_key("openai", "k1");
+    rig.choose_openai("c1");
+    let listed = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model": "provider:openai", "polish_model_name": "gpt-synthetic-mini"}}),
+        "s1",
+    );
+    assert_eq!(
+        listed["modes"][0]["polish_model_name"], "gpt-synthetic-mini",
+        "{listed}"
+    );
+    assert_eq!(listed["modes"][0]["polish_model_state"], "ready");
+    for bad in [json!("engine-only\u{7}"), json!("x".repeat(129))] {
+        let failed = rig.ask(
+            json!({"cmd": "modes.save", "mode": {"id": "default", "polish_model_name": bad}}),
+            "bad",
+        );
+        assert_eq!(failed["code"], "model_name_invalid", "{failed}");
+    }
+    let consent = LlmConsent::Cloud {
+        endpoint: OPENAI.into(),
+        name: "gpt-4o-mini (openai)".into(),
+    };
+    rig.net
+        .set(Ok((200, openai_answer("Polished synthetic words."))));
+    let (_, inbox) = dictation_with(&rig, vec![consent.clone()]);
+    assert!(take_warnings(&rig, &inbox, 1, 1).is_empty());
+    let seen = rig.net.seen.lock().unwrap()[0].clone();
+    assert_eq!(seen.url, format!("{OPENAI}/chat/completions"));
+    let body: serde_json::Value = serde_json::from_str(&seen.body).unwrap();
+    assert_eq!(body["model"], "gpt-synthetic-mini");
+
+    // The provider does not know it.
+    rig.net
+        .set(Ok((404, r#"{"error":"no such model"}"#.into())));
+    let warnings = take_warnings(&rig, &inbox, 2, 2);
+    assert_eq!(warnings, ["polish_failed"]);
+    let failed = rig
+        .events
+        .all()
+        .into_iter()
+        .rfind(|v| v["kind"] == "polish_failed")
+        .unwrap();
+    assert_eq!(failed["message"], "provider returned HTTP 404", "{failed}");
+    rig.core.shutdown();
+    rig.events.assert_valid();
 }

@@ -12,11 +12,14 @@
 //!
 //! # A mode's own model
 //!
-//! A dictation mode may name the model it is polished on ([`ModelRef`]): one the shell registered,
-//! or the chosen own-key provider. Those are every model the core holds, so they are what a mode
-//! can pick ([`ShellLlms::choices`]); there is no second client. The mode's model is found again
-//! at each take ([`mode_models`]), behind local-only mode like every other call, and polish checks
-//! the user's consent on it as on the AI setting's model. A mode whose model is gone gets none.
+//! A dictation mode may name the model it is polished on ([`ModelPin`]: a [`ModelRef`], one the
+//! shell registered or the chosen own-key provider, and for a provider optionally a model of its
+//! own at it). Those are every model the core holds, so they are what a mode can pick
+//! ([`ShellLlms::choices`]); a model named at the provider is the same client asked for that
+//! model ([`ByokLlm::with_model`]): same endpoint, key and guard. The mode's model is found again
+//! at each take ([`mode_models`]) and at the call, behind local-only mode like every other call,
+//! and polish checks the user's consents on it as on the AI setting's model. A mode whose model is
+//! gone, or sends elsewhere than when the mode was saved ([`ModelPin::to`]), gets none.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -24,6 +27,8 @@ use std::sync::{Arc, PoisonError, RwLock};
 use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
 use ink_llm::guard::{GuardedLlm, LocalOnly};
 use ink_llm::{ByokLlm, Provider};
+use ink_pipeline::consent::Destination;
+use ink_pipeline::modes::ModelPin;
 
 use crate::external::ExternalLlm;
 
@@ -127,46 +132,83 @@ impl ShellLlms {
             .cloned()
     }
 
-    /// The model `r` names, if the core holds it now: the engine registered under its id, or the
-    /// chosen own-key provider when it is `r`'s provider.
-    pub fn get(&self, r: &ModelRef) -> Option<Arc<dyn Llm>> {
-        match r {
-            ModelRef::Engine(id) => self
+    /// **Any thread.** The model `r` names, if the core holds it now: the engine registered under
+    /// its id, or the chosen own-key provider when it is `r`'s provider, asked for `model` when a
+    /// name is given (a provider's only: an engine has no model to pick, so `None`).
+    pub fn get(&self, r: &ModelRef, model: Option<&str>) -> Option<Arc<dyn Llm>> {
+        match (r, model) {
+            (ModelRef::Engine(id), None) => self
                 .engines
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
                 .get(id)
                 .cloned()
                 .map(|llm| llm as Arc<dyn Llm>),
-            ModelRef::Provider(p) => self
-                .cloud()
-                .filter(|cloud| cloud.info().provider == p.id())
-                .map(|cloud| cloud as Arc<dyn Llm>),
+            (ModelRef::Engine(_), Some(_)) => None,
+            (ModelRef::Provider(p), model) => {
+                let cloud = self
+                    .cloud()
+                    .filter(|cloud| cloud.info().provider == p.id())?;
+                Some(match model {
+                    None => cloud as Arc<dyn Llm>,
+                    Some(model) => Arc::new(cloud.with_model(model)) as Arc<dyn Llm>,
+                })
+            }
         }
     }
 
-    /// Every model a mode can pick now, as [`pick`](Self::pick) orders them: the chosen own-key
-    /// provider, then the registered models by id.
-    pub fn choices(&self) -> Vec<(ModelRef, Arc<dyn Llm>)> {
-        let cloud = self.cloud().and_then(|cloud| {
-            let provider = Provider::from_id(&cloud.info().provider)?;
-            Some((ModelRef::Provider(provider), cloud as Arc<dyn Llm>))
-        });
+    /// **Any thread.** What [`get`](Self::get) would reach, described: its info, read under the
+    /// lock, so no engine is held (and none can be released on this thread) to answer.
+    pub fn info_of(&self, r: &ModelRef, model: Option<&str>) -> Option<LlmInfo> {
+        match (r, model) {
+            (ModelRef::Engine(id), None) => self
+                .engines
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(id)
+                .map(|llm| llm.info()),
+            (ModelRef::Engine(_), Some(_)) => None,
+            (ModelRef::Provider(p), model) => {
+                let cloud = self.cloud.read().unwrap_or_else(PoisonError::into_inner);
+                let mut info = cloud.as_ref().map(|c| c.info())?;
+                if info.provider != p.id() {
+                    return None;
+                }
+                if let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) {
+                    model.clone_into(&mut info.model);
+                }
+                Some(info)
+            }
+        }
+    }
+
+    /// **Any thread.** Whether the core holds the model `r` names now.
+    pub fn contains(&self, r: &ModelRef) -> bool {
+        self.info_of(r, None).is_some()
+    }
+
+    /// **Any thread.** Every model a mode can pick now, as [`pick`](Self::pick) orders them (so
+    /// the first is the AI setting's): the chosen own-key provider, then the registered models by
+    /// id. Described under the locks, holding none of them.
+    pub fn choices(&self) -> Vec<(ModelRef, LlmInfo)> {
+        let cloud = self
+            .cloud
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|cloud| {
+                let info = cloud.info();
+                Some((ModelRef::Provider(Provider::from_id(&info.provider)?), info))
+            });
         let engines = self.engines.read().unwrap_or_else(PoisonError::into_inner);
         cloud
             .into_iter()
             .chain(
                 engines
                     .iter()
-                    .map(|(id, llm)| (ModelRef::Engine(id.clone()), llm.clone() as Arc<dyn Llm>)),
+                    .map(|(id, llm)| (ModelRef::Engine(id.clone()), llm.info())),
             )
             .collect()
-    }
-
-    /// What [`pick`](Self::pick) gives now, as a mode would name it: the model a mode without one
-    /// of its own is polished on.
-    pub fn setting_ref(&self) -> Option<ModelRef> {
-        self.choices().into_iter().next().map(|(r, _)| r)
     }
 
     /// The chosen own-key provider, if one is chosen.
@@ -188,20 +230,33 @@ impl ShellLlms {
     }
 }
 
-/// The dictation chain's lookup for a mode's own model ([`ModelRef`]): none when the core holds
-/// no model by that id as the take is polished, else a [`PolishModel`] on it, which checks the
-/// polish consent and local-only mode on the model each call reaches, exactly as for the AI
-/// setting's model.
+/// **Worker.** The dictation chain's lookup for a mode's own model ([`ModelPin`]): none when the
+/// core holds no model by that id as the take is polished, else a [`PolishModel`] on it, which
+/// finds it again at the call, refuses it when it sends elsewhere than the pin recorded, and
+/// checks local-only mode and the polish consents on the model the call reaches, exactly as for
+/// the AI setting's model.
 pub fn mode_models(llms: Arc<ShellLlms>, local_only: LocalOnly) -> ink_pipeline::chain::ModeModels {
-    Arc::new(move |id: &str| {
-        let model = ModelRef::parse(id)?;
-        llms.get(&model)?;
+    Arc::new(move |pin: &ModelPin| {
+        let model = ModelRef::parse(&pin.id)?;
+        if !llms.contains(&model) {
+            return None;
+        }
         Some(Arc::new(PolishModel::for_mode(
             llms.clone(),
             local_only.clone(),
             model,
+            pin,
         )) as Arc<dyn Llm>)
     })
+}
+
+/// A mode's own model, as [`PolishModel`] finds it at each call.
+struct ModeModel {
+    model: ModelRef,
+    /// A model named at the provider.
+    name: Option<String>,
+    /// Where it sent when the mode was saved; `None`: never recorded, so it is never called.
+    to: Option<Destination>,
 }
 
 /// The dictation chain's polish model, and every other use of a registered language model (a
@@ -220,7 +275,7 @@ pub struct PolishModel {
     llms: Arc<ShellLlms>,
     local_only: LocalOnly,
     /// A mode's own model; `None` for whatever [`ShellLlms::pick`] gives.
-    model: Option<ModelRef>,
+    model: Option<ModeModel>,
 }
 
 impl PolishModel {
@@ -233,28 +288,43 @@ impl PolishModel {
         }
     }
 
-    /// Calls the model `model` names in `llms` (never another), behind the `local_only` switch.
-    pub fn for_mode(llms: Arc<ShellLlms>, local_only: LocalOnly, model: ModelRef) -> Self {
+    /// Calls the model `pin` names in `llms` (`model`, as parsed from it), never another, and only
+    /// while it sends where the pin recorded; behind the `local_only` switch.
+    pub fn for_mode(
+        llms: Arc<ShellLlms>,
+        local_only: LocalOnly,
+        model: ModelRef,
+        pin: &ModelPin,
+    ) -> Self {
         Self {
             llms,
             local_only,
-            model: Some(model),
+            model: Some(ModeModel {
+                model,
+                name: pin.model.clone(),
+                to: pin.to.clone(),
+            }),
         }
     }
 
-    /// The model this call goes to, if there is one now.
+    /// The model this call goes to, if there is one now. A mode's own model that sends elsewhere
+    /// than its pin recorded is none.
     fn reach(&self) -> Option<Arc<dyn Llm>> {
         match &self.model {
             None => self.llms.pick(),
-            Some(model) => self.llms.get(model),
+            Some(own) => self
+                .llms
+                .get(&own.model, own.name.as_deref())
+                .filter(|llm| own.to.as_ref().is_some_and(|to| to.covers(&llm.info()))),
         }
     }
 
     fn none(&self) -> LlmError {
-        LlmError::Engine(match self.model {
-            None => "no language model is registered for polish".into(),
-            Some(_) => "this mode's language model is not set up now".into(),
-        })
+        match self.model {
+            None => LlmError::Engine("no language model is registered for polish".into()),
+            // The chain says polish_model_missing: nothing was sent, and no other model is used.
+            Some(_) => LlmError::Unavailable,
+        }
     }
 }
 
@@ -284,7 +354,9 @@ impl Llm for PolishModel {
     }
 
     /// Checks the model picked for this call: a model registered or let go of since the caller
-    /// looked can never receive text `allow` would refuse (dictation polish's consent).
+    /// looked can never receive text `allow` would refuse (dictation polish's consent). Local-only
+    /// mode is asked first: a model it refuses is refused as such, never as a consent the user
+    /// could give and local-only would refuse anyway.
     fn complete_if(
         &self,
         request: &LlmRequest,
@@ -295,6 +367,7 @@ impl Llm for PolishModel {
             return Err(self.none());
         };
         let info = llm.info();
+        self.local_only.check(&info.endpoint)?;
         if !allow(&info) {
             return Err(LlmError::NotAllowed { refused: info });
         }
@@ -333,10 +406,19 @@ mod tests {
     fn with_nothing_registered_there_is_nothing_to_pick() {
         let llms = ShellLlms::default();
         assert!(llms.choices().is_empty());
-        assert_eq!(llms.setting_ref(), None);
-        assert!(llms.get(&ModelRef::Provider(Provider::OpenAi)).is_none());
+        assert!(
+            llms.get(&ModelRef::Provider(Provider::OpenAi), None)
+                .is_none()
+        );
+        assert!(!llms.contains(&ModelRef::Engine("apple-foundation-models".into())));
         let find = mode_models(Arc::new(llms), LocalOnly::new(true));
-        assert!(find("engine:apple-foundation-models").is_none());
-        assert!(find("not a ref").is_none());
+        let pin = |id: &str| ModelPin {
+            id: id.into(),
+            model: None,
+            to: Some(Destination::OnDevice),
+        };
+        assert!(find(&pin("engine:apple-foundation-models")).is_none());
+        assert!(find(&pin("not a ref")).is_none());
+        assert!(find(&pin("")).is_none(), "blank never resolves");
     }
 }

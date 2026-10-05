@@ -803,6 +803,19 @@ impl VoiceRig {
         )
     }
 
+    /// Turns local-only mode on or off, as Settings > AI does, and waits for it to be said.
+    fn local_only(&self, on: bool) {
+        let value = if on { "on" } else { "off" };
+        let said = self.events.count("setting.value");
+        self.command(&format!(
+            r#"{{"cmd":"setting.set","key":"llm.local_only","value":"{value}"}}"#
+        ));
+        assert!(
+            self.events.wait_count("setting.value", said + 1, WAIT),
+            "local-only never changed"
+        );
+    }
+
     fn focus_on(&self, app: &str) {
         self.platform.set_focus(ink_core::FocusInfo {
             app: Some(ink_core::AppRef {
@@ -828,6 +841,11 @@ fn a_saved_mode_reaches_a_running_dictation_at_once() {
         "s1",
     );
     let chat = listed["modes"][1]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        listed["saved"],
+        chat.as_str(),
+        "the new mode's id, for the editor"
+    );
     assert!(rig.setting(ink_ffi::queries::MODES_KEY).is_some());
     assert_eq!(rig.dictate(1.0, 62)["text"], "hello world");
     rig.change_modes(
@@ -882,6 +900,8 @@ fn a_mode_polishes_on_its_own_model_only_where_the_consent_covers_it() {
     assert_eq!(own.calls.load(Ordering::SeqCst), 1);
 
     rig.default_on("engine:remote-llm", "s2");
+    // The consent's refusal, not local-only mode's (which is asked first).
+    rig.local_only(false);
     assert_eq!(rig.dictate(1.0, 65)["text"], "Hello world.");
     assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
     let refused = rig.warnings("polish_not_allowed");
@@ -931,6 +951,191 @@ fn a_mode_s_cloud_model_is_refused_while_local_only_is_on() {
             .is_some_and(|m| m.contains("local-only")),
         "{failed:?}"
     );
+    rig.events.assert_valid();
+}
+
+/// The stored modes cannot be read: dictation goes on in the built-in default mode and polishes
+/// nothing, even with polish on and its consent given, since the user's modes may send each to a
+/// model of its own (or to none) and which cannot be known. `dictation.ready` names the modes.
+#[test]
+fn unreadable_modes_polish_nothing_at_dictation_time() {
+    let rig = VoiceRig::new("modes-unreadable");
+    let model = rig.register_local();
+    rig.allow_on_device("c1");
+    rig.core()
+        .shared()
+        .store
+        .set_setting(ink_ffi::queries::MODES_KEY, "{not json")
+        .unwrap();
+    let ready = rig.enable();
+    assert!(
+        ready["settings_error"]
+            .as_str()
+            .is_some_and(|e| e.contains("the modes")),
+        "{ready}"
+    );
+    assert_eq!(rig.dictate(1.0, 68)["text"], "Hello world.");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    rig.events.assert_valid();
+}
+
+/// The owner's decision (2026-10-05): one polish consent per destination. The AI setting's model
+/// on this machine and a Chat mode on a cloud model each polish under their own consent; revoking
+/// one stops only the modes on it; revoking the last turns polish off. `consent.state` lists them.
+#[test]
+fn two_modes_on_two_destinations_polish_each_under_its_own_consent() {
+    let rig = VoiceRig::new("consent-per-destination");
+    let local = rig.register_local();
+    let cloud = rig.register_model("remote-llm", "remote", false, "Hello world, cloud!");
+    rig.local_only(false);
+    rig.allow_on_device("c1");
+    // Not the AI setting's model (that is local-llm): one a mode can pick, so it can be agreed to.
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"c2"}"#,
+        "c2",
+    );
+    assert_eq!(state["type"], "consent.state", "{state}");
+    assert_eq!(
+        state["allowed"], true,
+        "the AI setting's model is still covered"
+    );
+    let consents = state["consents"].as_array().unwrap();
+    assert_eq!(consents.len(), 2, "{state}");
+    assert_eq!(consents[0]["to"], "on_device");
+    assert_eq!(consents[1]["to"], "cloud");
+    assert_eq!(consents[1]["endpoint"], "shell engine remote-llm");
+    assert_eq!(consents[1]["name"], "remote");
+    let stored: Value = serde_json::from_str(&rig.setting("llm.consent.polish").unwrap()).unwrap();
+    assert_eq!(stored.as_array().map(Vec::len), Some(2), "{stored}");
+
+    rig.enable();
+    let listed = rig.change_modes(
+        r#"{"cmd":"modes.save","mode":{"name":"Chat","polish":true,"apps":["com.example.chat"],"polish_model":"engine:remote-llm"},"id":"s1"}"#,
+        "s1",
+    );
+    assert_eq!(
+        listed["modes"][1]["polish_model_state"], "ready",
+        "{listed}"
+    );
+    let models = listed["polish_models"].as_array().unwrap();
+    assert!(models.iter().all(|m| m["allowed"] == true), "{listed}");
+
+    let dictate_in = |app: &str, seed: u64| {
+        rig.focus_on(app);
+        rig.dictate(1.0, seed)["text"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(dictate_in("com.example.chat", 81), "Hello world, cloud!");
+    assert_eq!(dictate_in("com.example.mail", 82), "Hello, world!");
+    assert_eq!(
+        (
+            cloud.calls.load(Ordering::SeqCst),
+            local.calls.load(Ordering::SeqCst)
+        ),
+        (1, 1)
+    );
+
+    // The cloud consent revoked: Chat goes in as said and asks for it; the rest still polishes.
+    let ready = rig.events.count("dictation.ready");
+    let state = rig.ask(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"r1"}"#,
+        "r1",
+    );
+    assert_eq!(state["consents"].as_array().unwrap().len(), 1, "{state}");
+    assert_eq!(state["on"], true);
+    assert!(rig.events.wait_count("dictation.ready", ready + 1, WAIT));
+    assert_eq!(dictate_in("com.example.chat", 83), "Hello world.");
+    assert_eq!(rig.warnings("polish_not_allowed").len(), 1);
+    assert_eq!(dictate_in("com.example.mail", 84), "Hello, world!");
+    assert_eq!(
+        cloud.calls.load(Ordering::SeqCst),
+        1,
+        "nothing more sent there"
+    );
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l1"}"#, "l1");
+    let remote = listed["polish_models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "engine:remote-llm")
+        .unwrap()
+        .clone();
+    assert_eq!(remote["allowed"], false, "{remote}");
+    // Revoking it again changes nothing, and is no failure.
+    let again = rig.ask(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"r2"}"#,
+        "r2",
+    );
+    assert_eq!(again["type"], "consent.state");
+
+    // The last one revoked: polish is off with it.
+    let state = rig.ask(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","id":"r3"}"#,
+        "r3",
+    );
+    assert_eq!(state["on"], false, "{state}");
+    assert_eq!(state["consents"].as_array().map(Vec::len), Some(0));
+    assert_eq!(rig.setting("dictation.polish").as_deref(), Some("off"));
+    assert_eq!(rig.setting("llm.consent.polish").as_deref(), Some("none"));
+    let refused = rig.fails(
+        r#"{"cmd":"consent.revoke","feature":"edit","to":"on_device","id":"r4"}"#,
+        "r4",
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("one consent"))
+    );
+    rig.events.assert_valid();
+}
+
+/// The single polish consent a build before consents per destination stored reads as one, so
+/// nothing is asked again; the next consent is added beside it, and the list is what is stored.
+#[test]
+fn the_single_polish_consent_an_older_build_stored_is_kept() {
+    let rig = VoiceRig::new("consent-migration");
+    let local = rig.register_local();
+    rig.register_model("remote-llm", "remote", false, "Hello world, cloud!");
+    let store = &rig.core().shared().store;
+    store.set_setting("dictation.polish", "on").unwrap();
+    store
+        .set_setting("llm.consent.polish", r#"{"to":"on_device"}"#)
+        .unwrap();
+    let state = rig.polish_state("g1");
+    assert_eq!(state["allowed"], true, "{state}");
+    assert_eq!(state["consents"].as_array().map(Vec::len), Some(1));
+    rig.enable();
+    assert_eq!(rig.dictate(1.0, 85)["text"], "Hello, world!");
+    assert_eq!(local.calls.load(Ordering::SeqCst), 1);
+    rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"c1"}"#,
+        "c1",
+    );
+    let stored: Value = serde_json::from_str(&rig.setting("llm.consent.polish").unwrap()).unwrap();
+    assert_eq!(stored[0]["to"], "on_device", "{stored}");
+    assert_eq!(stored[1]["endpoint"], "shell engine remote-llm", "{stored}");
+    rig.events.assert_valid();
+}
+
+/// `modes.listed` says truly whether polish may use each model: a cloud model the user agreed to
+/// is not allowed while local-only mode is on, and says that is why.
+#[test]
+fn a_model_local_only_refuses_is_listed_as_not_allowed() {
+    let rig = VoiceRig::new("modes-listed-local-only");
+    rig.register_remote();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"a1"}"#,
+        "a1",
+    );
+    assert_eq!(state["type"], "consent.state", "{state}");
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l1"}"#, "l1");
+    let model = &listed["polish_models"][0];
+    assert_eq!(model["allowed"], false, "{listed}");
+    assert_eq!(model["blocked_local_only"], true);
+    assert_eq!(model["model"], "remote");
+    rig.local_only(false);
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l2"}"#, "l2");
+    assert_eq!(listed["polish_models"][0]["allowed"], true, "{listed}");
+    assert_eq!(listed["polish_models"][0]["blocked_local_only"], false);
     rig.events.assert_valid();
 }
 
@@ -1312,7 +1517,7 @@ fn polish_allow_records_the_consent_and_turns_polish_on() {
     assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
     assert_eq!(
         rig.setting("llm.consent.polish").as_deref(),
-        Some(r#"{"to":"on_device"}"#)
+        Some(r#"[{"to":"on_device"}]"#)
     );
     rig.enable();
     rig.dictate(1.0, 51);
@@ -1396,6 +1601,20 @@ fn a_model_that_moves_to_the_cloud_gets_nothing_until_the_user_agrees_again() {
     assert_eq!(state["endpoint"], "shell engine remote-llm", "{state}");
     assert_eq!(state["allowed_to"], "on_device", "{state}");
 
+    // Local-only mode (on by default) refuses it first, and says so: no consent would let it.
+    rig.dictate(1.0, 51);
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    assert!(rig.warnings("polish_not_allowed").is_empty());
+    assert!(
+        rig.warnings("polish_failed")
+            .last()
+            .and_then(|w| w["message"].as_str())
+            .is_some_and(|m| m.contains("local-only")),
+        "{:?}",
+        rig.warnings("polish_failed")
+    );
+
+    rig.local_only(false);
     rig.dictate(1.0, 52);
     assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
     assert!(
@@ -1533,7 +1752,7 @@ fn the_switch_and_the_consent_are_saved_together_or_not_at_all() {
     assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
     assert_eq!(
         rig.setting("llm.consent.polish").as_deref(),
-        Some(r#"{"to":"on_device"}"#),
+        Some(r#"[{"to":"on_device"}]"#),
         "both as they were"
     );
     store.heal();
@@ -1715,6 +1934,8 @@ fn an_edit_model_that_moves_to_the_cloud_gets_nothing() {
         .expect("bound");
     rig.unregister("local-llm");
     let remote = rig.register_remote();
+    // The consent's refusal, not local-only mode's (which is asked first).
+    rig.local_only(false);
     let state = rig.edit_state("m2");
     assert_eq!(state["on"], true);
     assert_eq!(state["allowed"], false);

@@ -39,7 +39,7 @@ use ink_core::{
 };
 use ink_engines::{ExternalEngine, ModelDir, Route};
 use ink_pipeline::chain::{DictationChain, DictationSettings, Services};
-use ink_pipeline::consent::{Feature, LlmConsent};
+use ink_pipeline::consent::Feature;
 use ink_pipeline::dictionary::Dictionary;
 use ink_pipeline::events::DictationEvent;
 use ink_pipeline::mic::MicPath;
@@ -368,7 +368,7 @@ pub fn shutdown(shared: &Shared) {
 /// The modes dictation writes in with no modes stored: the built-in default, polished whenever
 /// the user's switch is on (so "Polish my words" alone decides on a fresh install). The switch
 /// turns on only with the user's consent, and polish runs only where that consent covers
-/// ([`LlmConsent`]).
+/// ([`LlmConsent`](ink_pipeline::consent::LlmConsent)).
 pub fn default_modes() -> ModeStore {
     ModeStore {
         default_id: Mode::builtin_default().id,
@@ -379,11 +379,20 @@ pub fn default_modes() -> ModeStore {
     }
 }
 
+/// The modes dictation writes in while the stored ones cannot be read: the built-in default,
+/// never polished. The user's modes may send each to a model of its own, or to none, and which
+/// cannot be known now: polishing on the AI setting's model could send words somewhere the user
+/// set a mode up not to, so nothing is polished until they read again (`dictation.ready` names
+/// the modes as unreadable).
+pub fn unreadable_modes() -> ModeStore {
+    ModeStore::default()
+}
+
 /// The user's modes, as `modes.list` shows them ([`crate::modes::load`]): the stored document,
 /// else the imported one, else [`default_modes`]. A document that cannot be read is an error,
 /// never quietly the default.
 pub fn load_modes(store: &dyn Store) -> Result<ModeStore, String> {
-    crate::modes::load(store).map(|loaded| loaded.modes)
+    crate::modes::load(store)
 }
 
 /// The dictionary: the one saved in 1.0, else the one imported from 0.2 (an array of
@@ -436,27 +445,29 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
         read(EDIT_KEY_SETTING, "the edit key").filter(|k| k != "off" && !k.trim().is_empty());
     let polish_wish = read(POLISH_SETTING, "the polish switch").as_deref() == Some("on");
     // Unreadable consent is no consent: the feature fails closed, and the shell hears why.
-    let mut consent = |feature: Feature, name: &'static str| {
+    let mut consents = |feature: Feature, name: &'static str| {
         let stored = match store.setting(feature.setting_key()) {
             Ok(v) => v,
             Err(e) => {
                 log::error!("dictation: {name} could not be read: {e}");
                 unreadable.push(name);
-                return None;
+                return Vec::new();
             }
         };
-        LlmConsent::from_setting(stored.as_deref()).unwrap_or_else(|e| {
+        feature.read(stored.as_deref()).unwrap_or_else(|e| {
             log::error!("dictation: {e} ({name}); nothing is sent until the user agrees again");
             unreadable.push(name);
-            None
+            Vec::new()
         })
     };
-    let polish_consent = consent(Feature::Polish, "the polish consent");
-    let edit_consent = consent(Feature::Edit, "the voice edit consent");
+    let polish_consents = consents(Feature::Polish, "the polish consent");
+    let edit_consent = consents(Feature::Edit, "the voice edit consent")
+        .into_iter()
+        .next();
     let modes = load_modes(store).unwrap_or_else(|e| {
-        log::error!("dictation: the modes could not be read: {e}");
+        log::error!("dictation: the modes could not be read: {e}; nothing is polished");
         unreadable.push("the modes");
-        default_modes()
+        unreadable_modes()
     });
     let dictionary = load_dictionary(store).unwrap_or_else(|e| {
         log::error!("dictation: the dictionary could not be read: {e}");
@@ -470,7 +481,7 @@ fn load(store: &dyn Store, utc_offset_minutes: i32) -> Loaded {
             modes,
             dictionary,
             polish_wish,
-            polish_consent,
+            polish_consents,
             edit_consent,
             utc_offset_minutes,
             ..DictationSettings::default()
