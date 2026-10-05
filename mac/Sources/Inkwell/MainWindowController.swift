@@ -49,16 +49,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.delegate = self
     }
 
-    /// The window's smallest content size.
+    /// The window's smallest content size, under the toolbar (makeWindow).
     static let minimumContentSize = NSSize(width: 720, height: 460)
 
     /// The window around `root`, at its default size. SwiftUI sets the minimum size, and the user
     /// the rest; the hosting controller writes SwiftUI's minimum over the window's own, so the root
-    /// holds the minimum width too (without it the window's minimum fell to the screen's, 413 pt
-    /// wide on Today, measured offscreen). Not the height: SwiftUI's minimum counts the toolbar
-    /// over the content, so 460 there would be 512 here. Tests lay the screens out in this window.
+    /// holds the minimum size too (without it the window's minimum fell to the screen's, 413 pt
+    /// wide and 154 tall on Today, measured offscreen). The root sits under the toolbar, and
+    /// SwiftUI's minimum counts the toolbar over it: 460 here is 512 in contentMinSize, with 460 of
+    /// it under the toolbar. Tests lay the screens out in this window.
     static func makeWindow<Root: View>(root: Root) -> NSWindow {
-        let hosting = NSHostingController(rootView: root.frame(minWidth: minimumContentSize.width))
+        let hosting = NSHostingController(
+            rootView: root.frame(minWidth: minimumContentSize.width, minHeight: minimumContentSize.height))
         // The SwiftUI title and toolbar become the window's; the sidebar toggle lives there.
         hosting.sceneBridgingOptions = [.title, .toolbars]
         hosting.sizingOptions = [.minSize]
