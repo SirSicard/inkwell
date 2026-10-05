@@ -222,18 +222,11 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>The own-key provider the Polish step offers while this PC has no language model: Groq, for its free tier.</summary>
     public const string OwnKeyProvider = "groq";
 
-    /// <summary>Where Groq's keys are made (the homepage's link).</summary>
-    public const string OwnKeyUrl = "https://console.groq.com";
-
-    /// <summary>The Polish step's own key: one choice, Groq's free model, behind this disclosure.</summary>
+    /// <summary>
+    /// The Polish step's own key: one choice, Groq's free model, behind this disclosure, with how
+    /// to get the key over its box (<see cref="GroqKeyGuide"/>, <see cref="GroqKeyGuidePlace.FirstRun"/>).
+    /// </summary>
     public const string OwnKeyTitle = "Use Groq's free model";
-
-    /// <summary>Under it: the homepage's sentence, its host a link to <see cref="OwnKeyUrl"/>.</summary>
-    public const string OwnKeyLead =
-        "Groq's free tier covers ordinary personal use and needs no credit card. Sign in at console.groq.com, create a key under API Keys and paste it here.";
-
-    /// <summary>The part of <see cref="OwnKeyLead"/> that is the link.</summary>
-    public const string OwnKeyHost = "console.groq.com";
 
     public const string OwnKeyBoxName = "Groq API key";
 

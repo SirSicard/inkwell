@@ -23,8 +23,16 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Language model" />
-            <!-- The provider, its key, its model, Use and Test (LanguageModelRows, shared with the first run). -->
-            <ContentPresenter x:Name="LanguageModelHost" Grid.Column="1" />
+            <StackPanel Grid.Column="1" Spacing="8">
+                <!-- The provider, its key, its model, Use and Test (LanguageModelRows, shared with the first run). -->
+                <ContentPresenter x:Name="LanguageModelHost" />
+                <!-- How to get a free Groq key (GroqKeyGuideView), closed at first. Settings only:
+                     the first run has the guide over Groq's own rows. -->
+                <Expander
+                    x:Name="GroqGuideExpander"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch" />
+            </StackPanel>
         </Grid>
         <TextBlock
             Style="{StaticResource InkCaptionStyle}"
