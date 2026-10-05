@@ -2356,6 +2356,48 @@ final class OnboardingLayoutTests: XCTestCase {
         assertFits(screens.catalogue, screens: screens, "before the press")
     }
 
+    /// Every model already on this Mac: the step was one line in an empty sheet. It lists the
+    /// choices as installed, as tall as before the press less the Download, and fits the sheet.
+    func testTheModelsStepWithEverythingOnThisMacListsItAndFillsTheStep() {
+        let available = listed()
+        let before = needed(FirstRunModelsStep(catalogue: available.catalogue), screens: available)
+        XCTAssertFalse(available.catalogue.allOnThisMac)
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.catalogue.apply(event(listedAll.replacingOccurrences(of: #""installed":false"#, with: #""installed":true"#)))
+        let catalogue = screens.catalogue
+        XCTAssertTrue(catalogue.firstRunModels.isEmpty, "everything is on this Mac")
+        XCTAssertTrue(catalogue.allOnThisMac)
+        XCTAssertTrue(FirstRunModelsStep.lead(allHere: true).hasPrefix("All set"))
+        // Each choice reads On this Mac (ChoiceRow), over its models with their sizes.
+        XCTAssertEqual(catalogue.choices, CatalogueModel.Choice.allCases)
+        for choice in catalogue.choices {
+            XCTAssertEqual(catalogue.state(of: choice), .installed, "\(choice)")
+            let entries = catalogue.entries(choice)
+            XCTAssertFalse(entries.isEmpty, "\(choice)")
+            for entry in entries {
+                XCTAssertTrue(CatalogueModel.facts(entry).contains(CatalogueModel.roundedSize(entry.sizeBytes)), entry.id)
+            }
+        }
+        XCTAssertEqual(catalogue.bytesToDownload(Set(CatalogueModel.Choice.allCases)), 0, "nothing to download")
+        let done = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
+        XCTAssertGreaterThan(done.height, before.height * 0.8, "the step lists what is on this Mac")
+        assertFits(catalogue, screens: screens, "everything on this Mac")
+    }
+
+    /// Downloaded while the step is open: All set once the last model is in, not before.
+    func testTheModelsStepIsAllSetOnceTheLastDownloadEnds() {
+        let catalogue = listed().catalogue
+        catalogue.download(choices: [.accuracy, .speakers])
+        let order = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "nemotron-3-diarization-q8", "qwen3-asr-1.7b-q8"]
+        for id in order {
+            XCTAssertFalse(catalogue.allOnThisMac, "before \(id) ends")
+            catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":true,"no_model_warm":false}"#))
+        }
+        XCTAssertFalse(catalogue.downloading)
+        XCTAssertTrue(catalogue.allOnThisMac)
+        XCTAssertFalse(catalogue.firstRunModels.isEmpty, "the step still lists what came down")
+    }
+
     func testTheModelsStepFitsTheSheetWithADownloadsBar() {
         let screens = listed()
         let catalogue = screens.catalogue

@@ -68,6 +68,11 @@ extension CatalogueModel {
         case failed(String)
     }
 
+    /// Every model the step lists is on this Mac: there before the first run, or downloaded since.
+    var allOnThisMac: Bool {
+        listed && firstRunModels.allSatisfy { isOnThisMac($0.id) }
+    }
+
     /// The choices the catalogue can serve (every model each names is listed), in order.
     var choices: [Choice] {
         guard listed else { return [] }

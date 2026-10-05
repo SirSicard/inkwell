@@ -292,36 +292,50 @@ struct FirstRunModelsStep: View {
                 Button("Try again") { catalogue.requery() }
             } else if !catalogue.listed {
                 Text("Checking which models are on this Mac…").foregroundStyle(Theme.secondaryText)
-            } else if catalogue.firstRunModels.isEmpty {
-                Text("Every model Inkwell uses is on this Mac already.")
             } else {
-                Text("Inkwell writes down speech with models that run on this Mac. Each is downloaded once, and only when you press Download.")
+                // Everything on this Mac, before the step or since: the same rows, each reading On
+                // this Mac, so the step reads as done rather than empty (it was one line).
+                let allHere = catalogue.allOnThisMac
+                Text(Self.lead(allHere: allHere))
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(catalogue.choices) { choice in
                         ChoiceRow(catalogue: catalogue, choice: choice, ticked: $ticked)
                     }
                 }
-                let bytes = catalogue.bytesToDownload(ticked)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    if catalogue.downloading {
-                        Text("You can go on: the downloads keep going, and Settings > Models shows them.")
-                            .font(Typography.caption)
-                            .foregroundStyle(Theme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
-                    if bytes > 0 {
-                        Button(CatalogueModel.downloadTitle(bytes)) { catalogue.download(choices: ticked) }
-                            .buttonStyle(.borderedProminent)
-                            .accessibilityLabel("\(CatalogueModel.downloadTitle(bytes)) from \(catalogue.downloadSources(ticked))")
-                    }
-                }
+                if !allHere { downloadRow }
             }
         }
         .font(Typography.body)
         .foregroundStyle(Theme.text)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The line over the choices: what they are, or, with every model on this Mac, that there is
+    /// nothing to do.
+    static func lead(allHere: Bool) -> String {
+        allHere
+            ? "All set: every model Inkwell uses is on this Mac already, so there is nothing to download."
+            : "Inkwell writes down speech with models that run on this Mac. Each is downloaded once, and only when you press Download."
+    }
+
+    /// Download, carrying the total of what is ticked, and while downloads run, that they go on.
+    private var downloadRow: some View {
+        let bytes = catalogue.bytesToDownload(ticked)
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+            if catalogue.downloading {
+                Text("You can go on: the downloads keep going, and Settings > Models shows them.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            if bytes > 0 {
+                Button(CatalogueModel.downloadTitle(bytes)) { catalogue.download(choices: ticked) }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("\(CatalogueModel.downloadTitle(bytes)) from \(catalogue.downloadSources(ticked))")
+            }
+        }
     }
 }
 
