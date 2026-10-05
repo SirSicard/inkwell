@@ -19,9 +19,8 @@ struct TodayScreen: View {
     @Environment(ScreenModels.self) private var screens
     @Environment(WindowPresence.self) private var presence
     @State private var showAllNeeds = false
-    /// The content's width: two columns (the canvas's 1.3 : 1) from 624 pt, else one.
-    @State private var width: CGFloat = 0
-    /// The visible height: the counts sit at the foot of the screen, as the canvas has them.
+    /// The visible height: the counts sit at the foot of the screen, as the canvas has them. Only
+    /// the height: the scroll axis can't widen the ScrollView (the columns' width: TodayColumnsLayout).
     @State private var height: CGFloat = 0
 
     private var calendar: Calendar { library.calendar }
@@ -35,22 +34,10 @@ struct TodayScreen: View {
                     LiveCard(meeting: meeting)
                 }
                 needsYou(now)
-                if width >= 624 {
-                    let left = (width - 18) * 1.3 / 2.3
-                    HStack(alignment: .top, spacing: 18) {
-                        card(lastMeeting(now)).frame(width: left, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 18) {
-                            card(upNextSection(now))
-                            card(owedSoon(now))
-                        }
-                        .frame(width: width - 18 - left, alignment: .leading)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 18) {
-                        card(lastMeeting(now))
-                        card(upNextSection(now))
-                        card(owedSoon(now))
-                    }
+                TodayColumnsLayout {
+                    card(lastMeeting(now))
+                    card(upNextSection(now))
+                    card(owedSoon(now))
                 }
                 Spacer(minLength: 0)
                 stats
@@ -61,10 +48,7 @@ struct TodayScreen: View {
             .frame(maxWidth: .infinity, minHeight: height, alignment: .topLeading)
         }
         .scrollContentBackground(.hidden)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-            width = max(size.width - 72, 0)
-            height = size.height
-        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .onAppear {
             library.refreshToday()
             screens.owed.load()
@@ -397,6 +381,73 @@ struct TodayScreen: View {
         // Its words without the arrow, which VoiceOver would read out.
         .accessibilityLabel(lines.isEmpty ? "Stats" : lines.joined(separator: ". "))
         .accessibilityHint("Opens Stats")
+    }
+}
+
+/// Today's last meeting, up next and owed soon: from `twoColumns` of width, the first on the left
+/// and the rest under one another on the right, the canvas's 1.3 : 1; narrower, all of them under
+/// one another. One set of views either way.
+///
+/// Chosen from the width proposed, measuring and placing alike, never from a width measured and
+/// written back. Today read the ScrollView's width into state and gave the columns fixed widths
+/// from it, but that width counts an always-shown (legacy) scroller the content does not get: the
+/// columns overflowed by the scroller's 17 pt, a ScrollView grows to hold content wider than it, and
+/// the wider ScrollView widened the columns again, a pass at a time without end whenever the
+/// content needed scrolling (600 pt tall or less with nothing on Today; the default 700 with Needs
+/// you showing): the main run loop never came back. With overlay scrollers it held, but a narrowed window kept the old width,
+/// the right column cut off. It is always the width offered: a card that can't fit its column
+/// overflows it rather than widen the ScrollView.
+struct TodayColumnsLayout: Layout {
+    static let twoColumns: CGFloat = 624
+    static let spacing: CGFloat = 18
+
+    private struct Arrangement {
+        var size: CGSize
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)]
+    }
+
+    private func arrange(_ proposed: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        let width = proposed.flatMap { $0.isFinite ? $0 : nil }
+        guard let width, width >= Self.twoColumns, subviews.count > 1 else { return stacked(width, subviews) }
+        let left = (width - Self.spacing) * 1.3 / 2.3
+        let right = width - Self.spacing - left
+        let first = ProposedViewSize(width: left, height: nil)
+        var places = [(origin: CGPoint.zero, proposal: first)]
+        let rest = ProposedViewSize(width: right, height: nil)
+        var y: CGFloat = 0
+        for subview in subviews.dropFirst() {
+            places.append((CGPoint(x: left + Self.spacing, y: y), rest))
+            y += subview.sizeThatFits(rest).height + Self.spacing
+        }
+        let height = max(subviews[0].sizeThatFits(first).height, y - Self.spacing)
+        return Arrangement(size: CGSize(width: width, height: height), places: places)
+    }
+
+    private func stacked(_ width: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        let proposal = ProposedViewSize(width: width, height: nil)
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)] = []
+        var y: CGFloat = 0
+        var widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(proposal)
+            places.append((CGPoint(x: 0, y: y), proposal))
+            y += size.height + Self.spacing
+            widest = max(widest, size.width)
+        }
+        return Arrangement(size: CGSize(width: width ?? widest, height: max(0, y - Self.spacing)), places: places)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(proposal.width, subviews)
+        for (subview, place) in zip(subviews, arrangement.places) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + place.origin.x, y: bounds.minY + place.origin.y),
+                anchor: .topLeading, proposal: place.proposal)
+        }
     }
 }
 
