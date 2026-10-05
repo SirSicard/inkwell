@@ -121,6 +121,13 @@ public sealed class ConsentModel : ObservableModel
     /// <summary>Which screen asked, so only that one shows the step (the first-run sheet can sit over Settings).</summary>
     public ConsentHost? Host { get; private set; }
 
+    /// <summary>
+    /// How many steps were put on screen. The first-run sheet shows the step inside it, under the
+    /// own key's rows, so it brings each new one into view (a second Use asks again with the same
+    /// words, and counts), and never scrolls for anything else.
+    /// </summary>
+    public int Asked { get; private set; }
+
     /// <summary>For voice edit, the key the step turns it on with.</summary>
     public string? PendingKey { get; private set; }
 
@@ -291,6 +298,7 @@ public sealed class ConsentModel : ObservableModel
         Pending = destination;
         Host = host;
         PendingKey = key;
+        Asked++;
         Changed();
     }
 
@@ -312,6 +320,7 @@ public sealed class ConsentModel : ObservableModel
         PendingKey = null;
         Choosing = true;
         this.choose = choose;
+        Asked++;
         Changed();
     }
 

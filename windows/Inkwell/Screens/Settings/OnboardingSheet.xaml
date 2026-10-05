@@ -151,7 +151,8 @@
                         </StackPanel>
                     </StackPanel>
                 </Expander>
-                <!-- Polish's consent step, inside the sheet. Only its agreeing button sends anything. -->
+                <!-- Polish's consent step, inside the sheet, brought into view when it is put up
+                     (RevealConsent). Only its agreeing button sends anything. -->
                 <Border x:Name="ConsentCard" Style="{StaticResource InkCardStyle}">
                     <StackPanel Spacing="10">
                         <TextBlock x:Name="ConsentTitle" AutomationProperties.HeadingLevel="Level2" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />

@@ -3,7 +3,8 @@
 // or the app quitting). Escape closes it as skipped (OnboardingModel.SheetDismissed, which does
 // nothing while the app quits), except while polish's consent step is up in it: then Escape
 // cancels the step and the sheet stays. The polish switch only asks (PolishModel.SetOn with
-// ConsentHost.Onboarding); only the step's agreeing button sends anything. The models step's
+// ConsentHost.Onboarding); only the step's agreeing button sends anything, and the step, inline
+// below the own key's rows, comes into view with the focus when it is put up. The models step's
 // Download is the only thing in the sheet that downloads (ModelChoices.Download: what is ticked). The
 // import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps). While
 // this PC has no language model, the Polish step offers Groq's free key through Settings > AI's
@@ -53,6 +54,8 @@ public sealed partial class OnboardingSheet : ContentDialog
     private bool others;
     /// <summary>Groq was suggested since the disclosure last opened.</summary>
     private bool suggested;
+    /// <summary>The last of polish's steps brought into view (ConsentModel.Asked); -1: the one up, again.</summary>
+    private int revealedAsk;
 
     private OnboardingSheet(
         FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
@@ -269,9 +272,11 @@ public sealed partial class OnboardingSheet : ContentDialog
             var step = onboarding.Step;
             if (step != shownStep)
             {
-                // Each step starts at its top.
+                // Each step starts at its top; a polish step still up when Polish shows again is
+                // brought into view again (below).
                 StepScroller.ChangeView(null, 0, null, disableAnimation: true);
                 shownStep = step;
+                revealedAsk = -1;
             }
             WelcomeStep.Visibility = Visible(step == OnboardingStep.Welcome);
             PermissionsStep.Visibility = Visible(step == OnboardingStep.Permissions);
@@ -350,6 +355,12 @@ public sealed partial class OnboardingSheet : ContentDialog
                 ConsentMessage.Text = PolishModel.ConsentMessage(asking);
                 ConsentAllow.Content = PolishModel.ConsentButton(asking);
                 AutomationProperties.SetName(ConsentAllow, ConsentModel.AllowName(LlmFeature.Polish, asking));
+                // Only while the card can be seen: a step left up on another step waits for Polish.
+                if (polish.Consent.Asked != revealedAsk && step == OnboardingStep.Polish && IsLoaded)
+                {
+                    revealedAsk = polish.Consent.Asked;
+                    RevealConsent(asking);
+                }
             }
 
             // No speech model: no "Hold … and speak" and no box to try it in; the orb stays.
@@ -565,6 +576,21 @@ public sealed partial class OnboardingSheet : ContentDialog
         cloud.PickGroq();
         others = false;
         RenderIfOpen();
+    }
+
+    /// <summary>
+    /// Polish's step, just put up under the own key's rows, where it can sit below the fold: Use
+    /// then seemed to do nothing, and the first run went on with nothing chosen and local-only mode
+    /// on. The whole card comes into view, and focus goes where Settings' step puts it
+    /// (ConsentDialog.Build): Cancel for a provider off this PC, so Enter never agrees to send
+    /// words away, else the agreeing button. The card may have been collapsed until now: laid out
+    /// first.
+    /// </summary>
+    private void RevealConsent(ConsentDestination asking)
+    {
+        StepScroller.UpdateLayout();
+        ConsentCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+        (asking.IsOnDevice ? ConsentAllow : ConsentCancel).Focus(FocusState.Programmatic);
     }
 
     private void OnConsentCancel(object sender, RoutedEventArgs e) => polish.CancelConsent();
