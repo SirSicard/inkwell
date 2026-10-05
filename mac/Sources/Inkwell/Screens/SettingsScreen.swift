@@ -2,7 +2,8 @@
 // their live state, dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
 // language model you bring, local-only mode, polish, summaries and Ask), meetings, stats
 // (milestones and the typing speed), models (with measured accuracy, and Download for those not on
-// this Mac), storage, and About with every notice the app ships.
+// this Mac), storage, and About with every notice the app ships. Each section is a card, as
+// Today's are, with its heading inside.
 import AppleEngines
 import InkBridge
 import SwiftUI
@@ -67,31 +68,28 @@ struct SettingsScreen: View {
             Rectangle().fill(PaperPalette.border).frame(width: 1).accessibilityHidden(true)
             ScrollViewReader { proxy in
                 ScrollView {
-                    // Each section after the first starts at a hairline, with room above it: where
-                    // one ends and the next begins reads at a glance.
-                    VStack(alignment: .leading, spacing: 40) {
-                        GeneralSection(screens: screens).id(SettingsSection.general)
-                        AppearanceSection(theme: screens.theme).sectionStart().id(SettingsSection.appearance)
-                        PermissionsSection(permissions: screens.permissions).sectionStart().id(SettingsSection.permissions)
+                    // Each section on its own card, as Today's are, apart as Today's are: in Dark,
+                    // sections divided by hairlines alone ran together.
+                    VStack(alignment: .leading, spacing: TodayColumnsLayout.spacing) {
+                        GeneralSection(screens: screens).settingsCard(.general)
+                        AppearanceSection(theme: screens.theme).settingsCard(.appearance)
+                        PermissionsSection(permissions: screens.permissions).settingsCard(.permissions)
                         DictationSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
-                            .sectionStart().id(SettingsSection.dictation)
-                        ModesSection(modes: screens.modes).sectionStart().id(SettingsSection.modes)
-                        SnippetsSection(snippets: screens.snippets).sectionStart().id(SettingsSection.snippets)
-                        VoiceCommandsSection(commands: screens.voiceCommands).sectionStart()
-                            .id(SettingsSection.voiceCommands)
-                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).sectionStart()
-                            .id(SettingsSection.ai)
+                            .settingsCard(.dictation)
+                        ModesSection(modes: screens.modes).settingsCard(.modes)
+                        SnippetsSection(snippets: screens.snippets).settingsCard(.snippets)
+                        VoiceCommandsSection(commands: screens.voiceCommands).settingsCard(.voiceCommands)
+                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).settingsCard(.ai)
                         MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
-                            .sectionStart().id(SettingsSection.meetings)
-                        StatsSettingsSection(stats: screens.stats).sectionStart().id(SettingsSection.stats)
-                        ModelsSection(catalogue: screens.catalogue).sectionStart().id(SettingsSection.models)
-                        StorageSection(storage: screens.storage, meetings: screens.meetings)
-                            .sectionStart().id(SettingsSection.storage)
-                        AboutSection().sectionStart().id(SettingsSection.about)
+                            .settingsCard(.meetings)
+                        StatsSettingsSection(stats: screens.stats).settingsCard(.stats)
+                        ModelsSection(catalogue: screens.catalogue).settingsCard(.models)
+                        StorageSection(storage: screens.storage, meetings: screens.meetings).settingsCard(.storage)
+                        AboutSection().settingsCard(.about)
                     }
                     // The sections are the scroll's targets, for the list to follow (below).
                     .scrollTargetLayout()
-                    .frame(maxWidth: 760, alignment: .leading)
+                    .frame(maxWidth: Self.maxCardWidth, alignment: .leading)
                     .modifier(SettingsMargins())
                     .padding(.vertical, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -137,6 +135,9 @@ struct SettingsScreen: View {
         .onDisappear { screens.permissions.screenDisappeared() }
     }
 
+    /// The cards' widest: 760 pt of section inside their padding, as wide as the page was before.
+    static let maxCardWidth: CGFloat = 760 + 2 * SectionCard.horizontal
+
     /// Selects `next` for the scrolling, without scrolling.
     private func follow(_ next: SettingsSection?) {
         guard let next, next != section else { return }
@@ -145,10 +146,12 @@ struct SettingsScreen: View {
     }
 }
 
-/// The page's margins either side: 40 pt, and 24 in a column too narrow to spare them (the window
+/// The page's margins either side: 28 pt, and 24 in a column too narrow to spare them (the window
 /// at its smallest), so the sections keep the room their controls need there. Between the two the
 /// margin grows with the column, so the sections' width only ever grows as the window widens (a
-/// step would narrow them for a moment, and flip a picker from segments to a menu and back).
+/// step would narrow them for a moment, and flip a picker from segments to a menu and back). 28,
+/// not the 40 the page had before its cards: the cards' padding is inside it, and with 40 the voice
+/// command form stacked in the default 1040-pt window (500 pt in its card, under its 520).
 private struct SettingsMargins: ViewModifier {
     func body(content: Content) -> some View {
         SettingsMarginsLayout { content }
@@ -156,7 +159,7 @@ private struct SettingsMargins: ViewModifier {
 }
 
 struct SettingsMarginsLayout: Layout {
-    static let wide: CGFloat = 40
+    static let wide: CGFloat = 28
     static let narrow: CGFloat = 24
     /// The column's width, margins included, up to which the margins are narrow, and from which
     /// they are wide.
@@ -192,13 +195,59 @@ struct SettingsMarginsLayout: Layout {
 }
 
 extension View {
-    /// A Settings section's start: a hairline across the column, and room under it before the
-    /// heading. Inside the section, so the list's scroll to it lands on the hairline.
-    func sectionStart() -> some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Rectangle().fill(PaperPalette.border).frame(height: 1).accessibilityHidden(true)
-            self
+    /// A Settings section on its card (Today's, sectionCard), its heading inside: one VoiceOver
+    /// group named for the section, and the target the list scrolls to, so it lands on the card.
+    func settingsCard(_ section: SettingsSection) -> some View {
+        transformAnchorPreference(key: SettingsCardBounds.self, value: .bounds) {
+            $0.append(SettingsCardBounds.Part(section: section, isCard: false, bounds: $1))
         }
+        .sectionCard()
+        .transformAnchorPreference(key: SettingsCardBounds.self, value: .bounds) {
+            $0.append(SettingsCardBounds.Part(section: section, isCard: true, bounds: $1))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(section.title)
+        .id(section)
+    }
+
+    /// A group inside a section's card (the permission rows, Inkwell 0.2's import): a hairline
+    /// round it and no card of its own, whose material would lie over the card's.
+    func cardGroup() -> some View {
+        modifier(CardGroup())
+    }
+}
+
+/// Where each Settings card is, and its section inside it: anchors, which change no layout, read by
+/// the layout tests (SettingsCardsLayoutTests) and by no view of the app's.
+struct SettingsCardBounds: PreferenceKey {
+    struct Part {
+        let section: SettingsSection
+        /// The card, or the section inside its padding.
+        let isCard: Bool
+        let bounds: Anchor<CGRect>
+    }
+
+    static var defaultValue: [Part] { [] }
+
+    static func reduce(value: inout [Part], nextValue: () -> [Part]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+/// cardGroup's hairline: the stronger border a card has under Increase Contrast or Reduce
+/// Transparency (GlowCard), so the group keeps its edge there as the card it replaced did.
+struct CardGroup: ViewModifier {
+    /// Inside the card's 22 pt corner, a smaller one.
+    static let radius: CGFloat = 14
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let solid = reduceTransparency || contrast == .increased
+        let shape = RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+        content
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(solid ? Theme.text.opacity(0.35) : PaperPalette.border, lineWidth: 1))
     }
 }
 
@@ -228,17 +277,19 @@ struct PermissionsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle(text: "Permissions")
-            PermissionCards(permissions: permissions)
+            PermissionCards(permissions: permissions, onCard: true)
         }
     }
 }
 
-/// The four cards, in one frame (Settings and onboarding).
+/// The four cards, in one frame: a card of its own in the first run, a group inside the
+/// Permissions card in Settings (`onCard`).
 struct PermissionCards: View {
     let permissions: PermissionsModel
+    var onCard = false
 
     var body: some View {
-        VStack(spacing: 0) {
+        let rows = VStack(spacing: 0) {
             ForEach(PermissionCard.allCases) { card in
                 PermissionRow(card: card, state: permissions.state(card)) { permissions.request(card) }
                 if card != PermissionCard.allCases.last {
@@ -246,8 +297,13 @@ struct PermissionCards: View {
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: Glow.Radius.card, style: .continuous))
-        .paperCard()
+        if onCard {
+            rows.cardGroup()
+        } else {
+            rows
+                .clipShape(RoundedRectangle(cornerRadius: Glow.Radius.card, style: .continuous))
+                .paperCard()
+        }
     }
 }
 
@@ -256,18 +312,28 @@ private struct PermissionRow: View {
     let state: CardState
     let request: () -> Void
 
+    /// The least room the words get beside the state: narrower, the state goes under them (the
+    /// Permissions card in the window at its smallest, where "Checking…" broke).
+    static let wordsMinimum: CGFloat = 150
+    /// The icon's width, and the room between it and the words.
+    private static let iconWidth: CGFloat = 22
+    private static let gap: CGFloat = 14
+
     var body: some View {
-        HStack(spacing: 14) {
-            icon.frame(width: 22, height: 22).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(card.title).font(.system(.body, weight: .semibold)).foregroundStyle(Theme.text)
-                Text(state.isAlert ? card.offDetail : card.detail)
-                    .font(Typography.caption)
-                    .foregroundStyle(state.isAlert ? Theme.text : Theme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+        // Chosen from the ideal widths, the words' set to their minimum: no width is measured.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Self.gap) {
+                icon.frame(width: Self.iconWidth, height: Self.iconWidth).accessibilityHidden(true)
+                words.frame(minWidth: Self.wordsMinimum, idealWidth: Self.wordsMinimum, maxWidth: .infinity, alignment: .leading)
+                trailing.fixedSize()
             }
-            Spacer(minLength: 0)
-            trailing
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: Self.gap) {
+                    icon.frame(width: Self.iconWidth, height: Self.iconWidth).accessibilityHidden(true)
+                    words.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                trailing.fixedSize().padding(.leading, Self.iconWidth + Self.gap)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -275,6 +341,16 @@ private struct PermissionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(card.title): \(spoken)")
         .accessibilityAction(named: actionTitle ?? "Check") { request() }
+    }
+
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(card.title).font(.system(.body, weight: .semibold)).foregroundStyle(Theme.text)
+            Text(state.isAlert ? card.offDetail : card.detail)
+                .font(Typography.caption)
+                .foregroundStyle(state.isAlert ? Theme.text : Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder private var icon: some View {

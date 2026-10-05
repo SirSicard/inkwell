@@ -116,6 +116,15 @@ extension View {
         modifier(GlowCard(alert: alert))
     }
 
+    /// A section on its card, as Today's and Settings' are: the card's padding inside it, as wide
+    /// as its column.
+    func sectionCard() -> some View {
+        padding(.vertical, SectionCard.vertical)
+            .padding(.horizontal, SectionCard.horizontal)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .paperCard()
+    }
+
     /// A row of a native List with a selection: in Theme.onAccent while AppKit fills it with the
     /// accent, which is while it is selected, its list has the keyboard (`listFocused`, the list's
     /// FocusState) and its window is key. Otherwise the row keeps its own colours: the selection
@@ -143,6 +152,12 @@ private struct OnAccentRow: ViewModifier {
             content
         }
     }
+}
+
+/// A section card's padding inside its edge (sectionCard).
+enum SectionCard {
+    static let vertical: CGFloat = 20
+    static let horizontal: CGFloat = 22
 }
 
 /// Glow's card.
