@@ -316,9 +316,33 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       (and the HTTP status of a refusal). One at a time; another sent meanwhile fails as busy.
  *       A provider that has not answered within 60 s fails it, and ink_shutdown never waits for
  *       its answer.
- *   {"cmd":"modes.list"}
+ *   {"cmd":"modes.list","id":"<ref>"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
- *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
+ *       each is picked for (on macOS, bundle ids: name them, never show them as they are), each
+ *       mode's polish instructions ("polish_prompt", blank for "default_polish_prompt") and its
+ *       own language model ("polish_model", absent for the AI setting's). "polish_models" lists
+ *       every model a mode can pick now (engine:<id> for one the shell registered,
+ *       provider:<id> for the chosen own-key provider), each with where it sends ("to") and
+ *       whether the polish consent covers it ("allowed"); "setting_polish_model" is the AI
+ *       setting's. Ask again after llm.choose, consent.state or an engine (un)registering.
+ *       Carries the user's words: never log it.
+ *   {"cmd":"modes.save","mode":{"id":"<absent to add>","name":"...","style":"formal|casual|relaxed",
+ *    "polish":true,"remove_fillers":true,"polish_prompt":"...","apps":["..."],
+ *    "polish_model":"<an id from polish_models, or null for the AI setting's>"},
+ *    "take_apps":false,"replace_unreadable":false,"id":"<ref>"}
+ *   {"cmd":"modes.delete","mode":"<mode id>","id":"<ref>"}
+ *       Settings' mode editor. A save without "id" adds a mode (the core gives it an id); with
+ *       one it changes only the fields it names, and keeps the stored fields it does not know.
+ *       A delete gives the mode's apps back to the default mode. Each answers "modes.listed" with
+ *       the "id" and reaches a running dictation at once (a voice command's pin to a deleted mode
+ *       is dropped). A refusal is command.failed with a "code": name_blank, name_taken (another
+ *       name sounds the same), name_is_style, too_long (a name over 64 characters, instructions
+ *       over 2000, over 64 apps or an app over 256, over 50 modes), default_mode (it cannot be
+ *       deleted or given apps), app_taken (send again with "take_apps":true to move it),
+ *       mode_not_found, model_unknown (not in polish_models), and list_unreadable as for
+ *       snippets.save. Each rule is checked on what the save changes. A mode whose model the core
+ *       does not hold at a take goes in as said (dictation.warning polish_model_missing): never
+ *       to another model, and its polish needs the polish consent for that model's destination.
  *   {"cmd":"snippets.list","id":"<ref>"}
  *   {"cmd":"snippets.save","snippets":[{"id":"...","trigger":"...","expansion":"...",
  *    "category":"...","enabled":true}],"id":"<ref>"}

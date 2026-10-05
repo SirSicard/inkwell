@@ -306,7 +306,7 @@ Each table is one kind:
 The screens read and change the library and the permissions through commands too
 ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): permission checks and
 requests, the open commitments ("owed"), a live meeting's notes, the model catalogue, the user's
-modes, each language-model feature's state and consent (`consent.get`, `consent.allow`), and a
+modes (listed and edited), each language-model feature's state and consent (`consent.get`, `consent.allow`), and a
 whitelist of settings the shell owns (`SHELL_SETTINGS` in
 [`queries.rs`](../core/crates/ink-ffi/src/queries.rs), each with the values it takes):
 `onboarding.done`, `dictation.polish` and `meetings.llm` (only ever set to off: they turn on
@@ -330,6 +330,21 @@ without a value, and the shell reads it as its default (for appearance, `APPEARA
   when a screen showing permissions appears, never on a timer.
 - A mode names apps by identity (on macOS, bundle ids, or part of one). The shell shows each as the
   app's name and icon; a raw identity is never shown.
+- **Modes are edited in Settings** (`modes.save`, `modes.delete`, [`modes.rs`](../core/crates/ink-ffi/src/modes.rs)).
+  Dictation and the listing read one document one way (`ModeStore::from_json`): the user's own,
+  else the 0.2 import's, else the built-in default. A save patches the stored document in place,
+  so a field this build does not know survives (0.2's `model`, which named a transcription model,
+  is never read as a language model). The rules are pure (`ModeStore::save`, each refusal with a
+  code) and are checked on what a save changes, so a mode the import brought that breaks one
+  stays editable.
+- **A mode may have its own language model** (`polish_model`): one the core holds, an engine the
+  shell registered (`engine:<id>`) or the chosen own-key provider (`provider:<id>`), found again
+  at each take through the same path as the AI setting's model (`PolishModel`: the polish consent
+  checked on the model the call reaches, then local-only mode). A mode whose model the core does
+  not hold then is not polished (`polish_model_missing`), never sent to another model: that could
+  be a destination the user did not pick for this mode. One polish consent covers one
+  destination, so a mode on a model elsewhere than the consent's goes in as said
+  (`polish_not_allowed`, naming that model's destination).
 - Replies carry the user's words only where the screen asked for them (a commitment's text); a
   note's words are never echoed back, and errors never quote them.
 
