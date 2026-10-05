@@ -35,9 +35,9 @@ struct TodayScreen: View {
                 }
                 needsYou(now)
                 TodayColumnsLayout {
-                    card(lastMeeting(now))
-                    card(upNextSection(now))
-                    card(owedSoon(now))
+                    lastMeeting(now).sectionCard()
+                    upNextSection(now).sectionCard()
+                    owedSoon(now).sectionCard()
                 }
                 Spacer(minLength: 0)
                 stats
@@ -117,15 +117,6 @@ struct TodayScreen: View {
         return [listening, hold]
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .joined(separator: " · ")
-    }
-
-    /// A section on its card.
-    private func card(_ content: some View) -> some View {
-        content
-            .padding(.vertical, 20)
-            .padding(.horizontal, 22)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .paperCard()
     }
 
     // MARK: Needs you
