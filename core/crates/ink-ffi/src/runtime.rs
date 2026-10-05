@@ -1431,7 +1431,8 @@ mod tests {
     #[ignore = "talks to the Windows audio service"]
     fn windows_record_now_opens_the_real_devices_without_starting_them() {
         let platform = MeetingPlatform::production().expect("the platform");
-        let mut opened = platform.capture.open(None, false).expect("opened");
+        let choices = crate::devices::Choices::new(Arc::new(ink_core::mock::MemStore::default()));
+        let mut opened = platform.capture.open(None, &choices).expect("opened");
         let channels: Vec<_> = opened.sides.iter().map(|s| s.source.channel()).collect();
         assert_eq!(channels, [ink_core::Channel::Mic, ink_core::Channel::Far]);
         assert_eq!(opened.far, crate::capture::FarScope::Everything);
